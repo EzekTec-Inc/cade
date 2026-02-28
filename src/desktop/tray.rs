@@ -83,7 +83,7 @@ pub fn spawn_tray() -> Result<mpsc::Sender<TrayMsg>, String> {
             }
         });
 
-        tray.run();
+        let _ = tray.run();
     });
 
     Ok(tx)

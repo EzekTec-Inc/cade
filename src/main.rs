@@ -4,6 +4,7 @@ mod desktop;
 mod permissions;
 mod settings;
 mod skills;
+mod tools;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;

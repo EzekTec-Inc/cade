@@ -10,7 +10,7 @@ pub struct LettaClient {
     api_key: String,
 }
 
-// ── Agent ────────────────────────────────────────────────────────────────────
+// ── Agent ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentState {
@@ -40,7 +40,7 @@ pub struct MemoryBlock {
     pub description: Option<String>,
 }
 
-// ── Messages ─────────────────────────────────────────────────────────────────
+// ── Messages ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LettaMessage {
@@ -50,14 +50,84 @@ pub struct LettaMessage {
     pub data: Value,
 }
 
+impl LettaMessage {
+    /// Return the message_type string, or empty if absent
+    pub fn msg_type(&self) -> &str {
+        self.data
+            .get("message_type")
+            .and_then(|v| v.as_str())
+            .or(self.message_type.as_deref())
+            .unwrap_or("")
+    }
+
+    /// Extract tool call info from a tool_call_message.
+    /// Returns `(tool_call_id, tool_name, arguments_value)`.
+    pub fn as_tool_call(&self) -> Option<(String, String, Value)> {
+        if self.msg_type() != "tool_call_message" {
+            return None;
+        }
+        let tc = self.data.get("tool_call")?;
+        let id = tc.get("id")
+            .and_then(|v| v.as_str())
+            .or_else(|| self.id.as_deref())
+            .unwrap_or("unknown")
+            .to_string();
+        let name = tc.get("name").and_then(|v| v.as_str())?.to_string();
+        let args = tc
+            .get("arguments")
+            .cloned()
+            .unwrap_or(json!({}));
+        // arguments may be a JSON string (needs parsing) or already an object
+        let args = if let Some(s) = args.as_str() {
+            serde_json::from_str(s).unwrap_or(json!({}))
+        } else {
+            args
+        };
+        Some((id, name, args))
+    }
+
+    /// Extract the text of an assistant_message
+    pub fn assistant_text(&self) -> Option<&str> {
+        if self.msg_type() != "assistant_message" {
+            return None;
+        }
+        self.data.get("content").and_then(|v| v.as_str())
+    }
+
+    /// Extract reasoning text from a reasoning_message
+    pub fn reasoning_text(&self) -> Option<&str> {
+        if self.msg_type() != "reasoning_message" {
+            return None;
+        }
+        self.data.get("reasoning").and_then(|v| v.as_str())
+    }
+}
+
 #[derive(Debug, Serialize)]
 pub struct SendMessageRequest {
     pub input: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub conversation_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub role: Option<String>,
 }
 
-// ── Tools ─────────────────────────────────────────────────────────────────────
+/// A tool return sent back to the agent after local execution
+#[derive(Debug, Serialize)]
+pub struct ToolReturnRequest {
+    /// Must be "tool"
+    pub role: String,
+    pub tool_return: ToolReturn,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ToolReturn {
+    pub tool_call_id: String,
+    pub content: String,
+    pub status: String, // "success" | "error"
+}
+
+// ── Tools (server-registered) ─────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDef {
@@ -81,6 +151,7 @@ impl LettaClient {
     pub fn new(base_url: String, api_key: String) -> Result<Self> {
         let client = Client::builder()
             .user_agent("cade/0.1.0")
+            .timeout(std::time::Duration::from_secs(300))
             .build()
             .context("build HTTP client")?;
         Ok(Self { client, base_url, api_key })
@@ -90,7 +161,7 @@ impl LettaClient {
         format!("{}/v1{}", self.base_url.trim_end_matches('/'), path)
     }
 
-    fn auth_header(&self) -> (&'static str, String) {
+    fn auth(&self) -> (&'static str, String) {
         ("Authorization", format!("Bearer {}", self.api_key))
     }
 
@@ -99,7 +170,7 @@ impl LettaClient {
     pub async fn health(&self) -> Result<bool> {
         let resp = self.client
             .get(self.url("/health"))
-            .header(self.auth_header().0, self.auth_header().1)
+            .header(self.auth().0, self.auth().1)
             .send()
             .await?;
         Ok(resp.status().is_success())
@@ -110,11 +181,10 @@ impl LettaClient {
     pub async fn create_agent(&self, req: CreateAgentRequest) -> Result<AgentState> {
         let resp = self.client
             .post(self.url("/agents"))
-            .header(self.auth_header().0, self.auth_header().1)
+            .header(self.auth().0, self.auth().1)
             .json(&req)
             .send()
             .await?;
-
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -126,10 +196,9 @@ impl LettaClient {
     pub async fn get_agent(&self, agent_id: &str) -> Result<AgentState> {
         let resp = self.client
             .get(self.url(&format!("/agents/{agent_id}")))
-            .header(self.auth_header().0, self.auth_header().1)
+            .header(self.auth().0, self.auth().1)
             .send()
             .await?;
-
         if !resp.status().is_success() {
             let status = resp.status();
             bail!("get_agent {agent_id} failed {status}");
@@ -140,10 +209,9 @@ impl LettaClient {
     pub async fn list_agents(&self) -> Result<Vec<AgentState>> {
         let resp = self.client
             .get(self.url("/agents"))
-            .header(self.auth_header().0, self.auth_header().1)
+            .header(self.auth().0, self.auth().1)
             .send()
             .await?;
-
         if !resp.status().is_success() {
             bail!("list_agents failed {}", resp.status());
         }
@@ -152,27 +220,47 @@ impl LettaClient {
 
     // ── Messages ──────────────────────────────────────────────────────────────
 
+    /// Send a user message and return the response messages
     pub async fn send_message(&self, agent_id: &str, input: &str) -> Result<Vec<LettaMessage>> {
-        let req = SendMessageRequest {
-            input: input.to_string(),
-            conversation_id: None,
-        };
+        let req = json!({ "input": input });
+        self.post_messages(agent_id, &req).await
+    }
 
+    /// Send a tool result back to the agent after local execution
+    pub async fn send_tool_return(
+        &self,
+        agent_id: &str,
+        tool_call_id: &str,
+        output: &str,
+        is_error: bool,
+    ) -> Result<Vec<LettaMessage>> {
+        let req = json!({
+            "role": "tool",
+            "tool_return": {
+                "tool_call_id": tool_call_id,
+                "content": output,
+                "status": if is_error { "error" } else { "success" }
+            }
+        });
+        self.post_messages(agent_id, &req).await
+    }
+
+    async fn post_messages(&self, agent_id: &str, body: &Value) -> Result<Vec<LettaMessage>> {
         let resp = self.client
             .post(self.url(&format!("/agents/{agent_id}/messages")))
-            .header(self.auth_header().0, self.auth_header().1)
-            .json(&req)
+            .header(self.auth().0, self.auth().1)
+            .json(body)
             .send()
             .await?;
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("send_message failed {status}: {body}");
+            let text = resp.text().await.unwrap_or_default();
+            bail!("messages request failed {status}: {text}");
         }
 
-        let body: Value = resp.json().await?;
-        let messages = body["messages"]
+        let raw: Value = resp.json().await?;
+        let msgs = raw["messages"]
             .as_array()
             .cloned()
             .unwrap_or_default()
@@ -183,8 +271,7 @@ impl LettaClient {
                 data: json!({}),
             }))
             .collect();
-
-        Ok(messages)
+        Ok(msgs)
     }
 
     // ── Tools ─────────────────────────────────────────────────────────────────
@@ -192,11 +279,10 @@ impl LettaClient {
     pub async fn create_tool(&self, req: CreateToolRequest) -> Result<ToolDef> {
         let resp = self.client
             .post(self.url("/tools"))
-            .header(self.auth_header().0, self.auth_header().1)
+            .header(self.auth().0, self.auth().1)
             .json(&req)
             .send()
             .await?;
-
         if !resp.status().is_success() {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
@@ -208,10 +294,9 @@ impl LettaClient {
     pub async fn list_tools(&self) -> Result<Vec<ToolDef>> {
         let resp = self.client
             .get(self.url("/tools"))
-            .header(self.auth_header().0, self.auth_header().1)
+            .header(self.auth().0, self.auth().1)
             .send()
             .await?;
-
         if !resp.status().is_success() {
             bail!("list_tools failed {}", resp.status());
         }
