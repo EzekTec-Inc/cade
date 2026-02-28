@@ -1,0 +1,188 @@
+use anyhow::{bail, Result};
+use async_stream::stream;
+use async_trait::async_trait;
+use futures::StreamExt;
+use reqwest::Client;
+use serde_json::{json, Value};
+use std::pin::Pin;
+use tokio_stream::Stream;
+
+use super::{CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
+
+const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+
+pub struct GeminiProvider {
+    client: Client,
+    api_key: String,
+}
+
+impl GeminiProvider {
+    pub fn new(api_key: String) -> Self {
+        Self { client: Client::new(), api_key }
+    }
+
+    fn url(&self, model: &str, stream: bool) -> String {
+        let action = if stream { "streamGenerateContent?alt=sse" } else { "generateContent" };
+        format!("{GEMINI_BASE}/{model}:{action}&key={}", self.api_key)
+    }
+
+    /// Convert our messages to Gemini `contents` format
+    fn to_gemini_contents(req: &CompletionRequest) -> (Option<String>, Vec<Value>) {
+        let mut system_text = None;
+        let mut contents = Vec::new();
+
+        for msg in &req.messages {
+            match msg.role.as_str() {
+                "system" => {
+                    system_text = Some(msg.content.clone());
+                }
+                "tool" => {
+                    contents.push(json!({
+                        "role": "user",
+                        "parts": [{ "functionResponse": {
+                            "name": "tool",
+                            "response": { "result": msg.content }
+                        }}]
+                    }));
+                }
+                "assistant" if msg.tool_calls.is_some() => {
+                    let calls: Vec<Value> = msg.tool_calls.as_ref().unwrap().iter().map(|tc| json!({
+                        "functionCall": { "name": tc.name, "args": tc.arguments }
+                    })).collect();
+                    contents.push(json!({"role": "model", "parts": calls}));
+                }
+                "assistant" => {
+                    contents.push(json!({
+                        "role": "model",
+                        "parts": [{"text": msg.content}]
+                    }));
+                }
+                _ => {
+                    contents.push(json!({
+                        "role": "user",
+                        "parts": [{"text": msg.content}]
+                    }));
+                }
+            }
+        }
+        (system_text, contents)
+    }
+
+    fn parse_response(body: &Value) -> CompletionResponse {
+        let candidate = &body["candidates"][0];
+        let finish_reason = candidate["finishReason"].as_str().unwrap_or("STOP").to_string();
+        let mut content = None;
+        let mut tool_calls = Vec::new();
+
+        if let Some(parts) = candidate["content"]["parts"].as_array() {
+            for part in parts {
+                if let Some(text) = part["text"].as_str() {
+                    content = Some(text.to_string());
+                }
+                if let Some(fc) = part.get("functionCall") {
+                    tool_calls.push(LlmToolCall {
+                        id:        uuid::Uuid::new_v4().to_string(),
+                        name:      fc["name"].as_str().unwrap_or("").to_string(),
+                        arguments: fc["args"].clone(),
+                    });
+                }
+            }
+        }
+        CompletionResponse { content, tool_calls, finish_reason }
+    }
+}
+
+#[async_trait]
+impl LlmProvider for GeminiProvider {
+    async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
+        let (system_text, contents) = Self::to_gemini_contents(req);
+        let tools: Vec<Value> = req.tools.iter().map(|s| json!({
+            "name": s["name"],
+            "description": s["description"],
+            "parameters": s["parameters"]
+        })).collect();
+
+        let mut body = json!({ "contents": contents });
+        if let Some(sys) = system_text {
+            body["systemInstruction"] = json!({"parts": [{"text": sys}]});
+        }
+        if !tools.is_empty() {
+            body["tools"] = json!([{"functionDeclarations": tools}]);
+        }
+
+        let resp = self.client
+            .post(self.url(&req.model, false))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            bail!("Gemini API {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+        }
+        Ok(Self::parse_response(&resp.json::<Value>().await?))
+    }
+
+    async fn stream(
+        &self,
+        req: &CompletionRequest,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
+        let (system_text, contents) = Self::to_gemini_contents(req);
+        let tools: Vec<Value> = req.tools.iter().map(|s| json!({
+            "name": s["name"], "description": s["description"], "parameters": s["parameters"]
+        })).collect();
+
+        let mut body = json!({ "contents": contents });
+        if let Some(sys) = system_text {
+            body["systemInstruction"] = json!({"parts": [{"text": sys}]});
+        }
+        if !tools.is_empty() {
+            body["tools"] = json!([{"functionDeclarations": tools}]);
+        }
+
+        let resp = self.client
+            .post(self.url(&req.model, true))
+            .json(&body)
+            .send()
+            .await?;
+
+        if !resp.status().is_success() {
+            bail!("Gemini stream {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+        }
+
+        let mut byte_stream = resp.bytes_stream();
+        let s = stream! {
+            let mut buf = String::new();
+            while let Some(chunk) = byte_stream.next().await {
+                let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(anyhow::anyhow!("{e}")); break; } };
+                buf.push_str(&String::from_utf8_lossy(&chunk));
+
+                while let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].trim().to_string();
+                    buf = buf[pos + 1..].to_string();
+                    let data = match line.strip_prefix("data: ") { Some(d) => d, None => continue };
+                    let v: Value = match serde_json::from_str(data) { Ok(v) => v, Err(_) => continue };
+                    let candidate = &v["candidates"][0];
+
+                    if let Some(parts) = candidate["content"]["parts"].as_array() {
+                        for part in parts {
+                            if let Some(text) = part["text"].as_str() {
+                                if !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
+                            }
+                            if let Some(fc) = part.get("functionCall") {
+                                yield Ok(StreamChunk::ToolCall(LlmToolCall {
+                                    id:        uuid::Uuid::new_v4().to_string(),
+                                    name:      fc["name"].as_str().unwrap_or("").to_string(),
+                                    arguments: fc["args"].clone(),
+                                }));
+                            }
+                        }
+                    }
+                    if candidate["finishReason"].as_str().is_some() {
+                        yield Ok(StreamChunk::Done); return;
+                    }
+                }
+            }
+        };
+        Ok(Box::pin(s))
+    }
+}

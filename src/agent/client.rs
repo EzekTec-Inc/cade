@@ -5,8 +5,8 @@ use reqwest_eventsource::{Event, EventSource};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-/// Letta REST API client
-pub struct LettaClient {
+/// CADE REST API client
+pub struct CadeClient {
     client: Client,
     base_url: String,
     api_key: String,
@@ -45,14 +45,14 @@ pub struct MemoryBlock {
 // ── Messages ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct LettaMessage {
+pub struct CadeMessage {
     pub id: Option<String>,
     pub message_type: Option<String>,
     #[serde(flatten)]
     pub data: Value,
 }
 
-impl LettaMessage {
+impl CadeMessage {
     /// Return the message_type string, or empty if absent
     pub fn msg_type(&self) -> &str {
         self.data
@@ -158,7 +158,7 @@ pub struct CreateToolRequest {
 
 // ── Client impl ───────────────────────────────────────────────────────────────
 
-impl LettaClient {
+impl CadeClient {
     pub fn new(base_url: String, api_key: String) -> Result<Self> {
         let client = Client::builder()
             .user_agent("cade/0.1.0")
@@ -233,7 +233,7 @@ impl LettaClient {
     // ── Messages ──────────────────────────────────────────────────────────────
 
     /// Send a user message and return the response messages
-    pub async fn send_message(&self, agent_id: &str, input: &str) -> Result<Vec<LettaMessage>> {
+    pub async fn send_message(&self, agent_id: &str, input: &str) -> Result<Vec<CadeMessage>> {
         let req = json!({ "input": input });
         self.post_messages(agent_id, &req).await
     }
@@ -248,9 +248,9 @@ impl LettaClient {
         agent_id: &str,
         input: &str,
         on_event: F,
-    ) -> Result<Vec<LettaMessage>>
+    ) -> Result<Vec<CadeMessage>>
     where
-        F: Fn(&LettaMessage),
+        F: Fn(&CadeMessage),
     {
         let url = self.url(&format!("/agents/{agent_id}/messages/stream"));
         let body = json!({ "input": input });
@@ -264,7 +264,7 @@ impl LettaClient {
         let mut es = EventSource::new(request)
             .map_err(|e| anyhow::anyhow!("EventSource: {e}"))?;
 
-        let mut messages: Vec<LettaMessage> = Vec::new();
+        let mut messages: Vec<CadeMessage> = Vec::new();
 
         while let Some(event) = es.next().await {
             match event {
@@ -273,7 +273,7 @@ impl LettaClient {
                     if msg.data.trim() == "[DONE]" || msg.data.trim().is_empty() {
                         continue;
                     }
-                    match serde_json::from_str::<LettaMessage>(&msg.data) {
+                    match serde_json::from_str::<CadeMessage>(&msg.data) {
                         Ok(lm) => {
                             on_event(&lm);
                             messages.push(lm);
@@ -283,7 +283,7 @@ impl LettaClient {
                             if let Ok(v) = serde_json::from_str::<Value>(&msg.data) {
                                 if let Some(arr) = v["messages"].as_array() {
                                     for item in arr {
-                                        if let Ok(lm) = serde_json::from_value::<LettaMessage>(item.clone()) {
+                                        if let Ok(lm) = serde_json::from_value::<CadeMessage>(item.clone()) {
                                             on_event(&lm);
                                             messages.push(lm);
                                         }
@@ -317,7 +317,7 @@ impl LettaClient {
         tool_call_id: &str,
         output: &str,
         is_error: bool,
-    ) -> Result<Vec<LettaMessage>> {
+    ) -> Result<Vec<CadeMessage>> {
         let req = json!({
             "role": "tool",
             "tool_return": {
@@ -337,9 +337,9 @@ impl LettaClient {
         output: &str,
         is_error: bool,
         on_event: F,
-    ) -> Result<Vec<LettaMessage>>
+    ) -> Result<Vec<CadeMessage>>
     where
-        F: Fn(&LettaMessage),
+        F: Fn(&CadeMessage),
     {
         let body = json!({
             "role": "tool",
@@ -367,7 +367,7 @@ impl LettaClient {
                     if msg.data.trim() == "[DONE]" || msg.data.trim().is_empty() {
                         continue;
                     }
-                    if let Ok(lm) = serde_json::from_str::<LettaMessage>(&msg.data) {
+                    if let Ok(lm) = serde_json::from_str::<CadeMessage>(&msg.data) {
                         on_event(&lm);
                         messages.push(lm);
                     }
@@ -385,7 +385,7 @@ impl LettaClient {
         Ok(messages)
     }
 
-    async fn post_messages(&self, agent_id: &str, body: &Value) -> Result<Vec<LettaMessage>> {
+    async fn post_messages(&self, agent_id: &str, body: &Value) -> Result<Vec<CadeMessage>> {
         let resp = self.client
             .post(self.url(&format!("/agents/{agent_id}/messages")))
             .header(self.auth().0, self.auth().1)
@@ -405,7 +405,7 @@ impl LettaClient {
             .cloned()
             .unwrap_or_default()
             .into_iter()
-            .map(|v| serde_json::from_value(v).unwrap_or(LettaMessage {
+            .map(|v| serde_json::from_value(v).unwrap_or(CadeMessage {
                 id: None,
                 message_type: None,
                 data: json!({}),

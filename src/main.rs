@@ -1,17 +1,17 @@
-mod agent;
-mod cli;
-mod desktop;
-mod permissions;
-mod settings;
-mod skills;
-mod tools;
+// Re-use modules declared in lib.rs
+use cade::agent;
+use cade::cli;
+use cade::desktop;
+use cade::permissions;
+use cade::settings;
+use cade::skills;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
 use std::path::PathBuf;
 
 use agent::{
-    LettaClient,
+    CadeClient,
     client::CreateAgentRequest,
     session::SessionStore,
     tools::register_cade_tools,
@@ -47,13 +47,13 @@ async fn main() -> Result<()> {
     // API credentials
     let api_key = settings
         .api_key()
-        .context("No LETTA_API_KEY. Set via env var or ~/.cade/settings.json")?;
+        .context("No CADE_API_KEY. Set via env var or ~/.cade/settings.json")?;
     let base_url = settings.base_url();
 
-    let client = LettaClient::new(base_url.clone(), api_key).context("create Letta client")?;
+    let client = CadeClient::new(base_url.clone(), api_key).context("create CADE server")?;
 
     if !client.health().await.unwrap_or(false) {
-        bail!("Cannot connect to Letta server at {base_url}. Check LETTA_API_KEY and LETTA_BASE_URL.");
+        bail!("Cannot connect to CADE server at {base_url}. Check CADE_API_KEY and CADE_SERVER_URL.");
     }
 
     // Permissions

@@ -1,17 +1,17 @@
 use anyhow::Result;
 use serde_json::{Value, json};
 
-use super::client::{CreateToolRequest, LettaClient, ToolDef};
+use super::client::{CreateToolRequest, CadeClient, ToolDef};
 use crate::tools::all_schemas;
 
-/// Register all CADE tools with the Letta server.
+/// Register all CADE tools with the CADE server.
 ///
-/// The Letta POST /v1/tools endpoint derives tool name + signature from the
+/// The CADE server /v1/tools endpoint derives tool name + signature from the
 /// Python source_code. We pass our JSON schema explicitly so the agent gets
 /// accurate parameter descriptions.
 ///
 /// Execution happens client-side in Rust — the Python stubs are never run.
-pub async fn register_cade_tools(client: &LettaClient) -> Result<Vec<ToolDef>> {
+pub async fn register_cade_tools(client: &CadeClient) -> Result<Vec<ToolDef>> {
     // Fetch already-registered tools so we skip re-registration
     let existing = client.list_tools().await.unwrap_or_default();
     let existing_names: std::collections::HashSet<String> =
@@ -33,7 +33,7 @@ pub async fn register_cade_tools(client: &LettaClient) -> Result<Vec<ToolDef>> {
         }
 
         // Build a Python stub whose function name matches the tool name.
-        // Letta derives the tool name from `def <name>(...)`, so this must
+        // CADE server the tool name from `def <name>(...)`, so this must
         // be correct. Actual execution happens in Rust — the stub is never called.
         let stub = build_python_stub(&name, &description, &schema["parameters"]);
 

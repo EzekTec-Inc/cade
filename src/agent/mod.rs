@@ -2,4 +2,4 @@ pub mod client;
 pub mod session;
 pub mod tools;
 
-pub use client::LettaClient;
+pub use client::CadeClient;

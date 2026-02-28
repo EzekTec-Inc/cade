@@ -165,13 +165,43 @@ cargo install --path .
 
 ---
 
-## Self-hosting
+## Self-hosting with cade-server
 
-Point CADE at a self-hosted Letta server:
+CADE ships its own server — no third-party dependencies required.
 
 ```bash
-export LETTA_BASE_URL=http://localhost:8283
-export LETTA_API_KEY=your_key
+# 1. Set your LLM provider API key
+export ANTHROPIC_API_KEY=sk-ant-...     # or OPENAI_API_KEY / GOOGLE_API_KEY
+
+# 2. Start the CADE server (defaults to :8284)
+cade-server
+
+# 3. In another terminal — the CLI auto-connects to localhost:8284
+cade
+```
+
+### Server env vars
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CADE_SERVER_PORT` | `8284` | Port to listen on |
+| `CADE_LLM_PROVIDER` | `anthropic` | `anthropic` \| `openai` \| `gemini` \| `ollama` |
+| `CADE_DB_PATH` | `~/.cade/cade.db` | SQLite database path |
+| `ANTHROPIC_API_KEY` | — | Required for Anthropic provider |
+| `OPENAI_API_KEY` | — | Required for OpenAI provider |
+| `GOOGLE_API_KEY` | — | Required for Gemini provider |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama base URL |
+| `CADE_API_KEY` | — | Optional auth token for the server |
+
+### CLI env vars (client side)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CADE_API_KEY` | — | Auth token sent to cade-server |
+| `CADE_SERVER_URL` | `http://localhost:8284` | cade-server URL |
+
+### Use with a remote server
+```bash
+export CADE_SERVER_URL=http://my-server:8284
+export CADE_API_KEY=my-token
 cade
 ```
 

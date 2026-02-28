@@ -1,13 +1,13 @@
 use anyhow::Result;
 
-use crate::agent::{LettaClient, client::LettaMessage};
+use crate::agent::{CadeClient, client::CadeMessage};
 use crate::permissions::PermissionManager;
 use crate::tools::dispatch;
 
 /// Run a single headless prompt with streaming, driving the tool loop to completion.
 /// Prints streaming output to stdout. Returns the final assistant text.
 pub async fn run_headless(
-    client: &LettaClient,
+    client: &CadeClient,
     agent_id: &str,
     prompt: &str,
     permissions: &PermissionManager,
@@ -33,9 +33,9 @@ pub async fn run_headless(
 }
 
 async fn process_tool_calls(
-    client: &LettaClient,
+    client: &CadeClient,
     agent_id: &str,
-    messages: Vec<LettaMessage>,
+    messages: Vec<CadeMessage>,
     permissions: &PermissionManager,
     output: &mut String,
 ) -> Result<()> {
@@ -75,7 +75,7 @@ async fn process_tool_calls(
     Ok(())
 }
 
-fn collect_assistant_text(messages: &[LettaMessage], output: &mut String) {
+fn collect_assistant_text(messages: &[CadeMessage], output: &mut String) {
     for msg in messages {
         if let Some(text) = msg.assistant_text() {
             if !text.is_empty() {

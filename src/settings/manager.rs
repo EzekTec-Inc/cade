@@ -14,9 +14,9 @@ pub struct GlobalSettings {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct EnvSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub letta_api_key: Option<String>,
+    pub api_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub letta_base_url: Option<String>,
+    pub server_url: Option<String>,
 }
 
 /// Local project settings stored in .cade/settings.local.json (gitignored)
@@ -64,19 +64,21 @@ impl SettingsManager {
         Ok(())
     }
 
-    /// Resolve API key: env var > global settings
+    /// Resolve API key: CADE_API_KEY env var > global settings file
     pub fn api_key(&self) -> Option<String> {
-        std::env::var("LETTA_API_KEY")
+        std::env::var("CADE_API_KEY")
             .ok()
-            .or_else(|| self.global.env.letta_api_key.clone())
+            .or_else(|| std::env::var("LETTA_API_KEY").ok()) // backward-compat
+            .or_else(|| self.global.env.api_key.clone())
     }
 
-    /// Resolve base URL: env var > global settings > default cloud
+    /// Resolve server URL: CADE_SERVER_URL env var > global settings > localhost
     pub fn base_url(&self) -> String {
-        std::env::var("LETTA_BASE_URL")
+        std::env::var("CADE_SERVER_URL")
             .ok()
-            .or_else(|| self.global.env.letta_base_url.clone())
-            .unwrap_or_else(|| "https://api.letta.com".to_string())
+            .or_else(|| std::env::var("LETTA_BASE_URL").ok()) // backward-compat
+            .or_else(|| self.global.env.server_url.clone())
+            .unwrap_or_else(|| "http://localhost:8284".to_string())
     }
 
     /// Get the last used agent for this project directory

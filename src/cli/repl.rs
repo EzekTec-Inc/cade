@@ -8,7 +8,7 @@ use crossterm::{
 };
 use std::io::{self, Write};
 
-use crate::agent::{LettaClient, client::LettaMessage};
+use crate::agent::{CadeClient, client::CadeMessage};
 use crate::permissions::{PermissionManager, PermissionMode};
 use crate::tools::{dispatch, is_write_tool};
 
@@ -61,7 +61,7 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
 // ── Repl ──────────────────────────────────────────────────────────────────────
 
 pub struct Repl {
-    client: LettaClient,
+    client: CadeClient,
     agent_id: String,
     agent_name: String,
     permissions: PermissionManager,
@@ -69,7 +69,7 @@ pub struct Repl {
 
 impl Repl {
     pub fn new(
-        client: LettaClient,
+        client: CadeClient,
         agent_id: String,
         agent_name: String,
         permissions: PermissionManager,
@@ -184,7 +184,7 @@ impl Repl {
         is_tool_return: bool,
         tool_call_id: &str,
         tool_output: &str,
-    ) -> Result<Vec<LettaMessage>> {
+    ) -> Result<Vec<CadeMessage>> {
         // Shared mutable render state (needs interior mutability across the closure)
         let stdout_ptr = stdout as *mut io::Stdout;
         let in_reasoning = std::sync::Arc::new(std::sync::Mutex::new(false));
@@ -193,7 +193,7 @@ impl Repl {
         let in_reasoning2 = in_reasoning.clone();
         let in_assistant2 = in_assistant.clone();
 
-        let on_event = move |msg: &LettaMessage| {
+        let on_event = move |msg: &CadeMessage| {
             // SAFETY: closure is called synchronously within the async function body,
             // stdout outlives the closure, and we never alias it.
             let out = unsafe { &mut *stdout_ptr };
@@ -296,7 +296,7 @@ impl Repl {
     async fn dispatch_tool_calls(
         &self,
         stdout: &mut io::Stdout,
-        messages: Vec<LettaMessage>,
+        messages: Vec<CadeMessage>,
     ) -> Result<()> {
         let tool_calls: Vec<(String, String, serde_json::Value)> = messages
             .iter()
