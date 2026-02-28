@@ -302,6 +302,18 @@ impl CadeClient {
         Ok(blocks.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect())
     }
 
+    /// Delete a single memory block.
+    pub async fn delete_memory(&self, agent_id: &str, label: &str) -> Result<()> {
+        let resp = self.client
+            .delete(self.url(&format!("/agents/{agent_id}/memory/{label}")))
+            .header(self.auth().0, self.auth().1)
+            .send().await?;
+        if !resp.status().is_success() && resp.status().as_u16() != 404 {
+            bail!("delete_memory failed {}", resp.status());
+        }
+        Ok(())
+    }
+
     /// Upsert a single memory block.
     pub async fn upsert_memory(&self, agent_id: &str, label: &str, value: &str) -> Result<()> {
         let resp = self.client

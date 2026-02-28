@@ -158,6 +158,17 @@ pub async fn get_memory(
     Ok(Json(json!({ "blocks": arr })))
 }
 
+/// DELETE /v1/agents/:id/memory/:label
+pub async fn delete_memory(
+    State(state): State<AppState>,
+    Path((agent_id, label)): Path<(String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    let found = sqlite::delete_memory_block(&state.db, &agent_id, &label)
+        .map_err(|e| server_err(e.to_string()))?;
+    if found { Ok(StatusCode::NO_CONTENT) }
+    else { Err((StatusCode::NOT_FOUND, Json(json!({"detail": format!("Memory block '{label}' not found")})))) }
+}
+
 /// PUT /v1/agents/:id/memory/:label
 pub async fn upsert_memory(
     State(state): State<AppState>,

@@ -235,6 +235,15 @@ pub fn upsert_memory_block(db: &Db, agent_id: &str, label: &str, value: &str) ->
     Ok(())
 }
 
+pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
+    let conn = db.lock().unwrap();
+    let n = conn.execute(
+        "DELETE FROM memory_blocks WHERE agent_id = ?1 AND label = ?2",
+        params![agent_id, label],
+    )?;
+    Ok(n > 0)
+}
+
 pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String)>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(

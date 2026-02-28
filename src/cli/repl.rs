@@ -497,27 +497,96 @@ impl Repl {
                     }
 
                     SlashCmd::Memory => {
-                        match self.client.get_memory(&self.agent_id()).await {
-                            Ok(blocks) if blocks.is_empty() => {
-                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                    Print("\n  (no memory blocks)\n"), ResetColor)?;
-                            }
-                            Ok(blocks) => {
-                                execute!(stdout, Print("\n"))?;
-                                for b in &blocks {
-                                    let preview: String = b.value.chars().take(300).collect();
-                                    let ellipsis = if b.value.len() > 300 { "…" } else { "" };
-                                    execute!(stdout,
-                                        SetForegroundColor(Color::Cyan),
-                                        Print(format!("  [{}]\n", b.label)),
-                                        SetForegroundColor(Color::White),
-                                        Print(format!("  {}{}\n\n", preview, ellipsis)),
-                                        ResetColor)?;
+                        // Parse subcommand from the raw input line
+                        let raw = input.trim();
+                        let mem_arg = raw.strip_prefix("/memory").unwrap_or("").trim().to_string();
+                        let parts: Vec<&str> = mem_arg.splitn(3, ' ').collect();
+                        let sub = parts.first().copied().unwrap_or("");
+
+                        match sub {
+                            // /memory set <label> <value>
+                            "set" if parts.len() >= 3 => {
+                                let label = parts[1];
+                                let value = parts[2..].join(" ");
+                                let id = self.agent_id();
+                                match self.client.upsert_memory(&id, label, &value).await {
+                                    Ok(_) => println!("\n  ✓ [{label}] updated"),
+                                    Err(e) => println!("\n  ✗ {e}"),
                                 }
                             }
-                            Err(e) => {
-                                execute!(stdout, SetForegroundColor(Color::Red),
-                                    Print(format!("\n  ✗ {e}\n")), ResetColor)?;
+                            // /memory delete <label>
+                            "delete" | "del" | "rm" if parts.len() >= 2 => {
+                                let label = parts[1];
+                                let id = self.agent_id();
+                                match self.client.delete_memory(&id, label).await {
+                                    Ok(_) => println!("\n  ✓ [{label}] deleted"),
+                                    Err(e) => println!("\n  ✗ {e}"),
+                                }
+                            }
+                            // /memory edit <label> — inline multi-line editor
+                            "edit" if parts.len() >= 2 => {
+                                let label = parts[1];
+                                let id = self.agent_id();
+                                // Fetch current value
+                                let current = self.client.get_memory(&id).await
+                                    .unwrap_or_default()
+                                    .into_iter()
+                                    .find(|b| b.label == label)
+                                    .map(|b| b.value)
+                                    .unwrap_or_default();
+
+                                execute!(stdout, ResetColor)?;
+                                stdout.flush()?;
+                                println!("\n  Editing [{label}]");
+                                println!("  Current value:\n  ---");
+                                for line in current.lines() { println!("  {line}"); }
+                                println!("  ---");
+                                println!("  Enter new content (empty line = done, .clear = erase):");
+
+                                terminal::disable_raw_mode()?;
+                                let mut lines: Vec<String> = Vec::new();
+                                let mut clear_mode = false;
+                                loop {
+                                    let mut buf = String::new();
+                                    std::io::stdin().read_line(&mut buf).unwrap_or(0);
+                                    let line = buf.trim_end_matches('\n').trim_end_matches('\r');
+                                    if line == ".clear" { clear_mode = true; break; }
+                                    if line.is_empty() { break; }
+                                    lines.push(line.to_string());
+                                }
+                                terminal::enable_raw_mode()?;
+
+                                let new_value = if clear_mode { String::new() } else { lines.join("\n") };
+                                if new_value.is_empty() && !clear_mode {
+                                    println!("  (cancelled — no changes)");
+                                } else {
+                                    match self.client.upsert_memory(&id, label, &new_value).await {
+                                        Ok(_) => println!("  ✓ [{label}] updated"),
+                                        Err(e) => println!("  ✗ {e}"),
+                                    }
+                                }
+                            }
+                            // /memory (list)
+                            _ => {
+                                match self.client.get_memory(&self.agent_id()).await {
+                                    Ok(blocks) if blocks.is_empty() => {
+                                        execute!(stdout, ResetColor)?;
+                                        stdout.flush()?;
+                                        println!("\n  (no memory blocks)");
+                                    }
+                                    Ok(blocks) => {
+                                        execute!(stdout, ResetColor)?;
+                                        stdout.flush()?;
+                                        println!();
+                                        for b in &blocks {
+                                            let preview: String = b.value.chars().take(300).collect();
+                                            let ellipsis = if b.value.len() > 300 { "..." } else { "" };
+                                            println!("  [{}]", b.label);
+                                            println!("  {}{}\n", preview, ellipsis);
+                                        }
+                                    }
+                                    Err(e) => println!("\n  ✗ {e}"),
+                                }
                             }
                         }
                         stdout.flush()?;
@@ -897,6 +966,11 @@ impl Repl {
         execute!(stdout, Print("\n"))?;
         stdout.flush()?;
 
+        // Intercept update_memory — handled natively rather than dispatched
+        if tool_name == "update_memory" {
+            return self.handle_update_memory(call_id, args).await;
+        }
+
         // Permission check — plan mode allows read operations, blocks write ones
         if self.permissions.is_blocked(tool_name, args) {
             let msg = self.permissions.block_reason(tool_name, args);
@@ -1004,6 +1078,57 @@ impl Repl {
         Ok(approved)
     }
 
+    /// Handle the agent's `update_memory` tool call natively.
+    async fn handle_update_memory(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+    ) -> Result<crate::tools::ToolResult> {
+        let label = args["label"].as_str().unwrap_or("").trim().to_string();
+        let value = args["value"].as_str().unwrap_or("").to_string();
+        let operation = args["operation"].as_str().unwrap_or("set");
+
+        if label.is_empty() {
+            return Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "update_memory".to_string(),
+                output: "error: 'label' is required".to_string(),
+                is_error: true,
+            });
+        }
+
+        let agent_id = self.agent_id();
+        let final_value = if operation == "append" {
+            let existing = self.client.get_memory(&agent_id).await
+                .unwrap_or_default()
+                .into_iter()
+                .find(|b| b.label == label)
+                .map(|b| b.value)
+                .unwrap_or_default();
+            if existing.is_empty() { value } else { format!("{existing}\n{value}") }
+        } else {
+            value
+        };
+
+        match self.client.upsert_memory(&agent_id, &label, &final_value).await {
+            Ok(_) => {
+                tracing::info!("Agent updated memory [{label}]");
+                Ok(crate::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "update_memory".to_string(),
+                    output: format!("Memory block '{label}' updated"),
+                    is_error: false,
+                })
+            }
+            Err(e) => Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "update_memory".to_string(),
+                output: format!("Failed to update '{label}': {e}"),
+                is_error: true,
+            }),
+        }
+    }
+
     fn print_error(&self, stdout: &mut io::Stdout, msg: &str) -> Result<()> {
         execute!(
             stdout,
@@ -1039,10 +1164,13 @@ impl Repl {
         println!("    /skills reload         - re-discover skills + update agent memory");
         println!();
         println!("  Memory:");
-        println!("    /init           - analyse project + initialise memory");
-        println!("    /remember <t>   - store a fact in agent memory");
-        println!("    /memory         - view all memory blocks");
-        println!("    /search <q>     - search past messages");
+        println!("    /memory                    - list all memory blocks");
+        println!("    /memory set <label> <val>  - set a block directly");
+        println!("    /memory delete <label>     - delete a block");
+        println!("    /memory edit <label>       - multi-line inline editor");
+        println!("    /remember <t>              - append to preferences block");
+        println!("    /init                      - analyse project + init memory");
+        println!("    /search <q>                - search past messages");
         println!();
         println!("  Model:");
         println!("    /model <m>      - switch model  (e.g. /model gemini/gemini-2.5-pro)");

@@ -56,6 +56,30 @@ async fn process_tool_calls(
             continue;
         }
 
+        // Intercept update_memory — handled natively
+        if tool_name == "update_memory" {
+            let label = args["label"].as_str().unwrap_or("").trim().to_string();
+            let value = args["value"].as_str().unwrap_or("").to_string();
+            let operation = args["operation"].as_str().unwrap_or("set");
+            let final_value = if operation == "append" {
+                let existing = client.get_memory(agent_id).await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|b| b.label == label)
+                    .map(|b| b.value)
+                    .unwrap_or_default();
+                if existing.is_empty() { value } else { format!("{existing}\n{value}") }
+            } else { value };
+            let (msg, err) = match client.upsert_memory(agent_id, &label, &final_value).await {
+                Ok(_) => (format!("Memory block '{label}' updated"), false),
+                Err(e) => (format!("Failed: {e}"), true),
+            };
+            let follow = client.stream_tool_return(agent_id, &call_id, &msg, err, |_| {}).await?;
+            collect_assistant_text(&follow, output);
+            Box::pin(process_tool_calls(client, agent_id, follow, permissions, output)).await?;
+            continue;
+        }
+
         tracing::info!("Executing tool: {tool_name}");
         let result = dispatch(call_id.clone(), &tool_name, &args).await;
         tracing::debug!("Tool '{}': {} bytes", tool_name, result.output.len());

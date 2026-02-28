@@ -25,8 +25,63 @@ use skills::{discover_skills, skills_context};
 
 const SKILLS_DIR: &str = ".skills";
 
+/// Default memory block labels and their seed values.
+const DEFAULT_MEMORY_BLOCKS: &[(&str, &str)] = &[
+    ("persona",  "CADE is a coding AI assistant with desktop extensions. It helps with programming tasks, file management, shell commands, and desktop automation. CADE prefers concise, accurate responses and always verifies changes before reporting success."),
+    ("human",    ""),   // agent fills in as it learns about the user
+    ("project",  ""),   // agent fills in via /init
+];
+
+/// Seed default memory blocks for a newly created agent.
+async fn seed_default_memory(client: &CadeClient, agent_id: &str) {
+    for (label, value) in DEFAULT_MEMORY_BLOCKS {
+        if let Err(e) = client.upsert_memory(agent_id, label, value).await {
+            tracing::warn!("seed_memory {label}: {e}");
+        }
+    }
+}
+
+/// Register the `update_memory` tool that lets the agent update its own memory.
+async fn register_update_memory_tool(client: &CadeClient) {
+    let schema = serde_json::json!({
+        "name": "update_memory",
+        "description": "Update a persistent memory block. Use this to store important information about the user, project, or yourself that should be remembered across conversations. Call this whenever you learn something worth remembering.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string",
+                    "description": "Memory block name: 'human' (user info), 'project' (project context), 'persona' (your identity/style), or any custom label"
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Content to store in the memory block"
+                },
+                "operation": {
+                    "type": "string",
+                    "enum": ["set", "append"],
+                    "description": "set = replace the block entirely, append = add to existing content"
+                }
+            },
+            "required": ["label", "value"]
+        }
+    });
+    use agent::client::CreateToolRequest;
+    let req = CreateToolRequest {
+        source_code: String::new(),
+        source_type: "json".to_string(),
+        json_schema: Some(schema),
+        tags: vec![],
+    };
+    if let Err(e) = client.create_tool(req).await {
+        tracing::debug!("update_memory tool already registered or failed: {e}");
+    }
+}
+
 /// Register all CADE tools on the server and attach them to the given agent.
 async fn register_and_attach(client: &CadeClient, agent_id: &str) {
+    // Register update_memory tool first so it's included in the agent's toolset
+    register_update_memory_tool(client).await;
     let tools = register_cade_tools(client).await.unwrap_or_default();
     let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
     tracing::info!("Registered {} tools", tools.len());
@@ -133,6 +188,7 @@ async fn main() -> Result<()> {
             .await
             .context("create agent")?;
         register_and_attach(&client, &a.id).await;
+        seed_default_memory(&client, &a.id).await;
         session.set_agent(a.id.clone(), Some(a.name.clone())).context("save session")?;
         settings.set_last_agent(&a.id).context("save global session")?;
         a
@@ -148,6 +204,7 @@ async fn main() -> Result<()> {
                     .await
                     .context("create agent")?;
                 register_and_attach(&client, &a.id).await;
+                seed_default_memory(&client, &a.id).await;
                 session.set_agent(a.id.clone(), Some(a.name.clone()))?;
                 settings.set_last_agent(&a.id)?;
                 a
@@ -160,6 +217,7 @@ async fn main() -> Result<()> {
             .await
             .context("create agent")?;
         register_and_attach(&client, &a.id).await;
+        seed_default_memory(&client, &a.id).await;
         session.set_agent(a.id.clone(), Some(a.name.clone()))?;
         settings.set_last_agent(&a.id)?;
         a
