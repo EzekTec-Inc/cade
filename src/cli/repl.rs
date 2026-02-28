@@ -167,98 +167,151 @@ impl Repl {
         Ok(())
     }
 
-    /// Send a user message and drive the tool-call loop until the agent sends
-    /// a final assistant_message (or stop_reason).
+    /// Send a user message and drive the tool-call loop with live SSE streaming.
     async fn agent_turn(&self, stdout: &mut io::Stdout, input: &str) -> Result<()> {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("\n⟳ thinking…\n"),
-            ResetColor
-        )?;
-        stdout.flush()?;
-
-        // Initial send
-        let messages = match self.client.send_message(&self.agent_id, input).await {
-            Ok(m) => m,
-            Err(e) => {
-                self.print_error(stdout, &e.to_string())?;
-                return Ok(());
-            }
-        };
-
-        self.handle_messages(stdout, messages).await
+        // Live-stream the response, rendering each event as it arrives
+        let messages = self.stream_turn(stdout, input, false, "", "").await?;
+        // After the stream ends, execute any tool calls that were collected
+        self.dispatch_tool_calls(stdout, messages).await
     }
 
-    /// Recursively process messages, executing tool calls and sending results back.
-    async fn handle_messages(
+    /// Stream one turn (user message or tool return) and render live.
+    /// Returns the complete collected message list.
+    async fn stream_turn(
         &self,
         stdout: &mut io::Stdout,
-        messages: Vec<LettaMessage>,
-    ) -> Result<()> {
-        let mut pending_tool_calls: Vec<(String, String, serde_json::Value)> = Vec::new();
+        input: &str,
+        is_tool_return: bool,
+        tool_call_id: &str,
+        tool_output: &str,
+    ) -> Result<Vec<LettaMessage>> {
+        // Shared mutable render state (needs interior mutability across the closure)
+        let stdout_ptr = stdout as *mut io::Stdout;
+        let in_reasoning = std::sync::Arc::new(std::sync::Mutex::new(false));
+        let in_assistant = std::sync::Arc::new(std::sync::Mutex::new(false));
 
-        for msg in &messages {
+        let in_reasoning2 = in_reasoning.clone();
+        let in_assistant2 = in_assistant.clone();
+
+        let on_event = move |msg: &LettaMessage| {
+            // SAFETY: closure is called synchronously within the async function body,
+            // stdout outlives the closure, and we never alias it.
+            let out = unsafe { &mut *stdout_ptr };
             match msg.msg_type() {
+                "reasoning_message" => {
+                    let mut flag = in_reasoning2.lock().unwrap();
+                    if let Some(text) = msg.reasoning_text() {
+                        if !*flag {
+                            let _ = execute!(out,
+                                SetForegroundColor(Color::DarkGrey),
+                                Print("\n  💭 "),
+                            );
+                            *flag = true;
+                        }
+                        let _ = execute!(out, Print(text));
+                    }
+                    let _ = out.flush();
+                }
                 "assistant_message" => {
+                    let mut rflag = in_reasoning2.lock().unwrap();
+                    if *rflag {
+                        let _ = execute!(out, Print("\n"), ResetColor);
+                        *rflag = false;
+                    }
+                    drop(rflag);
+
+                    let mut aflag = in_assistant2.lock().unwrap();
                     if let Some(text) = msg.assistant_text() {
                         if !text.is_empty() {
-                            execute!(
-                                stdout,
-                                SetForegroundColor(Color::White),
-                                Print(format!("\n{text}\n")),
-                                ResetColor
-                            )?;
+                            if !*aflag {
+                                let _ = execute!(out,
+                                    SetForegroundColor(Color::White),
+                                    Print("\n"),
+                                );
+                                *aflag = true;
+                            }
+                            let _ = execute!(out, Print(text));
                         }
                     }
-                }
-                "reasoning_message" => {
-                    if let Some(r) = msg.reasoning_text() {
-                        execute!(
-                            stdout,
-                            SetForegroundColor(Color::DarkGrey),
-                            Print(format!("  💭 {r}\n")),
-                            ResetColor
-                        )?;
-                    }
+                    let _ = out.flush();
                 }
                 "tool_call_message" => {
-                    if let Some(tc) = msg.as_tool_call() {
-                        pending_tool_calls.push(tc);
+                    // Close any open reasoning/assistant block
+                    let mut rflag = in_reasoning2.lock().unwrap();
+                    if *rflag {
+                        let _ = execute!(out, Print("\n"), ResetColor);
+                        *rflag = false;
+                    }
+                    drop(rflag);
+                    let mut aflag = in_assistant2.lock().unwrap();
+                    if *aflag {
+                        let _ = execute!(out, Print("\n"), ResetColor);
+                        *aflag = false;
                     }
                 }
                 _ => {}
             }
-        }
+        };
 
-        stdout.flush()?;
-
-        // Execute all pending tool calls
-        for (call_id, tool_name, args) in pending_tool_calls {
-            let result = self
-                .execute_tool(stdout, &call_id, &tool_name, &args)
-                .await?;
-
-            // Send result back to agent
-            let follow_up = match self
+        let messages = if is_tool_return {
+            match self
                 .client
-                .send_tool_return(
+                .stream_tool_return(
                     &self.agent_id,
-                    &call_id,
-                    &result.output,
-                    result.is_error,
+                    tool_call_id,
+                    tool_output,
+                    false,
+                    on_event,
                 )
                 .await
             {
                 Ok(m) => m,
                 Err(e) => {
-                    self.print_error(stdout, &format!("tool return failed: {e}"))?;
-                    return Ok(());
+                    self.print_error(stdout, &e.to_string())?;
+                    return Ok(vec![]);
                 }
-            };
+            }
+        } else {
+            match self
+                .client
+                .stream_message(&self.agent_id, input, on_event)
+                .await
+            {
+                Ok(m) => m,
+                Err(e) => {
+                    self.print_error(stdout, &e.to_string())?;
+                    return Ok(vec![]);
+                }
+            }
+        };
 
-            // Recursively handle follow-up messages (agent may chain more tools)
-            Box::pin(self.handle_messages(stdout, follow_up)).await?;
+        // Ensure final newline + colour reset after streaming
+        execute!(stdout, Print("\n"), ResetColor)?;
+        stdout.flush()?;
+
+        Ok(messages)
+    }
+
+    /// Collect tool calls from messages and execute them one by one.
+    async fn dispatch_tool_calls(
+        &self,
+        stdout: &mut io::Stdout,
+        messages: Vec<LettaMessage>,
+    ) -> Result<()> {
+        let tool_calls: Vec<(String, String, serde_json::Value)> = messages
+            .iter()
+            .filter_map(|m| m.as_tool_call())
+            .collect();
+
+        for (call_id, tool_name, args) in tool_calls {
+            let result = self.execute_tool(stdout, &call_id, &tool_name, &args).await?;
+
+            // Stream the tool return and process any chained tool calls
+            let follow = self
+                .stream_turn(stdout, "", true, &call_id, &result.output)
+                .await?;
+
+            Box::pin(self.dispatch_tool_calls(stdout, follow)).await?;
         }
 
         Ok(())

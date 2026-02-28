@@ -1,5 +1,7 @@
 use anyhow::{Context, Result, bail};
+use futures::StreamExt;
 use reqwest::Client;
+use reqwest_eventsource::{Event, EventSource};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -229,6 +231,78 @@ impl LettaClient {
         self.post_messages(agent_id, &req).await
     }
 
+    /// Stream a user message using SSE. Calls `on_event` for each message as
+    /// it arrives (for live rendering), and returns the full collected list.
+    ///
+    /// Uses `/v1/agents/{id}/messages/stream` — falls back to `send_message`
+    /// if the stream endpoint returns a non-2xx status.
+    pub async fn stream_message<F>(
+        &self,
+        agent_id: &str,
+        input: &str,
+        on_event: F,
+    ) -> Result<Vec<LettaMessage>>
+    where
+        F: Fn(&LettaMessage),
+    {
+        let url = self.url(&format!("/agents/{agent_id}/messages/stream"));
+        let body = json!({ "input": input });
+
+        let request = self
+            .client
+            .post(&url)
+            .header(self.auth().0, self.auth().1)
+            .json(&body);
+
+        let mut es = EventSource::new(request)
+            .map_err(|e| anyhow::anyhow!("EventSource: {e}"))?;
+
+        let mut messages: Vec<LettaMessage> = Vec::new();
+
+        while let Some(event) = es.next().await {
+            match event {
+                Ok(Event::Open) => {}
+                Ok(Event::Message(msg)) => {
+                    if msg.data.trim() == "[DONE]" || msg.data.trim().is_empty() {
+                        continue;
+                    }
+                    match serde_json::from_str::<LettaMessage>(&msg.data) {
+                        Ok(lm) => {
+                            on_event(&lm);
+                            messages.push(lm);
+                        }
+                        Err(_) => {
+                            // Try parsing as a wrapper object with a messages array
+                            if let Ok(v) = serde_json::from_str::<Value>(&msg.data) {
+                                if let Some(arr) = v["messages"].as_array() {
+                                    for item in arr {
+                                        if let Ok(lm) = serde_json::from_value::<LettaMessage>(item.clone()) {
+                                            on_event(&lm);
+                                            messages.push(lm);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(reqwest_eventsource::Error::StreamEnded) => break,
+                Err(e) => {
+                    // Non-streaming fallback: if stream endpoint fails, use regular
+                    tracing::debug!("SSE error: {e}, falling back to send_message");
+                    es.close();
+                    let fallback = self.send_message(agent_id, input).await?;
+                    for lm in &fallback {
+                        on_event(lm);
+                    }
+                    return Ok(fallback);
+                }
+            }
+        }
+
+        Ok(messages)
+    }
+
     /// Send a tool result back to the agent after local execution
     pub async fn send_tool_return(
         &self,
@@ -246,6 +320,62 @@ impl LettaClient {
             }
         });
         self.post_messages(agent_id, &req).await
+    }
+
+    /// Stream a tool return response (same as send_tool_return but with live events)
+    pub async fn stream_tool_return<F>(
+        &self,
+        agent_id: &str,
+        tool_call_id: &str,
+        output: &str,
+        is_error: bool,
+        on_event: F,
+    ) -> Result<Vec<LettaMessage>>
+    where
+        F: Fn(&LettaMessage),
+    {
+        let body = json!({
+            "role": "tool",
+            "tool_return": {
+                "tool_call_id": tool_call_id,
+                "content": output,
+                "status": if is_error { "error" } else { "success" }
+            }
+        });
+        let url = self.url(&format!("/agents/{agent_id}/messages/stream"));
+        let request = self
+            .client
+            .post(&url)
+            .header(self.auth().0, self.auth().1)
+            .json(&body);
+
+        let mut es = EventSource::new(request)
+            .map_err(|e| anyhow::anyhow!("EventSource: {e}"))?;
+        let mut messages = Vec::new();
+
+        while let Some(event) = es.next().await {
+            match event {
+                Ok(Event::Open) => {}
+                Ok(Event::Message(msg)) => {
+                    if msg.data.trim() == "[DONE]" || msg.data.trim().is_empty() {
+                        continue;
+                    }
+                    if let Ok(lm) = serde_json::from_str::<LettaMessage>(&msg.data) {
+                        on_event(&lm);
+                        messages.push(lm);
+                    }
+                }
+                Err(reqwest_eventsource::Error::StreamEnded) => break,
+                Err(_) => {
+                    // Fallback to non-streaming
+                    es.close();
+                    let fallback = self.send_tool_return(agent_id, tool_call_id, output, is_error).await?;
+                    for lm in &fallback { on_event(lm); }
+                    return Ok(fallback);
+                }
+            }
+        }
+        Ok(messages)
     }
 
     async fn post_messages(&self, agent_id: &str, body: &Value) -> Result<Vec<LettaMessage>> {
