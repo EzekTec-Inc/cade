@@ -176,7 +176,7 @@ impl CadeClient {
         ("Authorization", format!("Bearer {}", self.api_key))
     }
 
-    // ── Health ────────────────────────────────────────────────────────────────
+    // ── Health + server config ────────────────────────────────────────────────
 
     pub async fn health(&self) -> Result<bool> {
         let resp = self.client
@@ -185,6 +185,29 @@ impl CadeClient {
             .send()
             .await?;
         Ok(resp.status().is_success())
+    }
+
+    /// Fetch the server's auto-detected provider and default model.
+    /// Falls back to a local default if the endpoint is unavailable (e.g. Letta Cloud).
+    pub async fn server_default_model(&self) -> String {
+        let fallback = "anthropic/claude-sonnet-4-5-20250929".to_string();
+        let resp = match self.client
+            .get(self.url("/config"))
+            .header(self.auth().0, self.auth().1)
+            .send()
+            .await
+        {
+            Ok(r) if r.status().is_success() => r,
+            _ => return fallback,
+        };
+        let body: serde_json::Value = match resp.json().await {
+            Ok(v) => v,
+            Err(_) => return fallback,
+        };
+        // Server returns bare model name; wrap with provider prefix for storage
+        let provider = body["provider"].as_str().unwrap_or("anthropic");
+        let model    = body["default_model"].as_str().unwrap_or("claude-sonnet-4-5-20250929");
+        format!("{provider}/{model}")
     }
 
     // ── Agents ────────────────────────────────────────────────────────────────

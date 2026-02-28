@@ -65,6 +65,16 @@ pub trait LlmProvider: Send + Sync {
     ) -> Result<std::pin::Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>>;
 }
 
+/// Strip optional `provider/` prefix from a model handle.
+/// e.g. `"anthropic/claude-sonnet-4-5-20250929"` → `"claude-sonnet-4-5-20250929"`
+pub fn bare_model(model: &str) -> &str {
+    if let Some(pos) = model.find('/') {
+        &model[pos + 1..]
+    } else {
+        model
+    }
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 pub fn make_provider(config: &ServerConfig) -> Result<Arc<dyn LlmProvider>> {

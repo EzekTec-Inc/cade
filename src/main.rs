@@ -21,7 +21,6 @@ use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
 use skills::discover_skills;
 
-const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-5-20250929";
 const SKILLS_DIR: &str = ".skills";
 
 #[tokio::main]
@@ -74,23 +73,26 @@ async fn main() -> Result<()> {
         println!("Loaded {} skill(s) from {}", loaded_skills.len(), skills_dir.display());
     }
 
+    // Fetch the server's auto-detected default model (based on which API keys it has).
+    // CLI --model flag or CADE_DEFAULT_MODEL env var always wins.
+    let server_default = client.server_default_model().await;
+    let default_model = std::env::var("CADE_DEFAULT_MODEL")
+        .ok()
+        .or_else(|| args.model.clone())
+        .unwrap_or(server_default);
+
     // Agent resolution — helper closure avoids repeating the create logic
-    let create_agent = |model: String, desc: &str| {
-        let name = format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"));
-        let description = Some(desc.to_string());
-        CreateAgentRequest {
-            name: Some(name),
-            model,
-            description,
-            memory_blocks: vec![],
-            tool_ids: vec![],
-        }
+    let make_req = |model: String, desc: &str| CreateAgentRequest {
+        name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
+        model,
+        description: Some(desc.to_string()),
+        memory_blocks: vec![],
+        tool_ids: vec![],
     };
 
     let agent = if args.new_agent {
-        let model = args.model.as_deref().unwrap_or(DEFAULT_MODEL).to_string();
         let a = client
-            .create_agent(create_agent(model, "CADE coding agent with desktop extensions"))
+            .create_agent(make_req(default_model.clone(), "CADE coding agent with desktop extensions"))
             .await
             .context("create agent")?;
         let tools = register_cade_tools(&client).await.context("register tools")?;
@@ -105,9 +107,8 @@ async fn main() -> Result<()> {
             Ok(a) => a,
             Err(_) => {
                 eprintln!("Previous agent {last_id} not found — creating new agent");
-                let model = args.model.as_deref().unwrap_or(DEFAULT_MODEL).to_string();
                 let a = client
-                    .create_agent(create_agent(model, "CADE coding agent"))
+                    .create_agent(make_req(default_model.clone(), "CADE coding agent"))
                     .await
                     .context("create agent")?;
                 let _ = register_cade_tools(&client).await;
@@ -118,9 +119,9 @@ async fn main() -> Result<()> {
         }
     } else {
         println!("No previous session — creating new agent…");
-        let model = args.model.as_deref().unwrap_or(DEFAULT_MODEL).to_string();
+        let model = default_model.clone();
         let a = client
-            .create_agent(create_agent(model, "CADE coding agent with desktop extensions"))
+            .create_agent(make_req(model, "CADE coding agent with desktop extensions"))
             .await
             .context("create agent")?;
         let tools = register_cade_tools(&client).await.context("register tools")?;
@@ -150,6 +151,7 @@ async fn main() -> Result<()> {
         println!("CADE v{}", env!("CARGO_PKG_VERSION"));
         println!("Agent   : {} ({})", agent.name, agent.id);
         println!("Server  : {base_url}");
+        println!("Model   : {default_model}");
         println!("Mode    : {}", permissions.mode());
         println!("CWD     : {}", cwd.display());
         println!("Skills  : {}", loaded_skills.len());

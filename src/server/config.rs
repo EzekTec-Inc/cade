@@ -6,6 +6,7 @@ pub struct ServerConfig {
     pub addr: SocketAddr,
     pub db_path: String,
     pub llm_provider: LlmProviderKind,
+    pub default_model: String,
     pub anthropic_api_key: Option<String>,
     pub openai_api_key: Option<String>,
     pub google_api_key: Option<String>,
@@ -30,7 +31,9 @@ impl std::str::FromStr for LlmProviderKind {
             "openai" | "openai-compatible" => Ok(Self::OpenAI),
             "gemini" | "google" => Ok(Self::Gemini),
             "ollama" | "local" => Ok(Self::Ollama),
-            other => Err(anyhow::anyhow!("Unknown LLM provider: '{other}'. Valid: anthropic, openai, gemini, ollama")),
+            other => Err(anyhow::anyhow!(
+                "Unknown LLM provider '{other}'. Valid: anthropic, openai, gemini, ollama"
+            )),
         }
     }
 }
@@ -46,6 +49,53 @@ impl std::fmt::Display for LlmProviderKind {
     }
 }
 
+/// Best-in-class model for each provider (used when no explicit model is set)
+pub fn default_model_for(provider: &LlmProviderKind) -> &'static str {
+    match provider {
+        LlmProviderKind::Anthropic => "claude-sonnet-4-5-20250929",
+        LlmProviderKind::OpenAI    => "gpt-4o",
+        LlmProviderKind::Gemini    => "gemini-2.0-flash",
+        LlmProviderKind::Ollama    => "llama3.2",   // most likely installed; user can override
+    }
+}
+
+/// Auto-detect the best available provider by scanning env keys.
+/// Priority: Anthropic > OpenAI > Gemini > Ollama (always available as fallback).
+/// Returns (provider, bare_model_name).
+pub fn detect_provider() -> (LlmProviderKind, String) {
+    // User-explicit override takes highest priority
+    if let Ok(p) = std::env::var("CADE_LLM_PROVIDER") {
+        if let Ok(kind) = p.parse::<LlmProviderKind>() {
+            // Allow explicit model override too
+            let model = std::env::var("CADE_DEFAULT_MODEL")
+                .unwrap_or_else(|_| default_model_for(&kind).to_string());
+            return (kind, model);
+        }
+    }
+
+    // Scan for API keys in priority order
+    let providers: &[(fn() -> bool, LlmProviderKind)] = &[
+        (|| std::env::var("ANTHROPIC_API_KEY").map(|k| !k.is_empty()).unwrap_or(false), LlmProviderKind::Anthropic),
+        (|| std::env::var("OPENAI_API_KEY").map(|k| !k.is_empty()).unwrap_or(false),    LlmProviderKind::OpenAI),
+        (|| std::env::var("GOOGLE_API_KEY").map(|k| !k.is_empty()).unwrap_or(false),    LlmProviderKind::Gemini),
+    ];
+
+    for (check, kind) in providers {
+        if check() {
+            let model = std::env::var("CADE_DEFAULT_MODEL")
+                .unwrap_or_else(|_| default_model_for(kind).to_string());
+            tracing::info!("Auto-detected provider: {} → model: {}", kind, model);
+            return (kind.clone(), model);
+        }
+    }
+
+    // Ollama is always available as local fallback
+    let model = std::env::var("CADE_DEFAULT_MODEL")
+        .unwrap_or_else(|_| default_model_for(&LlmProviderKind::Ollama).to_string());
+    tracing::info!("No API keys found — falling back to Ollama ({})", model);
+    (LlmProviderKind::Ollama, model)
+}
+
 impl ServerConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let port: u16 = std::env::var("CADE_SERVER_PORT")
@@ -59,13 +109,12 @@ impl ServerConfig {
             .unwrap_or_else(|| "cade.db".to_string());
         let db_path = std::env::var("CADE_DB_PATH").unwrap_or(home);
 
-        let llm_provider: LlmProviderKind = std::env::var("CADE_LLM_PROVIDER")
-            .unwrap_or_else(|_| "anthropic".to_string())
-            .parse()?;
+        let (llm_provider, default_model) = detect_provider();
 
         Ok(Self {
             addr,
             db_path,
+            default_model,
             llm_provider,
             anthropic_api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
             openai_api_key: std::env::var("OPENAI_API_KEY").ok(),

@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
+use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
 
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
@@ -23,7 +23,8 @@ impl GeminiProvider {
 
     fn url(&self, model: &str, stream: bool) -> String {
         let action = if stream { "streamGenerateContent?alt=sse" } else { "generateContent" };
-        format!("{GEMINI_BASE}/{model}:{action}&key={}", self.api_key)
+        // Strip provider prefix for URL construction
+        format!("{GEMINI_BASE}/{}:{action}&key={}", bare_model(model), self.api_key)
     }
 
     /// Convert our messages to Gemini `contents` format

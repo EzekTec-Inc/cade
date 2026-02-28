@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
+use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 
@@ -86,7 +86,7 @@ impl OpenAiProvider {
 impl LlmProvider for OpenAiProvider {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
         let mut body = json!({
-            "model": req.model,
+            "model": bare_model(&req.model),
             "messages": Self::to_openai_messages(req),
             "max_tokens": req.max_tokens
         });
@@ -113,7 +113,7 @@ impl LlmProvider for OpenAiProvider {
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
         let mut body = json!({
-            "model": req.model,
+            "model": bare_model(&req.model),
             "messages": Self::to_openai_messages(req),
             "max_tokens": req.max_tokens,
             "stream": true
