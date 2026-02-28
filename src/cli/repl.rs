@@ -65,6 +65,8 @@ pub struct Repl {
     agent_id: String,
     agent_name: String,
     permissions: PermissionManager,
+    /// Current active model (may be switched with /model)
+    current_model: std::sync::Arc<std::sync::Mutex<String>>,
 }
 
 impl Repl {
@@ -73,8 +75,15 @@ impl Repl {
         agent_id: String,
         agent_name: String,
         permissions: PermissionManager,
+        current_model: String,
     ) -> Self {
-        Self { client, agent_id, agent_name, permissions }
+        Self {
+            client,
+            agent_id,
+            agent_name,
+            permissions,
+            current_model: std::sync::Arc::new(std::sync::Mutex::new(current_model)),
+        }
     }
 
     pub async fn run(self) -> Result<()> {
@@ -134,10 +143,14 @@ impl Repl {
                         println!("\nAgent: {} ({})", self.agent_name, self.agent_id);
                     }
                     SlashCmd::Info => {
+                        let model = self.current_model.lock()
+                            .map(|g| g.clone())
+                            .unwrap_or_else(|_| "unknown".to_string());
                         println!(
-                            "\nAgent : {} ({})\nMode  : {}\nVersion: {}",
+                            "\nAgent : {} ({})\nModel : {}\nMode  : {}\nVersion: {}",
                             self.agent_name,
                             self.agent_id,
+                            model,
                             self.permissions.mode(),
                             env!("CARGO_PKG_VERSION")
                         );
@@ -154,7 +167,35 @@ impl Repl {
                         println!("\nUse 'cade --new' to start a fresh agent session.");
                     }
                     SlashCmd::Model(m) => {
-                        println!("\n/model switching not yet implemented (requested: {m})");
+                        execute!(
+                            stdout,
+                            SetForegroundColor(Color::DarkGrey),
+                            Print(format!("\n  Switching model → {m}…\n")),
+                            ResetColor,
+                        )?;
+                        stdout.flush()?;
+                        match self.client.patch_agent_model(&self.agent_id, &m).await {
+                            Ok(new_model) => {
+                                if let Ok(mut guard) = self.current_model.lock() {
+                                    *guard = new_model.clone();
+                                }
+                                execute!(
+                                    stdout,
+                                    SetForegroundColor(Color::Green),
+                                    Print(format!("  ✓ Model: {new_model}\n")),
+                                    ResetColor,
+                                )?;
+                            }
+                            Err(e) => {
+                                execute!(
+                                    stdout,
+                                    SetForegroundColor(Color::Red),
+                                    Print(format!("  ✗ Failed to switch model: {e}\n")),
+                                    ResetColor,
+                                )?;
+                            }
+                        }
+                        stdout.flush()?;
                     }
                 }
                 continue;

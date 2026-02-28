@@ -141,6 +141,38 @@ pub fn delete_agent(db: &Db, id: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
+/// Update the model used by an agent. Returns false if the agent was not found.
+pub fn update_agent_model(db: &Db, id: &str, model: &str) -> Result<bool> {
+    let conn = db.lock().unwrap();
+    let n = conn.execute(
+        "UPDATE agents SET model = ?1 WHERE id = ?2",
+        params![model, id],
+    )?;
+    Ok(n > 0)
+}
+
+/// Associate a set of tool IDs with an agent (upsert).
+pub fn attach_tools_to_agent(db: &Db, agent_id: &str, tool_ids: &[String]) -> Result<()> {
+    let conn = db.lock().unwrap();
+    for tid in tool_ids {
+        conn.execute(
+            "INSERT OR IGNORE INTO agent_tools (agent_id, tool_id) VALUES (?1, ?2)",
+            params![agent_id, tid],
+        )?;
+    }
+    Ok(())
+}
+
+/// Return tool IDs associated with an agent (if any; falls back to all tools).
+pub fn get_agent_tool_ids(db: &Db, agent_id: &str) -> Result<Vec<String>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT tool_id FROM agent_tools WHERE agent_id = ?1"
+    )?;
+    let rows = stmt.query_map(params![agent_id], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 // ── Messages ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

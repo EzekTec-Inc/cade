@@ -212,6 +212,39 @@ impl CadeClient {
 
     // ── Agents ────────────────────────────────────────────────────────────────
 
+    /// Attach a list of tool IDs to an agent on the server.
+    /// Calls PATCH /v1/agents/:id/tools for each tool.
+    pub async fn attach_agent_tools(&self, agent_id: &str, tool_ids: &[String]) -> Result<()> {
+        let resp = self.client
+            .post(self.url(&format!("/agents/{agent_id}/tools")))
+            .header(self.auth().0, self.auth().1)
+            .json(&serde_json::json!({ "tool_ids": tool_ids }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            tracing::warn!("attach_agent_tools {status} — continuing without explicit attachment");
+        }
+        Ok(())
+    }
+
+    /// Switch the model for an existing agent. Returns the new model string.
+    pub async fn patch_agent_model(&self, agent_id: &str, model: &str) -> Result<String> {
+        let resp = self.client
+            .patch(self.url(&format!("/agents/{agent_id}")))
+            .header(self.auth().0, self.auth().1)
+            .json(&serde_json::json!({ "model": model }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            bail!("patch_agent failed {status}: {body}");
+        }
+        let body: serde_json::Value = resp.json().await?;
+        Ok(body["model"].as_str().unwrap_or(model).to_string())
+    }
+
     pub async fn create_agent(&self, req: CreateAgentRequest) -> Result<AgentState> {
         let resp = self.client
             .post(self.url("/agents"))

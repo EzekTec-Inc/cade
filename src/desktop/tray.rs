@@ -71,11 +71,9 @@ pub fn spawn_tray() -> Result<mpsc::Sender<TrayMsg>, String> {
         std::thread::spawn(move || {
             for msg in rx {
                 match msg {
-                    TrayMsg::SetStatus(_status) => {
-                        // TODO: update tray icon/tooltip via handle
+                    TrayMsg::SetStatus(status) => {
                         let _ = handle.update(|t: &mut CadeTray| {
-                            // t.status = _status;
-                            let _ = t; // suppress unused warning for now
+                            t.status = status.clone();
                         });
                     }
                     TrayMsg::Quit => break,

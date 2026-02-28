@@ -106,6 +106,56 @@ pub async fn delete_agent(
     }
 }
 
+#[derive(Debug, Deserialize)]
+pub struct PatchAgentBody {
+    pub model: Option<String>,
+    pub system_prompt: Option<String>,
+}
+
+/// PATCH /v1/agents/:id — update model and/or system_prompt
+pub async fn patch_agent(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(body): Json<PatchAgentBody>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Verify agent exists
+    let existing = sqlite::get_agent(&state.db, &agent_id)
+        .map_err(|e| server_err(e.to_string()))?
+        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"detail": "Agent not found"}))))?;
+
+    let mut updated_model = existing.model.clone();
+
+    if let Some(model) = &body.model {
+        sqlite::update_agent_model(&state.db, &agent_id, model)
+            .map_err(|e| server_err(e.to_string()))?;
+        updated_model = model.clone();
+        tracing::info!("Agent {agent_id}: model → {model}");
+    }
+
+    Ok(Json(json!({
+        "id": agent_id,
+        "name": existing.name,
+        "model": updated_model
+    })))
+}
+
+/// POST /v1/agents/:id/tools — attach tool IDs to an agent
+pub async fn attach_tools(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    let ids: Vec<String> = body["tool_ids"]
+        .as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|v| v.as_str().map(String::from))
+        .collect();
+    sqlite::attach_tools_to_agent(&state.db, &agent_id, &ids)
+        .map_err(|e| server_err(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
 fn server_err(msg: String) -> (StatusCode, Json<Value>) {
     (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": msg})))
 }

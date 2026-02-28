@@ -36,7 +36,10 @@ impl SessionStore {
             std::fs::create_dir_all(parent)?;
         }
         // Ensure .cade/settings.local.json is gitignored
-        let gitignore = self.path.parent().unwrap().join(".gitignore");
+        let gitignore = match self.path.parent() {
+            Some(p) => p.join(".gitignore"),
+            None => return Ok(()), // no parent dir — skip gitignore step
+        };
         if !gitignore.exists() {
             std::fs::write(&gitignore, "settings.local.json\n")?;
         }

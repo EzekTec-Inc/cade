@@ -5,7 +5,7 @@ pub mod tools;
 
 use axum::{
     Router,
-    routing::{delete, get, post},
+    routing::{delete, get, patch, post},
 };
 use crate::server::state::AppState;
 
@@ -16,7 +16,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/config", get(health::get_config))
         // Agents
         .route("/v1/agents",          post(agents::create_agent).get(agents::list_agents))
-        .route("/v1/agents/:id",      get(agents::get_agent).delete(agents::delete_agent))
+        .route("/v1/agents/:id",      get(agents::get_agent).delete(agents::delete_agent).patch(agents::patch_agent))
+        // Agent tools
+        .route("/v1/agents/:id/tools", post(agents::attach_tools))
         // Messages
         .route("/v1/agents/:id/messages",        post(messages::send_message))
         .route("/v1/agents/:id/messages/stream", post(messages::stream_message))

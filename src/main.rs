@@ -12,16 +12,28 @@ use std::path::PathBuf;
 
 use agent::{
     CadeClient,
-    client::CreateAgentRequest,
+    client::{CreateAgentRequest, MemoryBlock},
     session::SessionStore,
     tools::register_cade_tools,
 };
 use cli::{Args, Repl};
 use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
-use skills::discover_skills;
+use skills::{discover_skills, skills_context};
 
 const SKILLS_DIR: &str = ".skills";
+
+/// Register all CADE tools on the server and attach them to the given agent.
+async fn register_and_attach(client: &CadeClient, agent_id: &str) {
+    let tools = register_cade_tools(client).await.unwrap_or_default();
+    let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
+    tracing::info!("Registered {} tools", tools.len());
+    if !ids.is_empty() {
+        if let Err(e) = client.attach_agent_tools(agent_id, &ids).await {
+            tracing::warn!("attach_agent_tools: {e}");
+        }
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -90,22 +102,35 @@ async fn main() -> Result<()> {
         .or_else(|| std::env::var("CADE_DEFAULT_MODEL").ok())
         .unwrap_or(server_info.2);
 
+    // Skills context — injected into agent system prompt so the agent knows
+    // what project-specific skills are available
+    let skills_block = skills_context(&loaded_skills);
+
     // Agent resolution — helper closure avoids repeating the create logic
-    let make_req = |model: String, desc: &str| CreateAgentRequest {
-        name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
-        model,
-        description: Some(desc.to_string()),
-        memory_blocks: vec![],
-        tool_ids: vec![],
+    let make_req = |model: String, desc: &str| {
+        // Attach skills to system prompt if any were loaded
+        let memory_blocks: Vec<MemoryBlock> = if let Some(ctx) = &skills_block {
+            vec![MemoryBlock { label: "skills".to_string(), value: ctx.clone(), description: None }]
+        } else {
+            vec![]
+        };
+        CreateAgentRequest {
+            name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
+            model,
+            description: Some(desc.to_string()),
+            memory_blocks,
+            tool_ids: vec![],
+        }
     };
+
+
 
     let agent = if args.new_agent {
         let a = client
             .create_agent(make_req(default_model.clone(), "CADE coding agent with desktop extensions"))
             .await
             .context("create agent")?;
-        let tools = register_cade_tools(&client).await.context("register tools")?;
-        tracing::info!("Registered {} tools", tools.len());
+        register_and_attach(&client, &a.id).await;
         session.set_agent(a.id.clone(), Some(a.name.clone())).context("save session")?;
         settings.set_last_agent(&a.id).context("save global session")?;
         a
@@ -120,7 +145,7 @@ async fn main() -> Result<()> {
                     .create_agent(make_req(default_model.clone(), "CADE coding agent"))
                     .await
                     .context("create agent")?;
-                let _ = register_cade_tools(&client).await;
+                register_and_attach(&client, &a.id).await;
                 session.set_agent(a.id.clone(), Some(a.name.clone()))?;
                 settings.set_last_agent(&a.id)?;
                 a
@@ -128,13 +153,11 @@ async fn main() -> Result<()> {
         }
     } else {
         println!("No previous session — creating new agent…");
-        let model = default_model.clone();
         let a = client
-            .create_agent(make_req(model, "CADE coding agent with desktop extensions"))
+            .create_agent(make_req(default_model.clone(), "CADE coding agent with desktop extensions"))
             .await
             .context("create agent")?;
-        let tools = register_cade_tools(&client).await.context("register tools")?;
-        tracing::info!("Registered {} tools", tools.len());
+        register_and_attach(&client, &a.id).await;
         session.set_agent(a.id.clone(), Some(a.name.clone()))?;
         settings.set_last_agent(&a.id)?;
         a
@@ -168,7 +191,7 @@ async fn main() -> Result<()> {
     }
 
     // Interactive REPL
-    let repl = Repl::new(client, agent.id, agent.name, permissions);
+    let repl = Repl::new(client, agent.id, agent.name, permissions, default_model.clone());
     repl.run().await?;
 
     Ok(())

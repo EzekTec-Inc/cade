@@ -64,12 +64,19 @@ async fn build_context(
         messages.extend(db_row_to_llm(row));
     }
 
-    // Tool schemas
-    let tool_schemas: Vec<Value> = sqlite::list_tools(&state.db)
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|t| t.json_schema)
-        .collect();
+    // Tool schemas — use agent-specific tools if wired, else all tools
+    let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, agent_id)
+        .unwrap_or_default();
+    let all_tools = sqlite::list_tools(&state.db).unwrap_or_default();
+    let tool_schemas: Vec<Value> = if agent_tool_ids.is_empty() {
+        // Not yet wired → provide all registered tools (backwards-compatible)
+        all_tools.into_iter().filter_map(|t| t.json_schema).collect()
+    } else {
+        all_tools.into_iter()
+            .filter(|t| agent_tool_ids.contains(&t.id))
+            .filter_map(|t| t.json_schema)
+            .collect()
+    };
 
     Ok((agent.model, messages, tool_schemas))
 }
