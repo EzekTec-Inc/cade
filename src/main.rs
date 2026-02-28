@@ -10,6 +10,8 @@ use anyhow::{Context, Result, bail};
 use clap::Parser;
 use std::path::PathBuf;
 
+use std::sync::{Arc, Mutex};
+
 use agent::{
     CadeClient,
     client::{CreateAgentRequest, MemoryBlock},
@@ -191,7 +193,18 @@ async fn main() -> Result<()> {
     }
 
     // Interactive REPL
-    let repl = Repl::new(client, agent.id, agent.name, permissions, default_model.clone());
+    let settings_arc = Arc::new(Mutex::new(settings));
+    let session_arc  = Arc::new(Mutex::new(session));
+    let repl = Repl::new(
+        client,
+        agent.id,
+        agent.name,
+        permissions,
+        default_model.clone(),
+        settings_arc,
+        session_arc,
+        cwd.clone(),
+    );
     repl.run().await?;
 
     Ok(())

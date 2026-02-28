@@ -139,6 +139,65 @@ pub async fn patch_agent(
     })))
 }
 
+// ── Memory endpoints ──────────────────────────────────────────────────────────
+
+/// GET /v1/agents/:id/memory
+pub async fn get_memory(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let blocks = sqlite::get_memory_blocks(&state.db, &agent_id)
+        .map_err(|e| server_err(e.to_string()))?;
+    let arr: Vec<Value> = blocks.into_iter()
+        .map(|(label, value)| json!({ "label": label, "value": value }))
+        .collect();
+    Ok(Json(json!({ "blocks": arr })))
+}
+
+/// PUT /v1/agents/:id/memory/:label
+pub async fn upsert_memory(
+    State(state): State<AppState>,
+    Path((agent_id, label)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    let value = body["value"].as_str().unwrap_or("").to_string();
+    sqlite::upsert_memory_block(&state.db, &agent_id, &label, &value)
+        .map_err(|e| server_err(e.to_string()))?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ── Messages endpoints ────────────────────────────────────────────────────────
+
+/// DELETE /v1/agents/:id/messages — clear conversation context
+pub async fn clear_messages_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let n = sqlite::clear_messages(&state.db, &agent_id)
+        .map_err(|e| server_err(e.to_string()))?;
+    Ok(Json(json!({ "deleted": n })))
+}
+
+/// GET /v1/agents/:id/messages?q=<query> — search message history
+pub async fn search_messages_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let query = params.get("q").map(String::as_str).unwrap_or("");
+    if query.is_empty() {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({"detail": "missing ?q= parameter"}))));
+    }
+    let rows = sqlite::search_messages(&state.db, &agent_id, query)
+        .map_err(|e| server_err(e.to_string()))?;
+    let messages: Vec<Value> = rows.into_iter().map(|r| json!({
+        "id": r.id,
+        "role": r.role,
+        "content": r.content
+    })).collect();
+    Ok(Json(json!({ "messages": messages })))
+}
+
 /// POST /v1/agents/:id/tools — attach tool IDs to an agent
 pub async fn attach_tools(
     State(state): State<AppState>,

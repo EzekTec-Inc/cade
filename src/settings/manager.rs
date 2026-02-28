@@ -19,13 +19,20 @@ pub struct EnvSettings {
     pub server_url: Option<String>,
 }
 
+/// A pinned agent entry
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PinnedAgent {
+    pub id: String,
+    pub name: String,
+}
+
 /// Local project settings stored in .cade/settings.local.json (gitignored)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct LocalSettings {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_agent: Option<String>,
     #[serde(default)]
-    pub pinned_agents: Vec<String>,
+    pub pinned_agents: Vec<PinnedAgent>,
 }
 
 pub struct SettingsManager {
@@ -94,6 +101,17 @@ impl SettingsManager {
         Self::save_json(&self.local_path, &self.local)?;
         Self::save_json(&self.global_path, &self.global)?;
         Ok(())
+    }
+
+    /// Pin an agent by ID + name (deduplicates by ID).
+    pub fn pin_agent(&mut self, id: &str, name: &str) -> Result<()> {
+        self.local.pinned_agents.retain(|p| p.id != id);
+        self.local.pinned_agents.push(PinnedAgent { id: id.to_string(), name: name.to_string() });
+        Self::save_json(&self.local_path, &self.local)
+    }
+
+    pub fn pinned_agents(&self) -> &[PinnedAgent] {
+        &self.local.pinned_agents
     }
 
     pub fn global(&self) -> &GlobalSettings { &self.global }

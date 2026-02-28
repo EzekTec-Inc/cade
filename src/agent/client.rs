@@ -286,6 +286,64 @@ impl CadeClient {
         Ok(resp.json::<Vec<AgentState>>().await?)
     }
 
+    // ── Memory ────────────────────────────────────────────────────────────────
+
+    /// Fetch all memory blocks for an agent.
+    pub async fn get_memory(&self, agent_id: &str) -> Result<Vec<MemoryBlock>> {
+        let resp = self.client
+            .get(self.url(&format!("/agents/{agent_id}/memory")))
+            .header(self.auth().0, self.auth().1)
+            .send().await?;
+        if !resp.status().is_success() {
+            bail!("get_memory failed {}", resp.status());
+        }
+        let body: Value = resp.json().await?;
+        let blocks = body["blocks"].as_array().cloned().unwrap_or_default();
+        Ok(blocks.into_iter().filter_map(|v| serde_json::from_value(v).ok()).collect())
+    }
+
+    /// Upsert a single memory block.
+    pub async fn upsert_memory(&self, agent_id: &str, label: &str, value: &str) -> Result<()> {
+        let resp = self.client
+            .put(self.url(&format!("/agents/{agent_id}/memory/{label}")))
+            .header(self.auth().0, self.auth().1)
+            .json(&json!({ "value": value }))
+            .send().await?;
+        if !resp.status().is_success() {
+            bail!("upsert_memory failed {}", resp.status());
+        }
+        Ok(())
+    }
+
+    // ── Context management ────────────────────────────────────────────────────
+
+    /// Delete all messages for an agent (clear context window).
+    pub async fn clear_messages(&self, agent_id: &str) -> Result<usize> {
+        let resp = self.client
+            .delete(self.url(&format!("/agents/{agent_id}/messages")))
+            .header(self.auth().0, self.auth().1)
+            .send().await?;
+        if !resp.status().is_success() {
+            bail!("clear_messages failed {}", resp.status());
+        }
+        let body: Value = resp.json().await?;
+        Ok(body["deleted"].as_u64().unwrap_or(0) as usize)
+    }
+
+    /// Search message history for an agent.
+    pub async fn search_messages(&self, agent_id: &str, query: &str) -> Result<Vec<Value>> {
+        let resp = self.client
+            .get(self.url(&format!("/agents/{agent_id}/messages")))
+            .header(self.auth().0, self.auth().1)
+            .query(&[("q", query)])
+            .send().await?;
+        if !resp.status().is_success() {
+            bail!("search_messages failed {}", resp.status());
+        }
+        let body: Value = resp.json().await?;
+        Ok(body["messages"].as_array().cloned().unwrap_or_default())
+    }
+
     // ── Messages ──────────────────────────────────────────────────────────────
 
     /// Send a user message and return the response messages

@@ -287,6 +287,39 @@ pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
 /// - If not in a tool-call turn: (0, 0)
 /// - If waiting for more results: received < expected
 /// - If all received: received == expected
+/// Delete all messages for an agent (context-window clear).
+pub fn clear_messages(db: &Db, agent_id: &str) -> Result<usize> {
+    let conn = db.lock().unwrap();
+    let n = conn.execute(
+        "DELETE FROM messages WHERE agent_id = ?1",
+        params![agent_id],
+    )?;
+    Ok(n)
+}
+
+/// Full-text search over message content for an agent.
+pub fn search_messages(db: &Db, agent_id: &str, query: &str) -> Result<Vec<MessageRow>> {
+    let conn = db.lock().unwrap();
+    let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+    let mut stmt = conn.prepare(
+        "SELECT id, agent_id, role, content FROM messages \
+         WHERE agent_id = ?1 AND content LIKE ?2 ESCAPE '\\' \
+         ORDER BY rowid DESC LIMIT 50",
+    )?;
+    let rows = stmt.query_map(params![agent_id, pattern], |r| {
+        let content_str: String = r.get(3)?;
+        let content = serde_json::from_str(&content_str)
+            .unwrap_or(serde_json::Value::String(content_str));
+        Ok(MessageRow {
+            id: r.get(0)?,
+            agent_id: r.get(1)?,
+            role: r.get(2)?,
+            content,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 pub fn pending_tool_results(db: &Db, agent_id: &str) -> Result<(usize, usize)> {
     let messages = list_messages(db, agent_id, 20)?;
 

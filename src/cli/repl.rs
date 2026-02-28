@@ -8,8 +8,12 @@ use crossterm::{
 };
 use std::io::{self, Write};
 
-use crate::agent::{CadeClient, client::CadeMessage};
+use std::sync::{Arc, Mutex};
+
+use crate::agent::{CadeClient, client::{CadeMessage, MemoryBlock}};
+use crate::agent::session::SessionStore;
 use crate::permissions::{PermissionManager, PermissionMode};
+use crate::settings::SettingsManager;
 use crate::tools::{dispatch, is_write_tool};
 
 const BANNER: &str = r#"
@@ -34,13 +38,16 @@ enum SlashCmd {
     Info,
     Model(String),
     New,
-    /// Switch to bypassPermissions — approve everything automatically
+    Pin,
+    Agents,
+    Init,
+    Remember(String),
+    Memory,
+    Search(String),
+    Feedback,
     Yolo,
-    /// Switch to plan / read-only — block all write/exec tools
     Plan,
-    /// Switch back to default mode — ask before each tool
     Default,
-    /// Show / switch permission mode: /mode  or  /mode <name>
     Mode(Option<String>),
 }
 
@@ -50,18 +57,26 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         return None;
     }
     let parts: Vec<&str> = trimmed[1..].splitn(2, ' ').collect();
+    let arg = parts.get(1).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     match parts[0] {
-        "help" | "?"        => Some(SlashCmd::Help),
-        "exit" | "quit" | "q" => Some(SlashCmd::Exit),
-        "clear"             => Some(SlashCmd::Clear),
-        "agent"             => Some(SlashCmd::Agent),
-        "info"              => Some(SlashCmd::Info),
-        "new"               => Some(SlashCmd::New),
-        "yolo"              => Some(SlashCmd::Yolo),
-        "plan"              => Some(SlashCmd::Plan),
+        "help" | "?"             => Some(SlashCmd::Help),
+        "exit" | "quit" | "q"   => Some(SlashCmd::Exit),
+        "clear"                  => Some(SlashCmd::Clear),
+        "agent"                  => Some(SlashCmd::Agent),
+        "info"                   => Some(SlashCmd::Info),
+        "new"                    => Some(SlashCmd::New),
+        "pin"                    => Some(SlashCmd::Pin),
+        "agents"                 => Some(SlashCmd::Agents),
+        "init"                   => Some(SlashCmd::Init),
+        "remember" if arg.is_some() => Some(SlashCmd::Remember(arg.unwrap())),
+        "memory"                 => Some(SlashCmd::Memory),
+        "search" if arg.is_some()   => Some(SlashCmd::Search(arg.unwrap())),
+        "feedback"               => Some(SlashCmd::Feedback),
+        "yolo"                   => Some(SlashCmd::Yolo),
+        "plan"                   => Some(SlashCmd::Plan),
         "default" | "normal" | "resume" => Some(SlashCmd::Default),
-        "mode"              => Some(SlashCmd::Mode(parts.get(1).map(|s| s.to_string()))),
-        "model" if parts.len() > 1 => Some(SlashCmd::Model(parts[1].to_string())),
+        "mode"                   => Some(SlashCmd::Mode(arg)),
+        "model" if arg.is_some() => Some(SlashCmd::Model(arg.unwrap())),
         _ => None,
     }
 }
@@ -70,11 +85,15 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
 
 pub struct Repl {
     client: CadeClient,
-    agent_id: String,
-    agent_name: String,
+    /// Shared-mutable so /new and /agents can hot-swap the agent mid-session
+    agent_id:   Arc<Mutex<String>>,
+    agent_name: Arc<Mutex<String>>,
     permissions: PermissionManager,
-    /// Current active model (may be switched with /model)
-    current_model: std::sync::Arc<std::sync::Mutex<String>>,
+    current_model: Arc<Mutex<String>>,
+    settings: Arc<Mutex<SettingsManager>>,
+    session:  Arc<Mutex<SessionStore>>,
+    /// Working directory (for /init context)
+    cwd: std::path::PathBuf,
 }
 
 impl Repl {
@@ -84,15 +103,25 @@ impl Repl {
         agent_name: String,
         permissions: PermissionManager,
         current_model: String,
+        settings: Arc<Mutex<SettingsManager>>,
+        session: Arc<Mutex<SessionStore>>,
+        cwd: std::path::PathBuf,
     ) -> Self {
         Self {
             client,
-            agent_id,
-            agent_name,
+            agent_id:   Arc::new(Mutex::new(agent_id)),
+            agent_name: Arc::new(Mutex::new(agent_name)),
             permissions,
-            current_model: std::sync::Arc::new(std::sync::Mutex::new(current_model)),
+            current_model: Arc::new(Mutex::new(current_model)),
+            settings,
+            session,
+            cwd,
         }
     }
+
+    fn agent_id(&self)   -> String { self.agent_id.lock().unwrap().clone() }
+    fn agent_name(&self) -> String { self.agent_name.lock().unwrap().clone() }
+    fn model(&self)      -> String { self.current_model.lock().unwrap().clone() }
 
     pub async fn run(self) -> Result<()> {
         let mut stdout = io::stdout();
@@ -103,7 +132,7 @@ impl Repl {
             SetForegroundColor(Color::DarkGrey),
             Print(format!(
                 " Agent : {} ({})\n Mode  : {}\n\n",
-                self.agent_name, self.agent_id, self.permissions.mode()
+                self.agent_name(), self.agent_id(), self.permissions.mode()
             )),
             ResetColor
         )?;
@@ -113,11 +142,7 @@ impl Repl {
 
         loop {
             // Prompt — show mode indicator when not in default mode
-            let mode_tag = match self.permissions.mode() {
-                PermissionMode::Plan               => " \x1b[36m[plan]\x1b[0m",
-                PermissionMode::BypassPermissions  => " \x1b[33m[yolo]\x1b[0m",
-                _                                  => "",
-            };
+            let mode_tag = mode_prompt_tag(self.permissions.mode());
             execute!(
                 stdout,
                 SetForegroundColor(Color::Green),
@@ -137,6 +162,34 @@ impl Repl {
             history.push(input.clone());
             hist_idx = None;
 
+            // Direct bash: lines starting with '!'
+            if let Some(cmd) = input.strip_prefix('!') {
+                let cmd = cmd.trim();
+                if !cmd.is_empty() {
+                    let output = tokio::process::Command::new("sh")
+                        .arg("-c")
+                        .arg(cmd)
+                        .output()
+                        .await;
+                    match output {
+                        Ok(out) => {
+                            let text = if out.stdout.is_empty() {
+                                String::from_utf8_lossy(&out.stderr).to_string()
+                            } else {
+                                String::from_utf8_lossy(&out.stdout).to_string()
+                            };
+                            execute!(stdout, SetForegroundColor(Color::White), Print(text), ResetColor)?;
+                        }
+                        Err(e) => {
+                            execute!(stdout, SetForegroundColor(Color::Red),
+                                Print(format!("  bash error: {e}\n")), ResetColor)?;
+                        }
+                    }
+                    stdout.flush()?;
+                }
+                continue;
+            }
+
             // Slash commands
             if let Some(cmd) = parse_slash(&input) {
                 match cmd {
@@ -144,27 +197,19 @@ impl Repl {
                         execute!(stdout, Print("\nBye!\n"))?;
                         break;
                     }
-                    SlashCmd::Clear => {
-                        execute!(
-                            stdout,
-                            terminal::Clear(ClearType::All),
-                            cursor::MoveTo(0, 0)
-                        )?;
-                    }
+                    // SlashCmd::Clear is handled below (with context clearing)
                     SlashCmd::Help => self.print_help(&mut stdout)?,
                     SlashCmd::Agent => {
-                        println!("\nAgent: {} ({})", self.agent_name, self.agent_id);
+                        println!("\nAgent: {} ({})", self.agent_name(), self.agent_id());
                     }
                     SlashCmd::Info => {
-                        let model = self.current_model.lock()
-                            .map(|g| g.clone())
-                            .unwrap_or_else(|_| "unknown".to_string());
                         println!(
-                            "\nAgent : {} ({})\nModel : {}\nMode  : {}\nVersion: {}",
-                            self.agent_name,
-                            self.agent_id,
-                            model,
+                            "\nAgent : {} ({})\nModel : {}\nMode  : {}\nCWD   : {}\nVersion: {}",
+                            self.agent_name(),
+                            self.agent_id(),
+                            self.model(),
                             self.permissions.mode(),
+                            self.cwd.display(),
                             env!("CARGO_PKG_VERSION")
                         );
                     }
@@ -241,38 +286,270 @@ impl Repl {
                             }
                         }
                     }
-                    SlashCmd::New => {
-                        println!("\nUse 'cade --new' to start a fresh agent session.");
-                    }
+                    // SlashCmd::New is handled below (hot-swap)
                     SlashCmd::Model(m) => {
-                        execute!(
-                            stdout,
-                            SetForegroundColor(Color::DarkGrey),
-                            Print(format!("\n  Switching model → {m}…\n")),
-                            ResetColor,
-                        )?;
+                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                            Print(format!("\n  Switching model → {m}…\n")), ResetColor)?;
                         stdout.flush()?;
-                        match self.client.patch_agent_model(&self.agent_id, &m).await {
+                        match self.client.patch_agent_model(&self.agent_id(), &m).await {
                             Ok(new_model) => {
-                                if let Ok(mut guard) = self.current_model.lock() {
-                                    *guard = new_model.clone();
-                                }
-                                execute!(
-                                    stdout,
-                                    SetForegroundColor(Color::Green),
-                                    Print(format!("  ✓ Model: {new_model}\n")),
-                                    ResetColor,
-                                )?;
+                                *self.current_model.lock().unwrap() = new_model.clone();
+                                execute!(stdout, SetForegroundColor(Color::Green),
+                                    Print(format!("  ✓ Model: {new_model}\n")), ResetColor)?;
                             }
                             Err(e) => {
-                                execute!(
-                                    stdout,
-                                    SetForegroundColor(Color::Red),
-                                    Print(format!("  ✗ Failed to switch model: {e}\n")),
-                                    ResetColor,
-                                )?;
+                                execute!(stdout, SetForegroundColor(Color::Red),
+                                    Print(format!("  ✗ {e}\n")), ResetColor)?;
                             }
                         }
+                        stdout.flush()?;
+                    }
+
+                    // ── New commands ──────────────────────────────────────────
+
+                    SlashCmd::Clear => {
+                        // Clear terminal
+                        execute!(stdout, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+                        // Clear context window on server
+                        match self.client.clear_messages(&self.agent_id()).await {
+                            Ok(n) => {
+                                execute!(stdout, SetForegroundColor(Color::Green),
+                                    Print(format!("✓ Context window cleared ({n} messages deleted)\n")),
+                                    ResetColor)?;
+                            }
+                            Err(e) => {
+                                execute!(stdout, SetForegroundColor(Color::Yellow),
+                                    Print(format!("⚠ Screen cleared (context clear failed: {e})\n")),
+                                    ResetColor)?;
+                            }
+                        }
+                        stdout.flush()?;
+                    }
+
+                    SlashCmd::New => {
+                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                            Print("\n  Creating new agent…\n"), ResetColor)?;
+                        stdout.flush()?;
+                        let model = self.model();
+                        let req = crate::agent::client::CreateAgentRequest {
+                            name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
+                            model,
+                            description: Some("CADE coding agent".to_string()),
+                            memory_blocks: vec![],
+                            tool_ids: vec![],
+                        };
+                        match self.client.create_agent(req).await {
+                            Ok(a) => {
+                                *self.agent_id.lock().unwrap()   = a.id.clone();
+                                *self.agent_name.lock().unwrap() = a.name.clone();
+                                if let Ok(mut s) = self.settings.lock() {
+                                    let _ = s.set_last_agent(&a.id);
+                                }
+                                if let Ok(mut s) = self.session.lock() {
+                                    let _ = s.set_agent(a.id.clone(), Some(a.name.clone()));
+                                }
+                                execute!(stdout, SetForegroundColor(Color::Green),
+                                    Print(format!("  ✓ New agent: {} ({})\n", a.name, a.id)),
+                                    ResetColor)?;
+                            }
+                            Err(e) => {
+                                execute!(stdout, SetForegroundColor(Color::Red),
+                                    Print(format!("  ✗ {e}\n")), ResetColor)?;
+                            }
+                        }
+                        stdout.flush()?;
+                    }
+
+                    SlashCmd::Pin => {
+                        let id   = self.agent_id();
+                        let name = self.agent_name();
+                        match self.settings.lock() {
+                            Ok(mut s) => match s.pin_agent(&id, &name) {
+                                Ok(_) => {
+                                    execute!(stdout, SetForegroundColor(Color::Green),
+                                        Print(format!("\n  ✓ Pinned: {name} ({id})\n")), ResetColor)?;
+                                }
+                                Err(e) => {
+                                    execute!(stdout, SetForegroundColor(Color::Red),
+                                        Print(format!("\n  ✗ Pin failed: {e}\n")), ResetColor)?;
+                                }
+                            },
+                            Err(_) => {}
+                        }
+                        stdout.flush()?;
+                    }
+
+                    SlashCmd::Agents => {
+                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                            Print("\n  Fetching agents…\n"), ResetColor)?;
+                        stdout.flush()?;
+                        match self.client.list_agents().await {
+                            Ok(agents) if agents.is_empty() => {
+                                execute!(stdout, Print("  (no agents found)\n"))?;
+                            }
+                            Ok(agents) => {
+                                let current = self.agent_id();
+                                for (i, a) in agents.iter().enumerate() {
+                                    let marker = if a.id == current { " ←" } else { "" };
+                                    execute!(stdout,
+                                        SetForegroundColor(if a.id == current { Color::Green } else { Color::White }),
+                                        Print(format!("  [{}] {}{}\n      {}\n", i + 1, a.name, marker, a.id)),
+                                        ResetColor)?;
+                                }
+                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                    Print("\n  Switch to [number] or Enter to cancel: "), ResetColor)?;
+                                stdout.flush()?;
+                                // Read input (need cooked mode for this)
+                                terminal::enable_raw_mode()?;
+                                let choice = {
+                                    let mut buf = String::new();
+                                    loop {
+                                        if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
+                                            match k.code {
+                                                KeyCode::Enter => break,
+                                                KeyCode::Char(c) => {
+                                                    buf.push(c);
+                                                    execute!(stdout, Print(c))?;
+                                                }
+                                                KeyCode::Backspace if !buf.is_empty() => {
+                                                    buf.pop();
+                                                    execute!(stdout, cursor::MoveLeft(1), Print(" "), cursor::MoveLeft(1))?;
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                    buf
+                                };
+                                terminal::disable_raw_mode()?;
+                                execute!(stdout, Print("\n"))?;
+                                if let Ok(n) = choice.trim().parse::<usize>() {
+                                    if n >= 1 && n <= agents.len() {
+                                        let a = &agents[n - 1];
+                                        *self.agent_id.lock().unwrap()   = a.id.clone();
+                                        *self.agent_name.lock().unwrap() = a.name.clone();
+                                        if let Ok(mut s) = self.settings.lock() {
+                                            let _ = s.set_last_agent(&a.id);
+                                        }
+                                        execute!(stdout, SetForegroundColor(Color::Green),
+                                            Print(format!("  ✓ Switched to: {} ({})\n", a.name, a.id)),
+                                            ResetColor)?;
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                execute!(stdout, SetForegroundColor(Color::Red),
+                                    Print(format!("  ✗ {e}\n")), ResetColor)?;
+                            }
+                        }
+                        stdout.flush()?;
+                    }
+
+                    SlashCmd::Init => {
+                        let init_prompt = format!(
+                            "Please analyse this project directory ('{}') and initialise your memory. \
+                             Read relevant files (README.md, Cargo.toml, package.json, pyproject.toml, etc.), \
+                             then store key information in memory blocks: \
+                             (1) project purpose, (2) tech stack, (3) key conventions, (4) important paths. \
+                             Be concise.",
+                            self.cwd.display()
+                        );
+                        self.agent_turn(&mut stdout, &init_prompt).await?;
+                    }
+
+                    SlashCmd::Remember(text) => {
+                        let id = self.agent_id();
+                        // Append to existing 'preferences' block (or create it)
+                        let existing = self.client.get_memory(&id).await
+                            .unwrap_or_default()
+                            .into_iter()
+                            .find(|b| b.label == "preferences")
+                            .map(|b| b.value)
+                            .unwrap_or_default();
+                        let ts = chrono::Local::now().format("%Y-%m-%d");
+                        let updated = if existing.is_empty() {
+                            format!("[{ts}] {text}")
+                        } else {
+                            format!("{existing}\n[{ts}] {text}")
+                        };
+                        match self.client.upsert_memory(&id, "preferences", &updated).await {
+                            Ok(_) => {
+                                execute!(stdout, SetForegroundColor(Color::Green),
+                                    Print(format!("\n  ✓ Remembered: {text}\n")), ResetColor)?;
+                            }
+                            Err(e) => {
+                                execute!(stdout, SetForegroundColor(Color::Red),
+                                    Print(format!("\n  ✗ {e}\n")), ResetColor)?;
+                            }
+                        }
+                        stdout.flush()?;
+                    }
+
+                    SlashCmd::Memory => {
+                        match self.client.get_memory(&self.agent_id()).await {
+                            Ok(blocks) if blocks.is_empty() => {
+                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                    Print("\n  (no memory blocks)\n"), ResetColor)?;
+                            }
+                            Ok(blocks) => {
+                                execute!(stdout, Print("\n"))?;
+                                for b in &blocks {
+                                    let preview: String = b.value.chars().take(300).collect();
+                                    let ellipsis = if b.value.len() > 300 { "…" } else { "" };
+                                    execute!(stdout,
+                                        SetForegroundColor(Color::Cyan),
+                                        Print(format!("  [{}]\n", b.label)),
+                                        SetForegroundColor(Color::White),
+                                        Print(format!("  {}{}\n\n", preview, ellipsis)),
+                                        ResetColor)?;
+                                }
+                            }
+                            Err(e) => {
+                                execute!(stdout, SetForegroundColor(Color::Red),
+                                    Print(format!("\n  ✗ {e}\n")), ResetColor)?;
+                            }
+                        }
+                        stdout.flush()?;
+                    }
+
+                    SlashCmd::Search(query) => {
+                        match self.client.search_messages(&self.agent_id(), &query).await {
+                            Ok(msgs) if msgs.is_empty() => {
+                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                    Print(format!("\n  No results for '{query}'\n")), ResetColor)?;
+                            }
+                            Ok(msgs) => {
+                                execute!(stdout, Print(format!("\n  {} result(s) for '{query}':\n\n", msgs.len())))?;
+                                for m in msgs.iter().take(10) {
+                                    let role = m["role"].as_str().unwrap_or("?");
+                                    let content = m["content"]["content"].as_str()
+                                        .or_else(|| m["content"].as_str())
+                                        .unwrap_or("");
+                                    let preview: String = content.chars().take(120).collect();
+                                    let ellipsis = if content.len() > 120 { "…" } else { "" };
+                                    execute!(stdout,
+                                        SetForegroundColor(Color::DarkGrey),
+                                        Print(format!("  [{role}] ")),
+                                        SetForegroundColor(Color::White),
+                                        Print(format!("{preview}{ellipsis}\n")),
+                                        ResetColor)?;
+                                }
+                            }
+                            Err(e) => {
+                                execute!(stdout, SetForegroundColor(Color::Red),
+                                    Print(format!("\n  ✗ {e}\n")), ResetColor)?;
+                            }
+                        }
+                        stdout.flush()?;
+                    }
+
+                    SlashCmd::Feedback => {
+                        execute!(stdout,
+                            SetForegroundColor(Color::Cyan),
+                            Print("\n  Report issues or give feedback:\n"),
+                            SetForegroundColor(Color::White),
+                            Print("  https://github.com/EzekTec-Inc/CADE/issues\n"),
+                            ResetColor)?;
                         stdout.flush()?;
                     }
                 }
@@ -288,9 +565,7 @@ impl Repl {
 
     /// Send a user message and drive the tool-call loop with live SSE streaming.
     async fn agent_turn(&self, stdout: &mut io::Stdout, input: &str) -> Result<()> {
-        // Live-stream the response, rendering each event as it arrives
         let messages = self.stream_turn(stdout, input, false, "", "").await?;
-        // After the stream ends, execute any tool calls that were collected
         self.dispatch_tool_calls(stdout, messages).await
     }
 
@@ -372,16 +647,11 @@ impl Repl {
             }
         };
 
+        let agent_id = self.agent_id();
         let messages = if is_tool_return {
             match self
                 .client
-                .stream_tool_return(
-                    &self.agent_id,
-                    tool_call_id,
-                    tool_output,
-                    false,
-                    on_event,
-                )
+                .stream_tool_return(&agent_id, tool_call_id, tool_output, false, on_event)
                 .await
             {
                 Ok(m) => m,
@@ -391,11 +661,7 @@ impl Repl {
                 }
             }
         } else {
-            match self
-                .client
-                .stream_message(&self.agent_id, input, on_event)
-                .await
-            {
+            match self.client.stream_message(&agent_id, input, on_event).await {
                 Ok(m) => m,
                 Err(e) => {
                     self.print_error(stdout, &e.to_string())?;
@@ -599,27 +865,37 @@ impl Repl {
             stdout,
             SetForegroundColor(Color::Cyan),
             Print(format!(
-                "\nSlash commands:\n\
+                "\nCommands:\n\
                  \n\
                  Session:\n\
-                   /info          — agent ID, model, current mode\n\
-                   /agent         — show agent ID\n\
-                   /new           — start a new agent session\n\
-                   /clear         — clear the screen\n\
+                   /info           — agent, model, mode, cwd\n\
+                   /agent          — show current agent ID\n\
+                   /agents         — list all agents + switch\n\
+                   /new            — create a fresh agent (hot-swap)\n\
+                   /pin            — pin current agent for quick access\n\
+                   /clear          — clear screen + context window\n\
                  \n\
-                 Permission modes  (currently: {icon} {label}):\n\
-                   /default       — ask before each tool  [normal]\n\
-                 /resume  /normal  (aliases for /default)\n\
-                   /plan          — read-only, block all write/exec tools\n\
-                   /yolo          — auto-approve all tools\n\
-                 /mode           — show current mode\n\
-                 /mode <name>    — switch: default | plan | yolo\n\
+                 Memory:\n\
+                   /init           — analyse project + initialise memory\n\
+                   /remember <t>   — store a fact in agent memory\n\
+                   /memory         — view all memory blocks\n\
+                   /search <q>     — search past messages\n\
                  \n\
                  Model:\n\
-                 /model <m>      — switch model mid-session\n\
+                   /model <m>      — switch model mid-session\n\
                  \n\
-                 /help  /?       — this message\n\
-                 /exit  /quit    — quit CADE\n"
+                 Permission modes  (currently: {icon} {label}):\n\
+                   /default        — ask before each tool  [Shift+Tab to cycle]\n\
+                   /plan           — read-only tools; write ops blocked\n\
+                   /yolo           — auto-approve all tools\n\
+                   /mode [name]    — show / set: default | plan | yolo | acceptEdits\n\
+                 \n\
+                 Direct bash (bypasses agent):\n\
+                   ! <cmd>         — e.g.  ! git status\n\
+                 \n\
+                   /feedback       — report issues\n\
+                   /help  /?       — this message\n\
+                   exit  /exit     — quit CADE\n"
             )),
             ResetColor
         )?;
@@ -647,6 +923,31 @@ impl Repl {
                 match event::read()? {
                     Event::Key(KeyEvent { code, modifiers, .. }) => {
                         match (code, modifiers) {
+                            (KeyCode::BackTab, _) => {
+                                // Shift+Tab: cycle Default → AcceptEdits → Plan → BypassPermissions → Default
+                                let next = match self.permissions.mode() {
+                                    PermissionMode::Default           => PermissionMode::AcceptEdits,
+                                    PermissionMode::AcceptEdits       => PermissionMode::Plan,
+                                    PermissionMode::Plan              => PermissionMode::BypassPermissions,
+                                    PermissionMode::BypassPermissions => PermissionMode::Default,
+                                };
+                                self.permissions.set_mode(next);
+                                let (icon, label, _) = mode_display(next);
+                                // Briefly show mode without breaking the input line
+                                execute!(stdout,
+                                    Print("\r"),
+                                    terminal::Clear(ClearType::CurrentLine),
+                                    SetForegroundColor(Color::DarkGrey),
+                                    Print(format!("  {icon} {label}  (Shift+Tab to cycle)\n")),
+                                    ResetColor,
+                                    SetForegroundColor(Color::Green),
+                                    Print(format!("cade{}> ", mode_prompt_tag(next))),
+                                    ResetColor,
+                                    Print(&buf),
+                                )?;
+                                stdout.flush()?;
+                                continue;
+                            }
                             (KeyCode::Enter, _) => return Ok(Some(buf.clone())),
                             (KeyCode::Char('d'), KeyModifiers::CONTROL) if buf.is_empty() => {
                                 return Ok(None);
@@ -772,6 +1073,15 @@ impl Repl {
 
 fn truncate(s: &str, max: usize) -> String {
     super::truncate(s, max)
+}
+
+fn mode_prompt_tag(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Plan               => " \x1b[36m[plan]\x1b[0m",
+        PermissionMode::BypassPermissions  => " \x1b[33m[yolo]\x1b[0m",
+        PermissionMode::AcceptEdits        => " \x1b[35m[edits]\x1b[0m",
+        PermissionMode::Default            => "",
+    }
 }
 
 /// Returns (icon, label, hint) for the current permission mode.
