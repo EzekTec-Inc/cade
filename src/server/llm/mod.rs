@@ -75,27 +75,105 @@ pub fn bare_model(model: &str) -> &str {
     }
 }
 
-// ── Factory ───────────────────────────────────────────────────────────────────
+// ── LLM Router ────────────────────────────────────────────────────────────────
+//
+// Owns all configured providers and selects the right one at request time
+// based on the `provider/model` prefix in `CompletionRequest.model`.
+// This lets /model switching work transparently without a server restart.
+
+pub struct LlmRouter {
+    providers: std::collections::HashMap<String, Arc<dyn LlmProvider>>,
+    default_provider: String,
+}
+
+impl LlmRouter {
+    pub fn build(config: &ServerConfig) -> Self {
+        let mut providers: std::collections::HashMap<String, Arc<dyn LlmProvider>> =
+            std::collections::HashMap::new();
+        let mut default_provider = config.llm_provider.to_string();
+
+        // Register every provider for which an API key is available
+        if let Some(key) = &config.anthropic_api_key {
+            providers.insert(
+                "anthropic".to_string(),
+                Arc::new(anthropic::AnthropicProvider::new(key.clone())),
+            );
+        }
+        if let Some(key) = &config.openai_api_key {
+            providers.insert(
+                "openai".to_string(),
+                Arc::new(openai::OpenAiProvider::new(key.clone(), None)),
+            );
+        }
+        if let Some(key) = &config.google_api_key {
+            providers.insert(
+                "gemini".to_string(),
+                Arc::new(gemini::GeminiProvider::new(key.clone())),
+            );
+            // Accept both "gemini" and "google" prefixes
+            providers.insert(
+                "google".to_string(),
+                Arc::new(gemini::GeminiProvider::new(
+                    config.google_api_key.clone().unwrap(),
+                )),
+            );
+        }
+        // Ollama is always available as a fallback
+        providers.insert(
+            "ollama".to_string(),
+            Arc::new(ollama::OllamaProvider::new(config.ollama_base_url.clone())),
+        );
+
+        // Ensure the configured default is actually available; fall back gracefully
+        if !providers.contains_key(&default_provider) {
+            if let Some(first) = providers.keys().next() {
+                default_provider = first.clone();
+            }
+        }
+
+        Self { providers, default_provider }
+    }
+
+    /// Select provider and bare model name for a `provider/model` or bare `model` string.
+    fn pick(&self, model: &str) -> Option<(Arc<dyn LlmProvider>, String)> {
+        if let Some(slash) = model.find('/') {
+            let prefix   = &model[..slash];
+            let bare     = model[slash + 1..].to_string();
+            if let Some(p) = self.providers.get(prefix) {
+                return Some((Arc::clone(p), bare));
+            }
+        }
+        // No known prefix — use default provider, pass model unchanged
+        self.providers
+            .get(&self.default_provider)
+            .map(|p| (Arc::clone(p), model.to_string()))
+    }
+}
+
+#[async_trait::async_trait]
+impl LlmProvider for LlmRouter {
+    async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
+        let (provider, bare_model) = self
+            .pick(&req.model)
+            .ok_or_else(|| anyhow::anyhow!("No provider available for model '{}'", req.model))?;
+        let routed = CompletionRequest { model: bare_model, ..req.clone() };
+        provider.complete(&routed).await
+    }
+
+    async fn stream(
+        &self,
+        req: &CompletionRequest,
+    ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamChunk>> + Send>>> {
+        let (provider, bare_model) = self
+            .pick(&req.model)
+            .ok_or_else(|| anyhow::anyhow!("No provider available for model '{}'", req.model))?;
+        let routed = CompletionRequest { model: bare_model, ..req.clone() };
+        provider.stream(&routed).await
+    }
+}
+
+// ── Factory (kept for compatibility) ──────────────────────────────────────────
 
 pub fn make_provider(config: &ServerConfig) -> Result<Arc<dyn LlmProvider>> {
-    match config.llm_provider {
-        LlmProviderKind::Anthropic => {
-            let key = config.anthropic_api_key.clone()
-                .ok_or_else(|| anyhow::anyhow!("ANTHROPIC_API_KEY not set"))?;
-            Ok(Arc::new(anthropic::AnthropicProvider::new(key)))
-        }
-        LlmProviderKind::OpenAI => {
-            let key = config.openai_api_key.clone()
-                .ok_or_else(|| anyhow::anyhow!("OPENAI_API_KEY not set"))?;
-            Ok(Arc::new(openai::OpenAiProvider::new(key, None)))
-        }
-        LlmProviderKind::Gemini => {
-            let key = config.google_api_key.clone()
-                .ok_or_else(|| anyhow::anyhow!("GOOGLE_API_KEY not set"))?;
-            Ok(Arc::new(gemini::GeminiProvider::new(key)))
-        }
-        LlmProviderKind::Ollama => {
-            Ok(Arc::new(ollama::OllamaProvider::new(config.ollama_base_url.clone())))
-        }
-    }
+    Ok(Arc::new(LlmRouter::build(config)))
 }

@@ -203,15 +203,14 @@ impl Repl {
                         println!("\nAgent: {} ({})", self.agent_name(), self.agent_id());
                     }
                     SlashCmd::Info => {
-                        println!(
-                            "\nAgent : {} ({})\nModel : {}\nMode  : {}\nCWD   : {}\nVersion: {}",
-                            self.agent_name(),
-                            self.agent_id(),
-                            self.model(),
-                            self.permissions.mode(),
-                            self.cwd.display(),
-                            env!("CARGO_PKG_VERSION")
-                        );
+                        execute!(stdout, ResetColor)?;
+                        stdout.flush()?;
+                        println!();
+                        println!("  Agent   : {} ({})", self.agent_name(), self.agent_id());
+                        println!("  Model   : {}", self.model());
+                        println!("  Mode    : {}", self.permissions.mode());
+                        println!("  CWD     : {}", self.cwd.display());
+                        println!("  Version : {}", env!("CARGO_PKG_VERSION"));
                     }
                     SlashCmd::Yolo => {
                         self.permissions.set_mode(PermissionMode::BypassPermissions);
@@ -861,44 +860,43 @@ impl Repl {
 
     fn print_help(&self, stdout: &mut io::Stdout) -> Result<()> {
         let (icon, label, _) = mode_display(self.permissions.mode());
-        execute!(
-            stdout,
-            SetForegroundColor(Color::Cyan),
-            Print(format!(
-                "\nCommands:\n\
-                 \n\
-                 Session:\n\
-                   /info           — agent, model, mode, cwd\n\
-                   /agent          — show current agent ID\n\
-                   /agents         — list all agents + switch\n\
-                   /new            — create a fresh agent (hot-swap)\n\
-                   /pin            — pin current agent for quick access\n\
-                   /clear          — clear screen + context window\n\
-                 \n\
-                 Memory:\n\
-                   /init           — analyse project + initialise memory\n\
-                   /remember <t>   — store a fact in agent memory\n\
-                   /memory         — view all memory blocks\n\
-                   /search <q>     — search past messages\n\
-                 \n\
-                 Model:\n\
-                   /model <m>      — switch model mid-session\n\
-                 \n\
-                 Permission modes  (currently: {icon} {label}):\n\
-                   /default        — ask before each tool  [Shift+Tab to cycle]\n\
-                   /plan           — read-only tools; write ops blocked\n\
-                   /yolo           — auto-approve all tools\n\
-                   /mode [name]    — show / set: default | plan | yolo | acceptEdits\n\
-                 \n\
-                 Direct bash (bypasses agent):\n\
-                   ! <cmd>         — e.g.  ! git status\n\
-                 \n\
-                   /feedback       — report issues\n\
-                   /help  /?       — this message\n\
-                   exit  /exit     — quit CADE\n"
-            )),
-            ResetColor
-        )?;
+        // Use plain println! to avoid crossterm cursor misalignment from emojis
+        // (emojis are double-width in some terminals which confuses crossterm's Print)
+        execute!(stdout, ResetColor)?;
+        stdout.flush()?;
+        println!();
+        println!("Commands:");
+        println!();
+        println!("  Session:");
+        println!("    /info           - agent, model, mode, cwd");
+        println!("    /agent          - show current agent ID");
+        println!("    /agents         - list all agents + switch");
+        println!("    /new            - create a fresh agent (hot-swap)");
+        println!("    /pin            - pin current agent for quick access");
+        println!("    /clear          - clear screen + context window");
+        println!();
+        println!("  Memory:");
+        println!("    /init           - analyse project + initialise memory");
+        println!("    /remember <t>   - store a fact in agent memory");
+        println!("    /memory         - view all memory blocks");
+        println!("    /search <q>     - search past messages");
+        println!();
+        println!("  Model:");
+        println!("    /model <m>      - switch model  (e.g. /model gemini/gemini-2.5-pro)");
+        println!();
+        println!("  Permission modes  (currently: {icon} {label}):");
+        println!("    /default        - ask before each tool  [Shift+Tab to cycle]");
+        println!("    /plan           - read-only tools; write ops blocked");
+        println!("    /yolo           - auto-approve all tools");
+        println!("    /mode [name]    - show / set: default | plan | yolo | acceptEdits");
+        println!();
+        println!("  Direct bash (bypasses agent):");
+        println!("    ! <cmd>         - e.g.  ! git status");
+        println!();
+        println!("    /feedback       - report issues");
+        println!("    /help  /?       - this message");
+        println!("    exit  /exit     - quit CADE");
+        println!();
         stdout.flush()?;
         Ok(())
     }
