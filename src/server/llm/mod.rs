@@ -137,30 +137,47 @@ impl LlmRouter {
     /// Select provider and bare model name for a `provider/model` or bare `model` string.
     ///
     /// Resolution order:
-    ///   1. Explicit `provider/model` prefix (e.g. `gemini/gemini-2.5-pro`)
-    ///   2. Auto-detect provider from well-known model name patterns
-    ///   3. Fall back to the configured default provider
-    fn pick(&self, model: &str) -> Option<(Arc<dyn LlmProvider>, String)> {
-        // 1. Explicit prefix
+    ///   1. Explicit `provider/model` prefix — error if prefix unknown
+    ///   2. Auto-detect provider from well-known model name patterns — error if provider not configured
+    ///   3. Fall back to the configured default provider (only for truly unknown model names)
+    fn pick(&self, model: &str) -> anyhow::Result<(Arc<dyn LlmProvider>, String)> {
+        // 1. Explicit prefix: `gemini/gemini-2.5-pro`
         if let Some(slash) = model.find('/') {
             let prefix = &model[..slash];
             let bare   = model[slash + 1..].to_string();
-            if let Some(p) = self.providers.get(prefix) {
-                return Some((Arc::clone(p), bare));
-            }
+            return self.providers
+                .get(prefix)
+                .map(|p| (Arc::clone(p), bare))
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Provider '{}' is not configured on this server \
+                     (check that the corresponding API key env var is set)",
+                    prefix
+                ));
         }
 
         // 2. Infer provider from model name pattern
         if let Some(prefix) = infer_provider_prefix(model) {
-            if let Some(p) = self.providers.get(prefix) {
-                return Some((Arc::clone(p), model.to_string()));
-            }
+            return self.providers
+                .get(prefix)
+                .map(|p| (Arc::clone(p), model.to_string()))
+                .ok_or_else(|| anyhow::anyhow!(
+                    "Model '{}' requires the '{}' provider, but it is not configured on this server. \
+                     Set the appropriate API key env var and restart cade-server.",
+                    model, prefix
+                ));
         }
 
-        // 3. Default provider fallback
+        // 3. Truly unknown model — use the default provider
         self.providers
             .get(&self.default_provider)
             .map(|p| (Arc::clone(p), model.to_string()))
+            .ok_or_else(|| anyhow::anyhow!("No LLM provider available"))
+    }
+
+    /// Validate that the given model string can be routed. Returns an error
+    /// message if the required provider is not configured.
+    pub fn validate_model(&self, model: &str) -> anyhow::Result<()> {
+        self.pick(model).map(|_| ())
     }
 }
 
@@ -195,9 +212,7 @@ fn infer_provider_prefix(model: &str) -> Option<&'static str> {
 #[async_trait::async_trait]
 impl LlmProvider for LlmRouter {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
-        let (provider, bare_model) = self
-            .pick(&req.model)
-            .ok_or_else(|| anyhow::anyhow!("No provider available for model '{}'", req.model))?;
+        let (provider, bare_model) = self.pick(&req.model)?;
         let routed = CompletionRequest { model: bare_model, ..req.clone() };
         provider.complete(&routed).await
     }
@@ -206,9 +221,7 @@ impl LlmProvider for LlmRouter {
         &self,
         req: &CompletionRequest,
     ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamChunk>> + Send>>> {
-        let (provider, bare_model) = self
-            .pick(&req.model)
-            .ok_or_else(|| anyhow::anyhow!("No provider available for model '{}'", req.model))?;
+        let (provider, bare_model) = self.pick(&req.model)?;
         let routed = CompletionRequest { model: bare_model, ..req.clone() };
         provider.stream(&routed).await
     }

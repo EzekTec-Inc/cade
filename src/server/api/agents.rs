@@ -126,6 +126,10 @@ pub async fn patch_agent(
     let mut updated_model = existing.model.clone();
 
     if let Some(model) = &body.model {
+        // Validate the model is routable before persisting
+        state.llm_router.validate_model(model).map_err(|e| {
+            (StatusCode::BAD_REQUEST, Json(json!({ "detail": e.to_string() })))
+        })?;
         sqlite::update_agent_model(&state.db, &agent_id, model)
             .map_err(|e| server_err(e.to_string()))?;
         updated_model = model.clone();

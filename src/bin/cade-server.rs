@@ -6,7 +6,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use cade::server::{
     api::router,
     config::ServerConfig,
-    llm::make_provider,
+    llm::LlmRouter,
     state::AppState,
     storage::open as open_db,
 };
@@ -38,16 +38,13 @@ async fn main() -> Result<()> {
     let db = open_db(&config.db_path)?;
 
     // LLM provider
-    let llm = make_provider(&config).map_err(|e| {
-        anyhow::anyhow!(
-            "{e}\n\nHint: set ANTHROPIC_API_KEY / OPENAI_API_KEY / GOOGLE_API_KEY / OLLAMA_BASE_URL\n\
-             and CADE_LLM_PROVIDER=anthropic|openai|gemini|ollama"
-        )
-    })?;
+    let llm_router = std::sync::Arc::new(LlmRouter::build(&config));
+    let llm: std::sync::Arc<dyn cade::server::llm::LlmProvider> = llm_router.clone() as _;
 
     let state = AppState {
         db,
         llm,
+        llm_router,
         config: Arc::new(config.clone()),
     };
 
