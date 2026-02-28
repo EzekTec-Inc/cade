@@ -293,17 +293,25 @@ impl CadeClient {
             match event {
                 Ok(Event::Open) => {}
                 Ok(Event::Message(msg)) => {
-                    if msg.data.trim() == "[DONE]" || msg.data.trim().is_empty() {
+                    let data = msg.data.trim();
+                    if data.is_empty() {
                         continue;
                     }
-                    match serde_json::from_str::<CadeMessage>(&msg.data) {
+                    if data == "[DONE]" {
+                        // Explicitly close to prevent reqwest_eventsource from
+                        // auto-reconnecting (SSE spec default), which would re-POST
+                        // the same body and duplicate messages on the server.
+                        es.close();
+                        break;
+                    }
+                    match serde_json::from_str::<CadeMessage>(data) {
                         Ok(lm) => {
                             on_event(&lm);
                             messages.push(lm);
                         }
                         Err(_) => {
                             // Try parsing as a wrapper object with a messages array
-                            if let Ok(v) = serde_json::from_str::<Value>(&msg.data) {
+                            if let Ok(v) = serde_json::from_str::<Value>(data) {
                                 if let Some(arr) = v["messages"].as_array() {
                                     for item in arr {
                                         if let Ok(lm) = serde_json::from_value::<CadeMessage>(item.clone()) {
@@ -387,10 +395,17 @@ impl CadeClient {
             match event {
                 Ok(Event::Open) => {}
                 Ok(Event::Message(msg)) => {
-                    if msg.data.trim() == "[DONE]" || msg.data.trim().is_empty() {
+                    let data = msg.data.trim();
+                    if data.is_empty() {
                         continue;
                     }
-                    if let Ok(lm) = serde_json::from_str::<CadeMessage>(&msg.data) {
+                    if data == "[DONE]" {
+                        // Close explicitly — prevents SSE auto-reconnect which would
+                        // re-POST the tool_return body and duplicate the DB record.
+                        es.close();
+                        break;
+                    }
+                    if let Ok(lm) = serde_json::from_str::<CadeMessage>(data) {
                         on_event(&lm);
                         messages.push(lm);
                     }
