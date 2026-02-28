@@ -21,7 +21,7 @@ use agent::{
 use cli::{Args, Repl};
 use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
-use skills::{discover_skills, skills_context};
+use skills::{discover_all_skills, skills_listing};
 
 const SKILLS_DIR: &str = ".skills";
 
@@ -38,6 +38,67 @@ async fn seed_default_memory(client: &CadeClient, agent_id: &str) {
         if let Err(e) = client.upsert_memory(agent_id, label, value).await {
             tracing::warn!("seed_memory {label}: {e}");
         }
+    }
+}
+
+/// Register the `load_skill` tool that lets the agent load skill content on-demand.
+async fn register_load_skill_tool(client: &CadeClient) {
+    let schema = serde_json::json!({
+        "name": "load_skill",
+        "description": "Load the full content of a skill into context. Call this when starting a task that matches one of the available skills listed in your system prompt.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "The skill ID to load (from the Available Skills list)"
+                }
+            },
+            "required": ["id"]
+        }
+    });
+    use agent::client::CreateToolRequest;
+    let req = CreateToolRequest {
+        source_code: String::new(),
+        source_type: "json".to_string(),
+        json_schema: Some(schema),
+        tags: vec![],
+    };
+    if let Err(e) = client.create_tool(req).await {
+        tracing::debug!("load_skill tool: {e}");
+    }
+}
+
+/// Register the `install_skill` tool that lets the agent install skills from URLs.
+async fn register_install_skill_tool(client: &CadeClient) {
+    let schema = serde_json::json!({
+        "name": "install_skill",
+        "description": "Download and install a skill from a GitHub URL or direct SKILL.MD URL. Use when the user asks to install a skill.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "GitHub tree URL or direct SKILL.MD URL to install"
+                },
+                "scope": {
+                    "type": "string",
+                    "enum": ["project", "global"],
+                    "description": "Where to install: project (.skills/) or global (~/.cade/skills/)"
+                }
+            },
+            "required": ["url"]
+        }
+    });
+    use agent::client::CreateToolRequest;
+    let req = CreateToolRequest {
+        source_code: String::new(),
+        source_type: "json".to_string(),
+        json_schema: Some(schema),
+        tags: vec![],
+    };
+    if let Err(e) = client.create_tool(req).await {
+        tracing::debug!("install_skill tool: {e}");
     }
 }
 
@@ -80,8 +141,9 @@ async fn register_update_memory_tool(client: &CadeClient) {
 
 /// Register all CADE tools on the server and attach them to the given agent.
 async fn register_and_attach(client: &CadeClient, agent_id: &str) {
-    // Register update_memory tool first so it's included in the agent's toolset
     register_update_memory_tool(client).await;
+    register_load_skill_tool(client).await;
+    register_install_skill_tool(client).await;
     let tools = register_cade_tools(client).await.unwrap_or_default();
     let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
     tracing::info!("Registered {} tools", tools.len());
@@ -143,15 +205,15 @@ async fn main() -> Result<()> {
         .context("invalid permission mode")?;
     let permissions = PermissionManager::new(perm_mode);
 
-    // Skills — discovered from .skills/ in cwd (or custom dir)
+    // Skills — multi-scope discovery: project > agent > global
     let skills_dir = args
         .skills
         .as_ref()
         .map(PathBuf::from)
         .unwrap_or_else(|| cwd.join(SKILLS_DIR));
-    let loaded_skills = discover_skills(&skills_dir).unwrap_or_default();
+    let loaded_skills = discover_all_skills(&cwd, None, None);
     if !loaded_skills.is_empty() {
-        println!("Loaded {} skill(s) from {}", loaded_skills.len(), skills_dir.display());
+        println!("Loaded {} skill(s)", loaded_skills.len());
     }
 
     // Default model: CLI flag > CADE_DEFAULT_MODEL env > server's detected model
@@ -159,29 +221,19 @@ async fn main() -> Result<()> {
         .or_else(|| std::env::var("CADE_DEFAULT_MODEL").ok())
         .unwrap_or(server_info.2);
 
-    // Skills context — injected into agent system prompt so the agent knows
-    // what project-specific skills are available
-    let skills_block = skills_context(&loaded_skills);
+    // Skills listing — compact (names + descriptions only), not full bodies.
+    // The agent uses load_skill(id) to pull full content on-demand.
+    let skills_block = skills_listing(&loaded_skills);
 
     // Agent resolution — helper closure avoids repeating the create logic
     let make_req = |model: String, desc: &str| {
-        // Attach skills as memory blocks on agent creation.
-        // Each skill gets its own block (skill:<id>) + a combined "skills" block.
-        let mut memory_blocks: Vec<MemoryBlock> = vec![];
-        for skill in &loaded_skills {
-            memory_blocks.push(MemoryBlock {
-                label: format!("skill:{}", skill.id),
-                value: skill.to_context_block(),
-                description: None,
-            });
-        }
-        if let Some(ctx) = &skills_block {
-            memory_blocks.push(MemoryBlock {
-                label: "skills".to_string(),
-                value: ctx.clone(),
-                description: None,
-            });
-        }
+        // Inject only the compact listing as a memory block.
+        // Full skill content is loaded on-demand by the agent via load_skill tool.
+        let memory_blocks: Vec<MemoryBlock> = if let Some(ctx) = &skills_block {
+            vec![MemoryBlock { label: "skills".to_string(), value: ctx.clone(), description: None }]
+        } else {
+            vec![]
+        };
         CreateAgentRequest {
             name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
             model,

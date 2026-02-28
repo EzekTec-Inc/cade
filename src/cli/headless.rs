@@ -80,6 +80,22 @@ async fn process_tool_calls(
             continue;
         }
 
+        // load_skill — headless: return full body if skill found in current dir
+        if tool_name == "load_skill" {
+            let id = args["id"].as_str().unwrap_or("").trim().to_string();
+            let skills = crate::skills::discover_all_skills(
+                &std::env::current_dir().unwrap_or_default(), None, None
+            );
+            let (msg, err) = match skills.into_iter().find(|s| s.id == id) {
+                Some(s) => (s.to_context_block(), false),
+                None    => (format!("Skill '{id}' not found"), true),
+            };
+            let follow = client.stream_tool_return(agent_id, &call_id, &msg, err, |_| {}).await?;
+            collect_assistant_text(&follow, output);
+            Box::pin(process_tool_calls(client, agent_id, follow, permissions, output)).await?;
+            continue;
+        }
+
         tracing::info!("Executing tool: {tool_name}");
         let result = dispatch(call_id.clone(), &tool_name, &args).await;
         tracing::debug!("Tool '{}': {} bytes", tool_name, result.output.len());

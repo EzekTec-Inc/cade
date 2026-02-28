@@ -14,7 +14,7 @@ use crate::agent::{CadeClient, client::{CadeMessage, MemoryBlock}};
 use crate::agent::session::SessionStore;
 use crate::permissions::{PermissionManager, PermissionMode};
 use crate::settings::SettingsManager;
-use crate::skills::{Skill, discover_skills, skills_context};
+use crate::skills::Skill;
 use crate::tools::{dispatch, is_write_tool};
 
 const BANNER: &str = r#"
@@ -639,20 +639,18 @@ impl Repl {
                                 if skills.is_empty() {
                                     println!("\n  No skills loaded.");
                                     println!("  Create one: /skills create <name>");
-                                    println!("  Skills dir: {}", self.skills_dir.display());
+                                    println!("  Skills dirs: .skills/  ~/.cade/skills/  ~/.cade/agents/<id>/skills/");
                                 } else {
-                                    println!("\n  Skills ({} loaded from {}):\n",
-                                        skills.len(), self.skills_dir.display());
+                                    println!("\n  Skills ({} loaded):\n", skills.len());
                                     for s in skills.iter() {
                                         let cat = s.category.as_deref()
-                                            .map(|c| format!(" [{}]", c))
+                                            .map(|c| format!("[{}]", c))
                                             .unwrap_or_default();
-                                        let tags = if s.tags.is_empty() { String::new() }
-                                            else { format!(" ({})", s.tags.join(", ")) };
-                                        println!("  [{:<24}]{:<12} — {}{}",
-                                            s.id, cat, s.description, tags);
+                                        println!("  {:<10} {:<28} {:<12} {}",
+                                            format!("[{}]", s.scope), s.id, cat, s.description);
                                     }
                                     println!();
+                                    println!("  Agent uses load_skill(<id>) to load full content on-demand.");
                                 }
                             }
 
@@ -732,59 +730,46 @@ impl Repl {
                             }
 
                             "reload" => {
-                                match discover_skills(&self.skills_dir) {
-                                    Err(e) => {
-                                        println!("\n  ✗ Skills discovery failed: {e}");
-                                    }
-                                    Ok(new_skills) => {
+                                {
+                                        let new_skills = crate::skills::discover_all_skills(&self.cwd, None, None);
                                         let prev_count = self.skills.lock().unwrap().len();
                                         let new_count = new_skills.len();
                                         let agent_id = self.agent_id();
 
-                                        // Store each skill as its own memory block: skill:<id>
-                                        // This makes them individually retrievable and addressable.
-                                        // First clear all old per-skill blocks by fetching existing labels.
+                                        // Clear old per-skill blocks, upsert new ones individually
                                         let existing = self.client.get_memory(&agent_id).await.unwrap_or_default();
                                         for block in &existing {
                                             if block.label.starts_with("skill:") {
                                                 let _ = self.client.delete_memory(&agent_id, &block.label).await;
                                             }
                                         }
-
-                                        // Upsert each skill individually
                                         let mut names = vec![];
                                         for skill in &new_skills {
                                             let label = format!("skill:{}", skill.id);
-                                            let value = skill.to_context_block();
-                                            let _ = self.client.upsert_memory(&agent_id, &label, &value).await;
+                                            let _ = self.client.upsert_memory(&agent_id, &label, &skill.to_context_block()).await;
                                             names.push(skill.name.clone());
                                         }
 
-                                        // Also keep the combined block for backwards compat + easy browsing
-                                        let combined = skills_context(&new_skills);
+                                        // Compact listing for system prompt
+                                        let listing = crate::skills::skills_listing(&new_skills);
                                         let _ = self.client.upsert_memory(
-                                            &agent_id, "skills",
-                                            combined.as_deref().unwrap_or("")
+                                            &agent_id, "skills", listing.as_deref().unwrap_or("")
                                         ).await;
 
-                                        // Update the in-memory list
                                         *self.skills.lock().unwrap() = new_skills;
 
                                         println!("\n  ✓ Reloaded: {new_count} skills (was {prev_count})");
-                                        println!("  ✓ Per-skill memory blocks updated (skill:<id>)");
+                                        println!("  ✓ Skills listing updated (on-demand via load_skill)");
 
-                                        // Notify the agent in the current conversation so it
-                                        // acknowledges the change without requiring a re-prompt.
+                                        // Notify agent in current conversation
                                         if new_count > 0 {
                                             let list = names.join(", ");
                                             let notify = format!(
                                                 "[System: Skills reloaded. Now active: {list}. \
-                                                 Your skills memory has been updated — apply these \
-                                                 skills going forward.]"
+                                                 Use load_skill(id) to load any skill's full content.]"
                                             );
                                             self.agent_turn(&mut stdout, &notify).await?;
                                         }
-                                    }
                                 }
                             }
 
@@ -994,9 +979,15 @@ impl Repl {
         execute!(stdout, Print("\n"))?;
         stdout.flush()?;
 
-        // Intercept update_memory — handled natively rather than dispatched
+        // Native tool intercepts (handled without going through generic dispatch)
         if tool_name == "update_memory" {
             return self.handle_update_memory(call_id, args).await;
+        }
+        if tool_name == "load_skill" {
+            return self.handle_load_skill(call_id, args).await;
+        }
+        if tool_name == "install_skill" {
+            return self.handle_install_skill(call_id, args, stdout).await;
         }
 
         // Permission check — plan mode allows read operations, blocks write ones
@@ -1154,6 +1145,114 @@ impl Repl {
                 output: format!("Failed to update '{label}': {e}"),
                 is_error: true,
             }),
+        }
+    }
+
+    /// Return the full body of a skill by ID — `load_skill` tool intercept.
+    async fn handle_load_skill(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+    ) -> Result<crate::tools::ToolResult> {
+        let id = args["id"].as_str().unwrap_or("").trim().to_string();
+        let skills = self.skills.lock().unwrap();
+        match skills.iter().find(|s| s.id == id) {
+            Some(skill) => {
+                let content = skill.to_context_block();
+                tracing::info!("Agent loaded skill: {id}");
+                Ok(crate::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "load_skill".to_string(),
+                    output: content,
+                    is_error: false,
+                })
+            }
+            None => {
+                let available: Vec<&str> = skills.iter().map(|s| s.id.as_str()).collect();
+                Ok(crate::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "load_skill".to_string(),
+                    output: format!(
+                        "Skill '{}' not found. Available: {}",
+                        id,
+                        available.join(", ")
+                    ),
+                    is_error: true,
+                })
+            }
+        }
+    }
+
+    /// Download and install a skill from a URL — `install_skill` tool intercept.
+    async fn handle_install_skill(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+        stdout: &mut io::Stdout,
+    ) -> Result<crate::tools::ToolResult> {
+        let url   = args["url"].as_str().unwrap_or("").trim().to_string();
+        let scope = args["scope"].as_str().unwrap_or("project");
+
+        if url.is_empty() {
+            return Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "install_skill".to_string(),
+                output: "error: 'url' is required".to_string(),
+                is_error: true,
+            });
+        }
+
+        // Resolve target directory based on scope
+        let target_dir = if scope == "global" {
+            dirs::home_dir()
+                .map(|h| h.join(".cade").join("skills"))
+                .unwrap_or_else(|| self.skills_dir.clone())
+        } else {
+            self.skills_dir.clone()
+        };
+
+        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+            Print(format!("  Downloading skill from {}…\n", url)), ResetColor)?;
+        stdout.flush()?;
+
+        match crate::skills::install_skill_from_url(&url, &target_dir).await {
+            Ok(skill) => {
+                let name = skill.name.clone();
+                let id   = skill.id.clone();
+                // Add to in-memory list
+                self.skills.lock().unwrap().push(skill);
+                // Update agent memory listing
+                let agent_id = self.agent_id();
+                let skills   = self.skills.lock().unwrap().clone();
+                let listing  = crate::skills::skills_listing(&skills);
+                let _ = self.client.upsert_memory(
+                    &agent_id, "skills",
+                    listing.as_deref().unwrap_or("")
+                ).await;
+                drop(skills);
+
+                execute!(stdout, SetForegroundColor(Color::Green),
+                    Print(format!("  ✓ Installed: {name} [{id}]\n")), ResetColor)?;
+                stdout.flush()?;
+
+                Ok(crate::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "install_skill".to_string(),
+                    output: format!("Skill '{name}' installed as [{id}] in {scope} scope. It is now available via load_skill(\"{id}\")."),
+                    is_error: false,
+                })
+            }
+            Err(e) => {
+                execute!(stdout, SetForegroundColor(Color::Red),
+                    Print(format!("  ✗ Install failed: {e}\n")), ResetColor)?;
+                stdout.flush()?;
+                Ok(crate::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "install_skill".to_string(),
+                    output: format!("Failed to install skill: {e}"),
+                    is_error: true,
+                })
+            }
         }
     }
 
