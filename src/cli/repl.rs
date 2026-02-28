@@ -14,6 +14,7 @@ use crate::agent::{CadeClient, client::{CadeMessage, MemoryBlock}};
 use crate::agent::session::SessionStore;
 use crate::permissions::{PermissionManager, PermissionMode};
 use crate::settings::SettingsManager;
+use crate::skills::{Skill, discover_skills, skills_context};
 use crate::tools::{dispatch, is_write_tool};
 
 const BANNER: &str = r#"
@@ -45,6 +46,8 @@ enum SlashCmd {
     Memory,
     Search(String),
     Feedback,
+    /// /skills [list|create <name>|show <id>|reload]
+    Skills(Option<String>),
     Yolo,
     Plan,
     Default,
@@ -72,6 +75,7 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "memory"                 => Some(SlashCmd::Memory),
         "search" if arg.is_some()   => Some(SlashCmd::Search(arg.unwrap())),
         "feedback"               => Some(SlashCmd::Feedback),
+        "skills"                 => Some(SlashCmd::Skills(arg)),
         "yolo"                   => Some(SlashCmd::Yolo),
         "plan"                   => Some(SlashCmd::Plan),
         "default" | "normal" | "resume" => Some(SlashCmd::Default),
@@ -90,10 +94,14 @@ pub struct Repl {
     agent_name: Arc<Mutex<String>>,
     permissions: PermissionManager,
     current_model: Arc<Mutex<String>>,
-    settings: Arc<Mutex<SettingsManager>>,
-    session:  Arc<Mutex<SessionStore>>,
+    settings:   Arc<Mutex<SettingsManager>>,
+    session:    Arc<Mutex<SessionStore>>,
     /// Working directory (for /init context)
     cwd: std::path::PathBuf,
+    /// Currently loaded skills
+    skills:     Arc<Mutex<Vec<Skill>>>,
+    /// Directory from which skills are discovered
+    skills_dir: std::path::PathBuf,
 }
 
 impl Repl {
@@ -106,6 +114,8 @@ impl Repl {
         settings: Arc<Mutex<SettingsManager>>,
         session: Arc<Mutex<SessionStore>>,
         cwd: std::path::PathBuf,
+        skills: Vec<Skill>,
+        skills_dir: std::path::PathBuf,
     ) -> Self {
         Self {
             client,
@@ -116,6 +126,8 @@ impl Repl {
             settings,
             session,
             cwd,
+            skills:     Arc::new(Mutex::new(skills)),
+            skills_dir,
         }
     }
 
@@ -542,6 +554,151 @@ impl Repl {
                         stdout.flush()?;
                     }
 
+                    SlashCmd::Skills(arg) => {
+                        let sub = arg.as_deref().unwrap_or("list");
+                        let (sub_cmd, sub_arg) = sub.splitn(2, ' ')
+                            .collect::<Vec<_>>()
+                            .split_first()
+                            .map(|(c, r)| (*c, r.join(" ")))
+                            .unwrap_or(("list", String::new()));
+
+                        match sub_cmd {
+                            "list" | "" => {
+                                let skills = self.skills.lock().unwrap();
+                                execute!(stdout, ResetColor)?;
+                                stdout.flush()?;
+                                if skills.is_empty() {
+                                    println!("\n  No skills loaded.");
+                                    println!("  Create one: /skills create <name>");
+                                    println!("  Skills dir: {}", self.skills_dir.display());
+                                } else {
+                                    println!("\n  Skills ({} loaded from {}):\n",
+                                        skills.len(), self.skills_dir.display());
+                                    for s in skills.iter() {
+                                        let cat = s.category.as_deref()
+                                            .map(|c| format!(" [{}]", c))
+                                            .unwrap_or_default();
+                                        let tags = if s.tags.is_empty() { String::new() }
+                                            else { format!(" ({})", s.tags.join(", ")) };
+                                        println!("  [{:<24}]{:<12} — {}{}",
+                                            s.id, cat, s.description, tags);
+                                    }
+                                    println!();
+                                }
+                            }
+
+                            "create" => {
+                                let name_raw = sub_arg.trim().to_string();
+                                if name_raw.is_empty() {
+                                    println!("\n  Usage: /skills create <name>");
+                                } else {
+                                    let slug: String = name_raw
+                                        .to_lowercase()
+                                        .chars()
+                                        .map(|c| if c.is_alphanumeric() { c } else { '-' })
+                                        .collect::<String>()
+                                        .trim_matches('-')
+                                        .to_string();
+                                    let skill_dir = self.skills_dir.join(&slug);
+                                    let skill_file = skill_dir.join("SKILL.MD");
+                                    if skill_file.exists() {
+                                        println!("\n  ✗ Skill '{}' already exists: {}",
+                                            slug, skill_file.display());
+                                    } else {
+                                        match std::fs::create_dir_all(&skill_dir) {
+                                            Ok(_) => {
+                                                let title: String = slug.replace('-', " ")
+                                                    .split_whitespace()
+                                                    .map(|w| {
+                                                        let mut c = w.chars();
+                                                        match c.next() {
+                                                            None => String::new(),
+                                                            Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+                                                        }
+                                                    })
+                                                    .collect::<Vec<_>>()
+                                                    .join(" ");
+                                                let template = format!(
+                                                    "---\nname: {title}\ndescription: One-line description of what this skill does\ncategory: general\ntags: []\n---\n\n\
+                                                    # {title}\n\nDescribe the skill here. This text is injected into the agent's\n\
+                                                    system prompt when this skill is loaded.\n\n\
+                                                    You can use markdown, code blocks, examples, step-by-step instructions, etc.\n"
+                                                );
+                                                match std::fs::write(&skill_file, template) {
+                                                    Ok(_) => {
+                                                        println!("\n  ✓ Created: {}", skill_file.display());
+                                                        println!("    Edit the file, then run /skills reload to activate it.");
+                                                    }
+                                                    Err(e) => println!("\n  ✗ Failed to write skill file: {e}"),
+                                                }
+                                            }
+                                            Err(e) => println!("\n  ✗ Failed to create directory: {e}"),
+                                        }
+                                    }
+                                }
+                            }
+
+                            "show" => {
+                                let id = sub_arg.trim();
+                                let skills = self.skills.lock().unwrap();
+                                match skills.iter().find(|s| s.id == id) {
+                                    None => {
+                                        println!("\n  Skill '{}' not found. Run /skills to list.", id);
+                                    }
+                                    Some(s) => {
+                                        execute!(stdout, ResetColor)?;
+                                        stdout.flush()?;
+                                        println!("\n  [{id}]");
+                                        println!("  Name       : {}", s.name);
+                                        println!("  Description: {}", s.description);
+                                        if let Some(cat) = &s.category {
+                                            println!("  Category   : {cat}");
+                                        }
+                                        if !s.tags.is_empty() {
+                                            println!("  Tags       : {}", s.tags.join(", "));
+                                        }
+                                        println!("\n---\n{}\n---", s.body);
+                                    }
+                                }
+                            }
+
+                            "reload" => {
+                                match discover_skills(&self.skills_dir) {
+                                    Err(e) => {
+                                        println!("\n  ✗ Skills discovery failed: {e}");
+                                    }
+                                    Ok(new_skills) => {
+                                        let prev_count = self.skills.lock().unwrap().len();
+                                        let new_count = new_skills.len();
+                                        let context = skills_context(&new_skills);
+
+                                        // Update the in-memory list
+                                        *self.skills.lock().unwrap() = new_skills;
+
+                                        // Update the agent's memory block
+                                        let id = self.agent_id();
+                                        let value = context.as_deref().unwrap_or("");
+                                        match self.client.upsert_memory(&id, "skills", value).await {
+                                            Ok(_) => {
+                                                println!("\n  ✓ Reloaded: {new_count} skills (was {prev_count})");
+                                                println!("  ✓ Agent memory block 'skills' updated");
+                                            }
+                                            Err(e) => {
+                                                println!("\n  Skills reloaded ({new_count}), but memory update failed: {e}");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            other => {
+                                println!("\n  Unknown /skills subcommand: '{other}'");
+                                println!("  Usage: /skills [list | create <name> | show <id> | reload]");
+                            }
+                        }
+                        stdout.flush()?;
+                    }
+
                     SlashCmd::Feedback => {
                         execute!(stdout,
                             SetForegroundColor(Color::Cyan),
@@ -874,6 +1031,12 @@ impl Repl {
         println!("    /new            - create a fresh agent (hot-swap)");
         println!("    /pin            - pin current agent for quick access");
         println!("    /clear          - clear screen + context window");
+        println!();
+        println!("  Skills:");
+        println!("    /skills                - list loaded skills");
+        println!("    /skills create <name>  - scaffold a new SKILL.MD file");
+        println!("    /skills show <id>      - show full skill content");
+        println!("    /skills reload         - re-discover skills + update agent memory");
         println!();
         println!("  Memory:");
         println!("    /init           - analyse project + initialise memory");

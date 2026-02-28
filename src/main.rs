@@ -204,6 +204,8 @@ async fn main() -> Result<()> {
         settings_arc,
         session_arc,
         cwd.clone(),
+        loaded_skills,
+        skills_dir,
     );
     repl.run().await?;
 
