@@ -102,6 +102,52 @@ async fn register_install_skill_tool(client: &CadeClient) {
     }
 }
 
+/// Register the `run_subagent` tool — spawns a focused subagent for a task.
+async fn register_run_subagent_tool(client: &CadeClient) {
+    let schema = serde_json::json!({
+        "name": "run_subagent",
+        "description": "Spawn a subagent to handle a task autonomously. Only the final answer \
+is returned — your context stays clean. Use for: codebase search (explore), implementation \
+(general-purpose, coder), code review (reviewer), or custom subagents.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "subagent_type": {
+                    "type": "string",
+                    "description": "Built-in type (explore, general-purpose, coder, reviewer) or custom name from .cade/agents/"
+                },
+                "prompt": {
+                    "type": "string",
+                    "description": "The task description for the subagent"
+                },
+                "background": {
+                    "type": "boolean",
+                    "description": "Run in background — tool returns immediately, you get notified on completion (default false)"
+                },
+                "agent_id": {
+                    "type": "string",
+                    "description": "Optional: deploy an existing stateful agent as the subagent by its agent ID"
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Optional: override the subagent's model"
+                }
+            },
+            "required": ["subagent_type", "prompt"]
+        }
+    });
+    use agent::client::CreateToolRequest;
+    let req = CreateToolRequest {
+        source_code: String::new(),
+        source_type: "json".to_string(),
+        json_schema: Some(schema),
+        tags: vec![],
+    };
+    if let Err(e) = client.create_tool(req).await {
+        tracing::debug!("run_subagent tool: {e}");
+    }
+}
+
 /// Register the `update_memory` tool that lets the agent update its own memory.
 async fn register_update_memory_tool(client: &CadeClient) {
     let schema = serde_json::json!({
@@ -144,6 +190,7 @@ async fn register_and_attach(client: &CadeClient, agent_id: &str) {
     register_update_memory_tool(client).await;
     register_load_skill_tool(client).await;
     register_install_skill_tool(client).await;
+    register_run_subagent_tool(client).await;
     let tools = register_cade_tools(client).await.unwrap_or_default();
     let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
     tracing::info!("Registered {} tools", tools.len());

@@ -15,6 +15,7 @@ use crate::agent::session::SessionStore;
 use crate::permissions::{PermissionManager, PermissionMode};
 use crate::settings::SettingsManager;
 use crate::skills::Skill;
+use crate::subagents::{SubagentDef, SubagentTools, BackgroundResult, discover_all_subagents, find_subagent};
 use crate::tools::{dispatch, is_write_tool};
 
 const BANNER: &str = r#"
@@ -48,6 +49,7 @@ enum SlashCmd {
     Feedback,
     /// /skills [list|create <name>|show <id>|reload]
     Skills(Option<String>),
+    Subagents,
     Yolo,
     Plan,
     Default,
@@ -76,6 +78,7 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "search" if arg.is_some()   => Some(SlashCmd::Search(arg.unwrap())),
         "feedback"               => Some(SlashCmd::Feedback),
         "skills"                 => Some(SlashCmd::Skills(arg)),
+        "subagents" | "agents-list" => Some(SlashCmd::Subagents),
         "yolo"                   => Some(SlashCmd::Yolo),
         "plan"                   => Some(SlashCmd::Plan),
         "default" | "normal" | "resume" => Some(SlashCmd::Default),
@@ -102,6 +105,8 @@ pub struct Repl {
     skills:     Arc<Mutex<Vec<Skill>>>,
     /// Directory from which skills are discovered
     skills_dir: std::path::PathBuf,
+    /// Completed background subagent results waiting to be shown
+    background_results: Arc<Mutex<Vec<BackgroundResult>>>,
 }
 
 impl Repl {
@@ -128,6 +133,7 @@ impl Repl {
             cwd,
             skills:     Arc::new(Mutex::new(skills)),
             skills_dir,
+            background_results: Arc::new(Mutex::new(vec![])),
         }
     }
 
@@ -153,6 +159,23 @@ impl Repl {
         let mut hist_idx: Option<usize> = None;
 
         loop {
+            // Check for completed background subagent results
+            {
+                let mut results = self.background_results.lock().unwrap();
+                for r in results.drain(..) {
+                    execute!(stdout, Print("\n"), SetForegroundColor(Color::Cyan),
+                        Print(format!("  [background subagent: {}]", r.subagent)), ResetColor,
+                        Print(format!("\n  Task: {}\n  Result: {}\n", r.prompt_preview, r.result)))?;
+                    stdout.flush()?;
+                    // Inject result into main agent's conversation
+                    let notify = format!(
+                        "[Background subagent '{}' completed (task ID: {})]:\n{}",
+                        r.subagent, r.task_id, r.result
+                    );
+                    let _ = self.client.send_message(&self.agent_id(), &notify).await;
+                }
+            }
+
             // Prompt — show mode indicator when not in default mode
             let mode_tag = mode_prompt_tag(self.permissions.mode());
             execute!(
@@ -781,6 +804,20 @@ impl Repl {
                         stdout.flush()?;
                     }
 
+                    SlashCmd::Subagents => {
+                        let all = discover_all_subagents(&self.cwd);
+                        execute!(stdout, ResetColor)?;
+                        stdout.flush()?;
+                        println!("\n  Available subagents ({}):\n", all.len());
+                        for def in &all {
+                            println!("{}", def.summary());
+                        }
+                        println!();
+                        println!("  Usage: ask the agent to run_subagent(type, task)");
+                        println!("  Custom: create .cade/agents/<name>.md in this project");
+                        println!("  Global: create ~/.cade/agents/<name>.md");
+                    }
+
                     SlashCmd::Feedback => {
                         execute!(stdout,
                             SetForegroundColor(Color::Cyan),
@@ -988,6 +1025,9 @@ impl Repl {
         }
         if tool_name == "install_skill" {
             return self.handle_install_skill(call_id, args, stdout).await;
+        }
+        if tool_name == "run_subagent" {
+            return self.handle_run_subagent(call_id, args, stdout).await;
         }
 
         // Permission check — plan mode allows read operations, blocks write ones
@@ -1256,6 +1296,145 @@ impl Repl {
         }
     }
 
+    /// Handle the `run_subagent` tool call — spawn a subagent and return its result.
+    async fn handle_run_subagent(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+        stdout: &mut io::Stdout,
+    ) -> Result<crate::tools::ToolResult> {
+        let subagent_type = args["subagent_type"].as_str().unwrap_or("general-purpose").trim().to_string();
+        let prompt        = args["prompt"].as_str().unwrap_or("").trim().to_string();
+        let background    = args["background"].as_bool().unwrap_or(false);
+        let agent_id_arg  = args["agent_id"].as_str().map(|s| s.trim().to_string());
+        let model_override= args["model"].as_str().map(|s| s.trim().to_string());
+
+        if prompt.is_empty() {
+            return Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "run_subagent".to_string(),
+                output: "error: 'prompt' is required".to_string(),
+                is_error: true,
+            });
+        }
+
+        // Resolve subagent definition
+        let all_defs = discover_all_subagents(&self.cwd);
+        let def_opt  = find_subagent(&subagent_type, &all_defs).cloned();
+
+        // Determine if using existing stateful agent or ephemeral
+        let use_existing_agent = agent_id_arg.is_some();
+
+        // Show progress
+        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+            Print(format!("  Launching subagent [{}]{}…\n",
+                subagent_type,
+                if background { " (background)" } else { "" }
+            )),
+            ResetColor)?;
+        stdout.flush()?;
+
+        // Clone what we need for the async task
+        let client     = self.client.clone();
+        let main_model = self.model();
+        let permissions = crate::permissions::PermissionManager::default();
+        let call_id_owned = call_id.to_string();
+        let bg_results = Arc::clone(&self.background_results);
+
+        let task_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
+        let task_id_c = task_id.clone();
+        let prompt_preview: String = prompt.chars().take(60).collect();
+
+        let run_task = {
+            let subagent_type_c = subagent_type.clone();
+            let task_id_c = task_id.clone();
+            let prompt_preview_c = prompt_preview.clone();
+            async move {
+                // Determine agent to use
+                let (sub_agent_id, ephemeral) = if let Some(existing_id) = agent_id_arg {
+                    (existing_id, false)
+                } else {
+                    // Create ephemeral agent
+                    let system_prompt = def_opt.as_ref()
+                        .map(|d| d.system_prompt.clone())
+                        .unwrap_or_else(|| "You are a helpful coding assistant. Complete the task and report back.".to_string());
+
+                    let model = model_override.clone()
+                        .or_else(|| def_opt.as_ref().and_then(|d| d.model.clone()))
+                        .unwrap_or(main_model);
+
+                    let req = crate::agent::client::CreateAgentRequest {
+                        name: Some(format!("subagent-{}-{}", subagent_type_c, task_id_c)),
+                        model,
+                        description: Some(format!("Ephemeral subagent: {}", subagent_type_c)),
+                        memory_blocks: vec![],
+                        tool_ids: vec![],
+                    };
+                    match client.create_agent(req).await {
+                        Ok(a)  => (a.id, true),
+                        Err(e) => return (format!("Failed to create subagent: {e}"), true),
+                    }
+                };
+
+                // Run headless
+                let result = crate::cli::headless::run_headless(
+                    &client, &sub_agent_id, &prompt, &permissions
+                ).await;
+
+                // Delete ephemeral agent
+                if ephemeral {
+                    let _ = client.delete_agent(&sub_agent_id).await;
+                }
+
+                match result {
+                    Ok(output) => (output, false),
+                    Err(e)     => (format!("Subagent error: {e}"), true),
+                }
+            }
+        };
+
+        if background {
+            // Spawn and return immediately
+            let bg = bg_results;
+            let st = subagent_type.clone();
+            tokio::spawn(async move {
+                let (result, is_error) = run_task.await;
+                bg.lock().unwrap().push(BackgroundResult {
+                    task_id: task_id.clone(),
+                    subagent: st,
+                    prompt_preview,
+                    result,
+                    is_error,
+                });
+            });
+
+            Ok(crate::tools::ToolResult {
+                tool_call_id: call_id_owned,
+                tool_name: "run_subagent".to_string(),
+                output: format!(
+                    "Background subagent [{subagent_type}] launched (task ID: {}). \
+                     You will be notified when it completes.", task_id_c
+                ),
+                is_error: false,
+            })
+        } else {
+            // Run synchronously — wait for result
+            let (output, is_error) = run_task.await;
+            if !is_error {
+                execute!(stdout, SetForegroundColor(Color::Green),
+                    Print(format!("  ✓ Subagent [{}] complete\n", subagent_type)),
+                    ResetColor)?;
+            }
+            stdout.flush()?;
+            Ok(crate::tools::ToolResult {
+                tool_call_id: call_id_owned,
+                tool_name: "run_subagent".to_string(),
+                output,
+                is_error,
+            })
+        }
+    }
+
     fn print_error(&self, stdout: &mut io::Stdout, msg: &str) -> Result<()> {
         execute!(
             stdout,
@@ -1283,6 +1462,11 @@ impl Repl {
         println!("    /new            - create a fresh agent (hot-swap)");
         println!("    /pin            - pin current agent for quick access");
         println!("    /clear          - clear screen + context window");
+        println!();
+        println!("  Subagents:");
+        println!("    /subagents      - list available subagents (built-in + custom)");
+        println!("    ask agent to    - run_subagent(type, task) — spawns subagent");
+        println!("    custom def      - .cade/agents/<name>.md in project or ~/.cade/agents/");
         println!();
         println!("  Skills:");
         println!("    /skills                - list loaded skills");

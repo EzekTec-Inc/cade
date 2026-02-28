@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// CADE REST API client
+#[derive(Clone)]
 pub struct CadeClient {
     client: Client,
     base_url: String,
@@ -258,6 +259,17 @@ impl CadeClient {
             bail!("create_agent failed {status}: {body}");
         }
         Ok(resp.json::<AgentState>().await?)
+    }
+
+    pub async fn delete_agent(&self, agent_id: &str) -> Result<()> {
+        let resp = self.client
+            .delete(self.url(&format!("/agents/{agent_id}")))
+            .header(self.auth().0, self.auth().1)
+            .send().await?;
+        if !resp.status().is_success() && resp.status().as_u16() != 404 {
+            bail!("delete_agent failed {}", resp.status());
+        }
+        Ok(())
     }
 
     pub async fn get_agent(&self, agent_id: &str) -> Result<AgentState> {
