@@ -165,12 +165,23 @@ async fn main() -> Result<()> {
 
     // Agent resolution — helper closure avoids repeating the create logic
     let make_req = |model: String, desc: &str| {
-        // Attach skills to system prompt if any were loaded
-        let memory_blocks: Vec<MemoryBlock> = if let Some(ctx) = &skills_block {
-            vec![MemoryBlock { label: "skills".to_string(), value: ctx.clone(), description: None }]
-        } else {
-            vec![]
-        };
+        // Attach skills as memory blocks on agent creation.
+        // Each skill gets its own block (skill:<id>) + a combined "skills" block.
+        let mut memory_blocks: Vec<MemoryBlock> = vec![];
+        for skill in &loaded_skills {
+            memory_blocks.push(MemoryBlock {
+                label: format!("skill:{}", skill.id),
+                value: skill.to_context_block(),
+                description: None,
+            });
+        }
+        if let Some(ctx) = &skills_block {
+            memory_blocks.push(MemoryBlock {
+                label: "skills".to_string(),
+                value: ctx.clone(),
+                description: None,
+            });
+        }
         CreateAgentRequest {
             name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
             model,

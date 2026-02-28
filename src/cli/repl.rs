@@ -739,22 +739,50 @@ impl Repl {
                                     Ok(new_skills) => {
                                         let prev_count = self.skills.lock().unwrap().len();
                                         let new_count = new_skills.len();
-                                        let context = skills_context(&new_skills);
+                                        let agent_id = self.agent_id();
+
+                                        // Store each skill as its own memory block: skill:<id>
+                                        // This makes them individually retrievable and addressable.
+                                        // First clear all old per-skill blocks by fetching existing labels.
+                                        let existing = self.client.get_memory(&agent_id).await.unwrap_or_default();
+                                        for block in &existing {
+                                            if block.label.starts_with("skill:") {
+                                                let _ = self.client.delete_memory(&agent_id, &block.label).await;
+                                            }
+                                        }
+
+                                        // Upsert each skill individually
+                                        let mut names = vec![];
+                                        for skill in &new_skills {
+                                            let label = format!("skill:{}", skill.id);
+                                            let value = skill.to_context_block();
+                                            let _ = self.client.upsert_memory(&agent_id, &label, &value).await;
+                                            names.push(skill.name.clone());
+                                        }
+
+                                        // Also keep the combined block for backwards compat + easy browsing
+                                        let combined = skills_context(&new_skills);
+                                        let _ = self.client.upsert_memory(
+                                            &agent_id, "skills",
+                                            combined.as_deref().unwrap_or("")
+                                        ).await;
 
                                         // Update the in-memory list
                                         *self.skills.lock().unwrap() = new_skills;
 
-                                        // Update the agent's memory block
-                                        let id = self.agent_id();
-                                        let value = context.as_deref().unwrap_or("");
-                                        match self.client.upsert_memory(&id, "skills", value).await {
-                                            Ok(_) => {
-                                                println!("\n  ✓ Reloaded: {new_count} skills (was {prev_count})");
-                                                println!("  ✓ Agent memory block 'skills' updated");
-                                            }
-                                            Err(e) => {
-                                                println!("\n  Skills reloaded ({new_count}), but memory update failed: {e}");
-                                            }
+                                        println!("\n  ✓ Reloaded: {new_count} skills (was {prev_count})");
+                                        println!("  ✓ Per-skill memory blocks updated (skill:<id>)");
+
+                                        // Notify the agent in the current conversation so it
+                                        // acknowledges the change without requiring a re-prompt.
+                                        if new_count > 0 {
+                                            let list = names.join(", ");
+                                            let notify = format!(
+                                                "[System: Skills reloaded. Now active: {list}. \
+                                                 Your skills memory has been updated — apply these \
+                                                 skills going forward.]"
+                                            );
+                                            self.agent_turn(&mut stdout, &notify).await?;
                                         }
                                     }
                                 }
