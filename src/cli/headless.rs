@@ -45,10 +45,11 @@ async fn process_tool_calls(
         .collect();
 
     for (call_id, tool_name, args) in tool_calls {
-        if permissions.is_blocked(&tool_name) {
-            tracing::warn!("Tool '{tool_name}' blocked (plan mode)");
+        if permissions.is_blocked(&tool_name, &args) {
+            let reason = permissions.block_reason(&tool_name, &args);
+            tracing::warn!("{reason}");
             let follow = client
-                .stream_tool_return(agent_id, &call_id, &format!("Tool '{tool_name}' blocked"), true, |_| {})
+                .stream_tool_return(agent_id, &call_id, &reason, true, |_| {})
                 .await?;
             collect_assistant_text(&follow, output);
             Box::pin(process_tool_calls(client, agent_id, follow, permissions, output)).await?;

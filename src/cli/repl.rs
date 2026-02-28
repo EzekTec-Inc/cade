@@ -475,9 +475,9 @@ impl Repl {
         execute!(stdout, Print("\n"))?;
         stdout.flush()?;
 
-        // Permission check
-        if self.permissions.is_blocked(tool_name) {
-            let msg = format!("Tool '{tool_name}' blocked (plan mode)");
+        // Permission check — plan mode allows read operations, blocks write ones
+        if self.permissions.is_blocked(tool_name, args) {
+            let msg = self.permissions.block_reason(tool_name, args);
             execute!(
                 stdout,
                 SetForegroundColor(Color::Red),
