@@ -34,8 +34,14 @@ enum SlashCmd {
     Info,
     Model(String),
     New,
+    /// Switch to bypassPermissions — approve everything automatically
     Yolo,
+    /// Switch to plan / read-only — block all write/exec tools
     Plan,
+    /// Switch back to default mode — ask before each tool
+    Default,
+    /// Show / switch permission mode: /mode  or  /mode <name>
+    Mode(Option<String>),
 }
 
 fn parse_slash(input: &str) -> Option<SlashCmd> {
@@ -45,14 +51,16 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
     }
     let parts: Vec<&str> = trimmed[1..].splitn(2, ' ').collect();
     match parts[0] {
-        "help" | "?" => Some(SlashCmd::Help),
+        "help" | "?"        => Some(SlashCmd::Help),
         "exit" | "quit" | "q" => Some(SlashCmd::Exit),
-        "clear" => Some(SlashCmd::Clear),
-        "agent" => Some(SlashCmd::Agent),
-        "info" => Some(SlashCmd::Info),
-        "new" => Some(SlashCmd::New),
-        "yolo" => Some(SlashCmd::Yolo),
-        "plan" => Some(SlashCmd::Plan),
+        "clear"             => Some(SlashCmd::Clear),
+        "agent"             => Some(SlashCmd::Agent),
+        "info"              => Some(SlashCmd::Info),
+        "new"               => Some(SlashCmd::New),
+        "yolo"              => Some(SlashCmd::Yolo),
+        "plan"              => Some(SlashCmd::Plan),
+        "default" | "normal" | "resume" => Some(SlashCmd::Default),
+        "mode"              => Some(SlashCmd::Mode(parts.get(1).map(|s| s.to_string()))),
         "model" if parts.len() > 1 => Some(SlashCmd::Model(parts[1].to_string())),
         _ => None,
     }
@@ -104,11 +112,16 @@ impl Repl {
         let mut hist_idx: Option<usize> = None;
 
         loop {
-            // Prompt
+            // Prompt — show mode indicator when not in default mode
+            let mode_tag = match self.permissions.mode() {
+                PermissionMode::Plan               => " \x1b[36m[plan]\x1b[0m",
+                PermissionMode::BypassPermissions  => " \x1b[33m[yolo]\x1b[0m",
+                _                                  => "",
+            };
             execute!(
                 stdout,
                 SetForegroundColor(Color::Green),
-                Print("\ncade> "),
+                Print(format!("\ncade{mode_tag}> ")),
                 ResetColor,
             )?;
             stdout.flush()?;
@@ -157,11 +170,76 @@ impl Repl {
                     }
                     SlashCmd::Yolo => {
                         self.permissions.set_mode(PermissionMode::BypassPermissions);
-                        println!("\n⚡ Permission mode: bypassPermissions (--yolo)");
+                        execute!(stdout,
+                            SetForegroundColor(Color::Yellow),
+                            Print("\n⚡ Permission mode: bypassPermissions — all tools auto-approved\n"),
+                            ResetColor,
+                        )?;
+                        stdout.flush()?;
                     }
                     SlashCmd::Plan => {
                         self.permissions.set_mode(PermissionMode::Plan);
-                        println!("\n📖 Permission mode: plan (read-only)");
+                        execute!(stdout,
+                            SetForegroundColor(Color::Cyan),
+                            Print("\n📖 Permission mode: plan (read-only) — write/exec tools blocked\n"),
+                            Print("   Use /default to resume normal mode\n"),
+                            ResetColor,
+                        )?;
+                        stdout.flush()?;
+                    }
+                    SlashCmd::Default => {
+                        self.permissions.set_mode(PermissionMode::Default);
+                        execute!(stdout,
+                            SetForegroundColor(Color::Green),
+                            Print("\n✅ Permission mode: default — tools require approval\n"),
+                            ResetColor,
+                        )?;
+                        stdout.flush()?;
+                    }
+                    SlashCmd::Mode(arg) => {
+                        match arg.as_deref() {
+                            None | Some("") => {
+                                // Show current mode
+                                let (icon, label, hint) = mode_display(self.permissions.mode());
+                                execute!(stdout,
+                                    Print(format!("\n{icon} Current mode: {label}  {hint}\n")),
+                                )?;
+                                stdout.flush()?;
+                            }
+                            Some(name) => {
+                                // Switch to named mode
+                                match name.to_lowercase().as_str() {
+                                    "default" | "normal" => {
+                                        self.permissions.set_mode(PermissionMode::Default);
+                                        execute!(stdout, SetForegroundColor(Color::Green),
+                                            Print("\n✅ Permission mode: default\n"), ResetColor)?;
+                                    }
+                                    "plan" | "readonly" | "read-only" => {
+                                        self.permissions.set_mode(PermissionMode::Plan);
+                                        execute!(stdout, SetForegroundColor(Color::Cyan),
+                                            Print("\n📖 Permission mode: plan (read-only)\n"),
+                                            Print("   Use /default to resume normal mode\n"),
+                                            ResetColor)?;
+                                    }
+                                    "yolo" | "bypass" | "bypasspermissions" => {
+                                        self.permissions.set_mode(PermissionMode::BypassPermissions);
+                                        execute!(stdout, SetForegroundColor(Color::Yellow),
+                                            Print("\n⚡ Permission mode: bypassPermissions\n"), ResetColor)?;
+                                    }
+                                    "acceptedits" | "accept-edits" | "edits" => {
+                                        self.permissions.set_mode(PermissionMode::AcceptEdits);
+                                        execute!(stdout, SetForegroundColor(Color::Green),
+                                            Print("\n📝 Permission mode: acceptEdits — file edits auto-approved\n"), ResetColor)?;
+                                    }
+                                    other => {
+                                        execute!(stdout, SetForegroundColor(Color::Red),
+                                            Print(format!("\n  Unknown mode '{other}'\n  Valid: default | plan | yolo | acceptEdits\n")),
+                                            ResetColor)?;
+                                    }
+                                }
+                                stdout.flush()?;
+                            }
+                        }
                     }
                     SlashCmd::New => {
                         println!("\nUse 'cade --new' to start a fresh agent session.");
@@ -516,20 +594,32 @@ impl Repl {
     }
 
     fn print_help(&self, stdout: &mut io::Stdout) -> Result<()> {
+        let (icon, label, _) = mode_display(self.permissions.mode());
         execute!(
             stdout,
             SetForegroundColor(Color::Cyan),
-            Print(concat!(
-                "\nSlash commands:\n",
-                "  /help        — this message\n",
-                "  /agent       — show current agent ID\n",
-                "  /info        — show session info\n",
-                "  /clear       — clear the screen\n",
-                "  /yolo        — disable all permission prompts\n",
-                "  /plan        — read-only mode (block write/exec tools)\n",
-                "  /model <m>   — switch model (upcoming)\n",
-                "  /new         — create new agent session\n",
-                "  /exit        — quit CADE\n"
+            Print(format!(
+                "\nSlash commands:\n\
+                 \n\
+                 Session:\n\
+                   /info          — agent ID, model, current mode\n\
+                   /agent         — show agent ID\n\
+                   /new           — start a new agent session\n\
+                   /clear         — clear the screen\n\
+                 \n\
+                 Permission modes  (currently: {icon} {label}):\n\
+                   /default       — ask before each tool  [normal]\n\
+                 /resume  /normal  (aliases for /default)\n\
+                   /plan          — read-only, block all write/exec tools\n\
+                   /yolo          — auto-approve all tools\n\
+                 /mode           — show current mode\n\
+                 /mode <name>    — switch: default | plan | yolo\n\
+                 \n\
+                 Model:\n\
+                 /model <m>      — switch model mid-session\n\
+                 \n\
+                 /help  /?       — this message\n\
+                 /exit  /quit    — quit CADE\n"
             )),
             ResetColor
         )?;
@@ -682,4 +772,14 @@ impl Repl {
 
 fn truncate(s: &str, max: usize) -> String {
     super::truncate(s, max)
+}
+
+/// Returns (icon, label, hint) for the current permission mode.
+fn mode_display(mode: PermissionMode) -> (&'static str, &'static str, &'static str) {
+    match mode {
+        PermissionMode::Plan               => ("📖", "plan (read-only)", "— Use /default to resume"),
+        PermissionMode::BypassPermissions  => ("⚡",  "yolo",             "— All tools auto-approved"),
+        PermissionMode::AcceptEdits        => ("📝",  "acceptEdits",       "— File edits auto-approved"),
+        PermissionMode::Default            => ("✅",  "default",           "— Tools require approval"),
+    }
 }
