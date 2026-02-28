@@ -140,13 +140,20 @@ pub struct ToolDef {
     pub description: Option<String>,
 }
 
+/// Only fields accepted by POST /v1/tools.
+/// `name` and `description` are NOT top-level — the API derives the name
+/// from the Python function name in source_code.
 #[derive(Debug, Serialize)]
 pub struct CreateToolRequest {
-    pub name: String,
-    pub description: String,
     pub source_code: String,
     pub source_type: String,
-    pub json_schema: Value,
+    /// Full OpenAI-compatible function schema (name + description + parameters).
+    /// Providing it overrides the auto-generated schema from source_code.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub json_schema: Option<Value>,
+    /// Optional tags for organisation
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tags: Vec<String>,
 }
 
 // ── Client impl ───────────────────────────────────────────────────────────────
