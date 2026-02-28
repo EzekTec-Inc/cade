@@ -55,6 +55,18 @@ async fn main() -> Result<()> {
         bail!("Cannot connect to CADE server at {base_url}. Check CADE_API_KEY and CADE_SERVER_URL.");
     }
 
+    // Fetch server's detected provider + model — shown in banner + used for agent creation
+    let server_info = {
+        let resp = client.server_default_model().await;
+        // server_default_model returns "provider/model" — split for display
+        let (prov, mdl) = resp.split_once('/').unwrap_or(("unknown", &resp));
+        (prov.to_string(), mdl.to_string(), resp)
+    };
+    eprintln!(
+        "Connected to cade-server at {base_url} | provider={} | model={}",
+        server_info.0, server_info.1
+    );
+
     // Permissions
     let perm_mode: PermissionMode = args
         .effective_permission_mode()
@@ -73,13 +85,10 @@ async fn main() -> Result<()> {
         println!("Loaded {} skill(s) from {}", loaded_skills.len(), skills_dir.display());
     }
 
-    // Fetch the server's auto-detected default model (based on which API keys it has).
-    // CLI --model flag or CADE_DEFAULT_MODEL env var always wins.
-    let server_default = client.server_default_model().await;
-    let default_model = std::env::var("CADE_DEFAULT_MODEL")
-        .ok()
-        .or_else(|| args.model.clone())
-        .unwrap_or(server_default);
+    // Default model: CLI flag > CADE_DEFAULT_MODEL env > server's detected model
+    let default_model = args.model.clone()
+        .or_else(|| std::env::var("CADE_DEFAULT_MODEL").ok())
+        .unwrap_or(server_info.2);
 
     // Agent resolution — helper closure avoids repeating the create logic
     let make_req = |model: String, desc: &str| CreateAgentRequest {
