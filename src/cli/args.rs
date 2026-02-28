@@ -16,7 +16,7 @@ pub struct Args {
     #[arg(long = "agent", short = 'a')]
     pub agent: Option<String>,
 
-    /// Model to use (e.g., claude-sonnet-4-5, gpt-4o, gemini-2.5-pro)
+    /// Model to use in provider/model format (e.g., anthropic/claude-sonnet-4-5-20250929, openai/gpt-4o)
     #[arg(short = 'm', long = "model")]
     pub model: Option<String>,
 

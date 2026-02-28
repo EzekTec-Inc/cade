@@ -21,7 +21,7 @@ use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
 use skills::discover_skills;
 
-const DEFAULT_MODEL: &str = "claude-sonnet-4-5-20250929";
+const DEFAULT_MODEL: &str = "anthropic/claude-sonnet-4-5-20250929";
 const SKILLS_DIR: &str = ".skills";
 
 #[tokio::main]
