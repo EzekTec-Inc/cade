@@ -249,6 +249,44 @@ pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
     Ok(())
 }
 
+/// Check whether all tool results have been received for the current turn.
+///
+/// Returns `(received, expected)`.
+/// - If not in a tool-call turn: (0, 0)
+/// - If waiting for more results: received < expected
+/// - If all received: received == expected
+pub fn pending_tool_results(db: &Db, agent_id: &str) -> Result<(usize, usize)> {
+    let messages = list_messages(db, agent_id, 20)?;
+
+    let mut tool_results_received: usize = 0;
+    let mut expected: usize = 0;
+
+    // Walk backwards through recent messages
+    for msg in messages.iter().rev() {
+        match msg.role.as_str() {
+            "tool" => {
+                tool_results_received += 1;
+            }
+            "assistant" => {
+                if let Some(arr) = msg.content["tool_calls"].as_array() {
+                    let non_empty: Vec<_> = arr.iter()
+                        .filter(|tc| tc.get("id").and_then(|v| v.as_str()).is_some())
+                        .collect();
+                    if !non_empty.is_empty() {
+                        expected = non_empty.len();
+                        break; // found the assistant turn that issued tool calls
+                    }
+                }
+                // Assistant message without tool_calls = not in a tool-call turn
+                break;
+            }
+            _ => break, // user/system — not in tool-call turn
+        }
+    }
+
+    Ok((tool_results_received, expected))
+}
+
 pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(

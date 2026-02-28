@@ -15,6 +15,7 @@ use crate::server::{
     state::AppState,
     storage::sqlite::{self, MessageRow},
 };
+use crate::server::storage::pending_tool_results;
 
 const HISTORY_LIMIT: usize = 40;
 const MAX_TOKENS: u32 = 8192;
@@ -190,13 +191,28 @@ async fn handle_tool_return_blocking(state: &AppState, agent_id: &str, body: &Va
         "tool_call_id": call_id
     }));
 
-    // 2. Build context from DB
+    // 2. Check if all tool results for this turn have arrived.
+    //    Anthropic requires ALL tool_results in ONE user message — we must
+    //    wait until the CLI has sent every result before calling the LLM.
+    match sqlite::pending_tool_results(&state.db, agent_id) {
+        Ok((received, expected)) if received < expected => {
+            tracing::debug!(
+                "Tool results: {received}/{expected} received — waiting for more"
+            );
+            // Return empty — CLI will send the next tool result shortly
+            return Json(json!({ "messages": [] })).into_response();
+        }
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        _ => {} // all results in — proceed to LLM
+    }
+
+    // 3. Build context from DB (all tool results now present)
     let (model, messages, tools) = match build_context(state, agent_id).await {
         Ok(ctx) => ctx,
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
 
-    // 3. Call LLM
+    // 4. Call LLM
     let req = CompletionRequest { model, messages, tools, max_tokens: MAX_TOKENS };
     match state.llm.complete(&req).await {
         Ok(resp) => {
@@ -248,7 +264,23 @@ pub async fn stream_message(
         persist(&state, &agent_id, "user", json!({ "content": input }));
     }
 
-    // 2. Build context from DB
+    // 2. If this was a tool return, check if all results for this turn have arrived.
+    if is_tool_return {
+        match sqlite::pending_tool_results(&state.db, &agent_id) {
+            Ok((received, expected)) if received < expected => {
+                tracing::debug!("Stream: tool results {received}/{expected} — waiting");
+                // Return a trivial SSE stream that immediately closes
+                let s = futures::stream::once(async {
+                    Ok::<Event, std::convert::Infallible>(Event::default().data("[DONE]"))
+                });
+                return Sse::new(s).into_response();
+            }
+            Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+            _ => {}
+        }
+    }
+
+    // 3. Build context from DB
     let (model, messages, tools) = match build_context(&state, &agent_id).await {
         Ok(ctx) => ctx,
         Err(e) => return err(StatusCode::NOT_FOUND, &e),

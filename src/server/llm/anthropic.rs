@@ -27,16 +27,27 @@ impl AnthropicProvider {
         let (system, messages): (Vec<_>, Vec<_>) = req.messages.iter().partition(|m| m.role == "system");
         let system_text: String = system.iter().map(|m| m.content.as_str()).collect::<Vec<_>>().join("\n\n");
 
-        let anthropic_messages: Vec<Value> = messages.iter().map(|m| {
+        // Anthropic rule: all tool_result blocks for a given assistant turn MUST be
+        // in ONE user message. Consecutive "tool" messages must be merged.
+        let mut anthropic_messages: Vec<Value> = Vec::new();
+        let mut i = 0;
+        while i < messages.len() {
+            let m = &messages[i];
             match m.role.as_str() {
-                "tool" => json!({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": m.tool_call_id,
-                        "content": m.content
-                    }]
-                }),
+                "tool" => {
+                    // Collect ALL consecutive tool messages into one user message
+                    let mut tool_results: Vec<Value> = Vec::new();
+                    while i < messages.len() && messages[i].role == "tool" {
+                        let tm = &messages[i];
+                        tool_results.push(json!({
+                            "type": "tool_result",
+                            "tool_use_id": tm.tool_call_id.as_deref().unwrap_or(""),
+                            "content": tm.content
+                        }));
+                        i += 1;
+                    }
+                    anthropic_messages.push(json!({ "role": "user", "content": tool_results }));
+                }
                 "assistant" if m.tool_calls.is_some() => {
                     let tool_uses: Vec<Value> = m.tool_calls.as_ref().unwrap().iter().map(|tc| json!({
                         "type": "tool_use",
@@ -48,11 +59,15 @@ impl AnthropicProvider {
                     if !m.content.is_empty() {
                         blocks.insert(0, json!({"type": "text", "text": m.content}));
                     }
-                    json!({"role": "assistant", "content": blocks})
+                    anthropic_messages.push(json!({"role": "assistant", "content": blocks}));
+                    i += 1;
                 }
-                _ => json!({"role": m.role, "content": m.content}),
+                _ => {
+                    anthropic_messages.push(json!({"role": m.role, "content": m.content}));
+                    i += 1;
+                }
             }
-        }).collect();
+        }
 
         // Build tools array in Anthropic format
         let tools: Vec<Value> = req.tools.iter().map(|schema| json!({
