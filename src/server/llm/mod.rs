@@ -135,18 +135,60 @@ impl LlmRouter {
     }
 
     /// Select provider and bare model name for a `provider/model` or bare `model` string.
+    ///
+    /// Resolution order:
+    ///   1. Explicit `provider/model` prefix (e.g. `gemini/gemini-2.5-pro`)
+    ///   2. Auto-detect provider from well-known model name patterns
+    ///   3. Fall back to the configured default provider
     fn pick(&self, model: &str) -> Option<(Arc<dyn LlmProvider>, String)> {
+        // 1. Explicit prefix
         if let Some(slash) = model.find('/') {
-            let prefix   = &model[..slash];
-            let bare     = model[slash + 1..].to_string();
+            let prefix = &model[..slash];
+            let bare   = model[slash + 1..].to_string();
             if let Some(p) = self.providers.get(prefix) {
                 return Some((Arc::clone(p), bare));
             }
         }
-        // No known prefix — use default provider, pass model unchanged
+
+        // 2. Infer provider from model name pattern
+        if let Some(prefix) = infer_provider_prefix(model) {
+            if let Some(p) = self.providers.get(prefix) {
+                return Some((Arc::clone(p), model.to_string()));
+            }
+        }
+
+        // 3. Default provider fallback
         self.providers
             .get(&self.default_provider)
             .map(|p| (Arc::clone(p), model.to_string()))
+    }
+}
+
+/// Infer the provider key from well-known model name prefixes.
+/// Returns e.g. "anthropic", "openai", "gemini", "ollama", or None.
+fn infer_provider_prefix(model: &str) -> Option<&'static str> {
+    let m = model.to_lowercase();
+    if m.starts_with("claude") {
+        Some("anthropic")
+    } else if m.starts_with("gemini") {
+        Some("gemini")
+    } else if m.starts_with("gpt-")
+        || m.starts_with("o1-")
+        || m.starts_with("o3-")
+        || m.starts_with("o4-")
+        || m == "gpt-4o"
+        || m == "gpt-4o-mini"
+    {
+        Some("openai")
+    } else if m.starts_with("llama")
+        || m.starts_with("mistral")
+        || m.starts_with("phi")
+        || m.starts_with("qwen")
+        || m.starts_with("deepseek")
+    {
+        Some("ollama")
+    } else {
+        None
     }
 }
 
