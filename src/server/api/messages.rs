@@ -20,6 +20,86 @@ use crate::server::storage::pending_tool_results;
 const HISTORY_LIMIT: usize = 40;
 const MAX_TOKENS: u32 = 8192;
 
+// ── Message history sanitizer ─────────────────────────────────────────────────
+//
+// Anthropic enforces a strict schema:
+//   1. Every tool_use in an assistant message must have exactly ONE matching
+//      tool_result in the very next user message.
+//   2. No tool_result may appear without a preceding tool_use.
+//   3. No duplicate tool_result IDs in the same user message.
+//
+// Previous bugs (SSE reconnect, interrupted sessions) can leave the DB in a
+// state that violates these rules.  sanitize_messages() repairs the history
+// before it is sent to the LLM so the server never crashes due to DB
+// corruption.
+
+fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
+    let mut result: Vec<LlmMessage> = Vec::new();
+    let mut i = 0;
+
+    while i < messages.len() {
+        let msg = messages[i].clone();
+
+        match msg.role.as_str() {
+            "assistant"
+                if msg.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()) =>
+            {
+                let tool_calls = msg.tool_calls.as_ref().unwrap();
+                let expected_ids: Vec<String> =
+                    tool_calls.iter().map(|tc| tc.id.clone()).collect();
+
+                // Consume ALL immediately-following tool rows (may be duplicated/partial)
+                let mut j = i + 1;
+                // id → first content seen (dedup)
+                let mut found: std::collections::HashMap<String, String> =
+                    std::collections::HashMap::new();
+                while j < messages.len() && messages[j].role == "tool" {
+                    if let Some(id) = &messages[j].tool_call_id {
+                        found.entry(id.clone())
+                            .or_insert_with(|| messages[j].content.clone());
+                    }
+                    j += 1;
+                }
+
+                result.push(msg);
+
+                // Emit exactly one tool_result per expected id (synthetic if missing)
+                for id in &expected_ids {
+                    let content = found
+                        .get(id)
+                        .cloned()
+                        .unwrap_or_else(|| "[Tool execution was interrupted]".to_string());
+                    result.push(LlmMessage {
+                        role: "tool".to_string(),
+                        content,
+                        tool_call_id: Some(id.clone()),
+                        tool_calls: None,
+                    });
+                }
+
+                i = j; // skip the (possibly messy) original tool rows
+            }
+
+            "tool" => {
+                // Orphaned tool_result — no preceding assistant with a matching tool_use.
+                // Drop it; it would make Anthropic return 400.
+                tracing::warn!(
+                    "Dropping orphaned tool_result (id={:?})",
+                    msg.tool_call_id
+                );
+                i += 1;
+            }
+
+            _ => {
+                result.push(msg);
+                i += 1;
+            }
+        }
+    }
+
+    result
+}
+
 // ── Context builder ───────────────────────────────────────────────────────────
 //
 // Key design rule:
@@ -62,6 +142,14 @@ async fn build_context(
 
     for row in &history {
         messages.extend(db_row_to_llm(row));
+    }
+
+    // Sanitize history: fix orphaned tool_calls, dedup tool_results, drop
+    // stray tool_results so Anthropic never sees an invalid sequence.
+    if messages.len() > 1 {
+        let system_msg = messages.remove(0);
+        let sanitized = sanitize_messages(messages);
+        messages = std::iter::once(system_msg).chain(sanitized).collect();
     }
 
     // Tool schemas — use agent-specific tools if wired, else all tools
