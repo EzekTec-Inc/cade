@@ -37,9 +37,19 @@ async fn main() -> Result<()> {
     // Storage
     let db = open_db(&config.db_path)?;
 
-    // LLM provider
+    // LLM router — registers every provider for which an API key is available
     let llm_router = std::sync::Arc::new(LlmRouter::build(&config));
     let llm: std::sync::Arc<dyn cade::server::llm::LlmProvider> = llm_router.clone() as _;
+
+    // Log which providers are available
+    {
+        let mut available = vec![];
+        if config.anthropic_api_key.is_some() { available.push("anthropic"); }
+        if config.openai_api_key.is_some()    { available.push("openai"); }
+        if config.google_api_key.is_some()    { available.push("gemini"); }
+        available.push("ollama"); // always available
+        tracing::info!("Available providers: {}", available.join(", "));
+    }
 
     let state = AppState {
         db,

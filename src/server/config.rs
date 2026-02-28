@@ -116,9 +116,13 @@ impl ServerConfig {
             db_path,
             default_model,
             llm_provider,
-            anthropic_api_key: std::env::var("ANTHROPIC_API_KEY").ok(),
+            anthropic_api_key: std::env::var("ANTHROPIC_API_KEY")
+                .or_else(|_| std::env::var("CLAUDE_API_KEY"))
+                .ok(),
             openai_api_key: std::env::var("OPENAI_API_KEY").ok(),
-            google_api_key: std::env::var("GOOGLE_API_KEY").ok(),
+            google_api_key: std::env::var("GOOGLE_API_KEY")
+                .or_else(|_| std::env::var("GEMINI_API_KEY"))
+                .ok(),
             ollama_base_url: std::env::var("OLLAMA_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:11434".to_string()),
             api_key: std::env::var("CADE_API_KEY").ok(),
