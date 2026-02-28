@@ -8,6 +8,7 @@ mod tools;
 
 use anyhow::{Context, Result, bail};
 use clap::Parser;
+use std::path::PathBuf;
 
 use agent::{
     LettaClient,
@@ -18,12 +19,13 @@ use agent::{
 use cli::{Args, Repl};
 use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
+use skills::discover_skills;
 
 const DEFAULT_MODEL: &str = "claude-sonnet-4-5-20250929";
+const SKILLS_DIR: &str = ".skills";
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging (stderr only, so stdout stays clean)
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -33,7 +35,6 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .init();
 
-    // Load .env if present
     let _ = dotenvy::dotenv();
 
     let args = Args::parse();
@@ -43,118 +44,115 @@ async fn main() -> Result<()> {
     let mut settings = SettingsManager::new(&cwd).context("load settings")?;
     let mut session = SessionStore::load(&cwd);
 
-    // Resolve API key
-    let api_key = settings.api_key()
-        .context("No LETTA_API_KEY found. Set via env var or ~/.cade/settings.json")?;
+    // API credentials
+    let api_key = settings
+        .api_key()
+        .context("No LETTA_API_KEY. Set via env var or ~/.cade/settings.json")?;
     let base_url = settings.base_url();
 
-    // Build Letta client
-    let client = LettaClient::new(base_url.clone(), api_key)
-        .context("create Letta client")?;
+    let client = LettaClient::new(base_url.clone(), api_key).context("create Letta client")?;
 
-    // Verify connectivity
     if !client.health().await.unwrap_or(false) {
         bail!("Cannot connect to Letta server at {base_url}. Check LETTA_API_KEY and LETTA_BASE_URL.");
     }
 
-    // Resolve permission mode
+    // Permissions
     let perm_mode: PermissionMode = args
         .effective_permission_mode()
         .parse()
         .context("invalid permission mode")?;
     let permissions = PermissionManager::new(perm_mode);
 
-    // Resolve or create agent
-    let agent = if args.new_agent {
-        // Always create a new agent
-        let model = args.model.as_deref().unwrap_or(DEFAULT_MODEL).to_string();
-        let agent = client.create_agent(CreateAgentRequest {
-            name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
+    // Skills — discovered from .skills/ in cwd (or custom dir)
+    let skills_dir = args
+        .skills
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| cwd.join(SKILLS_DIR));
+    let loaded_skills = discover_skills(&skills_dir).unwrap_or_default();
+    if !loaded_skills.is_empty() {
+        println!("Loaded {} skill(s) from {}", loaded_skills.len(), skills_dir.display());
+    }
+
+    // Agent resolution — helper closure avoids repeating the create logic
+    let create_agent = |model: String, desc: &str| {
+        let name = format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"));
+        let description = Some(desc.to_string());
+        CreateAgentRequest {
+            name: Some(name),
             model,
-            description: Some("CADE coding agent with desktop extensions".to_string()),
+            description,
             memory_blocks: vec![],
             tool_ids: vec![],
-        }).await.context("create agent")?;
+        }
+    };
 
-        // Register tools and attach
-        let tools = register_cade_tools(&client).await
-            .context("register tools")?;
+    let agent = if args.new_agent {
+        let model = args.model.as_deref().unwrap_or(DEFAULT_MODEL).to_string();
+        let a = client
+            .create_agent(create_agent(model, "CADE coding agent with desktop extensions"))
+            .await
+            .context("create agent")?;
+        let tools = register_cade_tools(&client).await.context("register tools")?;
         tracing::info!("Registered {} tools", tools.len());
-
-        session.set_agent(agent.id.clone(), Some(agent.name.clone()))
-            .context("save session")?;
-        settings.set_last_agent(&agent.id).context("save global session")?;
-
-        agent
-    } else if let Some(agent_id) = &args.agent {
-        client.get_agent(agent_id).await
-            .with_context(|| format!("get agent {agent_id}"))?
+        session.set_agent(a.id.clone(), Some(a.name.clone())).context("save session")?;
+        settings.set_last_agent(&a.id).context("save global session")?;
+        a
+    } else if let Some(id) = &args.agent {
+        client.get_agent(id).await.with_context(|| format!("get agent {id}"))?
     } else if let Some(last_id) = session.session.agent_id.clone() {
-        // Resume last agent for this project
         match client.get_agent(&last_id).await {
             Ok(a) => a,
             Err(_) => {
-                eprintln!("Previous agent {last_id} not found. Creating new agent...");
+                eprintln!("Previous agent {last_id} not found — creating new agent");
                 let model = args.model.as_deref().unwrap_or(DEFAULT_MODEL).to_string();
-                let agent = client.create_agent(CreateAgentRequest {
-                    name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
-                    model,
-                    description: Some("CADE coding agent".to_string()),
-                    memory_blocks: vec![],
-                    tool_ids: vec![],
-                }).await.context("create agent")?;
+                let a = client
+                    .create_agent(create_agent(model, "CADE coding agent"))
+                    .await
+                    .context("create agent")?;
                 let _ = register_cade_tools(&client).await;
-                session.set_agent(agent.id.clone(), Some(agent.name.clone()))?;
-                agent
+                session.set_agent(a.id.clone(), Some(a.name.clone()))?;
+                settings.set_last_agent(&a.id)?;
+                a
             }
         }
     } else {
-        // No previous session — create new agent
+        println!("No previous session — creating new agent…");
         let model = args.model.as_deref().unwrap_or(DEFAULT_MODEL).to_string();
-        println!("No previous session found. Creating new agent...");
-        let agent = client.create_agent(CreateAgentRequest {
-            name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
-            model,
-            description: Some("CADE coding agent with desktop extensions".to_string()),
-            memory_blocks: vec![],
-            tool_ids: vec![],
-        }).await.context("create agent")?;
-
-        let tools = register_cade_tools(&client).await?;
+        let a = client
+            .create_agent(create_agent(model, "CADE coding agent with desktop extensions"))
+            .await
+            .context("create agent")?;
+        let tools = register_cade_tools(&client).await.context("register tools")?;
         tracing::info!("Registered {} tools", tools.len());
-
-        session.set_agent(agent.id.clone(), Some(agent.name.clone()))?;
-        settings.set_last_agent(&agent.id)?;
-        agent
+        session.set_agent(a.id.clone(), Some(a.name.clone()))?;
+        settings.set_last_agent(&a.id)?;
+        a
     };
 
-    // Optional: spawn tray if requested
+    // Tray
     if args.tray {
         match desktop::spawn_tray() {
-            Ok(_tx) => tracing::info!("System tray started"),
-            Err(e) => tracing::warn!("System tray failed to start: {e}"),
+            Ok(_) => tracing::info!("System tray started"),
+            Err(e) => tracing::warn!("System tray failed: {e}"),
         }
     }
 
-    // Headless mode
+    // Headless
     if let Some(prompt) = &args.prompt {
-        let output = cli::headless::run_headless(
-            &client,
-            &agent.id,
-            prompt,
-            &permissions,
-        ).await?;
+        let output = cli::headless::run_headless(&client, &agent.id, prompt, &permissions).await?;
         println!("{output}");
         return Ok(());
     }
 
-    // Info mode
+    // Info
     if args.info {
         println!("CADE v{}", env!("CARGO_PKG_VERSION"));
-        println!("Agent: {} ({})", agent.name, agent.id);
-        println!("Server: {base_url}");
-        println!("Permission mode: {}", permissions.mode());
-        println!("CWD: {}", cwd.display());
+        println!("Agent   : {} ({})", agent.name, agent.id);
+        println!("Server  : {base_url}");
+        println!("Mode    : {}", permissions.mode());
+        println!("CWD     : {}", cwd.display());
+        println!("Skills  : {}", loaded_skills.len());
         return Ok(());
     }
 

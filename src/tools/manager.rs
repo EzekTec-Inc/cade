@@ -1,7 +1,12 @@
 use anyhow::Result;
 use serde_json::Value;
 
-use super::{bash::BashTool, fs::{EditTool, ReadTool, WriteTool}, search::{GlobTool, GrepTool}};
+use super::{
+    bash::BashTool,
+    desktop::{DesktopCaptureTool, DesktopControlTool, DesktopListWindowsTool, DesktopNotifyTool},
+    fs::{EditTool, ReadTool, WriteTool},
+    search::{GlobTool, GrepTool},
+};
 
 /// Result of executing a local tool
 #[derive(Debug, Clone)]
@@ -12,18 +17,9 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-/// Parse a tool_call_message from the agent response and dispatch locally.
-///
-/// `tool_call_id`  — the id field from the tool_call_message
-/// `tool_name`     — the name of the tool to execute
-/// `arguments`     — parsed JSON arguments for the tool
-pub async fn dispatch(
-    tool_call_id: String,
-    tool_name: &str,
-    arguments: &Value,
-) -> ToolResult {
+/// Dispatch a tool call by name to its local Rust implementation.
+pub async fn dispatch(tool_call_id: String, tool_name: &str, arguments: &Value) -> ToolResult {
     let result = run_tool(tool_name, arguments).await;
-
     match result {
         Ok(output) => ToolResult {
             tool_call_id,
@@ -42,29 +38,45 @@ pub async fn dispatch(
 
 async fn run_tool(name: &str, args: &Value) -> Result<String> {
     match name {
-        "bash" => BashTool::run(args).await,
-        "read_file" => ReadTool::run(args).await,
+        // Core dev tools
+        "bash"       => BashTool::run(args).await,
+        "read_file"  => ReadTool::run(args).await,
         "write_file" => WriteTool::run(args).await,
-        "edit_file" => EditTool::run(args).await,
-        "grep" => GrepTool::run(args).await,
-        "glob" => GlobTool::run(args).await,
-        other => Err(anyhow::anyhow!("Unknown tool: {other}")),
+        "edit_file"  => EditTool::run(args).await,
+        "grep"       => GrepTool::run(args).await,
+        "glob"       => GlobTool::run(args).await,
+        // Desktop extensions
+        "desktop_screenshot"   => DesktopCaptureTool::run(args).await,
+        "desktop_list_windows" => DesktopListWindowsTool::run(args).await,
+        "desktop_control"      => DesktopControlTool::run(args).await,
+        "desktop_notify"       => DesktopNotifyTool::run(args).await,
+        other => Err(anyhow::anyhow!("Unknown tool: '{other}'")),
     }
 }
 
-/// All tool JSON schemas — used to register with Letta
+/// All tool JSON schemas — sent to Letta for registration
 pub fn all_schemas() -> Vec<Value> {
     vec![
+        // Core
         BashTool::schema(),
         ReadTool::schema(),
         WriteTool::schema(),
         EditTool::schema(),
         GrepTool::schema(),
         GlobTool::schema(),
+        // Desktop
+        DesktopCaptureTool::schema(),
+        DesktopListWindowsTool::schema(),
+        DesktopControlTool::schema(),
+        DesktopNotifyTool::schema(),
     ]
 }
 
-/// Returns true if this is a write-capable tool (for permission gating)
+/// Returns true if the tool can mutate state (used for permission gating)
 pub fn is_write_tool(name: &str) -> bool {
-    matches!(name, "bash" | "write_file" | "edit_file")
+    matches!(
+        name,
+        "bash" | "write_file" | "edit_file"
+            | "desktop_control" | "desktop_screenshot"
+    )
 }

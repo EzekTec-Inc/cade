@@ -103,6 +103,7 @@ impl LettaMessage {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct SendMessageRequest {
     pub input: String,
@@ -113,6 +114,7 @@ pub struct SendMessageRequest {
 }
 
 /// A tool return sent back to the agent after local execution
+#[allow(dead_code)]
 #[derive(Debug, Serialize)]
 pub struct ToolReturnRequest {
     /// Must be "tool"
@@ -206,6 +208,7 @@ impl LettaClient {
         Ok(resp.json::<AgentState>().await?)
     }
 
+    #[allow(dead_code)]
     pub async fn list_agents(&self) -> Result<Vec<AgentState>> {
         let resp = self.client
             .get(self.url("/agents"))
