@@ -2317,12 +2317,13 @@ impl Repl {
         Ok(())
     }
 
-    /// `/agents` TUI picker with multi-select delete.
+    /// `/agents` TUI picker — rendered via ratatui `Viewport::Inline`.
     ///
     /// Keys:
     ///   ↑/↓  j/k  — move cursor
     ///   Space      — toggle mark for deletion
     ///   d / Delete — confirm delete of all marked (or current if none marked)
+    ///   r          — rename highlighted agent
     ///   Enter      — switch to highlighted agent (only when no marks)
     ///   Esc / q    — cancel
     async fn agent_picker(
@@ -2332,6 +2333,13 @@ impl Repl {
     ) -> Result<Option<AgentPickerResult>> {
         use crossterm::event::{self, Event, KeyCode};
         use std::collections::HashSet;
+        use ratatui::{
+            Terminal, TerminalOptions, Viewport,
+            backend::CrosstermBackend,
+            widgets::{List, ListItem, ListState, Block},
+            style::{Style, Color as RC, Modifier},
+            text::{Line, Span},
+        };
 
         if agents.is_empty() {
             return Ok(None);
@@ -2344,147 +2352,114 @@ impl Repl {
             .unwrap_or(0);
         let mut marked: HashSet<usize> = HashSet::new();
 
-        // ── Draw ────────────────────────────────────────────────────────────
-        let draw = |
-            stdout:  &mut io::Stdout,
-            agents:  &[AgentState],
-            sel:     usize,
-            current: &str,
-            marked:  &HashSet<usize>,
-        | -> Result<()> {
-            let n_marked = marked.len();
-            execute!(stdout,
-                cursor::MoveToColumn(0),
-                terminal::Clear(terminal::ClearType::FromCursorDown),
-                Print("\r\n"),
-                SetForegroundColor(Color::Cyan), Print("  Agents  "),
-                ResetColor,
-                SetForegroundColor(Color::DarkGrey),
-                Print("↑↓ navigate  Space mark  r rename  d delete  Enter switch  Esc cancel\r\n"),
-                ResetColor,
-            )?;
+        // ── Build list items ─────────────────────────────────────────────────
+        // Returns owned ListItems so the ratatui draw closure is 'static-safe.
+        let build_items = |agents: &[AgentState], sel: usize,
+                           marked: &HashSet<usize>, current: &str| -> Vec<ListItem<'static>> {
+            agents.iter().enumerate().map(|(i, a)| {
+                let is_sel    = i == sel;
+                let is_marked = marked.contains(&i);
+                let is_active = a.id == current;
+                let short_id  = if a.id.len() > 16 { a.id[..16].to_string() + "…" }
+                                else { a.id.clone() };
 
-            // Footer hint when marks are active
-            if n_marked > 0 {
-                execute!(stdout,
-                    SetForegroundColor(Color::Yellow),
-                    Print(format!("  {} agent{} marked for deletion\r\n", n_marked,
-                        if n_marked == 1 { "" } else { "s" })),
-                    ResetColor,
-                )?;
-            } else {
-                execute!(stdout, Print("\r\n"))?;
-            }
+                let arrow_style = Style::default().fg(if is_sel { RC::Green } else { RC::DarkGray });
+                let name_style  = Style::default()
+                    .fg(if is_sel { RC::White } else { RC::DarkGray })
+                    .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() });
+                let check_style = Style::default()
+                    .fg(if is_marked { RC::Yellow } else { RC::DarkGray });
 
-            for (i, a) in agents.iter().enumerate() {
-                let is_sel     = i == sel;
-                let is_marked  = marked.contains(&i);
-                let is_current = a.id == current;
-                let short_id   = if a.id.len() > 16 { &a.id[..16] } else { &a.id };
-
-                // cursor arrow
-                execute!(stdout,
-                    SetForegroundColor(if is_sel { Color::Green } else { Color::DarkGrey }),
-                    Print(if is_sel { "  ▶ " } else { "    " }),
-                )?;
-                // mark checkbox
-                execute!(stdout,
-                    SetForegroundColor(if is_marked { Color::Yellow } else { Color::DarkGrey }),
-                    Print(if is_marked { "☑ " } else { "☐ " }),
-                )?;
-                // name + id
-                execute!(stdout,
-                    SetForegroundColor(if is_sel { Color::White } else { Color::DarkGrey }),
-                    Print(format!("{:<30}", a.name)),
-                    SetForegroundColor(Color::DarkGrey),
-                    Print(format!("{short_id}…")),
-                    ResetColor,
-                )?;
-                if is_current {
-                    execute!(stdout, SetForegroundColor(Color::Cyan), Print(" ← active"), ResetColor)?;
-                }
-                execute!(stdout, Print("\r\n"))?;
-            }
-            execute!(stdout, Print("\r\n"))?;
-            stdout.flush()?;
-            Ok(())
+                ListItem::new(Line::from(vec![
+                    Span::styled(if is_sel { "▶ " } else { "  " }.to_string(), arrow_style),
+                    Span::styled(if is_marked { "☑ " } else { "☐ " }.to_string(), check_style),
+                    Span::styled(format!("{:<30}", a.name), name_style),
+                    Span::styled(short_id, Style::default().fg(RC::DarkGray)),
+                    Span::styled(
+                        if is_active { "  ← active".to_string() } else { String::new() },
+                        Style::default().fg(RC::Cyan),
+                    ),
+                ]))
+            }).collect()
         };
 
-        // Lines drawn: 1 (hint) + 1 (mark footer) + total + 1 (trailing blank)
-        let draw_lines = (3 + total) as u16;
+        // ── Terminal setup ───────────────────────────────────────────────────
+        let term_rows = terminal::size().map(|(_, r)| r as usize).unwrap_or(24);
+        let view_h    = (total + 3).min(term_rows.saturating_sub(2)).max(3) as u16;
 
         terminal::enable_raw_mode()?;
         execute!(stdout, cursor::Hide)?;
-        draw(stdout, agents, selected, &current, &marked)?;
+        let mut term = Terminal::with_options(
+            CrosstermBackend::new(&mut *stdout),
+            TerminalOptions { viewport: Viewport::Inline(view_h) },
+        )?;
 
-        // ── Event loop ──────────────────────────────────────────────────────
+        // ── Draw helper ──────────────────────────────────────────────────────
+        macro_rules! redraw {
+            () => {{
+                let items = build_items(agents, selected, &marked, &current);
+                let n     = marked.len();
+                let title = if n == 0 {
+                    " Agents  ↑↓/jk navigate  Space mark  r rename  d delete  Enter switch  q cancel "
+                        .to_string()
+                } else {
+                    format!(" Agents  [{n} marked]  d delete all marked  Esc/q cancel ")
+                };
+                let list = List::new(items)
+                    .block(Block::default().title(title));
+                let mut ls = ListState::default().with_selected(Some(selected));
+                term.draw(|f| f.render_stateful_widget(list, f.area(), &mut ls))?;
+            }};
+        }
+        redraw!();
+
+        // ── Event loop ───────────────────────────────────────────────────────
         let result = loop {
             if let Ok(Event::Key(key)) = event::read() {
                 match (key.code, key.modifiers) {
-                    // ── Cancel ──────────────────────────────────────────────
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
 
-                    // ── Switch (only when nothing is marked) ────────────────
                     (KeyCode::Enter, _) => {
                         if marked.is_empty() {
                             let a = agents[selected].clone();
-                            if a.id != current {
-                                break Some(AgentPickerResult::Switch(a));
-                            }
-                            // switching to current → no-op
+                            if a.id != current { break Some(AgentPickerResult::Switch(a)); }
                         }
-                        // if marks exist, Enter is a no-op (user should press d or Esc)
                     }
 
-                    // ── Toggle mark ─────────────────────────────────────────
                     (KeyCode::Char(' '), _) => {
-                        if marked.contains(&selected) {
-                            marked.remove(&selected);
-                        } else {
-                            marked.insert(selected);
-                        }
-                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
-                        draw(stdout, agents, selected, &current, &marked)?;
+                        if marked.contains(&selected) { marked.remove(&selected); }
+                        else                          { marked.insert(selected);  }
+                        redraw!();
                     }
 
-                    // ── Delete ──────────────────────────────────────────────
                     (KeyCode::Char('d'), _) | (KeyCode::Delete, _) => {
-                        // If nothing marked, treat current row as the target
                         let targets: Vec<usize> = if marked.is_empty() {
                             vec![selected]
                         } else {
                             let mut v: Vec<usize> = marked.iter().copied().collect();
-                            v.sort_unstable();
-                            v
+                            v.sort_unstable(); v
                         };
-                        let names: Vec<&str> = targets.iter()
-                            .map(|&i| agents[i].name.as_str())
+                        let names: Vec<String> = targets.iter()
+                            .map(|&i| agents[i].name.clone())
                             .collect();
-
-                        // Confirm prompt
-                        terminal::disable_raw_mode()?;
-                        execute!(stdout, cursor::Show, SetForegroundColor(Color::Yellow))?;
-                        if targets.len() == 1 {
-                            execute!(stdout,
-                                Print(format!("\n  Delete '{}'? [y/N]: ", names[0])),
-                            )?;
+                        let prompt = if targets.len() == 1 {
+                            format!("\n  Delete '{}'? [y/N]: ", names[0])
                         } else {
-                            execute!(stdout,
-                                Print(format!("\n  Delete {} agents ({})? [y/N]: ",
-                                    targets.len(), names.join(", "))),
-                            )?;
-                        }
-                        execute!(stdout, ResetColor)?;
-                        stdout.flush()?;
+                            format!("\n  Delete {} agents ({})? [y/N]: ",
+                                targets.len(), names.join(", "))
+                        };
+                        execute!(term.backend_mut(),
+                            cursor::Show,
+                            SetForegroundColor(Color::Yellow),
+                            Print(&prompt), ResetColor)?;
+                        term.backend_mut().flush()?;
 
-                        terminal::enable_raw_mode()?;
                         let confirmed = loop {
                             if let Ok(Event::Key(k)) = event::read() {
                                 break matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y'));
                             }
                         };
-                        terminal::disable_raw_mode()?;
-                        execute!(stdout, Print("\n"))?;
+                        execute!(term.backend_mut(), cursor::Hide, Print("\n"))?;
 
                         if confirmed {
                             let to_delete: Vec<AgentState> = targets.iter()
@@ -2492,62 +2467,62 @@ impl Repl {
                                 .collect();
                             break Some(AgentPickerResult::DeleteMany(to_delete));
                         } else {
-                            // Keep marks, redraw
-                            execute!(stdout, cursor::Hide)?;
-                            terminal::enable_raw_mode()?;
-                            draw(stdout, agents, selected, &current, &marked)?;
+                            redraw!();
                         }
                     }
 
-                    // ── Rename ──────────────────────────────────────────────
                     (KeyCode::Char('r'), _) => {
                         let a = agents[selected].clone();
                         terminal::disable_raw_mode()?;
-                        execute!(stdout, cursor::Show,
+                        execute!(term.backend_mut(),
+                            cursor::Show,
                             SetForegroundColor(Color::Yellow),
                             Print(format!("\n  Rename '{}' → new name: ", a.name)),
                             ResetColor)?;
-                        stdout.flush()?;
+                        term.backend_mut().flush()?;
                         let mut buf = String::new();
                         std::io::stdin().read_line(&mut buf).unwrap_or(0);
                         let new_name = buf.trim().to_string();
-                        execute!(stdout, cursor::Hide)?;
                         terminal::enable_raw_mode()?;
-                        if new_name.is_empty() {
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("  (cancelled)\r\n"), ResetColor)?;
-                            draw(stdout, agents, selected, &current, &marked)?;
-                        } else {
-                            break Some(AgentPickerResult::Rename { agent: a, new_name });
-                        }
+                        execute!(term.backend_mut(), cursor::Hide)?;
+                        if new_name.is_empty() { redraw!(); }
+                        else { break Some(AgentPickerResult::Rename { agent: a, new_name }); }
                     }
 
-                    // ── Navigation ──────────────────────────────────────────
                     (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
                         selected = if selected == 0 { total - 1 } else { selected - 1 };
-                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
-                        draw(stdout, agents, selected, &current, &marked)?;
+                        redraw!();
                     }
                     (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
                         selected = (selected + 1) % total;
-                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
-                        draw(stdout, agents, selected, &current, &marked)?;
+                        redraw!();
                     }
                     _ => {}
                 }
             }
         };
 
+        term.clear()?;
+        drop(term);
         terminal::disable_raw_mode()?;
         execute!(stdout, cursor::Show, ResetColor)?;
         stdout.flush()?;
         Ok(result)
     }
 
-    /// Interactive model picker — opens on `/model` with no argument.
+    /// Interactive model picker — rendered via ratatui `Viewport::Inline`.
     /// Returns the selected model string or None if cancelled.
     async fn interactive_model_picker(&self, stdout: &mut io::Stdout) -> Result<Option<String>> {
         use crossterm::event::{self, Event, KeyCode};
+        use ratatui::{
+            Terminal, TerminalOptions, Viewport,
+            backend::CrosstermBackend,
+            widgets::{List, ListItem, ListState, Block,
+                      Scrollbar, ScrollbarOrientation, ScrollbarState},
+            layout::{Constraint, Layout, Direction},
+            style::{Style, Color as RC, Modifier},
+            text::{Line, Span},
+        };
 
         execute!(stdout, SetForegroundColor(Color::DarkGrey),
             Print("\n  Fetching models…\r\n"), ResetColor)?;
@@ -2555,14 +2530,13 @@ impl Repl {
 
         let current = self.model();
 
-        // ── Fetch model list from server ──────────────────────────────────────
-        // Each entry: (provider_label, display_name, full_model_id, toolset, is_dynamic)
+        // ── Fetch model list ──────────────────────────────────────────────────
+        // (provider, display_name, model_id, toolset, is_dynamic)
         let mut models: Vec<(String, String, String, String, bool)> = Vec::new();
         let mut custom_providers: Vec<String> = Vec::new();
 
         match self.client.list_models().await {
             Ok(body) => {
-                // Supported catalogue models
                 if let Some(arr) = body["supported"].as_array() {
                     for m in arr {
                         models.push((
@@ -2574,12 +2548,10 @@ impl Repl {
                         ));
                     }
                 }
-                // Dynamic models — live-fetched from Ollama, Groq, OpenRouter, etc.
                 if let Some(arr) = body["dynamic"].as_array() {
                     for m in arr {
                         let id       = m["id"].as_str().unwrap_or("?").to_string();
                         let provider = m["provider"].as_str().unwrap_or("?").to_string();
-                        // Skip if already present via catalogue
                         if !models.iter().any(|(_, _, mid, _, _)| mid == &id) {
                             models.push((
                                 provider,
@@ -2591,7 +2563,6 @@ impl Repl {
                         }
                     }
                 }
-                // Custom providers
                 if let Some(arr) = body["custom_providers"].as_array() {
                     custom_providers = arr.iter()
                         .filter_map(|v| v.as_str().map(String::from))
@@ -2599,56 +2570,34 @@ impl Repl {
                 }
             }
             Err(_) => {
-                // Fallback: just show available providers info
                 execute!(stdout, SetForegroundColor(Color::DarkGrey),
                     Print("  Could not fetch models from server.\r\n"),
-                    Print("  Specify model directly: /model anthropic/claude-sonnet-4-5-20250929\r\n\n"),
+                    Print("  Specify model directly: /model provider/model-name\r\n\n"),
                     ResetColor)?;
                 stdout.flush()?;
                 return Ok(None);
             }
         }
 
-        // "Enter custom model ID" is always the last selectable item
-        // We represent it as a sentinel with provider = "__custom__"
-        let custom_sentinel = (
-            "__custom__".to_string(),
-            "Enter custom model ID…".to_string(),
-            String::new(),
-            String::new(),
-            false,
-        );
-        // Add custom provider placeholder entries
         for cp in &custom_providers {
-            models.push((
-                cp.clone(),
-                format!("Enter model for {cp}…"),
-                format!("{cp}/"),
-                "default".to_string(),
-                false,
-            ));
+            models.push((cp.clone(), format!("Enter model for {cp}…"),
+                         format!("{cp}/"), "default".to_string(), false));
         }
-        models.push(custom_sentinel);
+        // Sentinel: always-last "Enter custom model ID" entry
+        models.push(("__custom__".to_string(), "Enter custom model ID…".to_string(),
+                     String::new(), String::new(), false));
 
         if models.len() == 1 {
-            // Only the custom sentinel — no real models
-            execute!(stdout, ResetColor,
-                Print("\n  No standard models available.\r\n"),
+            execute!(stdout, Print("\n  No models available.\r\n"),
                 SetForegroundColor(Color::DarkGrey),
-                Print("  Connect a provider: /connect\r\n\n"),
-                ResetColor)?;
+                Print("  Connect a provider: /connect\r\n\n"), ResetColor)?;
             stdout.flush()?;
             return Ok(None);
         }
 
-        let total    = models.len();
-        let mut selected: usize = models.iter()
-            .position(|(_, _, id, _, _)| *id == current)
-            .unwrap_or(0);
+        let n_models = models.len();
 
-        // ── Build flat display-item list ──────────────────────────────────────
-        // Each item is either a provider group header or a model row (index into `models`).
-        // This lets us scroll a single flat list while keeping group headers contiguous.
+        // ── Flat display-item list (provider headers + model rows) ────────────
         #[derive(Clone)]
         enum DisplayItem { Header(String, bool), ModelRow(usize) }
 
@@ -2664,153 +2613,162 @@ impl Repl {
             }
             items
         };
-        let disp_total = display_items.len();
+        let disp_len = display_items.len();
 
-        // Find the display-item index of a model by its models[] index
-        let disp_idx_of = |model_idx: usize| -> usize {
-            display_items.iter().position(|d| matches!(d, DisplayItem::ModelRow(i) if *i == model_idx))
-                .unwrap_or(0)
+        // list_pos = position in display_items (never on a Header)
+        let initial_list_pos = display_items.iter()
+            .position(|d| matches!(d, DisplayItem::ModelRow(i) if models[*i].2 == current))
+            .or_else(|| display_items.iter().position(|d| matches!(d, DisplayItem::ModelRow(_))))
+            .unwrap_or(0);
+        let mut list_pos = initial_list_pos;
+
+        // Navigate display_items, skipping Header items
+        let next_pos = |mut p: usize| -> usize {
+            loop {
+                p = (p + 1) % disp_len;
+                if !matches!(display_items.get(p), Some(DisplayItem::Header(..))) { return p; }
+            }
+        };
+        let prev_pos = |mut p: usize| -> usize {
+            loop {
+                p = if p == 0 { disp_len - 1 } else { p - 1 };
+                if !matches!(display_items.get(p), Some(DisplayItem::Header(..))) { return p; }
+            }
+        };
+        // Derive selected model index from list_pos
+        let model_at = |p: usize| -> usize {
+            if let Some(DisplayItem::ModelRow(i)) = display_items.get(p) { *i } else { 0 }
         };
 
-        // ── Viewport ──────────────────────────────────────────────────────────
-        // Fixed lines consumed by UI chrome: blank + header-row + blank + scroll-hint + blank-footer
-        const CHROME: usize = 5;
-        let term_h    = terminal::size().map(|(_, r)| r as usize).unwrap_or(24);
-        let view_size = term_h.saturating_sub(CHROME).max(3);
-        let mut view_start: usize = 0; // first display_items index visible
-
-        // Ensure the cursor model is always visible
-        let ensure_visible = |sel: usize, vs: &mut usize| {
-            let di = display_items.iter().position(|d| matches!(d, DisplayItem::ModelRow(i) if *i == sel)).unwrap_or(0);
-            if di < *vs { *vs = di; }
-            if di >= *vs + view_size { *vs = di + 1 - view_size; }
-        };
-        ensure_visible(selected, &mut view_start);
-
-        // ── Draw helper (viewport-aware) ──────────────────────────────────────
-        let draw = |stdout: &mut io::Stdout, sel: usize, vs: usize| -> Result<()> {
-            execute!(stdout,
-                cursor::MoveToColumn(0),
-                terminal::Clear(terminal::ClearType::FromCursorDown),
-                Print("\r\n"),
-                SetForegroundColor(Color::Cyan), Print("  Select model  "),
-                ResetColor,
-                SetForegroundColor(Color::DarkGrey),
-                Print(format!("↑↓/jk navigate  Enter select  Esc cancel  [{}/{}]\r\n\r\n",
-                    sel + 1, total)),
-                ResetColor,
-            )?;
-
-            let window = display_items.iter().skip(vs).take(view_size);
-            for item in window {
-                match item {
-                    DisplayItem::Header(provider, dynamic) => {
-                        if provider == "__custom__" {
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("  ──────────────────────────────────────\r\n"), ResetColor)?;
-                        } else {
-                            let suffix = if *dynamic {
-                                if provider == "ollama" { " (local)" } else { " (live)" }
-                            } else { "" };
-                            execute!(stdout, SetForegroundColor(Color::Yellow),
-                                Print(format!("  {}{}\r\n", provider.to_uppercase(), suffix)),
-                                ResetColor)?;
-                        }
-                    }
-                    DisplayItem::ModelRow(i) => {
-                        let (provider, name, id, toolset, _) = &models[*i];
-                        let is_current = !id.is_empty() && *id == current;
-                        let is_sel     = *i == sel;
-                        let arrow      = if is_sel { "  ▶ " } else { "    " };
-
-                        if provider == "__custom__" {
-                            execute!(stdout,
-                                SetForegroundColor(if is_sel { Color::Cyan } else { Color::DarkGrey }),
-                                Print(arrow),
-                                Print(format!("{name}\r\n")),
-                                ResetColor,
-                            )?;
-                        } else {
-                            // Truncate display name to fit terminal width (leave room for arrow + toolset + marker)
-                            let max_name = term_h.min(40);
-                            let display_name = if name.len() > max_name {
-                                format!("{}…", &name[..max_name.saturating_sub(1)])
-                            } else {
-                                format!("{:<width$}", name, width = max_name)
-                            };
-                            execute!(stdout,
-                                SetForegroundColor(if is_sel { Color::Green } else { Color::DarkGrey }),
-                                Print(arrow),
-                                SetForegroundColor(if is_sel { Color::White } else { Color::DarkGrey }),
-                                Print(&display_name),
-                                SetForegroundColor(Color::DarkGrey),
-                                Print(if toolset.is_empty() { String::new() } else { format!(" [{toolset}]") }),
-                                ResetColor,
-                            )?;
-                            if is_current {
-                                execute!(stdout, SetForegroundColor(Color::Cyan),
-                                    Print(" ← current"), ResetColor)?;
-                            }
-                            execute!(stdout, Print("\r\n"))?;
-                        }
+        // ── Build ratatui ListItems ───────────────────────────────────────────
+        let build_items = |list_pos: usize, current: &str| -> Vec<ListItem<'static>> {
+            display_items.iter().map(|item| match item {
+                DisplayItem::Header(provider, dynamic) => {
+                    if provider == "__custom__" {
+                        ListItem::new(Line::from(Span::styled(
+                            "  ─────────────────────────────────────────".to_string(),
+                            Style::default().fg(RC::DarkGray),
+                        )))
+                    } else {
+                        let suffix = if *dynamic {
+                            if provider == "ollama" { " (local)" } else { " (live)" }
+                        } else { "" };
+                        ListItem::new(Line::from(Span::styled(
+                            format!("  {}{}", provider.to_uppercase(), suffix),
+                            Style::default().fg(RC::Yellow).add_modifier(Modifier::BOLD),
+                        )))
                     }
                 }
-            }
+                DisplayItem::ModelRow(i) => {
+                    let (provider, name, id, toolset, _) = &models[*i];
+                    let is_sel     = *i == model_at(list_pos);
+                    let is_current = !id.is_empty() && id == current;
 
-            // Scroll indicator
-            if disp_total > view_size {
-                let pct = (vs * 100) / disp_total.saturating_sub(view_size).max(1);
-                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                    Print(format!("  … {pct}% ({} more not shown)\r\n",
-                        disp_total.saturating_sub(vs + view_size))),
-                    ResetColor)?;
-            } else {
-                execute!(stdout, Print("\r\n"))?;
-            }
-            stdout.flush()?;
-            Ok(())
+                    if provider == "__custom__" {
+                        ListItem::new(Line::from(vec![
+                            Span::styled(
+                                if is_sel { "  ▶ " } else { "    " }.to_string(),
+                                Style::default().fg(RC::Cyan),
+                            ),
+                            Span::styled(name.clone(),
+                                Style::default().fg(if is_sel { RC::Cyan } else { RC::DarkGray })),
+                        ]))
+                    } else {
+                        let name_trunc = if name.len() > 44 {
+                            format!("{}…", &name[..43])
+                        } else {
+                            format!("{:<44}", name)
+                        };
+                        let toolset_tag = if toolset.is_empty() { String::new() }
+                                          else { format!(" [{toolset}]") };
+                        let current_tag = if is_current { " ← current".to_string() }
+                                          else { String::new() };
+                        ListItem::new(Line::from(vec![
+                            Span::styled(
+                                if is_sel { "  ▶ " } else { "    " }.to_string(),
+                                Style::default().fg(if is_sel { RC::Green } else { RC::DarkGray }),
+                            ),
+                            Span::styled(name_trunc,
+                                Style::default()
+                                    .fg(if is_sel { RC::White } else { RC::DarkGray })
+                                    .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() })),
+                            Span::styled(toolset_tag,
+                                Style::default().fg(RC::DarkGray)),
+                            Span::styled(current_tag,
+                                Style::default().fg(RC::Cyan)),
+                        ]))
+                    }
+                }
+            }).collect()
         };
 
-        // draw_lines is now constant = CHROME + min(disp_total, view_size)
-        let draw_lines = (CHROME + view_size.min(disp_total)) as u16;
+        // ── Terminal setup ────────────────────────────────────────────────────
+        let term_rows = terminal::size().map(|(_, r)| r as usize).unwrap_or(24);
+        let view_h    = term_rows.saturating_sub(3).max(5) as u16;
 
-        // ── Interactive loop ──────────────────────────────────────────────────
         terminal::enable_raw_mode()?;
         execute!(stdout, cursor::Hide)?;
-        draw(stdout, selected, view_start)?;
+        let mut term = Terminal::with_options(
+            CrosstermBackend::new(&mut *stdout),
+            TerminalOptions { viewport: Viewport::Inline(view_h) },
+        )?;
 
+        // ── Draw macro ────────────────────────────────────────────────────────
+        macro_rules! redraw {
+            () => {{
+                let sel_model = model_at(list_pos);
+                let title = format!(
+                    " Models  ↑↓/jk/PgUp/PgDn  Enter select  q cancel  [{}/{}] ",
+                    sel_model + 1, n_models
+                );
+                let items = build_items(list_pos, &current);
+                let list = List::new(items)
+                    .block(Block::default().title(title));
+                let mut ls = ListState::default().with_selected(Some(list_pos));
+                let mut sb = ScrollbarState::new(disp_len).position(list_pos);
+                term.draw(|f| {
+                    let area = f.area();
+                    let chunks = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([Constraint::Fill(1), Constraint::Length(1)])
+                        .split(area);
+                    f.render_stateful_widget(list, chunks[0], &mut ls);
+                    f.render_stateful_widget(
+                        Scrollbar::new(ScrollbarOrientation::VerticalRight),
+                        chunks[1], &mut sb,
+                    );
+                })?;
+            }};
+        }
+        redraw!();
+
+        // ── Event loop ────────────────────────────────────────────────────────
         let result = loop {
             if let Ok(Event::Key(key)) = event::read() {
                 match (key.code, key.modifiers) {
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
 
                     (KeyCode::Enter, _) => {
-                        let (provider, _, id, _, _) = &models[selected];
+                        let sel = model_at(list_pos);
+                        let (provider, _, id, _, _) = &models[sel];
                         if provider == "__custom__" || id.ends_with('/') {
-                            // Custom model input
+                            // Text input — write directly to backend
                             terminal::disable_raw_mode()?;
-                            execute!(stdout, cursor::Show, Print("\r\n"))?;
                             let prefix = if id.ends_with('/') && id.len() > 1 {
                                 id.as_str()
-                            } else {
-                                ""
-                            };
-                            execute!(stdout,
+                            } else { "" };
+                            execute!(term.backend_mut(),
+                                cursor::Show, Print("\n"),
                                 SetForegroundColor(Color::DarkGrey),
-                                Print(format!("  Model ID: {prefix}")),
-                                ResetColor)?;
-                            stdout.flush()?;
+                                Print(format!("  Model ID: {prefix}")), ResetColor)?;
+                            term.backend_mut().flush()?;
                             let mut input = String::new();
                             std::io::stdin().read_line(&mut input).unwrap_or(0);
                             let typed = input.trim().to_string();
-                            if typed.is_empty() {
-                                break None;
-                            }
+                            if typed.is_empty() { break None; }
                             let full = if prefix.is_empty() || typed.starts_with(prefix) {
                                 typed
-                            } else {
-                                format!("{prefix}{typed}")
-                            };
+                            } else { format!("{prefix}{typed}") };
                             break Some(full);
                         } else {
                             break Some(id.clone());
@@ -2818,34 +2776,28 @@ impl Repl {
                     }
 
                     (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
-                        selected = if selected == 0 { total - 1 } else { selected - 1 };
-                        ensure_visible(selected, &mut view_start);
-                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
-                        draw(stdout, selected, view_start)?;
+                        list_pos = prev_pos(list_pos);
+                        redraw!();
                     }
                     (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
-                        selected = (selected + 1) % total;
-                        ensure_visible(selected, &mut view_start);
-                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
-                        draw(stdout, selected, view_start)?;
+                        list_pos = next_pos(list_pos);
+                        redraw!();
                     }
                     (KeyCode::PageDown, _) => {
-                        selected = (selected + view_size).min(total - 1);
-                        ensure_visible(selected, &mut view_start);
-                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
-                        draw(stdout, selected, view_start)?;
+                        for _ in 0..view_h { list_pos = next_pos(list_pos); }
+                        redraw!();
                     }
                     (KeyCode::PageUp, _) => {
-                        selected = selected.saturating_sub(view_size);
-                        ensure_visible(selected, &mut view_start);
-                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
-                        draw(stdout, selected, view_start)?;
+                        for _ in 0..view_h { list_pos = prev_pos(list_pos); }
+                        redraw!();
                     }
                     _ => {}
                 }
             }
         };
 
+        term.clear()?;
+        drop(term);
         terminal::disable_raw_mode()?;
         execute!(stdout, cursor::Show, ResetColor)?;
         stdout.flush()?;
