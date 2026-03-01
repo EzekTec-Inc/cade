@@ -35,7 +35,7 @@ const BANNER: &str = r#"
 /// Result from the agent TUI picker.
 enum AgentPickerResult {
     Switch(AgentState),
-    Delete(AgentState),
+    DeleteMany(Vec<AgentState>),
 }
 
 #[derive(Debug)]
@@ -518,32 +518,37 @@ impl Repl {
                                                 Print(format!("  ✓ Switched to: {} ({})\n", a.name, a.id)),
                                                 ResetColor)?;
                                         }
-                                        AgentPickerResult::Delete(a) => {
-                                            match self.client.delete_agent(&a.id).await {
-                                                Ok(_) => {
-                                                    execute!(stdout, SetForegroundColor(Color::Green),
-                                                        Print(format!("  ✓ Deleted: {}\n", a.name)), ResetColor)?;
-                                                    // If we deleted the current agent, switch to any remaining
-                                                    if a.id == self.agent_id() {
-                                                        match self.client.list_agents().await {
-                                                            Ok(remaining) if !remaining.is_empty() => {
-                                                                let first = &remaining[0];
-                                                                *self.agent_id.lock().unwrap()   = first.id.clone();
-                                                                *self.agent_name.lock().unwrap() = first.name.clone();
-                                                                if let Ok(mut s) = self.settings.lock() {
-                                                                    let _ = s.set_last_agent(&first.id);
-                                                                }
-                                                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                                                    Print(format!("  → Now using: {}\n", first.name)), ResetColor)?;
-                                                            }
-                                                            _ => {
-                                                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                                                    Print("  No remaining agents — run /new to create one\n"), ResetColor)?;
-                                                            }
+                                        AgentPickerResult::DeleteMany(to_delete) => {
+                                            let current_id = self.agent_id();
+                                            let mut deleted_active = false;
+                                            for a in &to_delete {
+                                                match self.client.delete_agent(&a.id).await {
+                                                    Ok(_) => {
+                                                        execute!(stdout, SetForegroundColor(Color::Green),
+                                                            Print(format!("  ✓ Deleted: {}\n", a.name)), ResetColor)?;
+                                                        if a.id == current_id { deleted_active = true; }
+                                                    }
+                                                    Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                                                }
+                                            }
+                                            // If the active agent was deleted, auto-switch
+                                            if deleted_active {
+                                                match self.client.list_agents().await {
+                                                    Ok(remaining) if !remaining.is_empty() => {
+                                                        let first = &remaining[0];
+                                                        *self.agent_id.lock().unwrap()   = first.id.clone();
+                                                        *self.agent_name.lock().unwrap() = first.name.clone();
+                                                        if let Ok(mut s) = self.settings.lock() {
+                                                            let _ = s.set_last_agent(&first.id);
                                                         }
+                                                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                                            Print(format!("  → Now using: {}\n", first.name)), ResetColor)?;
+                                                    }
+                                                    _ => {
+                                                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                                            Print("  No remaining agents — run /new to create one\n"), ResetColor)?;
                                                     }
                                                 }
-                                                Err(e) => self.print_error(&mut stdout, &e.to_string())?,
                                             }
                                         }
                                     }
@@ -2297,13 +2302,21 @@ impl Repl {
         Ok(())
     }
 
-    /// Result from the `/agents` TUI picker.
+    /// `/agents` TUI picker with multi-select delete.
+    ///
+    /// Keys:
+    ///   ↑/↓  j/k  — move cursor
+    ///   Space      — toggle mark for deletion
+    ///   d / Delete — confirm delete of all marked (or current if none marked)
+    ///   Enter      — switch to highlighted agent (only when no marks)
+    ///   Esc / q    — cancel
     async fn agent_picker(
         &self,
         stdout: &mut io::Stdout,
         agents: &mut Vec<AgentState>,
     ) -> Result<Option<AgentPickerResult>> {
         use crossterm::event::{self, Event, KeyCode};
+        use std::collections::HashSet;
 
         if agents.is_empty() {
             return Ok(None);
@@ -2314,8 +2327,17 @@ impl Repl {
         let mut selected: usize = agents.iter()
             .position(|a| a.id == current)
             .unwrap_or(0);
+        let mut marked: HashSet<usize> = HashSet::new();
 
-        let draw = |stdout: &mut io::Stdout, agents: &[AgentState], sel: usize, current: &str| -> Result<()> {
+        // ── Draw ────────────────────────────────────────────────────────────
+        let draw = |
+            stdout:  &mut io::Stdout,
+            agents:  &[AgentState],
+            sel:     usize,
+            current: &str,
+            marked:  &HashSet<usize>,
+        | -> Result<()> {
+            let n_marked = marked.len();
             execute!(stdout,
                 cursor::MoveToColumn(0),
                 terminal::Clear(terminal::ClearType::FromCursorDown),
@@ -2323,17 +2345,40 @@ impl Repl {
                 SetForegroundColor(Color::Cyan), Print("  Agents  "),
                 ResetColor,
                 SetForegroundColor(Color::DarkGrey),
-                Print("↑↓ navigate  Enter switch  d delete  Esc cancel\r\n\r\n"),
+                Print("↑↓ navigate  Space mark  d delete  Enter switch  Esc cancel\r\n"),
                 ResetColor,
             )?;
+
+            // Footer hint when marks are active
+            if n_marked > 0 {
+                execute!(stdout,
+                    SetForegroundColor(Color::Yellow),
+                    Print(format!("  {} agent{} marked for deletion\r\n", n_marked,
+                        if n_marked == 1 { "" } else { "s" })),
+                    ResetColor,
+                )?;
+            } else {
+                execute!(stdout, Print("\r\n"))?;
+            }
+
             for (i, a) in agents.iter().enumerate() {
                 let is_sel     = i == sel;
+                let is_marked  = marked.contains(&i);
                 let is_current = a.id == current;
-                let arrow      = if is_sel { "  ▶ " } else { "    " };
                 let short_id   = if a.id.len() > 16 { &a.id[..16] } else { &a.id };
+
+                // cursor arrow
                 execute!(stdout,
                     SetForegroundColor(if is_sel { Color::Green } else { Color::DarkGrey }),
-                    Print(arrow),
+                    Print(if is_sel { "  ▶ " } else { "    " }),
+                )?;
+                // mark checkbox
+                execute!(stdout,
+                    SetForegroundColor(if is_marked { Color::Yellow } else { Color::DarkGrey }),
+                    Print(if is_marked { "☑ " } else { "☐ " }),
+                )?;
+                // name + id
+                execute!(stdout,
                     SetForegroundColor(if is_sel { Color::White } else { Color::DarkGrey }),
                     Print(format!("{:<30}", a.name)),
                     SetForegroundColor(Color::DarkGrey),
@@ -2350,33 +2395,73 @@ impl Repl {
             Ok(())
         };
 
-        // Lines drawn: 2 (header+blank) + total + 1 (footer blank)
+        // Lines drawn: 1 (hint) + 1 (mark footer) + total + 1 (trailing blank)
         let draw_lines = (3 + total) as u16;
 
         terminal::enable_raw_mode()?;
         execute!(stdout, cursor::Hide)?;
-        draw(stdout, agents, selected, &current)?;
+        draw(stdout, agents, selected, &current, &marked)?;
 
+        // ── Event loop ──────────────────────────────────────────────────────
         let result = loop {
             if let Ok(Event::Key(key)) = event::read() {
                 match (key.code, key.modifiers) {
+                    // ── Cancel ──────────────────────────────────────────────
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
+
+                    // ── Switch (only when nothing is marked) ────────────────
                     (KeyCode::Enter, _) => {
-                        let a = agents[selected].clone();
-                        if a.id == current {
-                            break None; // no-op switch to current
+                        if marked.is_empty() {
+                            let a = agents[selected].clone();
+                            if a.id != current {
+                                break Some(AgentPickerResult::Switch(a));
+                            }
+                            // switching to current → no-op
                         }
-                        break Some(AgentPickerResult::Switch(a));
+                        // if marks exist, Enter is a no-op (user should press d or Esc)
                     }
+
+                    // ── Toggle mark ─────────────────────────────────────────
+                    (KeyCode::Char(' '), _) => {
+                        if marked.contains(&selected) {
+                            marked.remove(&selected);
+                        } else {
+                            marked.insert(selected);
+                        }
+                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
+                        draw(stdout, agents, selected, &current, &marked)?;
+                    }
+
+                    // ── Delete ──────────────────────────────────────────────
                     (KeyCode::Char('d'), _) | (KeyCode::Delete, _) => {
-                        // Inline delete confirm
-                        let a = agents[selected].clone();
+                        // If nothing marked, treat current row as the target
+                        let targets: Vec<usize> = if marked.is_empty() {
+                            vec![selected]
+                        } else {
+                            let mut v: Vec<usize> = marked.iter().copied().collect();
+                            v.sort_unstable();
+                            v
+                        };
+                        let names: Vec<&str> = targets.iter()
+                            .map(|&i| agents[i].name.as_str())
+                            .collect();
+
+                        // Confirm prompt
                         terminal::disable_raw_mode()?;
-                        execute!(stdout, cursor::Show,
-                            SetForegroundColor(Color::Yellow),
-                            Print(format!("\n  Delete '{}'? [y/N]: ", a.name)),
-                            ResetColor)?;
+                        execute!(stdout, cursor::Show, SetForegroundColor(Color::Yellow))?;
+                        if targets.len() == 1 {
+                            execute!(stdout,
+                                Print(format!("\n  Delete '{}'? [y/N]: ", names[0])),
+                            )?;
+                        } else {
+                            execute!(stdout,
+                                Print(format!("\n  Delete {} agents ({})? [y/N]: ",
+                                    targets.len(), names.join(", "))),
+                            )?;
+                        }
+                        execute!(stdout, ResetColor)?;
                         stdout.flush()?;
+
                         terminal::enable_raw_mode()?;
                         let confirmed = loop {
                             if let Ok(Event::Key(k)) = event::read() {
@@ -2385,24 +2470,30 @@ impl Repl {
                         };
                         terminal::disable_raw_mode()?;
                         execute!(stdout, Print("\n"))?;
+
                         if confirmed {
-                            break Some(AgentPickerResult::Delete(a));
+                            let to_delete: Vec<AgentState> = targets.iter()
+                                .map(|&i| agents[i].clone())
+                                .collect();
+                            break Some(AgentPickerResult::DeleteMany(to_delete));
                         } else {
-                            // Redraw after cancelled delete
+                            // Keep marks, redraw
                             execute!(stdout, cursor::Hide)?;
                             terminal::enable_raw_mode()?;
-                            draw(stdout, agents, selected, &current)?;
+                            draw(stdout, agents, selected, &current, &marked)?;
                         }
                     }
+
+                    // ── Navigation ──────────────────────────────────────────
                     (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
                         selected = if selected == 0 { total - 1 } else { selected - 1 };
                         execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
-                        draw(stdout, agents, selected, &current)?;
+                        draw(stdout, agents, selected, &current, &marked)?;
                     }
                     (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
                         selected = (selected + 1) % total;
                         execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
-                        draw(stdout, agents, selected, &current)?;
+                        draw(stdout, agents, selected, &current, &marked)?;
                     }
                     _ => {}
                 }
@@ -2837,7 +2928,7 @@ impl Repl {
         println!("  Session:");
         println!("    /info           - agent, model, mode, cwd");
         println!("    /agent          - show current agent ID");
-        println!("    /agents         - list all agents + switch (↑↓ navigate, d delete)");
+        println!("    /agents         - list all agents + switch/delete (Space mark, d delete marked, Enter switch)");
         println!("    /resume         - alias for /agents (Letta compatibility)");
         println!("    /new            - create a fresh agent (hot-swap)");
         println!("    /rename [name]  - rename current agent");
