@@ -2129,7 +2129,7 @@ impl Repl {
                                     Print("\r"),
                                     terminal::Clear(ClearType::CurrentLine),
                                     SetForegroundColor(Color::DarkGrey),
-                                    Print(format!("  {icon} {label}  (Shift+Tab to cycle)\n")),
+                                    Print(format!("  {icon} {label}  (Shift+Tab to cycle)\r\n")),
                                     ResetColor,
                                     SetForegroundColor(Color::Green),
                                     Print(format!("cade{}> ", mode_prompt_tag(next))),
@@ -2144,7 +2144,7 @@ impl Repl {
                                 return Ok(None);
                             }
                             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                                execute!(stdout, Print("^C\n"))?;
+                                execute!(stdout, Print("^C\r\n"))?;
                                 buf.clear();
                                 cursor_pos = 0;
                                 return Ok(Some(String::new()));
