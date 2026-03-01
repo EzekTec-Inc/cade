@@ -369,9 +369,13 @@ impl CadeClient {
             .send()
             .await?;
         if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            bail!("patch_agent failed {status}: {body}");
+            let text = resp.text().await.unwrap_or_default();
+            // Extract human-readable detail from {"detail":"..."} wrapper if present
+            let msg = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v["detail"].as_str().map(String::from))
+                .unwrap_or(text);
+            bail!("{msg}");
         }
         let body: serde_json::Value = resp.json().await?;
         Ok(body["model"].as_str().unwrap_or(model).to_string())

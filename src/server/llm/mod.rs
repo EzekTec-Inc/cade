@@ -537,7 +537,10 @@ impl LlmRouter {
     ///   1. Explicit `provider/model` prefix — error if prefix unknown
     ///   2. Auto-detect provider from well-known model name patterns — error if provider not configured
     ///   3. Fall back to the configured default provider (only for truly unknown model names)
-    fn pick(&self, model: &str) -> anyhow::Result<(Arc<dyn LlmProvider>, String)> {
+    ///
+    /// Public so `RouterAdapter` in `cade-server.rs` can resolve a provider Arc while
+    /// holding the lock for only this call, then drop the lock before making HTTP calls.
+    pub fn resolve_provider(&self, model: &str) -> anyhow::Result<(Arc<dyn LlmProvider>, String)> {
         // 1. Explicit prefix: `gemini/gemini-2.5-pro`
         if let Some(slash) = model.find('/') {
             let prefix = &model[..slash];
@@ -571,7 +574,7 @@ impl LlmRouter {
 
     /// Validate that the given model string can be routed.
     pub fn validate_model(&self, model: &str) -> anyhow::Result<()> {
-        self.pick(model).map(|_| ())
+        self.resolve_provider(model).map(|_| ())
     }
 }
 
@@ -606,7 +609,7 @@ fn infer_provider_prefix(model: &str) -> Option<&'static str> {
 #[async_trait::async_trait]
 impl LlmProvider for LlmRouter {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
-        let (provider, bare_model) = self.pick(&req.model)?;
+        let (provider, bare_model) = self.resolve_provider(&req.model)?;
         let routed = CompletionRequest { model: bare_model, ..req.clone() };
         provider.complete(&routed).await
     }
@@ -615,7 +618,7 @@ impl LlmProvider for LlmRouter {
         &self,
         req: &CompletionRequest,
     ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamChunk>> + Send>>> {
-        let (provider, bare_model) = self.pick(&req.model)?;
+        let (provider, bare_model) = self.resolve_provider(&req.model)?;
         let routed = CompletionRequest { model: bare_model, ..req.clone() };
         provider.stream(&routed).await
     }

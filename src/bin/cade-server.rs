@@ -7,7 +7,7 @@ use axum::http::Request;
 use cade::server::{
     api::router,
     config::ServerConfig,
-    llm::LlmRouter,
+    llm::{CompletionRequest, LlmRouter},
     state::AppState,
     storage::{open as open_db, sqlite},
 };
@@ -83,6 +83,14 @@ async fn main() -> Result<()> {
 }
 
 // ── RouterAdapter: thin wrapper so Arc<RwLock<LlmRouter>> implements LlmProvider ──
+//
+// IMPORTANT: the lock is held ONLY for the brief resolve_provider() call.
+// It is dropped BEFORE any HTTP calls to Anthropic / OpenAI / Gemini.
+//
+// Holding the lock across async HTTP calls (the old pattern) caused
+// Tokio's write-preferring RwLock to starve subsequent readers (e.g.
+// validate_model in PATCH /agents/:id) whenever GET /v1/models queued
+// a hot_sync write — blocking /model switches mid-stream.
 
 struct RouterAdapter(Arc<RwLock<LlmRouter>>);
 
@@ -90,17 +98,29 @@ struct RouterAdapter(Arc<RwLock<LlmRouter>>);
 impl cade::server::llm::LlmProvider for RouterAdapter {
     async fn complete(
         &self,
-        req: &cade::server::llm::CompletionRequest,
+        req: &CompletionRequest,
     ) -> anyhow::Result<cade::server::llm::CompletionResponse> {
-        self.0.read().await.complete(req).await
+        // Acquire lock just long enough to clone the provider Arc.
+        let (provider, bare_model) = {
+            let router = self.0.read().await;
+            router.resolve_provider(&req.model)?
+        }; // ← lock released here, BEFORE the HTTP call
+        let routed = CompletionRequest { model: bare_model, ..req.clone() };
+        provider.complete(&routed).await
     }
 
     async fn stream(
         &self,
-        req: &cade::server::llm::CompletionRequest,
+        req: &CompletionRequest,
     ) -> anyhow::Result<std::pin::Pin<Box<dyn tokio_stream::Stream<
         Item = anyhow::Result<cade::server::llm::StreamChunk>
     > + Send>>> {
-        self.0.read().await.stream(req).await
+        // Same pattern: lock only for routing, drop before streaming HTTP call.
+        let (provider, bare_model) = {
+            let router = self.0.read().await;
+            router.resolve_provider(&req.model)?
+        }; // ← lock released here, BEFORE the streaming HTTP call
+        let routed = CompletionRequest { model: bare_model, ..req.clone() };
+        provider.stream(&routed).await
     }
 }
