@@ -385,6 +385,20 @@ async fn main() -> Result<()> {
             .get_agent(id)
             .await
             .with_context(|| format!("get agent {id}"))?
+    } else if let Some(name_query) = &args.name {
+        // --name: find agent by name (partial, case-insensitive)
+        let all = client.list_agents().await.context("list agents for --name")?;
+        let q = name_query.to_lowercase();
+        let matched: Vec<_> = all.iter().filter(|a| a.name.to_lowercase().contains(&q)).collect();
+        match matched.len() {
+            0 => anyhow::bail!("No agent matching --name '{name_query}'"),
+            1 => client.get_agent(&matched[0].id).await
+                    .with_context(|| format!("get agent {}", matched[0].id))?,
+            n => anyhow::bail!(
+                "{n} agents match '{name_query}': {}",
+                matched.iter().map(|a| format!("{} ({})", a.name, a.id)).collect::<Vec<_>>().join(", ")
+            ),
+        }
     } else if let Some(last_id) = session.session.agent_id.clone() {
         match client.get_agent(&last_id).await {
             Ok(a) => a,
@@ -422,6 +436,9 @@ async fn main() -> Result<()> {
     if !hook_engine.is_empty() {
         tracing::info!("Hooks loaded from settings");
     }
+
+    // Expose AGENT_ID to all child processes (bash tool, hooks, etc.)
+    std::env::set_var("AGENT_ID", &agent.id);
 
     // Seed default memory blocks if this agent has none yet
     // (covers agents created before default block seeding was introduced)
@@ -462,9 +479,10 @@ async fn main() -> Result<()> {
 
     if let Some(prompt) = headless_prompt {
         let result = cli::headless::run_headless(&client, &agent.id, &prompt, &permissions).await;
+        let fmt = args.effective_output_format();
         match result {
             Ok(output) => {
-                if args.json {
+                if fmt == "json" {
                     println!(
                         "{}",
                         serde_json::json!({ "response": output, "agent_id": agent.id })
@@ -475,7 +493,7 @@ async fn main() -> Result<()> {
                 std::process::exit(0);
             }
             Err(e) => {
-                if args.json {
+                if fmt == "json" {
                     eprintln!("{}", serde_json::json!({ "error": e.to_string() }));
                 } else {
                     eprintln!("Error: {e}");

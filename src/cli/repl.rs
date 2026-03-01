@@ -58,6 +58,8 @@ enum SlashCmd {
     DenyAlways(String),
     Permissions,
     Hooks,
+    Rename(String),
+    Toolset(Option<String>),
     Yolo,
     Plan,
     Default,
@@ -94,12 +96,14 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "deny-always"    => Some(SlashCmd::DenyAlways(arg.unwrap_or_default())),
         "permissions"    => Some(SlashCmd::Permissions),
         "hooks"          => Some(SlashCmd::Hooks),
+        "rename"         => Some(SlashCmd::Rename(arg.unwrap_or_default())),
+        "toolset"        => Some(SlashCmd::Toolset(arg)),
         "yolo"                   => Some(SlashCmd::Yolo),
         "plan"                   => Some(SlashCmd::Plan),
         "default" | "normal" | "resume" => Some(SlashCmd::Default),
         "mode"                   => Some(SlashCmd::Mode(arg)),
         "model"  => Some(SlashCmd::Model(arg.unwrap_or_default())),
-        "toolset" => Some(SlashCmd::Model(format!("__toolset__{}", arg.unwrap_or_default()))),
+        // "toolset" now handled as SlashCmd::Toolset above
         _ => None,
     }
 }
@@ -1286,6 +1290,80 @@ impl Repl {
                         stdout.flush()?;
                     }
 
+                    SlashCmd::Rename(new_name) => {
+                        let id = self.agent_id();
+                        let new_name = new_name.trim().to_string();
+                        let name = if new_name.is_empty() {
+                            // Prompt for name interactively
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("\n  New name: "), ResetColor)?;
+                            stdout.flush()?;
+                            terminal::disable_raw_mode()?;
+                            let mut buf = String::new();
+                            std::io::stdin().read_line(&mut buf).unwrap_or(0);
+                            terminal::enable_raw_mode()?;
+                            buf.trim().to_string()
+                        } else {
+                            new_name
+                        };
+                        if name.is_empty() {
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("  (cancelled)\n"), ResetColor)?;
+                        } else {
+                            match self.client.rename_agent(&id, &name).await {
+                                Ok(_) => {
+                                    *self.agent_name.lock().unwrap() = name.clone();
+                                    execute!(stdout, SetForegroundColor(Color::Green),
+                                        Print(format!("\n  ✓ Renamed to: {name}\n")), ResetColor)?;
+                                }
+                                Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                            }
+                        }
+                        stdout.flush()?;
+                    }
+
+                    SlashCmd::Toolset(arg) => {
+                        // Reuse the model command's toolset-switching logic
+                        let fake_arg = format!("__toolset__{}", arg.as_deref().unwrap_or(""));
+                        // Delegate by recursing into the Model handler logic inline
+                        let old_toolset = *self.current_toolset.lock().unwrap();
+                        let new_toolset = if let Some(name) = arg.as_deref() {
+                            match crate::toolsets::Toolset::from_str(name) {
+                                Some(t) => t,
+                                None => {
+                                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                        Print("\n  Toolsets: default | codex | gemini\n\n"), ResetColor)?;
+                                    stdout.flush()?;
+                                    continue;
+                                }
+                            }
+                        } else {
+                            // No arg — show current and options
+                            execute!(stdout,
+                                Print("\n  Current: "),
+                                SetForegroundColor(Color::Cyan),
+                                Print(format!("{old_toolset:?}")),
+                                ResetColor,
+                                Print("\n"),
+                                SetForegroundColor(Color::DarkGrey),
+                                Print("  /toolset default | codex | gemini\n\n"),
+                                ResetColor,
+                            )?;
+                            stdout.flush()?;
+                            continue;
+                        };
+                        let _ = fake_arg; // silence unused warning
+                        if new_toolset != old_toolset {
+                            *self.current_toolset.lock().unwrap() = new_toolset;
+                            execute!(stdout, SetForegroundColor(Color::Green),
+                                Print(format!("\n  ✓ Toolset: {new_toolset:?}\n")), ResetColor)?;
+                        } else {
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print(format!("\n  Toolset already: {new_toolset:?}\n")), ResetColor)?;
+                        }
+                        stdout.flush()?;
+                    }
+
                     SlashCmd::Feedback => {
                         execute!(stdout,
                             SetForegroundColor(Color::Cyan),
@@ -2302,6 +2380,7 @@ impl Repl {
         println!("    /agent          - show current agent ID");
         println!("    /agents         - list all agents + switch");
         println!("    /new            - create a fresh agent (hot-swap)");
+        println!("    /rename [name]  - rename current agent");
         println!("    /pin            - pin current agent for quick access");
         println!("    /clear          - clear screen + context window");
         println!();
@@ -2346,6 +2425,10 @@ impl Repl {
         println!("  Model:");
         println!("    /model <m>      - switch model  (e.g. /model gemini/gemini-2.5-pro)");
         println!();
+        println!("  Model / Toolset:");
+        println!("    /model [name]   - show current or switch model");
+        println!("    /toolset [name] - show current or switch toolset: default | codex | gemini");
+        println!();
         println!("  Permission modes  (currently: {icon} {label}):");
         println!("    /default        - ask before each tool  [Shift+Tab to cycle]");
         println!("    /plan           - read-only tools; write ops blocked");
@@ -2354,6 +2437,14 @@ impl Repl {
         println!();
         println!("  Direct bash (bypasses agent):");
         println!("    ! <cmd>         - e.g.  ! git status");
+        println!();
+        println!("  Keyboard shortcuts:");
+        println!("    Shift+Enter    - insert newline (multi-line input)");
+        println!("    Esc            - clear current input line");
+        println!("    Shift+Tab      - cycle permission mode");
+        println!("    ↑ / ↓          - navigate command history");
+        println!("    Ctrl+C         - clear line / cancel current input");
+        println!("    Ctrl+D         - exit (on empty line)");
         println!();
         println!("    /feedback       - report issues");
         println!("    /help  /?       - this message");
@@ -2412,6 +2503,30 @@ impl Repl {
                             (KeyCode::Char('d'), KeyModifiers::CONTROL) if buf.is_empty() => {
                                 return Ok(None);
                             }
+                            // Esc — clear input buffer (if non-empty)
+                            (KeyCode::Esc, _) => {
+                                if !buf.is_empty() {
+                                    if cursor_pos > 0 {
+                                        execute!(stdout, cursor::MoveLeft(cursor_pos as u16))?;
+                                    }
+                                    let clear = " ".repeat(buf.len());
+                                    execute!(stdout, Print(&clear))?;
+                                    if !clear.is_empty() {
+                                        execute!(stdout, cursor::MoveLeft(clear.len() as u16))?;
+                                    }
+                                    buf.clear();
+                                    cursor_pos = 0;
+                                }
+                                // Esc on empty line: do nothing
+                            }
+
+                            // Shift+Enter — insert literal newline (multi-line input)
+                            (KeyCode::Enter, m) if m == KeyModifiers::SHIFT => {
+                                buf.insert(cursor_pos, '\n');
+                                cursor_pos += 1;
+                                execute!(stdout, Print("\r\n  "))?;
+                            }
+
                             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                                 execute!(stdout, Print("^C\r\n"))?;
                                 buf.clear();

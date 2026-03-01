@@ -109,6 +109,7 @@ pub async fn delete_agent(
 
 #[derive(Debug, Deserialize)]
 pub struct PatchAgentBody {
+    pub name: Option<String>,
     pub model: Option<String>,
     pub system_prompt: Option<String>,
 }
@@ -125,6 +126,18 @@ pub async fn patch_agent(
         .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"detail": "Agent not found"}))))?;
 
     let mut updated_model = existing.model.clone();
+    let mut updated_name  = existing.name.clone();
+
+    if let Some(name) = &body.name {
+        let name = name.trim();
+        if name.is_empty() {
+            return Err((StatusCode::BAD_REQUEST, Json(json!({ "detail": "name cannot be empty" }))));
+        }
+        sqlite::update_agent_name(&state.db, &agent_id, name)
+            .map_err(|e| server_err(e.to_string()))?;
+        updated_name = name.to_string();
+        tracing::info!("Agent {agent_id}: name → {name}");
+    }
 
     if let Some(model) = &body.model {
         // Validate the model is routable before persisting
@@ -139,7 +152,7 @@ pub async fn patch_agent(
 
     Ok(Json(json!({
         "id": agent_id,
-        "name": existing.name,
+        "name": updated_name,
         "model": updated_model
     })))
 }

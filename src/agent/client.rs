@@ -354,6 +354,20 @@ impl CadeClient {
         Ok(resp.json::<AgentState>().await?)
     }
 
+    /// Rename an agent (PATCH /v1/agents/:id with {"name": name}).
+    pub async fn rename_agent(&self, agent_id: &str, name: &str) -> Result<()> {
+        let resp = self.client
+            .patch(self.url(&format!("/agents/{agent_id}")))
+            .header(self.auth().0, self.auth().1)
+            .json(&serde_json::json!({ "name": name }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            bail!("rename_agent failed {}", resp.status());
+        }
+        Ok(())
+    }
+
     #[allow(dead_code)]
     pub async fn list_agents(&self) -> Result<Vec<AgentState>> {
         let resp = self.client

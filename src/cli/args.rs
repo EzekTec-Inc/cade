@@ -16,7 +16,11 @@ pub struct Args {
     #[arg(long = "agent", short = 'a')]
     pub agent: Option<String>,
 
-    /// Model to use in provider/model format (e.g., anthropic/claude-sonnet-4-5-20250929, openai/gpt-4o)
+    /// Resume agent by name (partial, case-insensitive match)
+    #[arg(long = "name", short = 'n')]
+    pub name: Option<String>,
+
+    /// Model to use in provider/model format (e.g., anthropic/claude-sonnet-4-5-20250929)
     #[arg(short = 'm', long = "model")]
     pub model: Option<String>,
 
@@ -36,7 +40,7 @@ pub struct Args {
     #[arg(long = "skills")]
     pub skills: Option<String>,
 
-    /// Show connection info and current agent
+    /// Show connection info and current agent (without starting a session)
     #[arg(long = "info")]
     pub info: bool,
 
@@ -48,11 +52,11 @@ pub struct Args {
     #[arg(long = "disallowed-tools")]
     pub disallowed_tools: Option<String>,
 
-    /// Output response as JSON (headless mode only)
-    #[arg(long = "json")]
-    pub json: bool,
+    /// Output format: text | json | stream-json (headless mode only)
+    #[arg(long = "output-format")]
+    pub output_format: Option<String>,
 
-    /// Disable streaming (headless mode only — for clean JSON output)
+    /// Disable streaming (headless mode only)
     #[arg(long = "no-stream")]
     pub no_stream: bool,
 
@@ -68,5 +72,10 @@ impl Args {
         } else {
             self.permission_mode.as_deref().unwrap_or("default")
         }
+    }
+
+    /// Returns the effective output format for headless mode.
+    pub fn effective_output_format(&self) -> &str {
+        self.output_format.as_deref().unwrap_or("text")
     }
 }

@@ -241,6 +241,15 @@ pub fn update_agent_model(db: &Db, id: &str, model: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
+pub fn update_agent_name(db: &Db, id: &str, name: &str) -> Result<bool> {
+    let conn = db.lock().unwrap();
+    let n = conn.execute(
+        "UPDATE agents SET name = ?1 WHERE id = ?2",
+        params![name, id],
+    )?;
+    Ok(n > 0)
+}
+
 /// Associate a set of tool IDs with an agent (upsert).
 pub fn attach_tools_to_agent(db: &Db, agent_id: &str, tool_ids: &[String]) -> Result<()> {
     let conn = db.lock().unwrap();
