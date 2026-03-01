@@ -41,7 +41,9 @@ async fn main() -> Result<()> {
     for row in &db_providers {
         if !row.enabled { continue; }
         if let Some(p) = LlmRouter::provider_from_row(row, &config) {
-            router_inner.add_provider(row.name.clone(), p);
+            // Store the API key so list_dynamic_models() can fetch live model lists.
+            let key = row.api_key.clone().unwrap_or_default();
+            router_inner.add_provider_with_key(row.name.clone(), p, key);
             tracing::info!("Loaded provider from DB: {} ({})", row.name, row.kind);
         }
     }

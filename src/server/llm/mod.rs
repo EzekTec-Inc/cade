@@ -258,15 +258,22 @@ impl LlmRouter {
     }
 
     /// Add or replace a provider at runtime (hot-reload via /connect).
-    /// `api_key` is stored for live model listing; pass `None` if not applicable.
+    /// Add or replace a provider at runtime (hot-reload via /connect or DB load).
+    /// `key` is stored in provider_keys for live model listing; pass empty if not applicable.
+    ///
+    /// Note: always prefer `add_provider_with_key` when the API key is known — the key
+    /// must be in `provider_keys` for `list_dynamic_models` to fetch live model lists.
     pub fn add_provider(&mut self, name: String, provider: Arc<dyn LlmProvider>) {
         tracing::info!("Provider hot-loaded: {name}");
         self.providers.insert(name, provider);
+        // NOTE: provider_keys is NOT updated here — caller must use add_provider_with_key
+        // when the API key is known, or live model listing will fall back to catalogue.
     }
 
-    /// Add a provider with its API key (used by /connect when key is known).
+    /// Add a provider with its API key. Prefer this over add_provider whenever the key
+    /// is available so that list_dynamic_models() can fetch live model lists.
     pub fn add_provider_with_key(&mut self, name: String, provider: Arc<dyn LlmProvider>, key: String) {
-        tracing::info!("Provider hot-loaded: {name}");
+        tracing::info!("Provider hot-loaded with key: {name}");
         self.providers.insert(name.clone(), provider);
         if !key.is_empty() {
             self.provider_keys.insert(name, key);
@@ -275,18 +282,29 @@ impl LlmRouter {
 
     /// Re-scan current shell env vars and hot-register any newly available providers.
     ///
-    /// Idempotent — skips providers already registered. Call this from `GET /v1/models`
-    /// so the model picker always reflects the current shell environment, even if API keys
-    /// were added after server startup.
+    /// Scan the server's environment and register/update any newly available providers.
+    ///
+    /// Called from `GET /v1/models` so the picker reflects current env state.
+    /// Now handles two cases:
+    ///   1. Provider not yet registered → create it from env key
+    ///   2. Provider registered but `provider_keys` is missing its key → fill it in
+    ///      (happens when provider was loaded from DB without the key being stored)
     pub fn hot_sync_env_providers(&mut self) {
+        // Helper: check if provider is missing from provider_keys (key not stored)
+        let needs_key = |p: &std::collections::HashMap<String, String>, name: &str| -> bool {
+            p.get(name).map(|k| k.is_empty()).unwrap_or(true)
+        };
+
         // ── Core providers ────────────────────────────────────────────────────
-        if !self.providers.contains_key("anthropic") {
+        let missing_anthropic = !self.providers.contains_key("anthropic")
+            || needs_key(&self.provider_keys, "anthropic");
+        if missing_anthropic {
             let key = std::env::var("ANTHROPIC_API_KEY")
                 .or_else(|_| std::env::var("CLAUDE_API_KEY"))
                 .ok()
                 .filter(|k| !k.is_empty());
             if let Some(key) = key {
-                tracing::info!("hot_sync: registering anthropic from env");
+                tracing::info!("hot_sync: registering/updating anthropic from env");
                 self.providers.insert(
                     "anthropic".into(),
                     Arc::new(anthropic::AnthropicProvider::new(key.clone())),
@@ -294,10 +312,13 @@ impl LlmRouter {
                 self.provider_keys.insert("anthropic".into(), key);
             }
         }
-        if !self.providers.contains_key("openai") {
+
+        let missing_openai = !self.providers.contains_key("openai")
+            || needs_key(&self.provider_keys, "openai");
+        if missing_openai {
             let key = std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.is_empty());
             if let Some(key) = key {
-                tracing::info!("hot_sync: registering openai from env");
+                tracing::info!("hot_sync: registering/updating openai from env");
                 self.providers.insert(
                     "openai".into(),
                     Arc::new(openai::OpenAiProvider::new(key.clone(), None)),
@@ -305,13 +326,16 @@ impl LlmRouter {
                 self.provider_keys.insert("openai".into(), key);
             }
         }
-        if !self.providers.contains_key("gemini") {
+
+        let missing_gemini = !self.providers.contains_key("gemini")
+            || needs_key(&self.provider_keys, "gemini");
+        if missing_gemini {
             let key = std::env::var("GOOGLE_API_KEY")
                 .or_else(|_| std::env::var("GEMINI_API_KEY"))
                 .ok()
                 .filter(|k| !k.is_empty());
             if let Some(key) = key {
-                tracing::info!("hot_sync: registering gemini/google from env");
+                tracing::info!("hot_sync: registering/updating gemini/google from env");
                 self.providers.insert(
                     "gemini".into(),
                     Arc::new(gemini::GeminiProvider::new(key.clone())),
@@ -327,13 +351,13 @@ impl LlmRouter {
 
         // ── Preset providers (Groq, OpenRouter, Together, etc.) ───────────────
         for preset in PRESET_PROVIDERS {
-            if self.providers.contains_key(preset.name) {
-                continue;
-            }
+            let missing = !self.providers.contains_key(preset.name)
+                || needs_key(&self.provider_keys, preset.name);
+            if !missing { continue; }
             let key = preset.env_vars.iter()
                 .find_map(|var| std::env::var(var).ok().filter(|k| !k.is_empty()));
             if let Some(key) = key {
-                tracing::info!("hot_sync: registering {} from env", preset.name);
+                tracing::info!("hot_sync: registering/updating {} from env", preset.name);
                 self.providers.insert(
                     preset.name.into(),
                     Arc::new(openai::OpenAiProvider::new(

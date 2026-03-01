@@ -97,9 +97,10 @@ pub async fn add_provider(
 
     let row = ProviderRow { name: name.clone(), kind: kind.clone(), api_key, base_url, enabled: true };
 
-    // Build the live provider and add to router
+    // Build the live provider and add to router — store API key so live model listing works.
     if let Some(provider) = LlmRouter::provider_from_row(&row, &state.config) {
-        state.llm_router.write().await.add_provider(name.clone(), provider);
+        let key = row.api_key.clone().unwrap_or_default();
+        state.llm_router.write().await.add_provider_with_key(name.clone(), provider, key);
     } else {
         return Err(bad_req("Could not construct provider — check api_key/base_url"));
     }
