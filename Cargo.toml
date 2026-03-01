@@ -37,7 +37,7 @@ thiserror = "2"
 
 # Terminal / REPL
 crossterm = "0.28"
-ratatui = { version = "0.29", features = ["crossterm"] }
+ratatui = { version = "0.29", features = ["crossterm", "scrolling-regions"] }
 
 # Logging
 tracing = "0.1"
