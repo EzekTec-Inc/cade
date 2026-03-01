@@ -79,6 +79,36 @@ pub struct Args {
     /// Rename the resolved agent and exit (combine with --agent or --name to target a specific one)
     #[arg(long = "rename", short = 'r')]
     pub rename: Option<String>,
+
+    /// Restrict which tools are attached to the agent (comma-separated names, or "" for none).
+    /// Unlike --allowed-tools (runtime permission gate), this controls what is registered
+    /// in the LLM's context window. Example: --tools "bash,read_file,grep"
+    #[arg(long = "tools")]
+    pub tools: Option<String>,
+
+    /// Attach CADE tools to the agent and start the session (re-links tools after /unlink)
+    #[arg(long = "link")]
+    pub link: bool,
+
+    /// Remove all CADE tools from the agent and start the session
+    #[arg(long = "unlink")]
+    pub unlink: bool,
+}
+
+impl Args {
+    /// Parse --tools into an optional name list.
+    /// None  → not specified (all tools)
+    /// Some([]) → empty string → no tools
+    /// Some(names) → filter to these names
+    pub fn tool_filter(&self) -> Option<Vec<String>> {
+        self.tools.as_ref().map(|s| {
+            if s.is_empty() {
+                vec![]
+            } else {
+                s.split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect()
+            }
+        })
+    }
 }
 
 impl Args {

@@ -75,6 +75,10 @@ enum SlashCmd {
     Default,
     Mode(Option<String>),
     Mcp,
+    Link,
+    Unlink,
+    Logout,
+    Stream,
 }
 
 fn parse_slash(input: &str) -> Option<SlashCmd> {
@@ -118,6 +122,10 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "mode"                   => Some(SlashCmd::Mode(arg)),
         "model"  => Some(SlashCmd::Model(arg.unwrap_or_default())),
         "mcp"    => Some(SlashCmd::Mcp),
+        "link"   => Some(SlashCmd::Link),
+        "unlink" => Some(SlashCmd::Unlink),
+        "logout" => Some(SlashCmd::Logout),
+        "stream" => Some(SlashCmd::Stream),
         // "toolset" now handled as SlashCmd::Toolset above
         _ => None,
     }
@@ -156,6 +164,8 @@ pub struct Repl {
     conversation_id: Arc<Mutex<Option<String>>>,
     /// MCP server manager — routes tool calls with `{server}__` prefix.
     mcp: std::sync::Arc<crate::mcp::McpManager>,
+    /// Whether SSE token streaming is enabled (toggled by /stream).
+    streaming_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Repl {
@@ -189,10 +199,11 @@ impl Repl {
             background_results: Arc::new(Mutex::new(vec![])),
             current_toolset: Arc::new(Mutex::new(toolset)),
             hooks,
-            first_turn:      std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            cancel_turn:     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            conversation_id: Arc::new(Mutex::new(conversation_id)),
+            first_turn:        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            cancel_turn:       std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            conversation_id:   Arc::new(Mutex::new(conversation_id)),
             mcp,
+            streaming_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
 
@@ -366,6 +377,67 @@ impl Repl {
                             }
                         }
                         stdout.flush()?;
+                    }
+                    SlashCmd::Link => {
+                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                            Print("\n  Linking tools…\n"), ResetColor)?;
+                        stdout.flush()?;
+                        let client2  = self.client.clone();
+                        let mcp2     = std::sync::Arc::clone(&self.mcp);
+                        let toolset2 = *self.current_toolset.lock().unwrap();
+                        let agent_id = self.agent_id();
+                        use crate::agent::tools::{register_cade_tools, register_mcp_tools};
+                        let native_ids: Vec<String> = register_cade_tools(&client2, toolset2)
+                            .await.unwrap_or_default().into_iter().map(|t| t.id).collect();
+                        let n_native = native_ids.len();
+                        if !native_ids.is_empty() {
+                            let _ = client2.attach_agent_tools(&agent_id, &native_ids).await;
+                        }
+                        let mcp_ids: Vec<String> = register_mcp_tools(&client2, mcp2.all_tool_schemas())
+                            .await.unwrap_or_default().into_iter().map(|t| t.id).collect();
+                        let n_mcp = mcp_ids.len();
+                        if !mcp_ids.is_empty() {
+                            let _ = client2.attach_agent_tools(&agent_id, &mcp_ids).await;
+                        }
+                        execute!(stdout, SetForegroundColor(Color::Green),
+                            Print(format!("  ✓ Linked {n_native} native + {n_mcp} MCP tool(s)\n")),
+                            ResetColor)?;
+                        stdout.flush()?;
+                    }
+                    SlashCmd::Unlink => {
+                        let agent_id = self.agent_id();
+                        match self.client.detach_agent_tools(&agent_id).await {
+                            Ok(n) => {
+                                execute!(stdout, SetForegroundColor(Color::Green),
+                                    Print(format!("\n  ✓ Detached {n} tool(s) from agent\n")),
+                                    ResetColor)?;
+                            }
+                            Err(e) => {
+                                execute!(stdout, SetForegroundColor(Color::Red),
+                                    Print(format!("\n  ✗ {e}\n")), ResetColor)?;
+                            }
+                        }
+                        stdout.flush()?;
+                    }
+                    SlashCmd::Stream => {
+                        use std::sync::atomic::Ordering;
+                        let current = self.streaming_enabled.load(Ordering::SeqCst);
+                        self.streaming_enabled.store(!current, Ordering::SeqCst);
+                        let label = if !current { "on" } else { "off" };
+                        execute!(stdout, SetForegroundColor(Color::Cyan),
+                            Print(format!("\n  Streaming: {label}\n")), ResetColor)?;
+                        stdout.flush()?;
+                    }
+                    SlashCmd::Logout => {
+                        if let Ok(mut s) = self.settings.lock() {
+                            s.clear_api_key();
+                        }
+                        execute!(stdout, SetForegroundColor(Color::Green),
+                            Print("\n  ✓ API key cleared from ~/.cade/settings.json\n"),
+                            Print("    Restart CADE to re-authenticate.\n"),
+                            ResetColor)?;
+                        stdout.flush()?;
+                        return Ok(());
                     }
                     SlashCmd::Plan => {
                         self.permissions.set_mode(PermissionMode::Plan);
@@ -816,7 +888,7 @@ impl Repl {
                                     let perm = PermissionManager::default();
                                     let result = run_headless(&client, &sub.id, &explore_prompt, &perm, &crate::mcp::McpManager::empty()).await;
                                     let _ = client.delete_agent(&sub.id).await;
-                                    result.unwrap_or_else(|e| format!("Analysis failed: {e}"))
+                                    result.map(|(s, _)| s).unwrap_or_else(|e| format!("Analysis failed: {e}"))
                                 }
                                 Err(e) => format!("Could not spawn explore agent: {e}"),
                             }
@@ -1864,16 +1936,39 @@ impl Repl {
                 }
             }
         } else {
-            match self.client.stream_message_cancellable(&agent_id, input, conv_ref, on_event, Some(cancel)).await {
-                Ok(m) => m,
-                Err(e) if is_cancel(&e) => {
-                    execute!(stdout, Print("\n"), SetForegroundColor(Color::Yellow),
-                        Print("  ✗ Turn interrupted\n"), ResetColor)?;
-                    return Ok(vec![]);
+            use std::sync::atomic::Ordering;
+            let streaming = self.streaming_enabled.load(Ordering::SeqCst);
+            if streaming {
+                match self.client.stream_message_cancellable(&agent_id, input, conv_ref, on_event, Some(cancel)).await {
+                    Ok(m) => m,
+                    Err(e) if is_cancel(&e) => {
+                        execute!(stdout, Print("\n"), SetForegroundColor(Color::Yellow),
+                            Print("  ✗ Turn interrupted\n"), ResetColor)?;
+                        return Ok(vec![]);
+                    }
+                    Err(e) => {
+                        self.print_error(stdout, &e.to_string())?;
+                        return Ok(vec![]);
+                    }
                 }
-                Err(e) => {
-                    self.print_error(stdout, &e.to_string())?;
-                    return Ok(vec![]);
+            } else {
+                // Non-streaming path — single HTTP request, print result at end
+                match self.client.send_message(&agent_id, input).await {
+                    Ok(msgs) => {
+                        for msg in &msgs {
+                            if let Some(text) = msg.assistant_text() {
+                                if !text.is_empty() {
+                                    execute!(stdout, SetForegroundColor(Color::White),
+                                        Print(format!("\n{text}")), ResetColor)?;
+                                }
+                            }
+                        }
+                        msgs
+                    }
+                    Err(e) => {
+                        self.print_error(stdout, &e.to_string())?;
+                        return Ok(vec![]);
+                    }
                 }
             }
         };
@@ -3209,8 +3304,8 @@ impl Repl {
                 }
 
                 match result {
-                    Ok(output) => (output, false),
-                    Err(e)     => (format!("Subagent error: {e}"), true),
+                    Ok((output, _)) => (output, false),
+                    Err(e)          => (format!("Subagent error: {e}"), true),
                 }
             }
         };
@@ -3303,6 +3398,8 @@ impl Repl {
         println!();
         println!("  Hooks:");
         println!("    /mcp            - list active MCP servers and their tools");
+        println!("    /link           - (re-)attach CADE tools to current agent");
+        println!("    /unlink         - remove all CADE tools from current agent");
         println!("    /hooks                    - show active hook configuration");
         println!("    (configure in ~/.cade/settings.json or .cade/settings.json)");
         println!("    events: PreToolUse PostToolUse Stop UserPromptSubmit SessionStart …");
@@ -3350,8 +3447,8 @@ impl Repl {
         println!("  Permission modes  (currently: {icon} {label}):");
         println!("    /default        - ask before each tool  [Shift+Tab to cycle]");
         println!("    /plan           - read-only tools; write ops blocked");
-        println!("    /yolo           - auto-approve all tools");
-        println!("    /mode [name]    - show / set: default | plan | yolo | acceptEdits");
+        println!("    /yolo           - auto-approve all tools (bypassPermissions)");
+        println!("    /mode [name]    - show/set: default | plan | yolo | acceptEdits | bypassPermissions");
         println!();
         println!("  Direct bash (bypasses agent):");
         println!("    ! <cmd>         - e.g.  ! git status");
@@ -3364,6 +3461,8 @@ impl Repl {
         println!("    Ctrl+C         - clear line / cancel current input / interrupt running turn");
         println!("    Ctrl+D         - exit (on empty line)");
         println!();
+        println!("    /stream         - toggle token streaming on/off");
+        println!("    /logout         - clear API credentials and exit");
         println!("    /feedback       - report issues");
         println!("    /help  /?       - this message");
         println!("    exit  /exit     - quit CADE");

@@ -318,6 +318,31 @@ pub fn get_agent_tool_ids(db: &Db, agent_id: &str) -> Result<Vec<String>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+/// Return (tool_id, tool_name) pairs for all tools attached to an agent.
+pub fn get_agent_tools_with_names(db: &Db, agent_id: &str) -> Result<Vec<(String, String)>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT at.tool_id, t.name FROM agent_tools at
+         JOIN tools t ON t.id = at.tool_id
+         WHERE at.agent_id = ?1
+         ORDER BY t.name"
+    )?;
+    let rows = stmt.query_map(params![agent_id], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Detach ALL tools from an agent (clear agent_tools rows for this agent).
+pub fn detach_all_tools_from_agent(db: &Db, agent_id: &str) -> Result<usize> {
+    let conn = db.lock().unwrap();
+    let n = conn.execute(
+        "DELETE FROM agent_tools WHERE agent_id = ?1",
+        params![agent_id],
+    )?;
+    Ok(n)
+}
+
 // ── Conversations ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

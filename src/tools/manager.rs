@@ -102,6 +102,22 @@ pub fn all_schemas() -> Vec<Value> {
     schemas_for_toolset(Toolset::Default)
 }
 
+/// Filter schemas to only the named tools. Names are case-insensitive.
+/// Used to implement `--tools "bash,read_file"`.
+pub fn schemas_for_names(toolset: Toolset, names: &[String]) -> Vec<Value> {
+    let lower: std::collections::HashSet<String> =
+        names.iter().map(|n| n.to_lowercase()).collect();
+    schemas_for_toolset(toolset)
+        .into_iter()
+        .filter(|s| {
+            s["name"]
+                .as_str()
+                .map(|n| lower.contains(&n.to_lowercase()))
+                .unwrap_or(false)
+        })
+        .collect()
+}
+
 /// Returns true if the native tool can mutate state (used for permission gating).
 pub fn is_native_write_tool(name: &str) -> bool {
     matches!(

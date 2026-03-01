@@ -7,6 +7,7 @@ use cade::mcp::McpManager;
 use cade::permissions;
 use cade::settings;
 use cade::skills;
+use cade::tools::schemas_for_names;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -237,11 +238,24 @@ async fn register_update_memory_tool(client: &CadeClient) {
 
 /// Register all CADE tools on the server and attach them to the given agent.
 pub async fn register_and_attach(client: &CadeClient, agent_id: &str, toolset: Toolset) {
+    register_and_attach_filtered(client, agent_id, toolset, None).await;
+}
+
+/// Register CADE tools, optionally restricted to a name list, and attach to agent.
+/// `tool_filter = None`   → attach all tools for toolset
+/// `tool_filter = Some([])` → attach only meta-tools (memory/skills/subagents; not filtered)
+/// `tool_filter = Some(names)` → attach only tools whose name is in `names`
+pub async fn register_and_attach_filtered(
+    client: &CadeClient,
+    agent_id: &str,
+    toolset: Toolset,
+    tool_filter: Option<&[String]>,
+) {
     register_update_memory_tool(client).await;
     register_load_skill_tool(client).await;
     register_install_skill_tool(client).await;
     register_run_subagent_tool(client).await;
-    let tools = register_cade_tools(client, toolset)
+    let tools = register_cade_tools_filtered(client, toolset, tool_filter)
         .await
         .unwrap_or_default();
     let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
@@ -251,6 +265,54 @@ pub async fn register_and_attach(client: &CadeClient, agent_id: &str, toolset: T
             tracing::warn!("attach_agent_tools: {e}");
         }
     }
+}
+
+async fn register_cade_tools_filtered(
+    client: &CadeClient,
+    toolset: Toolset,
+    filter: Option<&[String]>,
+) -> anyhow::Result<Vec<agent::client::ToolDef>> {
+    // schemas_for_toolset and schemas_for_names imported at top-level
+    // When no filter, use normal registration path
+    if filter.is_none() {
+        return register_cade_tools(client, toolset).await;
+    }
+    let names = filter.unwrap();
+    let schemas = if names.is_empty() {
+        // Empty filter → no tools (analysis-only mode)
+        vec![]
+    } else {
+        schemas_for_names(toolset, names)
+    };
+
+    // Reuse the existing tool registration logic by passing schemas directly
+    use agent::client::CreateToolRequest;
+    use agent::tools::build_python_stub_from_schema as bps;
+    let existing = client.list_tools().await.unwrap_or_default();
+    let existing_map: std::collections::HashMap<String, agent::client::ToolDef> =
+        existing.into_iter().map(|t| (t.name.clone(), t)).collect();
+
+    let mut registered = Vec::new();
+    for schema in schemas {
+        let name        = schema["name"].as_str().unwrap_or("").to_string();
+        let description = schema["description"].as_str().unwrap_or("").to_string();
+        if let Some(t) = existing_map.get(&name) {
+            registered.push(t.clone());
+            continue;
+        }
+        let stub = bps(&name, &description, &schema["parameters"]);
+        let req = CreateToolRequest {
+            source_code: stub,
+            source_type: "python".to_string(),
+            json_schema: Some(schema),
+            tags: vec!["cade".to_string()],
+        };
+        match client.create_tool(req).await {
+            Ok(t) => registered.push(t),
+            Err(e) => tracing::warn!("register filtered tool '{name}': {e}"),
+        }
+    }
+    Ok(registered)
 }
 
 #[tokio::main]
@@ -393,6 +455,8 @@ async fn main() -> Result<()> {
         }
     };
 
+    let tool_filter: Option<Vec<String>> = args.tool_filter();
+
     let agent = if args.new_agent {
         let a = client
             .create_agent(make_req(
@@ -401,7 +465,7 @@ async fn main() -> Result<()> {
             ))
             .await
             .context("create agent")?;
-        register_and_attach(&client, &a.id, toolset).await;
+        register_and_attach_filtered(&client, &a.id, toolset, tool_filter.as_deref()).await;
         seed_default_memory(&client, &a.id).await;
         session
             .set_agent(a.id.clone(), Some(a.name.clone()))
@@ -438,7 +502,7 @@ async fn main() -> Result<()> {
                     .create_agent(make_req(default_model.clone(), "CADE coding agent"))
                     .await
                     .context("create agent")?;
-                register_and_attach(&client, &a.id, toolset).await;
+                register_and_attach_filtered(&client, &a.id, toolset, tool_filter.as_deref()).await;
                 seed_default_memory(&client, &a.id).await;
                 session.set_agent(a.id.clone(), Some(a.name.clone()))?;
                 settings.set_last_agent(&a.id)?;
@@ -454,7 +518,7 @@ async fn main() -> Result<()> {
             ))
             .await
             .context("create agent")?;
-        register_and_attach(&client, &a.id, toolset).await;
+        register_and_attach_filtered(&client, &a.id, toolset, tool_filter.as_deref()).await;
         seed_default_memory(&client, &a.id).await;
         session.set_agent(a.id.clone(), Some(a.name.clone()))?;
         settings.set_last_agent(&a.id)?;
@@ -577,6 +641,28 @@ async fn main() -> Result<()> {
     // Expose AGENT_ID to all child processes (bash tool, hooks, etc.)
     std::env::set_var("AGENT_ID", &agent.id);
 
+    // --unlink: detach all tools from agent, then continue
+    if args.unlink {
+        match client.detach_agent_tools(&agent.id).await {
+            Ok(n) => println!("✓ Detached {n} tool(s) from agent"),
+            Err(e) => eprintln!("Warning: detach failed: {e}"),
+        }
+    }
+
+    // --link: (re-)attach native + MCP tools to agent, then continue
+    if args.link {
+        register_and_attach(&client, &agent.id, toolset).await;
+        if !mcp.is_empty() {
+            use agent::tools::register_mcp_tools;
+            let mcp_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas())
+                .await.unwrap_or_default().into_iter().map(|t| t.id).collect();
+            if !mcp_ids.is_empty() {
+                let _ = client.attach_agent_tools(&agent.id, &mcp_ids).await;
+            }
+        }
+        println!("✓ Tools linked to agent");
+    }
+
     // --rename <new-name>: rename the resolved agent and exit (no REPL)
     if let Some(new_name) = &args.rename {
         let new_name = new_name.trim();
@@ -629,15 +715,28 @@ async fn main() -> Result<()> {
     };
 
     if let Some(prompt) = headless_prompt {
-        let result = cli::headless::run_headless(&client, &agent.id, &prompt, &permissions, &mcp).await;
         let fmt = args.effective_output_format();
+
+        if fmt == "stream-json" {
+            cli::headless::run_headless_stream_json(
+                &client, &agent.id, &default_model, &prompt, &permissions, &mcp
+            ).await;
+            std::process::exit(0);
+        }
+
+        let result = cli::headless::run_headless(&client, &agent.id, &prompt, &permissions, &mcp).await;
         match result {
-            Ok(output) => {
+            Ok((output, stats)) => {
                 if fmt == "json" {
-                    println!(
-                        "{}",
-                        serde_json::json!({ "response": output, "agent_id": agent.id })
-                    );
+                    println!("{}", serde_json::json!({
+                        "type":        "result",
+                        "subtype":     "success",
+                        "is_error":    false,
+                        "duration_ms": stats.duration_ms as u64,
+                        "num_turns":   stats.turn_count,
+                        "result":      output,
+                        "agent_id":    agent.id,
+                    }));
                 } else {
                     println!("{output}");
                 }
@@ -645,7 +744,13 @@ async fn main() -> Result<()> {
             }
             Err(e) => {
                 if fmt == "json" {
-                    eprintln!("{}", serde_json::json!({ "error": e.to_string() }));
+                    eprintln!("{}", serde_json::json!({
+                        "type":    "result",
+                        "subtype": "error",
+                        "is_error": true,
+                        "error":   e.to_string(),
+                        "agent_id": agent.id,
+                    }));
                 } else {
                     eprintln!("Error: {e}");
                 }
@@ -663,6 +768,15 @@ async fn main() -> Result<()> {
         println!("Mode    : {}", permissions.mode());
         println!("CWD     : {}", cwd.display());
         println!("Skills  : {}", loaded_skills.len());
+        // Show attached tools
+        match client.get_agent_tools(&agent.id).await {
+            Ok(tools) if !tools.is_empty() => {
+                let names: Vec<&str> = tools.iter().map(|(_, n)| n.as_str()).collect();
+                println!("Tools   : {} ({})", tools.len(), names.join(", "));
+            }
+            Ok(_) => println!("Tools   : 0 (none attached — use --link or /link)"),
+            Err(_) => {}
+        }
         return Ok(());
     }
 

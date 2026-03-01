@@ -312,7 +312,6 @@ impl CadeClient {
     // ── Agents ────────────────────────────────────────────────────────────────
 
     /// Attach a list of tool IDs to an agent on the server.
-    /// Calls PATCH /v1/agents/:id/tools for each tool.
     pub async fn attach_agent_tools(&self, agent_id: &str, tool_ids: &[String]) -> Result<()> {
         let resp = self.client
             .post(self.url(&format!("/agents/{agent_id}/tools")))
@@ -325,6 +324,40 @@ impl CadeClient {
             tracing::warn!("attach_agent_tools {status} — continuing without explicit attachment");
         }
         Ok(())
+    }
+
+    /// Detach ALL tools from an agent.
+    pub async fn detach_agent_tools(&self, agent_id: &str) -> Result<usize> {
+        let resp = self.client
+            .delete(self.url(&format!("/agents/{agent_id}/tools")))
+            .header(self.auth().0, self.auth().1)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            tracing::warn!("detach_agent_tools {status}");
+            return Ok(0);
+        }
+        let body: serde_json::Value = resp.json().await?;
+        Ok(body["detached"].as_u64().unwrap_or(0) as usize)
+    }
+
+    /// List tools currently attached to an agent. Returns `[(id, name)]`.
+    pub async fn get_agent_tools(&self, agent_id: &str) -> Result<Vec<(String, String)>> {
+        let resp = self.client
+            .get(self.url(&format!("/agents/{agent_id}/tools")))
+            .header(self.auth().0, self.auth().1)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            bail!("get_agent_tools failed {}", resp.status());
+        }
+        let list: Vec<serde_json::Value> = resp.json().await?;
+        Ok(list.into_iter().filter_map(|v| {
+            let id   = v["id"].as_str()?.to_string();
+            let name = v["name"].as_str()?.to_string();
+            Some((id, name))
+        }).collect())
     }
 
     /// Switch the model for an existing agent. Returns the new model string.

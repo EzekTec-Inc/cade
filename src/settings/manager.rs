@@ -282,6 +282,13 @@ impl SettingsManager {
     pub fn global(&self) -> &GlobalSettings { &self.global }
     pub fn local(&self) -> &LocalSettings { &self.local }
 
+    /// Remove the API key from global settings and persist.
+    /// Used by `/logout` to clear stored credentials.
+    pub fn clear_api_key(&mut self) {
+        self.global.env.api_key = None;
+        let _ = Self::save_json(&self.global_path, &self.global);
+    }
+
     pub fn permission_settings(&self) -> &PermissionSettings {
         &self.global.permissions
     }

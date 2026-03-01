@@ -310,6 +310,30 @@ pub async fn attach_tools(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// GET /v1/agents/:id/tools — list tools attached to an agent
+pub async fn get_agent_tools(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let tools = sqlite::get_agent_tools_with_names(&state.db, &agent_id)
+        .map_err(|e| server_err(e.to_string()))?;
+    let list: Vec<Value> = tools
+        .into_iter()
+        .map(|(id, name)| json!({ "id": id, "name": name }))
+        .collect();
+    Ok(Json(json!(list)))
+}
+
+/// DELETE /v1/agents/:id/tools — detach all tools from an agent
+pub async fn detach_tools(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let n = sqlite::detach_all_tools_from_agent(&state.db, &agent_id)
+        .map_err(|e| server_err(e.to_string()))?;
+    Ok(Json(json!({ "detached": n })))
+}
+
 fn server_err(msg: String) -> (StatusCode, Json<Value>) {
     tracing::error!("500 Internal Server Error: {msg}");
     (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": msg})))
