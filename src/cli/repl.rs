@@ -2646,8 +2646,49 @@ impl Repl {
             .position(|(_, _, id, _, _)| *id == current)
             .unwrap_or(0);
 
-        // ── Draw helper ───────────────────────────────────────────────────────
-        let draw = |stdout: &mut io::Stdout, sel: usize| -> Result<()> {
+        // ── Build flat display-item list ──────────────────────────────────────
+        // Each item is either a provider group header or a model row (index into `models`).
+        // This lets us scroll a single flat list while keeping group headers contiguous.
+        #[derive(Clone)]
+        enum DisplayItem { Header(String, bool), ModelRow(usize) }
+
+        let display_items: Vec<DisplayItem> = {
+            let mut items = Vec::new();
+            let mut last_p = String::new();
+            for (i, (provider, _, _, _, dynamic)) in models.iter().enumerate() {
+                if *provider != last_p {
+                    items.push(DisplayItem::Header(provider.clone(), *dynamic));
+                    last_p = provider.clone();
+                }
+                items.push(DisplayItem::ModelRow(i));
+            }
+            items
+        };
+        let disp_total = display_items.len();
+
+        // Find the display-item index of a model by its models[] index
+        let disp_idx_of = |model_idx: usize| -> usize {
+            display_items.iter().position(|d| matches!(d, DisplayItem::ModelRow(i) if *i == model_idx))
+                .unwrap_or(0)
+        };
+
+        // ── Viewport ──────────────────────────────────────────────────────────
+        // Fixed lines consumed by UI chrome: blank + header-row + blank + scroll-hint + blank-footer
+        const CHROME: usize = 5;
+        let term_h    = terminal::size().map(|(_, r)| r as usize).unwrap_or(24);
+        let view_size = term_h.saturating_sub(CHROME).max(3);
+        let mut view_start: usize = 0; // first display_items index visible
+
+        // Ensure the cursor model is always visible
+        let ensure_visible = |sel: usize, vs: &mut usize| {
+            let di = display_items.iter().position(|d| matches!(d, DisplayItem::ModelRow(i) if *i == sel)).unwrap_or(0);
+            if di < *vs { *vs = di; }
+            if di >= *vs + view_size { *vs = di + 1 - view_size; }
+        };
+        ensure_visible(selected, &mut view_start);
+
+        // ── Draw helper (viewport-aware) ──────────────────────────────────────
+        let draw = |stdout: &mut io::Stdout, sel: usize, vs: usize| -> Result<()> {
             execute!(stdout,
                 cursor::MoveToColumn(0),
                 terminal::Clear(terminal::ClearType::FromCursorDown),
@@ -2655,83 +2696,88 @@ impl Repl {
                 SetForegroundColor(Color::Cyan), Print("  Select model  "),
                 ResetColor,
                 SetForegroundColor(Color::DarkGrey),
-                Print("↑↓ / j/k navigate  Enter select  Esc cancel\r\n"),
+                Print(format!("↑↓/jk navigate  Enter select  Esc cancel  [{}/{}]\r\n\r\n",
+                    sel + 1, total)),
                 ResetColor,
-                Print("\r\n"),
             )?;
 
-            let mut last_provider = String::new();
-            for (i, (provider, name, id, toolset, dynamic)) in models.iter().enumerate() {
-                // Provider group header
-                if *provider != last_provider {
-                    if provider == "__custom__" {
-                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                            Print("  ──────────────────────────────────────\r\n"), ResetColor)?;
-                    } else {
-                        // For dynamic providers: Ollama = "(local)", cloud APIs = "(live)"
-                        let suffix = if *dynamic {
-                            if provider == "ollama" { " (local)" } else { " (live)" }
-                        } else { "" };
-                        execute!(stdout, SetForegroundColor(Color::Yellow),
-                            Print(format!("  {}{}\r\n", provider.to_uppercase(), suffix)),
-                            ResetColor)?;
+            let window = display_items.iter().skip(vs).take(view_size);
+            for item in window {
+                match item {
+                    DisplayItem::Header(provider, dynamic) => {
+                        if provider == "__custom__" {
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("  ──────────────────────────────────────\r\n"), ResetColor)?;
+                        } else {
+                            let suffix = if *dynamic {
+                                if provider == "ollama" { " (local)" } else { " (live)" }
+                            } else { "" };
+                            execute!(stdout, SetForegroundColor(Color::Yellow),
+                                Print(format!("  {}{}\r\n", provider.to_uppercase(), suffix)),
+                                ResetColor)?;
+                        }
                     }
-                    last_provider = provider.clone();
-                }
+                    DisplayItem::ModelRow(i) => {
+                        let (provider, name, id, toolset, _) = &models[*i];
+                        let is_current = !id.is_empty() && *id == current;
+                        let is_sel     = *i == sel;
+                        let arrow      = if is_sel { "  ▶ " } else { "    " };
 
-                let is_current = !id.is_empty() && *id == current;
-                let is_sel     = i == sel;
-                let arrow      = if is_sel { "  ▶ " } else { "    " };
-
-                if provider == "__custom__" {
-                    // Special "enter custom" entry
-                    execute!(stdout,
-                        SetForegroundColor(if is_sel { Color::Cyan } else { Color::DarkGrey }),
-                        Print(arrow),
-                        Print(format!("{name}\r\n")),
-                        ResetColor,
-                    )?;
-                } else {
-                    execute!(stdout,
-                        SetForegroundColor(if is_sel { Color::Green } else { Color::DarkGrey }),
-                        Print(arrow),
-                        SetForegroundColor(if is_sel { Color::White } else { Color::DarkGrey }),
-                        Print(format!("{:<30}", name)),
-                        SetForegroundColor(Color::DarkGrey),
-                        Print(if toolset.is_empty() { String::new() } else { format!("[{toolset}]") }),
-                        ResetColor,
-                    )?;
-                    if is_current {
-                        execute!(stdout, SetForegroundColor(Color::Cyan),
-                            Print(" ← current"), ResetColor)?;
+                        if provider == "__custom__" {
+                            execute!(stdout,
+                                SetForegroundColor(if is_sel { Color::Cyan } else { Color::DarkGrey }),
+                                Print(arrow),
+                                Print(format!("{name}\r\n")),
+                                ResetColor,
+                            )?;
+                        } else {
+                            // Truncate display name to fit terminal width (leave room for arrow + toolset + marker)
+                            let max_name = term_h.min(40);
+                            let display_name = if name.len() > max_name {
+                                format!("{}…", &name[..max_name.saturating_sub(1)])
+                            } else {
+                                format!("{:<width$}", name, width = max_name)
+                            };
+                            execute!(stdout,
+                                SetForegroundColor(if is_sel { Color::Green } else { Color::DarkGrey }),
+                                Print(arrow),
+                                SetForegroundColor(if is_sel { Color::White } else { Color::DarkGrey }),
+                                Print(&display_name),
+                                SetForegroundColor(Color::DarkGrey),
+                                Print(if toolset.is_empty() { String::new() } else { format!(" [{toolset}]") }),
+                                ResetColor,
+                            )?;
+                            if is_current {
+                                execute!(stdout, SetForegroundColor(Color::Cyan),
+                                    Print(" ← current"), ResetColor)?;
+                            }
+                            execute!(stdout, Print("\r\n"))?;
+                        }
                     }
-                    execute!(stdout, Print("\r\n"))?;
                 }
             }
-            execute!(stdout, Print("\r\n"))?;
+
+            // Scroll indicator
+            if disp_total > view_size {
+                let pct = (vs * 100) / disp_total.saturating_sub(view_size).max(1);
+                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                    Print(format!("  … {pct}% ({} more not shown)\r\n",
+                        disp_total.saturating_sub(vs + view_size))),
+                    ResetColor)?;
+            } else {
+                execute!(stdout, Print("\r\n"))?;
+            }
             stdout.flush()?;
             Ok(())
         };
 
-        // ── Count lines drawn so cursor can be repositioned on redraw ─────────
-        fn count_draw_lines(models: &[(String, String, String, String, bool)]) -> u16 {
-            let mut lines: u16 = 4; // blank + header + blank + blank-footer
-            let mut last = String::new();
-            for (provider, ..) in models {
-                if *provider != last {
-                    lines += 1; // provider header or divider
-                    last = provider.clone();
-                }
-                lines += 1; // model row
-            }
-            lines
-        }
-        let draw_lines = count_draw_lines(&models);
+        // draw_lines is now constant = CHROME + min(disp_total, view_size)
+        let draw_lines = (CHROME + view_size.min(disp_total)) as u16;
 
         // ── Interactive loop ──────────────────────────────────────────────────
         terminal::enable_raw_mode()?;
         execute!(stdout, cursor::Hide)?;
-        draw(stdout, selected)?;
+        draw(stdout, selected, view_start)?;
 
         let result = loop {
             if let Ok(Event::Key(key)) = event::read() {
@@ -2773,13 +2819,27 @@ impl Repl {
 
                     (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
                         selected = if selected == 0 { total - 1 } else { selected - 1 };
+                        ensure_visible(selected, &mut view_start);
                         execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
-                        draw(stdout, selected)?;
+                        draw(stdout, selected, view_start)?;
                     }
                     (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
                         selected = (selected + 1) % total;
+                        ensure_visible(selected, &mut view_start);
                         execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
-                        draw(stdout, selected)?;
+                        draw(stdout, selected, view_start)?;
+                    }
+                    (KeyCode::PageDown, _) => {
+                        selected = (selected + view_size).min(total - 1);
+                        ensure_visible(selected, &mut view_start);
+                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
+                        draw(stdout, selected, view_start)?;
+                    }
+                    (KeyCode::PageUp, _) => {
+                        selected = selected.saturating_sub(view_size);
+                        ensure_visible(selected, &mut view_start);
+                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
+                        draw(stdout, selected, view_start)?;
                     }
                     _ => {}
                 }
