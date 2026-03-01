@@ -17,6 +17,16 @@ impl ScreenCapture {
         monitor_index: Option<usize>,
         window_title: Option<&str>,
     ) -> Result<String> {
+        let (b64, _, _) = self.capture_with_dimensions(monitor_index, window_title).await?;
+        Ok(b64)
+    }
+
+    /// Like `capture` but also returns (width, height) of the saved image.
+    pub async fn capture_with_dimensions(
+        &self,
+        monitor_index: Option<usize>,
+        window_title: Option<&str>,
+    ) -> Result<(String, u32, u32)> {
         let mut image = if let Some(title) = window_title {
             let windows = xcap::Window::all().context("list windows")?;
             let window = windows
@@ -45,12 +55,13 @@ impl ScreenCapture {
             );
         }
 
+        let (w, h) = (image.width(), image.height());
         let mut bytes: Vec<u8> = Vec::new();
         image
             .write_to(&mut Cursor::new(&mut bytes), xcap::image::ImageFormat::Png)
             .context("encode PNG")?;
 
-        Ok(base64::prelude::BASE64_STANDARD.encode(bytes))
+        Ok((base64::prelude::BASE64_STANDARD.encode(bytes), w, h))
     }
 
     /// List all visible window titles

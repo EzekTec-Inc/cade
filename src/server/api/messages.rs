@@ -20,6 +20,12 @@ use crate::server::{
 const HISTORY_LIMIT: usize = 200;
 /// Max output tokens per LLM response. Claude 3.7/4.x and GPT-4.1 support 16k+.
 const MAX_TOKENS: u32 = 16384;
+/// Cap on a single tool-result content string (chars). ~8k tokens.
+/// Prevents huge outputs (screenshots, logs) from blowing the context window.
+const TOOL_RESULT_MAX_CHARS: usize = 32_768;
+/// Total character budget for all messages sent to the LLM (~150k tokens, leaving 50k headroom).
+/// Oldest non-system messages are dropped when the budget is exceeded.
+const CONTEXT_CHAR_BUDGET: usize = 600_000;
 
 // ── Message history sanitizer ─────────────────────────────────────────────────
 //
@@ -159,6 +165,17 @@ async fn build_context(
         messages = std::iter::once(system_msg).chain(sanitized).collect();
     }
 
+    // Character-budget trimming: drop oldest non-system messages until total
+    // content is under CONTEXT_CHAR_BUDGET (~150k tokens).
+    // Always keeps the system prompt and the last user+assistant turn (≥3 msgs).
+    let total_chars = |msgs: &[LlmMessage]| -> usize {
+        msgs.iter().map(|m| m.content.len()).sum()
+    };
+    while total_chars(&messages) > CONTEXT_CHAR_BUDGET && messages.len() > 3 {
+        // messages[0] is always the system prompt — remove messages[1]
+        messages.remove(1);
+    }
+
     // Tool schemas — use agent-specific tools if wired, else all tools
     let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, agent_id)
         .unwrap_or_default();
@@ -179,12 +196,27 @@ async fn build_context(
 /// Convert a DB MessageRow to one or more LlmMessages.
 fn db_row_to_llm(row: &MessageRow) -> Vec<LlmMessage> {
     match row.role.as_str() {
-        "tool" => vec![LlmMessage {
-            role: "tool".to_string(),
-            content: row.content["content"].as_str().unwrap_or("").to_string(),
-            tool_call_id: row.content["tool_call_id"].as_str().map(String::from),
-            tool_calls: None,
-        }],
+        "tool" => {
+            let raw = row.content["content"].as_str().unwrap_or("");
+            // Truncate very large tool results (e.g. raw base64 images, enormous logs)
+            // to prevent context window overflows.
+            let content = if raw.len() > TOOL_RESULT_MAX_CHARS {
+                format!(
+                    "{}\n[... output truncated: {} total chars, showing first {}]",
+                    &raw[..TOOL_RESULT_MAX_CHARS],
+                    raw.len(),
+                    TOOL_RESULT_MAX_CHARS
+                )
+            } else {
+                raw.to_string()
+            };
+            vec![LlmMessage {
+                role: "tool".to_string(),
+                content,
+                tool_call_id: row.content["tool_call_id"].as_str().map(String::from),
+                tool_calls: None,
+            }]
+        }
         "assistant" => {
             // A single DB row may have both text content and tool_calls
             let text = row.content["content"].as_str().unwrap_or("").to_string();

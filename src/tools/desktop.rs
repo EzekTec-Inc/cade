@@ -16,22 +16,62 @@ pub struct DesktopCaptureTool;
 
 impl DesktopCaptureTool {
     pub async fn run(args: &Value) -> Result<String> {
-        let monitor = args["monitor"].as_u64().map(|n| n as usize);
-        let window = args["window_title"].as_str();
+        use base64::Engine;
+        use std::io::Write;
+
+        let monitor     = args["monitor"].as_u64().map(|n| n as usize);
+        let window      = args["window_title"].as_str();
+        let save_path   = args["save_path"].as_str();
 
         let capture = ScreenCapture::new();
-        let b64 = capture.capture(monitor, window).await?;
-        // Return as a data-URI the model can reason over
-        Ok(format!("data:image/png;base64,{b64}"))
+        let (b64, width, height) = capture.capture_with_dimensions(monitor, window).await?;
+
+        // Decode base64 → PNG bytes
+        let png_bytes = base64::prelude::BASE64_STANDARD
+            .decode(&b64)
+            .map_err(|e| anyhow::anyhow!("base64 decode: {e}"))?;
+
+        // Resolve save path: explicit arg > ~/Pictures/cade_screenshot_<ts>.png > /tmp/
+        let dest = if let Some(p) = save_path {
+            // Expand ~ manually
+            if p.starts_with("~/") {
+                let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+                home.join(&p[2..])
+            } else {
+                std::path::PathBuf::from(p)
+            }
+        } else {
+            let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
+            let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
+            let dir  = home.join("Pictures");
+            let _    = std::fs::create_dir_all(&dir);
+            dir.join(format!("cade_screenshot_{ts}.png"))
+        };
+
+        // Create parent directory if needed
+        if let Some(parent) = dest.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+
+        let mut f = std::fs::File::create(&dest)
+            .map_err(|e| anyhow::anyhow!("Cannot write to {}: {e}", dest.display()))?;
+        f.write_all(&png_bytes)?;
+
+        let kb = png_bytes.len() / 1024;
+        Ok(format!(
+            "Screenshot saved: {} ({}×{} px, {}KB)",
+            dest.display(), width, height, kb
+        ))
     }
 
     pub fn schema() -> Value {
         serde_json::json!({
             "name": "desktop_screenshot",
-            "description": "Capture a screenshot of the full screen or a specific window. Returns a base64-encoded PNG. Useful for visual debugging, UI verification, or understanding the current desktop state.",
+            "description": "Capture a screenshot of the full screen or a specific window and save it to disk. Returns the saved file path and image dimensions. Use save_path to control the destination (supports ~/... expansion).",
             "parameters": {
                 "type": "object",
                 "properties": {
+                    "save_path":    { "type": "string",  "description": "Where to save the PNG, e.g. '~/Pictures/shot.png'. Default: ~/Pictures/cade_screenshot_<timestamp>.png" },
                     "monitor":      { "type": "integer", "description": "Monitor index (0-based, default 0)" },
                     "window_title": { "type": "string",  "description": "Capture a specific window by exact title (optional)" }
                 },
