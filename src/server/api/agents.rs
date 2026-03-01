@@ -12,10 +12,12 @@ use crate::server::{
     storage::sqlite::{self, AgentRow},
 };
 
-const CADE_SYSTEM_PROMPT: &str = "You are CADE, a coding AI assistant with desktop extensions. \
-You have access to tools for reading/writing files, running shell commands, searching code, \
-and controlling the desktop. Work step-by-step, always verify your changes with the available tools. \
-Be concise and accurate.";
+/// Minimal fallback system prompt used only when the client doesn't supply one
+/// (e.g. API calls outside the CLI). The CLI always sends BASE_SYSTEM_PROMPT.
+const CADE_SYSTEM_PROMPT: &str = "\
+You are CADE (Coding AI assistant with Desktop Extensions), a stateful AI coding agent. \
+Use your tools to explore, edit, and run code on the user's machine. \
+Be concise, accurate, and verify your changes after making them.";
 
 // ── Request / Response DTOs ───────────────────────────────────────────────────
 

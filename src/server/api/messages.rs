@@ -16,8 +16,10 @@ use crate::server::{
     storage::sqlite::{self, MessageRow},
 };
 
-const HISTORY_LIMIT: usize = 40;
-const MAX_TOKENS: u32 = 8192;
+/// Number of DB message rows to load per turn (~100 full tool-call cycles at 200 rows).
+const HISTORY_LIMIT: usize = 200;
+/// Max output tokens per LLM response. Claude 3.7/4.x and GPT-4.1 support 16k+.
+const MAX_TOKENS: u32 = 16384;
 
 // ── Message history sanitizer ─────────────────────────────────────────────────
 //

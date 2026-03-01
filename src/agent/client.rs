@@ -29,6 +29,8 @@ pub struct CreateAgentRequest {
     pub model: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub memory_blocks: Vec<MemoryBlock>,
     #[serde(skip_serializing_if = "Vec::is_empty")]

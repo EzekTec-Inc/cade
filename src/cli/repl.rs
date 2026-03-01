@@ -131,6 +131,9 @@ pub struct Repl {
     current_toolset: Arc<Mutex<Toolset>>,
     /// Hook engine — fires user-defined scripts at lifecycle events
     hooks: crate::hooks::HookEngine,
+    /// `true` until the first real user message is sent this session.
+    /// Used to inject the environment context block (OS, cwd, git) on turn 1.
+    first_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Repl {
@@ -162,6 +165,7 @@ impl Repl {
             background_results: Arc::new(Mutex::new(vec![])),
             current_toolset: Arc::new(Mutex::new(toolset)),
             hooks,
+            first_turn: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         }
     }
 
@@ -430,6 +434,7 @@ impl Repl {
                             name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
                             model,
                             description: Some("CADE coding agent".to_string()),
+                            system_prompt: None,
                             memory_blocks: vec![],
                             tool_ids: vec![],
                         };
@@ -581,6 +586,7 @@ impl Repl {
                                 name: Some("init-explore".to_string()),
                                 model: main_model,
                                 description: Some("Ephemeral init analysis".to_string()),
+                                system_prompt: Some("You are an expert code explorer. Be concise and precise.".to_string()),
                                 memory_blocks: vec![],
                                 tool_ids: vec![],
                             };
@@ -1397,9 +1403,94 @@ impl Repl {
         Ok(())
     }
 
+    /// Build environment context injected on the first user turn of each session.
+    fn build_env_context(&self) -> String {
+        use std::process::Command;
+
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M %Z");
+
+        // OS / kernel
+        let os_info = {
+            let uname = Command::new("uname").arg("-sr").output()
+                .ok()
+                .and_then(|o| String::from_utf8(o.stdout).ok())
+                .unwrap_or_default();
+            // Try /etc/os-release for distro name
+            let distro = std::fs::read_to_string("/etc/os-release")
+                .unwrap_or_default()
+                .lines()
+                .find(|l| l.starts_with("PRETTY_NAME="))
+                .map(|l| l.trim_start_matches("PRETTY_NAME=").trim_matches('"').to_string())
+                .unwrap_or_default();
+            if distro.is_empty() {
+                uname.trim().to_string()
+            } else {
+                format!("{} ({})", uname.trim(), distro)
+            }
+        };
+
+        // CWD
+        let cwd = self.cwd.display().to_string();
+
+        // Git info
+        let git_info = {
+            let branch = Command::new("git")
+                .args(["-C", &cwd, "rev-parse", "--abbrev-ref", "HEAD"])
+                .output()
+                .ok()
+                .and_then(|o| if o.status.success() {
+                    String::from_utf8(o.stdout).ok()
+                } else { None })
+                .map(|s| s.trim().to_string());
+
+            let status = Command::new("git")
+                .args(["-C", &cwd, "status", "--porcelain"])
+                .output()
+                .ok()
+                .and_then(|o| if o.status.success() {
+                    String::from_utf8(o.stdout).ok()
+                } else { None });
+
+            match (branch, status) {
+                (Some(b), Some(s)) if !b.is_empty() => {
+                    let lines: Vec<&str> = s.lines().collect();
+                    if lines.is_empty() {
+                        format!("branch={b}, clean")
+                    } else {
+                        format!("branch={b}, {} uncommitted change{}", lines.len(),
+                            if lines.len() == 1 { "" } else { "s" })
+                    }
+                }
+                _ => String::new(),
+            }
+        };
+
+        let mut parts = vec![
+            format!("Date:   {now}"),
+            format!("OS:     {os_info}"),
+            format!("CWD:    {cwd}"),
+        ];
+        if !git_info.is_empty() {
+            parts.push(format!("Git:    {git_info}"));
+        }
+        format!("<environment>\n{}\n</environment>", parts.join("\n"))
+    }
+
     /// Send a user message and drive the tool-call loop with live SSE streaming.
     async fn agent_turn(&self, stdout: &mut io::Stdout, input: &str) -> Result<()> {
-        let messages = self.stream_turn(stdout, input, false, "", "").await?;
+        use std::sync::atomic::Ordering;
+
+        // On the first real turn, prefix with environment context
+        let effective_input = if self.first_turn.compare_exchange(
+            true, false, Ordering::SeqCst, Ordering::SeqCst
+        ).is_ok() {
+            let env = self.build_env_context();
+            format!("{env}\n\n{input}")
+        } else {
+            input.to_string()
+        };
+
+        let messages = self.stream_turn(stdout, &effective_input, false, "", "").await?;
         self.dispatch_tool_calls(stdout, messages, input).await
     }
 
@@ -1575,23 +1666,61 @@ impl Repl {
             ResetColor,
         )?;
 
-        // Show compact args preview
-        if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
-            let preview: String = cmd.chars().take(80).collect();
-            let ellipsis = if cmd.len() > 80 { "…" } else { "" };
-            execute!(
-                stdout,
-                SetForegroundColor(Color::DarkGrey),
-                Print(format!("({preview}{ellipsis})")),
-                ResetColor
-            )?;
-        } else if let Some(path) = args.get("path").and_then(|v| v.as_str()) {
-            execute!(
-                stdout,
-                SetForegroundColor(Color::DarkGrey),
-                Print(format!("({path})")),
-                ResetColor
-            )?;
+        // Show compact args preview — key arg depends on tool type
+        let preview: Option<String> = {
+            fn short(s: &str, n: usize) -> String {
+                let s = s.trim();
+                if s.chars().count() <= n {
+                    s.to_string()
+                } else {
+                    format!("{}…", s.chars().take(n).collect::<String>())
+                }
+            }
+            let a = args;
+            // Priority: check args in tool-specific order
+            if let Some(cmd) = a["command"].as_str() {
+                // bash / shell_command
+                Some(format!("$ {}", short(cmd, 80)))
+            } else if let Some(fp) = a["file_path"].as_str().or(a["path"].as_str()) {
+                // read / write / edit / glob
+                let extra = if let Some(old) = a["old_string"].as_str() {
+                    format!("  \"{}\"", short(old, 40))
+                } else if let Some(content) = a["content"].as_str() {
+                    format!("  ({} chars)", content.len())
+                } else {
+                    String::new()
+                };
+                Some(format!("{fp}{extra}"))
+            } else if let Some(pat) = a["pattern"].as_str() {
+                // grep / glob
+                let in_path = a["path"].as_str().unwrap_or("");
+                if in_path.is_empty() {
+                    Some(format!("\"{}\"", short(pat, 60)))
+                } else {
+                    Some(format!("\"{}\" in {in_path}", short(pat, 40)))
+                }
+            } else if let Some(label) = a["label"].as_str() {
+                // update_memory
+                let op = a["operation"].as_str().unwrap_or("set");
+                Some(format!("[{label}] ({op})"))
+            } else if let Some(id) = a["id"].as_str() {
+                // load_skill / install_skill
+                Some(id.to_string())
+            } else if let Some(task) = a["task"].as_str().or(a["prompt"].as_str()) {
+                // run_subagent
+                Some(format!("\"{}\"", short(task, 60)))
+            } else if let Some(patch) = a["patch"].as_str() {
+                // apply_patch
+                Some(format!("\"{}\"", short(patch, 60)))
+            } else {
+                // Generic: first string value in the args object
+                a.as_object().and_then(|m| {
+                    m.values().find_map(|v| v.as_str()).map(|s| short(s, 60))
+                })
+            }
+        };
+        if let Some(p) = preview {
+            execute!(stdout, SetForegroundColor(Color::DarkGrey), Print(format!("  {p}")), ResetColor)?;
         }
         execute!(stdout, Print("\n"))?;
         stdout.flush()?;
@@ -2392,6 +2521,7 @@ impl Repl {
                         name: Some(format!("subagent-{}-{}", subagent_type_c, task_id_c)),
                         model,
                         description: Some(format!("Ephemeral subagent: {}", subagent_type_c)),
+                        system_prompt: None,
                         memory_blocks: vec![],
                         tool_ids: vec![],
                     };
