@@ -46,6 +46,17 @@ impl PermissionRule {
     ///
     /// `tool_name` — the tool being invoked (e.g. "bash")
     /// `tool_arg`  — the first meaningful string argument (command / path)
+    /// Canonical tool name (lowercase).
+    pub fn tool(&self) -> &str { &self.tool }
+
+    /// Display string for the argument pattern, e.g. `(cargo test)` or empty.
+    pub fn arg_display(&self) -> String {
+        match &self.pattern {
+            Some(p) => format!("({p})"),
+            None => String::new(),
+        }
+    }
+
     pub fn matches(&self, tool_name: &str, tool_arg: Option<&str>) -> bool {
         if self.tool != tool_name.to_lowercase() {
             return false;

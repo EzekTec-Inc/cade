@@ -1024,19 +1024,48 @@ impl Repl {
                     }
 
                     SlashCmd::Permissions => {
-                        let mode = self.permissions.mode();
+                        let mode  = self.permissions.mode();
                         let allow = self.permissions.allow_rules();
                         let deny  = self.permissions.deny_rules();
-                        println!("\n  Mode: {}\n", mode);
+
+                        // Mode header — icon + label in cyan, hint in grey
+                        let (icon, label, _) = mode_display(mode);
+                        let mode_hint = match mode {
+                            crate::permissions::PermissionMode::Default           => "ask before each tool call",
+                            crate::permissions::PermissionMode::AcceptEdits       => "file edits auto-approved; Bash still prompts",
+                            crate::permissions::PermissionMode::Plan              => "read-only; write operations blocked",
+                            crate::permissions::PermissionMode::BypassPermissions => "all tools auto-approved (deny rules still apply)",
+                        };
+                        execute!(stdout,
+                            Print("\n"),
+                            Print("  Mode: "),
+                            SetForegroundColor(Color::Cyan),
+                            Print(format!("{icon} {label}")),
+                            ResetColor,
+                            SetForegroundColor(Color::DarkGrey),
+                            Print(format!("  —  {mode_hint}\n\n")),
+                            ResetColor,
+                        )?;
+
+                        // Rules
                         if allow.is_empty() && deny.is_empty() {
                             execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("  No allow/deny rules active.\n"), ResetColor)?;
+                                Print("  No allow/deny rules active.\n\n"), ResetColor)?;
                         } else {
                             if !allow.is_empty() {
                                 execute!(stdout, SetForegroundColor(Color::Green),
                                     Print(format!("  Allow rules ({}):\n", allow.len())), ResetColor)?;
                                 for r in &allow {
-                                    println!("    {r}");
+                                    execute!(stdout,
+                                        Print("    "),
+                                        SetForegroundColor(Color::Cyan),
+                                        Print(format!("{:<12}", r.tool())),
+                                        ResetColor,
+                                        SetForegroundColor(Color::DarkGrey),
+                                        Print(r.arg_display()),
+                                        ResetColor,
+                                        Print("\n"),
+                                    )?;
                                 }
                                 println!();
                             }
@@ -1044,28 +1073,56 @@ impl Repl {
                                 execute!(stdout, SetForegroundColor(Color::Red),
                                     Print(format!("  Deny rules ({}):\n", deny.len())), ResetColor)?;
                                 for r in &deny {
-                                    println!("    {r}");
+                                    execute!(stdout,
+                                        Print("    "),
+                                        SetForegroundColor(Color::Cyan),
+                                        Print(format!("{:<12}", r.tool())),
+                                        ResetColor,
+                                        SetForegroundColor(Color::DarkGrey),
+                                        Print(r.arg_display()),
+                                        ResetColor,
+                                        Print("\n"),
+                                    )?;
                                 }
                                 println!();
                             }
                         }
-                        println!("  /approve-always <pattern>  · /deny-always <pattern>");
-                        println!("  e.g.  /approve-always Bash(cargo test)");
-                        println!("        /deny-always Bash(rm -rf:*)\n");
+
+                        // Usage hints with color-coded command names
+                        execute!(stdout,
+                            SetForegroundColor(Color::Green),  Print("  /approve-always"),
+                            ResetColor,                        Print(" <pattern>    "),
+                            SetForegroundColor(Color::Red),    Print("/deny-always"),
+                            ResetColor,                        Print(" <pattern>\n"),
+                            SetForegroundColor(Color::DarkGrey),
+                            Print("  Pattern:  Bash(cargo test)  ·  Read(src/**)  ·  Bash(rm -rf:*)\n\n"),
+                            ResetColor,
+                        )?;
                     }
 
                     SlashCmd::ApproveAlways(pattern) => {
                         if pattern.is_empty() {
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("  Usage: /approve-always <pattern>\n"),
-                                Print("  e.g.  /approve-always Bash(cargo test)\n"),
-                                Print("        /approve-always Read(src/**)\n"),
-                                ResetColor)?;
+                            execute!(stdout,
+                                Print("\n  "),
+                                SetForegroundColor(Color::Green), Print("/approve-always"), ResetColor,
+                                SetForegroundColor(Color::DarkGrey), Print(" <pattern>\n"), ResetColor,
+                                SetForegroundColor(Color::DarkGrey),
+                                Print("  Pattern examples:\n"),
+                                Print("    Bash(cargo test)    — exact command\n"),
+                                Print("    Read(src/**)        — path prefix\n"),
+                                Print("    Bash(git commit:*)  — command prefix\n"),
+                                Print("    Bash                — all bash calls\n\n"),
+                                ResetColor,
+                            )?;
                         } else if let Some(rule) = crate::permissions::PermissionRule::parse(&pattern) {
                             self.permissions.add_allow_rule(rule.clone());
-                            execute!(stdout, SetForegroundColor(Color::Green),
-                                Print(format!("  ✓ Added allow rule: {rule}\n")), ResetColor)?;
-                            // Offer to persist
+                            execute!(stdout,
+                                Print("\n  "),
+                                SetForegroundColor(Color::Green), Print("✓ Allow  "), ResetColor,
+                                SetForegroundColor(Color::Cyan),  Print(format!("{:<12}", rule.tool())), ResetColor,
+                                SetForegroundColor(Color::DarkGrey), Print(rule.arg_display()), ResetColor,
+                                Print("\n"),
+                            )?;
                             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                                 Print("  Save to settings.json? [y/N] "), ResetColor)?;
                             stdout.flush()?;
@@ -1079,32 +1136,45 @@ impl Repl {
                                 }
                             };
                             terminal::disable_raw_mode()?;
-                            execute!(stdout, Print(if save { "y\n" } else { "N\n" }))?;
+                            execute!(stdout, SetForegroundColor(if save { Color::Green } else { Color::DarkGrey }),
+                                Print(if save { "y\n" } else { "N\n" }), ResetColor)?;
                             if save {
                                 let mut settings = self.settings.lock().unwrap();
                                 match settings.save_allow_rule(&pattern) {
                                     Ok(_) => execute!(stdout, SetForegroundColor(Color::Green),
-                                        Print("  ✓ Saved to ~/.cade/settings.json\n"), ResetColor)?,
+                                        Print("  ✓ Saved\n"), ResetColor)?,
                                     Err(e) => self.print_error(&mut stdout, &e.to_string())?,
                                 }
                             }
+                            println!();
                             stdout.flush()?;
                         } else {
-                            self.print_error(&mut stdout, "invalid pattern")?;
+                            self.print_error(&mut stdout, &format!("invalid pattern: {pattern:?}\n  Expected: Tool  or  Tool(arg)  or  Tool(prefix:*)"))?;
                         }
                     }
 
                     SlashCmd::DenyAlways(pattern) => {
                         if pattern.is_empty() {
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("  Usage: /deny-always <pattern>\n"),
-                                Print("  e.g.  /deny-always Bash(rm -rf:*)\n"),
-                                Print("        /deny-always Bash(git push --force:*)\n"),
-                                ResetColor)?;
+                            execute!(stdout,
+                                Print("\n  "),
+                                SetForegroundColor(Color::Red), Print("/deny-always"), ResetColor,
+                                SetForegroundColor(Color::DarkGrey), Print(" <pattern>\n"), ResetColor,
+                                SetForegroundColor(Color::DarkGrey),
+                                Print("  Pattern examples:\n"),
+                                Print("    Bash(rm -rf:*)          — prefix wildcard\n"),
+                                Print("    Bash(git push --force)  — exact command\n"),
+                                Print("    Bash                    — all bash calls\n\n"),
+                                ResetColor,
+                            )?;
                         } else if let Some(rule) = crate::permissions::PermissionRule::parse(&pattern) {
                             self.permissions.add_deny_rule(rule.clone());
-                            execute!(stdout, SetForegroundColor(Color::Red),
-                                Print(format!("  ✓ Added deny rule: {rule}\n")), ResetColor)?;
+                            execute!(stdout,
+                                Print("\n  "),
+                                SetForegroundColor(Color::Red),  Print("✗ Deny   "), ResetColor,
+                                SetForegroundColor(Color::Cyan), Print(format!("{:<12}", rule.tool())), ResetColor,
+                                SetForegroundColor(Color::DarkGrey), Print(rule.arg_display()), ResetColor,
+                                Print("\n"),
+                            )?;
                             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                                 Print("  Save to settings.json? [y/N] "), ResetColor)?;
                             stdout.flush()?;
@@ -1118,61 +1188,102 @@ impl Repl {
                                 }
                             };
                             terminal::disable_raw_mode()?;
-                            execute!(stdout, Print(if save { "y\n" } else { "N\n" }))?;
+                            execute!(stdout, SetForegroundColor(if save { Color::Red } else { Color::DarkGrey }),
+                                Print(if save { "y\n" } else { "N\n" }), ResetColor)?;
                             if save {
                                 let mut settings = self.settings.lock().unwrap();
                                 match settings.save_deny_rule(&pattern) {
                                     Ok(_) => execute!(stdout, SetForegroundColor(Color::Red),
-                                        Print("  ✓ Saved to ~/.cade/settings.json\n"), ResetColor)?,
+                                        Print("  ✓ Saved\n"), ResetColor)?,
                                     Err(e) => self.print_error(&mut stdout, &e.to_string())?,
                                 }
                             }
+                            println!();
                             stdout.flush()?;
                         } else {
-                            self.print_error(&mut stdout, "invalid pattern")?;
+                            self.print_error(&mut stdout, &format!("invalid pattern: {pattern:?}\n  Expected: Tool  or  Tool(arg)  or  Tool(prefix:*)"))?;
                         }
                     }
 
                     SlashCmd::Hooks => {
-                        use crate::settings::manager::HookDef;
                         let merged = self.settings.lock().unwrap().merged_hooks();
                         if merged.is_empty() {
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("\n  No hooks configured.\n\n"),
-                                Print("  Add hooks to ~/.cade/settings.json or .cade/settings.json:\n"),
-                                Print("  {\n    \"hooks\": {\n      \"PreToolUse\": [{ \"matcher\": \"Bash\", \"hooks\": [{ \"type\": \"command\", \"command\": \"./hooks/check.sh\" }] }]\n    }\n  }\n\n"),
-                                ResetColor)?;
+                            execute!(stdout,
+                                Print("\n"),
+                                SetForegroundColor(Color::DarkGrey),
+                                Print("  No hooks configured.\n\n"),
+                                ResetColor,
+                                Print("  Configure in "),
+                                SetForegroundColor(Color::Cyan), Print("~/.cade/settings.json"), ResetColor,
+                                Print(" or "),
+                                SetForegroundColor(Color::Cyan), Print(".cade/settings.json\n\n"), ResetColor,
+                                SetForegroundColor(Color::DarkGrey),
+                                Print("  Example:\n"),
+                                Print("  {\n"),
+                                Print("    \"hooks\": {\n"),
+                                Print("      \"PreToolUse\": [{\n"),
+                                Print("        \"matcher\": \"Bash\",\n"),
+                                Print("        \"hooks\": [{ \"type\": \"command\", \"command\": \"./hooks/validate.sh\" }]\n"),
+                                Print("      }],\n"),
+                                Print("      \"Stop\": [{\n"),
+                                Print("        \"hooks\": [{ \"type\": \"command\", \"command\": \"./hooks/run-tests.sh\" }]\n"),
+                                Print("      }]\n"),
+                                Print("    }\n"),
+                                Print("  }\n\n"),
+                                Print("  Exit codes:  0=allow  1=log+continue  2=block (stderr→agent)\n\n"),
+                                ResetColor,
+                            )?;
                         } else {
-                            println!("\n  Hooks configuration\n");
-                            let show_entries = |name: &str, entries: &[crate::settings::manager::HookEntry]| {
-                                if entries.is_empty() { return; }
-                                println!("  {} ({} entr{}):", name, entries.len(),
-                                    if entries.len() == 1 { "y" } else { "ies" });
-                                for entry in entries {
-                                    let m = entry.matcher.as_deref().unwrap_or("*");
-                                    println!("    matcher: {m}");
-                                    for hook in &entry.hooks {
-                                        println!("      {hook}");
+                            execute!(stdout,
+                                Print("\n  "),
+                                SetForegroundColor(Color::Cyan), Print("Hooks"), ResetColor,
+                                Print("\n\n"),
+                            )?;
+                            let mut stdout_ref = &mut stdout;
+                            macro_rules! show_hook_section {
+                                ($name:expr, $entries:expr, $color:expr) => {
+                                    if !$entries.is_empty() {
+                                        execute!(stdout_ref,
+                                            Print("  "),
+                                            SetForegroundColor($color), Print($name), ResetColor,
+                                            SetForegroundColor(Color::DarkGrey),
+                                            Print(format!("  ({})\n", $entries.len())),
+                                            ResetColor,
+                                        )?;
+                                        for entry in $entries {
+                                            let m = entry.matcher.as_deref().unwrap_or("*");
+                                            execute!(stdout_ref,
+                                                SetForegroundColor(Color::DarkGrey),
+                                                Print(format!("    matcher: {m}\n")),
+                                                ResetColor,
+                                            )?;
+                                            for hook in &entry.hooks {
+                                                execute!(stdout_ref,
+                                                    SetForegroundColor(Color::DarkGrey),
+                                                    Print(format!("      {hook}\n")),
+                                                    ResetColor,
+                                                )?;
+                                            }
+                                        }
+                                        println!();
                                     }
-                                }
-                                println!();
-                            };
-                            show_entries("PreToolUse",          &merged.pre_tool_use);
-                            show_entries("PostToolUse",         &merged.post_tool_use);
-                            show_entries("PostToolUseFailure",  &merged.post_tool_use_failure);
-                            show_entries("PermissionRequest",   &merged.permission_request);
-                            show_entries("UserPromptSubmit",    &merged.user_prompt_submit);
-                            show_entries("Stop",                &merged.stop);
-                            show_entries("SubagentStop",        &merged.subagent_stop);
-                            show_entries("SessionStart",        &merged.session_start);
-                            show_entries("SessionEnd",          &merged.session_end);
-                            show_entries("Notification",        &merged.notification);
+                                };
+                            }
+                            show_hook_section!("PreToolUse",         &merged.pre_tool_use,          Color::Yellow);
+                            show_hook_section!("PostToolUse",        &merged.post_tool_use,         Color::Green);
+                            show_hook_section!("PostToolUseFailure", &merged.post_tool_use_failure,  Color::Red);
+                            show_hook_section!("PermissionRequest",  &merged.permission_request,    Color::Yellow);
+                            show_hook_section!("UserPromptSubmit",   &merged.user_prompt_submit,    Color::Cyan);
+                            show_hook_section!("Stop",               &merged.stop,                  Color::Cyan);
+                            show_hook_section!("SubagentStop",       &merged.subagent_stop,         Color::Cyan);
+                            show_hook_section!("SessionStart",       &merged.session_start,         Color::DarkGrey);
+                            show_hook_section!("SessionEnd",         &merged.session_end,           Color::DarkGrey);
+                            show_hook_section!("Notification",       &merged.notification,          Color::DarkGrey);
                             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                                 Print("  Config: ~/.cade/settings.json  ·  .cade/settings.json  ·  .cade/settings.local.json\n\n"),
                                 ResetColor)?;
                         }
                         stdout.flush()?;
-                        let _ = HookDef::Command { command: String::new(), timeout: 0 }; // silence unused import
                     }
 
                     SlashCmd::Feedback => {
