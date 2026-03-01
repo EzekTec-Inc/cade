@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{bare_model, CompletionRequest, CompletionResponse, LlmMessage, LlmProvider, LlmToolCall, StreamChunk};
+use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const DEFAULT_MAX_TOKENS: u32 = 8192;

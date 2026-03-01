@@ -1,7 +1,6 @@
 use anyhow::Result;
 use std::sync::Arc;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
-use tracing::Span;
 use axum::http::Request;
 
 // Bring in the server module tree from the main crate

@@ -10,12 +10,12 @@ use std::io::{self, Write};
 
 use std::sync::{Arc, Mutex};
 
-use crate::agent::{CadeClient, client::{CadeMessage, MemoryBlock}};
+use crate::agent::{CadeClient, client::CadeMessage};
 use crate::agent::session::SessionStore;
 use crate::permissions::{PermissionManager, PermissionMode};
 use crate::settings::SettingsManager;
 use crate::skills::Skill;
-use crate::subagents::{SubagentDef, SubagentTools, BackgroundResult, discover_all_subagents, find_subagent};
+use crate::subagents::{BackgroundResult, discover_all_subagents, find_subagent};
 use crate::toolsets::Toolset;
 use crate::tools::{dispatch, is_write_tool};
 
@@ -549,7 +549,7 @@ impl Repl {
                             use crate::permissions::PermissionManager;
                             use crate::cli::headless::run_headless;
 
-                            let system_prompt = explore_def.map(|d| d.system_prompt)
+                            let _system_prompt = explore_def.map(|d| d.system_prompt)
                                 .unwrap_or_else(|| "You are an expert code explorer. Be concise and precise.".to_string());
 
                             let req = crate::agent::client::CreateAgentRequest {
@@ -1390,7 +1390,7 @@ impl Repl {
     /// Interactive model picker — opens on `/model` with no argument.
     /// Returns the selected model string or None if cancelled.
     async fn interactive_model_picker(&self, stdout: &mut io::Stdout) -> Result<Option<String>> {
-        use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+        use crossterm::event::{self, Event, KeyCode};
 
         // Fetch available providers from server
         let providers = self.client.available_providers().await;
@@ -1552,7 +1552,7 @@ impl Repl {
         let def_opt  = find_subagent(&subagent_type, &all_defs).cloned();
 
         // Determine if using existing stateful agent or ephemeral
-        let use_existing_agent = agent_id_arg.is_some();
+        let _use_existing_agent = agent_id_arg.is_some();
 
         // Show progress
         execute!(stdout, SetForegroundColor(Color::DarkGrey),
@@ -1577,14 +1577,14 @@ impl Repl {
         let run_task = {
             let subagent_type_c = subagent_type.clone();
             let task_id_c = task_id.clone();
-            let prompt_preview_c = prompt_preview.clone();
+            let _prompt_preview_c = prompt_preview.clone();
             async move {
                 // Determine agent to use
                 let (sub_agent_id, ephemeral) = if let Some(existing_id) = agent_id_arg {
                     (existing_id, false)
                 } else {
                     // Create ephemeral agent
-                    let system_prompt = def_opt.as_ref()
+                    let _system_prompt = def_opt.as_ref()
                         .map(|d| d.system_prompt.clone())
                         .unwrap_or_else(|| "You are a helpful coding assistant. Complete the task and report back.".to_string());
 

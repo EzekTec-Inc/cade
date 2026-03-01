@@ -9,7 +9,7 @@ pub async fn create_tool(
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let source_code = body["source_code"].as_str().unwrap_or("").to_string();
-    let source_type = body["source_type"].as_str().unwrap_or("python").to_string();
+    let _source_type = body["source_type"].as_str().unwrap_or("python").to_string();
     let json_schema = body.get("json_schema").cloned();
     let tags: Vec<String> = body["tags"].as_array()
         .map(|arr| arr.iter().filter_map(|v| v.as_str()).map(String::from).collect())

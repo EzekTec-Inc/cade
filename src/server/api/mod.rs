@@ -5,7 +5,7 @@ pub mod tools;
 
 use axum::{
     Router,
-    routing::{delete, get, patch, post, put},
+    routing::{get, post, put},
 };
 use crate::server::state::AppState;
 

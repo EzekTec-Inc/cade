@@ -6,7 +6,7 @@ use axum::{
     Json,
 };
 use axum::response::sse::Event;
-use futures::StreamExt;
+
 use serde_json::{json, Value};
 use uuid::Uuid;
 
@@ -15,7 +15,6 @@ use crate::server::{
     state::AppState,
     storage::sqlite::{self, MessageRow},
 };
-use crate::server::storage::pending_tool_results;
 
 const HISTORY_LIMIT: usize = 40;
 const MAX_TOKENS: u32 = 8192;
@@ -392,8 +391,8 @@ pub async fn stream_message(
     };
 
     // 4. Track accumulated response for persistence
-    let mut acc_text = String::new();
-    let mut acc_tools: Vec<Value> = Vec::new();
+    let _acc_text = String::new();
+    let _acc_tools: Vec<Value> = Vec::new();
 
     // We can't mutate acc_* inside the closure directly (moved into stream),
     // so we use a channel to collect them after streaming.

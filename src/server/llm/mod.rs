@@ -10,7 +10,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio_stream::Stream;
 
-use crate::server::config::{LlmProviderKind, ServerConfig};
+use crate::server::config::ServerConfig;
 
 // ── Request / Response types ──────────────────────────────────────────────────
 
