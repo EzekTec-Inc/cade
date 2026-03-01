@@ -2118,8 +2118,17 @@ impl Repl {
                 }).unwrap_or_default()
             }
         };
-        // Show ratatui tool call box (bordered, yellow)
-        self.output.lock().unwrap().tool_call(tool_name, &preview)?;
+        // Show tool call — edit_file gets a styled diff display; everything else gets the bullet header
+        let is_edit = (tool_name == "edit_file" || tool_name == "apply_patch")
+            && args["file_path"].as_str().is_some();
+        if is_edit {
+            let fp  = args["file_path"].as_str().unwrap_or("");
+            let old = args["old_string"].as_str().unwrap_or("");
+            let new = args["new_string"].as_str().unwrap_or("");
+            self.output.lock().unwrap().tool_edit_call(tool_name, fp, old, new)?;
+        } else {
+            self.output.lock().unwrap().tool_call(tool_name, &preview)?;
+        }
 
         // Native tool intercepts (handled without going through generic dispatch)
         if tool_name == "update_memory" {
@@ -2203,22 +2212,27 @@ impl Repl {
         if result.is_error {
             self.output.lock().unwrap().tool_result(true, &truncate(&result.output, 120))?;
         } else {
-            let summary = match tool_name {
-                "write_file" | "create_file" => {
-                    format!("written ({} chars)", result.output.len())
-                }
-                "edit_file" | "apply_patch" => "edited".to_string(),
-                "delete_file" | "move_file" | "rename_file" => "done".to_string(),
+            match tool_name {
                 "bash" | "run_command" | "execute_command" => {
-                    if result.output.trim().is_empty() {
-                        "(no output)".to_string()
-                    } else {
-                        format!("{} lines", result.output.lines().count())
-                    }
+                    // Show first 5 lines of stdout as a preview
+                    self.output.lock().unwrap().tool_bash_result(&result.output)?;
                 }
-                _ => format!("{} lines", result.output.lines().count()),
-            };
-            self.output.lock().unwrap().tool_result(false, &summary)?;
+                "edit_file" | "apply_patch" => {
+                    let fp = args["file_path"].as_str().unwrap_or("file");
+                    let display = make_relative_path(fp);
+                    self.output.lock().unwrap().tool_result(false, &format!("Updated {display}"))?;
+                }
+                _ => {
+                    let summary = match tool_name {
+                        "write_file" | "create_file" => {
+                            format!("written ({} chars)", result.output.len())
+                        }
+                        "delete_file" | "move_file" | "rename_file" => "done".to_string(),
+                        _ => format!("{} lines", result.output.lines().count()),
+                    };
+                    self.output.lock().unwrap().tool_result(false, &summary)?;
+                }
+            }
         }
 
         Ok(result)
@@ -2233,38 +2247,12 @@ impl Repl {
         tool_name: &str,
         args: &serde_json::Value,
     ) -> Result<bool> {
-        // Show the tool-specific detail line first
+        // For bash: show the command being run
         if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                 Print(format!("  > {}\n", truncate(cmd, 120))), ResetColor)?;
-        } else if let Some(fp) = args.get("file_path").and_then(|v| v.as_str())
-            .or_else(|| args.get("path").and_then(|v| v.as_str())) {
-            // For edit_file: show old_string snippet as diff preview
-            if tool_name == "edit_file" || tool_name == "apply_patch" {
-                if let Some(old) = args.get("old_string").and_then(|v| v.as_str()) {
-                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                        Print(format!("  file: {fp}\n")), ResetColor)?;
-                    let preview = old.lines().take(4)
-                        .map(|l| format!("  - {}", truncate(l, 80)))
-                        .collect::<Vec<_>>().join("\n");
-                    execute!(stdout, SetForegroundColor(Color::Red),
-                        Print(format!("{preview}\n")), ResetColor)?;
-                    if let Some(new) = args.get("new_string").and_then(|v| v.as_str()) {
-                        let preview = new.lines().take(4)
-                            .map(|l| format!("  + {}", truncate(l, 80)))
-                            .collect::<Vec<_>>().join("\n");
-                        execute!(stdout, SetForegroundColor(Color::Green),
-                            Print(format!("{preview}\n")), ResetColor)?;
-                    }
-                } else {
-                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                        Print(format!("  file: {fp}\n")), ResetColor)?;
-                }
-            } else {
-                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                    Print(format!("  file: {fp}\n")), ResetColor)?;
-            }
         }
+        // For edit_file: diff already shown via tool_edit_call() before this prompt
 
         execute!(stdout, SetForegroundColor(Color::Yellow),
             Print(format!("  Allow {tool_name}? [y/N/A] ")),
@@ -3522,6 +3510,16 @@ impl Repl {
 
 fn truncate(s: &str, max: usize) -> String {
     super::truncate(s, max)
+}
+
+/// Return a display path relative to the current working directory if possible.
+fn make_relative_path(path: &str) -> String {
+    if let Ok(cwd) = std::env::current_dir() {
+        if let Ok(rel) = std::path::Path::new(path).strip_prefix(&cwd) {
+            return rel.display().to_string();
+        }
+    }
+    path.to_string()
 }
 
 /// Read a line from stdin with no echo (for API key input).
