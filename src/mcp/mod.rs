@@ -266,7 +266,27 @@ impl McpManager {
 // ── Content extraction ────────────────────────────────────────────────────────
 
 fn extract_content_text(content: &[rmcp::model::Content]) -> String {
-    content
+    // Some MCP servers emit two content items per result:
+    //   • one with audience=[Assistant]  (for the LLM)
+    //   • one with audience=[User]       (for the human UI)
+    // Joining both would duplicate the output. We keep only:
+    //   • items whose audience includes Assistant, OR
+    //   • items with no audience annotation (generic / unspecified)
+    // This mirrors how compliant MCP clients filter content.
+    let assistant_items: Vec<&rmcp::model::Content> = content
+        .iter()
+        .filter(|c| {
+            match c.audience() {
+                None         => true, // no audience = include for everyone
+                Some(roles)  => roles.contains(&rmcp::model::Role::Assistant),
+            }
+        })
+        .collect();
+
+    // If filtering left nothing (shouldn't happen, but be safe), fall back to all items
+    let items = if assistant_items.is_empty() { content.iter().collect() } else { assistant_items };
+
+    items
         .iter()
         .map(|c| match &c.raw {
             RawContent::Text(t)     => t.text.clone(),
