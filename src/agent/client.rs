@@ -91,6 +91,16 @@ impl CadeMessage {
         Some((id, name, args))
     }
 
+    /// Extract run_id from stream_start or any message that carries it
+    pub fn run_id(&self) -> Option<&str> {
+        self.data.get("run_id").and_then(|v| v.as_str())
+    }
+
+    /// Extract seq_id from a streamed event
+    pub fn seq_id(&self) -> Option<i64> {
+        self.data.get("seq_id").and_then(|v| v.as_i64())
+    }
+
     /// Extract the text of an assistant_message
     pub fn assistant_text(&self) -> Option<&str> {
         if self.msg_type() != "assistant_message" {
@@ -525,6 +535,58 @@ impl CadeClient {
             anyhow::bail!("delete_conversation failed: {txt}");
         }
         Ok(())
+    }
+
+    // ── Runs (background mode) ────────────────────────────────────────────────
+
+    pub async fn get_run(&self, run_id: &str) -> Result<serde_json::Value> {
+        let resp = self.client
+            .get(self.url(&format!("/runs/{run_id}")))
+            .header(self.auth().0, self.auth().1)
+            .send().await?;
+        if !resp.status().is_success() {
+            anyhow::bail!("get_run failed {}", resp.status());
+        }
+        Ok(resp.json().await?)
+    }
+
+    /// Resume a background run from a given seq_id, streaming events via SSE.
+    /// Calls `on_event` for each replayed event, returns full list.
+    pub async fn resume_run<F>(
+        &self,
+        run_id: &str,
+        after_seq: i64,
+        on_event: F,
+    ) -> Result<Vec<CadeMessage>>
+    where
+        F: Fn(&CadeMessage),
+    {
+        let url = self.url(&format!("/runs/{run_id}/stream"));
+        let request = self.client
+            .get(&url)
+            .header(self.auth().0, self.auth().1)
+            .query(&[("starting_after", after_seq.to_string())]);
+
+        let mut es = EventSource::new(request)
+            .map_err(|e| anyhow::anyhow!("EventSource: {e}"))?;
+        let mut messages = Vec::new();
+
+        while let Some(event) = es.next().await {
+            match event {
+                Ok(reqwest_eventsource::Event::Open) => {}
+                Ok(reqwest_eventsource::Event::Message(msg)) => {
+                    let data = msg.data.trim();
+                    if data.is_empty() || data == "[DONE]" { es.close(); break; }
+                    if let Ok(lm) = serde_json::from_str::<CadeMessage>(data) {
+                        on_event(&lm);
+                        messages.push(lm);
+                    }
+                }
+                Err(reqwest_eventsource::Error::StreamEnded) => break,
+                Err(_) => { es.close(); break; }
+            }
+        }
+        Ok(messages)
     }
 
     // ── Messages ──────────────────────────────────────────────────────────────

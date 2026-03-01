@@ -1674,17 +1674,22 @@ impl Repl {
         let in_reasoning2 = in_reasoning.clone();
         let in_assistant2 = in_assistant.clone();
 
-        // Clone Arcs before the move closure so conversation_id updates can be saved
+        // Clone Arcs before the move closure so conversation_id and run state can be saved
         let conv_arc     = self.conversation_id.clone();
         let session_arc  = self.session.clone();
+        // Track run_id/seq_id for crash recovery / reconnect
+        let run_id_cell:   std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
+        let seq_id_cell:   std::sync::Arc<std::sync::Mutex<Option<i64>>>   = Default::default();
+        let run_id_cell2   = run_id_cell.clone();
+        let seq_id_cell2   = seq_id_cell.clone();
 
         let on_event = move |msg: &CadeMessage| {
             // SAFETY: closure is called synchronously within the async function body,
             // stdout outlives the closure, and we never alias it.
             let out = unsafe { &mut *stdout_ptr };
             match msg.msg_type() {
-                "conversation_id" => {
-                    // Server is telling us the active conversation_id — persist it
+                "stream_start" => {
+                    // Server emits this as the first SSE event with conversation_id + run_id
                     if let Some(cid) = msg.data["conversation_id"].as_str() {
                         if !cid.is_empty() && conv_arc.lock().unwrap().as_deref() != Some(cid) {
                             let cid: String = cid.to_string();
@@ -1693,6 +1698,9 @@ impl Repl {
                                 let _ = s.set_conversation(Some(cid));
                             }
                         }
+                    }
+                    if let Some(rid) = msg.run_id() {
+                        *run_id_cell2.lock().unwrap() = Some(rid.to_string());
                     }
                 }
                 "reasoning_message" => {
@@ -1748,6 +1756,10 @@ impl Repl {
                 }
                 _ => {}
             }
+            // Track seq_id from every event for reconnect checkpointing
+            if let Some(s) = msg.seq_id() {
+                *seq_id_cell2.lock().unwrap() = Some(s);
+            }
         };
 
         let agent_id  = self.agent_id();
@@ -1794,6 +1806,15 @@ impl Repl {
         // Ensure final newline + colour reset after streaming
         execute!(stdout, Print("\n"), ResetColor)?;
         stdout.flush()?;
+
+        // Save run_id + last seq_id for crash recovery / reconnect
+        let saved_run_id  = run_id_cell.lock().unwrap().clone();
+        let saved_seq_id  = seq_id_cell.lock().unwrap().clone();
+        if saved_run_id.is_some() || saved_seq_id.is_some() {
+            if let Ok(mut s) = self.session.lock() {
+                let _ = s.set_run(saved_run_id, saved_seq_id);
+            }
+        }
 
         Ok(messages)
     }

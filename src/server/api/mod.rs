@@ -3,6 +3,7 @@ pub mod health;
 pub mod messages;
 pub mod models;
 pub mod providers;
+pub mod runs;
 pub mod tools;
 
 use axum::{
@@ -33,6 +34,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/agents/:id/messages",
                post(messages::send_message).delete(agents::clear_messages_handler).get(agents::search_messages_handler))
         .route("/v1/agents/:id/messages/stream", post(messages::stream_message))
+        // Runs (background mode)
+        .route("/v1/runs/:run_id",        get(runs::get_run))
+        .route("/v1/runs/:run_id/stream", get(runs::stream_run))
         // Tools
         .route("/v1/tools", post(tools::create_tool).get(tools::list_tools))
         // Models

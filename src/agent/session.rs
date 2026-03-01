@@ -10,6 +10,12 @@ pub struct Session {
     pub conversation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
+    /// Last background run ID — used to resume an interrupted stream
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Last received seq_id for the active run
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_seq_id: Option<i64>,
 }
 
 pub struct SessionStore {
@@ -57,6 +63,12 @@ impl SessionStore {
 
     pub fn set_conversation(&mut self, conversation_id: Option<String>) -> Result<()> {
         self.session.conversation_id = conversation_id;
+        self.save()
+    }
+
+    pub fn set_run(&mut self, run_id: Option<String>, last_seq_id: Option<i64>) -> Result<()> {
+        self.session.run_id = run_id;
+        self.session.last_seq_id = last_seq_id;
         self.save()
     }
 }

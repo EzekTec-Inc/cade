@@ -460,10 +460,17 @@ pub async fn stream_message(
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
 
+    let background = body["background"].as_bool().unwrap_or(false);
+    // Create a run for background (and also for foreground — keeps history for reconnect)
+    let run = sqlite::create_run(&state.db, &agent_id, conv_id_ref);
+    let run_id: Option<String> = run.ok().map(|r| r.id);
+
     let req = CompletionRequest { model, messages, tools, max_tokens: MAX_TOKENS };
     let state_clone = state.clone();
     let agent_id_clone = agent_id.clone();
     let conv_id_clone = conv_str.clone();
+    let run_id_clone  = run_id.clone();
+    let db_clone      = state.db.clone();
 
     // Open LLM stream
     let llm_stream = match state.llm.stream(&req).await {
@@ -474,11 +481,12 @@ pub async fn stream_message(
     let acc = std::sync::Arc::new(std::sync::Mutex::new((String::new(), Vec::<Value>::new())));
     let acc_clone = acc.clone();
 
-    // Emit conversation_id as the first SSE event so the client can save it
-    let conv_event = {
+    // First SSE event: metadata (conversation_id + run_id)
+    let meta_event = {
         let data = json!({
-            "message_type": "conversation_id",
-            "conversation_id": conv_str
+            "message_type": "stream_start",
+            "conversation_id": conv_str,
+            "run_id": run_id,
         });
         futures::stream::once(async move {
             Ok::<Event, std::convert::Infallible>(Event::default().data(data.to_string()))
@@ -486,21 +494,34 @@ pub async fn stream_message(
     };
 
     let sse_stream = futures::StreamExt::map(llm_stream, move |chunk: Result<StreamChunk>| {
+        // Persist each event to run_events so the stream is resumable
+        let emit = |data: Value| -> Event {
+            if let Some(rid) = &run_id_clone {
+                if let Ok(seq) = sqlite::append_run_event(&db_clone, rid, &data.to_string()) {
+                    let mut d = data.clone();
+                    if let Some(obj) = d.as_object_mut() {
+                        obj.insert("run_id".to_string(),  serde_json::Value::String(rid.clone()));
+                        obj.insert("seq_id".to_string(),  serde_json::Value::Number(seq.into()));
+                    }
+                    return Event::default().data(d.to_string());
+                }
+            }
+            Event::default().data(data.to_string())
+        };
+
         let event = match chunk {
             Ok(StreamChunk::Text(text)) => {
                 if let Ok(mut g) = acc_clone.lock() { g.0.push_str(&text); }
-                let data = json!({ "message_type": "assistant_message", "content": text });
-                Event::default().data(data.to_string())
+                emit(json!({ "message_type": "assistant_message", "content": text }))
             }
             Ok(StreamChunk::ToolCall(tc)) => {
                 if let Ok(mut g) = acc_clone.lock() {
                     g.1.push(json!({ "id": tc.id, "name": tc.name, "arguments": tc.arguments }));
                 }
-                let data = json!({
+                emit(json!({
                     "message_type": "tool_call_message",
                     "tool_call": { "id": tc.id, "name": tc.name, "arguments": tc.arguments }
-                });
-                Event::default().data(data.to_string())
+                }))
             }
             Ok(StreamChunk::Done) => {
                 if let Ok(g) = acc_clone.lock() {
@@ -509,16 +530,25 @@ pub async fn stream_message(
                         "tool_calls": g.1
                     }));
                 }
+                if let Some(rid) = &run_id_clone {
+                    let _ = sqlite::finish_run(&db_clone, rid, "completed");
+                }
                 Event::default().data("[DONE]")
             }
-            Err(e) => Event::default().data(json!({ "error": e.to_string() }).to_string()),
+            Err(e) => {
+                if let Some(rid) = &run_id_clone {
+                    let _ = sqlite::finish_run(&db_clone, rid, "failed");
+                }
+                Event::default().data(json!({ "error": e.to_string() }).to_string())
+            }
         };
         Ok::<Event, std::convert::Infallible>(event)
     });
 
     drop(acc);
+    let _ = background;
 
-    Sse::new(futures::StreamExt::chain(conv_event, sse_stream)).into_response()
+    Sse::new(futures::StreamExt::chain(meta_event, sse_stream)).into_response()
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
