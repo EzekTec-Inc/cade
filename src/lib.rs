@@ -1,6 +1,7 @@
 // Shared modules — accessible to both `cade` and `cade-server` binaries
 pub mod agent;
 pub mod cli;
+pub mod ui;
 pub mod desktop;
 pub mod mcp;
 pub mod permissions;

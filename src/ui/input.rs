@@ -1,0 +1,437 @@
+/// Ratatui-based input widget for the CADE REPL.
+///
+/// Replaces the raw-crossterm `read_line()` with a proper inline ratatui
+/// input box that shows:
+///   - A separator line
+///   - A bordered input area with mode indicator
+///   - A status line: model · agent · [mode] · tokens
+///
+/// Layout (Viewport::Inline(4)):
+/// ```
+///  ─────────────────────────────────────────────── (separator)
+///  ╭─ cade [yolo] ──────────────────────────────╮
+///  │ > Type a message…  (Shift+Enter for newline) │
+///  ╰─────────────────────────────────────────────╯
+///   claude-opus · agent-xyz · in: 1,234  out: 567
+/// ```
+
+use std::io;
+
+use anyhow::Result;
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    execute,
+    terminal,
+};
+use ratatui::{
+    Terminal, TerminalOptions, Viewport,
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout},
+    style::{Color as RC, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Paragraph, Wrap},
+};
+
+use crate::permissions::PermissionMode;
+
+// ── InputWidget ───────────────────────────────────────────────────────────────
+
+/// Persistent state for the input widget across REPL iterations.
+pub struct InputWidget {
+    /// Current input buffer.
+    buf: String,
+    /// Cursor position (byte offset into `buf`).
+    cursor_pos: usize,
+    /// Terminal width for drawing.
+    term_width: u16,
+}
+
+impl InputWidget {
+    pub fn new() -> Self {
+        let term_width = crossterm::terminal::size()
+            .map(|(w, _)| w)
+            .unwrap_or(80);
+        Self {
+            buf: String::new(),
+            cursor_pos: 0,
+            term_width,
+        }
+    }
+
+    /// Refresh terminal width (call on resize events).
+    pub fn update_width(&mut self) {
+        if let Ok((w, _)) = crossterm::terminal::size() {
+            self.term_width = w;
+        }
+    }
+
+    /// Show the ratatui input box and read one user message.
+    ///
+    /// Returns `None` on Ctrl+D (exit signal).
+    pub fn read(
+        &mut self,
+        history: &mut Vec<String>,
+        hist_idx: &mut Option<usize>,
+        mode: PermissionMode,
+        permissions: &crate::permissions::PermissionManager,
+        agent_name: &str,
+        model: &str,
+        in_tokens: u64,
+        out_tokens: u64,
+    ) -> Result<Option<String>> {
+        self.buf.clear();
+        self.cursor_pos = 0;
+
+        // 4 rows: separator + top-border + input-line + bottom-border
+        // Plus 1 for status line = 5 total
+        let viewport_height: u16 = 5;
+        let backend = CrosstermBackend::new(io::stdout());
+        let mut term = Terminal::with_options(
+            backend,
+            TerminalOptions {
+                viewport: Viewport::Inline(viewport_height),
+            },
+        )?;
+
+        terminal::enable_raw_mode()?;
+
+        let result: Result<Option<String>> = (|| {
+            loop {
+                // ── Draw ──────────────────────────────────────────────────────
+                let buf_snapshot = self.buf.clone();
+                let cursor_pos = self.cursor_pos;
+                let tw = self.term_width;
+                let mode_tag = mode_title(mode);
+                let agent_name = agent_name.to_string();
+                let model = model.to_string();
+
+                term.draw(|frame| {
+                    let area = frame.area();
+
+                    let chunks = Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Length(1), // separator
+                            Constraint::Length(3), // input box (border + 1 content row)
+                            Constraint::Length(1), // status bar
+                        ])
+                        .split(area);
+
+                    // ── Separator ─────────────────────────────────────────────
+                    let sep = "─".repeat(tw as usize);
+                    let sep_para = Paragraph::new(Span::styled(
+                        sep,
+                        Style::default().fg(RC::DarkGray),
+                    ));
+                    frame.render_widget(sep_para, chunks[0]);
+
+                    // ── Input box ─────────────────────────────────────────────
+                    let border_color = mode_color(mode);
+                    let block = Block::default()
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(border_color))
+                        .title(Span::styled(
+                            format!(" cade{mode_tag} "),
+                            Style::default()
+                                .fg(border_color)
+                                .add_modifier(Modifier::BOLD),
+                        ));
+                    let inner = block.inner(chunks[1]);
+
+                    // Show placeholder when empty
+                    let display = if buf_snapshot.is_empty() {
+                        Line::from(vec![
+                            Span::raw("> "),
+                            Span::styled(
+                                "Type a message…  (Shift+Enter for newline)",
+                                Style::default().fg(RC::DarkGray),
+                            ),
+                        ])
+                    } else {
+                        Line::from(vec![
+                            Span::raw("> "),
+                            Span::styled(
+                                buf_snapshot.replace('\n', "↵ "),
+                                Style::default().fg(RC::White),
+                            ),
+                        ])
+                    };
+
+                    let input_para = Paragraph::new(display)
+                        .wrap(Wrap { trim: false });
+                    frame.render_widget(block, chunks[1]);
+                    frame.render_widget(input_para, inner);
+
+                    // Cursor position: after "> " prefix + cursor_pos chars
+                    let cursor_col = inner.x + 2 + (cursor_pos as u16).min(inner.width.saturating_sub(3));
+                    let cursor_row = inner.y;
+                    frame.set_cursor_position((cursor_col, cursor_row));
+
+                    // ── Status bar ────────────────────────────────────────────
+                    let (mode_icon, mode_label) = mode_status(mode);
+                    let tok_in = fmt_tokens(in_tokens);
+                    let tok_out = fmt_tokens(out_tokens);
+                    let status = Line::from(vec![
+                        Span::styled(
+                            format!(" {model}"),
+                            Style::default().fg(RC::Cyan),
+                        ),
+                        Span::styled(" · ", Style::default().fg(RC::DarkGray)),
+                        Span::styled(
+                            agent_name.clone(),
+                            Style::default().fg(RC::DarkGray),
+                        ),
+                        Span::styled(
+                            format!("  {mode_icon} {mode_label}"),
+                            Style::default()
+                                .fg(border_color)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(
+                            format!("  in:{tok_in}  out:{tok_out}"),
+                            Style::default().fg(RC::DarkGray),
+                        ),
+                        Span::styled(
+                            "  Shift+Tab: cycle mode",
+                            Style::default().fg(RC::DarkGray),
+                        ),
+                    ]);
+                    frame.render_widget(
+                        Paragraph::new(status),
+                        chunks[2],
+                    );
+                })?;
+
+                // ── Event ─────────────────────────────────────────────────────
+                if !event::poll(std::time::Duration::from_millis(50))? {
+                    continue;
+                }
+
+                match event::read()? {
+                    Event::Key(KeyEvent { code, modifiers, .. }) => {
+                        match (code, modifiers) {
+                            // ── Mode cycling (Shift+Tab) ──────────────────────
+                            (KeyCode::BackTab, _) => {
+                                let next = cycle_mode(mode);
+                                permissions.set_mode(next);
+                                // Re-enter loop with updated mode (drawn next frame)
+                                // We can't mutate `mode` here (it's captured by value),
+                                // so we return a sentinel to the caller — but instead we
+                                // just continue; the caller will re-call read() if needed.
+                                // For now, reflect mode via a re-draw on next iteration.
+                                // The caller passes the current mode; after mode change the
+                                // next redraw iteration will use the new mode automatically
+                                // since the mode comes from permissions.mode() in the caller.
+                                // This works because mode is re-read by the caller each turn.
+                                // Signal via an empty input (caller skips empty lines):
+                                return Ok(Some(String::new()));
+                            }
+
+                            // ── Submit (Enter) ────────────────────────────────
+                            (KeyCode::Enter, m) if m == KeyModifiers::SHIFT => {
+                                self.buf.insert(self.cursor_pos, '\n');
+                                self.cursor_pos += 1;
+                            }
+                            (KeyCode::Enter, _) => {
+                                let line = self.buf.clone();
+                                return Ok(Some(line));
+                            }
+
+                            // ── Exit (Ctrl+D on empty) ────────────────────────
+                            (KeyCode::Char('d'), KeyModifiers::CONTROL)
+                                if self.buf.is_empty() =>
+                            {
+                                return Ok(None);
+                            }
+
+                            // ── Clear (Ctrl+C) ────────────────────────────────
+                            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                                self.buf.clear();
+                                self.cursor_pos = 0;
+                                return Ok(Some(String::new()));
+                            }
+
+                            // ── Esc: clear buffer ─────────────────────────────
+                            (KeyCode::Esc, _) => {
+                                self.buf.clear();
+                                self.cursor_pos = 0;
+                            }
+
+                            // ── Kill line (Ctrl+U) ────────────────────────────
+                            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                                self.buf.drain(..self.cursor_pos);
+                                self.cursor_pos = 0;
+                            }
+
+                            // ── Delete word (Ctrl+W) ──────────────────────────
+                            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                                // Find start of previous word
+                                let end = self.cursor_pos;
+                                let start = self.buf[..end]
+                                    .rfind(|c: char| !c.is_whitespace())
+                                    .and_then(|p| self.buf[..p].rfind(char::is_whitespace).map(|q| q + 1))
+                                    .unwrap_or(0);
+                                self.buf.drain(start..end);
+                                self.cursor_pos = start;
+                            }
+
+                            // ── Home / Ctrl+A ─────────────────────────────────
+                            (KeyCode::Home, _)
+                            | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+                                self.cursor_pos = 0;
+                            }
+
+                            // ── End / Ctrl+E ──────────────────────────────────
+                            (KeyCode::End, _)
+                            | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+                                self.cursor_pos = self.buf.len();
+                            }
+
+                            // ── Cursor left ───────────────────────────────────
+                            (KeyCode::Left, _) if self.cursor_pos > 0 => {
+                                // Move one char (UTF-8 safe)
+                                self.cursor_pos -= self.buf[..self.cursor_pos]
+                                    .chars()
+                                    .last()
+                                    .map(|c| c.len_utf8())
+                                    .unwrap_or(1);
+                            }
+
+                            // ── Cursor right ──────────────────────────────────
+                            (KeyCode::Right, _) if self.cursor_pos < self.buf.len() => {
+                                self.cursor_pos += self.buf[self.cursor_pos..]
+                                    .chars()
+                                    .next()
+                                    .map(|c| c.len_utf8())
+                                    .unwrap_or(1);
+                            }
+
+                            // ── History up ────────────────────────────────────
+                            (KeyCode::Up, _) if !history.is_empty() => {
+                                let new_idx = match *hist_idx {
+                                    None => history.len() - 1,
+                                    Some(i) if i > 0 => i - 1,
+                                    Some(i) => i,
+                                };
+                                *hist_idx = Some(new_idx);
+                                self.buf = history[new_idx].clone();
+                                self.cursor_pos = self.buf.len();
+                            }
+
+                            // ── History down ──────────────────────────────────
+                            (KeyCode::Down, _) => {
+                                if let Some(i) = *hist_idx {
+                                    if i + 1 < history.len() {
+                                        *hist_idx = Some(i + 1);
+                                        self.buf = history[i + 1].clone();
+                                        self.cursor_pos = self.buf.len();
+                                    } else {
+                                        *hist_idx = None;
+                                        self.buf.clear();
+                                        self.cursor_pos = 0;
+                                    }
+                                }
+                            }
+
+                            // ── Backspace ─────────────────────────────────────
+                            (KeyCode::Backspace, _) if self.cursor_pos > 0 => {
+                                let char_len = self.buf[..self.cursor_pos]
+                                    .chars()
+                                    .last()
+                                    .map(|c| c.len_utf8())
+                                    .unwrap_or(1);
+                                self.cursor_pos -= char_len;
+                                self.buf.remove(self.cursor_pos);
+                            }
+
+                            // ── Delete ────────────────────────────────────────
+                            (KeyCode::Delete, _)
+                                if self.cursor_pos < self.buf.len() =>
+                            {
+                                self.buf.remove(self.cursor_pos);
+                            }
+
+                            // ── Regular character ─────────────────────────────
+                            (KeyCode::Char(c), mods)
+                                if mods == KeyModifiers::NONE
+                                    || mods == KeyModifiers::SHIFT =>
+                            {
+                                self.buf.insert(self.cursor_pos, c);
+                                self.cursor_pos += c.len_utf8();
+                            }
+
+                            _ => {}
+                        }
+                    }
+
+                    Event::Resize(w, _) => {
+                        self.term_width = w;
+                    }
+
+                    _ => {}
+                }
+            }
+        })();
+
+        terminal::disable_raw_mode()?;
+        // Drop term so its inline rows are released before next streaming turn
+        drop(term);
+        result
+    }
+}
+
+impl Default for InputWidget {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+fn mode_title(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Default           => "",
+        PermissionMode::AcceptEdits       => " [edits]",
+        PermissionMode::Plan              => " [plan]",
+        PermissionMode::BypassPermissions => " [yolo]",
+    }
+}
+
+fn mode_color(mode: PermissionMode) -> RC {
+    match mode {
+        PermissionMode::Default           => RC::Green,
+        PermissionMode::AcceptEdits       => RC::Magenta,
+        PermissionMode::Plan              => RC::Cyan,
+        PermissionMode::BypassPermissions => RC::Yellow,
+    }
+}
+
+fn mode_status(mode: PermissionMode) -> (&'static str, &'static str) {
+    match mode {
+        PermissionMode::Default           => ("✅", "default"),
+        PermissionMode::AcceptEdits       => ("📝", "acceptEdits"),
+        PermissionMode::Plan              => ("📖", "plan"),
+        PermissionMode::BypassPermissions => ("⚡", "yolo"),
+    }
+}
+
+fn cycle_mode(mode: PermissionMode) -> PermissionMode {
+    match mode {
+        PermissionMode::Default           => PermissionMode::AcceptEdits,
+        PermissionMode::AcceptEdits       => PermissionMode::Plan,
+        PermissionMode::Plan              => PermissionMode::BypassPermissions,
+        PermissionMode::BypassPermissions => PermissionMode::Default,
+    }
+}
+
+fn fmt_tokens(n: u64) -> String {
+    if n == 0 {
+        "0".to_string()
+    } else if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
