@@ -28,16 +28,31 @@ use skills::{discover_all_skills, skills_listing};
 const SKILLS_DIR: &str = ".skills";
 
 /// Default memory block labels and their seed values.
-const DEFAULT_MEMORY_BLOCKS: &[(&str, &str)] = &[
-    ("persona",  "CADE is a coding AI assistant with desktop extensions, mcp servers and super-powers. It helps with programming tasks, file management, shell commands, and desktop automation. CADE prefers concise, accurate responses and always verifies changes before reporting success."),
-    ("human",    ""),   // agent fills in as it learns about the user
-    ("project",  ""),   // agent fills in via /init
+/// (label, value, description)
+const DEFAULT_MEMORY_BLOCKS: &[(&str, &str, &str)] = &[
+    (
+        "persona",
+        "CADE is a coding AI assistant with desktop extensions, mcp servers and super-powers. \
+         It helps with programming tasks, file management, shell commands, and desktop automation. \
+         CADE prefers concise, accurate responses and always verifies changes before reporting success.",
+        "Who I am, what I value, and how I approach working with people",
+    ),
+    (
+        "human",
+        "",
+        "What I know about the person I'm working with — their name, preferences, and working style",
+    ),
+    (
+        "project",
+        "",
+        "Current project context, tech stack, conventions, and ongoing work",
+    ),
 ];
 
 /// Seed default memory blocks for a newly created agent.
 async fn seed_default_memory(client: &CadeClient, agent_id: &str) {
-    for (label, value) in DEFAULT_MEMORY_BLOCKS {
-        if let Err(e) = client.upsert_memory(agent_id, label, value).await {
+    for (label, value, description) in DEFAULT_MEMORY_BLOCKS {
+        if let Err(e) = client.upsert_memory(agent_id, label, value, Some(description)).await {
             tracing::warn!("seed_memory {label}: {e}");
         }
     }
@@ -170,6 +185,10 @@ async fn register_update_memory_tool(client: &CadeClient) {
                     "type": "string",
                     "enum": ["set", "append"],
                     "description": "set = replace the block entirely, append = add to existing content"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Short description of what this block is for (optional, shown in /memory display)"
                 }
             },
             "required": ["label", "value"]

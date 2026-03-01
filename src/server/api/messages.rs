@@ -118,7 +118,13 @@ async fn build_context(
     let memory = sqlite::get_memory_blocks(&state.db, agent_id)
         .unwrap_or_default()
         .into_iter()
-        .map(|(label, val)| format!("[{label}]\n{val}"))
+        .map(|(label, val, desc)| {
+            if desc.is_empty() {
+                format!("[{label}]\n{val}")
+            } else {
+                format!("[{label}] — {desc}\n{val}")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n\n");
 

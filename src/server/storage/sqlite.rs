@@ -78,6 +78,23 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         "#)?;
         tracing::info!("Migration complete: memory_blocks UNIQUE constraint added");
     }
+
+    // Migration 2: add `description` column to memory_blocks if missing.
+    // SQLite supports ADD COLUMN directly (no table rebuild needed).
+    let has_description: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('memory_blocks') WHERE name='description'",
+        [],
+        |r| r.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    if !has_description {
+        tracing::info!("Running migration: adding description column to memory_blocks");
+        conn.execute_batch(
+            "ALTER TABLE memory_blocks ADD COLUMN description TEXT NOT NULL DEFAULT '';"
+        )?;
+        tracing::info!("Migration complete: memory_blocks.description added");
+    }
+
     Ok(())
 }
 
@@ -106,6 +123,7 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             agent_id    TEXT NOT NULL,
             label       TEXT NOT NULL,
             value       TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
             updated_at  INTEGER NOT NULL,
             UNIQUE (agent_id, label),
             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
@@ -295,10 +313,14 @@ pub fn list_messages(db: &Db, agent_id: &str, limit: usize) -> Result<Vec<Messag
 
 // ── Memory blocks ─────────────────────────────────────────────────────────────
 
-pub fn upsert_memory_block(db: &Db, agent_id: &str, label: &str, value: &str) -> Result<()> {
+pub fn upsert_memory_block(
+    db: &Db,
+    agent_id: &str,
+    label: &str,
+    value: &str,
+    description: Option<&str>,
+) -> Result<()> {
     let conn = db.lock().unwrap();
-    // Use SELECT + UPDATE/INSERT instead of ON CONFLICT so this works regardless
-    // of whether the UNIQUE(agent_id, label) constraint exists on the table.
     let existing: Option<String> = conn.query_row(
         "SELECT id FROM memory_blocks WHERE agent_id = ?1 AND label = ?2",
         params![agent_id, label],
@@ -306,17 +328,25 @@ pub fn upsert_memory_block(db: &Db, agent_id: &str, label: &str, value: &str) ->
     ).optional()?;
 
     if existing.is_some() {
-        conn.execute(
-            "UPDATE memory_blocks SET value = ?1, updated_at = ?2
-             WHERE agent_id = ?3 AND label = ?4",
-            params![value, now_ts(), agent_id, label],
-        )?;
+        if let Some(desc) = description {
+            conn.execute(
+                "UPDATE memory_blocks SET value = ?1, description = ?2, updated_at = ?3
+                 WHERE agent_id = ?4 AND label = ?5",
+                params![value, desc, now_ts(), agent_id, label],
+            )?;
+        } else {
+            conn.execute(
+                "UPDATE memory_blocks SET value = ?1, updated_at = ?2
+                 WHERE agent_id = ?3 AND label = ?4",
+                params![value, now_ts(), agent_id, label],
+            )?;
+        }
     } else {
         let id = uuid::Uuid::new_v4().to_string();
         conn.execute(
-            "INSERT INTO memory_blocks (id, agent_id, label, value, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![id, agent_id, label, value, now_ts()],
+            "INSERT INTO memory_blocks (id, agent_id, label, value, description, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, agent_id, label, value, description.unwrap_or(""), now_ts()],
         )?;
     }
     Ok(())
@@ -331,13 +361,18 @@ pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool>
     Ok(n > 0)
 }
 
-pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String)>> {
+/// Returns (label, value, description) tuples ordered by label.
+pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String)>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT label, value FROM memory_blocks WHERE agent_id = ?1 ORDER BY label"
+        "SELECT label, value, description FROM memory_blocks WHERE agent_id = ?1 ORDER BY label"
     )?;
     let rows = stmt.query_map(params![agent_id], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2).unwrap_or_default(),
+        ))
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }

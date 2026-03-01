@@ -70,7 +70,8 @@ async fn process_tool_calls(
                     .unwrap_or_default();
                 if existing.is_empty() { value } else { format!("{existing}\n{value}") }
             } else { value };
-            let (msg, err) = match client.upsert_memory(agent_id, &label, &final_value).await {
+            let description = args["description"].as_str();
+            let (msg, err) = match client.upsert_memory(agent_id, &label, &final_value, description).await {
                 Ok(_) => (format!("Memory block '{label}' updated"), false),
                 Err(e) => (format!("Failed: {e}"), true),
             };

@@ -396,11 +396,21 @@ impl CadeClient {
     }
 
     /// Upsert a single memory block.
-    pub async fn upsert_memory(&self, agent_id: &str, label: &str, value: &str) -> Result<()> {
+    pub async fn upsert_memory(
+        &self,
+        agent_id: &str,
+        label: &str,
+        value: &str,
+        description: Option<&str>,
+    ) -> Result<()> {
+        let mut body = json!({ "value": value });
+        if let Some(desc) = description {
+            body["description"] = json!(desc);
+        }
         let resp = self.client
             .put(self.url(&format!("/agents/{agent_id}/memory/{label}")))
             .header(self.auth().0, self.auth().1)
-            .json(&json!({ "value": value }))
+            .json(&body)
             .send().await?;
         if !resp.status().is_success() {
             bail!("upsert_memory failed {}", resp.status());

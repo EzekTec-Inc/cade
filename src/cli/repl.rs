@@ -592,7 +592,7 @@ impl Repl {
                         };
 
                         // Write summary into project memory block
-                        let _ = self.client.upsert_memory(&agent_id, "project", &summary).await;
+                        let _ = self.client.upsert_memory(&agent_id, "project", &summary, None).await;
 
                         // Tell the main agent what was discovered
                         let init_prompt = format!(
@@ -604,31 +604,17 @@ impl Repl {
                     }
 
                     SlashCmd::Remember(text) => {
-                        let id = self.agent_id();
-                        // Append to existing 'preferences' block (or create it)
-                        let existing = self.client.get_memory(&id).await
-                            .unwrap_or_default()
-                            .into_iter()
-                            .find(|b| b.label == "preferences")
-                            .map(|b| b.value)
-                            .unwrap_or_default();
-                        let ts = chrono::Local::now().format("%Y-%m-%d");
-                        let updated = if existing.is_empty() {
-                            format!("[{ts}] {text}")
+                        // Route through the agent — it decides what to store and where.
+                        // This matches Letta's /remember behaviour exactly.
+                        let msg = if text.is_empty() {
+                            "[/remember] Please review our recent conversation and update your \
+                             memory blocks with anything important you've learned about me, \
+                             my preferences, or this project."
+                                .to_string()
                         } else {
-                            format!("{existing}\n[{ts}] {text}")
+                            format!("[/remember] {text}")
                         };
-                        match self.client.upsert_memory(&id, "preferences", &updated).await {
-                            Ok(_) => {
-                                execute!(stdout, SetForegroundColor(Color::Green),
-                                    Print(format!("\n  ✓ Remembered: {text}\n")), ResetColor)?;
-                            }
-                            Err(e) => {
-                                execute!(stdout, SetForegroundColor(Color::Red),
-                                    Print(format!("\n  ✗ {e}\n")), ResetColor)?;
-                            }
-                        }
-                        stdout.flush()?;
+                        self.agent_turn(&mut stdout, &msg).await?;
                     }
 
                     SlashCmd::Memory => {
@@ -639,12 +625,42 @@ impl Repl {
                         let sub = parts.first().copied().unwrap_or("");
 
                         match sub {
+                            // /memory view <label> — show full value untruncated
+                            "view" | "show" if parts.len() >= 2 => {
+                                let label = parts[1];
+                                let id = self.agent_id();
+                                match self.client.get_memory(&id).await {
+                                    Ok(blocks) => {
+                                        if let Some(b) = blocks.iter().find(|b| b.label == label) {
+                                            println!();
+                                            execute!(stdout, SetForegroundColor(Color::Cyan),
+                                                Print(format!("  [{label}]")), ResetColor)?;
+                                            if let Some(desc) = &b.description {
+                                                if !desc.is_empty() {
+                                                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                                        Print(format!("  {desc}")), ResetColor)?;
+                                                }
+                                            }
+                                            println!();
+                                            if b.value.is_empty() {
+                                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                                    Print("  (empty)\n"), ResetColor)?;
+                                            } else {
+                                                println!("{}\n", b.value);
+                                            }
+                                        } else {
+                                            println!("\n  ✗ Block '{label}' not found");
+                                        }
+                                    }
+                                    Err(e) => println!("\n  ✗ {e}"),
+                                }
+                            }
                             // /memory set <label> <value>
                             "set" if parts.len() >= 3 => {
                                 let label = parts[1];
                                 let value = parts[2..].join(" ");
                                 let id = self.agent_id();
-                                match self.client.upsert_memory(&id, label, &value).await {
+                                match self.client.upsert_memory(&id, label, &value, None).await {
                                     Ok(_) => println!("\n  ✓ [{label}] updated"),
                                     Err(e) => println!("\n  ✗ {e}"),
                                 }
@@ -695,7 +711,7 @@ impl Repl {
                                 if new_value.is_empty() && !clear_mode {
                                     println!("  (cancelled — no changes)");
                                 } else {
-                                    match self.client.upsert_memory(&id, label, &new_value).await {
+                                    match self.client.upsert_memory(&id, label, &new_value, None).await {
                                         Ok(_) => println!("  ✓ [{label}] updated"),
                                         Err(e) => println!("  ✗ {e}"),
                                     }
@@ -708,16 +724,32 @@ impl Repl {
                                         execute!(stdout, ResetColor)?;
                                         stdout.flush()?;
                                         println!("\n  (no memory blocks)");
+                                        println!("  Run /init to populate, or use update_memory tool");
                                     }
                                     Ok(blocks) => {
                                         execute!(stdout, ResetColor)?;
                                         stdout.flush()?;
                                         println!();
                                         for b in &blocks {
-                                            let preview: String = b.value.chars().take(300).collect();
-                                            let ellipsis = if b.value.len() > 300 { "..." } else { "" };
-                                            println!("  [{}]", b.label);
-                                            println!("  {}{}\n", preview, ellipsis);
+                                            // Label + description
+                                            execute!(stdout, SetForegroundColor(Color::Cyan),
+                                                Print(format!("  [{}]", b.label)), ResetColor)?;
+                                            if let Some(desc) = &b.description {
+                                                if !desc.is_empty() {
+                                                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                                        Print(format!("  {desc}")), ResetColor)?;
+                                                }
+                                            }
+                                            println!();
+                                            // Value preview
+                                            if b.value.is_empty() {
+                                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                                    Print("  (empty)\n\n"), ResetColor)?;
+                                            } else {
+                                                let preview: String = b.value.chars().take(300).collect();
+                                                let ellipsis = if b.value.len() > 300 { "…  (/memory view to see all)" } else { "" };
+                                                println!("  {preview}{ellipsis}\n");
+                                            }
                                         }
                                     }
                                     Err(e) => println!("\n  ✗ {e}"),
@@ -881,14 +913,14 @@ impl Repl {
                                         let mut names = vec![];
                                         for skill in &new_skills {
                                             let label = format!("skill:{}", skill.id);
-                                            let _ = self.client.upsert_memory(&agent_id, &label, &skill.to_context_block()).await;
+                                            let _ = self.client.upsert_memory(&agent_id, &label, &skill.to_context_block(), None).await;
                                             names.push(skill.name.clone());
                                         }
 
                                         // Compact listing for system prompt
                                         let listing = crate::skills::skills_listing(&new_skills);
                                         let _ = self.client.upsert_memory(
-                                            &agent_id, "skills", listing.as_deref().unwrap_or("")
+                                            &agent_id, "skills", listing.as_deref().unwrap_or(""), None
                                         ).await;
 
                                         *self.skills.lock().unwrap() = new_skills;
@@ -1556,7 +1588,8 @@ impl Repl {
             value
         };
 
-        match self.client.upsert_memory(&agent_id, &label, &final_value).await {
+        let description = args["description"].as_str();
+        match self.client.upsert_memory(&agent_id, &label, &final_value, description).await {
             Ok(_) => {
                 tracing::info!("Agent updated memory [{label}]");
                 Ok(crate::tools::ToolResult {
@@ -1654,7 +1687,7 @@ impl Repl {
                 let listing  = crate::skills::skills_listing(&skills);
                 let _ = self.client.upsert_memory(
                     &agent_id, "skills",
-                    listing.as_deref().unwrap_or("")
+                    listing.as_deref().unwrap_or(""), None
                 ).await;
                 drop(skills);
 
@@ -2190,11 +2223,12 @@ impl Repl {
         println!("    /skills reload         - re-discover skills + update agent memory");
         println!();
         println!("  Memory:");
-        println!("    /memory                    - list all memory blocks");
+        println!("    /memory                    - list memory blocks (label + description + preview)");
+        println!("    /memory view <label>       - show full block content");
         println!("    /memory set <label> <val>  - set a block directly");
         println!("    /memory delete <label>     - delete a block");
         println!("    /memory edit <label>       - multi-line inline editor");
-        println!("    /remember <t>              - append to preferences block");
+        println!("    /remember [text]           - ask agent to store something in memory");
         println!("    /init                      - analyse project + init memory");
         println!("    /search <q>                - search past messages");
         println!();

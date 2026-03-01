@@ -71,7 +71,8 @@ pub async fn create_agent(
     for block in &body.memory_blocks {
         let label = block["label"].as_str().unwrap_or("memory");
         let value = block["value"].as_str().unwrap_or("");
-        let _ = sqlite::upsert_memory_block(&state.db, &id, label, value);
+        let desc = block["description"].as_str();
+        let _ = sqlite::upsert_memory_block(&state.db, &id, label, value, desc);
     }
 
     tracing::info!("Created agent: {name} ({id}) model={}", body.model);
@@ -153,7 +154,7 @@ pub async fn get_memory(
     let blocks = sqlite::get_memory_blocks(&state.db, &agent_id)
         .map_err(|e| server_err(e.to_string()))?;
     let arr: Vec<Value> = blocks.into_iter()
-        .map(|(label, value)| json!({ "label": label, "value": value }))
+        .map(|(label, value, description)| json!({ "label": label, "value": value, "description": description }))
         .collect();
     Ok(Json(json!({ "blocks": arr })))
 }
@@ -175,8 +176,9 @@ pub async fn upsert_memory(
     Path((agent_id, label)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    let value = body["value"].as_str().unwrap_or("").to_string();
-    sqlite::upsert_memory_block(&state.db, &agent_id, &label, &value)
+    let value       = body["value"].as_str().unwrap_or("").to_string();
+    let description = body["description"].as_str();
+    sqlite::upsert_memory_block(&state.db, &agent_id, &label, &value, description)
         .map_err(|e| server_err(e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
 }
