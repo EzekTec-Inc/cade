@@ -2574,17 +2574,18 @@ impl Repl {
                         ));
                     }
                 }
-                // Dynamic Ollama models (de-duplicate with catalogue)
+                // Dynamic models — live-fetched from Ollama, Groq, OpenRouter, etc.
                 if let Some(arr) = body["dynamic"].as_array() {
                     for m in arr {
-                        let id = m["id"].as_str().unwrap_or("?").to_string();
-                        // Skip if already present via catalogue (static placeholder)
+                        let id       = m["id"].as_str().unwrap_or("?").to_string();
+                        let provider = m["provider"].as_str().unwrap_or("?").to_string();
+                        // Skip if already present via catalogue
                         if !models.iter().any(|(_, _, mid, _, _)| mid == &id) {
                             models.push((
-                                "ollama".to_string(),
+                                provider,
                                 m["display_name"].as_str().unwrap_or(&id).to_string(),
                                 id,
-                                "default".to_string(),
+                                m["toolset"].as_str().unwrap_or("default").to_string(),
                                 true,
                             ));
                         }
@@ -2667,13 +2668,13 @@ impl Repl {
                         execute!(stdout, SetForegroundColor(Color::DarkGrey),
                             Print("  ──────────────────────────────────────\r\n"), ResetColor)?;
                     } else {
-                        let label = if *dynamic {
-                            format!("  {}  (local)\r\n", provider.to_uppercase())
-                        } else {
-                            format!("  {}\r\n", provider.to_uppercase())
-                        };
+                        // For dynamic providers: Ollama = "(local)", cloud APIs = "(live)"
+                        let suffix = if *dynamic {
+                            if provider == "ollama" { " (local)" } else { " (live)" }
+                        } else { "" };
                         execute!(stdout, SetForegroundColor(Color::Yellow),
-                            Print(label), ResetColor)?;
+                            Print(format!("  {}{}\r\n", provider.to_uppercase(), suffix)),
+                            ResetColor)?;
                     }
                     last_provider = provider.clone();
                 }

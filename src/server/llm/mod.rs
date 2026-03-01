@@ -275,48 +275,59 @@ impl LlmRouter {
     }
 
     /// Fetch live model lists from all providers that support it (Ollama + preset providers
-    /// with a `models_url`). Results are returned as `ModelEntry { dynamic: true }`.
+    /// with a `models_url`). Queries are run **concurrently** — one task per provider.
+    /// Results are returned as `ModelEntry { dynamic: true }`.
     ///
     /// Called by `GET /v1/models` to populate the dynamic section of the model picker.
     pub async fn list_dynamic_models(&self) -> Vec<catalogue::ModelEntry> {
         use catalogue::ModelEntry;
-        let mut out: Vec<ModelEntry> = Vec::new();
+        use futures::future::join_all;
 
-        for (name, _provider) in &self.providers {
+        // Build one future per provider that supports live model listing
+        type ModelFut = std::pin::Pin<Box<dyn std::future::Future<Output = Vec<ModelEntry>> + Send>>;
+        let mut tasks: Vec<ModelFut> = Vec::new();
+
+        for name in self.providers.keys() {
             if name == "ollama" {
-                // Ollama: query /api/tags
-                let ol = ollama::OllamaProvider::new(self.ollama_base_url.clone());
-                for model_name in ol.list_models().await {
-                    out.push(ModelEntry {
-                        provider:     "ollama".to_string(),
-                        id:           format!("ollama/{model_name}"),
-                        display_name: model_name,
-                        toolset:      "default".to_string(),
-                        dynamic:      true,
-                    });
-                }
+                let url = self.ollama_base_url.clone();
+                tasks.push(Box::pin(async move {
+                    let ol = ollama::OllamaProvider::new(url);
+                    ol.list_models().await
+                        .into_iter()
+                        .map(|m| ModelEntry {
+                            provider:     "ollama".to_string(),
+                            id:           format!("ollama/{m}"),
+                            display_name: m,
+                            toolset:      "default".to_string(),
+                            dynamic:      true,
+                        })
+                        .collect()
+                }));
                 continue;
             }
 
-            // Preset providers with a live models endpoint
             if let Some(preset) = PRESET_PROVIDERS.iter().find(|p| p.name == name.as_str()) {
                 if let Some(models_url) = preset.models_url {
+                    let n   = name.clone();
+                    let url = models_url.to_string();
                     let key = self.provider_keys.get(name.as_str()).cloned().unwrap_or_default();
-                    let models = openai::fetch_model_ids(models_url, &key).await;
-                    for id in models {
-                        let display = id.clone();
-                        out.push(ModelEntry {
-                            provider:     name.clone(),
-                            id:           format!("{name}/{id}"),
-                            display_name: display,
-                            toolset:      "default".to_string(),
-                            dynamic:      true,
-                        });
-                    }
+                    tasks.push(Box::pin(async move {
+                        openai::fetch_model_ids(&url, &key).await
+                            .into_iter()
+                            .map(|id| ModelEntry {
+                                provider:     n.clone(),
+                                id:           format!("{n}/{id}"),
+                                display_name: id,
+                                toolset:      "default".to_string(),
+                                dynamic:      true,
+                            })
+                            .collect()
+                    }));
                 }
             }
         }
 
+        let mut out: Vec<ModelEntry> = join_all(tasks).await.into_iter().flatten().collect();
         out.sort_by(|a, b| a.provider.cmp(&b.provider).then(a.id.cmp(&b.id)));
         out
     }

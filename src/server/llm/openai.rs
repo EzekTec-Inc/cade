@@ -20,13 +20,13 @@ const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 /// Returns a sorted `Vec<String>` of model IDs; empty on any error.
 pub async fn fetch_model_ids(models_url: &str, api_key: &str) -> Vec<String> {
     let client = Client::new();
-    let Ok(resp) = client
+    let req = client
         .get(models_url)
         .header("Authorization", format!("Bearer {api_key}"))
-        .send()
-        .await
-    else {
-        return vec![];
+        .send();
+    let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
+        Ok(Ok(r))  => r,
+        Ok(Err(_)) | Err(_) => return vec![],
     };
     if !resp.status().is_success() { return vec![]; }
     let Ok(body) = resp.json::<Value>().await else { return vec![]; };
