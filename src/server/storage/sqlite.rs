@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
@@ -35,11 +35,19 @@ pub fn open(path: &str) -> Result<Db> {
 fn run_migrations(conn: &Connection) -> Result<()> {
     // Migration 1: add UNIQUE(agent_id, label) to memory_blocks if missing.
     // SQLite doesn't support ALTER TABLE ADD CONSTRAINT, so we rebuild the table.
+    // Detect UNIQUE(agent_id, label) specifically.
+    // Note: autoindices for PRIMARY KEY have sql=NULL — exclude them with sql IS NOT NULL.
+    // A user-defined UNIQUE constraint generates an autoindex whose sql is also NULL,
+    // so we check the index name pattern instead.
     let has_unique: bool = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master
-         WHERE type='index' AND tbl_name='memory_blocks'
-         AND (sql LIKE '%agent_id, label%' OR sql LIKE '%agent_id,label%'
-              OR name='sqlite_autoindex_memory_blocks_1')",
+         WHERE tbl_name='memory_blocks'
+         AND (
+           (type='index' AND sql IS NOT NULL
+            AND (sql LIKE '%agent_id%label%' OR sql LIKE '%label%agent_id%'))
+           OR
+           (type='table' AND sql LIKE '%UNIQUE%agent_id%label%')
+         )",
         [],
         |r| r.get::<_, i64>(0),
     ).unwrap_or(0) > 0;
@@ -289,13 +297,28 @@ pub fn list_messages(db: &Db, agent_id: &str, limit: usize) -> Result<Vec<Messag
 
 pub fn upsert_memory_block(db: &Db, agent_id: &str, label: &str, value: &str) -> Result<()> {
     let conn = db.lock().unwrap();
-    let id = uuid::Uuid::new_v4().to_string();
-    conn.execute(
-        "INSERT INTO memory_blocks (id, agent_id, label, value, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT (agent_id, label) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
-        params![id, agent_id, label, value, now_ts()],
-    )?;
+    // Use SELECT + UPDATE/INSERT instead of ON CONFLICT so this works regardless
+    // of whether the UNIQUE(agent_id, label) constraint exists on the table.
+    let existing: Option<String> = conn.query_row(
+        "SELECT id FROM memory_blocks WHERE agent_id = ?1 AND label = ?2",
+        params![agent_id, label],
+        |r| r.get(0),
+    ).optional()?;
+
+    if existing.is_some() {
+        conn.execute(
+            "UPDATE memory_blocks SET value = ?1, updated_at = ?2
+             WHERE agent_id = ?3 AND label = ?4",
+            params![value, now_ts(), agent_id, label],
+        )?;
+    } else {
+        let id = uuid::Uuid::new_v4().to_string();
+        conn.execute(
+            "INSERT INTO memory_blocks (id, agent_id, label, value, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, agent_id, label, value, now_ts()],
+        )?;
+    }
     Ok(())
 }
 

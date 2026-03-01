@@ -340,6 +340,13 @@ async fn main() -> Result<()> {
         a
     };
 
+    // Seed default memory blocks if this agent has none yet
+    // (covers agents created before default block seeding was introduced)
+    let existing_blocks = client.get_memory(&agent.id).await.unwrap_or_default();
+    if existing_blocks.is_empty() {
+        seed_default_memory(&client, &agent.id).await;
+    }
+
     // Tray
     if args.tray {
         match desktop::spawn_tray() {
