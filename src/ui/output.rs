@@ -142,6 +142,7 @@ impl OutputRenderer {
     /// Tool call box — yellow bordered, shows tool name + preview line.
     pub fn tool_call(&mut self, name: &str, preview: &str) -> Result<()> {
         self.close_streaming()?;
+        self.update_width();
         // Truncate preview to fit inside the box (width - 4 for borders + padding)
         let inner_w = self.term_width.saturating_sub(4) as usize;
         let preview_trunc = truncate_str(preview, inner_w);
@@ -184,6 +185,7 @@ impl OutputRenderer {
 
     /// System / info message — dim gray, word-wrapped.
     pub fn system(&mut self, msg: &str) -> Result<()> {
+        self.update_width();
         let tw = self.term_width;
         let wrap_w = tw.saturating_sub(4) as usize;
         // Estimate height needed
@@ -256,6 +258,7 @@ impl OutputRenderer {
         task: &str,
         result: &str,
     ) -> Result<()> {
+        self.update_width();
         let title = format!(" [background: {subagent}] ");
         let body = format!("Task: {task}\nResult: {result}");
         let lines = (body.lines().count() as u16 + 2).max(3);

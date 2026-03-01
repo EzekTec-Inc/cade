@@ -19,7 +19,9 @@ use std::io;
 
 use anyhow::Result;
 use crossterm::{
+    cursor,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    execute,
     terminal,
 };
 use ratatui::{
@@ -99,7 +101,6 @@ impl InputWidget {
                 // ── Draw ──────────────────────────────────────────────────────
                 let buf_snapshot = self.buf.clone();
                 let cursor_pos = self.cursor_pos;
-                let tw = self.term_width;
                 let mode_tag = mode_title(mode);
                 let agent_name = agent_name.to_string();
                 let model = model.to_string();
@@ -117,7 +118,7 @@ impl InputWidget {
                         .split(area);
 
                     // ── Separator ─────────────────────────────────────────────
-                    let sep = "─".repeat(tw as usize);
+                    let sep = "─".repeat(chunks[0].width as usize);
                     let sep_para = Paragraph::new(Span::styled(
                         sep,
                         Style::default().fg(RC::DarkGray),
@@ -373,6 +374,9 @@ impl InputWidget {
         })();
 
         terminal::disable_raw_mode()?;
+        // Move cursor below the entire viewport so that subsequent streaming output
+        // does not overwrite the input box area. MoveDown clamps at screen bottom.
+        let _ = execute!(io::stdout(), cursor::MoveDown(viewport_height), cursor::MoveToColumn(0));
         // Drop term so its inline rows are released before next streaming turn
         drop(term);
         result
