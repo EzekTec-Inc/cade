@@ -12,6 +12,10 @@ pub struct Args {
     #[arg(long = "new", conflicts_with = "agent")]
     pub new_agent: bool,
 
+    /// Resume last session exactly (suppresses first-turn env context re-injection)
+    #[arg(long = "continue", short = 'c')]
+    pub continue_last: bool,
+
     /// Connect to a specific agent by ID
     #[arg(long = "agent", short = 'a')]
     pub agent: Option<String>,

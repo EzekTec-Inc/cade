@@ -561,6 +561,10 @@ async fn main() -> Result<()> {
         toolset,
         hook_engine,
     );
+    // --continue: mark first turn as already done so env context isn't re-injected
+    if args.continue_last {
+        repl.mark_continued();
+    }
     repl.run().await?;
 
     Ok(())

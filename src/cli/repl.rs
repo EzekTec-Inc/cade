@@ -10,7 +10,7 @@ use std::io::{self, Write};
 
 use std::sync::{Arc, Mutex};
 
-use crate::agent::{CadeClient, client::CadeMessage};
+use crate::agent::{CadeClient, client::{AgentState, CadeMessage}};
 use crate::agent::session::SessionStore;
 use crate::permissions::{PermissionManager, PermissionMode};
 use crate::settings::SettingsManager;
@@ -31,6 +31,12 @@ const BANNER: &str = r#"
 "#;
 
 // ── Slash commands ─────────────────────────────────────────────────────────────
+
+/// Result from the agent TUI picker.
+enum AgentPickerResult {
+    Switch(AgentState),
+    Delete(AgentState),
+}
 
 #[derive(Debug)]
 enum SlashCmd {
@@ -60,6 +66,7 @@ enum SlashCmd {
     Hooks,
     Rename(String),
     Toolset(Option<String>),
+    Delete(Option<String>),
     Yolo,
     Plan,
     Default,
@@ -81,7 +88,8 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "info"                   => Some(SlashCmd::Info),
         "new"                    => Some(SlashCmd::New),
         "pin"                    => Some(SlashCmd::Pin),
-        "agents"                 => Some(SlashCmd::Agents),
+        "agents" | "resume"      => Some(SlashCmd::Agents),
+        "delete" | "del" | "rm-agent" => Some(SlashCmd::Delete(arg)),
         "init"                   => Some(SlashCmd::Init),
         "remember" if arg.is_some() => Some(SlashCmd::Remember(arg.unwrap())),
         "memory"                 => Some(SlashCmd::Memory),
@@ -134,6 +142,9 @@ pub struct Repl {
     /// `true` until the first real user message is sent this session.
     /// Used to inject the environment context block (OS, cwd, git) on turn 1.
     first_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Set to `true` by a SIGINT handler while a turn is running.
+    /// `stream_turn()` checks this flag and aborts the SSE stream early.
+    cancel_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Repl {
@@ -165,13 +176,20 @@ impl Repl {
             background_results: Arc::new(Mutex::new(vec![])),
             current_toolset: Arc::new(Mutex::new(toolset)),
             hooks,
-            first_turn: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            first_turn:   std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            cancel_turn:  std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
     fn agent_id(&self)   -> String { self.agent_id.lock().unwrap().clone() }
     fn agent_name(&self) -> String { self.agent_name.lock().unwrap().clone() }
     fn model(&self)      -> String { self.current_model.lock().unwrap().clone() }
+
+    /// Called when `--continue` is set — suppress first-turn env injection.
+    pub fn mark_continued(&self) {
+        use std::sync::atomic::Ordering;
+        self.first_turn.store(false, Ordering::SeqCst);
+    }
 
     pub async fn run(self) -> Result<()> {
         let mut stdout = io::stdout();
@@ -487,60 +505,105 @@ impl Repl {
                             Ok(agents) if agents.is_empty() => {
                                 execute!(stdout, Print("  (no agents found)\n"))?;
                             }
-                            Ok(agents) => {
-                                let current = self.agent_id();
-                                for (i, a) in agents.iter().enumerate() {
-                                    let marker = if a.id == current { " ←" } else { "" };
-                                    execute!(stdout,
-                                        SetForegroundColor(if a.id == current { Color::Green } else { Color::White }),
-                                        Print(format!("  [{}] {}{}\n      {}\n", i + 1, a.name, marker, a.id)),
-                                        ResetColor)?;
-                                }
-                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                    Print("\n  Switch to [number] or Enter to cancel: "), ResetColor)?;
-                                stdout.flush()?;
-                                // Read input (need cooked mode for this)
-                                terminal::enable_raw_mode()?;
-                                let choice = {
-                                    let mut buf = String::new();
-                                    loop {
-                                        if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
-                                            match k.code {
-                                                KeyCode::Enter => break,
-                                                KeyCode::Char(c) => {
-                                                    buf.push(c);
-                                                    execute!(stdout, Print(c))?;
+                            Ok(mut agents) => {
+                                if let Some(result) = self.agent_picker(&mut stdout, &mut agents).await? {
+                                    match result {
+                                        AgentPickerResult::Switch(a) => {
+                                            *self.agent_id.lock().unwrap()   = a.id.clone();
+                                            *self.agent_name.lock().unwrap() = a.name.clone();
+                                            if let Ok(mut s) = self.settings.lock() {
+                                                let _ = s.set_last_agent(&a.id);
+                                            }
+                                            execute!(stdout, SetForegroundColor(Color::Green),
+                                                Print(format!("  ✓ Switched to: {} ({})\n", a.name, a.id)),
+                                                ResetColor)?;
+                                        }
+                                        AgentPickerResult::Delete(a) => {
+                                            match self.client.delete_agent(&a.id).await {
+                                                Ok(_) => {
+                                                    execute!(stdout, SetForegroundColor(Color::Green),
+                                                        Print(format!("  ✓ Deleted: {}\n", a.name)), ResetColor)?;
+                                                    // If we deleted the current agent, switch to any remaining
+                                                    if a.id == self.agent_id() {
+                                                        match self.client.list_agents().await {
+                                                            Ok(remaining) if !remaining.is_empty() => {
+                                                                let first = &remaining[0];
+                                                                *self.agent_id.lock().unwrap()   = first.id.clone();
+                                                                *self.agent_name.lock().unwrap() = first.name.clone();
+                                                                if let Ok(mut s) = self.settings.lock() {
+                                                                    let _ = s.set_last_agent(&first.id);
+                                                                }
+                                                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                                                    Print(format!("  → Now using: {}\n", first.name)), ResetColor)?;
+                                                            }
+                                                            _ => {
+                                                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                                                    Print("  No remaining agents — run /new to create one\n"), ResetColor)?;
+                                                            }
+                                                        }
+                                                    }
                                                 }
-                                                KeyCode::Backspace if !buf.is_empty() => {
-                                                    buf.pop();
-                                                    execute!(stdout, cursor::MoveLeft(1), Print(" "), cursor::MoveLeft(1))?;
-                                                }
-                                                _ => {}
+                                                Err(e) => self.print_error(&mut stdout, &e.to_string())?,
                                             }
                                         }
                                     }
-                                    buf
-                                };
-                                terminal::disable_raw_mode()?;
-                                execute!(stdout, Print("\n"))?;
-                                if let Ok(n) = choice.trim().parse::<usize>() {
-                                    if n >= 1 && n <= agents.len() {
-                                        let a = &agents[n - 1];
-                                        *self.agent_id.lock().unwrap()   = a.id.clone();
-                                        *self.agent_name.lock().unwrap() = a.name.clone();
-                                        if let Ok(mut s) = self.settings.lock() {
-                                            let _ = s.set_last_agent(&a.id);
-                                        }
-                                        execute!(stdout, SetForegroundColor(Color::Green),
-                                            Print(format!("  ✓ Switched to: {} ({})\n", a.name, a.id)),
-                                            ResetColor)?;
-                                    }
                                 }
                             }
-                            Err(e) => {
-                                execute!(stdout, SetForegroundColor(Color::Red),
-                                    Print(format!("  ✗ {e}\n")), ResetColor)?;
+                            Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                        }
+                        stdout.flush()?;
+                    }
+
+                    SlashCmd::Delete(target) => {
+                        // /delete [name-or-id] — delete a specific agent by name/id prefix
+                        let agents = match self.client.list_agents().await {
+                            Ok(a) => a,
+                            Err(e) => { self.print_error(&mut stdout, &e.to_string())?; vec![] }
+                        };
+                        if agents.is_empty() { execute!(stdout, Print("  (no agents)\n"))?; }
+                        else if let Some(query) = target {
+                            let q = query.to_lowercase();
+                            let matched: Vec<_> = agents.iter()
+                                .filter(|a| a.name.to_lowercase().contains(&q) || a.id.starts_with(&q))
+                                .collect();
+                            match matched.len() {
+                                0 => self.print_error(&mut stdout, &format!("No agent matching '{query}'"))?,
+                                1 => {
+                                    let a = matched[0];
+                                    execute!(stdout, SetForegroundColor(Color::Yellow),
+                                        Print(format!("\n  Delete '{}'? [y/N]: ", a.name)), ResetColor)?;
+                                    stdout.flush()?;
+                                    terminal::enable_raw_mode()?;
+                                    let confirmed = loop {
+                                        if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
+                                            break matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y'));
+                                        }
+                                    };
+                                    terminal::disable_raw_mode()?;
+                                    execute!(stdout, Print("\n"))?;
+                                    if confirmed {
+                                        match self.client.delete_agent(&a.id).await {
+                                            Ok(_) => {
+                                                execute!(stdout, SetForegroundColor(Color::Green),
+                                                    Print(format!("  ✓ Deleted: {}\n", a.name)), ResetColor)?;
+                                                if a.id == self.agent_id() {
+                                                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                                        Print("  Active agent deleted — use /new or /agents to continue\n"), ResetColor)?;
+                                                }
+                                            }
+                                            Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                                        }
+                                    } else {
+                                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                            Print("  (cancelled)\n"), ResetColor)?;
+                                    }
+                                }
+                                n => self.print_error(&mut stdout, &format!("{n} agents match '{query}' — be more specific"))?,
                             }
+                        } else {
+                            // No arg → open the agents TUI picker directly in delete mode
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("\n  /delete <name-or-id>  or  /agents then press d\n"), ResetColor)?;
                         }
                         stdout.flush()?;
                     }
@@ -1480,6 +1543,20 @@ impl Repl {
     async fn agent_turn(&self, stdout: &mut io::Stdout, input: &str) -> Result<()> {
         use std::sync::atomic::Ordering;
 
+        // Reset cancel flag and spawn SIGINT watcher for the duration of this turn
+        self.cancel_turn.store(false, Ordering::SeqCst);
+        let cancel_flag = self.cancel_turn.clone();
+        let _sigint_guard = tokio::spawn(async move {
+            #[cfg(unix)]
+            {
+                use tokio::signal::unix::{signal, SignalKind};
+                if let Ok(mut sig) = signal(SignalKind::interrupt()) {
+                    sig.recv().await;
+                    cancel_flag.store(true, Ordering::SeqCst);
+                }
+            }
+        });
+
         // On the first real turn, prefix with environment context
         let effective_input = if self.first_turn.compare_exchange(
             true, false, Ordering::SeqCst, Ordering::SeqCst
@@ -1491,6 +1568,8 @@ impl Repl {
         };
 
         let messages = self.stream_turn(stdout, &effective_input, false, "", "").await?;
+        // Clear cancel flag after turn completes
+        self.cancel_turn.store(false, Ordering::SeqCst);
         self.dispatch_tool_calls(stdout, messages, input).await
     }
 
@@ -1572,22 +1651,37 @@ impl Repl {
             }
         };
 
-        let agent_id = self.agent_id();
+        let agent_id  = self.agent_id();
+        let cancel    = &self.cancel_turn;
+
+        // Helper: detect a user-triggered cancellation error vs a real error
+        fn is_cancel(e: &anyhow::Error) -> bool { e.to_string() == "__cancelled__" }
+
         let messages = if is_tool_return {
             match self
                 .client
-                .stream_tool_return(&agent_id, tool_call_id, tool_output, false, on_event)
+                .stream_tool_return_cancellable(&agent_id, tool_call_id, tool_output, false, on_event, Some(cancel))
                 .await
             {
                 Ok(m) => m,
+                Err(e) if is_cancel(&e) => {
+                    execute!(stdout, Print("\n"), SetForegroundColor(Color::Yellow),
+                        Print("  ✗ Turn interrupted\n"), ResetColor)?;
+                    return Ok(vec![]);
+                }
                 Err(e) => {
                     self.print_error(stdout, &e.to_string())?;
                     return Ok(vec![]);
                 }
             }
         } else {
-            match self.client.stream_message(&agent_id, input, on_event).await {
+            match self.client.stream_message_cancellable(&agent_id, input, on_event, Some(cancel)).await {
                 Ok(m) => m,
+                Err(e) if is_cancel(&e) => {
+                    execute!(stdout, Print("\n"), SetForegroundColor(Color::Yellow),
+                        Print("  ✗ Turn interrupted\n"), ResetColor)?;
+                    return Ok(vec![]);
+                }
                 Err(e) => {
                     self.print_error(stdout, &e.to_string())?;
                     return Ok(vec![]);
@@ -2203,6 +2297,124 @@ impl Repl {
         Ok(())
     }
 
+    /// Result from the `/agents` TUI picker.
+    async fn agent_picker(
+        &self,
+        stdout: &mut io::Stdout,
+        agents: &mut Vec<AgentState>,
+    ) -> Result<Option<AgentPickerResult>> {
+        use crossterm::event::{self, Event, KeyCode};
+
+        if agents.is_empty() {
+            return Ok(None);
+        }
+
+        let current = self.agent_id();
+        let total   = agents.len();
+        let mut selected: usize = agents.iter()
+            .position(|a| a.id == current)
+            .unwrap_or(0);
+
+        let draw = |stdout: &mut io::Stdout, agents: &[AgentState], sel: usize, current: &str| -> Result<()> {
+            execute!(stdout,
+                cursor::MoveToColumn(0),
+                terminal::Clear(terminal::ClearType::FromCursorDown),
+                Print("\r\n"),
+                SetForegroundColor(Color::Cyan), Print("  Agents  "),
+                ResetColor,
+                SetForegroundColor(Color::DarkGrey),
+                Print("↑↓ navigate  Enter switch  d delete  Esc cancel\r\n\r\n"),
+                ResetColor,
+            )?;
+            for (i, a) in agents.iter().enumerate() {
+                let is_sel     = i == sel;
+                let is_current = a.id == current;
+                let arrow      = if is_sel { "  ▶ " } else { "    " };
+                let short_id   = if a.id.len() > 16 { &a.id[..16] } else { &a.id };
+                execute!(stdout,
+                    SetForegroundColor(if is_sel { Color::Green } else { Color::DarkGrey }),
+                    Print(arrow),
+                    SetForegroundColor(if is_sel { Color::White } else { Color::DarkGrey }),
+                    Print(format!("{:<30}", a.name)),
+                    SetForegroundColor(Color::DarkGrey),
+                    Print(format!("{short_id}…")),
+                    ResetColor,
+                )?;
+                if is_current {
+                    execute!(stdout, SetForegroundColor(Color::Cyan), Print(" ← active"), ResetColor)?;
+                }
+                execute!(stdout, Print("\r\n"))?;
+            }
+            execute!(stdout, Print("\r\n"))?;
+            stdout.flush()?;
+            Ok(())
+        };
+
+        // Lines drawn: 2 (header+blank) + total + 1 (footer blank)
+        let draw_lines = (3 + total) as u16;
+
+        terminal::enable_raw_mode()?;
+        execute!(stdout, cursor::Hide)?;
+        draw(stdout, agents, selected, &current)?;
+
+        let result = loop {
+            if let Ok(Event::Key(key)) = event::read() {
+                match (key.code, key.modifiers) {
+                    (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
+                    (KeyCode::Enter, _) => {
+                        let a = agents[selected].clone();
+                        if a.id == current {
+                            break None; // no-op switch to current
+                        }
+                        break Some(AgentPickerResult::Switch(a));
+                    }
+                    (KeyCode::Char('d'), _) | (KeyCode::Delete, _) => {
+                        // Inline delete confirm
+                        let a = agents[selected].clone();
+                        terminal::disable_raw_mode()?;
+                        execute!(stdout, cursor::Show,
+                            SetForegroundColor(Color::Yellow),
+                            Print(format!("\n  Delete '{}'? [y/N]: ", a.name)),
+                            ResetColor)?;
+                        stdout.flush()?;
+                        terminal::enable_raw_mode()?;
+                        let confirmed = loop {
+                            if let Ok(Event::Key(k)) = event::read() {
+                                break matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y'));
+                            }
+                        };
+                        terminal::disable_raw_mode()?;
+                        execute!(stdout, Print("\n"))?;
+                        if confirmed {
+                            break Some(AgentPickerResult::Delete(a));
+                        } else {
+                            // Redraw after cancelled delete
+                            execute!(stdout, cursor::Hide)?;
+                            terminal::enable_raw_mode()?;
+                            draw(stdout, agents, selected, &current)?;
+                        }
+                    }
+                    (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
+                        selected = if selected == 0 { total - 1 } else { selected - 1 };
+                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
+                        draw(stdout, agents, selected, &current)?;
+                    }
+                    (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
+                        selected = (selected + 1) % total;
+                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
+                        draw(stdout, agents, selected, &current)?;
+                    }
+                    _ => {}
+                }
+            }
+        };
+
+        terminal::disable_raw_mode()?;
+        execute!(stdout, cursor::Show, ResetColor)?;
+        stdout.flush()?;
+        Ok(result)
+    }
+
     /// Interactive model picker — opens on `/model` with no argument.
     /// Returns the selected model string or None if cancelled.
     async fn interactive_model_picker(&self, stdout: &mut io::Stdout) -> Result<Option<String>> {
@@ -2625,9 +2837,11 @@ impl Repl {
         println!("  Session:");
         println!("    /info           - agent, model, mode, cwd");
         println!("    /agent          - show current agent ID");
-        println!("    /agents         - list all agents + switch");
+        println!("    /agents         - list all agents + switch (↑↓ navigate, d delete)");
+        println!("    /resume         - alias for /agents (Letta compatibility)");
         println!("    /new            - create a fresh agent (hot-swap)");
         println!("    /rename [name]  - rename current agent");
+        println!("    /delete <name>  - delete an agent by name or ID");
         println!("    /pin            - pin current agent for quick access");
         println!("    /clear          - clear screen + context window");
         println!();
@@ -2690,7 +2904,7 @@ impl Repl {
         println!("    Esc            - clear current input line");
         println!("    Shift+Tab      - cycle permission mode");
         println!("    ↑ / ↓          - navigate command history");
-        println!("    Ctrl+C         - clear line / cancel current input");
+        println!("    Ctrl+C         - clear line / cancel current input / interrupt running turn");
         println!("    Ctrl+D         - exit (on empty line)");
         println!();
         println!("    /feedback       - report issues");

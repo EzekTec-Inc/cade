@@ -502,6 +502,20 @@ impl CadeClient {
     where
         F: Fn(&CadeMessage),
     {
+        self.stream_message_cancellable(agent_id, input, on_event, None).await
+    }
+
+    /// Like `stream_message` but checks an optional cancel flag before each SSE event.
+    pub async fn stream_message_cancellable<F>(
+        &self,
+        agent_id: &str,
+        input: &str,
+        on_event: F,
+        cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Vec<CadeMessage>>
+    where
+        F: Fn(&CadeMessage),
+    {
         let url = self.url(&format!("/agents/{agent_id}/messages/stream"));
         let body = json!({ "input": input });
 
@@ -517,6 +531,11 @@ impl CadeClient {
         let mut messages: Vec<CadeMessage> = Vec::new();
 
         while let Some(event) = es.next().await {
+            // Check cancel flag on every event (fired ~per token while streaming)
+            if cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::SeqCst)) {
+                es.close();
+                return Err(anyhow::anyhow!("__cancelled__"));
+            }
             match event {
                 Ok(Event::Open) => {}
                 Ok(Event::Message(msg)) => {
@@ -599,6 +618,22 @@ impl CadeClient {
     where
         F: Fn(&CadeMessage),
     {
+        self.stream_tool_return_cancellable(agent_id, tool_call_id, output, is_error, on_event, None).await
+    }
+
+    /// Like `stream_tool_return` but checks an optional cancel flag between SSE events.
+    pub async fn stream_tool_return_cancellable<F>(
+        &self,
+        agent_id: &str,
+        tool_call_id: &str,
+        output: &str,
+        is_error: bool,
+        on_event: F,
+        cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Vec<CadeMessage>>
+    where
+        F: Fn(&CadeMessage),
+    {
         let body = json!({
             "role": "tool",
             "tool_return": {
@@ -619,6 +654,10 @@ impl CadeClient {
         let mut messages = Vec::new();
 
         while let Some(event) = es.next().await {
+            if cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::SeqCst)) {
+                es.close();
+                return Err(anyhow::anyhow!("__cancelled__"));
+            }
             match event {
                 Ok(Event::Open) => {}
                 Ok(Event::Message(msg)) => {
