@@ -27,7 +27,50 @@ pub fn open(path: &str) -> Result<Db> {
         .with_context(|| format!("open SQLite at {path}"))?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     apply_schema(&conn)?;
+    run_migrations(&conn)?;
     Ok(Arc::new(Mutex::new(conn)))
+}
+
+/// Idempotent migrations — run after apply_schema on every startup.
+fn run_migrations(conn: &Connection) -> Result<()> {
+    // Migration 1: add UNIQUE(agent_id, label) to memory_blocks if missing.
+    // SQLite doesn't support ALTER TABLE ADD CONSTRAINT, so we rebuild the table.
+    let has_unique: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master
+         WHERE type='index' AND tbl_name='memory_blocks'
+         AND (sql LIKE '%agent_id, label%' OR sql LIKE '%agent_id,label%'
+              OR name='sqlite_autoindex_memory_blocks_1')",
+        [],
+        |r| r.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    if !has_unique {
+        tracing::info!("Running migration: adding UNIQUE(agent_id, label) to memory_blocks");
+        conn.execute_batch(r#"
+            BEGIN;
+            CREATE TABLE IF NOT EXISTS memory_blocks_new (
+                id         TEXT PRIMARY KEY,
+                agent_id   TEXT NOT NULL,
+                label      TEXT NOT NULL,
+                value      TEXT NOT NULL DEFAULT '',
+                updated_at INTEGER NOT NULL,
+                UNIQUE (agent_id, label),
+                FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+            );
+            -- Copy keeping only the latest row per (agent_id, label)
+            INSERT OR IGNORE INTO memory_blocks_new
+                SELECT id, agent_id, label, value, updated_at FROM (
+                    SELECT *, ROW_NUMBER() OVER (
+                        PARTITION BY agent_id, label ORDER BY updated_at DESC
+                    ) AS rn FROM memory_blocks
+                ) WHERE rn = 1;
+            DROP TABLE memory_blocks;
+            ALTER TABLE memory_blocks_new RENAME TO memory_blocks;
+            COMMIT;
+        "#)?;
+        tracing::info!("Migration complete: memory_blocks UNIQUE constraint added");
+    }
+    Ok(())
 }
 
 fn apply_schema(conn: &Connection) -> Result<()> {
@@ -56,6 +99,7 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             label       TEXT NOT NULL,
             value       TEXT NOT NULL DEFAULT '',
             updated_at  INTEGER NOT NULL,
+            UNIQUE (agent_id, label),
             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
         );
 
@@ -249,7 +293,7 @@ pub fn upsert_memory_block(db: &Db, agent_id: &str, label: &str, value: &str) ->
     conn.execute(
         "INSERT INTO memory_blocks (id, agent_id, label, value, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5)
-         ON CONFLICT (agent_id) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
+         ON CONFLICT (agent_id, label) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at",
         params![id, agent_id, label, value, now_ts()],
     )?;
     Ok(())
