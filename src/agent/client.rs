@@ -190,6 +190,21 @@ impl CadeClient {
 
     /// Fetch the server's auto-detected provider and default model.
     /// Falls back to a local default if the endpoint is unavailable (e.g. Letta Cloud).
+    /// Returns list of configured provider names from the server.
+    pub async fn available_providers(&self) -> Vec<String> {
+        let resp = self.client
+            .get(self.url("/config"))
+            .header(self.auth().0, self.auth().1)
+            .send().await;
+        let Ok(r) = resp else { return vec!["ollama".to_string()] };
+        let Ok(body): Result<serde_json::Value, _> = r.json().await else {
+            return vec!["ollama".to_string()]
+        };
+        body["available_providers"].as_array()
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_else(|| vec!["ollama".to_string()])
+    }
+
     pub async fn server_default_model(&self) -> String {
         let fallback = "anthropic/claude-sonnet-4-5-20250929".to_string();
         let resp = match self.client

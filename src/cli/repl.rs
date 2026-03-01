@@ -84,7 +84,8 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "plan"                   => Some(SlashCmd::Plan),
         "default" | "normal" | "resume" => Some(SlashCmd::Default),
         "mode"                   => Some(SlashCmd::Mode(arg)),
-        "model" if arg.is_some() => Some(SlashCmd::Model(arg.unwrap())),
+        "model"  => Some(SlashCmd::Model(arg.unwrap_or_default())),
+        "toolset" => Some(SlashCmd::Model(format!("__toolset__{}", arg.unwrap_or_default()))),
         _ => None,
     }
 }
@@ -327,6 +328,15 @@ impl Repl {
                     }
                     // SlashCmd::New is handled below (hot-swap)
                     SlashCmd::Model(m) => {
+                        // Empty arg → open interactive picker
+                        let m = if m.is_empty() {
+                            match self.interactive_model_picker(&mut stdout).await? {
+                                Some(picked) => picked,
+                                None => { stdout.flush()?; continue; }
+                            }
+                        } else {
+                            m
+                        };
                         let new_toolset = Toolset::for_model(&m);
                         let old_toolset = *self.current_toolset.lock().unwrap();
                         execute!(stdout, SetForegroundColor(Color::DarkGrey),
@@ -1375,6 +1385,144 @@ impl Repl {
                 })
             }
         }
+    }
+
+    /// Interactive model picker — opens on `/model` with no argument.
+    /// Returns the selected model string or None if cancelled.
+    async fn interactive_model_picker(&self, stdout: &mut io::Stdout) -> Result<Option<String>> {
+        use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+
+        // Fetch available providers from server
+        let providers = self.client.available_providers().await;
+        let current   = self.model();
+
+        // Supported model catalogue — (provider, display_name, full_id, toolset_label)
+        let catalogue: &[(&str, &str, &str, &str)] = &[
+            // Anthropic
+            ("anthropic", "Claude Opus 4.6",      "anthropic/claude-opus-4-6",              "default"),
+            ("anthropic", "Claude Sonnet 4.5",    "anthropic/claude-sonnet-4-5-20250929",   "default"),
+            ("anthropic", "Claude Haiku 4.5",     "anthropic/claude-haiku-4-5",             "default"),
+            // OpenAI
+            ("openai",    "GPT-4.1",              "openai/gpt-4.1",                         "codex"),
+            ("openai",    "GPT-4o",               "openai/gpt-4o",                          "codex"),
+            ("openai",    "GPT-4o Mini",          "openai/gpt-4o-mini",                     "codex"),
+            ("openai",    "o3 Mini",              "openai/o3-mini",                         "codex"),
+            // Google
+            ("gemini",    "Gemini 2.5 Pro",       "gemini/gemini-2.5-pro",                  "gemini"),
+            ("gemini",    "Gemini 2.0 Flash",     "gemini/gemini-2.0-flash",                "gemini"),
+            // Ollama
+            ("ollama",    "Llama 3",              "ollama/llama3",                          "default"),
+            ("ollama",    "Mistral",              "ollama/mistral",                         "default"),
+            ("ollama",    "Code Llama",           "ollama/codellama",                       "default"),
+        ];
+
+        // Filter to available providers only
+        let models: Vec<(&str, &str, &str, &str)> = catalogue.iter()
+            .filter(|(p, ..)| providers.contains(&p.to_string()))
+            .copied()
+            .collect();
+
+        if models.is_empty() {
+            execute!(stdout, ResetColor)?;
+            stdout.flush()?;
+            println!("\n  No models available. Check your API keys.");
+            return Ok(None);
+        }
+
+        let total = models.len();
+        let mut selected: usize = models.iter().position(|(_, _, id, _)| *id == current).unwrap_or(0);
+
+        // Draw the picker
+        let draw = |stdout: &mut io::Stdout, sel: usize| -> Result<()> {
+            // Clear lines: move up (total+4) and clear down
+            execute!(stdout,
+                cursor::MoveToColumn(0),
+                terminal::Clear(terminal::ClearType::FromCursorDown)
+            )?;
+            println!();
+            execute!(stdout, SetForegroundColor(Color::Cyan),
+                Print("  Select model  "), ResetColor,
+                SetForegroundColor(Color::DarkGrey),
+                Print("↑↓ navigate  Enter select  Esc cancel\n"),
+                ResetColor)?;
+            println!();
+
+            let mut last_provider = "";
+            for (i, (provider, name, id, toolset)) in models.iter().enumerate() {
+                if *provider != last_provider {
+                    execute!(stdout, SetForegroundColor(Color::Yellow),
+                        Print(format!("  {}\n", provider.to_uppercase())), ResetColor)?;
+                    last_provider = provider;
+                }
+                let is_current = *id == current;
+                let is_sel     = i == sel;
+                let cursor_str = if is_sel { "  ▶ " } else { "    " };
+                let name_color = if is_sel { Color::White } else { Color::DarkGrey };
+                execute!(stdout,
+                    SetForegroundColor(if is_sel { Color::Green } else { Color::DarkGrey }),
+                    Print(cursor_str),
+                    SetForegroundColor(name_color),
+                    Print(format!("{:<28}", name)),
+                    SetForegroundColor(Color::DarkGrey),
+                    Print(format!("[{}]", toolset)),
+                    ResetColor)?;
+                if is_current {
+                    execute!(stdout, SetForegroundColor(Color::Cyan), Print(" ← current"), ResetColor)?;
+                }
+                println!();
+            }
+            println!();
+            stdout.flush()?;
+            Ok(())
+        };
+
+        // Initial draw
+        terminal::disable_raw_mode()?;
+        execute!(stdout, cursor::Hide)?;
+        terminal::enable_raw_mode()?;
+        draw(stdout, selected)?;
+
+        // Event loop
+        let result = loop {
+            if let Ok(Event::Key(key)) = event::read() {
+                match (key.code, key.modifiers) {
+                    (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => {
+                        break None;
+                    }
+                    (KeyCode::Enter, _) => {
+                        break Some(models[selected].2.to_string());
+                    }
+                    (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
+                        if selected > 0 { selected -= 1; }
+                        else { selected = total - 1; }
+                        // Redraw: move cursor up by (total + header lines)
+                        let lines = total + 5 + {
+                            // Count provider headers
+                            let mut seen = std::collections::HashSet::new();
+                            models.iter().filter(|(p,..)| seen.insert(*p)).count()
+                        };
+                        execute!(stdout, cursor::MoveToPreviousLine(lines as u16))?;
+                        draw(stdout, selected)?;
+                    }
+                    (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
+                        selected = (selected + 1) % total;
+                        let lines = total + 5 + {
+                            let mut seen = std::collections::HashSet::new();
+                            models.iter().filter(|(p,..)| seen.insert(*p)).count()
+                        };
+                        execute!(stdout, cursor::MoveToPreviousLine(lines as u16))?;
+                        draw(stdout, selected)?;
+                    }
+                    _ => {}
+                }
+            }
+        };
+
+        terminal::disable_raw_mode()?;
+        execute!(stdout, cursor::Show, ResetColor)?;
+        terminal::enable_raw_mode()?;
+        stdout.flush()?;
+        Ok(result)
     }
 
     /// Handle the `run_subagent` tool call — spawn a subagent and return its result.
