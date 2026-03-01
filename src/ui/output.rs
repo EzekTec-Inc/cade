@@ -1,18 +1,20 @@
 /// Streaming and bounded output renderer for the CADE REPL.
 ///
 /// Two rendering paths:
-/// 1. **Streaming** (reasoning/assistant chunks): direct stdout writes with
-///    terminal-width-aware word wrapping. Fast, smooth, no flicker.
+/// 1. **Streaming** (reasoning/assistant chunks): raw text via direct stdout
+///    writes while the LLM is generating. On completion, raw lines are erased
+///    and re-rendered via ratatui `insert_before` with proper markdown styling.
 /// 2. **Bounded** (tool calls, system msgs, headers): ratatui `insert_before`
-///    with styled boxes. The closure receives `&mut Buffer`; widgets are
-///    rendered via `Widget::render(area, buf)`.
+///    with styled `Paragraph`/`Line`/`Span` widgets.
 
 use std::io::{self, Write};
 
 use anyhow::Result;
 use crossterm::{
+    cursor,
     execute,
     style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
+    terminal::{self, ClearType},
 };
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
@@ -65,29 +67,13 @@ pub struct OutputRenderer {
     /// Current column position while streaming (for word-wrap tracking).
     pub stream_col: u16,
 
-    // ── Inline markdown state (assistant streaming only) ──────────────────
-    /// Currently inside `**...**` bold span.
-    in_bold: bool,
-    /// Currently inside single-backtick `` `code` `` span.
-    in_code: bool,
-    /// Pending `*` or sentinel char for multi-char pattern detection.
-    md_pending: Option<char>,
-    /// True immediately after a newline — enables bullet / heading / list detection.
-    at_line_start: bool,
-
-    // ── Code fence state ──────────────────────────────────────────────────
-    /// Count of consecutive `` ` `` chars seen (for triple-backtick detection).
-    backtick_run: u8,
-    /// Currently inside a ` ``` ` fenced code block.
-    in_code_fence: bool,
-    /// Accumulates the language label after the opening ` ``` `.
-    fence_lang_buf: String,
-    /// True once the language line's trailing `\n` has been consumed.
-    fence_lang_done: bool,
-
-    // ── Numbered list state ───────────────────────────────────────────────
-    /// Accumulates ASCII digit chars at line-start (for `1. ` detection).
-    num_buf: String,
+    // ── Streaming buffers (text accumulated for re-render at completion) ──
+    /// Full assistant response text (accumulated while streaming).
+    response_buf: String,
+    /// Full reasoning text (accumulated while streaming).
+    reason_buf: String,
+    /// Number of `\n` / `\r\n` emitted during streaming (used to erase lines).
+    stream_line_count: u16,
 }
 
 impl OutputRenderer {
@@ -100,15 +86,9 @@ impl OutputRenderer {
             in_reasoning: false,
             in_assistant: false,
             stream_col: 0,
-            in_bold: false,
-            in_code: false,
-            md_pending: None,
-            at_line_start: false,
-            backtick_run: 0,
-            in_code_fence: false,
-            fence_lang_buf: String::new(),
-            fence_lang_done: false,
-            num_buf: String::new(),
+            response_buf: String::new(),
+            reason_buf: String::new(),
+            stream_line_count: 0,
         }
     }
 
@@ -119,12 +99,18 @@ impl OutputRenderer {
         }
     }
 
-    // ── Streaming paths (direct stdout, no ratatui overhead) ─────────────────
+    // ── Streaming paths ───────────────────────────────────────────────────────
+    //
+    // Text is written raw to stdout while streaming (for live display).
+    // On completion, raw lines are erased and re-rendered via ratatui
+    // insert_before with proper markdown formatting.
 
-    /// Start of a reasoning block — print styled header line.
+    /// Start of a reasoning block — print plain header line, init counters.
     pub fn reasoning_header(&mut self) -> io::Result<()> {
         self.in_reasoning = true;
         self.stream_col = CONTENT_PAD;
+        // 2 lines: the opening \n + the header line (which has its own trailing \n)
+        self.stream_line_count = 2;
         let mut out = io::stdout();
         execute!(
             out,
@@ -136,41 +122,68 @@ impl OutputRenderer {
         out.flush()
     }
 
-    /// Write one chunk of reasoning text, with soft word-wrap.
+    /// Write one chunk of reasoning text — buffer it and write raw to stdout.
     pub fn reasoning_chunk(&mut self, text: &str) -> io::Result<()> {
+        self.reason_buf.push_str(text);
         let wrap_at = self.wrap_width();
         let mut out = io::stdout();
-        self.write_wrapped(&mut out, text, wrap_at)?;
+        self.write_raw(&mut out, text, wrap_at)?;
         out.flush()
     }
 
-    /// Close the reasoning block — reset style.
-    pub fn reasoning_done(&mut self) -> io::Result<()> {
+    /// Close reasoning block — erase raw lines, re-render via ratatui.
+    pub fn reasoning_done(&mut self) -> Result<()> {
         if !self.in_reasoning {
             return Ok(());
         }
         self.in_reasoning = false;
         self.stream_col = 0;
-        self.in_bold = false;
-        self.in_code = false;
-        self.md_pending = None;
-        self.at_line_start = false;
-        self.backtick_run = 0;
-        self.in_code_fence = false;
-        self.fence_lang_buf.clear();
-        self.fence_lang_done = false;
-        self.num_buf.clear();
+        let buf = std::mem::take(&mut self.reason_buf);
+        let line_count = self.stream_line_count;
+        self.stream_line_count = 0;
+        self.update_width();
+
         let mut out = io::stdout();
-        execute!(out, Print("\n"), SetAttribute(Attribute::Reset), ResetColor)?;
-        out.flush()
+        // Erase the raw-streamed lines
+        if line_count > 0 {
+            execute!(
+                out,
+                cursor::MoveUp(line_count),
+                cursor::MoveToColumn(0),
+                terminal::Clear(ClearType::FromCursorDown),
+            )?;
+        }
+        execute!(out, SetAttribute(Attribute::Reset), ResetColor)?;
+        out.flush()?;
+
+        // Re-render with ratatui: italic gray header + plain body
+        if !buf.trim().is_empty() {
+            let width = self.wrap_width();
+            let mut lines: Vec<Line> = vec![Line::from(Span::styled(
+                format!("{INDENT}💭 thinking…"),
+                Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC),
+            ))];
+            for text_line in buf.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("{INDENT}{text_line}"),
+                    Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC),
+                )));
+            }
+            let height = estimate_height(&lines, width);
+            self.with_insert_before(height, move |buf_ref| {
+                let area = padded_rect(*buf_ref.area(), CONTENT_PAD);
+                Paragraph::new(lines).wrap(Wrap { trim: false }).render(area, buf_ref);
+            })?;
+        }
+        Ok(())
     }
 
-    /// Write one chunk of assistant text, with soft word-wrap.
+    /// Write one chunk of assistant text — buffer it and write raw to stdout.
     pub fn assistant_chunk(&mut self, text: &str) -> io::Result<()> {
         if !self.in_assistant {
             self.in_assistant = true;
             self.stream_col = CONTENT_PAD;
-            self.at_line_start = true;
+            self.stream_line_count = 1; // for the opening \n
             let mut out = io::stdout();
             execute!(
                 out,
@@ -179,36 +192,55 @@ impl OutputRenderer {
                 SetForegroundColor(Color::White),
                 Print(format!("\n{INDENT}")),
             )?;
+            out.flush()?;
         }
+        self.response_buf.push_str(text);
         let wrap_at = self.wrap_width();
         let mut out = io::stdout();
-        self.write_wrapped(&mut out, text, wrap_at)?;
+        self.write_raw(&mut out, text, wrap_at)?;
         out.flush()
     }
 
-    /// Close the assistant block — reset and trailing newline.
-    pub fn assistant_done(&mut self) -> io::Result<()> {
+    /// Close assistant block — erase raw lines, re-render via ratatui with markdown.
+    pub fn assistant_done(&mut self) -> Result<()> {
         if !self.in_assistant {
             return Ok(());
         }
         self.in_assistant = false;
         self.stream_col = 0;
-        self.in_bold = false;
-        self.in_code = false;
-        self.md_pending = None;
-        self.at_line_start = false;
-        self.backtick_run = 0;
-        self.in_code_fence = false;
-        self.fence_lang_buf.clear();
-        self.fence_lang_done = false;
-        self.num_buf.clear();
+        let buf = std::mem::take(&mut self.response_buf);
+        let line_count = self.stream_line_count;
+        self.stream_line_count = 0;
+        self.update_width();
+
         let mut out = io::stdout();
-        execute!(out, Print("\n"), SetAttribute(Attribute::Reset), ResetColor)?;
-        out.flush()
+        // Erase raw-streamed lines
+        if line_count > 0 {
+            execute!(
+                out,
+                cursor::MoveUp(line_count),
+                cursor::MoveToColumn(0),
+                terminal::Clear(ClearType::FromCursorDown),
+            )?;
+        }
+        execute!(out, SetAttribute(Attribute::Reset), ResetColor)?;
+        out.flush()?;
+
+        // Re-render with ratatui markdown formatting
+        if !buf.trim().is_empty() {
+            let width = self.wrap_width();
+            let lines = parse_markdown_lines(&buf);
+            let height = estimate_height(&lines, width);
+            self.with_insert_before(height, move |buf_ref| {
+                let area = padded_rect(*buf_ref.area(), CONTENT_PAD);
+                Paragraph::new(lines).wrap(Wrap { trim: false }).render(area, buf_ref);
+            })?;
+        }
+        Ok(())
     }
 
     /// Close any open streaming block (call before bounded content).
-    pub fn close_streaming(&mut self) -> io::Result<()> {
+    pub fn close_streaming(&mut self) -> Result<()> {
         if self.in_reasoning {
             self.reasoning_done()?;
         }
@@ -507,242 +539,25 @@ impl OutputRenderer {
     }
 
     /// Write `text` to `out` with soft word-wrapping at `wrap_at` columns.
-    /// When `self.in_assistant`, applies inline markdown:
-    ///   ``` fences, `inline code`, **bold**, - bullets, # headings, 1. lists
-    fn write_wrapped(
-        &mut self,
-        out: &mut impl Write,
-        text: &str,
-        wrap_at: usize,
-    ) -> io::Result<()> {
-        let do_md = self.in_assistant;
-
+    /// Plain text only — no markdown processing. Tracks `stream_line_count`.
+    fn write_raw(&mut self, out: &mut impl Write, text: &str, wrap_at: usize) -> io::Result<()> {
         for ch in text.chars() {
-            // ── Newline ────────────────────────────────────────────────────
             if ch == '\n' {
-                // ── Inside a code fence: handle lang line or normal newline ─
-                if do_md && self.in_code_fence && !self.fence_lang_done {
-                    // Print dim lang label then switch to yellow for code
-                    if !self.fence_lang_buf.is_empty() {
-                        let label = self.fence_lang_buf.clone();
-                        execute!(
-                            out,
-                            SetForegroundColor(Color::DarkGrey),
-                            Print(format!(" {label}")),
-                            SetAttribute(Attribute::Reset),
-                            SetForegroundColor(Color::Yellow),
-                        )?;
-                    } else {
-                        execute!(out, SetAttribute(Attribute::Reset), SetForegroundColor(Color::Yellow))?;
-                    }
-                    self.fence_lang_done = true;
-                    execute!(out, Print(format!("\r\n{INDENT}")))?;
-                    self.stream_col = CONTENT_PAD;
-                    self.at_line_start = true;
-                    continue;
-                }
-                // Flush any pending `*` before newline
-                if let Some(p) = self.md_pending.take() {
-                    execute!(out, Print(p))?;
-                    self.stream_col = self.stream_col.saturating_add(1);
-                }
-                // Flush any pending num_buf before newline
-                if !self.num_buf.is_empty() {
-                    let nb = std::mem::take(&mut self.num_buf);
-                    execute!(out, Print(&nb))?;
-                    self.stream_col = self.stream_col.saturating_add(nb.chars().count() as u16);
-                }
                 execute!(out, Print(format!("\r\n{INDENT}")))?;
                 self.stream_col = CONTENT_PAD;
-                self.at_line_start = true;
-                continue;
-            }
-
-            if ch == '\r' {
-                continue; // skip bare CR
-            }
-
-            // ── Inside a code fence ────────────────────────────────────────
-            if do_md && self.in_code_fence {
-                if !self.fence_lang_done {
-                    // Accumulate lang label
-                    self.fence_lang_buf.push(ch);
-                    continue; // don't print yet — wait for \n
-                }
-                // ── Inside fence body: handle closing ``` via backtick_run ─
-                if ch == '`' {
-                    self.backtick_run += 1;
-                    if self.backtick_run == 3 {
-                        // Closing fence
-                        self.in_code_fence = false;
-                        self.fence_lang_buf.clear();
-                        self.fence_lang_done = false;
-                        self.backtick_run = 0;
-                        execute!(out, SetAttribute(Attribute::Reset), SetForegroundColor(Color::White))?;
-                    }
-                    continue;
-                } else {
-                    // Emit any held backticks inside the fence body (shouldn't normally happen)
-                    for _ in 0..self.backtick_run {
-                        execute!(out, Print('`'))?;
-                        self.stream_col = self.stream_col.saturating_add(1);
-                    }
-                    self.backtick_run = 0;
-                }
-                // Normal char inside fence — print, track col
-                if self.stream_col >= wrap_at as u16 && ch == ' ' {
-                    execute!(out, Print(format!("\r\n{INDENT}")))?;
-                    self.stream_col = CONTENT_PAD;
-                    continue;
-                }
+                self.stream_line_count += 1;
+            } else if ch == '\r' {
+                // skip bare CR
+            } else if self.stream_col >= wrap_at as u16 && ch == ' ' {
+                // soft word-wrap at space
+                execute!(out, Print(format!("\r\n{INDENT}")))?;
+                self.stream_col = CONTENT_PAD;
+                self.stream_line_count += 1;
+                // skip the space that triggered the wrap
+            } else {
                 execute!(out, Print(ch))?;
                 self.stream_col = self.stream_col.saturating_add(1);
-                continue;
             }
-
-            // ── Soft-wrap at word boundary ─────────────────────────────────
-            if self.stream_col >= wrap_at as u16 && ch == ' ' {
-                if let Some(p) = self.md_pending.take() {
-                    execute!(out, Print(p))?;
-                }
-                if !self.num_buf.is_empty() {
-                    let nb = std::mem::take(&mut self.num_buf);
-                    execute!(out, Print(&nb))?;
-                }
-                execute!(out, Print(format!("\r\n{INDENT}")))?;
-                self.stream_col = CONTENT_PAD;
-                self.at_line_start = false;
-                continue; // skip the space that triggered the wrap
-            }
-
-            if do_md {
-                // ── Backtick: fence or inline code ─────────────────────────
-                if ch == '`' {
-                    self.backtick_run += 1;
-                    continue; // hold — wait to see if it's 1, 2, or 3
-                }
-                if self.backtick_run > 0 {
-                    let run = self.backtick_run;
-                    self.backtick_run = 0;
-                    if run == 3 {
-                        // Opening ``` fence
-                        self.in_code_fence = true;
-                        self.fence_lang_done = false;
-                        self.fence_lang_buf.clear();
-                        // Start lang accumulation with current char (if not space/newline)
-                        if ch != ' ' && ch != '\n' {
-                            self.fence_lang_buf.push(ch);
-                        }
-                        continue;
-                    } else if run == 1 && !self.in_code_fence {
-                        // Single backtick: toggle inline code
-                        self.in_code = !self.in_code;
-                        execute!(
-                            out,
-                            if self.in_code { SetForegroundColor(Color::Yellow) }
-                            else { SetForegroundColor(Color::White) },
-                        )?;
-                        // fall through: process `ch` normally
-                    } else {
-                        // 2 backticks: emit literally
-                        for _ in 0..run {
-                            execute!(out, Print('`'))?;
-                            self.stream_col = self.stream_col.saturating_add(1);
-                        }
-                        // fall through: process `ch` normally
-                    }
-                }
-
-                // ── Heading: `# ` at line start ───────────────────────────
-                if self.at_line_start && ch == '#' {
-                    self.at_line_start = false;
-                    execute!(out, SetForegroundColor(Color::Cyan), SetAttribute(Attribute::Bold))?;
-                    continue; // don't print the `#`
-                }
-
-                // ── Numbered list: digits at line start ───────────────────
-                if self.at_line_start && ch.is_ascii_digit() {
-                    self.num_buf.push(ch);
-                    continue; // accumulate
-                }
-                if !self.num_buf.is_empty() {
-                    if ch == '.' {
-                        // confirmed list item prefix — store sentinel
-                        self.md_pending = Some('N');
-                        continue;
-                    } else if self.md_pending == Some('N') && ch == ' ' {
-                        // emit "N. " in bold
-                        let nb = std::mem::take(&mut self.num_buf);
-                        self.md_pending = None;
-                        execute!(
-                            out,
-                            SetAttribute(Attribute::Bold),
-                            Print(format!("{nb}. ")),
-                            SetAttribute(Attribute::NormalIntensity),
-                        )?;
-                        self.stream_col = self.stream_col.saturating_add((nb.len() + 2) as u16);
-                        self.at_line_start = false;
-                        continue;
-                    } else {
-                        // not a list item — emit buffered digits literally
-                        let nb = std::mem::take(&mut self.num_buf);
-                        self.md_pending = None;
-                        execute!(out, Print(&nb))?;
-                        self.stream_col = self.stream_col.saturating_add(nb.chars().count() as u16);
-                        // fall through to process `ch` normally
-                    }
-                }
-
-                // ── Bullet: `- ` or `* ` at line start ───────────────────
-                if self.at_line_start && (ch == '-' || ch == '*') {
-                    self.md_pending = Some('•');
-                    self.at_line_start = false;
-                    continue;
-                }
-                if let Some('•') = self.md_pending {
-                    if ch == ' ' {
-                        self.md_pending = None;
-                        execute!(out, Print("• "))?;
-                        self.stream_col = self.stream_col.saturating_add(2);
-                        continue;
-                    } else {
-                        let held = self.md_pending.take().unwrap();
-                        execute!(out, Print(held))?;
-                        self.stream_col = self.stream_col.saturating_add(1);
-                        // fall through
-                    }
-                }
-
-                // ── Bold `**...**` ─────────────────────────────────────────
-                if ch == '*' {
-                    if self.md_pending == Some('*') {
-                        self.md_pending = None;
-                        self.in_bold = !self.in_bold;
-                        execute!(
-                            out,
-                            if self.in_bold { SetAttribute(Attribute::Bold) }
-                            else { SetAttribute(Attribute::NormalIntensity) },
-                        )?;
-                    } else {
-                        self.md_pending = Some('*');
-                    }
-                    continue;
-                }
-                // Flush pending `*` on non-`*` char
-                if let Some('*') = self.md_pending {
-                    execute!(out, Print('*'))?;
-                    self.stream_col = self.stream_col.saturating_add(1);
-                    self.md_pending = None;
-                }
-
-                // Clear line-start flag on first non-whitespace
-                if self.at_line_start && !ch.is_whitespace() {
-                    self.at_line_start = false;
-                }
-            }
-
-            execute!(out, Print(ch))?;
-            self.stream_col = self.stream_col.saturating_add(1);
         }
         Ok(())
     }
@@ -769,6 +584,201 @@ impl Default for OutputRenderer {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// ── Markdown parser ───────────────────────────────────────────────────────────
+
+/// Convert a complete markdown text string into a `Vec<Line>` for ratatui rendering.
+/// Handles: headings, bullets, numbered lists, code fences, horizontal rules, inline bold/code.
+fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut in_fence = false;
+
+    for raw_line in text.lines() {
+        let trimmed = raw_line.trim_start();
+
+        // ── Code fence toggle ────────────────────────────────────────────
+        if trimmed.starts_with("```") {
+            in_fence = !in_fence;
+            if in_fence {
+                let lang = trimmed.trim_start_matches('`').trim();
+                if !lang.is_empty() {
+                    lines.push(Line::from(Span::styled(
+                        format!("{INDENT}  {lang}"),
+                        Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                    )));
+                }
+            }
+            // Don't emit the ``` line itself
+            continue;
+        }
+
+        if in_fence {
+            lines.push(Line::from(Span::styled(
+                format!("{INDENT}  {raw_line}"),
+                Style::default().fg(RC::Yellow),
+            )));
+            continue;
+        }
+
+        // ── Empty line ────────────────────────────────────────────────────
+        if raw_line.trim().is_empty() {
+            lines.push(Line::from(""));
+            continue;
+        }
+
+        // ── Headings ──────────────────────────────────────────────────────
+        if let Some(rest) = trimmed.strip_prefix("### ") {
+            lines.push(Line::from(Span::styled(
+                format!("{INDENT}{rest}"),
+                Style::default().fg(RC::Cyan),
+            )));
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("## ") {
+            lines.push(Line::from(Span::styled(
+                format!("{INDENT}{rest}"),
+                Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD),
+            )));
+            continue;
+        }
+        if let Some(rest) = trimmed.strip_prefix("# ") {
+            lines.push(Line::from(Span::styled(
+                format!("{INDENT}{rest}"),
+                Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+            )));
+            continue;
+        }
+
+        // ── Horizontal rule ────────────────────────────────────────────────
+        if trimmed == "---" || trimmed == "***" || trimmed == "===" {
+            lines.push(Line::from(Span::styled(
+                format!("{INDENT}{}", "─".repeat(40)),
+                Style::default().fg(RC::DarkGray),
+            )));
+            continue;
+        }
+
+        // ── Bullet list ────────────────────────────────────────────────────
+        let bullet_rest = trimmed
+            .strip_prefix("- ")
+            .or_else(|| trimmed.strip_prefix("* "))
+            .or_else(|| trimmed.strip_prefix("• "));
+        if let Some(rest) = bullet_rest {
+            let mut spans: Vec<Span<'static>> = vec![
+                Span::raw(format!("{INDENT}  ")),
+                Span::styled("• ", Style::default().fg(RC::Green)),
+            ];
+            spans.extend(parse_inline(rest));
+            lines.push(Line::from(spans));
+            continue;
+        }
+
+        // ── Numbered list ─────────────────────────────────────────────────
+        if let Some((num, rest)) = parse_list_prefix(trimmed) {
+            let mut spans: Vec<Span<'static>> = vec![
+                Span::raw(format!("{INDENT}  ")),
+                Span::styled(format!("{num}. "), Style::default().add_modifier(Modifier::BOLD)),
+            ];
+            spans.extend(parse_inline(rest));
+            lines.push(Line::from(spans));
+            continue;
+        }
+
+        // ── Normal paragraph line with inline spans ───────────────────────
+        let mut spans: Vec<Span<'static>> = vec![Span::raw(INDENT)];
+        spans.extend(parse_inline(trimmed));
+        lines.push(Line::from(spans));
+    }
+
+    lines
+}
+
+/// Parse inline markdown spans within a single line of text.
+/// Handles: `**bold**`, `` `code` ``, `*italic*`.
+fn parse_inline(text: &str) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut rest = text.to_string();
+
+    while !rest.is_empty() {
+        // ── Bold: **…** ────────────────────────────────────────────────
+        if let Some(pos) = rest.find("**") {
+            let before = rest[..pos].to_string();
+            if !before.is_empty() {
+                spans.push(Span::raw(before));
+            }
+            let after_open = &rest[pos + 2..];
+            if let Some(end) = after_open.find("**") {
+                spans.push(Span::styled(
+                    after_open[..end].to_string(),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+                rest = after_open[end + 2..].to_string();
+                continue;
+            } else {
+                // Unmatched ** — emit literally
+                spans.push(Span::raw(format!("**{after_open}")));
+                break;
+            }
+        }
+        // ── Inline code: `…` ──────────────────────────────────────────
+        if let Some(pos) = rest.find('`') {
+            let before = rest[..pos].to_string();
+            if !before.is_empty() {
+                spans.push(Span::raw(before));
+            }
+            let after_open = &rest[pos + 1..];
+            if let Some(end) = after_open.find('`') {
+                spans.push(Span::styled(
+                    after_open[..end].to_string(),
+                    Style::default().fg(RC::Yellow),
+                ));
+                rest = after_open[end + 1..].to_string();
+                continue;
+            } else {
+                spans.push(Span::raw(format!("`{after_open}")));
+                break;
+            }
+        }
+        // ── Italic: *…* ───────────────────────────────────────────────
+        if let Some(pos) = rest.find('*') {
+            let before = rest[..pos].to_string();
+            if !before.is_empty() {
+                spans.push(Span::raw(before));
+            }
+            let after_open = &rest[pos + 1..];
+            if let Some(end) = after_open.find('*') {
+                spans.push(Span::styled(
+                    after_open[..end].to_string(),
+                    Style::default().add_modifier(Modifier::ITALIC),
+                ));
+                rest = after_open[end + 1..].to_string();
+                continue;
+            } else {
+                spans.push(Span::raw(format!("*{after_open}")));
+                break;
+            }
+        }
+        // ── Plain text (no more delimiters) ──────────────────────────
+        spans.push(Span::raw(rest.clone()));
+        break;
+    }
+
+    if spans.is_empty() {
+        spans.push(Span::raw(String::new()));
+    }
+    spans
+}
+
+/// Detect a numbered list prefix like `1. ` at the start of `s`.
+/// Returns `(number_str, rest_of_line)` or `None`.
+fn parse_list_prefix(s: &str) -> Option<(&str, &str)> {
+    let end = s.find(|c: char| !c.is_ascii_digit())?;
+    if end == 0 {
+        return None;
+    }
+    let rest = s[end..].strip_prefix(". ")?;
+    Some((&s[..end], rest))
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
