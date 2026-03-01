@@ -1,7 +1,10 @@
 pub mod anthropic;
+pub mod catalogue;
 pub mod gemini;
 pub mod ollama;
 pub mod openai;
+
+pub use catalogue::{ModelEntry, CATALOGUE};
 
 use anyhow::Result;
 use async_trait::async_trait;
@@ -91,8 +94,10 @@ pub const OPENAI_COMPAT_PRESETS: &[(&str, &str)] = &[
 ];
 
 pub struct LlmRouter {
-    providers: std::collections::HashMap<String, Arc<dyn LlmProvider>>,
+    providers:        std::collections::HashMap<String, Arc<dyn LlmProvider>>,
     default_provider: String,
+    /// Base URL for the Ollama instance (used by /v1/models to query /api/tags).
+    pub ollama_base_url: String,
 }
 
 impl LlmRouter {
@@ -139,7 +144,7 @@ impl LlmRouter {
             }
         }
 
-        Self { providers, default_provider }
+        Self { providers, default_provider, ollama_base_url: config.ollama_base_url.clone() }
     }
 
     /// Add or replace a provider at runtime (hot-reload via /connect).

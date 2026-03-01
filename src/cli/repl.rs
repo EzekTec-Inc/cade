@@ -2079,62 +2079,109 @@ impl Repl {
     async fn interactive_model_picker(&self, stdout: &mut io::Stdout) -> Result<Option<String>> {
         use crossterm::event::{self, Event, KeyCode};
 
-        // Fetch available providers from server
-        let providers = self.client.available_providers().await;
-        let current   = self.model();
+        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+            Print("\n  Fetching models…\r\n"), ResetColor)?;
+        stdout.flush()?;
 
-        // Supported model catalogue — (provider, display_name, full_id, toolset_label)
-        let catalogue: &[(&str, &str, &str, &str)] = &[
-            // Anthropic
-            ("anthropic", "Claude Opus 4.6",      "anthropic/claude-opus-4-6",              "default"),
-            ("anthropic", "Claude Sonnet 4.5",    "anthropic/claude-sonnet-4-5-20250929",   "default"),
-            ("anthropic", "Claude Haiku 4.5",     "anthropic/claude-haiku-4-5",             "default"),
-            // OpenAI
-            ("openai",    "GPT-4.1",              "openai/gpt-4.1",                         "codex"),
-            ("openai",    "GPT-4o",               "openai/gpt-4o",                          "codex"),
-            ("openai",    "GPT-4o Mini",          "openai/gpt-4o-mini",                     "codex"),
-            ("openai",    "o3 Mini",              "openai/o3-mini",                         "codex"),
-            // Google
-            ("gemini",    "Gemini 2.5 Pro",       "gemini/gemini-2.5-pro",                  "gemini"),
-            ("gemini",    "Gemini 2.0 Flash",     "gemini/gemini-2.0-flash",                "gemini"),
-            // Ollama
-            ("ollama",    "Llama 3",              "ollama/llama3",                          "default"),
-            ("ollama",    "Mistral",              "ollama/mistral",                         "default"),
-            ("ollama",    "Code Llama",           "ollama/codellama",                       "default"),
-        ];
+        let current = self.model();
 
-        // Filter to available providers only
-        let models: Vec<(&str, &str, &str, &str)> = catalogue.iter()
-            .filter(|(p, ..)| providers.contains(&p.to_string()))
-            .copied()
-            .collect();
+        // ── Fetch model list from server ──────────────────────────────────────
+        // Each entry: (provider_label, display_name, full_model_id, toolset, is_dynamic)
+        let mut models: Vec<(String, String, String, String, bool)> = Vec::new();
+        let mut custom_providers: Vec<String> = Vec::new();
 
-        if models.is_empty() {
-            execute!(stdout, ResetColor)?;
+        match self.client.list_models().await {
+            Ok(body) => {
+                // Supported catalogue models
+                if let Some(arr) = body["supported"].as_array() {
+                    for m in arr {
+                        models.push((
+                            m["provider"].as_str().unwrap_or("?").to_string(),
+                            m["display_name"].as_str().unwrap_or("?").to_string(),
+                            m["id"].as_str().unwrap_or("?").to_string(),
+                            m["toolset"].as_str().unwrap_or("default").to_string(),
+                            false,
+                        ));
+                    }
+                }
+                // Dynamic Ollama models (de-duplicate with catalogue)
+                if let Some(arr) = body["dynamic"].as_array() {
+                    for m in arr {
+                        let id = m["id"].as_str().unwrap_or("?").to_string();
+                        // Skip if already present via catalogue (static placeholder)
+                        if !models.iter().any(|(_, _, mid, _, _)| mid == &id) {
+                            models.push((
+                                "ollama".to_string(),
+                                m["display_name"].as_str().unwrap_or(&id).to_string(),
+                                id,
+                                "default".to_string(),
+                                true,
+                            ));
+                        }
+                    }
+                }
+                // Custom providers
+                if let Some(arr) = body["custom_providers"].as_array() {
+                    custom_providers = arr.iter()
+                        .filter_map(|v| v.as_str().map(String::from))
+                        .collect();
+                }
+            }
+            Err(_) => {
+                // Fallback: just show available providers info
+                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                    Print("  Could not fetch models from server.\r\n"),
+                    Print("  Specify model directly: /model anthropic/claude-sonnet-4-5-20250929\r\n\n"),
+                    ResetColor)?;
+                stdout.flush()?;
+                return Ok(None);
+            }
+        }
+
+        // "Enter custom model ID" is always the last selectable item
+        // We represent it as a sentinel with provider = "__custom__"
+        let custom_sentinel = (
+            "__custom__".to_string(),
+            "Enter custom model ID…".to_string(),
+            String::new(),
+            String::new(),
+            false,
+        );
+        // Add custom provider placeholder entries
+        for cp in &custom_providers {
+            models.push((
+                cp.clone(),
+                format!("Enter model for {cp}…"),
+                format!("{cp}/"),
+                "default".to_string(),
+                false,
+            ));
+        }
+        models.push(custom_sentinel);
+
+        if models.len() == 1 {
+            // Only the custom sentinel — no real models
+            execute!(stdout, ResetColor,
+                Print("\n  No standard models available.\r\n"),
+                SetForegroundColor(Color::DarkGrey),
+                Print("  Connect a provider: /connect\r\n\n"),
+                ResetColor)?;
             stdout.flush()?;
-            println!("\n  No models available. Check your API keys.");
             return Ok(None);
         }
 
-        let total = models.len();
-        let mut selected: usize = models.iter().position(|(_, _, id, _)| *id == current).unwrap_or(0);
+        let total    = models.len();
+        let mut selected: usize = models.iter()
+            .position(|(_, _, id, _, _)| *id == current)
+            .unwrap_or(0);
 
-        // Count provider headers once — needed for accurate line counting
-        let provider_header_count = {
-            let mut seen = std::collections::HashSet::new();
-            models.iter().filter(|(p, ..)| seen.insert(*p)).count()
-        };
-        // Lines drawn per full render:
-        // 1 (blank) + 1 (header) + 1 (blank) + provider_headers + total_models + 1 (blank footer)
-        let draw_lines = (3 + provider_header_count + total + 1) as u16;
-
-        // Draw the picker — must use \r\n everywhere; we are in raw mode.
+        // ── Draw helper ───────────────────────────────────────────────────────
         let draw = |stdout: &mut io::Stdout, sel: usize| -> Result<()> {
             execute!(stdout,
                 cursor::MoveToColumn(0),
                 terminal::Clear(terminal::ClearType::FromCursorDown),
                 Print("\r\n"),
-                SetForegroundColor(Color::Cyan),  Print("  Select model  "),
+                SetForegroundColor(Color::Cyan), Print("  Select model  "),
                 ResetColor,
                 SetForegroundColor(Color::DarkGrey),
                 Print("↑↓ / j/k navigate  Enter select  Esc cancel\r\n"),
@@ -2142,47 +2189,117 @@ impl Repl {
                 Print("\r\n"),
             )?;
 
-            let mut last_provider = "";
-            for (i, (provider, name, id, toolset)) in models.iter().enumerate() {
+            let mut last_provider = String::new();
+            for (i, (provider, name, id, toolset, dynamic)) in models.iter().enumerate() {
+                // Provider group header
                 if *provider != last_provider {
-                    execute!(stdout, SetForegroundColor(Color::Yellow),
-                        Print(format!("  {}\r\n", provider.to_uppercase())), ResetColor)?;
-                    last_provider = provider;
+                    if provider == "__custom__" {
+                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                            Print("  ──────────────────────────────────────\r\n"), ResetColor)?;
+                    } else {
+                        let label = if *dynamic {
+                            format!("  {}  (local)\r\n", provider.to_uppercase())
+                        } else {
+                            format!("  {}\r\n", provider.to_uppercase())
+                        };
+                        execute!(stdout, SetForegroundColor(Color::Yellow),
+                            Print(label), ResetColor)?;
+                    }
+                    last_provider = provider.clone();
                 }
-                let is_current = *id == current;
+
+                let is_current = !id.is_empty() && *id == current;
                 let is_sel     = i == sel;
                 let arrow      = if is_sel { "  ▶ " } else { "    " };
-                let name_color = if is_sel { Color::White } else { Color::DarkGrey };
-                execute!(stdout,
-                    SetForegroundColor(if is_sel { Color::Green } else { Color::DarkGrey }),
-                    Print(arrow),
-                    SetForegroundColor(name_color),
-                    Print(format!("{:<28}", name)),
-                    SetForegroundColor(Color::DarkGrey),
-                    Print(format!("[{}]", toolset)),
-                    ResetColor,
-                )?;
-                if is_current {
-                    execute!(stdout, SetForegroundColor(Color::Cyan), Print(" ← current"), ResetColor)?;
+
+                if provider == "__custom__" {
+                    // Special "enter custom" entry
+                    execute!(stdout,
+                        SetForegroundColor(if is_sel { Color::Cyan } else { Color::DarkGrey }),
+                        Print(arrow),
+                        Print(format!("{name}\r\n")),
+                        ResetColor,
+                    )?;
+                } else {
+                    execute!(stdout,
+                        SetForegroundColor(if is_sel { Color::Green } else { Color::DarkGrey }),
+                        Print(arrow),
+                        SetForegroundColor(if is_sel { Color::White } else { Color::DarkGrey }),
+                        Print(format!("{:<30}", name)),
+                        SetForegroundColor(Color::DarkGrey),
+                        Print(if toolset.is_empty() { String::new() } else { format!("[{toolset}]") }),
+                        ResetColor,
+                    )?;
+                    if is_current {
+                        execute!(stdout, SetForegroundColor(Color::Cyan),
+                            Print(" ← current"), ResetColor)?;
+                    }
+                    execute!(stdout, Print("\r\n"))?;
                 }
-                execute!(stdout, Print("\r\n"))?;
             }
             execute!(stdout, Print("\r\n"))?;
             stdout.flush()?;
             Ok(())
         };
 
-        // Enter raw mode and draw initial state
+        // ── Count lines drawn so cursor can be repositioned on redraw ─────────
+        fn count_draw_lines(models: &[(String, String, String, String, bool)]) -> u16 {
+            let mut lines: u16 = 4; // blank + header + blank + blank-footer
+            let mut last = String::new();
+            for (provider, ..) in models {
+                if *provider != last {
+                    lines += 1; // provider header or divider
+                    last = provider.clone();
+                }
+                lines += 1; // model row
+            }
+            lines
+        }
+        let draw_lines = count_draw_lines(&models);
+
+        // ── Interactive loop ──────────────────────────────────────────────────
         terminal::enable_raw_mode()?;
         execute!(stdout, cursor::Hide)?;
         draw(stdout, selected)?;
 
-        // Event loop
         let result = loop {
             if let Ok(Event::Key(key)) = event::read() {
                 match (key.code, key.modifiers) {
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
-                    (KeyCode::Enter, _) => break Some(models[selected].2.to_string()),
+
+                    (KeyCode::Enter, _) => {
+                        let (provider, _, id, _, _) = &models[selected];
+                        if provider == "__custom__" || id.ends_with('/') {
+                            // Custom model input
+                            terminal::disable_raw_mode()?;
+                            execute!(stdout, cursor::Show, Print("\r\n"))?;
+                            let prefix = if id.ends_with('/') && id.len() > 1 {
+                                id.as_str()
+                            } else {
+                                ""
+                            };
+                            execute!(stdout,
+                                SetForegroundColor(Color::DarkGrey),
+                                Print(format!("  Model ID: {prefix}")),
+                                ResetColor)?;
+                            stdout.flush()?;
+                            let mut input = String::new();
+                            std::io::stdin().read_line(&mut input).unwrap_or(0);
+                            let typed = input.trim().to_string();
+                            if typed.is_empty() {
+                                break None;
+                            }
+                            let full = if prefix.is_empty() || typed.starts_with(prefix) {
+                                typed
+                            } else {
+                                format!("{prefix}{typed}")
+                            };
+                            break Some(full);
+                        } else {
+                            break Some(id.clone());
+                        }
+                    }
+
                     (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
                         selected = if selected == 0 { total - 1 } else { selected - 1 };
                         execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;

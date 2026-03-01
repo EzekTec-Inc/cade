@@ -244,19 +244,36 @@ impl CadeClient {
         body["presets"].as_array().cloned().unwrap_or_default()
     }
 
-    /// Returns list of configured provider names from the server.
+    /// Returns live provider names from `GET /v1/providers` (liveness-aware).
     pub async fn available_providers(&self) -> Vec<String> {
         let resp = self.client
-            .get(self.url("/config"))
+            .get(self.url("/providers"))
             .header(self.auth().0, self.auth().1)
             .send().await;
         let Ok(r) = resp else { return vec!["ollama".to_string()] };
         let Ok(body): Result<serde_json::Value, _> = r.json().await else {
             return vec!["ollama".to_string()]
         };
-        body["available_providers"].as_array()
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        body["providers"].as_array()
+            .map(|arr| {
+                arr.iter()
+                    .filter(|v| v["live"].as_bool().unwrap_or(false))
+                    .filter_map(|v| v["name"].as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_else(|| vec!["ollama".to_string()])
+    }
+
+    /// Response from `GET /v1/models`.
+    pub async fn list_models(&self) -> anyhow::Result<serde_json::Value> {
+        let resp = self.client
+            .get(self.url("/models"))
+            .header(self.auth().0, self.auth().1)
+            .send().await?;
+        if !resp.status().is_success() {
+            anyhow::bail!("list_models failed {}", resp.status());
+        }
+        Ok(resp.json().await?)
     }
 
     pub async fn server_default_model(&self) -> String {
