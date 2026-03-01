@@ -54,6 +54,9 @@ enum SlashCmd {
     Providers,
     Connect(Option<String>),
     Disconnect(String),
+    ApproveAlways(String),
+    DenyAlways(String),
+    Permissions,
     Yolo,
     Plan,
     Default,
@@ -86,6 +89,9 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "providers" | "provider-list" => Some(SlashCmd::Providers),
         "connect"    => Some(SlashCmd::Connect(arg)),
         "disconnect" => Some(SlashCmd::Disconnect(arg.unwrap_or_default())),
+        "approve-always" => Some(SlashCmd::ApproveAlways(arg.unwrap_or_default())),
+        "deny-always"    => Some(SlashCmd::DenyAlways(arg.unwrap_or_default())),
+        "permissions"    => Some(SlashCmd::Permissions),
         "yolo"                   => Some(SlashCmd::Yolo),
         "plan"                   => Some(SlashCmd::Plan),
         "default" | "normal" | "resume" => Some(SlashCmd::Default),
@@ -976,6 +982,116 @@ impl Repl {
                         }
                     }
 
+                    SlashCmd::Permissions => {
+                        let mode = self.permissions.mode();
+                        let allow = self.permissions.allow_rules();
+                        let deny  = self.permissions.deny_rules();
+                        println!("\n  Mode: {}\n", mode);
+                        if allow.is_empty() && deny.is_empty() {
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("  No allow/deny rules active.\n"), ResetColor)?;
+                        } else {
+                            if !allow.is_empty() {
+                                execute!(stdout, SetForegroundColor(Color::Green),
+                                    Print(format!("  Allow rules ({}):\n", allow.len())), ResetColor)?;
+                                for r in &allow {
+                                    println!("    {r}");
+                                }
+                                println!();
+                            }
+                            if !deny.is_empty() {
+                                execute!(stdout, SetForegroundColor(Color::Red),
+                                    Print(format!("  Deny rules ({}):\n", deny.len())), ResetColor)?;
+                                for r in &deny {
+                                    println!("    {r}");
+                                }
+                                println!();
+                            }
+                        }
+                        println!("  /approve-always <pattern>  · /deny-always <pattern>");
+                        println!("  e.g.  /approve-always Bash(cargo test)");
+                        println!("        /deny-always Bash(rm -rf:*)\n");
+                    }
+
+                    SlashCmd::ApproveAlways(pattern) => {
+                        if pattern.is_empty() {
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("  Usage: /approve-always <pattern>\n"),
+                                Print("  e.g.  /approve-always Bash(cargo test)\n"),
+                                Print("        /approve-always Read(src/**)\n"),
+                                ResetColor)?;
+                        } else if let Some(rule) = crate::permissions::PermissionRule::parse(&pattern) {
+                            self.permissions.add_allow_rule(rule.clone());
+                            execute!(stdout, SetForegroundColor(Color::Green),
+                                Print(format!("  ✓ Added allow rule: {rule}\n")), ResetColor)?;
+                            // Offer to persist
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("  Save to settings.json? [y/N] "), ResetColor)?;
+                            stdout.flush()?;
+                            terminal::enable_raw_mode()?;
+                            let save = loop {
+                                if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
+                                    match k.code {
+                                        crossterm::event::KeyCode::Char('y') | crossterm::event::KeyCode::Char('Y') => break true,
+                                        _ => break false,
+                                    }
+                                }
+                            };
+                            terminal::disable_raw_mode()?;
+                            execute!(stdout, Print(if save { "y\n" } else { "N\n" }))?;
+                            if save {
+                                let mut settings = self.settings.lock().unwrap();
+                                match settings.save_allow_rule(&pattern) {
+                                    Ok(_) => execute!(stdout, SetForegroundColor(Color::Green),
+                                        Print("  ✓ Saved to ~/.cade/settings.json\n"), ResetColor)?,
+                                    Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                                }
+                            }
+                            stdout.flush()?;
+                        } else {
+                            self.print_error(&mut stdout, "invalid pattern")?;
+                        }
+                    }
+
+                    SlashCmd::DenyAlways(pattern) => {
+                        if pattern.is_empty() {
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("  Usage: /deny-always <pattern>\n"),
+                                Print("  e.g.  /deny-always Bash(rm -rf:*)\n"),
+                                Print("        /deny-always Bash(git push --force:*)\n"),
+                                ResetColor)?;
+                        } else if let Some(rule) = crate::permissions::PermissionRule::parse(&pattern) {
+                            self.permissions.add_deny_rule(rule.clone());
+                            execute!(stdout, SetForegroundColor(Color::Red),
+                                Print(format!("  ✓ Added deny rule: {rule}\n")), ResetColor)?;
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("  Save to settings.json? [y/N] "), ResetColor)?;
+                            stdout.flush()?;
+                            terminal::enable_raw_mode()?;
+                            let save = loop {
+                                if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
+                                    match k.code {
+                                        crossterm::event::KeyCode::Char('y') | crossterm::event::KeyCode::Char('Y') => break true,
+                                        _ => break false,
+                                    }
+                                }
+                            };
+                            terminal::disable_raw_mode()?;
+                            execute!(stdout, Print(if save { "y\n" } else { "N\n" }))?;
+                            if save {
+                                let mut settings = self.settings.lock().unwrap();
+                                match settings.save_deny_rule(&pattern) {
+                                    Ok(_) => execute!(stdout, SetForegroundColor(Color::Red),
+                                        Print("  ✓ Saved to ~/.cade/settings.json\n"), ResetColor)?,
+                                    Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                                }
+                            }
+                            stdout.flush()?;
+                        } else {
+                            self.print_error(&mut stdout, "invalid pattern")?;
+                        }
+                    }
+
                     SlashCmd::Feedback => {
                         execute!(stdout,
                             SetForegroundColor(Color::Cyan),
@@ -1205,7 +1321,7 @@ impl Repl {
             });
         }
 
-        if !self.permissions.auto_approve(tool_name) {
+        if !self.permissions.auto_approve(tool_name, args) {
             // Prompt for approval
             if !self.prompt_approval(stdout, tool_name, args)? {
                 let msg = format!("Tool '{tool_name}' denied by user");
@@ -1290,8 +1406,14 @@ impl Repl {
         };
         terminal::disable_raw_mode()?;
         execute!(stdout, Print(if approved { "y\n" } else { "N\n" }))?;
-        stdout.flush()?;
 
+        // Show /approve-always hint on denial (default mode only, once per tool type)
+        if !approved && self.permissions.mode() == crate::permissions::PermissionMode::Default {
+            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                Print(format!("  Tip: /approve-always {tool_name} to always allow\n")),
+                ResetColor)?;
+        }
+        stdout.flush()?;
         Ok(approved)
     }
 
@@ -1919,6 +2041,12 @@ impl Repl {
         println!("    /new            - create a fresh agent (hot-swap)");
         println!("    /pin            - pin current agent for quick access");
         println!("    /clear          - clear screen + context window");
+        println!();
+        println!("  Permissions:");
+        println!("    /permissions              - show mode + active allow/deny rules");
+        println!("    /approve-always <pattern> - always allow a tool pattern");
+        println!("    /deny-always <pattern>    - always deny a tool pattern");
+        println!("    pattern syntax: Bash(cargo test)  Read(src/**)  Bash(rm -rf:*)");
         println!();
         println!("  Providers:");
         println!("    /providers           - list configured providers");

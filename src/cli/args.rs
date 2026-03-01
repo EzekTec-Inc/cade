@@ -40,6 +40,14 @@ pub struct Args {
     #[arg(long = "info")]
     pub info: bool,
 
+    /// Always-allow tool patterns (comma-separated): "Bash(cargo test),Read"
+    #[arg(long = "allowed-tools")]
+    pub allowed_tools: Option<String>,
+
+    /// Always-deny tool patterns (comma-separated): "Bash(rm -rf:*)"
+    #[arg(long = "disallowed-tools")]
+    pub disallowed_tools: Option<String>,
+
     /// Output response as JSON (headless mode only)
     #[arg(long = "json")]
     pub json: bool,

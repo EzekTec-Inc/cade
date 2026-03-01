@@ -2,6 +2,17 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Permission allow/deny rules persisted in settings.json
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct PermissionSettings {
+    /// Patterns that are always allowed: e.g. ["Bash(cargo test)", "Read(src/**)"]
+    #[serde(default)]
+    pub allow: Vec<String>,
+    /// Patterns that are always denied: e.g. ["Bash(rm -rf:*)"]
+    #[serde(default)]
+    pub deny: Vec<String>,
+}
+
 /// Global settings stored in ~/.cade/settings.json
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GlobalSettings {
@@ -9,6 +20,8 @@ pub struct GlobalSettings {
     pub env: EnvSettings,
     #[serde(default)]
     pub last_agent: Option<String>,
+    #[serde(default)]
+    pub permissions: PermissionSettings,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -116,4 +129,26 @@ impl SettingsManager {
 
     pub fn global(&self) -> &GlobalSettings { &self.global }
     pub fn local(&self) -> &LocalSettings { &self.local }
+
+    pub fn permission_settings(&self) -> &PermissionSettings {
+        &self.global.permissions
+    }
+
+    /// Append a rule to the global allow list and persist.
+    pub fn save_allow_rule(&mut self, rule: &str) -> Result<()> {
+        if !self.global.permissions.allow.contains(&rule.to_string()) {
+            self.global.permissions.allow.push(rule.to_string());
+            Self::save_json(&self.global_path, &self.global)?;
+        }
+        Ok(())
+    }
+
+    /// Append a rule to the global deny list and persist.
+    pub fn save_deny_rule(&mut self, rule: &str) -> Result<()> {
+        if !self.global.permissions.deny.contains(&rule.to_string()) {
+            self.global.permissions.deny.push(rule.to_string());
+            Self::save_json(&self.global_path, &self.global)?;
+        }
+        Ok(())
+    }
 }

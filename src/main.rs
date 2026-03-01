@@ -6,29 +6,29 @@ use cade::permissions;
 use cade::settings;
 use cade::skills;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use std::path::PathBuf;
 
 use std::sync::{Arc, Mutex};
 
 use agent::{
-    CadeClient,
     client::{CreateAgentRequest, MemoryBlock},
     session::SessionStore,
     tools::register_cade_tools,
+    CadeClient,
 };
+use cade::toolsets::Toolset;
 use cli::{Args, Repl};
 use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
 use skills::{discover_all_skills, skills_listing};
-use cade::toolsets::Toolset;
 
 const SKILLS_DIR: &str = ".skills";
 
 /// Default memory block labels and their seed values.
 const DEFAULT_MEMORY_BLOCKS: &[(&str, &str)] = &[
-    ("persona",  "CADE is a coding AI assistant with desktop extensions. It helps with programming tasks, file management, shell commands, and desktop automation. CADE prefers concise, accurate responses and always verifies changes before reporting success."),
+    ("persona",  "CADE is a coding AI assistant with desktop extensions, mcp servers and super-powers. It helps with programming tasks, file management, shell commands, and desktop automation. CADE prefers concise, accurate responses and always verifies changes before reporting success."),
     ("human",    ""),   // agent fills in as it learns about the user
     ("project",  ""),   // agent fills in via /init
 ];
@@ -108,8 +108,8 @@ async fn register_run_subagent_tool(client: &CadeClient) {
     let schema = serde_json::json!({
         "name": "run_subagent",
         "description": "Spawn a subagent to handle a task autonomously. Only the final answer \
-is returned — your context stays clean. Use for: codebase search (explore), implementation \
-(general-purpose, coder), code review (reviewer), or custom subagents.",
+    is returned — your context stays clean. Use for: codebase search (explore), implementation \
+    (general-purpose, coder), code review (reviewer), or custom subagents.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -192,7 +192,9 @@ pub async fn register_and_attach(client: &CadeClient, agent_id: &str, toolset: T
     register_load_skill_tool(client).await;
     register_install_skill_tool(client).await;
     register_run_subagent_tool(client).await;
-    let tools = register_cade_tools(client, toolset).await.unwrap_or_default();
+    let tools = register_cade_tools(client, toolset)
+        .await
+        .unwrap_or_default();
     let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
     tracing::info!("Registered {} tools", tools.len());
     if !ids.is_empty() {
@@ -231,7 +233,9 @@ async fn main() -> Result<()> {
     let client = CadeClient::new(base_url.clone(), api_key).context("create CADE server")?;
 
     if !client.health().await.unwrap_or(false) {
-        bail!("Cannot connect to CADE server at {base_url}. Check CADE_API_KEY and CADE_SERVER_URL.");
+        bail!(
+            "Cannot connect to CADE server at {base_url}. Check CADE_API_KEY and CADE_SERVER_URL."
+        );
     }
 
     // Fetch server's detected provider + model — shown in banner + used for agent creation
@@ -253,6 +257,33 @@ async fn main() -> Result<()> {
         .context("invalid permission mode")?;
     let permissions = PermissionManager::new(perm_mode);
 
+    // Load persistent rules from ~/.cade/settings.json
+    for raw in &settings.permission_settings().allow.clone() {
+        if let Some(rule) = permissions::PermissionRule::parse(raw) {
+            permissions.add_allow_rule(rule);
+        }
+    }
+    for raw in &settings.permission_settings().deny.clone() {
+        if let Some(rule) = permissions::PermissionRule::parse(raw) {
+            permissions.add_deny_rule(rule);
+        }
+    }
+    // Load CLI flag rules (override / supplement settings)
+    if let Some(s) = &args.allowed_tools {
+        for raw in s.split(',') {
+            if let Some(rule) = permissions::PermissionRule::parse(raw.trim()) {
+                permissions.add_allow_rule(rule);
+            }
+        }
+    }
+    if let Some(s) = &args.disallowed_tools {
+        for raw in s.split(',') {
+            if let Some(rule) = permissions::PermissionRule::parse(raw.trim()) {
+                permissions.add_deny_rule(rule);
+            }
+        }
+    }
+
     // Skills — multi-scope discovery: project > agent > global
     let skills_dir = args
         .skills
@@ -265,15 +296,23 @@ async fn main() -> Result<()> {
     }
 
     // Default model: CLI flag > CADE_DEFAULT_MODEL env > server's detected model
-    let default_model = args.model.clone()
+    let default_model = args
+        .model
+        .clone()
         .or_else(|| std::env::var("CADE_DEFAULT_MODEL").ok())
         .unwrap_or(server_info.2);
 
     // Detect toolset: --toolset flag > model family auto-detection
-    let toolset = args.toolset.as_deref()
+    let toolset = args
+        .toolset
+        .as_deref()
         .and_then(Toolset::from_str)
         .unwrap_or_else(|| Toolset::for_model(&default_model));
-    tracing::info!("Toolset: {} (model={})", toolset.display_name(), default_model);
+    tracing::info!(
+        "Toolset: {} (model={})",
+        toolset.display_name(),
+        default_model
+    );
 
     // Skills listing — compact (names + descriptions only), not full bodies.
     // The agent uses load_skill(id) to pull full content on-demand.
@@ -284,12 +323,19 @@ async fn main() -> Result<()> {
         // Inject only the compact listing as a memory block.
         // Full skill content is loaded on-demand by the agent via load_skill tool.
         let memory_blocks: Vec<MemoryBlock> = if let Some(ctx) = &skills_block {
-            vec![MemoryBlock { label: "skills".to_string(), value: ctx.clone(), description: None }]
+            vec![MemoryBlock {
+                label: "skills".to_string(),
+                value: ctx.clone(),
+                description: None,
+            }]
         } else {
             vec![]
         };
         CreateAgentRequest {
-            name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
+            name: Some(format!(
+                "CADE-{}",
+                chrono::Local::now().format("%Y%m%d-%H%M%S")
+            )),
             model,
             description: Some(desc.to_string()),
             memory_blocks,
@@ -297,20 +343,28 @@ async fn main() -> Result<()> {
         }
     };
 
-
-
     let agent = if args.new_agent {
         let a = client
-            .create_agent(make_req(default_model.clone(), "CADE coding agent with desktop extensions"))
+            .create_agent(make_req(
+                default_model.clone(),
+                "CADE coding agent with desktop extensions",
+            ))
             .await
             .context("create agent")?;
         register_and_attach(&client, &a.id, toolset).await;
         seed_default_memory(&client, &a.id).await;
-        session.set_agent(a.id.clone(), Some(a.name.clone())).context("save session")?;
-        settings.set_last_agent(&a.id).context("save global session")?;
+        session
+            .set_agent(a.id.clone(), Some(a.name.clone()))
+            .context("save session")?;
+        settings
+            .set_last_agent(&a.id)
+            .context("save global session")?;
         a
     } else if let Some(id) = &args.agent {
-        client.get_agent(id).await.with_context(|| format!("get agent {id}"))?
+        client
+            .get_agent(id)
+            .await
+            .with_context(|| format!("get agent {id}"))?
     } else if let Some(last_id) = session.session.agent_id.clone() {
         match client.get_agent(&last_id).await {
             Ok(a) => a,
@@ -330,7 +384,10 @@ async fn main() -> Result<()> {
     } else {
         println!("No previous session — creating new agent…");
         let a = client
-            .create_agent(make_req(default_model.clone(), "CADE coding agent with desktop extensions"))
+            .create_agent(make_req(
+                default_model.clone(),
+                "CADE coding agent with desktop extensions",
+            ))
             .await
             .context("create agent")?;
         register_and_attach(&client, &a.id, toolset).await;
@@ -361,16 +418,20 @@ async fn main() -> Result<()> {
         let mut buf = String::new();
         std::io::stdin().read_to_string(&mut buf).ok();
         let s = buf.trim().to_string();
-        if s.is_empty() { None } else { Some(s) }
+        if s.is_empty() {
+            None
+        } else {
+            Some(s)
+        }
     } else {
         None
     };
 
     let headless_prompt: Option<String> = match (&args.prompt, &piped_stdin) {
         (Some(p), Some(stdin)) => Some(format!("{stdin}\n\n{p}")),
-        (Some(p), None)        => Some(p.clone()),
-        (None,    Some(stdin)) => Some(stdin.clone()),
-        (None,    None)        => None,
+        (Some(p), None) => Some(p.clone()),
+        (None, Some(stdin)) => Some(stdin.clone()),
+        (None, None) => None,
     };
 
     if let Some(prompt) = headless_prompt {
@@ -378,7 +439,10 @@ async fn main() -> Result<()> {
         match result {
             Ok(output) => {
                 if args.json {
-                    println!("{}", serde_json::json!({ "response": output, "agent_id": agent.id }));
+                    println!(
+                        "{}",
+                        serde_json::json!({ "response": output, "agent_id": agent.id })
+                    );
                 } else {
                     println!("{output}");
                 }
@@ -409,7 +473,7 @@ async fn main() -> Result<()> {
 
     // Interactive REPL
     let settings_arc = Arc::new(Mutex::new(settings));
-    let session_arc  = Arc::new(Mutex::new(session));
+    let session_arc = Arc::new(Mutex::new(session));
     let repl = Repl::new(
         client,
         agent.id,

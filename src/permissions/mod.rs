@@ -1,5 +1,104 @@
 use std::sync::{Arc, Mutex};
 
+// ── PermissionRule ─────────────────────────────────────────────────────────────
+
+/// A single allow or deny rule matching a tool call.
+///
+/// Syntax mirrors Letta Code:
+///   `Bash`              — all uses of the bash tool
+///   `Bash(cargo test)`  — bash where command == "cargo test"
+///   `Read(src/**)`      — read_file where path starts with "src/" (glob **)
+///   `Bash(rm -rf:*)`    — bash where command starts with "rm -rf" (:* suffix wildcard)
+#[derive(Debug, Clone, PartialEq)]
+pub struct PermissionRule {
+    /// Tool name, lower-cased for comparison (e.g. "bash", "edit_file")
+    pub tool: String,
+    /// Optional argument pattern
+    pub pattern: Option<String>,
+}
+
+impl std::fmt::Display for PermissionRule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.pattern {
+            Some(p) => write!(f, "{}({})", self.tool, p),
+            None    => write!(f, "{}", self.tool),
+        }
+    }
+}
+
+impl PermissionRule {
+    /// Parse `"Bash(cargo test)"` or `"Read"` into a `PermissionRule`.
+    /// Returns `None` if the input is empty or malformed.
+    pub fn parse(s: &str) -> Option<Self> {
+        let s = s.trim();
+        if s.is_empty() { return None; }
+        if let Some(paren) = s.find('(') {
+            let tool    = s[..paren].trim().to_lowercase();
+            let rest    = s[paren + 1..].trim_end_matches(')').trim().to_string();
+            let pattern = if rest.is_empty() { None } else { Some(rest) };
+            Some(Self { tool, pattern })
+        } else {
+            Some(Self { tool: s.to_lowercase(), pattern: None })
+        }
+    }
+
+    /// Returns `true` if this rule matches the given tool call.
+    ///
+    /// `tool_name` — the tool being invoked (e.g. "bash")
+    /// `tool_arg`  — the first meaningful string argument (command / path)
+    pub fn matches(&self, tool_name: &str, tool_arg: Option<&str>) -> bool {
+        if self.tool != tool_name.to_lowercase() {
+            return false;
+        }
+        match (&self.pattern, tool_arg) {
+            (None, _)             => true,             // no pattern → match all invocations
+            (Some(_), None)       => false,             // pattern requires an arg
+            (Some(pat), Some(arg)) => pattern_matches(pat, arg),
+        }
+    }
+}
+
+/// Match `arg` against `pattern`.
+///
+/// Supported syntax:
+///   `prefix:*`  — arg starts with `prefix` (`:*` is a suffix wildcard)
+///   `prefix/**` — arg starts with `prefix/` (path glob wildcard)
+///   `exact`     — exact equality
+fn pattern_matches(pattern: &str, arg: &str) -> bool {
+    if let Some(prefix) = pattern.strip_suffix(":*") {
+        // Command prefix wildcard: "rm -rf:*" matches "rm -rf foo"
+        arg.starts_with(prefix)
+    } else if let Some(prefix) = pattern.strip_suffix("/**") {
+        // Path glob: "src/**" matches "src/foo/bar.rs"
+        let dir = if prefix.ends_with('/') { prefix.to_string() } else { format!("{prefix}/") };
+        arg.starts_with(dir.as_str()) || arg == prefix
+    } else if pattern == "**" {
+        true
+    } else {
+        // Exact match (case-sensitive for paths/commands)
+        arg == pattern
+    }
+}
+
+/// Extract the first meaningful string argument from a tool's args JSON.
+pub fn tool_first_arg(tool_name: &str, args: &serde_json::Value) -> Option<String> {
+    // Known arg key names per tool type
+    let keys = match tool_name.to_lowercase().as_str() {
+        "bash" | "shell" | "run_command" | "execute_command"
+            => &["command", "cmd"][..],
+        "read_file" | "write_file" | "edit_file" | "create_file"
+        | "delete_file" | "move_file" | "rename_file" | "apply_patch"
+            => &["path", "file_path", "filename"][..],
+        _   => &["path", "command", "query"][..],
+    };
+    for key in keys {
+        if let Some(v) = args.get(key).and_then(|v| v.as_str()) {
+            return Some(v.to_string());
+        }
+    }
+    None
+}
+
 /// Permission mode controlling how tool calls are approved
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PermissionMode {
@@ -209,67 +308,112 @@ fn segment_is_write(seg: &str) -> bool {
 
 #[derive(Clone, Default)]
 pub struct PermissionManager {
-    mode: Arc<Mutex<PermissionMode>>,
+    mode:        Arc<Mutex<PermissionMode>>,
+    allow_rules: Arc<Mutex<Vec<PermissionRule>>>,
+    deny_rules:  Arc<Mutex<Vec<PermissionRule>>>,
 }
 
 impl PermissionManager {
     pub fn new(mode: PermissionMode) -> Self {
-        Self { mode: Arc::new(Mutex::new(mode)) }
+        Self {
+            mode:        Arc::new(Mutex::new(mode)),
+            allow_rules: Arc::new(Mutex::new(Vec::new())),
+            deny_rules:  Arc::new(Mutex::new(Vec::new())),
+        }
     }
 
-    pub fn mode(&self) -> PermissionMode {
-        *self.mode.lock().unwrap()
+    pub fn mode(&self) -> PermissionMode { *self.mode.lock().unwrap() }
+    pub fn set_mode(&self, mode: PermissionMode) { *self.mode.lock().unwrap() = mode; }
+
+    pub fn add_allow_rule(&self, rule: PermissionRule) {
+        let mut rules = self.allow_rules.lock().unwrap();
+        if !rules.contains(&rule) { rules.push(rule); }
     }
 
-    pub fn set_mode(&self, mode: PermissionMode) {
-        *self.mode.lock().unwrap() = mode;
+    pub fn add_deny_rule(&self, rule: PermissionRule) {
+        let mut rules = self.deny_rules.lock().unwrap();
+        if !rules.contains(&rule) { rules.push(rule); }
     }
+
+    pub fn allow_rules(&self) -> Vec<PermissionRule> { self.allow_rules.lock().unwrap().clone() }
+    pub fn deny_rules(&self)  -> Vec<PermissionRule> { self.deny_rules.lock().unwrap().clone() }
 
     /// Returns true if the tool call should proceed without prompting.
-    pub fn auto_approve(&self, tool_name: &str) -> bool {
+    ///
+    /// Resolution order (highest priority first):
+    ///   1. deny_rules match  → NOT auto-approved (must prompt or block)
+    ///   2. allow_rules match → auto-approved
+    ///   3. Mode-based        → BypassPermissions=always, AcceptEdits=file writes
+    pub fn auto_approve(&self, tool_name: &str, args: &serde_json::Value) -> bool {
+        let arg = tool_first_arg(tool_name, args);
+        let arg_ref = arg.as_deref();
+
+        // Explicit deny wins over everything
+        if self.deny_rules.lock().unwrap().iter().any(|r| r.matches(tool_name, arg_ref)) {
+            return false;
+        }
+        // Explicit allow
+        if self.allow_rules.lock().unwrap().iter().any(|r| r.matches(tool_name, arg_ref)) {
+            return true;
+        }
+        // Mode-based
         match self.mode() {
             PermissionMode::BypassPermissions => true,
             PermissionMode::AcceptEdits => {
-                matches!(tool_name, "write_file" | "edit_file")
+                // File edits + apply_patch (Codex toolset)
+                matches!(tool_name, "write_file" | "edit_file" | "apply_patch")
             }
             _ => false,
         }
     }
 
-    /// Returns true if this tool call (with the given args) is blocked by the
-    /// current mode.
+    /// Returns true if this tool call is blocked (must NOT run, even with approval).
     ///
-    /// Plan mode: tools that observe are allowed; tools that mutate are blocked.
+    /// Resolution order:
+    ///   1. deny_rules match in any mode → block
+    ///   2. plan mode write detection    → block
     pub fn is_blocked(&self, tool_name: &str, args: &serde_json::Value) -> bool {
+        let arg = tool_first_arg(tool_name, args);
+        let arg_ref = arg.as_deref();
+
+        // Explicit deny rules block regardless of mode
+        if self.deny_rules.lock().unwrap().iter().any(|r| r.matches(tool_name, arg_ref)) {
+            return true;
+        }
+
         if self.mode() != PermissionMode::Plan {
             return false;
         }
 
-        // Always-write tools
+        // Plan mode: block write tools
         if WRITE_TOOLS.contains(&tool_name) {
             return true;
         }
 
         // Bash — allow read-only commands, block write ones
         if matches!(tool_name, "bash" | "shell" | "run_command" | "execute_command") {
-            let cmd = args.get("command")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
             return bash_command_is_write(cmd);
         }
 
-        // Every other tool is allowed (read_file, list_dir, search, screenshot, etc.)
         false
     }
 
     /// Human-readable reason why a tool call was blocked.
     pub fn block_reason(&self, tool_name: &str, args: &serde_json::Value) -> String {
+        let arg = tool_first_arg(tool_name, args);
+        let arg_ref = arg.as_deref();
+
+        // Check deny rule first
+        if let Some(rule) = self.deny_rules.lock().unwrap().iter()
+            .find(|r| r.matches(tool_name, arg_ref))
+        {
+            return format!("blocked by deny rule: {rule}");
+        }
+
         if matches!(tool_name, "bash" | "shell" | "run_command" | "execute_command") {
             let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-            format!(
-                "plan mode: '{}' would modify system state",
-                cmd.chars().take(60).collect::<String>()
-            )
+            format!("plan mode: '{}' would modify system state", cmd.chars().take(60).collect::<String>())
         } else {
             format!("plan mode: '{tool_name}' is a write/mutating tool")
         }
