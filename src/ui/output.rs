@@ -18,10 +18,26 @@ use ratatui::{
     Terminal, TerminalOptions, Viewport,
     backend::CrosstermBackend,
     buffer::Buffer,
+    layout::Rect,
     style::{Color as RC, Modifier, Style},
     text::Span,
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
+
+/// Horizontal padding (columns) applied to both sides of all rendered content.
+pub const CONTENT_PAD: u16 = 4;
+/// Left-margin string for direct stdout writes (equals CONTENT_PAD spaces).
+const INDENT: &str = "    ";
+
+/// Shrink a buffer area by `pad` columns on each side for consistent margins.
+fn padded_rect(area: Rect, pad: u16) -> Rect {
+    Rect {
+        x:      area.x + pad,
+        y:      area.y,
+        width:  area.width.saturating_sub(pad * 2),
+        height: area.height,
+    }
+}
 
 // ── OutputRenderer ─────────────────────────────────────────────────────────────
 
@@ -62,14 +78,14 @@ impl OutputRenderer {
     /// Start of a reasoning block — print styled header line.
     pub fn reasoning_header(&mut self) -> io::Result<()> {
         self.in_reasoning = true;
-        self.stream_col = 2;
+        self.stream_col = CONTENT_PAD;
         let mut out = io::stdout();
         execute!(
             out,
             Print("\n"),
             SetForegroundColor(Color::DarkGrey),
             SetAttribute(Attribute::Italic),
-            Print("  💭 thinking…\n  "),
+            Print(format!("{INDENT}💭 thinking…\n{INDENT}")),
         )?;
         out.flush()
     }
@@ -98,14 +114,14 @@ impl OutputRenderer {
     pub fn assistant_chunk(&mut self, text: &str) -> io::Result<()> {
         if !self.in_assistant {
             self.in_assistant = true;
-            self.stream_col = 2;
+            self.stream_col = CONTENT_PAD;
             let mut out = io::stdout();
             execute!(
                 out,
                 SetAttribute(Attribute::Reset),
                 ResetColor,
                 SetForegroundColor(Color::White),
-                Print("\n  "),
+                Print(format!("\n{INDENT}")),
             )?;
         }
         let wrap_at = self.wrap_width();
@@ -143,8 +159,8 @@ impl OutputRenderer {
     pub fn tool_call(&mut self, name: &str, preview: &str) -> Result<()> {
         self.close_streaming()?;
         self.update_width();
-        // Truncate preview to fit inside the box (width - 4 for borders + padding)
-        let inner_w = self.term_width.saturating_sub(4) as usize;
+        // Truncate preview to fit: subtract left+right CONTENT_PAD margins and 2 border cols
+        let inner_w = self.term_width.saturating_sub(CONTENT_PAD * 2 + 2) as usize;
         let preview_trunc = truncate_str(preview, inner_w);
 
         // Content height: 1 line for the preview inside the box
@@ -154,7 +170,7 @@ impl OutputRenderer {
         let preview2 = preview_trunc.clone();
 
         self.with_insert_before(box_height, move |buf| {
-            let area = *buf.area();
+            let area = padded_rect(*buf.area(), CONTENT_PAD);
             let block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(RC::Yellow))
@@ -173,11 +189,11 @@ impl OutputRenderer {
     /// Tool result — green ✓ or red ✗ line pushed above.
     pub fn tool_result(&mut self, is_error: bool, summary: &str) -> Result<()> {
         let (icon, color) = if is_error { ("✗", RC::Red) } else { ("✓", RC::Green) };
-        let max = self.term_width.saturating_sub(8) as usize;
-        let text = format!("  {icon} {}", truncate_str(summary, max));
+        let max = self.term_width.saturating_sub(CONTENT_PAD * 2 + 4) as usize;
+        let text = format!("{icon} {}", truncate_str(summary, max));
 
         self.with_insert_before(1, move |buf| {
-            let area = *buf.area();
+            let area = padded_rect(*buf.area(), CONTENT_PAD);
             Paragraph::new(Span::styled(text, Style::default().fg(color).add_modifier(Modifier::BOLD)))
                 .render(area, buf);
         })
@@ -186,14 +202,13 @@ impl OutputRenderer {
     /// System / info message — dim gray, word-wrapped.
     pub fn system(&mut self, msg: &str) -> Result<()> {
         self.update_width();
-        let tw = self.term_width;
-        let wrap_w = tw.saturating_sub(4) as usize;
+        let wrap_w = self.term_width.saturating_sub(CONTENT_PAD * 2) as usize;
         // Estimate height needed
         let estimated_height = (msg.len() / wrap_w.max(1) + 1) as u16;
-        let text = format!("  ℹ {msg}");
+        let text = format!("ℹ {msg}");
 
         self.with_insert_before(estimated_height.max(1), move |buf| {
-            let area = *buf.area();
+            let area = padded_rect(*buf.area(), CONTENT_PAD);
             Paragraph::new(text.as_str())
                 .style(Style::default().fg(RC::DarkGray))
                 .wrap(Wrap { trim: false })
@@ -209,7 +224,7 @@ impl OutputRenderer {
             out,
             Print("\n"),
             SetForegroundColor(Color::Red),
-            Print(format!("  ✗ {msg}\n")),
+            Print(format!("{INDENT}✗ {msg}\n")),
             ResetColor,
         )?;
         out.flush()?;
@@ -218,9 +233,9 @@ impl OutputRenderer {
 
     /// Hook continuation notice.
     pub fn hook_continuation(&mut self, reason: &str) -> Result<()> {
-        let text = format!("  ↩ Hook continuing turn: {reason}");
+        let text = format!("↩ Hook continuing turn: {reason}");
         self.with_insert_before(1, move |buf| {
-            let area = *buf.area();
+            let area = padded_rect(*buf.area(), CONTENT_PAD);
             Paragraph::new(Span::styled(text, Style::default().fg(RC::DarkGray)))
                 .render(area, buf);
         })
@@ -264,7 +279,7 @@ impl OutputRenderer {
         let lines = (body.lines().count() as u16 + 2).max(3);
 
         self.with_insert_before(lines, move |buf| {
-            let area = *buf.area();
+            let area = padded_rect(*buf.area(), CONTENT_PAD);
             let block = Block::default()
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(RC::Cyan))
@@ -281,7 +296,7 @@ impl OutputRenderer {
     // ── Internals ─────────────────────────────────────────────────────────────
 
     fn wrap_width(&self) -> usize {
-        self.term_width.saturating_sub(4) as usize
+        self.term_width.saturating_sub(CONTENT_PAD * 2) as usize
     }
 
     /// Write `text` to `out` with soft word-wrapping at `wrap_at` columns,
@@ -294,15 +309,15 @@ impl OutputRenderer {
     ) -> io::Result<()> {
         for ch in text.chars() {
             if ch == '\n' {
-                execute!(out, Print("\r\n  "))?;
-                self.stream_col = 2;
+                execute!(out, Print(format!("\r\n{INDENT}")))?;
+                self.stream_col = CONTENT_PAD;
             } else if ch == '\r' {
                 // skip bare CR
             } else {
                 // Soft-wrap at a word boundary (space) when approaching the edge
                 if self.stream_col >= wrap_at as u16 && ch == ' ' {
-                    execute!(out, Print("\r\n  "))?;
-                    self.stream_col = 2;
+                    execute!(out, Print(format!("\r\n{INDENT}")))?;
+                    self.stream_col = CONTENT_PAD;
                     // skip the space that caused the wrap
                 } else {
                     execute!(out, Print(ch))?;

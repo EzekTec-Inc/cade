@@ -34,6 +34,7 @@ use ratatui::{
 };
 
 use crate::permissions::PermissionMode;
+use crate::ui::output::CONTENT_PAD;
 
 // ── InputWidget ───────────────────────────────────────────────────────────────
 
@@ -108,6 +109,16 @@ impl InputWidget {
                 term.draw(|frame| {
                     let area = frame.area();
 
+                    // Horizontal padding: shrink content area by CONTENT_PAD on each side
+                    let cols = Layout::default()
+                        .direction(Direction::Horizontal)
+                        .constraints([
+                            Constraint::Length(CONTENT_PAD),
+                            Constraint::Min(0),
+                            Constraint::Length(CONTENT_PAD),
+                        ])
+                        .split(area);
+
                     let chunks = Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([
@@ -115,7 +126,7 @@ impl InputWidget {
                             Constraint::Length(3), // input box (border + 1 content row)
                             Constraint::Length(1), // status bar
                         ])
-                        .split(area);
+                        .split(cols[1]);
 
                     // ── Separator ─────────────────────────────────────────────
                     let sep = "─".repeat(chunks[0].width as usize);
