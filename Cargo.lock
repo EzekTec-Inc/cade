@@ -620,6 +620,7 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
+ "unicode-width 0.2.0",
  "uuid",
  "walkdir",
  "xcap",

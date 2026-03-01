@@ -847,13 +847,13 @@ impl Repl {
                                     execute!(stdout, SetForegroundColor(Color::Yellow),
                                         Print(format!("\n  Delete '{}'? [y/N]: ", a.name)), ResetColor)?;
                                     stdout.flush()?;
-                                    terminal::enable_raw_mode()?;
+                                    let _raw = crate::ui::RawModeGuard::enable()?;
                                     let confirmed = loop {
                                         if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
                                             break matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y'));
                                         }
                                     };
-                                    terminal::disable_raw_mode()?;
+                                    drop(_raw);
                                     execute!(stdout, Print("\n"))?;
                                     if confirmed {
                                         match self.client.delete_agent(&a.id).await {
@@ -1473,7 +1473,7 @@ impl Repl {
                             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                                 Print("  Save to settings.json? [y/N] "), ResetColor)?;
                             stdout.flush()?;
-                            terminal::enable_raw_mode()?;
+                            let _raw = crate::ui::RawModeGuard::enable()?;
                             let save = loop {
                                 if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
                                     match k.code {
@@ -1482,7 +1482,7 @@ impl Repl {
                                     }
                                 }
                             };
-                            terminal::disable_raw_mode()?;
+                            drop(_raw);
                             execute!(stdout, SetForegroundColor(if save { Color::Green } else { Color::DarkGrey }),
                                 Print(if save { "y\n" } else { "N\n" }), ResetColor)?;
                             if save {
@@ -1525,7 +1525,7 @@ impl Repl {
                             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                                 Print("  Save to settings.json? [y/N] "), ResetColor)?;
                             stdout.flush()?;
-                            terminal::enable_raw_mode()?;
+                            let _raw = crate::ui::RawModeGuard::enable()?;
                             let save = loop {
                                 if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
                                     match k.code {
@@ -1534,7 +1534,7 @@ impl Repl {
                                     }
                                 }
                             };
-                            terminal::disable_raw_mode()?;
+                            drop(_raw);
                             execute!(stdout, SetForegroundColor(if save { Color::Red } else { Color::DarkGrey }),
                                 Print(if save { "y\n" } else { "N\n" }), ResetColor)?;
                             if save {
@@ -2263,7 +2263,7 @@ impl Repl {
         stdout.flush()?;
 
         // Read single keypress
-        terminal::enable_raw_mode()?;
+        let _raw = crate::ui::RawModeGuard::enable()?;
         let choice = loop {
             if let Ok(Event::Key(KeyEvent { code, .. })) = event::read() {
                 match code {
@@ -2273,7 +2273,7 @@ impl Repl {
                 }
             }
         };
-        terminal::disable_raw_mode()?;
+        drop(_raw);
 
         let approved = match choice {
             'y' => {
@@ -2533,7 +2533,7 @@ impl Repl {
                 Ok(())
             };
 
-            terminal::enable_raw_mode()?;
+            let _raw = crate::ui::RawModeGuard::enable()?;
             execute!(stdout, cursor::Hide)?;
             draw_list(stdout, sel)?;
 
@@ -2557,7 +2557,7 @@ impl Repl {
                 }
             };
 
-            terminal::disable_raw_mode()?;
+            drop(_raw);
             execute!(stdout, cursor::Show, ResetColor, Print("\r\n"))?;
             stdout.flush()?;
 
@@ -2662,7 +2662,7 @@ impl Repl {
             ratatui::TerminalOptions { viewport: Viewport::Inline(view_h) },
         )?;
 
-        crossterm::terminal::enable_raw_mode()?;
+        let _raw = crate::ui::RawModeGuard::enable()?;
         let mut sel:    usize = 0;
         let mut result: Option<serde_json::Value> = None;
         let mut list_state = ListState::default().with_selected(Some(0));
@@ -2758,7 +2758,7 @@ impl Repl {
 
         term.clear()?;
         drop(term);
-        crossterm::terminal::disable_raw_mode()?;
+        drop(_raw);
         Ok(result)
     }
 
@@ -2832,7 +2832,7 @@ impl Repl {
         let term_rows = terminal::size().map(|(_, r)| r as usize).unwrap_or(24);
         let view_h    = (total + 3).min(term_rows.saturating_sub(2)).max(3) as u16;
 
-        terminal::enable_raw_mode()?;
+        let _raw = crate::ui::RawModeGuard::enable()?;
         execute!(stdout, cursor::Hide)?;
         let mut term = Terminal::with_options(
             CrosstermBackend::new(&mut *stdout),
@@ -2949,7 +2949,7 @@ impl Repl {
 
         term.clear()?;
         drop(term);
-        terminal::disable_raw_mode()?;
+        drop(_raw);
         execute!(stdout, cursor::Show, ResetColor)?;
         stdout.flush()?;
         Ok(result)
@@ -3151,7 +3151,7 @@ impl Repl {
         let term_rows = terminal::size().map(|(_, r)| r as usize).unwrap_or(24);
         let view_h    = term_rows.saturating_sub(3).max(5) as u16;
 
-        terminal::enable_raw_mode()?;
+        let _raw = crate::ui::RawModeGuard::enable()?;
         execute!(stdout, cursor::Hide)?;
         let mut term = Terminal::with_options(
             CrosstermBackend::new(&mut *stdout),
@@ -3243,7 +3243,7 @@ impl Repl {
 
         term.clear()?;
         drop(term);
-        terminal::disable_raw_mode()?;
+        drop(_raw);
         execute!(stdout, cursor::Show, ResetColor)?;
         stdout.flush()?;
         Ok(result)
@@ -3511,7 +3511,7 @@ fn make_relative_path(path: &str) -> String {
 fn rpassword_read() -> anyhow::Result<String> {
     use crossterm::event::{self, Event, KeyCode};
     let mut buf = String::new();
-    terminal::enable_raw_mode()?;
+    let _raw = crate::ui::RawModeGuard::enable()?;
     loop {
         if let Ok(Event::Key(k)) = event::read() {
             match k.code {
@@ -3523,7 +3523,7 @@ fn rpassword_read() -> anyhow::Result<String> {
             }
         }
     }
-    terminal::disable_raw_mode()?; // always leave raw mode OFF on exit
+    drop(_raw); // always leave raw mode OFF on exit
     Ok(buf)
 }
 

@@ -38,6 +38,7 @@ thiserror = "2"
 # Terminal / REPL
 crossterm = "0.28"
 ratatui = { version = "0.29", features = ["crossterm", "scrolling-regions"] }
+unicode-width = "0.2"   # accurate display-width for emoji + CJK (2-wide chars)
 
 # Logging
 tracing = "0.1"
@@ -92,3 +93,5 @@ tokio-test = "0.4"
 opt-level = 3
 lto = true
 codegen-units = 1
+strip = true      # ← auto-strips on cargo build --release
+panic = "abort"   # ← removes unwinding code (~5-10% savings)

@@ -8,6 +8,7 @@
 ///    with styled `Paragraph`/`Line`/`Span` widgets.
 
 use std::io::{self, Write};
+use unicode_width::UnicodeWidthStr;
 
 use anyhow::Result;
 use crossterm::{
@@ -47,8 +48,10 @@ fn estimate_height(lines: &[Line], width: usize) -> u16 {
     lines
         .iter()
         .map(|l| {
-            let char_len: usize = l.spans.iter().map(|s| s.content.chars().count()).sum();
-            ((char_len.max(1) - 1) / width.max(1) + 1) as u16
+            // Use display width (2 for emoji/CJK) not char count, so insert_before
+            // reserves the correct number of rows and doesn't overwrite content.
+            let display_width: usize = l.spans.iter().map(|s| s.content.as_ref().width()).sum();
+            ((display_width.max(1) - 1) / width.max(1) + 1) as u16
         })
         .sum::<u16>()
         .max(1)
@@ -72,8 +75,6 @@ pub struct OutputRenderer {
     response_buf: String,
     /// Full reasoning text (accumulated while streaming).
     reason_buf: String,
-    /// Number of `\n` / `\r\n` emitted during streaming (used to erase lines).
-    stream_line_count: u16,
 }
 
 impl OutputRenderer {
@@ -88,7 +89,6 @@ impl OutputRenderer {
             stream_col: 0,
             response_buf: String::new(),
             reason_buf: String::new(),
-            stream_line_count: 0,
         }
     }
 
@@ -227,7 +227,6 @@ impl OutputRenderer {
         self.in_assistant = false;
         self.stream_col = 0;
         let buf = std::mem::take(&mut self.response_buf);
-        self.stream_line_count = 0;
         self.update_width();
 
         let mut out = io::stdout();

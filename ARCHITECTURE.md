@@ -312,16 +312,15 @@ The user interface lives in `src/cli/`:
 ```
 Args (clap)
  ├── --model          override LLM model
- ├── --server         cade-server URL (default: http://127.0.0.1:8282)
+ ├── --server         cade-server URL (default: http://localhost:8284)
  ├── --agent          reuse a named agent
  ├── --permission-mode (auto / ask / deny)
  ├── --toolset        (default / codex / gemini)
  └── -p / --print     headless: prompt from CLI arg
 
 Repl (ratatui + crossterm)
- ├── Markdown rendering via pulldown-cmark
- ├── Scrollable message history
- ├── Live streaming token display
+ ├── Markdown rendering (custom parse_markdown_lines: headings, bullets, code fences, bold/italic)
+ ├── Single-line spinner during generation; insert_before re-render on completion
  ├── Slash commands: /help /memory /mcp /skills /subagents /clear /exit …
  └── Multi-line input (Shift+Enter)
 
@@ -686,7 +685,7 @@ Merged settings control:
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `CADE_SERVER_ADDR` | `127.0.0.1:8282` | Bind address |
+| `CADE_SERVER_PORT` | `8284` | Server listen port |
 | `CADE_DB_PATH` | `~/.cade/cade.db` | SQLite database path |
 | `CADE_LLM_PROVIDER` | auto-detect | Force a provider |
 | `CADE_DEFAULT_MODEL` | provider default | Force a model |

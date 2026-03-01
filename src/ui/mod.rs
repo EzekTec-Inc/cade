@@ -11,5 +11,5 @@
 pub mod input;
 pub mod output;
 
-pub use input::InputWidget;
+pub use input::{InputWidget, RawModeGuard};
 pub use output::OutputRenderer;

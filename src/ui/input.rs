@@ -36,6 +36,30 @@ use ratatui::{
 use crate::permissions::PermissionMode;
 use crate::ui::output::CONTENT_PAD;
 
+// ── RawModeGuard ──────────────────────────────────────────────────────────────
+
+/// RAII guard that enables raw mode on construction and disables it on drop.
+///
+/// Replaces the scattered `enable_raw_mode()` / `disable_raw_mode()` call pairs
+/// across repl.rs and input.rs. Guarantees the terminal is always restored even
+/// if code paths panic or early-return between enable/disable.
+pub struct RawModeGuard;
+
+impl RawModeGuard {
+    /// Enable raw mode and return the guard.
+    /// The terminal will be restored to cooked mode when the guard is dropped.
+    pub fn enable() -> io::Result<Self> {
+        terminal::enable_raw_mode()?;
+        Ok(Self)
+    }
+}
+
+impl Drop for RawModeGuard {
+    fn drop(&mut self) {
+        let _ = terminal::disable_raw_mode();
+    }
+}
+
 // ── InputWidget ───────────────────────────────────────────────────────────────
 
 /// Persistent state for the input widget across REPL iterations.
@@ -95,7 +119,7 @@ impl InputWidget {
             },
         )?;
 
-        terminal::enable_raw_mode()?;
+        let _raw = RawModeGuard::enable()?;
 
         let result: Result<Option<String>> = (|| {
             loop {
@@ -174,8 +198,13 @@ impl InputWidget {
                     frame.render_widget(input_para, inner);
 
                     // Cursor position: after "> " prefix + cursor_pos chars
-                    let cursor_col = inner.x + 2 + (cursor_pos as u16).min(inner.width.saturating_sub(3));
-                    let cursor_row = inner.y;
+                    // For multi-line input, count newlines before cursor_pos to find the row.
+                    let before_cursor = &buf_snapshot[..cursor_pos.min(buf_snapshot.len())];
+                    let line_idx = before_cursor.chars().filter(|&c| c == '\n').count() as u16;
+                    let last_line_start = before_cursor.rfind('\n').map(|i| i + 1).unwrap_or(0);
+                    let col_in_line = before_cursor[last_line_start..].chars().count() as u16;
+                    let cursor_col = inner.x + 2 + col_in_line.min(inner.width.saturating_sub(3));
+                    let cursor_row = (inner.y + line_idx).min(inner.y + inner.height.saturating_sub(1));
                     frame.set_cursor_position((cursor_col, cursor_row));
 
                     // ── Status bar ────────────────────────────────────────────
@@ -384,7 +413,7 @@ impl InputWidget {
             }
         })();
 
-        terminal::disable_raw_mode()?;
+        drop(_raw); // restore cooked mode before returning
         // Move cursor below the entire viewport so that subsequent streaming output
         // does not overwrite the input box area. MoveDown clamps at screen bottom.
         let _ = execute!(io::stdout(), cursor::MoveDown(viewport_height), cursor::MoveToColumn(0));
