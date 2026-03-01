@@ -20,7 +20,6 @@ use std::io;
 use anyhow::Result;
 use crossterm::{
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
     terminal,
 };
 use ratatui::{

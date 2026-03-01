@@ -18,9 +18,8 @@ use ratatui::{
     Terminal, TerminalOptions, Viewport,
     backend::CrosstermBackend,
     buffer::Buffer,
-    layout::Rect,
     style::{Color as RC, Modifier, Style},
-    text::{Line, Span},
+    text::Span,
     widgets::{Block, Borders, Paragraph, Widget, Wrap},
 };
 
