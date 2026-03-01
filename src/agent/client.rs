@@ -190,6 +190,60 @@ impl CadeClient {
 
     /// Fetch the server's auto-detected provider and default model.
     /// Falls back to a local default if the endpoint is unavailable (e.g. Letta Cloud).
+    // ── Provider management ───────────────────────────────────────────────────
+
+    pub async fn list_providers(&self) -> anyhow::Result<serde_json::Value> {
+        let resp = self.client
+            .get(self.url("/providers"))
+            .header(self.auth().0, self.auth().1)
+            .send().await?;
+        Ok(resp.json().await?)
+    }
+
+    pub async fn add_provider(
+        &self,
+        name: &str,
+        kind: &str,
+        api_key: Option<&str>,
+        base_url: Option<&str>,
+    ) -> anyhow::Result<serde_json::Value> {
+        let mut body = serde_json::json!({ "name": name, "kind": kind });
+        if let Some(k) = api_key  { body["api_key"]  = k.into(); }
+        if let Some(u) = base_url { body["base_url"] = u.into(); }
+        let resp = self.client
+            .post(self.url("/providers"))
+            .header(self.auth().0, self.auth().1)
+            .json(&body)
+            .send().await?;
+        if !resp.status().is_success() {
+            let txt = resp.text().await.unwrap_or_default();
+            anyhow::bail!("add_provider failed: {txt}");
+        }
+        Ok(resp.json().await?)
+    }
+
+    pub async fn remove_provider(&self, name: &str) -> anyhow::Result<()> {
+        let resp = self.client
+            .delete(self.url(&format!("/providers/{name}")))
+            .header(self.auth().0, self.auth().1)
+            .send().await?;
+        if !resp.status().is_success() && resp.status().as_u16() != 404 {
+            let txt = resp.text().await.unwrap_or_default();
+            anyhow::bail!("remove_provider failed: {txt}");
+        }
+        Ok(())
+    }
+
+    pub async fn list_provider_presets(&self) -> Vec<serde_json::Value> {
+        let resp = self.client
+            .get(self.url("/providers/presets"))
+            .header(self.auth().0, self.auth().1)
+            .send().await;
+        let Ok(r) = resp else { return vec![] };
+        let Ok(body): Result<serde_json::Value, _> = r.json().await else { return vec![] };
+        body["presets"].as_array().cloned().unwrap_or_default()
+    }
+
     /// Returns list of configured provider names from the server.
     pub async fn available_providers(&self) -> Vec<String> {
         let resp = self.client

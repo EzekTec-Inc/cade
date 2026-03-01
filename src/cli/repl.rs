@@ -51,6 +51,9 @@ enum SlashCmd {
     /// /skills [list|create <name>|show <id>|reload]
     Skills(Option<String>),
     Subagents,
+    Providers,
+    Connect(Option<String>),
+    Disconnect(String),
     Yolo,
     Plan,
     Default,
@@ -80,6 +83,9 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "feedback"               => Some(SlashCmd::Feedback),
         "skills"                 => Some(SlashCmd::Skills(arg)),
         "subagents" | "agents-list" => Some(SlashCmd::Subagents),
+        "providers" | "provider-list" => Some(SlashCmd::Providers),
+        "connect"    => Some(SlashCmd::Connect(arg)),
+        "disconnect" => Some(SlashCmd::Disconnect(arg.unwrap_or_default())),
         "yolo"                   => Some(SlashCmd::Yolo),
         "plan"                   => Some(SlashCmd::Plan),
         "default" | "normal" | "resume" => Some(SlashCmd::Default),
@@ -909,6 +915,67 @@ impl Repl {
                         println!("  Global: create ~/.cade/agents/<name>.md");
                     }
 
+                    SlashCmd::Providers => {
+                        match self.client.list_providers().await {
+                            Ok(body) => {
+                                let empty = vec![];
+                                let providers = body["providers"].as_array().unwrap_or(&empty);
+                                println!("\n  Configured providers ({}):\n", providers.len());
+                                for p in providers {
+                                    let name    = p["name"].as_str().unwrap_or("?");
+                                    let kind    = p["kind"].as_str().unwrap_or("?");
+                                    let live    = p["live"].as_bool().unwrap_or(false);
+                                    let source  = p["source"].as_str().unwrap_or("db");
+                                    let enabled = p["enabled"].as_bool().unwrap_or(true);
+                                    let status  = if live { "✓ live" } else { "✗ offline" };
+                                    execute!(stdout,
+                                        SetForegroundColor(if live { Color::Green } else { Color::Red }),
+                                        Print(format!("  {status:<10}")),
+                                        ResetColor,
+                                        Print(format!("{:<18} [{kind}] ({source})\n",
+                                            if enabled { name.to_string() } else { format!("{name} (disabled)") }
+                                        ))
+                                    )?;
+                                }
+                                println!();
+                                println!("  /connect <name>    — add a provider");
+                                println!("  /disconnect <name> — remove a provider");
+                                let presets = self.client.list_provider_presets().await;
+                                if !presets.is_empty() {
+                                    println!("\n  OpenAI-compatible presets:");
+                                    for p in &presets {
+                                        let n = p["name"].as_str().unwrap_or("?");
+                                        let u = p["base_url"].as_str().unwrap_or("?");
+                                        println!("    /connect {n:<14} — {u}");
+                                    }
+                                }
+                                println!();
+                            }
+                            Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                        }
+                    }
+
+                    SlashCmd::Connect(preset) => {
+                        self.handle_connect(preset, &mut stdout).await?;
+                    }
+
+                    SlashCmd::Disconnect(name) => {
+                        if name.is_empty() {
+                            self.print_error(&mut stdout, "/disconnect requires a provider name")?;
+                        } else {
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print(format!("\n  Disconnecting provider '{name}'…\n")), ResetColor)?;
+                            match self.client.remove_provider(&name).await {
+                                Ok(_) => {
+                                    execute!(stdout, SetForegroundColor(Color::Green),
+                                        Print(format!("  ✓ Provider '{name}' removed\n")), ResetColor)?;
+                                }
+                                Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                            }
+                            stdout.flush()?;
+                        }
+                    }
+
                     SlashCmd::Feedback => {
                         execute!(stdout,
                             SetForegroundColor(Color::Cyan),
@@ -1387,6 +1454,167 @@ impl Repl {
         }
     }
 
+    /// Interactive /connect flow — guided provider setup.
+    async fn handle_connect(
+        &self,
+        preset: Option<String>,
+        stdout: &mut io::Stdout,
+    ) -> Result<()> {
+        use crossterm::event::{self, Event, KeyCode};
+
+        // Known built-in provider types (non-OpenAI-compatible)
+        const BUILTIN: &[(&str, &str)] = &[
+            ("anthropic", "Anthropic (Claude models)"),
+            ("openai",    "OpenAI (GPT / Codex models)"),
+            ("gemini",    "Google Gemini"),
+            ("ollama",    "Ollama (local models, no key needed)"),
+        ];
+
+        // Fetch presets from server
+        let presets = self.client.list_provider_presets().await;
+
+        // If a preset name was given (e.g. /connect openrouter) skip the picker
+        let (name, kind, default_base_url) = if let Some(p) = preset {
+            // Check built-in first
+            if let Some(&(n, _)) = BUILTIN.iter().find(|(n, _)| *n == p.as_str()) {
+                (n.to_string(), n.to_string(), None)
+            } else if let Some(preset_val) = presets.iter().find(|v| v["name"].as_str() == Some(&p)) {
+                let base = preset_val["base_url"].as_str().map(String::from);
+                (p.clone(), "openai-compatible".to_string(), base)
+            } else {
+                // Treat as custom openai-compatible
+                (p.clone(), "openai-compatible".to_string(), None)
+            }
+        } else {
+            // Interactive picker
+            println!();
+            execute!(stdout, SetForegroundColor(Color::Cyan),
+                Print("  /connect — Choose a provider\n\n"), ResetColor)?;
+
+            let mut all_options: Vec<(String, String, Option<String>)> = BUILTIN.iter()
+                .map(|(n, label)| (n.to_string(), label.to_string(), None))
+                .collect();
+            for p in &presets {
+                let n = p["name"].as_str().unwrap_or("?").to_string();
+                let u = p["base_url"].as_str().map(String::from);
+                all_options.push((n.clone(), format!("{n} (OpenAI-compatible)"), u));
+            }
+            all_options.push(("custom".to_string(), "Custom OpenAI-compatible URL…".to_string(), None));
+
+            let total = all_options.len();
+            let mut sel = 0usize;
+
+            // Draw list
+            let draw_list = |stdout: &mut io::Stdout, sel: usize| -> Result<()> {
+                execute!(stdout, cursor::MoveToColumn(0),
+                    terminal::Clear(terminal::ClearType::FromCursorDown))?;
+                for (i, (_, label, _)) in all_options.iter().enumerate() {
+                    let arrow = if i == sel { "  ▶ " } else { "    " };
+                    let color = if i == sel { Color::White } else { Color::DarkGrey };
+                    execute!(stdout, SetForegroundColor(if i == sel { Color::Green } else { Color::DarkGrey }),
+                        Print(arrow), SetForegroundColor(color), Print(format!("{label}\n")), ResetColor)?;
+                }
+                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                    Print("\n  ↑↓ navigate  Enter select  Esc cancel\n"), ResetColor)?;
+                stdout.flush()?;
+                Ok(())
+            };
+
+            terminal::enable_raw_mode()?;
+            execute!(stdout, cursor::Hide)?;
+            draw_list(stdout, sel)?;
+
+            let chosen = loop {
+                if let Ok(Event::Key(key)) = event::read() {
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('q') => { break None; }
+                        KeyCode::Enter => { break Some(sel); }
+                        KeyCode::Up | KeyCode::Char('k') => {
+                            sel = if sel == 0 { total - 1 } else { sel - 1 };
+                            execute!(stdout, cursor::MoveToPreviousLine((total + 2) as u16))?;
+                            draw_list(stdout, sel)?;
+                        }
+                        KeyCode::Down | KeyCode::Char('j') => {
+                            sel = (sel + 1) % total;
+                            execute!(stdout, cursor::MoveToPreviousLine((total + 2) as u16))?;
+                            draw_list(stdout, sel)?;
+                        }
+                        _ => {}
+                    }
+                }
+            };
+
+            terminal::disable_raw_mode()?;
+            execute!(stdout, cursor::Show, ResetColor)?;
+            println!();
+            stdout.flush()?;
+
+            let Some(idx) = chosen else { return Ok(()); };
+            let (n, _, base) = all_options.remove(idx);
+            let k = if BUILTIN.iter().any(|(bn, _)| *bn == n.as_str()) {
+                n.clone()
+            } else {
+                "openai-compatible".to_string()
+            };
+            (n, k, base)
+        };
+
+        // Prompt for API key (masked input)
+        let needs_key = kind != "ollama";
+        let api_key = if needs_key {
+            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                Print(format!("\n  API key for '{name}' (input hidden, Enter to skip): ")),
+                ResetColor)?;
+            stdout.flush()?;
+            terminal::disable_raw_mode()?;
+            let key = rpassword_read()?;
+            terminal::enable_raw_mode()?;
+            println!();
+            if key.trim().is_empty() { None } else { Some(key.trim().to_string()) }
+        } else {
+            None
+        };
+
+        // For custom: prompt for base URL
+        let base_url = if kind == "openai-compatible" && default_base_url.is_none() {
+            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                Print("  Base URL (e.g. https://api.example.com/v1/chat/completions): "),
+                ResetColor)?;
+            stdout.flush()?;
+            let mut line = String::new();
+            terminal::disable_raw_mode()?;
+            std::io::stdin().read_line(&mut line).ok();
+            terminal::enable_raw_mode()?;
+            let u = line.trim().to_string();
+            if u.is_empty() { None } else { Some(u) }
+        } else {
+            default_base_url
+        };
+
+        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+            Print(format!("\n  Connecting to '{name}'…\n")), ResetColor)?;
+        stdout.flush()?;
+
+        match self.client.add_provider(
+            &name,
+            &kind,
+            api_key.as_deref(),
+            base_url.as_deref(),
+        ).await {
+            Ok(_) => {
+                execute!(stdout, SetForegroundColor(Color::Green),
+                    Print(format!("  ✓ Provider '{name}' connected and hot-loaded\n")),
+                    ResetColor)?;
+                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                    Print(format!("    Use: /model {name}/<model-name>\n")),
+                    ResetColor)?;
+            }
+            Err(e) => self.print_error(stdout, &e.to_string())?,
+        }
+        stdout.flush()?;
+        Ok(())
+    }
+
     /// Interactive model picker — opens on `/model` with no argument.
     /// Returns the selected model string or None if cancelled.
     async fn interactive_model_picker(&self, stdout: &mut io::Stdout) -> Result<Option<String>> {
@@ -1692,6 +1920,12 @@ impl Repl {
         println!("    /pin            - pin current agent for quick access");
         println!("    /clear          - clear screen + context window");
         println!();
+        println!("  Providers:");
+        println!("    /providers           - list configured providers");
+        println!("    /connect             - interactive provider setup");
+        println!("    /connect <name>      - connect: anthropic, openai, gemini, openrouter, groq…");
+        println!("    /disconnect <name>   - remove a provider (persisted + live)");
+        println!();
         println!("  Subagents:");
         println!("    /subagents      - list available subagents (built-in + custom)");
         println!("    ask agent to    - run_subagent(type, task) — spawns subagent");
@@ -1902,6 +2136,27 @@ impl Repl {
 
 fn truncate(s: &str, max: usize) -> String {
     super::truncate(s, max)
+}
+
+/// Read a line from stdin with no echo (for API key input).
+/// Falls back to normal readline if raw mode can't be set.
+fn rpassword_read() -> anyhow::Result<String> {
+    use crossterm::event::{self, Event, KeyCode};
+    let mut buf = String::new();
+    terminal::enable_raw_mode()?;
+    loop {
+        if let Ok(Event::Key(k)) = event::read() {
+            match k.code {
+                KeyCode::Enter => break,
+                KeyCode::Backspace => { buf.pop(); }
+                KeyCode::Char(c)   => buf.push(c),
+                KeyCode::Esc       => { buf.clear(); break; }
+                _ => {}
+            }
+        }
+    }
+    terminal::disable_raw_mode()?;
+    Ok(buf)
 }
 
 fn mode_prompt_tag(mode: PermissionMode) -> &'static str {

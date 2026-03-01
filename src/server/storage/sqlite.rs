@@ -3,6 +3,17 @@ use rusqlite::{Connection, params};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
+// ── Provider row ──────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ProviderRow {
+    pub name:     String,
+    pub kind:     String,          // "anthropic" | "openai" | "gemini" | "ollama" | "openai-compatible"
+    pub api_key:  Option<String>,
+    pub base_url: Option<String>,
+    pub enabled:  bool,
+}
+
 /// Thread-safe SQLite handle
 pub type Db = Arc<Mutex<Connection>>;
 
@@ -64,6 +75,15 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             PRIMARY KEY (agent_id, tool_id),
             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
             FOREIGN KEY (tool_id)  REFERENCES tools(id)  ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS providers (
+            name       TEXT PRIMARY KEY,
+            kind       TEXT NOT NULL,
+            api_key    TEXT,
+            base_url   TEXT,
+            enabled    INTEGER NOT NULL DEFAULT 1,
+            created_at INTEGER NOT NULL
         );
     "#)?;
     Ok(())
@@ -387,4 +407,51 @@ pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
             tags: serde_json::from_str(&tags_str).unwrap_or_default(),
         })
         .collect())
+}
+
+// ── Providers ─────────────────────────────────────────────────────────────────
+
+pub fn upsert_provider(db: &Db, row: &ProviderRow) -> Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO providers (name, kind, api_key, base_url, enabled, created_at)
+         VALUES (?1,?2,?3,?4,?5,?6)
+         ON CONFLICT(name) DO UPDATE SET
+           kind    = excluded.kind,
+           api_key = excluded.api_key,
+           base_url= excluded.base_url,
+           enabled = excluded.enabled",
+        params![
+            row.name,
+            row.kind,
+            row.api_key,
+            row.base_url,
+            row.enabled as i64,
+            now_ts(),
+        ],
+    )?;
+    Ok(())
+}
+
+pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT name, kind, api_key, base_url, enabled FROM providers ORDER BY name"
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(ProviderRow {
+            name:     r.get(0)?,
+            kind:     r.get(1)?,
+            api_key:  r.get(2)?,
+            base_url: r.get(3)?,
+            enabled:  r.get::<_, i64>(4)? != 0,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn delete_provider(db: &Db, name: &str) -> Result<bool> {
+    let conn = db.lock().unwrap();
+    let n = conn.execute("DELETE FROM providers WHERE name = ?1", params![name])?;
+    Ok(n > 0)
 }
