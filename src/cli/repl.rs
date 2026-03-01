@@ -18,6 +18,7 @@ use crate::skills::Skill;
 use crate::subagents::{BackgroundResult, discover_all_subagents, find_subagent};
 use crate::toolsets::Toolset;
 use crate::tools::dispatch;
+use crate::ui::{InputWidget, OutputRenderer};
 
 const BANNER: &str = r#"
    ___    _    ____  _____
@@ -171,6 +172,10 @@ pub struct Repl {
     /// Cumulative token usage for the session (input, output).
     session_input_tokens:  std::sync::Arc<std::sync::atomic::AtomicU64>,
     session_output_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    /// ratatui-based output renderer (streaming + bounded content).
+    output: Arc<Mutex<OutputRenderer>>,
+    /// ratatui-based input widget (replaces raw read_line()).
+    input_widget: InputWidget,
 }
 
 impl Repl {
@@ -211,6 +216,8 @@ impl Repl {
             streaming_enabled:     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             session_input_tokens:  std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            output:       Arc::new(Mutex::new(OutputRenderer::new())),
+            input_widget: InputWidget::new(),
         }
     }
 
@@ -225,20 +232,16 @@ impl Repl {
         self.first_turn.store(false, Ordering::SeqCst);
     }
 
-    pub async fn run(self) -> Result<()> {
+    pub async fn run(mut self) -> Result<()> {
         let mut stdout = io::stdout();
 
-        execute!(stdout, SetForegroundColor(Color::Cyan), Print(BANNER), ResetColor)?;
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print(format!(
-                " Agent : {} ({})\n Model : {}\n Mode  : {}\n\n",
-                self.agent_name(), self.agent_id(),
-                self.current_model.lock().unwrap(),
-                self.permissions.mode()
-            )),
-            ResetColor
+        // Banner + agent info via OutputRenderer
+        self.output.lock().unwrap().banner(
+            BANNER,
+            &self.agent_name(),
+            &self.agent_id(),
+            &self.current_model.lock().unwrap().clone(),
+            &format!("{}", self.permissions.mode()),
         )?;
 
         // SessionStart hook (non-blocking)
@@ -252,10 +255,11 @@ impl Repl {
             {
                 let mut results = self.background_results.lock().unwrap();
                 for r in results.drain(..) {
-                    execute!(stdout, Print("\n"), SetForegroundColor(Color::Cyan),
-                        Print(format!("  [background subagent: {}]", r.subagent)), ResetColor,
-                        Print(format!("\n  Task: {}\n  Result: {}\n", r.prompt_preview, r.result)))?;
-                    stdout.flush()?;
+                    let _ = self.output.lock().unwrap().background_result(
+                        &r.subagent,
+                        &r.prompt_preview,
+                        &r.result,
+                    );
                     // Inject result into main agent's conversation
                     let notify = format!(
                         "[Background subagent '{}' completed (task ID: {})]:\n{}",
@@ -265,17 +269,18 @@ impl Repl {
                 }
             }
 
-            // Prompt — show mode indicator when not in default mode
-            let mode_tag = mode_prompt_tag(self.permissions.mode());
-            execute!(
-                stdout,
-                SetForegroundColor(Color::Green),
-                Print(format!("\ncade{mode_tag}> ")),
-                ResetColor,
-            )?;
-            stdout.flush()?;
-
-            let input = match self.read_line(&mut history, &mut hist_idx)? {
+            // Read input via ratatui InputWidget (shows bordered input box + status bar)
+            let mode = self.permissions.mode();
+            let model = self.current_model.lock().unwrap().clone();
+            let agent_name = self.agent_name();
+            let in_tok  = self.session_input_tokens.load(std::sync::atomic::Ordering::SeqCst);
+            let out_tok = self.session_output_tokens.load(std::sync::atomic::Ordering::SeqCst);
+            let input = match self.input_widget.read(
+                &mut history, &mut hist_idx,
+                mode, &self.permissions,
+                &agent_name, &model,
+                in_tok, out_tok,
+            )? {
                 Some(s) => s,
                 None => break,
             };
@@ -1843,17 +1848,18 @@ impl Repl {
     /// Returns the complete collected message list.
     async fn stream_turn(
         &self,
-        stdout: &mut io::Stdout,
+        _stdout: &mut io::Stdout,
         input: &str,
         is_tool_return: bool,
         tool_call_id: &str,
         tool_output: &str,
     ) -> Result<Vec<CadeMessage>> {
-        // Shared mutable render state (needs interior mutability across the closure)
-        let stdout_ptr = stdout as *mut io::Stdout;
+        // ── Shared render state for the on_event closure ────────────────────────
+        // OutputRenderer is on self but closures need Arcs for shared mutability.
+        // We use two Arcs mirroring in_reasoning / in_assistant state so the closure
+        // can track block transitions without touching &mut self.
         let in_reasoning = std::sync::Arc::new(std::sync::Mutex::new(false));
         let in_assistant = std::sync::Arc::new(std::sync::Mutex::new(false));
-
         let in_reasoning2 = in_reasoning.clone();
         let in_assistant2 = in_assistant.clone();
 
@@ -1869,10 +1875,13 @@ impl Repl {
         let run_id_cell2   = run_id_cell.clone();
         let seq_id_cell2   = seq_id_cell.clone();
 
+        // Clone the Arc so the on_event closure can access the renderer without
+        // unsafe pointer gymnastics. The Mutex ensures exclusive access per event.
+        let out_arc = self.output.clone();
+
         let on_event = move |msg: &CadeMessage| {
-            // SAFETY: closure is called synchronously within the async function body,
-            // stdout outlives the closure, and we never alias it.
-            let out = unsafe { &mut *stdout_ptr };
+            let mut out = out_arc.lock().unwrap();
+            let out = &mut *out;
             match msg.msg_type() {
                 "stream_start" => {
                     // Server emits this as the first SSE event with conversation_id + run_id
@@ -1890,55 +1899,38 @@ impl Repl {
                     }
                 }
                 "reasoning_message" => {
-                    let mut flag = in_reasoning2.lock().unwrap();
                     if let Some(text) = msg.reasoning_text() {
+                        let mut flag = in_reasoning2.lock().unwrap();
                         if !*flag {
-                            let _ = execute!(out,
-                                SetForegroundColor(Color::DarkGrey),
-                                Print("\n  💭 thinking…\n  "),
-                            );
+                            // First chunk: print the thinking header
+                            let _ = out.reasoning_header();
                             *flag = true;
                         }
-                        let _ = execute!(out, Print(text));
+                        let _ = out.reasoning_chunk(text);
                     }
-                    let _ = out.flush();
                 }
                 "assistant_message" => {
-                    let mut rflag = in_reasoning2.lock().unwrap();
-                    if *rflag {
-                        let _ = execute!(out, Print("\n"), ResetColor);
-                        *rflag = false;
-                    }
-                    drop(rflag);
-
-                    let mut aflag = in_assistant2.lock().unwrap();
-                    if let Some(text) = msg.assistant_text() {
-                        if !text.is_empty() {
-                            if !*aflag {
-                                let _ = execute!(out,
-                                    SetForegroundColor(Color::White),
-                                    Print("\n"),
-                                );
-                                *aflag = true;
-                            }
-                            let _ = execute!(out, Print(text));
+                    // Close reasoning block if open
+                    {
+                        let mut rflag = in_reasoning2.lock().unwrap();
+                        if *rflag {
+                            let _ = out.reasoning_done();
+                            *rflag = false;
                         }
                     }
-                    let _ = out.flush();
+                    if let Some(text) = msg.assistant_text() {
+                        if !text.is_empty() {
+                            let mut aflag = in_assistant2.lock().unwrap();
+                            let _ = out.assistant_chunk(text);
+                            *aflag = true;
+                        }
+                    }
                 }
                 "tool_call_message" => {
-                    // Close any open reasoning/assistant block
-                    let mut rflag = in_reasoning2.lock().unwrap();
-                    if *rflag {
-                        let _ = execute!(out, Print("\n"), ResetColor);
-                        *rflag = false;
-                    }
-                    drop(rflag);
-                    let mut aflag = in_assistant2.lock().unwrap();
-                    if *aflag {
-                        let _ = execute!(out, Print("\n"), ResetColor);
-                        *aflag = false;
-                    }
+                    // Close any open streaming block before tool call display
+                    let _ = out.close_streaming();
+                    *in_reasoning2.lock().unwrap() = false;
+                    *in_assistant2.lock().unwrap() = false;
                 }
                 "usage_statistics" => {
                     use std::sync::atomic::Ordering;
@@ -1974,12 +1966,13 @@ impl Repl {
             {
                 Ok(m) => m,
                 Err(e) if is_cancel(&e) => {
-                    execute!(stdout, Print("\n"), SetForegroundColor(Color::Yellow),
-                        Print("  ✗ Turn interrupted\n"), ResetColor)?;
+                    let _ = self.output.lock().unwrap().close_streaming();
+                    let _ = self.output.lock().unwrap().error("Turn interrupted");
                     return Ok(vec![]);
                 }
                 Err(e) => {
-                    self.print_error(stdout, &e.to_string())?;
+                    let _ = self.output.lock().unwrap().close_streaming();
+                    let _ = self.output.lock().unwrap().error(&e.to_string());
                     return Ok(vec![]);
                 }
             }
@@ -1990,12 +1983,13 @@ impl Repl {
                 match self.client.stream_message_cancellable(&agent_id, input, conv_ref, on_event, Some(cancel)).await {
                     Ok(m) => m,
                     Err(e) if is_cancel(&e) => {
-                        execute!(stdout, Print("\n"), SetForegroundColor(Color::Yellow),
-                            Print("  ✗ Turn interrupted\n"), ResetColor)?;
+                        let _ = self.output.lock().unwrap().close_streaming();
+                        let _ = self.output.lock().unwrap().error("Turn interrupted");
                         return Ok(vec![]);
                     }
                     Err(e) => {
-                        self.print_error(stdout, &e.to_string())?;
+                        let _ = self.output.lock().unwrap().close_streaming();
+                        let _ = self.output.lock().unwrap().error(&e.to_string());
                         return Ok(vec![]);
                     }
                 }
@@ -2006,24 +2000,23 @@ impl Repl {
                         for msg in &msgs {
                             if let Some(text) = msg.assistant_text() {
                                 if !text.is_empty() {
-                                    execute!(stdout, SetForegroundColor(Color::White),
-                                        Print(format!("\n{text}")), ResetColor)?;
+                                    let _ = self.output.lock().unwrap().assistant_chunk(text);
                                 }
                             }
                         }
+                        let _ = self.output.lock().unwrap().assistant_done();
                         msgs
                     }
                     Err(e) => {
-                        self.print_error(stdout, &e.to_string())?;
+                        let _ = self.output.lock().unwrap().error(&e.to_string());
                         return Ok(vec![]);
                     }
                 }
             }
         };
 
-        // Ensure final newline + colour reset after streaming
-        execute!(stdout, Print("\n"), ResetColor)?;
-        stdout.flush()?;
+        // Close any open streaming blocks (reasoning/assistant) after streaming ends
+        let _ = self.output.lock().unwrap().close_streaming();
 
         // Save run_id + last seq_id for crash recovery / reconnect
         let saved_run_id  = run_id_cell.lock().unwrap().clone();
@@ -2059,9 +2052,7 @@ impl Repl {
             // Stop hook — exit 2 feeds stderr back to agent as a continuation
             let stop_outcome = self.hooks.stop("end_turn", user_input, &assistant_msg).await;
             if let crate::hooks::HookOutcome::Block { reason } = stop_outcome {
-                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                    Print(format!("\n  ↩ Hook continuing turn: {reason}\n")), ResetColor)?;
-                stdout.flush()?;
+                let _ = self.output.lock().unwrap().hook_continuation(&reason);
                 // Feed the hook's stderr back to the agent as a new turn
                 let follow_msgs = self.stream_turn(stdout, &reason, false, "", "").await?;
                 Box::pin(self.dispatch_tool_calls(stdout, follow_msgs, user_input)).await?;
@@ -2091,74 +2082,44 @@ impl Repl {
         tool_name: &str,
         args: &serde_json::Value,
     ) -> Result<crate::tools::ToolResult> {
-        // Print what the agent wants to do
-        execute!(
-            stdout,
-            SetForegroundColor(Color::Yellow),
-            SetAttribute(Attribute::Bold),
-            Print(format!("\n  🔧 {tool_name}")),
-            SetAttribute(Attribute::Reset),
-            ResetColor,
-        )?;
-
-        // Show compact args preview — key arg depends on tool type
-        let preview: Option<String> = {
+        // Build compact args preview — key arg depends on tool type
+        let preview: String = {
             fn short(s: &str, n: usize) -> String {
                 let s = s.trim();
-                if s.chars().count() <= n {
-                    s.to_string()
-                } else {
-                    format!("{}…", s.chars().take(n).collect::<String>())
-                }
+                if s.chars().count() <= n { s.to_string() }
+                else { format!("{}…", s.chars().take(n).collect::<String>()) }
             }
             let a = args;
-            // Priority: check args in tool-specific order
             if let Some(cmd) = a["command"].as_str() {
-                // bash / shell_command
-                Some(format!("$ {}", short(cmd, 80)))
+                format!("$ {}", short(cmd, 80))
             } else if let Some(fp) = a["file_path"].as_str().or(a["path"].as_str()) {
-                // read / write / edit / glob
                 let extra = if let Some(old) = a["old_string"].as_str() {
                     format!("  \"{}\"", short(old, 40))
                 } else if let Some(content) = a["content"].as_str() {
                     format!("  ({} chars)", content.len())
-                } else {
-                    String::new()
-                };
-                Some(format!("{fp}{extra}"))
+                } else { String::new() };
+                format!("{fp}{extra}")
             } else if let Some(pat) = a["pattern"].as_str() {
-                // grep / glob
                 let in_path = a["path"].as_str().unwrap_or("");
-                if in_path.is_empty() {
-                    Some(format!("\"{}\"", short(pat, 60)))
-                } else {
-                    Some(format!("\"{}\" in {in_path}", short(pat, 40)))
-                }
+                if in_path.is_empty() { format!("\"{}\"", short(pat, 60)) }
+                else { format!("\"{}\" in {in_path}", short(pat, 40)) }
             } else if let Some(label) = a["label"].as_str() {
-                // update_memory
                 let op = a["operation"].as_str().unwrap_or("set");
-                Some(format!("[{label}] ({op})"))
+                format!("[{label}] ({op})")
             } else if let Some(id) = a["id"].as_str() {
-                // load_skill / install_skill
-                Some(id.to_string())
+                id.to_string()
             } else if let Some(task) = a["task"].as_str().or(a["prompt"].as_str()) {
-                // run_subagent
-                Some(format!("\"{}\"", short(task, 60)))
+                format!("\"{}\"", short(task, 60))
             } else if let Some(patch) = a["patch"].as_str() {
-                // apply_patch
-                Some(format!("\"{}\"", short(patch, 60)))
+                format!("\"{}\"", short(patch, 60))
             } else {
-                // Generic: first string value in the args object
                 a.as_object().and_then(|m| {
                     m.values().find_map(|v| v.as_str()).map(|s| short(s, 60))
-                })
+                }).unwrap_or_default()
             }
         };
-        if let Some(p) = preview {
-            execute!(stdout, SetForegroundColor(Color::DarkGrey), Print(format!("  {p}")), ResetColor)?;
-        }
-        execute!(stdout, Print("\n"))?;
-        stdout.flush()?;
+        // Show ratatui tool call box (bordered, yellow)
+        self.output.lock().unwrap().tool_call(tool_name, &preview)?;
 
         // Native tool intercepts (handled without going through generic dispatch)
         if tool_name == "update_memory" {
@@ -2177,8 +2138,7 @@ impl Repl {
         // Permission check — plan mode / deny rules
         if self.permissions.is_blocked(tool_name, args) {
             let msg = self.permissions.block_reason(tool_name, args);
-            execute!(stdout, SetForegroundColor(Color::Red),
-                Print(format!("  ✗ {msg}\n")), ResetColor)?;
+            self.output.lock().unwrap().tool_result(true, &msg)?;
             return Ok(crate::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -2192,8 +2152,7 @@ impl Repl {
             if let crate::hooks::HookOutcome::Block { reason } =
                 self.hooks.permission_request(tool_name, args).await
             {
-                execute!(stdout, SetForegroundColor(Color::Red),
-                    Print(format!("  ✗ Hook denied: {reason}\n")), ResetColor)?;
+                self.output.lock().unwrap().tool_result(true, &format!("Hook denied: {reason}"))?;
                 return Ok(crate::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: tool_name.to_string(),
@@ -2205,6 +2164,7 @@ impl Repl {
             // Prompt for approval
             if !self.prompt_approval(stdout, tool_name, args)? {
                 let msg = format!("Tool '{tool_name}' denied by user");
+                self.output.lock().unwrap().tool_result(true, &msg)?;
                 return Ok(crate::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: tool_name.to_string(),
@@ -2218,8 +2178,7 @@ impl Repl {
         if let crate::hooks::HookOutcome::Block { reason } =
             self.hooks.pre_tool_use(tool_name, args).await
         {
-            execute!(stdout, SetForegroundColor(Color::Red),
-                Print(format!("  ✗ Hook blocked: {reason}\n")), ResetColor)?;
+            self.output.lock().unwrap().tool_result(true, &format!("Hook blocked: {reason}"))?;
             return Ok(crate::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -2227,11 +2186,6 @@ impl Repl {
                 is_error: true,
             });
         }
-
-        // Execute
-        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-            Print("  ▶ running…\n"), ResetColor)?;
-        stdout.flush()?;
 
         let mut result = dispatch(call_id.to_string(), tool_name, args, &self.mcp).await;
 
@@ -2245,31 +2199,27 @@ impl Repl {
             }
         }
 
-        // Show result summary
+        // Show result summary via OutputRenderer
         if result.is_error {
-            execute!(stdout, SetForegroundColor(Color::Red),
-                Print(format!("  ✗ {}\n", truncate(&result.output, 120))), ResetColor)?;
+            self.output.lock().unwrap().tool_result(true, &truncate(&result.output, 120))?;
         } else {
             let summary = match tool_name {
                 "write_file" | "create_file" => {
-                    let bytes = result.output.len();
-                    format!("  ✓ written ({bytes} chars)")
+                    format!("written ({} chars)", result.output.len())
                 }
-                "edit_file" | "apply_patch" => "  ✓ edited".to_string(),
-                "delete_file" | "move_file" | "rename_file" => "  ✓ done".to_string(),
+                "edit_file" | "apply_patch" => "edited".to_string(),
+                "delete_file" | "move_file" | "rename_file" => "done".to_string(),
                 "bash" | "run_command" | "execute_command" => {
                     if result.output.trim().is_empty() {
-                        "  ✓ (no output)".to_string()
+                        "(no output)".to_string()
                     } else {
-                        format!("  ✓ {} lines", result.output.lines().count())
+                        format!("{} lines", result.output.lines().count())
                     }
                 }
-                _ => format!("  ✓ {} lines", result.output.lines().count()),
+                _ => format!("{} lines", result.output.lines().count()),
             };
-            execute!(stdout, SetForegroundColor(Color::Green),
-                Print(format!("{summary}\n")), ResetColor)?;
+            self.output.lock().unwrap().tool_result(false, &summary)?;
         }
-        stdout.flush()?;
 
         Ok(result)
     }
@@ -3568,196 +3518,6 @@ impl Repl {
         stdout.flush()?;
         Ok(())
     }
-
-    // ── Input reading (raw mode readline) ─────────────────────────────────────
-
-    fn read_line(
-        &self,
-        history: &mut Vec<String>,
-        hist_idx: &mut Option<usize>,
-    ) -> Result<Option<String>> {
-        let mut buf = String::new();
-        let mut cursor_pos = 0usize;
-        let mut stdout = io::stdout();
-
-        terminal::enable_raw_mode()?;
-        let result: Result<Option<String>> = (|| {
-            loop {
-                if !event::poll(std::time::Duration::from_millis(50))? {
-                    continue;
-                }
-                match event::read()? {
-                    Event::Key(KeyEvent { code, modifiers, .. }) => {
-                        match (code, modifiers) {
-                            (KeyCode::BackTab, _) => {
-                                // Shift+Tab: cycle Default → AcceptEdits → Plan → BypassPermissions → Default
-                                let next = match self.permissions.mode() {
-                                    PermissionMode::Default           => PermissionMode::AcceptEdits,
-                                    PermissionMode::AcceptEdits       => PermissionMode::Plan,
-                                    PermissionMode::Plan              => PermissionMode::BypassPermissions,
-                                    PermissionMode::BypassPermissions => PermissionMode::Default,
-                                };
-                                self.permissions.set_mode(next);
-                                let (icon, label, _) = mode_display(next);
-                                // Briefly show mode without breaking the input line
-                                execute!(stdout,
-                                    Print("\r"),
-                                    terminal::Clear(ClearType::CurrentLine),
-                                    SetForegroundColor(Color::DarkGrey),
-                                    Print(format!("  {icon} {label}  (Shift+Tab to cycle)\r\n")),
-                                    ResetColor,
-                                    SetForegroundColor(Color::Green),
-                                    Print(format!("cade{}> ", mode_prompt_tag(next))),
-                                    ResetColor,
-                                    Print(&buf),
-                                )?;
-                                stdout.flush()?;
-                                continue;
-                            }
-                            // Shift+Enter — insert literal newline (multi-line input)
-                            (KeyCode::Enter, m) if m == KeyModifiers::SHIFT => {
-                                buf.insert(cursor_pos, '\n');
-                                cursor_pos += 1;
-                                execute!(stdout, Print("\r\n  "))?;
-                            }
-                            (KeyCode::Enter, _) => return Ok(Some(buf.clone())),
-                            (KeyCode::Char('d'), KeyModifiers::CONTROL) if buf.is_empty() => {
-                                return Ok(None);
-                            }
-                            // Esc — clear input buffer (if non-empty)
-                            (KeyCode::Esc, _) => {
-                                if !buf.is_empty() {
-                                    if cursor_pos > 0 {
-                                        execute!(stdout, cursor::MoveLeft(cursor_pos as u16))?;
-                                    }
-                                    let clear = " ".repeat(buf.len());
-                                    execute!(stdout, Print(&clear))?;
-                                    if !clear.is_empty() {
-                                        execute!(stdout, cursor::MoveLeft(clear.len() as u16))?;
-                                    }
-                                    buf.clear();
-                                    cursor_pos = 0;
-                                }
-                                // Esc on empty line: do nothing
-                            }
-
-                            (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                                execute!(stdout, Print("^C\r\n"))?;
-                                buf.clear();
-                                cursor_pos = 0;
-                                return Ok(Some(String::new()));
-                            }
-                            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                                // Kill line
-                                if cursor_pos > 0 {
-                                    execute!(stdout, cursor::MoveLeft(cursor_pos as u16))?;
-                                }
-                                let clear = " ".repeat(buf.len());
-                                execute!(stdout, Print(&clear))?;
-                                if !clear.is_empty() {
-                                    execute!(stdout, cursor::MoveLeft(clear.len() as u16))?;
-                                }
-                                buf.clear();
-                                cursor_pos = 0;
-                            }
-                            (KeyCode::Backspace, _) if cursor_pos > 0 => {
-                                cursor_pos -= 1;
-                                buf.remove(cursor_pos);
-                                execute!(stdout, cursor::MoveLeft(1), Print(" "), cursor::MoveLeft(1))?;
-                                let rest = buf[cursor_pos..].to_string();
-                                execute!(stdout, Print(&rest), Print(" "))?;
-                                let back = rest.len() as u16 + 1;
-                                execute!(stdout, cursor::MoveLeft(back))?;
-                            }
-                            (KeyCode::Left, _) if cursor_pos > 0 => {
-                                cursor_pos -= 1;
-                                execute!(stdout, cursor::MoveLeft(1))?;
-                            }
-                            (KeyCode::Right, _) if cursor_pos < buf.len() => {
-                                cursor_pos += 1;
-                                execute!(stdout, cursor::MoveRight(1))?;
-                            }
-                            (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
-                                if cursor_pos > 0 {
-                                    execute!(stdout, cursor::MoveLeft(cursor_pos as u16))?;
-                                    cursor_pos = 0;
-                                }
-                            }
-                            (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
-                                let dist = buf.len() - cursor_pos;
-                                if dist > 0 {
-                                    execute!(stdout, cursor::MoveRight(dist as u16))?;
-                                    cursor_pos = buf.len();
-                                }
-                            }
-                            (KeyCode::Up, _) if !history.is_empty() => {
-                                let new_idx = match *hist_idx {
-                                    None => history.len() - 1,
-                                    Some(i) if i > 0 => i - 1,
-                                    Some(i) => i,
-                                };
-                                *hist_idx = Some(new_idx);
-                                let entry = history[new_idx].clone();
-                                self.replace_line_buf(&mut stdout, &buf, &entry, &mut cursor_pos)?;
-                                buf = entry;
-                            }
-                            (KeyCode::Down, _) => {
-                                if let Some(i) = *hist_idx {
-                                    if i + 1 < history.len() {
-                                        *hist_idx = Some(i + 1);
-                                        let entry = history[i + 1].clone();
-                                        self.replace_line_buf(&mut stdout, &buf, &entry, &mut cursor_pos)?;
-                                        buf = entry;
-                                    } else {
-                                        *hist_idx = None;
-                                        self.replace_line_buf(&mut stdout, &buf, "", &mut cursor_pos)?;
-                                        buf.clear();
-                                    }
-                                }
-                            }
-                            (KeyCode::Char(c), mods)
-                                if mods == KeyModifiers::NONE || mods == KeyModifiers::SHIFT =>
-                            {
-                                buf.insert(cursor_pos, c);
-                                cursor_pos += 1;
-                                execute!(stdout, Print(c))?;
-                                if cursor_pos < buf.len() {
-                                    let rest = buf[cursor_pos..].to_string();
-                                    execute!(stdout, Print(&rest))?;
-                                    execute!(stdout, cursor::MoveLeft(rest.len() as u16))?;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                    _ => {}
-                }
-                stdout.flush()?;
-            }
-        })();
-
-        terminal::disable_raw_mode()?;
-        result
-    }
-
-    fn replace_line_buf(
-        &self,
-        stdout: &mut io::Stdout,
-        old: &str,
-        new: &str,
-        cursor_pos: &mut usize,
-    ) -> Result<()> {
-        if *cursor_pos > 0 {
-            execute!(stdout, cursor::MoveLeft(*cursor_pos as u16))?;
-        }
-        let width = old.len().max(new.len()) + 1;
-        execute!(stdout, Print(" ".repeat(width)))?;
-        execute!(stdout, cursor::MoveLeft(width as u16))?;
-        execute!(stdout, Print(new))?;
-        *cursor_pos = new.len();
-        stdout.flush()?;
-        Ok(())
-    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -3787,14 +3547,6 @@ fn rpassword_read() -> anyhow::Result<String> {
     Ok(buf)
 }
 
-fn mode_prompt_tag(mode: PermissionMode) -> &'static str {
-    match mode {
-        PermissionMode::Plan               => " \x1b[36m[plan]\x1b[0m",
-        PermissionMode::BypassPermissions  => " \x1b[33m[yolo]\x1b[0m",
-        PermissionMode::AcceptEdits        => " \x1b[35m[edits]\x1b[0m",
-        PermissionMode::Default            => "",
-    }
-}
 
 /// Returns (icon, label, hint) for the current permission mode.
 fn mode_display(mode: PermissionMode) -> (&'static str, &'static str, &'static str) {
