@@ -1504,18 +1504,26 @@ impl Repl {
             let total = all_options.len();
             let mut sel = 0usize;
 
-            // Draw list
+            // Lines per render: total_options + 1 blank + 1 hint = total + 2
+            let connect_draw_lines = (all_options.len() + 2) as u16;
+
+            // Draw list — \r\n required in raw mode
             let draw_list = |stdout: &mut io::Stdout, sel: usize| -> Result<()> {
                 execute!(stdout, cursor::MoveToColumn(0),
                     terminal::Clear(terminal::ClearType::FromCursorDown))?;
                 for (i, (_, label, _)) in all_options.iter().enumerate() {
                     let arrow = if i == sel { "  ▶ " } else { "    " };
                     let color = if i == sel { Color::White } else { Color::DarkGrey };
-                    execute!(stdout, SetForegroundColor(if i == sel { Color::Green } else { Color::DarkGrey }),
-                        Print(arrow), SetForegroundColor(color), Print(format!("{label}\n")), ResetColor)?;
+                    execute!(stdout,
+                        SetForegroundColor(if i == sel { Color::Green } else { Color::DarkGrey }),
+                        Print(arrow),
+                        SetForegroundColor(color),
+                        Print(format!("{label}\r\n")),
+                        ResetColor,
+                    )?;
                 }
                 execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                    Print("\n  ↑↓ navigate  Enter select  Esc cancel\n"), ResetColor)?;
+                    Print("\r\n  ↑↓ / j/k navigate  Enter select  Esc cancel\r\n"), ResetColor)?;
                 stdout.flush()?;
                 Ok(())
             };
@@ -1531,12 +1539,12 @@ impl Repl {
                         KeyCode::Enter => { break Some(sel); }
                         KeyCode::Up | KeyCode::Char('k') => {
                             sel = if sel == 0 { total - 1 } else { sel - 1 };
-                            execute!(stdout, cursor::MoveToPreviousLine((total + 2) as u16))?;
+                            execute!(stdout, cursor::MoveToPreviousLine(connect_draw_lines))?;
                             draw_list(stdout, sel)?;
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
                             sel = (sel + 1) % total;
-                            execute!(stdout, cursor::MoveToPreviousLine((total + 2) as u16))?;
+                            execute!(stdout, cursor::MoveToPreviousLine(connect_draw_lines))?;
                             draw_list(stdout, sel)?;
                         }
                         _ => {}
@@ -1545,8 +1553,7 @@ impl Repl {
             };
 
             terminal::disable_raw_mode()?;
-            execute!(stdout, cursor::Show, ResetColor)?;
-            println!();
+            execute!(stdout, cursor::Show, ResetColor, Print("\r\n"))?;
             stdout.flush()?;
 
             let Some(idx) = chosen else { return Ok(()); };
@@ -1568,8 +1575,9 @@ impl Repl {
             stdout.flush()?;
             terminal::disable_raw_mode()?;
             let key = rpassword_read()?;
-            terminal::enable_raw_mode()?;
-            println!();
+            // rpassword_read leaves raw mode off — add newline in normal mode
+            execute!(stdout, Print("\r\n"))?;
+            stdout.flush()?;
             if key.trim().is_empty() { None } else { Some(key.trim().to_string()) }
         } else {
             None
@@ -1660,85 +1668,78 @@ impl Repl {
         let total = models.len();
         let mut selected: usize = models.iter().position(|(_, _, id, _)| *id == current).unwrap_or(0);
 
-        // Draw the picker
+        // Count provider headers once — needed for accurate line counting
+        let provider_header_count = {
+            let mut seen = std::collections::HashSet::new();
+            models.iter().filter(|(p, ..)| seen.insert(*p)).count()
+        };
+        // Lines drawn per full render:
+        // 1 (blank) + 1 (header) + 1 (blank) + provider_headers + total_models + 1 (blank footer)
+        let draw_lines = (3 + provider_header_count + total + 1) as u16;
+
+        // Draw the picker — must use \r\n everywhere; we are in raw mode.
         let draw = |stdout: &mut io::Stdout, sel: usize| -> Result<()> {
-            // Clear lines: move up (total+4) and clear down
             execute!(stdout,
                 cursor::MoveToColumn(0),
-                terminal::Clear(terminal::ClearType::FromCursorDown)
-            )?;
-            println!();
-            execute!(stdout, SetForegroundColor(Color::Cyan),
-                Print("  Select model  "), ResetColor,
+                terminal::Clear(terminal::ClearType::FromCursorDown),
+                Print("\r\n"),
+                SetForegroundColor(Color::Cyan),  Print("  Select model  "),
+                ResetColor,
                 SetForegroundColor(Color::DarkGrey),
-                Print("↑↓ navigate  Enter select  Esc cancel\n"),
-                ResetColor)?;
-            println!();
+                Print("↑↓ / j/k navigate  Enter select  Esc cancel\r\n"),
+                ResetColor,
+                Print("\r\n"),
+            )?;
 
             let mut last_provider = "";
             for (i, (provider, name, id, toolset)) in models.iter().enumerate() {
                 if *provider != last_provider {
                     execute!(stdout, SetForegroundColor(Color::Yellow),
-                        Print(format!("  {}\n", provider.to_uppercase())), ResetColor)?;
+                        Print(format!("  {}\r\n", provider.to_uppercase())), ResetColor)?;
                     last_provider = provider;
                 }
                 let is_current = *id == current;
                 let is_sel     = i == sel;
-                let cursor_str = if is_sel { "  ▶ " } else { "    " };
+                let arrow      = if is_sel { "  ▶ " } else { "    " };
                 let name_color = if is_sel { Color::White } else { Color::DarkGrey };
                 execute!(stdout,
                     SetForegroundColor(if is_sel { Color::Green } else { Color::DarkGrey }),
-                    Print(cursor_str),
+                    Print(arrow),
                     SetForegroundColor(name_color),
                     Print(format!("{:<28}", name)),
                     SetForegroundColor(Color::DarkGrey),
                     Print(format!("[{}]", toolset)),
-                    ResetColor)?;
+                    ResetColor,
+                )?;
                 if is_current {
                     execute!(stdout, SetForegroundColor(Color::Cyan), Print(" ← current"), ResetColor)?;
                 }
-                println!();
+                execute!(stdout, Print("\r\n"))?;
             }
-            println!();
+            execute!(stdout, Print("\r\n"))?;
             stdout.flush()?;
             Ok(())
         };
 
-        // Initial draw
-        terminal::disable_raw_mode()?;
-        execute!(stdout, cursor::Hide)?;
+        // Enter raw mode and draw initial state
         terminal::enable_raw_mode()?;
+        execute!(stdout, cursor::Hide)?;
         draw(stdout, selected)?;
 
         // Event loop
         let result = loop {
             if let Ok(Event::Key(key)) = event::read() {
                 match (key.code, key.modifiers) {
-                    (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => {
-                        break None;
-                    }
-                    (KeyCode::Enter, _) => {
-                        break Some(models[selected].2.to_string());
-                    }
+                    (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
+                    (KeyCode::Enter, _) => break Some(models[selected].2.to_string()),
                     (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
-                        if selected > 0 { selected -= 1; }
-                        else { selected = total - 1; }
-                        // Redraw: move cursor up by (total + header lines)
-                        let lines = total + 5 + {
-                            // Count provider headers
-                            let mut seen = std::collections::HashSet::new();
-                            models.iter().filter(|(p,..)| seen.insert(*p)).count()
-                        };
-                        execute!(stdout, cursor::MoveToPreviousLine(lines as u16))?;
+                        selected = if selected == 0 { total - 1 } else { selected - 1 };
+                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
                         draw(stdout, selected)?;
                     }
                     (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
                         selected = (selected + 1) % total;
-                        let lines = total + 5 + {
-                            let mut seen = std::collections::HashSet::new();
-                            models.iter().filter(|(p,..)| seen.insert(*p)).count()
-                        };
-                        execute!(stdout, cursor::MoveToPreviousLine(lines as u16))?;
+                        execute!(stdout, cursor::MoveToPreviousLine(draw_lines))?;
                         draw(stdout, selected)?;
                     }
                     _ => {}
@@ -1748,7 +1749,6 @@ impl Repl {
 
         terminal::disable_raw_mode()?;
         execute!(stdout, cursor::Show, ResetColor)?;
-        terminal::enable_raw_mode()?;
         stdout.flush()?;
         Ok(result)
     }
@@ -2140,6 +2140,8 @@ fn truncate(s: &str, max: usize) -> String {
 
 /// Read a line from stdin with no echo (for API key input).
 /// Falls back to normal readline if raw mode can't be set.
+/// Read a password from stdin with no echo. Caller must ensure raw mode is OFF before
+/// calling; this function enables and then disables raw mode internally.
 fn rpassword_read() -> anyhow::Result<String> {
     use crossterm::event::{self, Event, KeyCode};
     let mut buf = String::new();
@@ -2147,7 +2149,7 @@ fn rpassword_read() -> anyhow::Result<String> {
     loop {
         if let Ok(Event::Key(k)) = event::read() {
             match k.code {
-                KeyCode::Enter => break,
+                KeyCode::Enter     => break,
                 KeyCode::Backspace => { buf.pop(); }
                 KeyCode::Char(c)   => buf.push(c),
                 KeyCode::Esc       => { buf.clear(); break; }
@@ -2155,7 +2157,7 @@ fn rpassword_read() -> anyhow::Result<String> {
             }
         }
     }
-    terminal::disable_raw_mode()?;
+    terminal::disable_raw_mode()?; // always leave raw mode OFF on exit
     Ok(buf)
 }
 
