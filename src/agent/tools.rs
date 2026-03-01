@@ -5,6 +5,59 @@ use super::client::{CreateToolRequest, CadeClient, ToolDef};
 use crate::tools::schemas_for_toolset;
 use crate::toolsets::Toolset;
 
+/// Register MCP tool schemas with the cade-server and return their `ToolDef`s.
+///
+/// Skips already-registered tools (by name) to stay idempotent across restarts.
+/// Returns the full list of `ToolDef`s — needed for `attach_agent_tools()`.
+pub async fn register_mcp_tools(
+    client: &CadeClient,
+    schemas: Vec<Value>,
+) -> Result<Vec<ToolDef>> {
+    if schemas.is_empty() {
+        return Ok(vec![]);
+    }
+
+    // Fetch existing tools once — avoids N individual lookups
+    let existing = client.list_tools().await.unwrap_or_default();
+    let existing_map: std::collections::HashMap<String, ToolDef> =
+        existing.into_iter().map(|t| (t.name.clone(), t)).collect();
+
+    let mut registered = Vec::new();
+
+    for schema in schemas {
+        let name        = schema["name"].as_str().unwrap_or("").to_string();
+        let description = schema["description"].as_str().unwrap_or("").to_string();
+
+        if name.is_empty() {
+            continue;
+        }
+
+        // Already registered on this server — reuse, don't re-create
+        if let Some(existing_tool) = existing_map.get(&name) {
+            tracing::debug!("MCP tool '{}' already registered — reusing", name);
+            registered.push(existing_tool.clone());
+            continue;
+        }
+
+        let stub = build_python_stub_from_schema(&name, &description, &schema["parameters"]);
+        let req = CreateToolRequest {
+            source_code: stub,
+            source_type: "python".to_string(),
+            json_schema: Some(schema),
+            tags: vec!["cade".to_string(), "mcp".to_string()],
+        };
+        match client.create_tool(req).await {
+            Ok(tool) => {
+                tracing::debug!("Registered MCP tool: {}", tool.name);
+                registered.push(tool);
+            }
+            Err(e) => tracing::warn!("Failed to register MCP tool '{name}': {e}"),
+        }
+    }
+
+    Ok(registered)
+}
+
 /// Register all CADE tools with the CADE server.
 ///
 /// The CADE server /v1/tools endpoint derives tool name + signature from the

@@ -549,22 +549,22 @@ async fn main() -> Result<()> {
         std::sync::Arc::new(mgr)
     };
 
-    // Register MCP tool schemas with cade-server (idempotent)
-    for schema in mcp.all_tool_schemas() {
-        let name = schema["name"].as_str().unwrap_or("").to_string();
-        let description = schema["description"].as_str().unwrap_or("").to_string();
-        use cade::agent::client::CreateToolRequest;
-        use cade::agent::tools::build_python_stub_from_schema;
-        let stub = build_python_stub_from_schema(&name, &description, &schema["parameters"]);
-        let req = CreateToolRequest {
-            source_code: stub,
-            source_type: "python".to_string(),
-            json_schema: Some(schema),
-            tags: vec!["cade".to_string(), "mcp".to_string()],
-        };
-        match client.create_tool(req).await {
-            Ok(t)  => tracing::debug!("Registered MCP tool: {}", t.name),
-            Err(e) => tracing::warn!("Failed to register MCP tool '{name}': {e}"),
+    // Register MCP tool schemas with cade-server + attach to agent
+    if !mcp.is_empty() {
+        use agent::tools::register_mcp_tools;
+        let mcp_tool_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas())
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| t.id)
+            .collect();
+
+        if !mcp_tool_ids.is_empty() {
+            if let Err(e) = client.attach_agent_tools(&agent.id, &mcp_tool_ids).await {
+                tracing::warn!("Failed to attach MCP tools to agent: {e}");
+            } else {
+                println!("Attached {} MCP tool(s) to agent", mcp_tool_ids.len());
+            }
         }
     }
 

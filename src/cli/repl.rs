@@ -456,13 +456,20 @@ impl Repl {
                                     // Re-register + re-attach tools for the new toolset
                                     let agent_id = self.agent_id();
                                     let client = self.client.clone();
+                                    let mcp_ts  = std::sync::Arc::clone(&self.mcp);
                                     tokio::spawn(async move {
-                                        use crate::agent::tools::register_cade_tools;
+                                        use crate::agent::tools::{register_cade_tools, register_mcp_tools};
                                         let tools = register_cade_tools(&client, new_toolset)
                                             .await.unwrap_or_default();
-                                        let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
+                                        let ids: Vec<String> = tools.into_iter().map(|t| t.id).collect();
                                         if !ids.is_empty() {
                                             let _ = client.attach_agent_tools(&agent_id, &ids).await;
+                                        }
+                                        let mcp_ids: Vec<String> = register_mcp_tools(&client, mcp_ts.all_tool_schemas())
+                                            .await.unwrap_or_default()
+                                            .into_iter().map(|t| t.id).collect();
+                                        if !mcp_ids.is_empty() {
+                                            let _ = client.attach_agent_tools(&agent_id, &mcp_ids).await;
                                         }
                                     });
                                     execute!(stdout, SetForegroundColor(Color::Cyan),
@@ -551,6 +558,27 @@ impl Repl {
                                 execute!(stdout, SetForegroundColor(Color::Green),
                                     Print(format!("  ✓ New agent: {} ({})\n", a.name, a.id)),
                                     ResetColor)?;
+
+                                // Attach native + MCP tools in background
+                                let client2  = self.client.clone();
+                                let mcp2     = std::sync::Arc::clone(&self.mcp);
+                                let toolset2 = *self.current_toolset.lock().unwrap();
+                                let new_id   = a.id.clone();
+                                tokio::spawn(async move {
+                                    use crate::agent::tools::{register_cade_tools, register_mcp_tools};
+                                    let native_ids: Vec<String> = register_cade_tools(&client2, toolset2)
+                                        .await.unwrap_or_default()
+                                        .into_iter().map(|t| t.id).collect();
+                                    if !native_ids.is_empty() {
+                                        let _ = client2.attach_agent_tools(&new_id, &native_ids).await;
+                                    }
+                                    let mcp_ids: Vec<String> = register_mcp_tools(&client2, mcp2.all_tool_schemas())
+                                        .await.unwrap_or_default()
+                                        .into_iter().map(|t| t.id).collect();
+                                    if !mcp_ids.is_empty() {
+                                        let _ = client2.attach_agent_tools(&new_id, &mcp_ids).await;
+                                    }
+                                });
                             }
                             Err(e) => {
                                 execute!(stdout, SetForegroundColor(Color::Red),
