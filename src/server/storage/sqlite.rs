@@ -95,6 +95,23 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         tracing::info!("Migration complete: memory_blocks.description added");
     }
 
+    // Migration 3: add conversation_id column to messages + index.
+    let has_conv_col: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='conversation_id'",
+        [],
+        |r| r.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    if !has_conv_col {
+        tracing::info!("Running migration: adding conversation_id to messages");
+        conn.execute_batch(
+            "ALTER TABLE messages ADD COLUMN conversation_id TEXT;
+             CREATE INDEX IF NOT EXISTS idx_messages_conv
+               ON messages(agent_id, conversation_id);"
+        )?;
+        tracing::info!("Migration complete: messages.conversation_id added");
+    }
+
     Ok(())
 }
 
@@ -109,12 +126,22 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             created_at  INTEGER NOT NULL
         );
 
-        CREATE TABLE IF NOT EXISTS messages (
+        CREATE TABLE IF NOT EXISTS conversations (
             id          TEXT PRIMARY KEY,
             agent_id    TEXT NOT NULL,
-            role        TEXT NOT NULL,
-            content     TEXT NOT NULL,
+            title       TEXT NOT NULL DEFAULT '',
             created_at  INTEGER NOT NULL,
+            updated_at  INTEGER NOT NULL,
+            FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS messages (
+            id              TEXT PRIMARY KEY,
+            agent_id        TEXT NOT NULL,
+            conversation_id TEXT,
+            role            TEXT NOT NULL,
+            content         TEXT NOT NULL,
+            created_at      INTEGER NOT NULL,
             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
         );
 
@@ -272,46 +299,176 @@ pub fn get_agent_tool_ids(db: &Db, agent_id: &str) -> Result<Vec<String>> {
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+// ── Conversations ─────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ConversationRow {
+    pub id:         String,
+    pub agent_id:   String,
+    pub title:      String,
+    pub created_at: i64,
+    pub updated_at: i64,
+    pub message_count: i64,
+}
+
+pub fn create_conversation(db: &Db, agent_id: &str, title: &str) -> Result<ConversationRow> {
+    let id = format!("conv-{}", uuid::Uuid::new_v4());
+    let ts = now_ts();
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT INTO conversations (id, agent_id, title, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, agent_id, title, ts, ts],
+    )?;
+    Ok(ConversationRow { id, agent_id: agent_id.to_string(), title: title.to_string(),
+                         created_at: ts, updated_at: ts, message_count: 0 })
+}
+
+pub fn get_conversation(db: &Db, conv_id: &str) -> Result<Option<ConversationRow>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.agent_id, c.title, c.created_at, c.updated_at,
+                COUNT(m.id) as message_count
+         FROM conversations c
+         LEFT JOIN messages m ON m.conversation_id = c.id
+         WHERE c.id = ?1
+         GROUP BY c.id"
+    )?;
+    let mut rows = stmt.query(params![conv_id])?;
+    if let Some(r) = rows.next()? {
+        Ok(Some(ConversationRow {
+            id:            r.get(0)?,
+            agent_id:      r.get(1)?,
+            title:         r.get(2)?,
+            created_at:    r.get(3)?,
+            updated_at:    r.get(4)?,
+            message_count: r.get(5)?,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn list_conversations(db: &Db, agent_id: &str) -> Result<Vec<ConversationRow>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.agent_id, c.title, c.created_at, c.updated_at,
+                COUNT(m.id) as message_count
+         FROM conversations c
+         LEFT JOIN messages m ON m.conversation_id = c.id
+         WHERE c.agent_id = ?1
+         GROUP BY c.id
+         ORDER BY c.updated_at DESC"
+    )?;
+    let rows = stmt.query_map(params![agent_id], |r| {
+        Ok(ConversationRow {
+            id:            r.get(0)?,
+            agent_id:      r.get(1)?,
+            title:         r.get(2)?,
+            created_at:    r.get(3)?,
+            updated_at:    r.get(4)?,
+            message_count: r.get(5)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+pub fn delete_conversation(db: &Db, conv_id: &str) -> Result<bool> {
+    let conn = db.lock().unwrap();
+    // CASCADE deletes the messages too
+    let n = conn.execute("DELETE FROM conversations WHERE id = ?1", params![conv_id])?;
+    // Also clean up orphaned messages (fallback for rows without FK enforcement)
+    let _ = conn.execute(
+        "DELETE FROM messages WHERE conversation_id = ?1", params![conv_id]
+    );
+    Ok(n > 0)
+}
+
+/// Update the conversation's title and bump updated_at.
+pub fn update_conversation_title(db: &Db, conv_id: &str, title: &str) -> Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
+        params![title, now_ts(), conv_id],
+    )?;
+    Ok(())
+}
+
+/// Touch updated_at (called when a new message is added to a conversation).
+pub fn touch_conversation(db: &Db, conv_id: &str) -> Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
+        params![now_ts(), conv_id],
+    )?;
+    Ok(())
+}
+
 // ── Messages ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MessageRow {
-    pub id: String,
-    pub agent_id: String,
-    pub role: String,
-    pub content: Value,
+    pub id:              String,
+    pub agent_id:        String,
+    pub conversation_id: Option<String>,
+    pub role:            String,
+    pub content:         Value,
 }
 
 pub fn insert_message(db: &Db, row: &MessageRow) -> Result<()> {
     let conn = db.lock().unwrap();
     conn.execute(
-        "INSERT INTO messages (id, agent_id, role, content, created_at) VALUES (?1,?2,?3,?4,?5)",
-        params![row.id, row.agent_id, row.role, row.content.to_string(), now_ts()],
+        "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        params![
+            row.id, row.agent_id, row.conversation_id,
+            row.role, row.content.to_string(), now_ts()
+        ],
     )?;
     Ok(())
 }
 
-/// Load the last `limit` messages for an agent (oldest-first order)
-pub fn list_messages(db: &Db, agent_id: &str, limit: usize) -> Result<Vec<MessageRow>> {
+/// Load the last `limit` messages for an agent (or a specific conversation), oldest-first.
+/// If `conversation_id` is None → load messages with NULL conversation_id (legacy/default).
+/// Pass `Some("")` for the stub "all messages" mode — but we don't use that; always filter.
+pub fn list_messages(
+    db: &Db,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+    limit: usize,
+) -> Result<Vec<MessageRow>> {
     let conn = db.lock().unwrap();
-    let mut stmt = conn.prepare(
-        "SELECT id, agent_id, role, content FROM messages
-         WHERE agent_id = ?1
-         ORDER BY created_at DESC LIMIT ?2"
+    // Filter: conversation_id IS NULL for legacy messages, or matches given id.
+    let sql = if conversation_id.is_some() {
+        "SELECT id, agent_id, conversation_id, role, content FROM messages
+         WHERE agent_id = ?1 AND conversation_id = ?2
+         ORDER BY created_at DESC LIMIT ?3"
+    } else {
+        "SELECT id, agent_id, conversation_id, role, content FROM messages
+         WHERE agent_id = ?1 AND conversation_id IS NULL
+         ORDER BY created_at DESC LIMIT ?3"
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+    let conv_placeholder = conversation_id.unwrap_or("");
+    let rows = stmt.query_map(
+        params![agent_id, conv_placeholder, limit as i64],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        },
     )?;
-    let rows = stmt.query_map(params![agent_id, limit as i64], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-            row.get::<_, String>(2)?,
-            row.get::<_, String>(3)?,
-        ))
-    })?;
     let mut result: Vec<MessageRow> = rows
         .filter_map(|r| r.ok())
-        .map(|(id, agent_id, role, content)| MessageRow {
+        .map(|(id, agent_id, conversation_id, role, content)| MessageRow {
             id,
             agent_id,
+            conversation_id,
             role,
             content: serde_json::from_str(&content).unwrap_or(Value::String(content)),
         })
@@ -421,47 +578,68 @@ pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
     Ok(())
 }
 
-/// Check whether all tool results have been received for the current turn.
-///
-/// Returns `(received, expected)`.
-/// - If not in a tool-call turn: (0, 0)
-/// - If waiting for more results: received < expected
-/// - If all received: received == expected
-/// Delete all messages for an agent (context-window clear).
-pub fn clear_messages(db: &Db, agent_id: &str) -> Result<usize> {
+/// Delete all messages for an agent (or a specific conversation).
+/// If conversation_id is None, deletes all messages for the agent.
+pub fn clear_messages(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<usize> {
     let conn = db.lock().unwrap();
-    let n = conn.execute(
-        "DELETE FROM messages WHERE agent_id = ?1",
-        params![agent_id],
-    )?;
+    let n = if let Some(conv_id) = conversation_id {
+        conn.execute(
+            "DELETE FROM messages WHERE agent_id = ?1 AND conversation_id = ?2",
+            params![agent_id, conv_id],
+        )?
+    } else {
+        conn.execute(
+            "DELETE FROM messages WHERE agent_id = ?1 AND conversation_id IS NULL",
+            params![agent_id],
+        )?
+    };
     Ok(n)
 }
 
-/// Full-text search over message content for an agent.
-pub fn search_messages(db: &Db, agent_id: &str, query: &str) -> Result<Vec<MessageRow>> {
+/// Full-text search over message content for an agent (optionally scoped to a conversation).
+pub fn search_messages(
+    db: &Db,
+    agent_id: &str,
+    query: &str,
+    conversation_id: Option<&str>,
+) -> Result<Vec<MessageRow>> {
     let conn = db.lock().unwrap();
     let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
-    let mut stmt = conn.prepare(
-        "SELECT id, agent_id, role, content FROM messages \
+    let sql = if conversation_id.is_some() {
+        "SELECT id, agent_id, conversation_id, role, content FROM messages \
          WHERE agent_id = ?1 AND content LIKE ?2 ESCAPE '\\' \
-         ORDER BY rowid DESC LIMIT 50",
+         AND conversation_id = ?4 \
+         ORDER BY rowid DESC LIMIT 50"
+    } else {
+        "SELECT id, agent_id, conversation_id, role, content FROM messages \
+         WHERE agent_id = ?1 AND content LIKE ?2 ESCAPE '\\' \
+         ORDER BY rowid DESC LIMIT 50"
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt.query_map(
+        params![agent_id, pattern, "", conversation_id.unwrap_or("")],
+        |r| {
+            let content_str: String = r.get(4)?;
+            let content = serde_json::from_str(&content_str)
+                .unwrap_or(serde_json::Value::String(content_str));
+            Ok(MessageRow {
+                id:              r.get(0)?,
+                agent_id:        r.get(1)?,
+                conversation_id: r.get(2)?,
+                role:            r.get(3)?,
+                content,
+            })
+        },
     )?;
-    let rows = stmt.query_map(params![agent_id, pattern], |r| {
-        let content_str: String = r.get(3)?;
-        let content = serde_json::from_str(&content_str)
-            .unwrap_or(serde_json::Value::String(content_str));
-        Ok(MessageRow {
-            id: r.get(0)?,
-            agent_id: r.get(1)?,
-            role: r.get(2)?,
-            content,
-        })
-    })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-pub fn pending_tool_results(db: &Db, agent_id: &str) -> Result<(usize, usize)> {
-    let messages = list_messages(db, agent_id, 20)?;
+pub fn pending_tool_results(
+    db: &Db,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+) -> Result<(usize, usize)> {
+    let messages = list_messages(db, agent_id, conversation_id, 20)?;
 
     let mut tool_results_received: usize = 0;
     let mut expected: usize = 0;

@@ -8,9 +8,17 @@ pub struct Args {
     #[arg(short = 'p', long = "prompt")]
     pub prompt: Option<String>,
 
-    /// Create a new agent
+    /// Start a fresh conversation on the current agent (does not create a new agent)
     #[arg(long = "new", conflicts_with = "agent")]
+    pub new_conversation: bool,
+
+    /// Create a new agent
+    #[arg(long = "new-agent")]
     pub new_agent: bool,
+
+    /// Browse past conversations interactively and resume one
+    #[arg(long = "resume")]
+    pub resume: bool,
 
     /// Resume last session exactly (suppresses first-turn env context re-injection)
     #[arg(long = "continue", short = 'c')]

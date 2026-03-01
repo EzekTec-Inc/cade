@@ -47,9 +47,11 @@ enum SlashCmd {
     Agent,
     Info,
     Model(String),
-    New,
+    New,          // new conversation on same agent
+    NewAgent,     // create a brand-new agent
     Pin,
     Agents,
+    Resume,       // conversation picker
     Init,
     Remember(String),
     Memory,
@@ -88,8 +90,10 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "agent"                  => Some(SlashCmd::Agent),
         "info"                   => Some(SlashCmd::Info),
         "new"                    => Some(SlashCmd::New),
+        "new-agent"              => Some(SlashCmd::NewAgent),
         "pin"                    => Some(SlashCmd::Pin),
-        "agents" | "resume"      => Some(SlashCmd::Agents),
+        "agents"                 => Some(SlashCmd::Agents),
+        "resume"                 => Some(SlashCmd::Resume),
         "delete" | "del" | "rm-agent" => Some(SlashCmd::Delete(arg)),
         "init"                   => Some(SlashCmd::Init),
         "remember" if arg.is_some() => Some(SlashCmd::Remember(arg.unwrap())),
@@ -146,6 +150,8 @@ pub struct Repl {
     /// Set to `true` by a SIGINT handler while a turn is running.
     /// `stream_turn()` checks this flag and aborts the SSE stream early.
     cancel_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Active conversation ID — None means the default (legacy) conversation.
+    conversation_id: Arc<Mutex<Option<String>>>,
 }
 
 impl Repl {
@@ -162,6 +168,7 @@ impl Repl {
         skills_dir: std::path::PathBuf,
         toolset: Toolset,
         hooks: crate::hooks::HookEngine,
+        conversation_id: Option<String>,
     ) -> Self {
         Self {
             client,
@@ -177,14 +184,16 @@ impl Repl {
             background_results: Arc::new(Mutex::new(vec![])),
             current_toolset: Arc::new(Mutex::new(toolset)),
             hooks,
-            first_turn:   std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            cancel_turn:  std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            first_turn:      std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            cancel_turn:     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            conversation_id: Arc::new(Mutex::new(conversation_id)),
         }
     }
 
-    fn agent_id(&self)   -> String { self.agent_id.lock().unwrap().clone() }
-    fn agent_name(&self) -> String { self.agent_name.lock().unwrap().clone() }
-    fn model(&self)      -> String { self.current_model.lock().unwrap().clone() }
+    fn agent_id(&self)       -> String        { self.agent_id.lock().unwrap().clone() }
+    fn agent_name(&self)     -> String        { self.agent_name.lock().unwrap().clone() }
+    fn model(&self)          -> String        { self.current_model.lock().unwrap().clone() }
+    fn conversation_id(&self) -> Option<String> { self.conversation_id.lock().unwrap().clone() }
 
     /// Called when `--continue` is set — suppress first-turn env injection.
     pub fn mark_continued(&self) {
@@ -296,6 +305,7 @@ impl Repl {
                         stdout.flush()?;
                         println!();
                         println!("  Agent   : {} ({})", self.agent_name(), self.agent_id());
+                        println!("  Conv    : {}", self.conversation_id().as_deref().unwrap_or("default"));
                         println!("  Model   : {}", self.model());
                         println!("  Mode    : {}", self.permissions.mode());
                         println!("  CWD     : {}", self.cwd.display());
@@ -445,6 +455,29 @@ impl Repl {
                     }
 
                     SlashCmd::New => {
+                        // Start a fresh conversation on the current agent
+                        let agent_id = self.agent_id();
+                        match self.client.create_conversation(&agent_id, "").await {
+                            Ok(conv) => {
+                                let cid = conv["id"].as_str().unwrap_or("").to_string();
+                                *self.conversation_id.lock().unwrap() = Some(cid.clone());
+                                if let Ok(mut s) = self.session.lock() {
+                                    let _ = s.set_conversation(Some(cid.clone()));
+                                }
+                                self.first_turn.store(true, std::sync::atomic::Ordering::SeqCst);
+                                execute!(stdout, SetForegroundColor(Color::Green),
+                                    Print(format!("\n  ✓ New conversation started  ({})\n", &cid[..cid.len().min(20)])),
+                                    ResetColor)?;
+                            }
+                            Err(e) => {
+                                execute!(stdout, SetForegroundColor(Color::Red),
+                                    Print(format!("\n  ✗ {e}\n")), ResetColor)?;
+                            }
+                        }
+                        stdout.flush()?;
+                    }
+
+                    SlashCmd::NewAgent => {
                         execute!(stdout, SetForegroundColor(Color::DarkGrey),
                             Print("\n  Creating new agent…\n"), ResetColor)?;
                         stdout.flush()?;
@@ -461,6 +494,7 @@ impl Repl {
                             Ok(a) => {
                                 *self.agent_id.lock().unwrap()   = a.id.clone();
                                 *self.agent_name.lock().unwrap() = a.name.clone();
+                                *self.conversation_id.lock().unwrap() = None;
                                 if let Ok(mut s) = self.settings.lock() {
                                     let _ = s.set_last_agent(&a.id);
                                 }
@@ -475,6 +509,35 @@ impl Repl {
                                 execute!(stdout, SetForegroundColor(Color::Red),
                                     Print(format!("  ✗ {e}\n")), ResetColor)?;
                             }
+                        }
+                        stdout.flush()?;
+                    }
+
+                    SlashCmd::Resume => {
+                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                            Print("\n  Fetching conversations…\n"), ResetColor)?;
+                        stdout.flush()?;
+                        let agent_id = self.agent_id();
+                        match self.client.list_conversations(&agent_id).await {
+                            Ok(convs) => {
+                                if convs.is_empty() {
+                                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                        Print("  No saved conversations yet. Use /new to start one.\n\n"),
+                                        ResetColor)?;
+                                } else if let Some(picked) = self.conversation_picker(&mut stdout, &convs, &agent_id).await? {
+                                    let cid = picked["id"].as_str().unwrap_or("").to_string();
+                                    *self.conversation_id.lock().unwrap() = Some(cid.clone());
+                                    if let Ok(mut s) = self.session.lock() {
+                                        let _ = s.set_conversation(Some(cid));
+                                    }
+                                    self.first_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+                                    execute!(stdout, SetForegroundColor(Color::Green),
+                                        Print(format!("  ✓ Switched to: {}\n",
+                                            picked["title"].as_str().unwrap_or("(untitled)"))),
+                                        ResetColor)?;
+                                }
+                            }
+                            Err(e) => self.print_error(&mut stdout, &e.to_string())?,
                         }
                         stdout.flush()?;
                     }
@@ -1611,11 +1674,27 @@ impl Repl {
         let in_reasoning2 = in_reasoning.clone();
         let in_assistant2 = in_assistant.clone();
 
+        // Clone Arcs before the move closure so conversation_id updates can be saved
+        let conv_arc     = self.conversation_id.clone();
+        let session_arc  = self.session.clone();
+
         let on_event = move |msg: &CadeMessage| {
             // SAFETY: closure is called synchronously within the async function body,
             // stdout outlives the closure, and we never alias it.
             let out = unsafe { &mut *stdout_ptr };
             match msg.msg_type() {
+                "conversation_id" => {
+                    // Server is telling us the active conversation_id — persist it
+                    if let Some(cid) = msg.data["conversation_id"].as_str() {
+                        if !cid.is_empty() && conv_arc.lock().unwrap().as_deref() != Some(cid) {
+                            let cid: String = cid.to_string();
+                            *conv_arc.lock().unwrap() = Some(cid.clone());
+                            if let Ok(mut s) = session_arc.lock() {
+                                let _ = s.set_conversation(Some(cid));
+                            }
+                        }
+                    }
+                }
                 "reasoning_message" => {
                     let mut flag = in_reasoning2.lock().unwrap();
                     if let Some(text) = msg.reasoning_text() {
@@ -1677,10 +1756,13 @@ impl Repl {
         // Helper: detect a user-triggered cancellation error vs a real error
         fn is_cancel(e: &anyhow::Error) -> bool { e.to_string() == "__cancelled__" }
 
+        let conv_id   = self.conversation_id();
+        let conv_ref  = conv_id.as_deref();
+
         let messages = if is_tool_return {
             match self
                 .client
-                .stream_tool_return_cancellable(&agent_id, tool_call_id, tool_output, false, on_event, Some(cancel))
+                .stream_tool_return_cancellable(&agent_id, tool_call_id, tool_output, false, conv_ref, on_event, Some(cancel))
                 .await
             {
                 Ok(m) => m,
@@ -1695,7 +1777,7 @@ impl Repl {
                 }
             }
         } else {
-            match self.client.stream_message_cancellable(&agent_id, input, on_event, Some(cancel)).await {
+            match self.client.stream_message_cancellable(&agent_id, input, conv_ref, on_event, Some(cancel)).await {
                 Ok(m) => m,
                 Err(e) if is_cancel(&e) => {
                     execute!(stdout, Print("\n"), SetForegroundColor(Color::Yellow),
@@ -2315,6 +2397,140 @@ impl Repl {
         }
         stdout.flush()?;
         Ok(())
+    }
+
+    /// `/resume` conversation picker — ratatui Viewport::Inline.
+    ///
+    /// Keys: ↑/↓ move · Enter select · d delete · Esc/q cancel.
+    /// Returns the picked conversation JSON, or None if cancelled.
+    async fn conversation_picker(
+        &self,
+        stdout: &mut io::Stdout,
+        convs: &[serde_json::Value],
+        agent_id: &str,
+    ) -> Result<Option<serde_json::Value>> {
+        use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+        use ratatui::{
+            Terminal,
+            backend::CrosstermBackend,
+
+            style::{Color as RC, Modifier, Style},
+            text::{Line, Span},
+            widgets::{Block, Borders, List, ListItem, ListState},
+            Viewport,
+        };
+
+        if convs.is_empty() {
+            return Ok(None);
+        }
+
+        let term_h = crossterm::terminal::size().map(|(_, h)| h as u16).unwrap_or(24);
+        let view_h = (convs.len() as u16 + 2).min(term_h.saturating_sub(2)).max(4);
+
+        let backend  = CrosstermBackend::new(io::stdout());
+        let mut term = Terminal::with_options(
+            backend,
+            ratatui::TerminalOptions { viewport: Viewport::Inline(view_h) },
+        )?;
+
+        crossterm::terminal::enable_raw_mode()?;
+        let mut sel:    usize = 0;
+        let mut result: Option<serde_json::Value> = None;
+        let mut list_state = ListState::default().with_selected(Some(0));
+
+        let build_items = |sel: usize| -> Vec<ListItem<'static>> {
+            convs.iter().enumerate().map(|(i, c)| {
+                let title = c["title"].as_str().unwrap_or("(untitled)").to_string();
+                let cnt   = c["message_count"].as_i64().unwrap_or(0);
+                let ts    = c["updated_at"].as_i64().unwrap_or(0);
+                let date  = if ts > 0 {
+                    let dt = chrono::DateTime::from_timestamp(ts, 0)
+                        .unwrap_or_default()
+                        .with_timezone(&chrono::Local);
+                    dt.format("%m/%d %H:%M").to_string()
+                } else { String::new() };
+                let label = format!("{title}  ({cnt} msgs)  {date}");
+                let style = if i == sel {
+                    Style::default().fg(RC::Black).bg(RC::Cyan).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(RC::White)
+                };
+                ListItem::new(Line::from(vec![Span::styled(label, style)]))
+            }).collect()
+        };
+
+        macro_rules! redraw {
+            () => {{
+                let items = build_items(sel);
+                let n     = convs.len();
+                term.draw(|f| {
+                    let area = f.area();
+                    let block = Block::default()
+                        .borders(Borders::ALL)
+                        .title(format!(" Conversations [{}/{}] · Enter select · d delete · Esc cancel ", sel + 1, n))
+                        .border_style(Style::default().fg(RC::Cyan));
+                    let list = List::new(items).block(block)
+                        .highlight_style(Style::default().fg(RC::Black).bg(RC::Cyan));
+                    f.render_stateful_widget(list, area, &mut list_state);
+                })?;
+                list_state = ListState::default().with_selected(Some(sel));
+            }};
+        }
+
+        redraw!();
+
+        loop {
+            if !event::poll(std::time::Duration::from_millis(200))? { continue; }
+            match event::read()? {
+                Event::Key(k) => match (k.code, k.modifiers) {
+                    (KeyCode::Char('q') | KeyCode::Esc, _) => break,
+                    (KeyCode::Up   | KeyCode::Char('k'), _) => { if sel > 0 { sel -= 1; } redraw!(); }
+                    (KeyCode::Down | KeyCode::Char('j'), _) => {
+                        if sel + 1 < convs.len() { sel += 1; }
+                        redraw!();
+                    }
+                    (KeyCode::Enter, _) => {
+                        result = convs.get(sel).cloned();
+                        break;
+                    }
+                    (KeyCode::Char('d') | KeyCode::Delete, _) => {
+                        // Confirm + delete
+                        let conv_id = convs[sel]["id"].as_str().unwrap_or("").to_string();
+                        let title   = convs[sel]["title"].as_str().unwrap_or("(untitled)").to_string();
+                        term.clear()?;
+                        drop(term);
+                        crossterm::terminal::disable_raw_mode()?;
+                        execute!(stdout,
+                            SetForegroundColor(Color::Yellow),
+                            Print(format!("\n  Delete conversation \"{title}\"? [y/N] ")),
+                            ResetColor)?;
+                        stdout.flush()?;
+                        crossterm::terminal::enable_raw_mode()?;
+                        if let Ok(Event::Key(k2)) = event::read() {
+                            crossterm::terminal::disable_raw_mode()?;
+                            if matches!(k2.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
+                                let _ = self.client.delete_conversation(agent_id, &conv_id).await;
+                                execute!(stdout, SetForegroundColor(Color::Green),
+                                    Print("  Deleted.\n"), ResetColor)?;
+                            } else {
+                                execute!(stdout, Print("\n"))?;
+                            }
+                        } else {
+                            crossterm::terminal::disable_raw_mode()?;
+                        }
+                        return Ok(None); // close picker after delete
+                    }
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+
+        term.clear()?;
+        drop(term);
+        crossterm::terminal::disable_raw_mode()?;
+        Ok(result)
     }
 
     /// `/agents` TUI picker — rendered via ratatui `Viewport::Inline`.
@@ -2980,8 +3196,9 @@ impl Repl {
         println!("    /info           - agent, model, mode, cwd");
         println!("    /agent          - show current agent ID");
         println!("    /agents         - list all agents (Space mark, r rename, d delete, Enter switch)");
-        println!("    /resume         - alias for /agents (Letta compatibility)");
-        println!("    /new            - create a fresh agent (hot-swap)");
+        println!("    /new            - start a new conversation on the current agent");
+        println!("    /new-agent      - create a brand-new agent");
+        println!("    /resume         - browse past conversations and switch to one");
         println!("    /rename [name]  - rename current agent");
         println!("    /delete <name>  - delete an agent by name or ID");
         println!("    /pin            - pin current agent for quick access");

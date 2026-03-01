@@ -16,6 +16,8 @@ use crate::server::{
     storage::sqlite::{self, MessageRow},
 };
 
+/// Maximum length for auto-generated conversation titles (chars from first user message).
+const CONV_TITLE_MAX: usize = 60;
 /// Number of DB message rows to load per turn (~100 full tool-call cycles at 200 rows).
 const HISTORY_LIMIT: usize = 200;
 /// Max output tokens per LLM response. Claude 3.7/4.x and GPT-4.1 support 16k+.
@@ -117,6 +119,7 @@ fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
 async fn build_context(
     state: &AppState,
     agent_id: &str,
+    conversation_id: Option<&str>,
 ) -> Result<(String, Vec<LlmMessage>, Vec<Value>), String> {
     let agent = sqlite::get_agent(&state.db, agent_id)
         .map_err(|e| e.to_string())?
@@ -142,8 +145,8 @@ async fn build_context(
         format!("{}\n\n# Memory\n{memory}", agent.system_prompt.unwrap_or_default())
     };
 
-    // Message history from DB — oldest first
-    let history = sqlite::list_messages(&state.db, agent_id, HISTORY_LIMIT)
+    // Message history from DB — oldest first, scoped to conversation
+    let history = sqlite::list_messages(&state.db, agent_id, conversation_id, HISTORY_LIMIT)
         .unwrap_or_default();
 
     let mut messages: Vec<LlmMessage> = vec![LlmMessage {
@@ -246,14 +249,43 @@ fn new_msg_id() -> String {
     format!("msg-{}", Uuid::new_v4())
 }
 
-fn persist(state: &AppState, agent_id: &str, role: &str, content: Value) {
+fn persist(state: &AppState, agent_id: &str, conversation_id: Option<&str>, role: &str, content: Value) {
     let row = MessageRow {
-        id: new_msg_id(),
-        agent_id: agent_id.to_string(),
-        role: role.to_string(),
+        id:              new_msg_id(),
+        agent_id:        agent_id.to_string(),
+        conversation_id: conversation_id.map(String::from),
+        role:            role.to_string(),
         content,
     };
     let _ = sqlite::insert_message(&state.db, &row);
+    // Touch the conversation's updated_at so list order stays current
+    if let Some(conv_id) = conversation_id {
+        let _ = sqlite::touch_conversation(&state.db, conv_id);
+    }
+}
+
+/// Extract and validate conversation_id from request body.
+/// If present and non-empty, verifies it exists in the DB.
+/// Returns Ok(Some(id)) | Ok(None) | Err(response).
+fn resolve_conversation<'a>(
+    state: &AppState,
+    agent_id: &str,
+    body: &'a Value,
+) -> Result<Option<String>, axum::response::Response> {
+    let conv_id = body["conversation_id"].as_str().filter(|s| !s.is_empty());
+    match conv_id {
+        None => Ok(None),
+        Some(id) => {
+            match sqlite::get_conversation(&state.db, id) {
+                Ok(Some(_)) => Ok(Some(id.to_string())),
+                Ok(None) => Err(err(
+                    axum::http::StatusCode::NOT_FOUND,
+                    &format!("conversation '{id}' not found for agent '{agent_id}'"),
+                )),
+                Err(e) => Err(err(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())),
+            }
+        }
+    }
 }
 
 // ── POST /v1/agents/:id/messages  (blocking) ─────────────────────────────────
@@ -263,8 +295,14 @@ pub async fn send_message(
     Path(agent_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
+    let conv_id = match resolve_conversation(&state, &agent_id, &body) {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let conv_id_ref = conv_id.as_deref();
+
     if body["role"].as_str() == Some("tool") {
-        return handle_tool_return_blocking(&state, &agent_id, &body).await;
+        return handle_tool_return_blocking(&state, &agent_id, conv_id_ref, &body).await;
     }
 
     let input = match body["input"].as_str().filter(|s| !s.is_empty()) {
@@ -273,10 +311,10 @@ pub async fn send_message(
     };
 
     // 1. Persist user message FIRST
-    persist(&state, &agent_id, "user", json!({ "content": input }));
+    persist(&state, &agent_id, conv_id_ref, "user", json!({ "content": input }));
 
     // 2. Build context from DB (includes the message we just persisted)
-    let (model, messages, tools) = match build_context(&state, &agent_id).await {
+    let (model, messages, tools) = match build_context(&state, &agent_id, conv_id_ref).await {
         Ok(ctx) => ctx,
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
@@ -285,16 +323,14 @@ pub async fn send_message(
     let req = CompletionRequest { model, messages, tools, max_tokens: MAX_TOKENS };
     match state.llm.complete(&req).await {
         Ok(resp) => {
-            // 4. Persist LLM response as ONE assistant message (text + tool_calls together)
             let tool_calls_json: Vec<Value> = resp.tool_calls.iter().map(|tc| json!({
                 "id": tc.id, "name": tc.name, "arguments": tc.arguments
             })).collect();
-            persist(&state, &agent_id, "assistant", json!({
+            persist(&state, &agent_id, conv_id_ref, "assistant", json!({
                 "content": resp.content.clone().unwrap_or_default(),
                 "tool_calls": tool_calls_json
             }));
 
-            // 5. Build response events for CLI
             let mut out: Vec<Value> = vec![];
             if let Some(text) = &resp.content {
                 out.push(json!({ "message_type": "assistant_message", "content": text }));
@@ -305,7 +341,7 @@ pub async fn send_message(
                     "tool_call": { "id": tc.id, "name": tc.name, "arguments": tc.arguments }
                 }));
             }
-            Json(json!({ "messages": out })).into_response()
+            Json(json!({ "messages": out, "conversation_id": conv_id })).into_response()
         }
         Err(e) => {
             tracing::error!("LLM error: {e}");
@@ -314,50 +350,44 @@ pub async fn send_message(
     }
 }
 
-async fn handle_tool_return_blocking(state: &AppState, agent_id: &str, body: &Value) -> Response {
+async fn handle_tool_return_blocking(
+    state: &AppState,
+    agent_id: &str,
+    conv_id: Option<&str>,
+    body: &Value,
+) -> Response {
     let tr = &body["tool_return"];
     let call_id = tr["tool_call_id"].as_str().unwrap_or("").to_string();
-    let content = tr["content"].as_str().unwrap_or("").to_string();
+    let content  = tr["content"].as_str().unwrap_or("").to_string();
 
-    // 1. Persist tool result FIRST
-    persist(state, agent_id, "tool", json!({
-        "content": content,
-        "tool_call_id": call_id
+    persist(state, agent_id, conv_id, "tool", json!({
+        "content": content, "tool_call_id": call_id
     }));
 
-    // 2. Check if all tool results for this turn have arrived.
-    //    Anthropic requires ALL tool_results in ONE user message — we must
-    //    wait until the CLI has sent every result before calling the LLM.
-    match sqlite::pending_tool_results(&state.db, agent_id) {
+    match sqlite::pending_tool_results(&state.db, agent_id, conv_id) {
         Ok((received, expected)) if received < expected => {
-            tracing::debug!(
-                "Tool results: {received}/{expected} received — waiting for more"
-            );
-            // Return empty — CLI will send the next tool result shortly
-            return Json(json!({ "messages": [] })).into_response();
+            tracing::debug!("Tool results: {received}/{expected} — waiting");
+            return Json(json!({ "messages": [], "conversation_id": conv_id })).into_response();
         }
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
-        _ => {} // all results in — proceed to LLM
+        _ => {}
     }
 
-    // 3. Build context from DB (all tool results now present)
-    let (model, messages, tools) = match build_context(state, agent_id).await {
+    let (model, messages, tools) = match build_context(state, agent_id, conv_id).await {
         Ok(ctx) => ctx,
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
 
-    // 4. Call LLM
     let req = CompletionRequest { model, messages, tools, max_tokens: MAX_TOKENS };
     match state.llm.complete(&req).await {
         Ok(resp) => {
             let tool_calls_json: Vec<Value> = resp.tool_calls.iter().map(|tc| json!({
                 "id": tc.id, "name": tc.name, "arguments": tc.arguments
             })).collect();
-            persist(state, agent_id, "assistant", json!({
+            persist(state, agent_id, conv_id, "assistant", json!({
                 "content": resp.content.clone().unwrap_or_default(),
                 "tool_calls": tool_calls_json
             }));
-
             let mut out: Vec<Value> = vec![];
             if let Some(text) = &resp.content {
                 out.push(json!({ "message_type": "assistant_message", "content": text }));
@@ -368,7 +398,7 @@ async fn handle_tool_return_blocking(state: &AppState, agent_id: &str, body: &Va
                     "tool_call": { "id": tc.id, "name": tc.name, "arguments": tc.arguments }
                 }));
             }
-            Json(json!({ "messages": out })).into_response()
+            Json(json!({ "messages": out, "conversation_id": conv_id })).into_response()
         }
         Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
@@ -381,12 +411,19 @@ pub async fn stream_message(
     Path(agent_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Response {
+    let conv_id: Option<String> = match resolve_conversation(&state, &agent_id, &body) {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let conv_str = conv_id.clone();
+    let conv_id_ref = conv_str.as_deref();
+
     let is_tool_return = body["role"].as_str() == Some("tool");
 
     // 1. Persist incoming message FIRST
     if is_tool_return {
         let tr = &body["tool_return"];
-        persist(&state, &agent_id, "tool", json!({
+        persist(&state, &agent_id, conv_id_ref, "tool", json!({
             "content": tr["content"].as_str().unwrap_or(""),
             "tool_call_id": tr["tool_call_id"].as_str().unwrap_or("")
         }));
@@ -395,15 +432,18 @@ pub async fn stream_message(
             Some(s) => s.to_string(),
             None => return err(StatusCode::BAD_REQUEST, "missing 'input'"),
         };
-        persist(&state, &agent_id, "user", json!({ "content": input }));
+        // Auto-title new conversations from the first user message
+        if let Some(cid) = conv_id_ref {
+            let _ = maybe_set_conv_title(&state, cid, &input);
+        }
+        persist(&state, &agent_id, conv_id_ref, "user", json!({ "content": input }));
     }
 
     // 2. If this was a tool return, check if all results for this turn have arrived.
     if is_tool_return {
-        match sqlite::pending_tool_results(&state.db, &agent_id) {
+        match sqlite::pending_tool_results(&state.db, &agent_id, conv_id_ref) {
             Ok((received, expected)) if received < expected => {
                 tracing::debug!("Stream: tool results {received}/{expected} — waiting");
-                // Return a trivial SSE stream that immediately closes
                 let s = futures::stream::once(async {
                     Ok::<Event, std::convert::Infallible>(Event::default().data("[DONE]"))
                 });
@@ -415,7 +455,7 @@ pub async fn stream_message(
     }
 
     // 3. Build context from DB
-    let (model, messages, tools) = match build_context(&state, &agent_id).await {
+    let (model, messages, tools) = match build_context(&state, &agent_id, conv_id_ref).await {
         Ok(ctx) => ctx,
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
@@ -423,22 +463,27 @@ pub async fn stream_message(
     let req = CompletionRequest { model, messages, tools, max_tokens: MAX_TOKENS };
     let state_clone = state.clone();
     let agent_id_clone = agent_id.clone();
+    let conv_id_clone = conv_str.clone();
 
-    // 3. Open LLM stream
+    // Open LLM stream
     let llm_stream = match state.llm.stream(&req).await {
         Ok(s) => s,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
-    // 4. Track accumulated response for persistence
-    let _acc_text = String::new();
-    let _acc_tools: Vec<Value> = Vec::new();
-
-    // We can't mutate acc_* inside the closure directly (moved into stream),
-    // so we use a channel to collect them after streaming.
-    // Instead: collect accumulation via Arc<Mutex> shared state.
     let acc = std::sync::Arc::new(std::sync::Mutex::new((String::new(), Vec::<Value>::new())));
     let acc_clone = acc.clone();
+
+    // Emit conversation_id as the first SSE event so the client can save it
+    let conv_event = {
+        let data = json!({
+            "message_type": "conversation_id",
+            "conversation_id": conv_str
+        });
+        futures::stream::once(async move {
+            Ok::<Event, std::convert::Infallible>(Event::default().data(data.to_string()))
+        })
+    };
 
     let sse_stream = futures::StreamExt::map(llm_stream, move |chunk: Result<StreamChunk>| {
         let event = match chunk {
@@ -458,9 +503,8 @@ pub async fn stream_message(
                 Event::default().data(data.to_string())
             }
             Ok(StreamChunk::Done) => {
-                // Persist the complete assistant response (text + tools) as ONE row
                 if let Ok(g) = acc_clone.lock() {
-                    persist(&state_clone, &agent_id_clone, "assistant", json!({
+                    persist(&state_clone, &agent_id_clone, conv_id_clone.as_deref(), "assistant", json!({
                         "content": g.0,
                         "tool_calls": g.1
                     }));
@@ -472,10 +516,24 @@ pub async fn stream_message(
         Ok::<Event, std::convert::Infallible>(event)
     });
 
-    // Suppress unused-variable warning (acc used via acc_clone inside closure)
     drop(acc);
 
-    Sse::new(sse_stream).into_response()
+    Sse::new(futures::StreamExt::chain(conv_event, sse_stream)).into_response()
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Set conversation title from first user message if title is still empty.
+fn maybe_set_conv_title(state: &AppState, conv_id: &str, text: &str) {
+    if let Ok(Some(c)) = sqlite::get_conversation(&state.db, conv_id) {
+        if c.title.is_empty() {
+            let title: String = text.chars().take(CONV_TITLE_MAX).collect();
+            let title = title.trim().to_string();
+            if !title.is_empty() {
+                let _ = sqlite::update_conversation_title(&state.db, conv_id, &title);
+            }
+        }
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

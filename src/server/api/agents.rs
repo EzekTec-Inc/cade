@@ -200,17 +200,19 @@ pub async fn upsert_memory(
 
 // ── Messages endpoints ────────────────────────────────────────────────────────
 
-/// DELETE /v1/agents/:id/messages — clear conversation context
+/// DELETE /v1/agents/:id/messages — clear context (default conversation)
 pub async fn clear_messages_handler(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let n = sqlite::clear_messages(&state.db, &agent_id)
+    let conv_id = params.get("conversation_id").map(String::as_str);
+    let n = sqlite::clear_messages(&state.db, &agent_id, conv_id)
         .map_err(|e| server_err(e.to_string()))?;
     Ok(Json(json!({ "deleted": n })))
 }
 
-/// GET /v1/agents/:id/messages?q=<query> — search message history
+/// GET /v1/agents/:id/messages?q=<query>&conversation_id=<id> — search message history
 pub async fn search_messages_handler(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
@@ -220,14 +222,75 @@ pub async fn search_messages_handler(
     if query.is_empty() {
         return Err((StatusCode::BAD_REQUEST, Json(json!({"detail": "missing ?q= parameter"}))));
     }
-    let rows = sqlite::search_messages(&state.db, &agent_id, query)
+    let conv_id = params.get("conversation_id").map(String::as_str);
+    let rows = sqlite::search_messages(&state.db, &agent_id, query, conv_id)
         .map_err(|e| server_err(e.to_string()))?;
     let messages: Vec<Value> = rows.into_iter().map(|r| json!({
         "id": r.id,
         "role": r.role,
-        "content": r.content
+        "content": r.content,
+        "conversation_id": r.conversation_id,
     })).collect();
     Ok(Json(json!({ "messages": messages })))
+}
+
+// ── Conversation endpoints ────────────────────────────────────────────────────
+
+use crate::server::storage::sqlite::ConversationRow;
+
+fn conv_to_json(c: &ConversationRow) -> Value {
+    json!({
+        "id":            c.id,
+        "agent_id":      c.agent_id,
+        "title":         c.title,
+        "created_at":    c.created_at,
+        "updated_at":    c.updated_at,
+        "message_count": c.message_count,
+    })
+}
+
+/// GET /v1/agents/:id/conversations
+pub async fn list_conversations(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let rows = sqlite::list_conversations(&state.db, &agent_id)
+        .map_err(|e| server_err(e.to_string()))?;
+    let convs: Vec<Value> = rows.iter().map(conv_to_json).collect();
+    Ok(Json(json!({ "conversations": convs })))
+}
+
+/// POST /v1/agents/:id/conversations — create a new conversation
+pub async fn create_conversation(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let title = body["title"].as_str().unwrap_or("").to_string();
+    let row = sqlite::create_conversation(&state.db, &agent_id, &title)
+        .map_err(|e| server_err(e.to_string()))?;
+    Ok(Json(conv_to_json(&row)))
+}
+
+/// DELETE /v1/agents/:id/conversations/:conv_id
+pub async fn delete_conversation(
+    State(state): State<AppState>,
+    Path((agent_id, conv_id)): Path<(String, String)>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    // Verify ownership
+    match sqlite::get_conversation(&state.db, &conv_id) {
+        Ok(Some(c)) if c.agent_id != agent_id => {
+            return Err((StatusCode::FORBIDDEN, Json(json!({"detail": "conversation not owned by this agent"}))));
+        }
+        Ok(None) => {
+            return Err((StatusCode::NOT_FOUND, Json(json!({"detail": "conversation not found"}))));
+        }
+        Err(e) => return Err(server_err(e.to_string())),
+        Ok(Some(_)) => {}
+    }
+    let deleted = sqlite::delete_conversation(&state.db, &conv_id)
+        .map_err(|e| server_err(e.to_string()))?;
+    Ok(Json(json!({ "deleted": deleted })))
 }
 
 /// POST /v1/agents/:id/tools — attach tool IDs to an agent

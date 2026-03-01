@@ -460,6 +460,77 @@ async fn main() -> Result<()> {
         a
     };
 
+    // ── Conversation resolution ───────────────────────────────────────────────
+    //
+    // Precedence: --new (create new) > --resume (picker) > --continue (reuse saved) > saved session
+    let conversation_id: Option<String> = if args.new_conversation {
+        // Create a fresh conversation on the resolved agent
+        match client.create_conversation(&agent.id, "").await {
+            Ok(conv) => {
+                let cid = conv["id"].as_str().unwrap_or("").to_string();
+                session.set_conversation(Some(cid.clone())).context("save conversation")?;
+                Some(cid)
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to create conversation: {e}");
+                None
+            }
+        }
+    } else if args.resume {
+        // Interactive conversation picker (show before REPL starts)
+        match client.list_conversations(&agent.id).await {
+            Ok(convs) if !convs.is_empty() => {
+                // Quick TTY picker: numbered list, pick by number
+                println!("\nConversations for {}:", agent.name);
+                for (i, c) in convs.iter().enumerate() {
+                    let title = c["title"].as_str().unwrap_or("(untitled)");
+                    let cnt   = c["message_count"].as_i64().unwrap_or(0);
+                    println!("  [{}] {}  ({} msgs)", i + 1, title, cnt);
+                }
+                println!("  [n] Start new conversation");
+                print!("\nChoice [1-{}]: ", convs.len());
+                use std::io::Write;
+                std::io::stdout().flush()?;
+                let mut buf = String::new();
+                std::io::stdin().read_line(&mut buf)?;
+                let choice = buf.trim();
+                if choice == "n" || choice == "N" {
+                    let conv = client.create_conversation(&agent.id, "").await
+                        .context("create conversation")?;
+                    let cid = conv["id"].as_str().unwrap_or("").to_string();
+                    session.set_conversation(Some(cid.clone())).context("save conversation")?;
+                    Some(cid)
+                } else if let Ok(n) = choice.parse::<usize>() {
+                    if n >= 1 && n <= convs.len() {
+                        let cid = convs[n - 1]["id"].as_str().unwrap_or("").to_string();
+                        session.set_conversation(Some(cid.clone())).context("save conversation")?;
+                        Some(cid)
+                    } else {
+                        eprintln!("Invalid choice — using default conversation");
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            Ok(_) => {
+                println!("No conversations yet — starting new one");
+                match client.create_conversation(&agent.id, "").await {
+                    Ok(conv) => {
+                        let cid = conv["id"].as_str().unwrap_or("").to_string();
+                        session.set_conversation(Some(cid.clone())).context("save conversation")?;
+                        Some(cid)
+                    }
+                    Err(e) => { eprintln!("Warning: {e}"); None }
+                }
+            }
+            Err(e) => { eprintln!("Warning: list_conversations: {e}"); None }
+        }
+    } else {
+        // Use saved conversation_id (--continue or resume from session)
+        session.session.conversation_id.clone()
+    };
+
     // Build hook engine from merged settings (local > project > global)
     let hook_engine = HookEngine::new(settings.merged_hooks(), cwd.clone());
     if !hook_engine.is_empty() {
@@ -574,6 +645,7 @@ async fn main() -> Result<()> {
         skills_dir,
         toolset,
         hook_engine,
+        conversation_id,
     );
     // --continue: mark first turn as already done so env context isn't re-injected
     if args.continue_last {

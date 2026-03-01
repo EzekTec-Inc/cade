@@ -51,6 +51,12 @@ impl SessionStore {
     pub fn set_agent(&mut self, agent_id: String, agent_name: Option<String>) -> Result<()> {
         self.session.agent_id = Some(agent_id);
         self.session.agent_name = agent_name;
+        self.session.conversation_id = None; // reset conversation when agent changes
+        self.save()
+    }
+
+    pub fn set_conversation(&mut self, conversation_id: Option<String>) -> Result<()> {
+        self.session.conversation_id = conversation_id;
         self.save()
     }
 }

@@ -488,6 +488,47 @@ impl CadeClient {
         self.post_messages(agent_id, &req).await
     }
 
+    // ── Conversations ─────────────────────────────────────────────────────────
+
+    pub async fn list_conversations(&self, agent_id: &str) -> Result<Vec<serde_json::Value>> {
+        let resp = self.client
+            .get(self.url(&format!("/agents/{agent_id}/conversations")))
+            .header(self.auth().0, self.auth().1)
+            .send().await?;
+        if !resp.status().is_success() {
+            anyhow::bail!("list_conversations failed {}", resp.status());
+        }
+        let body: serde_json::Value = resp.json().await?;
+        Ok(body["conversations"].as_array().cloned().unwrap_or_default())
+    }
+
+    pub async fn create_conversation(&self, agent_id: &str, title: &str) -> Result<serde_json::Value> {
+        let resp = self.client
+            .post(self.url(&format!("/agents/{agent_id}/conversations")))
+            .header(self.auth().0, self.auth().1)
+            .json(&json!({ "title": title }))
+            .send().await?;
+        if !resp.status().is_success() {
+            let txt = resp.text().await.unwrap_or_default();
+            anyhow::bail!("create_conversation failed: {txt}");
+        }
+        Ok(resp.json().await?)
+    }
+
+    pub async fn delete_conversation(&self, agent_id: &str, conv_id: &str) -> Result<()> {
+        let resp = self.client
+            .delete(self.url(&format!("/agents/{agent_id}/conversations/{conv_id}")))
+            .header(self.auth().0, self.auth().1)
+            .send().await?;
+        if !resp.status().is_success() && resp.status().as_u16() != 404 {
+            let txt = resp.text().await.unwrap_or_default();
+            anyhow::bail!("delete_conversation failed: {txt}");
+        }
+        Ok(())
+    }
+
+    // ── Messages ──────────────────────────────────────────────────────────────
+
     /// Stream a user message using SSE. Calls `on_event` for each message as
     /// it arrives (for live rendering), and returns the full collected list.
     ///
@@ -502,7 +543,7 @@ impl CadeClient {
     where
         F: Fn(&CadeMessage),
     {
-        self.stream_message_cancellable(agent_id, input, on_event, None).await
+        self.stream_message_cancellable(agent_id, input, None, on_event, None).await
     }
 
     /// Like `stream_message` but checks an optional cancel flag before each SSE event.
@@ -510,6 +551,7 @@ impl CadeClient {
         &self,
         agent_id: &str,
         input: &str,
+        conversation_id: Option<&str>,
         on_event: F,
         cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Vec<CadeMessage>>
@@ -517,7 +559,10 @@ impl CadeClient {
         F: Fn(&CadeMessage),
     {
         let url = self.url(&format!("/agents/{agent_id}/messages/stream"));
-        let body = json!({ "input": input });
+        let mut body = json!({ "input": input });
+        if let Some(cid) = conversation_id {
+            body["conversation_id"] = cid.into();
+        }
 
         let request = self
             .client
@@ -618,7 +663,7 @@ impl CadeClient {
     where
         F: Fn(&CadeMessage),
     {
-        self.stream_tool_return_cancellable(agent_id, tool_call_id, output, is_error, on_event, None).await
+        self.stream_tool_return_cancellable(agent_id, tool_call_id, output, is_error, None, on_event, None).await
     }
 
     /// Like `stream_tool_return` but checks an optional cancel flag between SSE events.
@@ -628,13 +673,14 @@ impl CadeClient {
         tool_call_id: &str,
         output: &str,
         is_error: bool,
+        conversation_id: Option<&str>,
         on_event: F,
         cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Vec<CadeMessage>>
     where
         F: Fn(&CadeMessage),
     {
-        let body = json!({
+        let mut body = json!({
             "role": "tool",
             "tool_return": {
                 "tool_call_id": tool_call_id,
@@ -642,6 +688,9 @@ impl CadeClient {
                 "status": if is_error { "error" } else { "success" }
             }
         });
+        if let Some(cid) = conversation_id {
+            body["conversation_id"] = cid.into();
+        }
         let url = self.url(&format!("/agents/{agent_id}/messages/stream"));
         let request = self
             .client
