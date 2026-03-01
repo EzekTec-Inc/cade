@@ -109,7 +109,7 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "toolset"        => Some(SlashCmd::Toolset(arg)),
         "yolo"                   => Some(SlashCmd::Yolo),
         "plan"                   => Some(SlashCmd::Plan),
-        "default" | "normal" | "resume" => Some(SlashCmd::Default),
+        "default" | "normal" => Some(SlashCmd::Default),
         "mode"                   => Some(SlashCmd::Mode(arg)),
         "model"  => Some(SlashCmd::Model(arg.unwrap_or_default())),
         // "toolset" now handled as SlashCmd::Toolset above
@@ -1332,7 +1332,7 @@ impl Repl {
                                 SetForegroundColor(Color::Cyan), Print("Hooks"), ResetColor,
                                 Print("\n\n"),
                             )?;
-                            let mut stdout_ref = &mut stdout;
+                            let stdout_ref = &mut stdout;
                             macro_rules! show_hook_section {
                                 ($name:expr, $entries:expr, $color:expr) => {
                                     if !$entries.is_empty() {
@@ -3102,6 +3102,12 @@ impl Repl {
                                 stdout.flush()?;
                                 continue;
                             }
+                            // Shift+Enter — insert literal newline (multi-line input)
+                            (KeyCode::Enter, m) if m == KeyModifiers::SHIFT => {
+                                buf.insert(cursor_pos, '\n');
+                                cursor_pos += 1;
+                                execute!(stdout, Print("\r\n  "))?;
+                            }
                             (KeyCode::Enter, _) => return Ok(Some(buf.clone())),
                             (KeyCode::Char('d'), KeyModifiers::CONTROL) if buf.is_empty() => {
                                 return Ok(None);
@@ -3121,13 +3127,6 @@ impl Repl {
                                     cursor_pos = 0;
                                 }
                                 // Esc on empty line: do nothing
-                            }
-
-                            // Shift+Enter — insert literal newline (multi-line input)
-                            (KeyCode::Enter, m) if m == KeyModifiers::SHIFT => {
-                                buf.insert(cursor_pos, '\n');
-                                cursor_pos += 1;
-                                execute!(stdout, Print("\r\n  "))?;
                             }
 
                             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
