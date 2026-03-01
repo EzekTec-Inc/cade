@@ -67,6 +67,10 @@ pub struct Args {
     /// Force a specific toolset: default | codex | gemini
     #[arg(long = "toolset")]
     pub toolset: Option<String>,
+
+    /// Rename the resolved agent and exit (combine with --agent or --name to target a specific one)
+    #[arg(long = "rename", short = 'r')]
+    pub rename: Option<String>,
 }
 
 impl Args {

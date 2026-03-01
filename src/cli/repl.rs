@@ -36,6 +36,7 @@ const BANNER: &str = r#"
 enum AgentPickerResult {
     Switch(AgentState),
     DeleteMany(Vec<AgentState>),
+    Rename { agent: AgentState, new_name: String },
 }
 
 #[derive(Debug)]
@@ -517,6 +518,20 @@ impl Repl {
                                             execute!(stdout, SetForegroundColor(Color::Green),
                                                 Print(format!("  ✓ Switched to: {} ({})\n", a.name, a.id)),
                                                 ResetColor)?;
+                                        }
+                                        AgentPickerResult::Rename { agent, new_name } => {
+                                            match self.client.rename_agent(&agent.id, &new_name).await {
+                                                Ok(_) => {
+                                                    // Update live state if active agent was renamed
+                                                    if agent.id == self.agent_id() {
+                                                        *self.agent_name.lock().unwrap() = new_name.clone();
+                                                    }
+                                                    execute!(stdout, SetForegroundColor(Color::Green),
+                                                        Print(format!("  ✓ Renamed '{}' → '{new_name}'\n", agent.name)),
+                                                        ResetColor)?;
+                                                }
+                                                Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                                            }
                                         }
                                         AgentPickerResult::DeleteMany(to_delete) => {
                                             let current_id = self.agent_id();
@@ -2345,7 +2360,7 @@ impl Repl {
                 SetForegroundColor(Color::Cyan), Print("  Agents  "),
                 ResetColor,
                 SetForegroundColor(Color::DarkGrey),
-                Print("↑↓ navigate  Space mark  d delete  Enter switch  Esc cancel\r\n"),
+                Print("↑↓ navigate  Space mark  r rename  d delete  Enter switch  Esc cancel\r\n"),
                 ResetColor,
             )?;
 
@@ -2481,6 +2496,29 @@ impl Repl {
                             execute!(stdout, cursor::Hide)?;
                             terminal::enable_raw_mode()?;
                             draw(stdout, agents, selected, &current, &marked)?;
+                        }
+                    }
+
+                    // ── Rename ──────────────────────────────────────────────
+                    (KeyCode::Char('r'), _) => {
+                        let a = agents[selected].clone();
+                        terminal::disable_raw_mode()?;
+                        execute!(stdout, cursor::Show,
+                            SetForegroundColor(Color::Yellow),
+                            Print(format!("\n  Rename '{}' → new name: ", a.name)),
+                            ResetColor)?;
+                        stdout.flush()?;
+                        let mut buf = String::new();
+                        std::io::stdin().read_line(&mut buf).unwrap_or(0);
+                        let new_name = buf.trim().to_string();
+                        execute!(stdout, cursor::Hide)?;
+                        terminal::enable_raw_mode()?;
+                        if new_name.is_empty() {
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("  (cancelled)\r\n"), ResetColor)?;
+                            draw(stdout, agents, selected, &current, &marked)?;
+                        } else {
+                            break Some(AgentPickerResult::Rename { agent: a, new_name });
                         }
                     }
 
@@ -2928,7 +2966,7 @@ impl Repl {
         println!("  Session:");
         println!("    /info           - agent, model, mode, cwd");
         println!("    /agent          - show current agent ID");
-        println!("    /agents         - list all agents + switch/delete (Space mark, d delete marked, Enter switch)");
+        println!("    /agents         - list all agents (Space mark, r rename, d delete, Enter switch)");
         println!("    /resume         - alias for /agents (Letta compatibility)");
         println!("    /new            - create a fresh agent (hot-swap)");
         println!("    /rename [name]  - rename current agent");

@@ -469,6 +469,20 @@ async fn main() -> Result<()> {
     // Expose AGENT_ID to all child processes (bash tool, hooks, etc.)
     std::env::set_var("AGENT_ID", &agent.id);
 
+    // --rename <new-name>: rename the resolved agent and exit (no REPL)
+    if let Some(new_name) = &args.rename {
+        let new_name = new_name.trim();
+        if new_name.is_empty() {
+            eprintln!("✗ --rename: name cannot be empty");
+            std::process::exit(1);
+        }
+        match client.rename_agent(&agent.id, new_name).await {
+            Ok(_) => println!("✓ Renamed '{}' → '{new_name}'  ({})", agent.name, agent.id),
+            Err(e) => { eprintln!("✗ {e}"); std::process::exit(1); }
+        }
+        return Ok(());
+    }
+
     // Seed default memory blocks if this agent has none yet
     // (covers agents created before default block seeding was introduced)
     let existing_blocks = client.get_memory(&agent.id).await.unwrap_or_default();
