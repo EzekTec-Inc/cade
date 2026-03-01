@@ -11,6 +11,44 @@ use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmT
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 
+/// Fetch model IDs from an OpenAI-compatible `/v1/models` endpoint.
+///
+/// Handles two response shapes:
+///   `{ "data": [ { "id": "..." }, … ] }` — OpenAI / Groq / OpenRouter
+///   `[ { "id": "..." }, … ]`             — some providers return a bare array
+///
+/// Returns a sorted `Vec<String>` of model IDs; empty on any error.
+pub async fn fetch_model_ids(models_url: &str, api_key: &str) -> Vec<String> {
+    let client = Client::new();
+    let Ok(resp) = client
+        .get(models_url)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .send()
+        .await
+    else {
+        return vec![];
+    };
+    if !resp.status().is_success() { return vec![]; }
+    let Ok(body) = resp.json::<Value>().await else { return vec![]; };
+
+    // Try { "data": [...] } (OpenAI format)
+    let items = if let Some(arr) = body["data"].as_array() {
+        arr.clone()
+    } else if body.is_array() {
+        // Bare array
+        body.as_array().cloned().unwrap_or_default()
+    } else {
+        return vec![];
+    };
+
+    let mut ids: Vec<String> = items.iter()
+        .filter_map(|m| m["id"].as_str().map(String::from))
+        .filter(|id| !id.is_empty())
+        .collect();
+    ids.sort();
+    ids
+}
+
 pub struct OpenAiProvider {
     client: Client,
     api_key: String,

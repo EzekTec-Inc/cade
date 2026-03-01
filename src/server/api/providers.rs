@@ -2,7 +2,7 @@ use axum::{extract::{Path, State}, http::StatusCode, Json};
 use serde_json::{json, Value};
 
 use crate::server::{
-    llm::{LlmRouter, OPENAI_COMPAT_PRESETS},
+    llm::{LlmRouter, PRESET_PROVIDERS},
     state::AppState,
     storage::sqlite::{self, ProviderRow},
 };
@@ -69,11 +69,11 @@ pub async fn add_provider(
 
     if name.is_empty() { return Err(bad_req("'name' cannot be empty")); }
 
-    // Preset shortcut: if kind == "preset" or kind == name and it's in PRESETS, auto-fill base_url
+    // Preset shortcut: if kind == "preset" or kind == name and it matches a PresetDef, auto-fill base_url
     let base_url = if kind == "openai-compatible" || kind == "preset" || kind == name {
-        if let Some(preset_url) = OPENAI_COMPAT_PRESETS.iter()
-            .find(|(n, _)| *n == name.as_str())
-            .map(|(_, u)| u.to_string())
+        if let Some(preset_url) = PRESET_PROVIDERS.iter()
+            .find(|p| p.name == name.as_str())
+            .map(|p| p.chat_url.to_string())
         {
             kind = "openai-compatible".to_string();
             base_url.or(Some(preset_url))
@@ -131,10 +131,12 @@ pub async fn remove_provider(
 
 /// GET /v1/providers/presets — list available OpenAI-compatible presets
 pub async fn list_presets() -> Json<Value> {
-    let presets: Vec<Value> = OPENAI_COMPAT_PRESETS.iter().map(|(name, url)| json!({
-        "name": name,
-        "kind": "openai-compatible",
-        "base_url": url
+    let presets: Vec<Value> = PRESET_PROVIDERS.iter().map(|p| json!({
+        "name":     p.name,
+        "kind":     "openai-compatible",
+        "base_url": p.chat_url,
+        "models_url": p.models_url,
+        "env_vars": p.env_vars,
     })).collect();
     Json(json!({ "presets": presets }))
 }
