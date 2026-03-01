@@ -57,6 +57,7 @@ enum SlashCmd {
     ApproveAlways(String),
     DenyAlways(String),
     Permissions,
+    Hooks,
     Yolo,
     Plan,
     Default,
@@ -92,6 +93,7 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "approve-always" => Some(SlashCmd::ApproveAlways(arg.unwrap_or_default())),
         "deny-always"    => Some(SlashCmd::DenyAlways(arg.unwrap_or_default())),
         "permissions"    => Some(SlashCmd::Permissions),
+        "hooks"          => Some(SlashCmd::Hooks),
         "yolo"                   => Some(SlashCmd::Yolo),
         "plan"                   => Some(SlashCmd::Plan),
         "default" | "normal" | "resume" => Some(SlashCmd::Default),
@@ -123,6 +125,8 @@ pub struct Repl {
     background_results: Arc<Mutex<Vec<BackgroundResult>>>,
     /// Active toolset — switches with /model
     current_toolset: Arc<Mutex<Toolset>>,
+    /// Hook engine — fires user-defined scripts at lifecycle events
+    hooks: crate::hooks::HookEngine,
 }
 
 impl Repl {
@@ -138,6 +142,7 @@ impl Repl {
         skills: Vec<Skill>,
         skills_dir: std::path::PathBuf,
         toolset: Toolset,
+        hooks: crate::hooks::HookEngine,
     ) -> Self {
         Self {
             client,
@@ -152,6 +157,7 @@ impl Repl {
             skills_dir,
             background_results: Arc::new(Mutex::new(vec![])),
             current_toolset: Arc::new(Mutex::new(toolset)),
+            hooks,
         }
     }
 
@@ -172,6 +178,9 @@ impl Repl {
             )),
             ResetColor
         )?;
+
+        // SessionStart hook (non-blocking)
+        self.hooks.session_start(&self.agent_id()).await;
 
         let mut history: Vec<String> = Vec::new();
         let mut hist_idx: Option<usize> = None;
@@ -1092,6 +1101,48 @@ impl Repl {
                         }
                     }
 
+                    SlashCmd::Hooks => {
+                        use crate::settings::manager::HookDef;
+                        let merged = self.settings.lock().unwrap().merged_hooks();
+                        if merged.is_empty() {
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("\n  No hooks configured.\n\n"),
+                                Print("  Add hooks to ~/.cade/settings.json or .cade/settings.json:\n"),
+                                Print("  {\n    \"hooks\": {\n      \"PreToolUse\": [{ \"matcher\": \"Bash\", \"hooks\": [{ \"type\": \"command\", \"command\": \"./hooks/check.sh\" }] }]\n    }\n  }\n\n"),
+                                ResetColor)?;
+                        } else {
+                            println!("\n  Hooks configuration\n");
+                            let show_entries = |name: &str, entries: &[crate::settings::manager::HookEntry]| {
+                                if entries.is_empty() { return; }
+                                println!("  {} ({} entr{}):", name, entries.len(),
+                                    if entries.len() == 1 { "y" } else { "ies" });
+                                for entry in entries {
+                                    let m = entry.matcher.as_deref().unwrap_or("*");
+                                    println!("    matcher: {m}");
+                                    for hook in &entry.hooks {
+                                        println!("      {hook}");
+                                    }
+                                }
+                                println!();
+                            };
+                            show_entries("PreToolUse",          &merged.pre_tool_use);
+                            show_entries("PostToolUse",         &merged.post_tool_use);
+                            show_entries("PostToolUseFailure",  &merged.post_tool_use_failure);
+                            show_entries("PermissionRequest",   &merged.permission_request);
+                            show_entries("UserPromptSubmit",    &merged.user_prompt_submit);
+                            show_entries("Stop",                &merged.stop);
+                            show_entries("SubagentStop",        &merged.subagent_stop);
+                            show_entries("SessionStart",        &merged.session_start);
+                            show_entries("SessionEnd",          &merged.session_end);
+                            show_entries("Notification",        &merged.notification);
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("  Config: ~/.cade/settings.json  ·  .cade/settings.json  ·  .cade/settings.local.json\n\n"),
+                                ResetColor)?;
+                        }
+                        stdout.flush()?;
+                        let _ = HookDef::Command { command: String::new(), timeout: 0 }; // silence unused import
+                    }
+
                     SlashCmd::Feedback => {
                         execute!(stdout,
                             SetForegroundColor(Color::Cyan),
@@ -1105,9 +1156,22 @@ impl Repl {
                 continue;
             }
 
+            // UserPromptSubmit hook — can block the turn
+            if let crate::hooks::HookOutcome::Block { reason } =
+                self.hooks.user_prompt_submit(&input).await
+            {
+                execute!(stdout, SetForegroundColor(Color::Yellow),
+                    Print(format!("\n  ⚠ Hook blocked prompt: {reason}\n")), ResetColor)?;
+                stdout.flush()?;
+                continue;
+            }
+
             // Send to agent and handle tool loop
             self.agent_turn(&mut stdout, &input).await?;
         }
+
+        // SessionEnd hook (non-blocking)
+        self.hooks.session_end(&self.agent_id()).await;
 
         Ok(())
     }
@@ -1115,7 +1179,7 @@ impl Repl {
     /// Send a user message and drive the tool-call loop with live SSE streaming.
     async fn agent_turn(&self, stdout: &mut io::Stdout, input: &str) -> Result<()> {
         let messages = self.stream_turn(stdout, input, false, "", "").await?;
-        self.dispatch_tool_calls(stdout, messages).await
+        self.dispatch_tool_calls(stdout, messages, input).await
     }
 
     /// Stream one turn (user message or tool return) and render live.
@@ -1231,11 +1295,32 @@ impl Repl {
         &self,
         stdout: &mut io::Stdout,
         messages: Vec<CadeMessage>,
+        user_input: &str,
     ) -> Result<()> {
         let tool_calls: Vec<(String, String, serde_json::Value)> = messages
             .iter()
             .filter_map(|m| m.as_tool_call())
             .collect();
+
+        if tool_calls.is_empty() {
+            // No tool calls → agent has stopped. Collect final assistant text.
+            let assistant_msg: String = messages.iter()
+                .filter_map(|m| m.assistant_text())
+                .collect::<Vec<_>>()
+                .join(" ");
+
+            // Stop hook — exit 2 feeds stderr back to agent as a continuation
+            let stop_outcome = self.hooks.stop("end_turn", user_input, &assistant_msg).await;
+            if let crate::hooks::HookOutcome::Block { reason } = stop_outcome {
+                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                    Print(format!("\n  ↩ Hook continuing turn: {reason}\n")), ResetColor)?;
+                stdout.flush()?;
+                // Feed the hook's stderr back to the agent as a new turn
+                let follow_msgs = self.stream_turn(stdout, &reason, false, "", "").await?;
+                Box::pin(self.dispatch_tool_calls(stdout, follow_msgs, user_input)).await?;
+            }
+            return Ok(());
+        }
 
         for (call_id, tool_name, args) in tool_calls {
             let result = self.execute_tool(stdout, &call_id, &tool_name, &args).await?;
@@ -1245,7 +1330,7 @@ impl Repl {
                 .stream_turn(stdout, "", true, &call_id, &result.output)
                 .await?;
 
-            Box::pin(self.dispatch_tool_calls(stdout, follow)).await?;
+            Box::pin(self.dispatch_tool_calls(stdout, follow, user_input)).await?;
         }
 
         Ok(())
@@ -1304,15 +1389,11 @@ impl Repl {
             return self.handle_run_subagent(call_id, args, stdout).await;
         }
 
-        // Permission check — plan mode allows read operations, blocks write ones
+        // Permission check — plan mode / deny rules
         if self.permissions.is_blocked(tool_name, args) {
             let msg = self.permissions.block_reason(tool_name, args);
-            execute!(
-                stdout,
-                SetForegroundColor(Color::Red),
-                Print(format!("  ✗ {msg}\n")),
-                ResetColor
-            )?;
+            execute!(stdout, SetForegroundColor(Color::Red),
+                Print(format!("  ✗ {msg}\n")), ResetColor)?;
             return Ok(crate::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -1322,6 +1403,20 @@ impl Repl {
         }
 
         if !self.permissions.auto_approve(tool_name, args) {
+            // PermissionRequest hook — can block before showing prompt
+            if let crate::hooks::HookOutcome::Block { reason } =
+                self.hooks.permission_request(tool_name, args).await
+            {
+                execute!(stdout, SetForegroundColor(Color::Red),
+                    Print(format!("  ✗ Hook denied: {reason}\n")), ResetColor)?;
+                return Ok(crate::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    output: format!("Hook denied: {reason}"),
+                    is_error: true,
+                });
+            }
+
             // Prompt for approval
             if !self.prompt_approval(stdout, tool_name, args)? {
                 let msg = format!("Tool '{tool_name}' denied by user");
@@ -1334,33 +1429,45 @@ impl Repl {
             }
         }
 
+        // PreToolUse hook — can block execution
+        if let crate::hooks::HookOutcome::Block { reason } =
+            self.hooks.pre_tool_use(tool_name, args).await
+        {
+            execute!(stdout, SetForegroundColor(Color::Red),
+                Print(format!("  ✗ Hook blocked: {reason}\n")), ResetColor)?;
+            return Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output: format!("Blocked by hook: {reason}"),
+                is_error: true,
+            });
+        }
+
         // Execute
-        execute!(
-            stdout,
-            SetForegroundColor(Color::DarkGrey),
-            Print("  ▶ running…\n"),
-            ResetColor
-        )?;
+        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+            Print("  ▶ running…\n"), ResetColor)?;
         stdout.flush()?;
 
-        let result = dispatch(call_id.to_string(), tool_name, args).await;
+        let mut result = dispatch(call_id.to_string(), tool_name, args).await;
+
+        // PostToolUse / PostToolUseFailure hooks
+        if result.is_error {
+            self.hooks.post_tool_use_failure(tool_name, args, &result.output).await;
+        } else {
+            // PostToolUse may inject additionalContext into the tool output
+            if let Some(extra) = self.hooks.post_tool_use(tool_name, args, &result.output).await {
+                result.output = format!("{}\n\n[Hook context: {extra}]", result.output);
+            }
+        }
 
         // Show result summary
         if result.is_error {
-            execute!(
-                stdout,
-                SetForegroundColor(Color::Red),
-                Print(format!("  ✗ {}\n", truncate(&result.output, 120))),
-                ResetColor
-            )?;
+            execute!(stdout, SetForegroundColor(Color::Red),
+                Print(format!("  ✗ {}\n", truncate(&result.output, 120))), ResetColor)?;
         } else {
             let lines = result.output.lines().count();
-            execute!(
-                stdout,
-                SetForegroundColor(Color::Green),
-                Print(format!("  ✓ {} lines\n", lines)),
-                ResetColor
-            )?;
+            execute!(stdout, SetForegroundColor(Color::Green),
+                Print(format!("  ✓ {} lines\n", lines)), ResetColor)?;
         }
         stdout.flush()?;
 
@@ -1999,16 +2106,28 @@ impl Repl {
         } else {
             // Run synchronously — wait for result
             let (output, is_error) = run_task.await;
+
+            // SubagentStop hook — can block (exit 2 continues the agent)
+            let hook_outcome = self.hooks.subagent_stop(&subagent_type, &output, is_error).await;
+
             if !is_error {
                 execute!(stdout, SetForegroundColor(Color::Green),
                     Print(format!("  ✓ Subagent [{}] complete\n", subagent_type)),
                     ResetColor)?;
             }
             stdout.flush()?;
+
+            // If hook blocked, append its reason to the output so the agent sees it
+            let final_output = match hook_outcome {
+                crate::hooks::HookOutcome::Block { reason } =>
+                    format!("{output}\n\n[SubagentStop hook: {reason}]"),
+                crate::hooks::HookOutcome::Allow => output,
+            };
+
             Ok(crate::tools::ToolResult {
                 tool_call_id: call_id_owned,
                 tool_name: "run_subagent".to_string(),
-                output,
+                output: final_output,
                 is_error,
             })
         }
@@ -2041,6 +2160,11 @@ impl Repl {
         println!("    /new            - create a fresh agent (hot-swap)");
         println!("    /pin            - pin current agent for quick access");
         println!("    /clear          - clear screen + context window");
+        println!();
+        println!("  Hooks:");
+        println!("    /hooks                    - show active hook configuration");
+        println!("    (configure in ~/.cade/settings.json or .cade/settings.json)");
+        println!("    events: PreToolUse PostToolUse Stop UserPromptSubmit SessionStart …");
         println!();
         println!("  Permissions:");
         println!("    /permissions              - show mode + active allow/deny rules");

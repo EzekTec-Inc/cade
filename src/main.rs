@@ -2,6 +2,7 @@
 use cade::agent;
 use cade::cli;
 use cade::desktop;
+use cade::hooks::HookEngine;
 use cade::permissions;
 use cade::settings;
 use cade::skills;
@@ -397,6 +398,12 @@ async fn main() -> Result<()> {
         a
     };
 
+    // Build hook engine from merged settings (local > project > global)
+    let hook_engine = HookEngine::new(settings.merged_hooks(), cwd.clone());
+    if !hook_engine.is_empty() {
+        tracing::info!("Hooks loaded from settings");
+    }
+
     // Seed default memory blocks if this agent has none yet
     // (covers agents created before default block seeding was introduced)
     let existing_blocks = client.get_memory(&agent.id).await.unwrap_or_default();
@@ -486,6 +493,7 @@ async fn main() -> Result<()> {
         loaded_skills,
         skills_dir,
         toolset,
+        hook_engine,
     );
     repl.run().await?;
 

@@ -2,6 +2,86 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+// ── Hook configuration ────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum HookDef {
+    /// Run a shell command. Exit 0=allow, 1=log+continue, 2=block+stderr→agent.
+    Command {
+        command: String,
+        #[serde(default = "default_hook_timeout")]
+        timeout: u64, // milliseconds
+    },
+}
+
+fn default_hook_timeout() -> u64 { 60_000 }
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HookEntry {
+    /// Regex matcher for tool name (tool-related hooks only).
+    /// None / "" / "*" → match all tools.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matcher: Option<String>,
+    pub hooks: Vec<HookDef>,
+}
+
+/// All hooks grouped by event type.
+/// Field names match Letta's settings.json key names exactly.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct HooksConfig {
+    #[serde(default, rename = "PreToolUse")]
+    pub pre_tool_use: Vec<HookEntry>,
+    #[serde(default, rename = "PostToolUse")]
+    pub post_tool_use: Vec<HookEntry>,
+    #[serde(default, rename = "PostToolUseFailure")]
+    pub post_tool_use_failure: Vec<HookEntry>,
+    #[serde(default, rename = "PermissionRequest")]
+    pub permission_request: Vec<HookEntry>,
+    #[serde(default, rename = "UserPromptSubmit")]
+    pub user_prompt_submit: Vec<HookEntry>,
+    #[serde(default, rename = "Stop")]
+    pub stop: Vec<HookEntry>,
+    #[serde(default, rename = "SubagentStop")]
+    pub subagent_stop: Vec<HookEntry>,
+    #[serde(default, rename = "SessionStart")]
+    pub session_start: Vec<HookEntry>,
+    #[serde(default, rename = "SessionEnd")]
+    pub session_end: Vec<HookEntry>,
+    #[serde(default, rename = "Notification")]
+    pub notification: Vec<HookEntry>,
+}
+
+impl HooksConfig {
+    /// Merge two configs: `self` runs first (higher priority).
+    pub fn merge(mut self, other: HooksConfig) -> HooksConfig {
+        self.pre_tool_use.extend(other.pre_tool_use);
+        self.post_tool_use.extend(other.post_tool_use);
+        self.post_tool_use_failure.extend(other.post_tool_use_failure);
+        self.permission_request.extend(other.permission_request);
+        self.user_prompt_submit.extend(other.user_prompt_submit);
+        self.stop.extend(other.stop);
+        self.subagent_stop.extend(other.subagent_stop);
+        self.session_start.extend(other.session_start);
+        self.session_end.extend(other.session_end);
+        self.notification.extend(other.notification);
+        self
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.pre_tool_use.is_empty()
+            && self.post_tool_use.is_empty()
+            && self.post_tool_use_failure.is_empty()
+            && self.permission_request.is_empty()
+            && self.user_prompt_submit.is_empty()
+            && self.stop.is_empty()
+            && self.subagent_stop.is_empty()
+            && self.session_start.is_empty()
+            && self.session_end.is_empty()
+            && self.notification.is_empty()
+    }
+}
+
 /// Permission allow/deny rules persisted in settings.json
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PermissionSettings {
@@ -22,6 +102,15 @@ pub struct GlobalSettings {
     pub last_agent: Option<String>,
     #[serde(default)]
     pub permissions: PermissionSettings,
+    #[serde(default)]
+    pub hooks: HooksConfig,
+}
+
+/// Project settings stored in .cade/settings.json (committable — share with team)
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ProjectSettings {
+    #[serde(default)]
+    pub hooks: HooksConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -46,26 +135,48 @@ pub struct LocalSettings {
     pub last_agent: Option<String>,
     #[serde(default)]
     pub pinned_agents: Vec<PinnedAgent>,
+    #[serde(default)]
+    pub hooks: HooksConfig,
 }
 
 pub struct SettingsManager {
-    global_path: PathBuf,
-    local_path: PathBuf,
-    global: GlobalSettings,
-    local: LocalSettings,
+    global_path:  PathBuf,
+    project_path: PathBuf,
+    local_path:   PathBuf,
+    global:  GlobalSettings,
+    project: ProjectSettings,
+    local:   LocalSettings,
 }
 
 impl SettingsManager {
     pub fn new(cwd: &Path) -> Result<Self> {
         let home = dirs::home_dir().context("cannot resolve home dir")?;
-        let global_path = home.join(".cade").join("settings.json");
-        let local_path = cwd.join(".cade").join("settings.local.json");
+        let global_path  = home.join(".cade").join("settings.json");
+        let project_path = cwd.join(".cade").join("settings.json");
+        let local_path   = cwd.join(".cade").join("settings.local.json");
 
-        let global = Self::load_json(&global_path).unwrap_or_default();
-        let local = Self::load_json(&local_path).unwrap_or_default();
+        let global:  GlobalSettings  = Self::load_json(&global_path).unwrap_or_default();
+        let project: ProjectSettings = Self::load_json(&project_path).unwrap_or_default();
+        let local:   LocalSettings   = Self::load_json(&local_path).unwrap_or_default();
 
-        Ok(Self { global_path, local_path, global, local })
+        Ok(Self { global_path, project_path, local_path, global, project, local })
     }
+
+    /// Merged hooks config: local first (highest priority), then project, then global.
+    pub fn merged_hooks(&self) -> HooksConfig {
+        // Clone each source; local runs first per Letta spec
+        let local   = self.local.hooks.clone();
+        let project = self.project.hooks.clone();
+        let global  = self.global.hooks.clone();
+        local.merge(project).merge(global)
+    }
+
+    /// Path to the project settings file (.cade/settings.json — committable)
+    pub fn project_path(&self) -> &Path { &self.project_path }
+    /// Path to the local settings file (.cade/settings.local.json — gitignored)
+    pub fn local_path(&self) -> &Path { &self.local_path }
+    /// Path to the global settings file (~/.cade/settings.json)
+    pub fn global_path(&self) -> &Path { &self.global_path }
 
     fn load_json<T: for<'de> Deserialize<'de> + Default>(path: &Path) -> Result<T> {
         if !path.exists() {

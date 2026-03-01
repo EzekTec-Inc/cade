@@ -7,5 +7,6 @@ pub mod server;
 pub mod settings;
 pub mod skills;
 pub mod subagents;
+pub mod hooks;
 pub mod toolsets;
 pub mod tools;
