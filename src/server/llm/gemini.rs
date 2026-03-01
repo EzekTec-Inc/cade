@@ -10,6 +10,49 @@ use tokio_stream::Stream;
 use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
 
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+const GEMINI_LIST_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200";
+
+/// Fetch all generative-content-capable models available to this API key.
+/// Filters to models that support `generateContent` and whose names contain "gemini"
+/// (excludes embedding models, AQA, TTS, image-gen, etc.).
+/// Returns `(bare_id, display_name)` pairs.
+pub async fn fetch_gemini_models(api_key: &str) -> Vec<(String, String)> {
+    let url = format!("{GEMINI_LIST_URL}&key={api_key}");
+    let client = reqwest::Client::new();
+    let req = client.get(&url).send();
+    let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
+        Ok(Ok(r))  => r,
+        Ok(Err(_)) | Err(_) => return vec![],
+    };
+    if !resp.status().is_success() { return vec![]; }
+    let Ok(body) = resp.json::<Value>().await else { return vec![]; };
+
+    body["models"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    // name format: "models/gemini-2.0-flash"
+                    let full_name = m["name"].as_str()?;
+                    let id = full_name.strip_prefix("models/").unwrap_or(full_name);
+
+                    // Only models that support generateContent
+                    let supports_generate = m["supportedGenerationMethods"]
+                        .as_array()
+                        .map(|a| a.iter().any(|v| v.as_str() == Some("generateContent")))
+                        .unwrap_or(false);
+                    if !supports_generate { return None; }
+
+                    // Only "gemini" family (excludes embedding-*, aqa, etc.)
+                    if !id.contains("gemini") { return None; }
+
+                    let display = m["displayName"].as_str().unwrap_or(id).to_string();
+                    Some((id.to_string(), display))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 pub struct GeminiProvider {
     client: Client,

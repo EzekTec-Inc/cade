@@ -18,6 +18,50 @@ const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 ///   `[ { "id": "..." }, … ]`             — some providers return a bare array
 ///
 /// Returns a sorted `Vec<String>` of model IDs; empty on any error.
+/// Fetch only chat-completion-capable models from the OpenAI API.
+/// Filters out embeddings, TTS, Whisper, DALL-E, and legacy completions models.
+/// Returns model IDs sorted newest-first (by `created` timestamp).
+pub async fn fetch_openai_chat_models(api_key: &str) -> Vec<String> {
+    let client = Client::new();
+    let req = client
+        .get("https://api.openai.com/v1/models")
+        .header("Authorization", format!("Bearer {api_key}"))
+        .send();
+    let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
+        Ok(Ok(r))  => r,
+        Ok(Err(_)) | Err(_) => return vec![],
+    };
+    if !resp.status().is_success() { return vec![]; }
+    let Ok(body) = resp.json::<Value>().await else { return vec![]; };
+
+    let arr = match body["data"].as_array() {
+        Some(a) => a.clone(),
+        None    => return vec![],
+    };
+
+    // Keep only models that support chat completions — filter by well-known prefixes
+    let is_chat_model = |id: &str| -> bool {
+        let id = id.to_lowercase();
+        id.starts_with("gpt-")
+            || id.starts_with("o1")
+            || id.starts_with("o3")
+            || id.starts_with("o4")
+            || id.starts_with("chatgpt")
+    };
+
+    // Sort newest first using the `created` Unix timestamp
+    let mut entries: Vec<(u64, String)> = arr.iter()
+        .filter_map(|m| {
+            let id = m["id"].as_str()?;
+            if !is_chat_model(id) { return None; }
+            let created = m["created"].as_u64().unwrap_or(0);
+            Some((created, id.to_string()))
+        })
+        .collect();
+    entries.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(&b.1)));
+    entries.into_iter().map(|(_, id)| id).collect()
+}
+
 pub async fn fetch_model_ids(models_url: &str, api_key: &str) -> Vec<String> {
     let client = Client::new();
     let req = client

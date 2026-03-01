@@ -10,7 +10,40 @@ use tokio_stream::Stream;
 use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
+const MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
+const ANTHROPIC_VERSION: &str = "2023-06-01";
 const DEFAULT_MAX_TOKENS: u32 = 8192;
+
+/// Fetch all models available to this API key from Anthropic's models endpoint.
+/// Returns `(id, display_name)` pairs, newest first (as returned by the API).
+/// Returns empty Vec on any error or timeout.
+pub async fn fetch_anthropic_models(api_key: &str) -> Vec<(String, String)> {
+    let client = Client::new();
+    let req = client
+        .get(MODELS_URL)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", ANTHROPIC_VERSION)
+        .send();
+    let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
+        Ok(Ok(r))  => r,
+        Ok(Err(_)) | Err(_) => return vec![],
+    };
+    if !resp.status().is_success() { return vec![]; }
+    let Ok(body) = resp.json::<Value>().await else { return vec![]; };
+
+    body["data"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|m| {
+                    let id   = m["id"].as_str()?;
+                    let name = m["display_name"].as_str().unwrap_or(id);
+                    Some((id.to_string(), name.to_string()))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
 
 pub struct AnthropicProvider {
     client: Client,

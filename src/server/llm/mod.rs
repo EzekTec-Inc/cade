@@ -288,41 +288,112 @@ impl LlmRouter {
         let mut tasks: Vec<ModelFut> = Vec::new();
 
         for name in self.providers.keys() {
-            if name == "ollama" {
-                let url = self.ollama_base_url.clone();
-                tasks.push(Box::pin(async move {
-                    let ol = ollama::OllamaProvider::new(url);
-                    ol.list_models().await
-                        .into_iter()
-                        .map(|m| ModelEntry {
-                            provider:     "ollama".to_string(),
-                            id:           format!("ollama/{m}"),
-                            display_name: m,
-                            toolset:      "default".to_string(),
-                            dynamic:      true,
-                        })
-                        .collect()
-                }));
-                continue;
-            }
+            let key = self.provider_keys.get(name.as_str()).cloned().unwrap_or_default();
 
-            if let Some(preset) = PRESET_PROVIDERS.iter().find(|p| p.name == name.as_str()) {
-                if let Some(models_url) = preset.models_url {
-                    let n   = name.clone();
-                    let url = models_url.to_string();
-                    let key = self.provider_keys.get(name.as_str()).cloned().unwrap_or_default();
+            match name.as_str() {
+                // ── Local Ollama ─────────────────────────────────────────────
+                "ollama" => {
+                    let url = self.ollama_base_url.clone();
                     tasks.push(Box::pin(async move {
-                        openai::fetch_model_ids(&url, &key).await
+                        let ol = ollama::OllamaProvider::new(url);
+                        ol.list_models().await
                             .into_iter()
-                            .map(|id| ModelEntry {
-                                provider:     n.clone(),
-                                id:           format!("{n}/{id}"),
-                                display_name: id,
-                                toolset:      "default".to_string(),
+                            .map(|m| ModelEntry {
+                                provider:     "ollama".into(),
+                                id:           format!("ollama/{m}"),
+                                display_name: m,
+                                toolset:      "default".into(),
                                 dynamic:      true,
                             })
                             .collect()
                     }));
+                }
+
+                // ── Anthropic — live /v1/models, fallback to catalogue ───────
+                "anthropic" => {
+                    tasks.push(Box::pin(async move {
+                        let live = anthropic::fetch_anthropic_models(&key).await;
+                        if live.is_empty() {
+                            // Provider is configured but endpoint unreachable — use catalogue
+                            CATALOGUE.iter()
+                                .filter(|(p, ..)| *p == "anthropic")
+                                .map(catalogue::ModelEntry::from_catalogue)
+                                .collect()
+                        } else {
+                            live.into_iter().map(|(id, display)| ModelEntry {
+                                provider:     "anthropic".into(),
+                                id:           format!("anthropic/{id}"),
+                                display_name: display,
+                                toolset:      "default".into(),
+                                dynamic:      true,
+                            }).collect()
+                        }
+                    }));
+                }
+
+                // ── OpenAI — live /v1/models (chat only), fallback to catalogue
+                "openai" => {
+                    tasks.push(Box::pin(async move {
+                        let ids = openai::fetch_openai_chat_models(&key).await;
+                        if ids.is_empty() {
+                            CATALOGUE.iter()
+                                .filter(|(p, ..)| *p == "openai")
+                                .map(catalogue::ModelEntry::from_catalogue)
+                                .collect()
+                        } else {
+                            ids.into_iter().map(|id| ModelEntry {
+                                provider:     "openai".into(),
+                                id:           format!("openai/{id}"),
+                                display_name: id.clone(),
+                                toolset:      "codex".into(),
+                                dynamic:      true,
+                            }).collect()
+                        }
+                    }));
+                }
+
+                // ── Gemini — live models list, fallback to catalogue ─────────
+                "gemini" | "google" => {
+                    let n = name.clone();
+                    tasks.push(Box::pin(async move {
+                        let live = gemini::fetch_gemini_models(&key).await;
+                        if live.is_empty() {
+                            CATALOGUE.iter()
+                                .filter(|(p, ..)| *p == "gemini")
+                                .map(catalogue::ModelEntry::from_catalogue)
+                                .collect()
+                        } else {
+                            live.into_iter().map(|(id, display)| ModelEntry {
+                                provider:     n.clone(),
+                                id:           format!("{n}/{id}"),
+                                display_name: display,
+                                toolset:      "gemini".into(),
+                                dynamic:      true,
+                            }).collect()
+                        }
+                    }));
+                }
+
+                // ── Preset providers (Groq, OpenRouter, etc.) ───────────────
+                _ => {
+                    if let Some(preset) = PRESET_PROVIDERS.iter().find(|p| p.name == name.as_str()) {
+                        if let Some(models_url) = preset.models_url {
+                            let n   = name.clone();
+                            let url = models_url.to_string();
+                            tasks.push(Box::pin(async move {
+                                openai::fetch_model_ids(&url, &key).await
+                                    .into_iter()
+                                    .map(|id| ModelEntry {
+                                        provider:     n.clone(),
+                                        id:           format!("{n}/{id}"),
+                                        display_name: id,
+                                        toolset:      "default".into(),
+                                        dynamic:      true,
+                                    })
+                                    .collect()
+                            }));
+                        }
+                    }
                 }
             }
         }
