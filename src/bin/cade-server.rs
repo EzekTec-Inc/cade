@@ -1,6 +1,8 @@
 use anyhow::Result;
 use std::sync::Arc;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
+use tracing::Span;
+use axum::http::Request;
 
 // Bring in the server module tree from the main crate
 use cade::server::{
@@ -58,10 +60,22 @@ async fn main() -> Result<()> {
         config: Arc::new(config.clone()),
     };
 
-    // Build axum app
+    // Build axum app — trace layer logs method+path on 5xx
+    let trace_layer = TraceLayer::new_for_http()
+        .make_span_with(|req: &Request<_>| {
+            tracing::info_span!(
+                "http",
+                method = %req.method(),
+                uri    = %req.uri(),
+            )
+        })
+        .on_failure(
+            tower_http::trace::DefaultOnFailure::new().level(tracing::Level::ERROR)
+        );
+
     let app = router(state)
         .layer(CorsLayer::permissive())
-        .layer(TraceLayer::new_for_http());
+        .layer(trace_layer);
 
     tracing::info!("Listening on http://{}", config.addr);
     let listener = tokio::net::TcpListener::bind(config.addr).await?;

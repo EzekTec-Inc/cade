@@ -39,6 +39,18 @@ pub struct Args {
     /// Show connection info and current agent
     #[arg(long = "info")]
     pub info: bool,
+
+    /// Output response as JSON (headless mode only)
+    #[arg(long = "json")]
+    pub json: bool,
+
+    /// Disable streaming (headless mode only — for clean JSON output)
+    #[arg(long = "no-stream")]
+    pub no_stream: bool,
+
+    /// Force a specific toolset: default | codex | gemini
+    #[arg(long = "toolset")]
+    pub toolset: Option<String>,
 }
 
 impl Args {

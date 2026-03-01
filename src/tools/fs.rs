@@ -156,3 +156,64 @@ impl EditTool {
         })
     }
 }
+
+// ── ApplyPatch ────────────────────────────────────────────────────────────────
+// Unified-diff based editing optimised for OpenAI (Codex/GPT) models which are
+// trained to produce patch output rather than string-replace pairs.
+
+pub struct ApplyPatchTool;
+
+impl ApplyPatchTool {
+    pub async fn run(args: &Value) -> Result<String> {
+        let patch_str = args["patch"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("apply_patch: missing 'patch'"))?;
+
+        // Write patch to a tempfile then apply with `patch -p1`
+        let tmp = std::env::temp_dir().join(format!("cade-patch-{}.diff",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .subsec_nanos()
+        ));
+        std::fs::write(&tmp, patch_str)
+            .with_context(|| "apply_patch: failed to write tempfile")?;
+
+        let output = tokio::process::Command::new("patch")
+            .args(["-p1", "--input", tmp.to_str().unwrap_or("")])
+            .output()
+            .await
+            .with_context(|| "apply_patch: failed to run `patch` command (is it installed?)")?;
+
+        let _ = std::fs::remove_file(&tmp);
+
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            Ok(format!("Patch applied successfully.\n{stdout}").trim().to_string())
+        } else {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            anyhow::bail!("patch failed:\n{stdout}{stderr}")
+        }
+    }
+
+    pub fn schema() -> Value {
+        serde_json::json!({
+            "name": "apply_patch",
+            "description": "Apply a unified diff patch to modify one or more files. \
+Use this to edit files by providing a standard unified diff (output of `diff -u`). \
+Supports multi-file patches and new file creation. Preferred for large or complex edits \
+where string-replace would be fragile.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "patch": {
+                        "type": "string",
+                        "description": "Unified diff patch string. Format:\n--- a/path/to/file\n+++ b/path/to/file\n@@ -N,M +N,M @@\n context lines\n-removed line\n+added line"
+                    }
+                },
+                "required": ["patch"]
+            }
+        })
+    }
+}

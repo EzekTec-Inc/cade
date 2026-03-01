@@ -231,5 +231,6 @@ pub async fn attach_tools(
 }
 
 fn server_err(msg: String) -> (StatusCode, Json<Value>) {
+    tracing::error!("500 Internal Server Error: {msg}");
     (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": msg})))
 }

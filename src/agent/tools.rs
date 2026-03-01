@@ -2,7 +2,8 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use super::client::{CreateToolRequest, CadeClient, ToolDef};
-use crate::tools::all_schemas;
+use crate::tools::schemas_for_toolset;
+use crate::toolsets::Toolset;
 
 /// Register all CADE tools with the CADE server.
 ///
@@ -11,7 +12,7 @@ use crate::tools::all_schemas;
 /// accurate parameter descriptions.
 ///
 /// Execution happens client-side in Rust — the Python stubs are never run.
-pub async fn register_cade_tools(client: &CadeClient) -> Result<Vec<ToolDef>> {
+pub async fn register_cade_tools(client: &CadeClient, toolset: Toolset) -> Result<Vec<ToolDef>> {
     // Fetch already-registered tools so we skip re-registration
     let existing = client.list_tools().await.unwrap_or_default();
     let existing_names: std::collections::HashSet<String> =
@@ -19,7 +20,7 @@ pub async fn register_cade_tools(client: &CadeClient) -> Result<Vec<ToolDef>> {
 
     let mut registered = Vec::new();
 
-    for schema in all_schemas() {
+    for schema in schemas_for_toolset(toolset) {
         let name = schema["name"].as_str().unwrap_or("").to_string();
         let description = schema["description"].as_str().unwrap_or("").to_string();
 

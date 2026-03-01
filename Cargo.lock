@@ -590,6 +590,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "atty",
  "axum",
  "base64",
  "chrono",

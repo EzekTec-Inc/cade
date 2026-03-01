@@ -39,6 +39,7 @@ pub async fn create_tool(
     };
 
     sqlite::upsert_tool(&state.db, &row).map_err(|e| {
+        tracing::error!("500 upsert_tool [{name}]: {e}");
         (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": e.to_string()})))
     })?;
 

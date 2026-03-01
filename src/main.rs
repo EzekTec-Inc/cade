@@ -22,6 +22,7 @@ use cli::{Args, Repl};
 use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
 use skills::{discover_all_skills, skills_listing};
+use cade::toolsets::Toolset;
 
 const SKILLS_DIR: &str = ".skills";
 
@@ -186,12 +187,12 @@ async fn register_update_memory_tool(client: &CadeClient) {
 }
 
 /// Register all CADE tools on the server and attach them to the given agent.
-async fn register_and_attach(client: &CadeClient, agent_id: &str) {
+pub async fn register_and_attach(client: &CadeClient, agent_id: &str, toolset: Toolset) {
     register_update_memory_tool(client).await;
     register_load_skill_tool(client).await;
     register_install_skill_tool(client).await;
     register_run_subagent_tool(client).await;
-    let tools = register_cade_tools(client).await.unwrap_or_default();
+    let tools = register_cade_tools(client, toolset).await.unwrap_or_default();
     let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
     tracing::info!("Registered {} tools", tools.len());
     if !ids.is_empty() {
@@ -268,6 +269,12 @@ async fn main() -> Result<()> {
         .or_else(|| std::env::var("CADE_DEFAULT_MODEL").ok())
         .unwrap_or(server_info.2);
 
+    // Detect toolset: --toolset flag > model family auto-detection
+    let toolset = args.toolset.as_deref()
+        .and_then(Toolset::from_str)
+        .unwrap_or_else(|| Toolset::for_model(&default_model));
+    tracing::info!("Toolset: {} (model={})", toolset.display_name(), default_model);
+
     // Skills listing — compact (names + descriptions only), not full bodies.
     // The agent uses load_skill(id) to pull full content on-demand.
     let skills_block = skills_listing(&loaded_skills);
@@ -297,7 +304,7 @@ async fn main() -> Result<()> {
             .create_agent(make_req(default_model.clone(), "CADE coding agent with desktop extensions"))
             .await
             .context("create agent")?;
-        register_and_attach(&client, &a.id).await;
+        register_and_attach(&client, &a.id, toolset).await;
         seed_default_memory(&client, &a.id).await;
         session.set_agent(a.id.clone(), Some(a.name.clone())).context("save session")?;
         settings.set_last_agent(&a.id).context("save global session")?;
@@ -313,7 +320,7 @@ async fn main() -> Result<()> {
                     .create_agent(make_req(default_model.clone(), "CADE coding agent"))
                     .await
                     .context("create agent")?;
-                register_and_attach(&client, &a.id).await;
+                register_and_attach(&client, &a.id, toolset).await;
                 seed_default_memory(&client, &a.id).await;
                 session.set_agent(a.id.clone(), Some(a.name.clone()))?;
                 settings.set_last_agent(&a.id)?;
@@ -326,7 +333,7 @@ async fn main() -> Result<()> {
             .create_agent(make_req(default_model.clone(), "CADE coding agent with desktop extensions"))
             .await
             .context("create agent")?;
-        register_and_attach(&client, &a.id).await;
+        register_and_attach(&client, &a.id, toolset).await;
         seed_default_memory(&client, &a.id).await;
         session.set_agent(a.id.clone(), Some(a.name.clone()))?;
         settings.set_last_agent(&a.id)?;
@@ -341,11 +348,44 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Headless
-    if let Some(prompt) = &args.prompt {
-        let output = cli::headless::run_headless(&client, &agent.id, prompt, &permissions).await?;
-        println!("{output}");
-        return Ok(());
+    // Headless — --prompt flag OR piped stdin
+    let piped_stdin: Option<String> = if !atty::is(atty::Stream::Stdin) {
+        use std::io::Read;
+        let mut buf = String::new();
+        std::io::stdin().read_to_string(&mut buf).ok();
+        let s = buf.trim().to_string();
+        if s.is_empty() { None } else { Some(s) }
+    } else {
+        None
+    };
+
+    let headless_prompt: Option<String> = match (&args.prompt, &piped_stdin) {
+        (Some(p), Some(stdin)) => Some(format!("{stdin}\n\n{p}")),
+        (Some(p), None)        => Some(p.clone()),
+        (None,    Some(stdin)) => Some(stdin.clone()),
+        (None,    None)        => None,
+    };
+
+    if let Some(prompt) = headless_prompt {
+        let result = cli::headless::run_headless(&client, &agent.id, &prompt, &permissions).await;
+        match result {
+            Ok(output) => {
+                if args.json {
+                    println!("{}", serde_json::json!({ "response": output, "agent_id": agent.id }));
+                } else {
+                    println!("{output}");
+                }
+                std::process::exit(0);
+            }
+            Err(e) => {
+                if args.json {
+                    eprintln!("{}", serde_json::json!({ "error": e.to_string() }));
+                } else {
+                    eprintln!("Error: {e}");
+                }
+                std::process::exit(1);
+            }
+        }
     }
 
     // Info
@@ -374,6 +414,7 @@ async fn main() -> Result<()> {
         cwd.clone(),
         loaded_skills,
         skills_dir,
+        toolset,
     );
     repl.run().await?;
 

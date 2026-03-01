@@ -16,6 +16,7 @@ use crate::permissions::{PermissionManager, PermissionMode};
 use crate::settings::SettingsManager;
 use crate::skills::Skill;
 use crate::subagents::{SubagentDef, SubagentTools, BackgroundResult, discover_all_subagents, find_subagent};
+use crate::toolsets::Toolset;
 use crate::tools::{dispatch, is_write_tool};
 
 const BANNER: &str = r#"
@@ -107,6 +108,8 @@ pub struct Repl {
     skills_dir: std::path::PathBuf,
     /// Completed background subagent results waiting to be shown
     background_results: Arc<Mutex<Vec<BackgroundResult>>>,
+    /// Active toolset — switches with /model
+    current_toolset: Arc<Mutex<Toolset>>,
 }
 
 impl Repl {
@@ -121,6 +124,7 @@ impl Repl {
         cwd: std::path::PathBuf,
         skills: Vec<Skill>,
         skills_dir: std::path::PathBuf,
+        toolset: Toolset,
     ) -> Self {
         Self {
             client,
@@ -134,6 +138,7 @@ impl Repl {
             skills:     Arc::new(Mutex::new(skills)),
             skills_dir,
             background_results: Arc::new(Mutex::new(vec![])),
+            current_toolset: Arc::new(Mutex::new(toolset)),
         }
     }
 
@@ -322,12 +327,33 @@ impl Repl {
                     }
                     // SlashCmd::New is handled below (hot-swap)
                     SlashCmd::Model(m) => {
+                        let new_toolset = Toolset::for_model(&m);
+                        let old_toolset = *self.current_toolset.lock().unwrap();
                         execute!(stdout, SetForegroundColor(Color::DarkGrey),
                             Print(format!("\n  Switching model → {m}…\n")), ResetColor)?;
                         stdout.flush()?;
                         match self.client.patch_agent_model(&self.agent_id(), &m).await {
                             Ok(new_model) => {
                                 *self.current_model.lock().unwrap() = new_model.clone();
+                                // Auto-switch toolset if model family changed
+                                if new_toolset != old_toolset {
+                                    *self.current_toolset.lock().unwrap() = new_toolset;
+                                    // Re-register + re-attach tools for the new toolset
+                                    let agent_id = self.agent_id();
+                                    let client = self.client.clone();
+                                    tokio::spawn(async move {
+                                        use crate::agent::tools::register_cade_tools;
+                                        let tools = register_cade_tools(&client, new_toolset)
+                                            .await.unwrap_or_default();
+                                        let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
+                                        if !ids.is_empty() {
+                                            let _ = client.attach_agent_tools(&agent_id, &ids).await;
+                                        }
+                                    });
+                                    execute!(stdout, SetForegroundColor(Color::Cyan),
+                                        Print(format!("  Toolset → {}\n", new_toolset.display_name())),
+                                        ResetColor)?;
+                                }
                                 execute!(stdout, SetForegroundColor(Color::Green),
                                     Print(format!("  ✓ Model: {new_model}\n")), ResetColor)?;
                             }
@@ -480,13 +506,68 @@ impl Repl {
                     }
 
                     SlashCmd::Init => {
-                        let init_prompt = format!(
-                            "Please analyse this project directory ('{}') and initialise your memory. \
-                             Read relevant files (README.md, Cargo.toml, package.json, pyproject.toml, etc.), \
-                             then store key information in memory blocks: \
-                             (1) project purpose, (2) tech stack, (3) key conventions, (4) important paths. \
-                             Be concise.",
+                        // Spawn an explore subagent to do the analysis — keeps main
+                        // agent's context clean, only the summary comes back.
+                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                            Print(format!("  Analysing project at {}…\n", self.cwd.display())),
+                            ResetColor)?;
+                        stdout.flush()?;
+
+                        let explore_prompt = format!(
+                            "Analyse the project at '{}'. \
+                             Read: README.md, Cargo.toml / package.json / pyproject.toml / go.mod (whichever exist), \
+                             src/ or lib/ directory structure (top-level only), .env.example if present. \
+                             Return a concise report covering: \
+                             (1) Project name and purpose (2 sentences), \
+                             (2) Language + framework / stack, \
+                             (3) Key source directories and their purpose, \
+                             (4) Build / test commands, \
+                             (5) Any important conventions or notes from README. \
+                             Be specific and factual. Maximum 400 words.",
                             self.cwd.display()
+                        );
+
+                        let agent_id = self.agent_id();
+                        let client = self.client.clone();
+                        let cwd = self.cwd.clone();
+                        let all_defs = crate::subagents::discover_all_subagents(&cwd);
+                        let explore_def = crate::subagents::find_subagent("explore", &all_defs).cloned();
+                        let main_model = self.model();
+
+                        // Run explore subagent synchronously
+                        let summary = {
+                            use crate::permissions::PermissionManager;
+                            use crate::cli::headless::run_headless;
+
+                            let system_prompt = explore_def.map(|d| d.system_prompt)
+                                .unwrap_or_else(|| "You are an expert code explorer. Be concise and precise.".to_string());
+
+                            let req = crate::agent::client::CreateAgentRequest {
+                                name: Some("init-explore".to_string()),
+                                model: main_model,
+                                description: Some("Ephemeral init analysis".to_string()),
+                                memory_blocks: vec![],
+                                tool_ids: vec![],
+                            };
+                            match client.create_agent(req).await {
+                                Ok(sub) => {
+                                    let perm = PermissionManager::default();
+                                    let result = run_headless(&client, &sub.id, &explore_prompt, &perm).await;
+                                    let _ = client.delete_agent(&sub.id).await;
+                                    result.unwrap_or_else(|e| format!("Analysis failed: {e}"))
+                                }
+                                Err(e) => format!("Could not spawn explore agent: {e}"),
+                            }
+                        };
+
+                        // Write summary into project memory block
+                        let _ = self.client.upsert_memory(&agent_id, "project", &summary).await;
+
+                        // Tell the main agent what was discovered
+                        let init_prompt = format!(
+                            "[/init completed] Project analysis summary:\n\n{summary}\n\n\
+                             I've stored this in your 'project' memory block. \
+                             Acknowledge and summarise what you learned in 2-3 sentences."
                         );
                         self.agent_turn(&mut stdout, &init_prompt).await?;
                     }
