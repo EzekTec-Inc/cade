@@ -842,9 +842,13 @@ impl CadeClient {
             .await?;
 
         if !resp.status().is_success() {
-            let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            bail!("messages request failed {status}: {text}");
+            // Extract human-readable detail from {"detail":"..."} wrapper if present
+            let msg = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v["detail"].as_str().map(String::from))
+                .unwrap_or(text);
+            bail!("{msg}");
         }
 
         let raw: Value = resp.json().await?;

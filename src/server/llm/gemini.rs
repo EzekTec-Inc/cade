@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
+use super::{bare_model, provider_error, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
 
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_LIST_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200";
@@ -161,7 +161,9 @@ impl LlmProvider for GeminiProvider {
             .await?;
 
         if !resp.status().is_success() {
-            bail!("Gemini API {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(provider_error("Gemini", status, &text));
         }
         Ok(Self::parse_response(&resp.json::<Value>().await?))
     }
@@ -190,7 +192,9 @@ impl LlmProvider for GeminiProvider {
             .await?;
 
         if !resp.status().is_success() {
-            bail!("Gemini stream {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(provider_error("Gemini", status, &text));
         }
 
         let mut byte_stream = resp.bytes_stream();

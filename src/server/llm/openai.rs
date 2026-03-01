@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
+use super::{bare_model, provider_error, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 
@@ -185,7 +185,8 @@ impl LlmProvider for OpenAiProvider {
 
         if !resp.status().is_success() {
             let status = resp.status();
-            bail!("OpenAI API {status}: {}", resp.text().await.unwrap_or_default());
+            let text = resp.text().await.unwrap_or_default();
+            return Err(provider_error("OpenAI", status, &text));
         }
         Ok(Self::parse_response(&resp.json::<Value>().await?))
     }
@@ -212,7 +213,9 @@ impl LlmProvider for OpenAiProvider {
             .await?;
 
         if !resp.status().is_success() {
-            bail!("OpenAI stream {}: {}", resp.status(), resp.text().await.unwrap_or_default());
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            return Err(provider_error("OpenAI", status, &text));
         }
 
         let mut byte_stream = resp.bytes_stream();

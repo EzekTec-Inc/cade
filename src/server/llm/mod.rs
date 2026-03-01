@@ -77,6 +77,20 @@ pub trait LlmProvider: Send + Sync {
     ) -> Result<std::pin::Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>>;
 }
 
+/// Extract a human-readable error message from a provider's JSON error body.
+///
+/// All major providers (Anthropic, OpenAI, Gemini) use `{"error":{"message":"..."}}`.
+/// Falls back to the raw text if the body isn't JSON or lacks that field.
+///
+/// Returns an `anyhow::Error` ready to propagate with `return Err(...)`.
+pub fn provider_error(provider: &str, status: reqwest::StatusCode, body: &str) -> anyhow::Error {
+    let msg = serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|v| v["error"]["message"].as_str().map(String::from))
+        .unwrap_or_else(|| body.trim().to_string());
+    anyhow::anyhow!("{provider} {status}: {msg}")
+}
+
 /// Strip optional `provider/` prefix from a model handle.
 /// e.g. `"anthropic/claude-sonnet-4-5-20250929"` → `"claude-sonnet-4-5-20250929"`
 pub fn bare_model(model: &str) -> &str {

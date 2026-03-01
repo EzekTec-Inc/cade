@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
+use super::{bare_model, provider_error, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
@@ -168,7 +168,7 @@ impl LlmProvider for AnthropicProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            bail!("Anthropic API {status}: {text}");
+            return Err(provider_error("Anthropic", status, &text));
         }
         let json: Value = resp.json().await?;
         Ok(Self::parse_response(&json))
@@ -191,7 +191,7 @@ impl LlmProvider for AnthropicProvider {
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
-            bail!("Anthropic stream API {status}: {text}");
+            return Err(provider_error("Anthropic", status, &text));
         }
 
         let mut byte_stream = resp.bytes_stream();

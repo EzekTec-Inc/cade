@@ -345,7 +345,7 @@ pub async fn send_message(
         }
         Err(e) => {
             tracing::error!("LLM error: {e}");
-            err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())
+            err(StatusCode::BAD_GATEWAY, &e.to_string())
         }
     }
 }
@@ -400,7 +400,7 @@ async fn handle_tool_return_blocking(
             }
             Json(json!({ "messages": out, "conversation_id": conv_id })).into_response()
         }
-        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => err(StatusCode::BAD_GATEWAY, &e.to_string()),
     }
 }
 
@@ -475,7 +475,7 @@ pub async fn stream_message(
     // Open LLM stream
     let llm_stream = match state.llm.stream(&req).await {
         Ok(s) => s,
-        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => return err(StatusCode::BAD_GATEWAY, &e.to_string()),
     };
 
     let acc = std::sync::Arc::new(std::sync::Mutex::new((String::new(), Vec::<Value>::new())));
