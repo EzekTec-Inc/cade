@@ -1,2 +1,2 @@
 pub mod manager;
-pub use manager::SettingsManager;
+pub use manager::{McpServerConfig, SettingsManager};

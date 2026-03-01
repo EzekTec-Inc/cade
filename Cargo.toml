@@ -66,6 +66,13 @@ base64 = "0.22"                         # Base64-encode screenshots
 notify-rust = "4"                       # OS desktop notifications
 ksni = "0.2"                            # System tray (Linux/DBUS)
 
+# MCP client (Model Context Protocol — for spawning + calling local MCP servers)
+rmcp = { version = "0.2", features = [
+    "client",
+    "transport-child-process",
+    "transport-io",
+] }
+
 # Utilities
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"

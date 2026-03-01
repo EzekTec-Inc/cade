@@ -7,6 +7,7 @@ use super::{
     fs::{ApplyPatchTool, EditTool, ReadTool, WriteTool},
     search::{GlobTool, GrepTool},
 };
+use crate::mcp::McpManager;
 use crate::toolsets::Toolset;
 
 /// Result of executing a local tool
@@ -18,27 +19,38 @@ pub struct ToolResult {
     pub is_error: bool,
 }
 
-/// Dispatch a tool call by name to its local Rust implementation.
-pub async fn dispatch(tool_call_id: String, tool_name: &str, arguments: &Value) -> ToolResult {
-    let result = run_tool(tool_name, arguments).await;
-    match result {
-        Ok(output) => ToolResult {
-            tool_call_id,
-            tool_name: tool_name.to_string(),
-            output,
-            is_error: false,
-        },
-        Err(e) => ToolResult {
-            tool_call_id,
-            tool_name: tool_name.to_string(),
-            output: format!("Error: {e}"),
-            is_error: true,
-        },
+/// Dispatch a tool call by name to its local Rust implementation or to an MCP server.
+pub async fn dispatch(
+    tool_call_id: String,
+    tool_name: &str,
+    arguments: &Value,
+    mcp: &McpManager,
+) -> ToolResult {
+    // Try native tools first, fall through to MCP
+    let (output, is_error) = match run_native_tool(tool_name, arguments).await {
+        Some(Ok(out))  => (out, false),
+        Some(Err(e))   => (format!("Error: {e}"), true),
+        None => {
+            // Not a native tool — try MCP servers
+            match mcp.call_tool(tool_name, arguments).await {
+                Some(Ok((out, err_flag))) => (out, err_flag),
+                Some(Err(e))             => (format!("MCP error: {e}"), true),
+                None => (format!("Unknown tool: '{tool_name}'"), true),
+            }
+        }
+    };
+
+    ToolResult {
+        tool_call_id,
+        tool_name: tool_name.to_string(),
+        output,
+        is_error,
     }
 }
 
-async fn run_tool(name: &str, args: &Value) -> Result<String> {
-    match name {
+/// Run a native (built-in Rust) tool. Returns None if the tool name is unknown.
+async fn run_native_tool(name: &str, args: &Value) -> Option<Result<String>> {
+    Some(match name {
         // Core dev tools
         "bash"        => BashTool::run(args).await,
         "read_file"   => ReadTool::run(args).await,
@@ -52,8 +64,8 @@ async fn run_tool(name: &str, args: &Value) -> Result<String> {
         "desktop_list_windows" => DesktopListWindowsTool::run(args).await,
         "desktop_control"      => DesktopControlTool::run(args).await,
         "desktop_notify"       => DesktopNotifyTool::run(args).await,
-        other => Err(anyhow::anyhow!("Unknown tool: '{other}'")),
-    }
+        _other => return None,
+    })
 }
 
 /// All tool JSON schemas for a given toolset.
@@ -90,11 +102,22 @@ pub fn all_schemas() -> Vec<Value> {
     schemas_for_toolset(Toolset::Default)
 }
 
-/// Returns true if the tool can mutate state (used for permission gating)
-pub fn is_write_tool(name: &str) -> bool {
+/// Returns true if the native tool can mutate state (used for permission gating).
+pub fn is_native_write_tool(name: &str) -> bool {
     matches!(
         name,
         "bash" | "write_file" | "edit_file" | "apply_patch"
             | "desktop_control" | "desktop_screenshot"
     )
+}
+
+/// Returns true if the tool (native or MCP) can mutate state.
+pub fn is_write_tool(name: &str, mcp: &McpManager) -> bool {
+    if is_native_write_tool(name) {
+        return true;
+    }
+    if mcp.owns_tool(name) {
+        return mcp.is_write_tool(name);
+    }
+    false
 }

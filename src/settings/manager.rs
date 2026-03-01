@@ -93,6 +93,28 @@ pub struct PermissionSettings {
     pub deny: Vec<String>,
 }
 
+// ── MCP server configuration ──────────────────────────────────────────────────
+
+/// Configuration for a single MCP server (matches Claude Desktop / VS Code format).
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct McpServerConfig {
+    /// Absolute path (or executable name on PATH) to the server binary.
+    pub command: String,
+    /// CLI arguments passed to the server process.
+    #[serde(default)]
+    pub args: Vec<String>,
+    /// Extra environment variables injected into the server process.
+    #[serde(default)]
+    pub env: std::collections::HashMap<String, String>,
+    /// Tool names that mutate state (require permission prompt).
+    /// If not set, ALL tools from this server require permission.
+    #[serde(default)]
+    pub write_tools: Vec<String>,
+    /// If true, skip this server on startup (disabled without removing the entry).
+    #[serde(default)]
+    pub disabled: bool,
+}
+
 /// Global settings stored in ~/.cade/settings.json
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct GlobalSettings {
@@ -104,6 +126,9 @@ pub struct GlobalSettings {
     pub permissions: PermissionSettings,
     #[serde(default)]
     pub hooks: HooksConfig,
+    /// MCP servers available globally (all projects).
+    #[serde(default, rename = "mcpServers")]
+    pub mcp_servers: std::collections::HashMap<String, McpServerConfig>,
 }
 
 /// Project settings stored in .cade/settings.json (committable — share with team)
@@ -111,6 +136,9 @@ pub struct GlobalSettings {
 pub struct ProjectSettings {
     #[serde(default)]
     pub hooks: HooksConfig,
+    /// Project-scoped MCP servers (same key as global = project wins).
+    #[serde(default, rename = "mcpServers")]
+    pub mcp_servers: std::collections::HashMap<String, McpServerConfig>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -160,6 +188,19 @@ impl SettingsManager {
         let local:   LocalSettings   = Self::load_json(&local_path).unwrap_or_default();
 
         Ok(Self { global_path, project_path, local_path, global, project, local })
+    }
+
+    /// Merged MCP servers: project overrides global (same key = project wins).
+    /// Disabled servers are excluded.
+    pub fn merged_mcp_servers(&self) -> std::collections::HashMap<String, McpServerConfig> {
+        let mut merged = self.global.mcp_servers.clone();
+        // Project overrides global
+        for (k, v) in &self.project.mcp_servers {
+            merged.insert(k.clone(), v.clone());
+        }
+        // Remove disabled entries
+        merged.retain(|_, v| !v.disabled && !v.command.is_empty());
+        merged
     }
 
     /// Merged hooks config: local first (highest priority), then project, then global.

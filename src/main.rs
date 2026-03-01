@@ -3,6 +3,7 @@ use cade::agent;
 use cade::cli;
 use cade::desktop;
 use cade::hooks::HookEngine;
+use cade::mcp::McpManager;
 use cade::permissions;
 use cade::settings;
 use cade::skills;
@@ -531,6 +532,42 @@ async fn main() -> Result<()> {
         session.session.conversation_id.clone()
     };
 
+    // ── MCP server startup ────────────────────────────────────────────────────
+    let mcp_configs = settings.merged_mcp_servers();
+    let mcp: std::sync::Arc<McpManager> = if mcp_configs.is_empty() {
+        std::sync::Arc::new(McpManager::empty())
+    } else {
+        println!("Starting {} MCP server(s)…", mcp_configs.len());
+        let mgr = McpManager::start(&mcp_configs).await;
+        let count = mgr.status().len();
+        let total  = mcp_configs.len();
+        if count == 0 {
+            eprintln!("Warning: no MCP servers started successfully");
+        } else {
+            println!("MCP: {count}/{total} server(s) ready");
+        }
+        std::sync::Arc::new(mgr)
+    };
+
+    // Register MCP tool schemas with cade-server (idempotent)
+    for schema in mcp.all_tool_schemas() {
+        let name = schema["name"].as_str().unwrap_or("").to_string();
+        let description = schema["description"].as_str().unwrap_or("").to_string();
+        use cade::agent::client::CreateToolRequest;
+        use cade::agent::tools::build_python_stub_from_schema;
+        let stub = build_python_stub_from_schema(&name, &description, &schema["parameters"]);
+        let req = CreateToolRequest {
+            source_code: stub,
+            source_type: "python".to_string(),
+            json_schema: Some(schema),
+            tags: vec!["cade".to_string(), "mcp".to_string()],
+        };
+        match client.create_tool(req).await {
+            Ok(t)  => tracing::debug!("Registered MCP tool: {}", t.name),
+            Err(e) => tracing::warn!("Failed to register MCP tool '{name}': {e}"),
+        }
+    }
+
     // Build hook engine from merged settings (local > project > global)
     let hook_engine = HookEngine::new(settings.merged_hooks(), cwd.clone());
     if !hook_engine.is_empty() {
@@ -592,7 +629,7 @@ async fn main() -> Result<()> {
     };
 
     if let Some(prompt) = headless_prompt {
-        let result = cli::headless::run_headless(&client, &agent.id, &prompt, &permissions).await;
+        let result = cli::headless::run_headless(&client, &agent.id, &prompt, &permissions, &mcp).await;
         let fmt = args.effective_output_format();
         match result {
             Ok(output) => {
@@ -646,6 +683,7 @@ async fn main() -> Result<()> {
         toolset,
         hook_engine,
         conversation_id,
+        mcp,
     );
     // --continue: mark first turn as already done so env context isn't re-injected
     if args.continue_last {

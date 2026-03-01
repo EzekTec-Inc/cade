@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 use crate::agent::{CadeClient, client::CadeMessage};
+use crate::mcp::McpManager;
 use crate::permissions::PermissionManager;
 use crate::tools::dispatch;
 
@@ -11,6 +12,7 @@ pub async fn run_headless(
     agent_id: &str,
     prompt: &str,
     permissions: &PermissionManager,
+    mcp: &McpManager,
 ) -> Result<String> {
     tracing::debug!("headless: agent={agent_id}");
 
@@ -27,7 +29,7 @@ pub async fn run_headless(
         .await?;
 
     collect_assistant_text(&messages, &mut final_output);
-    process_tool_calls(client, agent_id, messages, permissions, &mut final_output).await?;
+    process_tool_calls(client, agent_id, messages, permissions, &mut final_output, mcp).await?;
 
     Ok(final_output.trim().to_string())
 }
@@ -38,6 +40,7 @@ async fn process_tool_calls(
     messages: Vec<CadeMessage>,
     permissions: &PermissionManager,
     output: &mut String,
+    mcp: &McpManager,
 ) -> Result<()> {
     let tool_calls: Vec<(String, String, serde_json::Value)> = messages
         .iter()
@@ -52,7 +55,7 @@ async fn process_tool_calls(
                 .stream_tool_return(agent_id, &call_id, &reason, true, |_| {})
                 .await?;
             collect_assistant_text(&follow, output);
-            Box::pin(process_tool_calls(client, agent_id, follow, permissions, output)).await?;
+            Box::pin(process_tool_calls(client, agent_id, follow, permissions, output, mcp)).await?;
             continue;
         }
 
@@ -77,7 +80,7 @@ async fn process_tool_calls(
             };
             let follow = client.stream_tool_return(agent_id, &call_id, &msg, err, |_| {}).await?;
             collect_assistant_text(&follow, output);
-            Box::pin(process_tool_calls(client, agent_id, follow, permissions, output)).await?;
+            Box::pin(process_tool_calls(client, agent_id, follow, permissions, output, mcp)).await?;
             continue;
         }
 
@@ -93,12 +96,12 @@ async fn process_tool_calls(
             };
             let follow = client.stream_tool_return(agent_id, &call_id, &msg, err, |_| {}).await?;
             collect_assistant_text(&follow, output);
-            Box::pin(process_tool_calls(client, agent_id, follow, permissions, output)).await?;
+            Box::pin(process_tool_calls(client, agent_id, follow, permissions, output, mcp)).await?;
             continue;
         }
 
         tracing::info!("Executing tool: {tool_name}");
-        let result = dispatch(call_id.clone(), &tool_name, &args).await;
+        let result = dispatch(call_id.clone(), &tool_name, &args, mcp).await;
         tracing::debug!("Tool '{}': {} bytes", tool_name, result.output.len());
 
         let follow = client
@@ -111,7 +114,7 @@ async fn process_tool_calls(
             .await?;
 
         collect_assistant_text(&follow, output);
-        Box::pin(process_tool_calls(client, agent_id, follow, permissions, output)).await?;
+        Box::pin(process_tool_calls(client, agent_id, follow, permissions, output, mcp)).await?;
     }
 
     Ok(())

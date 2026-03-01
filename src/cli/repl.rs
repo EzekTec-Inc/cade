@@ -74,6 +74,7 @@ enum SlashCmd {
     Plan,
     Default,
     Mode(Option<String>),
+    Mcp,
 }
 
 fn parse_slash(input: &str) -> Option<SlashCmd> {
@@ -116,6 +117,7 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "default" | "normal" => Some(SlashCmd::Default),
         "mode"                   => Some(SlashCmd::Mode(arg)),
         "model"  => Some(SlashCmd::Model(arg.unwrap_or_default())),
+        "mcp"    => Some(SlashCmd::Mcp),
         // "toolset" now handled as SlashCmd::Toolset above
         _ => None,
     }
@@ -152,6 +154,8 @@ pub struct Repl {
     cancel_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Active conversation ID — None means the default (legacy) conversation.
     conversation_id: Arc<Mutex<Option<String>>>,
+    /// MCP server manager — routes tool calls with `{server}__` prefix.
+    mcp: std::sync::Arc<crate::mcp::McpManager>,
 }
 
 impl Repl {
@@ -169,6 +173,7 @@ impl Repl {
         toolset: Toolset,
         hooks: crate::hooks::HookEngine,
         conversation_id: Option<String>,
+        mcp: std::sync::Arc<crate::mcp::McpManager>,
     ) -> Self {
         Self {
             client,
@@ -187,6 +192,7 @@ impl Repl {
             first_turn:      std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             cancel_turn:     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             conversation_id: Arc::new(Mutex::new(conversation_id)),
+            mcp,
         }
     }
 
@@ -318,6 +324,47 @@ impl Repl {
                             Print("\n⚡ Permission mode: bypassPermissions — all tools auto-approved\n"),
                             ResetColor,
                         )?;
+                        stdout.flush()?;
+                    }
+                    SlashCmd::Mcp => {
+                        let statuses = self.mcp.status();
+                        execute!(stdout, Print("\n"), SetForegroundColor(Color::Cyan),
+                            Print("  MCP Servers\n\n"), ResetColor)?;
+                        if statuses.is_empty() {
+                            execute!(stdout,
+                                SetForegroundColor(Color::DarkGrey),
+                                Print("  No MCP servers configured.\n\n"),
+                                ResetColor,
+                                Print("  Add servers to ~/.cade/settings.json:\n"),
+                                SetForegroundColor(Color::DarkGrey),
+                                Print("  {\n    \"mcpServers\": {\n"),
+                                Print("      \"git\": { \"command\": \"/path/to/git-mcp-server\" }\n"),
+                                Print("    }\n  }\n\n"),
+                                ResetColor,
+                            )?;
+                        } else {
+                            for s in &statuses {
+                                execute!(stdout,
+                                    SetForegroundColor(Color::Green), Print("  ● "), ResetColor,
+                                    SetForegroundColor(Color::White), Print(format!("{:<16}", s.key)), ResetColor,
+                                    SetForegroundColor(Color::DarkGrey),
+                                    Print(format!("{} tool(s)\n", s.tools.len())),
+                                    ResetColor,
+                                )?;
+                                // Show tool names (strip prefix for clarity)
+                                for chunk in s.tools.chunks(4) {
+                                    let names: Vec<&str> = chunk.iter()
+                                        .map(|t| t.splitn(2, "__").nth(1).unwrap_or(t))
+                                        .collect();
+                                    execute!(stdout,
+                                        SetForegroundColor(Color::DarkGrey),
+                                        Print(format!("    {}\n", names.join("  "))),
+                                        ResetColor,
+                                    )?;
+                                }
+                                println!();
+                            }
+                        }
                         stdout.flush()?;
                     }
                     SlashCmd::Plan => {
@@ -739,7 +786,7 @@ impl Repl {
                             match client.create_agent(req).await {
                                 Ok(sub) => {
                                     let perm = PermissionManager::default();
-                                    let result = run_headless(&client, &sub.id, &explore_prompt, &perm).await;
+                                    let result = run_headless(&client, &sub.id, &explore_prompt, &perm, &crate::mcp::McpManager::empty()).await;
                                     let _ = client.delete_agent(&sub.id).await;
                                     result.unwrap_or_else(|e| format!("Analysis failed: {e}"))
                                 }
@@ -2015,7 +2062,7 @@ impl Repl {
             Print("  ▶ running…\n"), ResetColor)?;
         stdout.flush()?;
 
-        let mut result = dispatch(call_id.to_string(), tool_name, args).await;
+        let mut result = dispatch(call_id.to_string(), tool_name, args, &self.mcp).await;
 
         // PostToolUse / PostToolUseFailure hooks
         if result.is_error {
@@ -2056,7 +2103,7 @@ impl Repl {
         )?;
 
         // Show args for write tools
-        if is_write_tool(tool_name) {
+        if is_write_tool(tool_name, &self.mcp) {
             if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
                 execute!(
                     stdout,
@@ -3085,6 +3132,7 @@ impl Repl {
         let permissions = crate::permissions::PermissionManager::default();
         let call_id_owned = call_id.to_string();
         let bg_results = Arc::clone(&self.background_results);
+        let mcp_ref    = std::sync::Arc::clone(&self.mcp);
 
         let task_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
         let task_id_c = task_id.clone();
@@ -3124,7 +3172,7 @@ impl Repl {
 
                 // Run headless
                 let result = crate::cli::headless::run_headless(
-                    &client, &sub_agent_id, &prompt, &permissions
+                    &client, &sub_agent_id, &prompt, &permissions, &mcp_ref
                 ).await;
 
                 // Delete ephemeral agent
@@ -3226,6 +3274,7 @@ impl Repl {
         println!("    /clear          - clear screen + context window");
         println!();
         println!("  Hooks:");
+        println!("    /mcp            - list active MCP servers and their tools");
         println!("    /hooks                    - show active hook configuration");
         println!("    (configure in ~/.cade/settings.json or .cade/settings.json)");
         println!("    events: PreToolUse PostToolUse Stop UserPromptSubmit SessionStart …");
