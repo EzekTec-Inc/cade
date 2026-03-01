@@ -10,6 +10,9 @@ use crate::server::state::AppState;
 /// and all preset providers (Groq, OpenRouter, etc.). Static catalogue is used only
 /// as a per-provider fallback if the live endpoint is unreachable.
 ///
+/// Hot-syncs env vars before listing: any API keys added to the shell after server
+/// startup are picked up here, so the model picker always reflects current env state.
+///
 /// Returns:
 /// - `supported`:        [] — kept for backward compat; all models now in `dynamic`
 /// - `dynamic`:          live models from every configured provider, sorted by provider
@@ -17,6 +20,12 @@ use crate::server::state::AppState;
 pub async fn list_models(
     State(state): State<AppState>,
 ) -> Json<Value> {
+    // Hot-sync: pick up API keys added to env after server start (write lock held briefly)
+    {
+        let mut router = state.llm_router.write().await;
+        router.hot_sync_env_providers();
+    }
+
     let router     = state.llm_router.read().await;
     let live_names = router.provider_names();
 

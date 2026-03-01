@@ -259,6 +259,79 @@ impl LlmRouter {
         }
     }
 
+    /// Re-scan current shell env vars and hot-register any newly available providers.
+    ///
+    /// Idempotent — skips providers already registered. Call this from `GET /v1/models`
+    /// so the model picker always reflects the current shell environment, even if API keys
+    /// were added after server startup.
+    pub fn hot_sync_env_providers(&mut self) {
+        // ── Core providers ────────────────────────────────────────────────────
+        if !self.providers.contains_key("anthropic") {
+            let key = std::env::var("ANTHROPIC_API_KEY")
+                .or_else(|_| std::env::var("CLAUDE_API_KEY"))
+                .ok()
+                .filter(|k| !k.is_empty());
+            if let Some(key) = key {
+                tracing::info!("hot_sync: registering anthropic from env");
+                self.providers.insert(
+                    "anthropic".into(),
+                    Arc::new(anthropic::AnthropicProvider::new(key.clone())),
+                );
+                self.provider_keys.insert("anthropic".into(), key);
+            }
+        }
+        if !self.providers.contains_key("openai") {
+            let key = std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.is_empty());
+            if let Some(key) = key {
+                tracing::info!("hot_sync: registering openai from env");
+                self.providers.insert(
+                    "openai".into(),
+                    Arc::new(openai::OpenAiProvider::new(key.clone(), None)),
+                );
+                self.provider_keys.insert("openai".into(), key);
+            }
+        }
+        if !self.providers.contains_key("gemini") {
+            let key = std::env::var("GOOGLE_API_KEY")
+                .or_else(|_| std::env::var("GEMINI_API_KEY"))
+                .ok()
+                .filter(|k| !k.is_empty());
+            if let Some(key) = key {
+                tracing::info!("hot_sync: registering gemini/google from env");
+                self.providers.insert(
+                    "gemini".into(),
+                    Arc::new(gemini::GeminiProvider::new(key.clone())),
+                );
+                self.providers.insert(
+                    "google".into(),
+                    Arc::new(gemini::GeminiProvider::new(key.clone())),
+                );
+                self.provider_keys.insert("gemini".into(), key.clone());
+                self.provider_keys.insert("google".into(), key);
+            }
+        }
+
+        // ── Preset providers (Groq, OpenRouter, Together, etc.) ───────────────
+        for preset in PRESET_PROVIDERS {
+            if self.providers.contains_key(preset.name) {
+                continue;
+            }
+            let key = preset.env_vars.iter()
+                .find_map(|var| std::env::var(var).ok().filter(|k| !k.is_empty()));
+            if let Some(key) = key {
+                tracing::info!("hot_sync: registering {} from env", preset.name);
+                self.providers.insert(
+                    preset.name.into(),
+                    Arc::new(openai::OpenAiProvider::new(
+                        key.clone(),
+                        Some(preset.chat_url.to_string()),
+                    )),
+                );
+                self.provider_keys.insert(preset.name.into(), key);
+            }
+        }
+    }
+
     /// Remove a provider at runtime (via /disconnect).
     /// Returns false if the name was not found.
     pub fn remove_provider(&mut self, name: &str) -> bool {
