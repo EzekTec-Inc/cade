@@ -101,37 +101,51 @@ impl OutputRenderer {
 
     // ── Streaming paths ───────────────────────────────────────────────────────
     //
-    // Text is written raw to stdout while streaming (for live display).
-    // On completion, raw lines are erased and re-rendered via ratatui
-    // insert_before with proper markdown formatting.
+    // A single-line spinner is shown in-place during streaming (overwritten with
+    // \r on each token). On completion, only that ONE line is erased via
+    // Clear(CurrentLine), then insert_before renders the fully formatted content.
+    //
+    // This avoids cursor::MoveUp(N) + Clear(FromCursorDown) which previously:
+    //   1) had an off-by-one (moved up to the row BEFORE streaming, clearing
+    //      content from the previous output section)
+    //   2) cleared the entire visible terminal for long responses (> term height)
+    //   3) raced with println!() calls on the main thread (print_help, etc.)
 
-    /// Start of a reasoning block — print plain header line, init counters.
+    /// Start of a reasoning block — print spinner, init state.
     pub fn reasoning_header(&mut self) -> io::Result<()> {
         self.in_reasoning = true;
         self.stream_col = CONTENT_PAD;
-        // 2 lines: the opening \n + the header line (which has its own trailing \n)
-        self.stream_line_count = 2;
         let mut out = io::stdout();
         execute!(
             out,
             Print("\n"),
             SetForegroundColor(Color::DarkGrey),
             SetAttribute(Attribute::Italic),
-            Print(format!("{INDENT}💭 thinking…\n{INDENT}")),
+            Print(format!("{INDENT}💭 thinking…")),
+            cursor::MoveToColumn(0),
         )?;
         out.flush()
     }
 
-    /// Write one chunk of reasoning text — buffer it and write raw to stdout.
+    /// Write one chunk of reasoning text — buffer it, update spinner.
     pub fn reasoning_chunk(&mut self, text: &str) -> io::Result<()> {
         self.reason_buf.push_str(text);
-        let wrap_at = self.wrap_width();
+        // Overwrite spinner in-place with word count update
+        let words = self.reason_buf.split_whitespace().count();
         let mut out = io::stdout();
-        self.write_raw(&mut out, text, wrap_at)?;
+        execute!(
+            out,
+            cursor::MoveToColumn(0),
+            terminal::Clear(ClearType::CurrentLine),
+            SetForegroundColor(Color::DarkGrey),
+            SetAttribute(Attribute::Italic),
+            Print(format!("{INDENT}💭 thinking… ({words} words)")),
+            cursor::MoveToColumn(0),
+        )?;
         out.flush()
     }
 
-    /// Close reasoning block — erase raw lines, re-render via ratatui.
+    /// Close reasoning block — erase spinner, re-render via ratatui.
     pub fn reasoning_done(&mut self) -> Result<()> {
         if !self.in_reasoning {
             return Ok(());
@@ -139,24 +153,20 @@ impl OutputRenderer {
         self.in_reasoning = false;
         self.stream_col = 0;
         let buf = std::mem::take(&mut self.reason_buf);
-        let line_count = self.stream_line_count;
-        self.stream_line_count = 0;
         self.update_width();
 
         let mut out = io::stdout();
-        // Erase the raw-streamed lines
-        if line_count > 0 {
-            execute!(
-                out,
-                cursor::MoveUp(line_count),
-                cursor::MoveToColumn(0),
-                terminal::Clear(ClearType::FromCursorDown),
-            )?;
-        }
-        execute!(out, SetAttribute(Attribute::Reset), ResetColor)?;
+        // Erase ONLY the spinner line (cursor already at col 0 from last chunk update)
+        execute!(
+            out,
+            cursor::MoveToColumn(0),
+            terminal::Clear(ClearType::CurrentLine),
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+        )?;
         out.flush()?;
 
-        // Re-render with ratatui: italic gray header + plain body
+        // Re-render with ratatui: italic gray header + body
         if !buf.trim().is_empty() {
             let width = self.wrap_width();
             let mut lines: Vec<Line> = vec![Line::from(Span::styled(
@@ -178,30 +188,38 @@ impl OutputRenderer {
         Ok(())
     }
 
-    /// Write one chunk of assistant text — buffer it and write raw to stdout.
+    /// Write one chunk of assistant text — buffer it, update spinner.
     pub fn assistant_chunk(&mut self, text: &str) -> io::Result<()> {
         if !self.in_assistant {
             self.in_assistant = true;
             self.stream_col = CONTENT_PAD;
-            self.stream_line_count = 1; // for the opening \n
             let mut out = io::stdout();
             execute!(
                 out,
                 SetAttribute(Attribute::Reset),
                 ResetColor,
-                SetForegroundColor(Color::White),
-                Print(format!("\n{INDENT}")),
+                SetForegroundColor(Color::DarkGrey),
+                Print(format!("\n{INDENT}● generating…")),
+                cursor::MoveToColumn(0),
             )?;
             out.flush()?;
         }
         self.response_buf.push_str(text);
-        let wrap_at = self.wrap_width();
+        // Overwrite spinner in-place with token count
+        let words = self.response_buf.split_whitespace().count();
         let mut out = io::stdout();
-        self.write_raw(&mut out, text, wrap_at)?;
+        execute!(
+            out,
+            cursor::MoveToColumn(0),
+            terminal::Clear(ClearType::CurrentLine),
+            SetForegroundColor(Color::DarkGrey),
+            Print(format!("{INDENT}● generating… ({words} words)")),
+            cursor::MoveToColumn(0),
+        )?;
         out.flush()
     }
 
-    /// Close assistant block — erase raw lines, re-render via ratatui with markdown.
+    /// Close assistant block — erase spinner, re-render via ratatui with markdown.
     pub fn assistant_done(&mut self) -> Result<()> {
         if !self.in_assistant {
             return Ok(());
@@ -209,21 +227,18 @@ impl OutputRenderer {
         self.in_assistant = false;
         self.stream_col = 0;
         let buf = std::mem::take(&mut self.response_buf);
-        let line_count = self.stream_line_count;
         self.stream_line_count = 0;
         self.update_width();
 
         let mut out = io::stdout();
-        // Erase raw-streamed lines
-        if line_count > 0 {
-            execute!(
-                out,
-                cursor::MoveUp(line_count),
-                cursor::MoveToColumn(0),
-                terminal::Clear(ClearType::FromCursorDown),
-            )?;
-        }
-        execute!(out, SetAttribute(Attribute::Reset), ResetColor)?;
+        // Erase ONLY the spinner line (cursor at col 0 from last chunk update)
+        execute!(
+            out,
+            cursor::MoveToColumn(0),
+            terminal::Clear(ClearType::CurrentLine),
+            SetAttribute(Attribute::Reset),
+            ResetColor,
+        )?;
         out.flush()?;
 
         // Re-render with ratatui markdown formatting
@@ -237,6 +252,27 @@ impl OutputRenderer {
             })?;
         }
         Ok(())
+    }
+
+    /// Print a plain text block via ratatui insert_before.
+    /// Routes output through OutputRenderer (safe for concurrent use) and
+    /// calls close_streaming() first to avoid racing with any active stream.
+    pub fn print_block(&mut self, text: &str) -> Result<()> {
+        self.close_streaming()?;
+        self.update_width();
+        let wrap_w = self.wrap_width();
+        let lines: Vec<Line> = text
+            .lines()
+            .map(|l| Line::from(Span::raw(l.to_string())))
+            .collect();
+        if lines.is_empty() {
+            return Ok(());
+        }
+        let height = estimate_height(&lines, wrap_w);
+        self.with_insert_before(height, move |buf| {
+            let area = padded_rect(*buf.area(), CONTENT_PAD);
+            Paragraph::new(lines).wrap(Wrap { trim: false }).render(area, buf);
+        })
     }
 
     /// Close any open streaming block (call before bounded content).
@@ -536,30 +572,6 @@ impl OutputRenderer {
 
     fn wrap_width(&self) -> usize {
         self.term_width.saturating_sub(CONTENT_PAD * 2) as usize
-    }
-
-    /// Write `text` to `out` with soft word-wrapping at `wrap_at` columns.
-    /// Plain text only — no markdown processing. Tracks `stream_line_count`.
-    fn write_raw(&mut self, out: &mut impl Write, text: &str, wrap_at: usize) -> io::Result<()> {
-        for ch in text.chars() {
-            if ch == '\n' {
-                execute!(out, Print(format!("\r\n{INDENT}")))?;
-                self.stream_col = CONTENT_PAD;
-                self.stream_line_count += 1;
-            } else if ch == '\r' {
-                // skip bare CR
-            } else if self.stream_col >= wrap_at as u16 && ch == ' ' {
-                // soft word-wrap at space
-                execute!(out, Print(format!("\r\n{INDENT}")))?;
-                self.stream_col = CONTENT_PAD;
-                self.stream_line_count += 1;
-                // skip the space that triggered the wrap
-            } else {
-                execute!(out, Print(ch))?;
-                self.stream_col = self.stream_col.saturating_add(1);
-            }
-        }
-        Ok(())
     }
 
     /// Create a minimal Viewport::Inline(0) terminal, call `insert_before(height, f)`,

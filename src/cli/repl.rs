@@ -336,7 +336,10 @@ impl Repl {
                         break;
                     }
                     // SlashCmd::Clear is handled below (with context clearing)
-                    SlashCmd::Help => self.print_help(&mut stdout)?,
+                    SlashCmd::Help => {
+                        let text = Self::help_text();
+                        self.output.lock().unwrap().print_block(&text)?;
+                    }
                     SlashCmd::Agent => {
                         println!("\nAgent: {} ({})", self.agent_name(), self.agent_id());
                     }
@@ -3410,101 +3413,80 @@ impl Repl {
         Ok(())
     }
 
-    fn print_help(&self, stdout: &mut io::Stdout) -> Result<()> {
-        let (icon, label, _) = mode_display(self.permissions.mode());
-        // Use plain println! to avoid crossterm cursor misalignment from emojis
-        // (emojis are double-width in some terminals which confuses crossterm's Print)
-        execute!(stdout, ResetColor)?;
-        stdout.flush()?;
-        println!();
-        println!("Commands:");
-        println!();
-        println!("  Session:");
-        println!("    /info           - agent, model, mode, cwd");
-        println!("    /agent          - show current agent ID");
-        println!("    /agents         - list all agents (Space mark, r rename, d delete, Enter switch)");
-        println!("    /new            - start a new conversation on the current agent");
-        println!("    /new-agent      - create a brand-new agent");
-        println!("    /resume         - browse past conversations and switch to one");
-        println!("    /rename [name]  - rename current agent");
-        println!("    /delete <name>  - delete an agent by name or ID");
-        println!("    /pin            - pin current agent for quick access");
-        println!("    /clear          - clear screen + context window");
-        println!();
-        println!("  Hooks:");
-        println!("    /mcp            - list active MCP servers and their tools");
-        println!("    /link           - (re-)attach CADE tools to current agent");
-        println!("    /unlink         - remove all CADE tools from current agent");
-        println!("    /hooks                    - show active hook configuration");
-        println!("    (configure in ~/.cade/settings.json or .cade/settings.json)");
-        println!("    events: PreToolUse PostToolUse Stop UserPromptSubmit SessionStart …");
-        println!();
-        println!("  Permissions:");
-        println!("    /permissions              - show mode + active allow/deny rules");
-        println!("    /approve-always <pattern> - always allow a tool pattern");
-        println!("    /deny-always <pattern>    - always deny a tool pattern");
-        println!("    pattern syntax: Bash(cargo test)  Read(src/**)  Bash(rm -rf:*)");
-        println!();
-        println!("  Providers:");
-        println!("    /providers           - list configured providers");
-        println!("    /connect             - interactive provider setup");
-        println!("    /connect <name>      - connect: anthropic, openai, gemini, openrouter, groq…");
-        println!("    /disconnect <name>   - remove a provider (persisted + live)");
-        println!();
-        println!("  Subagents:");
-        println!("    /subagents      - list available subagents (built-in + custom)");
-        println!("    ask agent to    - run_subagent(type, task) — spawns subagent");
-        println!("    custom def      - .cade/agents/<name>.md in project or ~/.cade/agents/");
-        println!();
-        println!("  Skills:");
-        println!("    /skills                - list loaded skills");
-        println!("    /skills create <name>  - scaffold a new SKILL.MD file");
-        println!("    /skills show <id>      - show full skill content");
-        println!("    /skills reload         - re-discover skills + update agent memory");
-        println!();
-        println!("  Memory:");
-        println!("    /memory                    - list memory blocks (label + description + preview)");
-        println!("    /memory view <label>       - show full block content");
-        println!("    /memory set <label> <val>  - set a block directly");
-        println!("    /memory delete <label>     - delete a block");
-        println!("    /memory edit <label>       - multi-line inline editor");
-        println!("    /remember [text]           - ask agent to store something in memory");
-        println!("    /init                      - analyse project + init memory");
-        println!("    /search <q>                - search past messages");
-        println!();
-        println!("  Model:");
-        println!("    /model <m>      - switch model  (e.g. /model gemini/gemini-2.5-pro)");
-        println!();
-        println!("  Model / Toolset:");
-        println!("    /model [name]   - show current or switch model");
-        println!("    /toolset [name] - show current or switch toolset: default | codex | gemini");
-        println!();
-        println!("  Permission modes  (currently: {icon} {label}):");
-        println!("    /default        - ask before each tool  [Shift+Tab to cycle]");
-        println!("    /plan           - read-only tools; write ops blocked");
-        println!("    /yolo           - auto-approve all tools (bypassPermissions)");
-        println!("    /mode [name]    - show/set: default | plan | yolo | acceptEdits | bypassPermissions");
-        println!();
-        println!("  Direct bash (bypasses agent):");
-        println!("    ! <cmd>         - e.g.  ! git status");
-        println!();
-        println!("  Keyboard shortcuts:");
-        println!("    Shift+Enter    - insert newline (multi-line input)");
-        println!("    Esc            - clear current input line");
-        println!("    Shift+Tab      - cycle permission mode");
-        println!("    ↑ / ↓          - navigate command history");
-        println!("    Ctrl+C         - clear line / cancel current input / interrupt running turn");
-        println!("    Ctrl+D         - exit (on empty line)");
-        println!();
-        println!("    /stream         - toggle token streaming on/off");
-        println!("    /usage          - show token usage for this session");
-        println!("    /logout         - clear API credentials and exit");
-        println!("    /feedback       - report issues");
-        println!("    /help  /?       - this message");
-        println!("    exit  /exit     - quit CADE");
-        println!();
-        stdout.flush()?;
-        Ok(())
+    /// Return the full help text as a string (used by /help via print_block).
+    fn help_text() -> String {
+        let mut s = String::new();
+        s.push_str("\nCommands:\n");
+        s.push_str("\n  Session:\n");
+        s.push_str("    /info           - agent, model, mode, cwd\n");
+        s.push_str("    /agent          - show current agent ID\n");
+        s.push_str("    /agents         - list all agents (Space mark, r rename, d delete, Enter switch)\n");
+        s.push_str("    /new            - start a new conversation on the current agent\n");
+        s.push_str("    /new-agent      - create a brand-new agent\n");
+        s.push_str("    /resume         - browse past conversations and switch to one\n");
+        s.push_str("    /rename [name]  - rename current agent\n");
+        s.push_str("    /delete <name>  - delete an agent by name or ID\n");
+        s.push_str("    /pin            - pin current agent for quick access\n");
+        s.push_str("    /clear          - clear screen + context window\n");
+        s.push_str("\n  Hooks:\n");
+        s.push_str("    /mcp            - list active MCP servers and their tools\n");
+        s.push_str("    /link           - (re-)attach CADE tools to current agent\n");
+        s.push_str("    /unlink         - remove all CADE tools from current agent\n");
+        s.push_str("    /hooks                    - show active hook configuration\n");
+        s.push_str("    (configure in ~/.cade/settings.json or .cade/settings.json)\n");
+        s.push_str("    events: PreToolUse PostToolUse Stop UserPromptSubmit SessionStart ...\n");
+        s.push_str("\n  Permissions:\n");
+        s.push_str("    /permissions              - show mode + active allow/deny rules\n");
+        s.push_str("    /approve-always <pattern> - always allow a tool pattern\n");
+        s.push_str("    /deny-always <pattern>    - always deny a tool pattern\n");
+        s.push_str("    pattern syntax: Bash(cargo test)  Read(src/**)  Bash(rm -rf:*)\n");
+        s.push_str("\n  Providers:\n");
+        s.push_str("    /providers           - list configured providers\n");
+        s.push_str("    /connect             - interactive provider setup\n");
+        s.push_str("    /connect <name>      - connect: anthropic, openai, gemini, openrouter, groq...\n");
+        s.push_str("    /disconnect <name>   - remove a provider (persisted + live)\n");
+        s.push_str("\n  Subagents:\n");
+        s.push_str("    /subagents      - list available subagents (built-in + custom)\n");
+        s.push_str("    ask agent to    - run_subagent(type, task) -- spawns subagent\n");
+        s.push_str("    custom def      - .cade/agents/<name>.md in project or ~/.cade/agents/\n");
+        s.push_str("\n  Skills:\n");
+        s.push_str("    /skills                - list loaded skills\n");
+        s.push_str("    /skills create <name>  - scaffold a new SKILL.MD file\n");
+        s.push_str("    /skills show <id>      - show full skill content\n");
+        s.push_str("    /skills reload         - re-discover skills + update agent memory\n");
+        s.push_str("\n  Memory:\n");
+        s.push_str("    /memory                    - list memory blocks (label + description + preview)\n");
+        s.push_str("    /memory view <label>       - show full block content\n");
+        s.push_str("    /memory set <label> <val>  - set a block directly\n");
+        s.push_str("    /memory delete <label>     - delete a block\n");
+        s.push_str("    /memory edit <label>       - multi-line inline editor\n");
+        s.push_str("    /remember [text]           - ask agent to store something in memory\n");
+        s.push_str("    /init                      - analyse project + init memory\n");
+        s.push_str("    /search <q>                - search past messages\n");
+        s.push_str("\n  Model / Toolset:\n");
+        s.push_str("    /model [name]   - show current or switch model\n");
+        s.push_str("    /toolset [name] - show current or switch toolset: default | codex | gemini\n");
+        s.push_str("\n  Permission modes:\n");
+        s.push_str("    /default        - ask before each tool  [Shift+Tab to cycle]\n");
+        s.push_str("    /plan           - read-only tools; write ops blocked\n");
+        s.push_str("    /yolo           - auto-approve all tools (bypassPermissions)\n");
+        s.push_str("    /mode [name]    - show/set: default | plan | yolo | acceptEdits | bypassPermissions\n");
+        s.push_str("\n  Direct bash (bypasses agent):\n");
+        s.push_str("    ! <cmd>         - e.g.  ! git status\n");
+        s.push_str("\n  Keyboard shortcuts:\n");
+        s.push_str("    Shift+Enter    - insert newline (multi-line input)\n");
+        s.push_str("    Esc            - clear current input line\n");
+        s.push_str("    Shift+Tab      - cycle permission mode\n");
+        s.push_str("    Up / Down      - navigate command history\n");
+        s.push_str("    Ctrl+C         - clear line / cancel current input / interrupt running turn\n");
+        s.push_str("    Ctrl+D         - exit (on empty line)\n");
+        s.push_str("\n    /stream         - toggle token streaming on/off\n");
+        s.push_str("    /usage          - show token usage for this session\n");
+        s.push_str("    /logout         - clear API credentials and exit\n");
+        s.push_str("    /feedback       - report issues\n");
+        s.push_str("    /help  /?       - this message\n");
+        s.push_str("    exit  /exit     - quit CADE\n");
+        s
     }
 }
 
