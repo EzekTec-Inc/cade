@@ -346,6 +346,14 @@ impl PermissionManager {
         if !rules.contains(&rule) { rules.push(rule); }
     }
 
+    /// Add a session-scope allow rule by raw string (e.g. from `A` keypress in prompt).
+    /// Parses the string; silently ignores invalid rules.
+    pub fn add_session_allow(&self, raw: &str) {
+        if let Some(rule) = PermissionRule::parse(raw) {
+            self.add_allow_rule(rule);
+        }
+    }
+
     pub fn allow_rules(&self) -> Vec<PermissionRule> { self.allow_rules.lock().unwrap().clone() }
     pub fn deny_rules(&self)  -> Vec<PermissionRule> { self.deny_rules.lock().unwrap().clone() }
 

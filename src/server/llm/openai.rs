@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
+use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 
@@ -249,6 +249,12 @@ impl LlmProvider for OpenAiProvider {
                             let args = serde_json::from_str(&tool_args).unwrap_or_default();
                             yield Ok(StreamChunk::ToolCall(LlmToolCall { id: tool_id.clone(), name: tool_name.clone(), arguments: args }));
                             tool_name.clear(); tool_id.clear(); tool_args.clear();
+                        }
+                        // OpenAI may include usage in the last chunk (stream_options.include_usage)
+                        let in_tok  = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+                        let out_tok = v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
+                        if in_tok > 0 || out_tok > 0 {
+                            yield Ok(StreamChunk::Usage(TokenUsage { input_tokens: in_tok, output_tokens: out_tok }));
                         }
                         yield Ok(StreamChunk::Done);
                     }

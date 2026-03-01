@@ -49,11 +49,20 @@ pub struct CompletionResponse {
     pub finish_reason: String,
 }
 
+/// Token usage reported by the LLM at the end of a completion.
+#[derive(Debug, Clone, Default)]
+pub struct TokenUsage {
+    pub input_tokens:  u32,
+    pub output_tokens: u32,
+}
+
 /// A chunk from a streaming response
 #[derive(Debug, Clone)]
 pub enum StreamChunk {
     Text(String),
     ToolCall(LlmToolCall),
+    /// Token usage reported at end of stream (before Done).
+    Usage(TokenUsage),
     Done,
 }
 

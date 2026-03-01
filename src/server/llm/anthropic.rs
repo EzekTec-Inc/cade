@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
+use super::{bare_model, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
@@ -202,6 +202,9 @@ impl LlmProvider for AnthropicProvider {
             let mut tool_id = String::new();
             let mut tool_name = String::new();
             let mut tool_args = String::new();
+            // Accumulate token usage across message_start + message_delta
+            let mut input_tokens: u32 = 0;
+            let mut output_tokens: u32 = 0;
 
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = match chunk {
@@ -260,7 +263,25 @@ impl LlmProvider for AnthropicProvider {
                                 tool_args.clear();
                             }
                         }
-                        "message_stop" => { yield Ok(StreamChunk::Done); break; }
+                        "message_start" => {
+                            // e.g. {"type":"message_start","message":{"usage":{"input_tokens":N}}}
+                            if let Some(n) = event["message"]["usage"]["input_tokens"].as_u64() {
+                                input_tokens += n as u32;
+                            }
+                        }
+                        "message_delta" => {
+                            // e.g. {"type":"message_delta","usage":{"output_tokens":N}}
+                            if let Some(n) = event["usage"]["output_tokens"].as_u64() {
+                                output_tokens += n as u32;
+                            }
+                        }
+                        "message_stop" => {
+                            if input_tokens > 0 || output_tokens > 0 {
+                                yield Ok(StreamChunk::Usage(TokenUsage { input_tokens, output_tokens }));
+                            }
+                            yield Ok(StreamChunk::Done);
+                            break;
+                        }
                         _ => {}
                     }
                 }

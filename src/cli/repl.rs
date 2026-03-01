@@ -17,7 +17,7 @@ use crate::settings::SettingsManager;
 use crate::skills::Skill;
 use crate::subagents::{BackgroundResult, discover_all_subagents, find_subagent};
 use crate::toolsets::Toolset;
-use crate::tools::{dispatch, is_write_tool};
+use crate::tools::dispatch;
 
 const BANNER: &str = r#"
    ___    _    ____  _____
@@ -79,6 +79,7 @@ enum SlashCmd {
     Unlink,
     Logout,
     Stream,
+    Usage,
 }
 
 fn parse_slash(input: &str) -> Option<SlashCmd> {
@@ -126,6 +127,7 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "unlink" => Some(SlashCmd::Unlink),
         "logout" => Some(SlashCmd::Logout),
         "stream" => Some(SlashCmd::Stream),
+        "usage"  => Some(SlashCmd::Usage),
         // "toolset" now handled as SlashCmd::Toolset above
         _ => None,
     }
@@ -166,6 +168,9 @@ pub struct Repl {
     mcp: std::sync::Arc<crate::mcp::McpManager>,
     /// Whether SSE token streaming is enabled (toggled by /stream).
     streaming_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Cumulative token usage for the session (input, output).
+    session_input_tokens:  std::sync::Arc<std::sync::atomic::AtomicU64>,
+    session_output_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Repl {
@@ -199,11 +204,13 @@ impl Repl {
             background_results: Arc::new(Mutex::new(vec![])),
             current_toolset: Arc::new(Mutex::new(toolset)),
             hooks,
-            first_turn:        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
-            cancel_turn:       std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            conversation_id:   Arc::new(Mutex::new(conversation_id)),
+            first_turn:            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            cancel_turn:           std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            conversation_id:       Arc::new(Mutex::new(conversation_id)),
             mcp,
-            streaming_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            streaming_enabled:     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
+            session_input_tokens:  std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            session_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -226,8 +233,10 @@ impl Repl {
             stdout,
             SetForegroundColor(Color::DarkGrey),
             Print(format!(
-                " Agent : {} ({})\n Mode  : {}\n\n",
-                self.agent_name(), self.agent_id(), self.permissions.mode()
+                " Agent : {} ({})\n Model : {}\n Mode  : {}\n\n",
+                self.agent_name(), self.agent_id(),
+                self.current_model.lock().unwrap(),
+                self.permissions.mode()
             )),
             ResetColor
         )?;
@@ -309,6 +318,15 @@ impl Repl {
             if let Some(cmd) = parse_slash(&input) {
                 match cmd {
                     SlashCmd::Exit => {
+                        use std::sync::atomic::Ordering;
+                        let in_tok  = self.session_input_tokens.load(Ordering::SeqCst);
+                        let out_tok = self.session_output_tokens.load(Ordering::SeqCst);
+                        if in_tok > 0 || out_tok > 0 {
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print(format!("\n  Session tokens — in: {in_tok}  out: {out_tok}  total: {}\n",
+                                    in_tok + out_tok)),
+                                ResetColor)?;
+                        }
                         execute!(stdout, Print("\nBye!\n"))?;
                         break;
                     }
@@ -426,6 +444,24 @@ impl Repl {
                         let label = if !current { "on" } else { "off" };
                         execute!(stdout, SetForegroundColor(Color::Cyan),
                             Print(format!("\n  Streaming: {label}\n")), ResetColor)?;
+                        stdout.flush()?;
+                    }
+                    SlashCmd::Usage => {
+                        use std::sync::atomic::Ordering;
+                        let in_tok  = self.session_input_tokens.load(Ordering::SeqCst);
+                        let out_tok = self.session_output_tokens.load(Ordering::SeqCst);
+                        let total   = in_tok + out_tok;
+                        execute!(stdout, SetForegroundColor(Color::Cyan), Print("\n  Token usage this session:\n"), ResetColor)?;
+                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                            Print(format!("    Input  : {:>8}\n", in_tok)),
+                            Print(format!("    Output : {:>8}\n", out_tok)),
+                            Print(format!("    Total  : {:>8}\n", total)),
+                            ResetColor)?;
+                        if total == 0 {
+                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                                Print("    (no usage recorded yet — requires Anthropic/OpenAI)\n"),
+                                ResetColor)?;
+                        }
                         stdout.flush()?;
                     }
                     SlashCmd::Logout => {
@@ -1824,6 +1860,9 @@ impl Repl {
         // Clone Arcs before the move closure so conversation_id and run state can be saved
         let conv_arc     = self.conversation_id.clone();
         let session_arc  = self.session.clone();
+        // Session-level token accumulators
+        let sess_in_tok  = self.session_input_tokens.clone();
+        let sess_out_tok = self.session_output_tokens.clone();
         // Track run_id/seq_id for crash recovery / reconnect
         let run_id_cell:   std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
         let seq_id_cell:   std::sync::Arc<std::sync::Mutex<Option<i64>>>   = Default::default();
@@ -1856,7 +1895,7 @@ impl Repl {
                         if !*flag {
                             let _ = execute!(out,
                                 SetForegroundColor(Color::DarkGrey),
-                                Print("\n  💭 "),
+                                Print("\n  💭 thinking…\n  "),
                             );
                             *flag = true;
                         }
@@ -1899,6 +1938,15 @@ impl Repl {
                     if *aflag {
                         let _ = execute!(out, Print("\n"), ResetColor);
                         *aflag = false;
+                    }
+                }
+                "usage_statistics" => {
+                    use std::sync::atomic::Ordering;
+                    if let Some(n) = msg.data["input_tokens"].as_u64() {
+                        sess_in_tok.fetch_add(n, Ordering::SeqCst);
+                    }
+                    if let Some(n) = msg.data["output_tokens"].as_u64() {
+                        sess_out_tok.fetch_add(n, Ordering::SeqCst);
                     }
                 }
                 _ => {}
@@ -2202,61 +2250,110 @@ impl Repl {
             execute!(stdout, SetForegroundColor(Color::Red),
                 Print(format!("  ✗ {}\n", truncate(&result.output, 120))), ResetColor)?;
         } else {
-            let lines = result.output.lines().count();
+            let summary = match tool_name {
+                "write_file" | "create_file" => {
+                    let bytes = result.output.len();
+                    format!("  ✓ written ({bytes} chars)")
+                }
+                "edit_file" | "apply_patch" => "  ✓ edited".to_string(),
+                "delete_file" | "move_file" | "rename_file" => "  ✓ done".to_string(),
+                "bash" | "run_command" | "execute_command" => {
+                    if result.output.trim().is_empty() {
+                        "  ✓ (no output)".to_string()
+                    } else {
+                        format!("  ✓ {} lines", result.output.lines().count())
+                    }
+                }
+                _ => format!("  ✓ {} lines", result.output.lines().count()),
+            };
             execute!(stdout, SetForegroundColor(Color::Green),
-                Print(format!("  ✓ {} lines\n", lines)), ResetColor)?;
+                Print(format!("{summary}\n")), ResetColor)?;
         }
         stdout.flush()?;
 
         Ok(result)
     }
 
-    /// Prompt the user to approve/deny a tool call. Returns true = approved.
+    /// Prompt the user to approve/deny a tool call.
+    /// Returns true = approved, false = denied.
+    /// `A` adds a session-allow rule (approve always for this session) and approves.
     fn prompt_approval(
         &self,
         stdout: &mut io::Stdout,
         tool_name: &str,
         args: &serde_json::Value,
     ) -> Result<bool> {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::Yellow),
-            Print(format!("\n  Allow {tool_name}? [y/N] ")),
-            ResetColor
-        )?;
-
-        // Show args for write tools
-        if is_write_tool(tool_name, &self.mcp) {
-            if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
-                execute!(
-                    stdout,
-                    SetForegroundColor(Color::DarkGrey),
-                    Print(format!("\n  > {}\n  Allow? [y/N] ", truncate(cmd, 120))),
-                    ResetColor
-                )?;
+        // Show the tool-specific detail line first
+        if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
+            execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                Print(format!("  > {}\n", truncate(cmd, 120))), ResetColor)?;
+        } else if let Some(fp) = args.get("file_path").and_then(|v| v.as_str())
+            .or_else(|| args.get("path").and_then(|v| v.as_str())) {
+            // For edit_file: show old_string snippet as diff preview
+            if tool_name == "edit_file" || tool_name == "apply_patch" {
+                if let Some(old) = args.get("old_string").and_then(|v| v.as_str()) {
+                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                        Print(format!("  file: {fp}\n")), ResetColor)?;
+                    let preview = old.lines().take(4)
+                        .map(|l| format!("  - {}", truncate(l, 80)))
+                        .collect::<Vec<_>>().join("\n");
+                    execute!(stdout, SetForegroundColor(Color::Red),
+                        Print(format!("{preview}\n")), ResetColor)?;
+                    if let Some(new) = args.get("new_string").and_then(|v| v.as_str()) {
+                        let preview = new.lines().take(4)
+                            .map(|l| format!("  + {}", truncate(l, 80)))
+                            .collect::<Vec<_>>().join("\n");
+                        execute!(stdout, SetForegroundColor(Color::Green),
+                            Print(format!("{preview}\n")), ResetColor)?;
+                    }
+                } else {
+                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                        Print(format!("  file: {fp}\n")), ResetColor)?;
+                }
+            } else {
+                execute!(stdout, SetForegroundColor(Color::DarkGrey),
+                    Print(format!("  file: {fp}\n")), ResetColor)?;
             }
         }
+
+        execute!(stdout, SetForegroundColor(Color::Yellow),
+            Print(format!("  Allow {tool_name}? [y/N/A] ")),
+            ResetColor)?;
         stdout.flush()?;
 
         // Read single keypress
         terminal::enable_raw_mode()?;
-        let approved = loop {
+        let choice = loop {
             if let Ok(Event::Key(KeyEvent { code, .. })) = event::read() {
                 match code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => break true,
-                    _ => break false,
+                    KeyCode::Char('y') | KeyCode::Char('Y') => break 'y',
+                    KeyCode::Char('a') | KeyCode::Char('A') => break 'a',
+                    _ => break 'n',
                 }
             }
         };
         terminal::disable_raw_mode()?;
-        execute!(stdout, Print(if approved { "y\n" } else { "N\n" }))?;
 
-        // Show /approve-always hint on denial (default mode only, once per tool type)
-        if !approved && self.permissions.mode() == crate::permissions::PermissionMode::Default {
-            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                Print(format!("  Tip: /approve-always {tool_name} to always allow\n")),
-                ResetColor)?;
-        }
+        let approved = match choice {
+            'y' => {
+                execute!(stdout, Print("y\n"))?;
+                true
+            }
+            'a' => {
+                // Always allow this tool for the rest of the session
+                execute!(stdout, Print("A\n"))?;
+                self.permissions.add_session_allow(tool_name);
+                execute!(stdout, SetForegroundColor(Color::Cyan),
+                    Print(format!("  ✓ Session: {tool_name} always allowed\n")),
+                    ResetColor)?;
+                true
+            }
+            _ => {
+                execute!(stdout, Print("N\n"))?;
+                false
+            }
+        };
+
         stdout.flush()?;
         Ok(approved)
     }
@@ -3462,6 +3559,7 @@ impl Repl {
         println!("    Ctrl+D         - exit (on empty line)");
         println!();
         println!("    /stream         - toggle token streaming on/off");
+        println!("    /usage          - show token usage for this session");
         println!("    /logout         - clear API credentials and exit");
         println!("    /feedback       - report issues");
         println!("    /help  /?       - this message");

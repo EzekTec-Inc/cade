@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use uuid::Uuid;
 
 use crate::server::{
-    llm::{CompletionRequest, LlmMessage, LlmToolCall, StreamChunk},
+    llm::{CompletionRequest, LlmMessage, LlmToolCall, StreamChunk, TokenUsage},
     state::AppState,
     storage::sqlite::{self, MessageRow},
 };
@@ -480,6 +480,9 @@ pub async fn stream_message(
 
     let acc = std::sync::Arc::new(std::sync::Mutex::new((String::new(), Vec::<Value>::new())));
     let acc_clone = acc.clone();
+    // Accumulate token usage across chunks
+    let usage_acc = std::sync::Arc::new(std::sync::Mutex::new(TokenUsage::default()));
+    let usage_acc2 = usage_acc.clone();
 
     // First SSE event: metadata (conversation_id + run_id)
     let meta_event = {
@@ -523,6 +526,18 @@ pub async fn stream_message(
                     "tool_call": { "id": tc.id, "name": tc.name, "arguments": tc.arguments }
                 }))
             }
+            Ok(StreamChunk::Usage(u)) => {
+                if let Ok(mut acc) = usage_acc2.lock() {
+                    acc.input_tokens  += u.input_tokens;
+                    acc.output_tokens += u.output_tokens;
+                }
+                // Emit usage_statistics event for client-side display
+                emit(json!({
+                    "message_type": "usage_statistics",
+                    "input_tokens":  u.input_tokens,
+                    "output_tokens": u.output_tokens,
+                }))
+            }
             Ok(StreamChunk::Done) => {
                 if let Ok(g) = acc_clone.lock() {
                     persist(&state_clone, &agent_id_clone, conv_id_clone.as_deref(), "assistant", json!({
@@ -546,6 +561,7 @@ pub async fn stream_message(
     });
 
     drop(acc);
+    drop(usage_acc);
     let _ = background;
 
     Sse::new(futures::StreamExt::chain(meta_event, sse_stream)).into_response()
