@@ -171,8 +171,9 @@ async fn build_context(
     // Character-budget trimming: drop oldest non-system messages until total
     // content is under CONTEXT_CHAR_BUDGET (~150k tokens).
     // Always keeps the system prompt and the last user+assistant turn (≥3 msgs).
+    // Count chars (codepoints), not bytes — CONTEXT_CHAR_BUDGET is a char budget.
     let total_chars = |msgs: &[LlmMessage]| -> usize {
-        msgs.iter().map(|m| m.content.len()).sum()
+        msgs.iter().map(|m| m.content.chars().count()).sum()
     };
     while total_chars(&messages) > CONTEXT_CHAR_BUDGET && messages.len() > 3 {
         // messages[0] is always the system prompt — remove messages[1]
@@ -203,13 +204,27 @@ fn db_row_to_llm(row: &MessageRow) -> Vec<LlmMessage> {
             let raw = row.content["content"].as_str().unwrap_or("");
             // Truncate very large tool results (e.g. raw base64 images, enormous logs)
             // to prevent context window overflows.
+            // Truncate at a char boundary, not a byte boundary.
+            // TOOL_RESULT_MAX_CHARS is a *char* limit; raw.len() is bytes.
+            // Slicing `&raw[..N]` at a bare byte index panics when a multibyte
+            // codepoint (e.g. '─' = 3 bytes: E2 94 80) straddles position N.
             let content = if raw.len() > TOOL_RESULT_MAX_CHARS {
-                format!(
-                    "{}\n[... output truncated: {} total chars, showing first {}]",
-                    &raw[..TOOL_RESULT_MAX_CHARS],
-                    raw.len(),
-                    TOOL_RESULT_MAX_CHARS
-                )
+                // Find the byte offset of the TOOL_RESULT_MAX_CHARS-th char.
+                let byte_end = raw
+                    .char_indices()
+                    .nth(TOOL_RESULT_MAX_CHARS)
+                    .map(|(i, _)| i)
+                    .unwrap_or(raw.len()); // fewer chars than the limit → keep all
+                if byte_end < raw.len() {
+                    format!(
+                        "{}\n[... truncated: {} bytes total, showing first {} chars]",
+                        &raw[..byte_end],
+                        raw.len(),
+                        TOOL_RESULT_MAX_CHARS,
+                    )
+                } else {
+                    raw.to_string()
+                }
             } else {
                 raw.to_string()
             };
