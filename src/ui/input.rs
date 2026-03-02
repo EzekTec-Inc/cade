@@ -15,7 +15,7 @@
 ///   claude-opus · agent-xyz · in: 1,234  out: 567
 /// ```
 
-use std::io;
+use std::io::{self, Write};
 
 use anyhow::Result;
 use crossterm::{
@@ -422,21 +422,19 @@ impl InputWidget {
         // Drop the ratatui terminal before touching the cursor so its internal
         // state is released first.
         drop(term);
-        // Return cursor to the row where the input box started and clear from
-        // there to the end of the visible screen. This erases the old input box
-        // (separator + border + text + status) so that subsequent insert_before
-        // calls don't interleave response content with leftover box drawing.
-        //
-        // Previous approach (MoveDown(viewport_height)) was wrong: the last
-        // draw() positions the cursor at the inner text row (Y+2), so
-        // MoveDown(5) landed at Y+7 — two rows past the box bottom. Short
-        // responses then never scrolled enough to clear the old box, producing
-        // the garbled overlap visible in the terminal.
-        let _ = execute!(
-            io::stdout(),
-            cursor::MoveTo(0, viewport_start_row),
-            terminal::Clear(ClearType::FromCursorDown),
-        );
+        // Clear ONLY the 5 input box rows individually. Using Clear(FromCursorDown)
+        // was too aggressive (cleared from viewport_start_row to terminal bottom)
+        // and left the cursor mid-screen, breaking insert_before which needs the
+        // viewport to be anchored at the terminal bottom to work correctly.
+        let mut out = io::stdout();
+        for row in viewport_start_row..viewport_start_row.saturating_add(viewport_height) {
+            let _ = execute!(out, cursor::MoveTo(0, row), terminal::Clear(ClearType::CurrentLine));
+        }
+        // Position cursor just below the (now-blank) input box area.
+        // with_insert_before will anchor to terminal bottom on each call, so
+        // this just needs to be anywhere at or below the cleared rows.
+        let _ = execute!(out, cursor::MoveTo(0, viewport_start_row.saturating_add(viewport_height)));
+        let _ = out.flush();
         result
     }
 }

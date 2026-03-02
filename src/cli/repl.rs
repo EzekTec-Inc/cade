@@ -1841,7 +1841,42 @@ impl Repl {
             input.to_string()
         };
 
-        let messages = self.stream_turn(stdout, &effective_input, false, "", "").await?;
+        // ── Thinking spinner ─────────────────────────────────────────────────
+        // Show a braille spinner while waiting for the first streaming event.
+        // Stopped by the first on_event call via the shared AtomicBool.
+        let spinner_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
+        let spinner_flag   = spinner_active.clone();
+        // Small newline so the spinner appears on its own line below the input
+        println!();
+        let spinner_task = tokio::spawn(async move {
+            const FRAMES: &[&str] = &["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
+            let mut i = 0usize;
+            loop {
+                if !spinner_flag.load(std::sync::atomic::Ordering::SeqCst) { break; }
+                {
+                    use std::io::Write;
+                    print!("\r    {} waiting…", FRAMES[i % FRAMES.len()]);
+                    let _ = std::io::stdout().flush();
+                }
+                i += 1;
+                tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
+            }
+            // Erase spinner line on exit
+            use std::io::Write;
+            print!("\r{}\r", " ".repeat(30));
+            let _ = std::io::stdout().flush();
+        });
+
+        let messages = self.stream_turn(
+            stdout, &effective_input, false, "", "",
+            Some(spinner_active.clone()),
+        ).await;
+
+        // Ensure spinner is stopped (handles error paths)
+        spinner_active.store(false, Ordering::SeqCst);
+        let _ = spinner_task.await;
+
+        let messages = messages?;
         // Clear cancel flag after turn completes
         self.cancel_turn.store(false, Ordering::SeqCst);
         self.dispatch_tool_calls(stdout, messages, input).await
@@ -1849,6 +1884,9 @@ impl Repl {
 
     /// Stream one turn (user message or tool return) and render live.
     /// Returns the complete collected message list.
+    ///
+    /// `spinner`: optional `AtomicBool` set to `true` while a waiting spinner is
+    /// active. The first SSE event sets it to `false` to stop the spinner.
     async fn stream_turn(
         &self,
         _stdout: &mut io::Stdout,
@@ -1856,6 +1894,7 @@ impl Repl {
         is_tool_return: bool,
         tool_call_id: &str,
         tool_output: &str,
+        spinner: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Vec<CadeMessage>> {
         // ── Shared render state for the on_event closure ────────────────────────
         // OutputRenderer is on self but closures need Arcs for shared mutability.
@@ -1881,8 +1920,19 @@ impl Repl {
         // Clone the Arc so the on_event closure can access the renderer without
         // unsafe pointer gymnastics. The Mutex ensures exclusive access per event.
         let out_arc = self.output.clone();
+        // Clone spinner flag for capture in on_event
+        let spinner_arc = spinner;
 
         let on_event = move |msg: &CadeMessage| {
+            // Stop the waiting spinner on the very first SSE event (idempotent)
+            if let Some(ref flag) = spinner_arc {
+                if flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                    // Was true → we're the one to clear the line
+                    use std::io::Write;
+                    print!("\r{}\r", " ".repeat(35));
+                    let _ = std::io::stdout().flush();
+                }
+            }
             let mut out = out_arc.lock().unwrap();
             let out = &mut *out;
             match msg.msg_type() {
@@ -2057,7 +2107,7 @@ impl Repl {
             if let crate::hooks::HookOutcome::Block { reason } = stop_outcome {
                 let _ = self.output.lock().unwrap().hook_continuation(&reason);
                 // Feed the hook's stderr back to the agent as a new turn
-                let follow_msgs = self.stream_turn(stdout, &reason, false, "", "").await?;
+                let follow_msgs = self.stream_turn(stdout, &reason, false, "", "", None).await?;
                 Box::pin(self.dispatch_tool_calls(stdout, follow_msgs, user_input)).await?;
             }
             return Ok(());
@@ -2068,7 +2118,7 @@ impl Repl {
 
             // Stream the tool return and process any chained tool calls
             let follow = self
-                .stream_turn(stdout, "", true, &call_id, &result.output)
+                .stream_turn(stdout, "", true, &call_id, &result.output, None)
                 .await?;
 
             Box::pin(self.dispatch_tool_calls(stdout, follow, user_input)).await?;

@@ -636,10 +636,24 @@ impl OutputRenderer {
 
     /// Create a minimal Viewport::Inline(0) terminal, call `insert_before(height, f)`,
     /// then immediately drop the terminal.
+    ///
+    /// IMPORTANT: `insert_before` only works correctly when the viewport is at the
+    /// terminal bottom. It issues a terminal ScrollUp(N) which renders content at
+    /// the last N rows. If the cursor is mid-screen, the rendered content appears
+    /// at the terminal bottom but the viewport is left mid-screen — subsequent
+    /// calls then render at inconsistent positions.
+    ///
+    /// Fix: anchor cursor at the terminal bottom row before creating the viewport.
+    /// `cursor::MoveToRow(N)` repositions without printing/scrolling, so no extra
+    /// blank lines appear. After each call, the cursor returns to term_h - 1.
     fn with_insert_before<F>(&self, height: u16, f: F) -> Result<()>
     where
         F: FnOnce(&mut Buffer),
     {
+        // Anchor to terminal bottom so insert_before works correctly
+        if let Ok((_, term_h)) = terminal::size() {
+            let _ = execute!(io::stdout(), cursor::MoveToRow(term_h.saturating_sub(1)));
+        }
         let backend = CrosstermBackend::new(io::stdout());
         let mut term = Terminal::with_options(
             backend,
