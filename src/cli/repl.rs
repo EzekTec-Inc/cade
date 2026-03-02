@@ -1862,7 +1862,7 @@ impl Repl {
                     use std::io::Write;
                     // \x1b[2K clears the entire current line before printing;
                     // prevents banner/previous text bleeding through the spinner.
-                    print!("\x1b[2K\r    {} waiting…", FRAMES[i % FRAMES.len()]);
+                    print!("\x1b[2K\r{} waiting…", FRAMES[i % FRAMES.len()]);
                     let _ = std::io::stdout().flush();
                 }
                 i += 1;

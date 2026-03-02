@@ -27,20 +27,16 @@ use ratatui::{
     widgets::{Paragraph, Widget, Wrap},
 };
 
-/// Horizontal padding (columns) applied to both sides of all rendered content.
-pub const CONTENT_PAD: u16 = 4;
-/// Left-margin string for direct stdout writes (equals CONTENT_PAD spaces).
-const INDENT: &str = "    ";
-
-/// Shrink a buffer area by `pad` columns on each side for consistent margins.
-fn padded_rect(area: Rect, pad: u16) -> Rect {
-    Rect {
-        x:      area.x + pad,
-        y:      area.y,
-        width:  area.width.saturating_sub(pad * 2),
-        height: area.height,
-    }
-}
+/// No global content padding — content starts at column 0 (Letta Code style).
+pub const CONTENT_PAD: u16 = 0;
+/// Left-margin for direct stdout writes — empty, content at column 0.
+const INDENT: &str = "";
+/// Result prefix: "  ⎿  " (5 chars — 2 spaces + ⎿ + 2 spaces).
+const RESULT_PREFIX: &str = "  ⎿  ";
+/// Result indent for continuation lines (5 spaces, aligns under RESULT_PREFIX).
+const RESULT_INDENT: &str = "     ";
+/// Kept for call-site compatibility; with CONTENT_PAD=0 this is a no-op.
+fn padded_rect(area: Rect, _pad: u16) -> Rect { area }
 
 /// Estimate the number of terminal rows a set of Lines will occupy when rendered
 /// at `width` columns (for `insert_before` height calculation).
@@ -114,14 +110,14 @@ impl OutputRenderer {
     /// Start of a reasoning block — print spinner, init state.
     pub fn reasoning_header(&mut self) -> io::Result<()> {
         self.in_reasoning = true;
-        self.stream_col = CONTENT_PAD;
+        self.stream_col = 0;
         let mut out = io::stdout();
         execute!(
             out,
             Print("\n"),
             SetForegroundColor(Color::DarkGrey),
             SetAttribute(Attribute::Italic),
-            Print(format!("{INDENT}💭 thinking…")),
+            Print("💭 thinking…"),
             cursor::MoveToColumn(0),
         )?;
         out.flush()
@@ -139,7 +135,7 @@ impl OutputRenderer {
             terminal::Clear(ClearType::CurrentLine),
             SetForegroundColor(Color::DarkGrey),
             SetAttribute(Attribute::Italic),
-            Print(format!("{INDENT}💭 thinking… ({words} words)")),
+            Print(format!("💭 thinking… ({words} words)")),
             cursor::MoveToColumn(0),
         )?;
         out.flush()
@@ -170,19 +166,18 @@ impl OutputRenderer {
         if !buf.trim().is_empty() {
             let width = self.wrap_width();
             let mut lines: Vec<Line> = vec![Line::from(Span::styled(
-                format!("{INDENT}💭 thinking…"),
+                "💭 thinking…",
                 Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC),
             ))];
             for text_line in buf.lines() {
                 lines.push(Line::from(Span::styled(
-                    format!("{INDENT}{text_line}"),
+                    text_line.to_string(),
                     Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC),
                 )));
             }
             let height = estimate_height(&lines, width);
             self.with_insert_before(height, move |buf_ref| {
-                let area = padded_rect(*buf_ref.area(), CONTENT_PAD);
-                Paragraph::new(lines).wrap(Wrap { trim: false }).render(area, buf_ref);
+                Paragraph::new(lines).wrap(Wrap { trim: false }).render(*buf_ref.area(), buf_ref);
             })?;
         }
         Ok(())
@@ -192,14 +187,14 @@ impl OutputRenderer {
     pub fn assistant_chunk(&mut self, text: &str) -> io::Result<()> {
         if !self.in_assistant {
             self.in_assistant = true;
-            self.stream_col = CONTENT_PAD;
+            self.stream_col = 0;
             let mut out = io::stdout();
             execute!(
                 out,
                 SetAttribute(Attribute::Reset),
                 ResetColor,
                 SetForegroundColor(Color::DarkGrey),
-                Print(format!("\n{INDENT}● generating…")),
+                Print("\n● generating…"),
                 cursor::MoveToColumn(0),
             )?;
             out.flush()?;
@@ -213,7 +208,7 @@ impl OutputRenderer {
             cursor::MoveToColumn(0),
             terminal::Clear(ClearType::CurrentLine),
             SetForegroundColor(Color::DarkGrey),
-            Print(format!("{INDENT}● generating… ({words} words)")),
+            Print(format!("● generating… ({words} words)")),
             cursor::MoveToColumn(0),
         )?;
         out.flush()
@@ -246,8 +241,7 @@ impl OutputRenderer {
             let lines = parse_markdown_lines(&buf);
             let height = estimate_height(&lines, width);
             self.with_insert_before(height, move |buf_ref| {
-                let area = padded_rect(*buf_ref.area(), CONTENT_PAD);
-                Paragraph::new(lines).wrap(Wrap { trim: false }).render(area, buf_ref);
+                Paragraph::new(lines).wrap(Wrap { trim: false }).render(*buf_ref.area(), buf_ref);
             })?;
         }
         Ok(())
@@ -269,8 +263,7 @@ impl OutputRenderer {
         }
         let height = estimate_height(&lines, wrap_w);
         self.with_insert_before(height, move |buf| {
-            let area = padded_rect(*buf.area(), CONTENT_PAD);
-            Paragraph::new(lines).wrap(Wrap { trim: false }).render(area, buf);
+            Paragraph::new(lines).wrap(Wrap { trim: false }).render(*buf.area(), buf);
         })
     }
 
@@ -288,39 +281,39 @@ impl OutputRenderer {
     // ── Bounded paths (ratatui insert_before) ─────────────────────────────────
 
     /// Tool call — Letta Code-style: `● Name(args…)` on a single line.
+    /// ● is green, Name is bold-white, (args) is plain — matching Letta Code exactly.
     pub fn tool_call(&mut self, name: &str, preview: &str) -> Result<()> {
         self.close_streaming()?;
         self.update_width();
-        // Budget: width minus padding, bullet, parens
-        let inner_w = self.term_width.saturating_sub(CONTENT_PAD * 2 + 4) as usize;
         let display = display_tool_name(name);
-        let label = if preview.is_empty() {
-            display.clone()
-        } else {
-            format!("{}({})", display, truncate_str(preview, inner_w.saturating_sub(display.len() + 2)))
-        };
+        // Budget: full width minus "● " (2) minus display name minus parens
+        let args_budget = self.term_width.saturating_sub(2 + display.len() as u16 + 2) as usize;
 
-        let line = Line::from(vec![
+        let mut spans = vec![
             Span::styled("● ", Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
-            Span::styled(label, Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
-        ]);
+            Span::styled(display.clone(), Style::default().add_modifier(Modifier::BOLD)),
+        ];
+        if !preview.is_empty() {
+            let truncated = truncate_str(preview, args_budget);
+            spans.push(Span::raw(format!("({truncated})")));
+        }
+        let line = Line::from(spans);
         self.with_insert_before(1, move |buf| {
-            let area = padded_rect(*buf.area(), CONTENT_PAD);
-            Paragraph::new(line).render(area, buf);
+            Paragraph::new(line).render(*buf.area(), buf);
         })
     }
 
     /// Tool result — `  ⎿  summary` line in green (success) or red (error).
     pub fn tool_result(&mut self, is_error: bool, summary: &str) -> Result<()> {
         let color = if is_error { RC::Red } else { RC::Green };
-        let max = self.term_width.saturating_sub(CONTENT_PAD * 2 + 6) as usize;
+        // 5 chars for "  ⎿  " prefix
+        let max = self.term_width.saturating_sub(5) as usize;
         let line = Line::from(vec![
-            Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
+            Span::styled(RESULT_PREFIX, Style::default().fg(RC::DarkGray)),
             Span::styled(truncate_str(summary, max), Style::default().fg(color).add_modifier(Modifier::BOLD)),
         ]);
         self.with_insert_before(1, move |buf| {
-            let area = padded_rect(*buf.area(), CONTENT_PAD);
-            Paragraph::new(line).render(area, buf);
+            Paragraph::new(line).render(*buf.area(), buf);
         })
     }
 
@@ -337,10 +330,9 @@ impl OutputRenderer {
             .collect();
         let height = estimate_height(&lines, wrap_w);
         self.with_insert_before(height, move |buf| {
-            let area = padded_rect(*buf.area(), CONTENT_PAD);
             Paragraph::new(lines)
                 .wrap(Wrap { trim: false })
-                .render(area, buf);
+                .render(*buf.area(), buf);
         })
     }
 
@@ -362,12 +354,11 @@ impl OutputRenderer {
     /// Hook continuation notice.
     pub fn hook_continuation(&mut self, reason: &str) -> Result<()> {
         let line = Line::from(vec![
-            Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
+            Span::styled(RESULT_PREFIX, Style::default().fg(RC::DarkGray)),
             Span::styled(format!("Hook continuing: {reason}"), Style::default().fg(RC::DarkGray)),
         ]);
         self.with_insert_before(1, move |buf| {
-            let area = padded_rect(*buf.area(), CONTENT_PAD);
-            Paragraph::new(line).render(area, buf);
+            Paragraph::new(line).render(*buf.area(), buf);
         })
     }
 
@@ -423,21 +414,19 @@ impl OutputRenderer {
         }
         let height = estimate_height(&lines, wrap_w);
         self.with_insert_before(height, move |buf| {
-            let area = padded_rect(*buf.area(), CONTENT_PAD);
             Paragraph::new(lines)
                 .wrap(Wrap { trim: false })
-                .render(area, buf);
+                .render(*buf.area(), buf);
         })
     }
 
     /// Edit tool call — Letta Code style:
-    ///   `● Edit(relative_path)`
-    ///   `  ⎿  Updated ./relative/path`
-    ///   `     Showing ~N context line(s)`
-    ///   `     N-2   context_before`  (dim, unchanged)
-    ///   `     N   - old_line`        (red)
-    ///   `     N   + new_line`        (green)
-    ///   `     N+1   context_after`   (dim, unchanged)
+    ///   `● Edit(./relative_path)`         ← ● green, name bold-white, path plain
+    ///   `  ⎿  Updated ./relative/path`    ← RESULT_PREFIX + header
+    ///   `     Showing ~1 context line`    ← RESULT_INDENT + dim
+    ///   `     113 -  old_line`            ← RESULT_INDENT + lineNo + " -  " + content (red)
+    ///   `     113 +  new_line`            ← RESULT_INDENT + lineNo + " +  " + content (green)
+    ///   `     114    context`             ← RESULT_INDENT + lineNo + "    " + content (dim)
     ///
     /// The `⎿ Updated` result is embedded here so `repl.rs` must NOT call
     /// `tool_result` separately for edit_file / apply_patch.
@@ -450,7 +439,6 @@ impl OutputRenderer {
     ) -> Result<()> {
         self.close_streaming()?;
         self.update_width();
-        let inner_w = self.term_width.saturating_sub(CONTENT_PAD * 2 + 10) as usize;
 
         // Relative path for display
         let rel_path = make_relative_path(file_path);
@@ -467,59 +455,65 @@ impl OutputRenderer {
         let old_lines: Vec<&str> = old_str.lines().collect();
         let new_lines: Vec<&str> = new_str.lines().collect();
         const MAX_DIFF_LINES: usize = 6;
-        const CONTEXT_LINES: usize = 2;
+        const CONTEXT_LINES: usize = 1; // Letta Code uses 1 context line
         let show_old = old_lines.len().min(MAX_DIFF_LINES);
         let show_new = new_lines.len().min(MAX_DIFF_LINES);
-        let context_n = show_old.max(show_new);
 
-        // ── Collect context lines from file ──────────────────────────────────
-        // Lines before the diff (0-indexed in file_lines = start_line - 1)
-        let diff_start_0 = start_line.saturating_sub(1); // 0-indexed
+        // Compute gutter width from max line number shown
+        let max_ln = start_line + show_old.max(show_new) + CONTEXT_LINES;
+        let gutter_w = max_ln.to_string().len();
+
+        // Content budget: width - RESULT_INDENT(5) - gutter - " -  "(4)
+        let inner_w = self.term_width.saturating_sub(5 + gutter_w as u16 + 4) as usize;
+
+        // ── Collect context lines ─────────────────────────────────────────────
+        let diff_start_0 = start_line.saturating_sub(1);
         let ctx_before_start = diff_start_0.saturating_sub(CONTEXT_LINES);
         let ctx_before: Vec<(usize, &str)> = (ctx_before_start..diff_start_0)
             .filter_map(|i| file_lines.get(i).map(|l| (i + 1, *l)))
             .collect();
-        // Lines after the diff
         let diff_end_0 = diff_start_0 + old_lines.len();
         let ctx_after: Vec<(usize, &str)> = (diff_end_0..diff_end_0 + CONTEXT_LINES)
             .filter_map(|i| file_lines.get(i).map(|l| (i + 1, *l)))
             .collect();
 
         // ── Build line list ───────────────────────────────────────────────────
+        let display = display_tool_name(tool_name);
+        let args_budget = self.term_width.saturating_sub(2 + display.len() as u16 + 2) as usize;
+        let path_arg = truncate_str(&rel_path, args_budget);
+
         let mut lines: Vec<Line> = vec![
-            // ● Edit(relative_path)
+            // ● Edit(./path)
             Line::from(vec![
                 Span::styled("● ", Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
-                Span::styled(
-                    format!("{}({})", display_tool_name(tool_name), rel_path),
-                    Style::default().fg(RC::Green).add_modifier(Modifier::BOLD),
-                ),
+                Span::styled(display, Style::default().add_modifier(Modifier::BOLD)),
+                Span::raw(format!("({path_arg})")),
             ]),
             // ⎿  Updated ./rel/path
             Line::from(vec![
-                Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
+                Span::styled(RESULT_PREFIX, Style::default().fg(RC::DarkGray)),
                 Span::styled(
                     format!("Updated {rel_path}"),
                     Style::default().fg(RC::Green).add_modifier(Modifier::BOLD),
                 ),
             ]),
-            // Showing ~N context line(s)
+            // Showing ~1 context line
             Line::from(Span::styled(
-                format!("     Showing ~{context_n} context line(s)"),
-                Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                format!("{RESULT_INDENT}Showing ~{CONTEXT_LINES} context line"),
+                Style::default().fg(RC::DarkGray),
             )),
         ];
 
-        // Context before
+        // Context before (dim)
         for (ln, ctx_l) in &ctx_before {
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("     {ln:>3}   "),
-                    Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                    format!("{RESULT_INDENT}{ln:>gutter_w$}    "),
+                    Style::default().fg(RC::DarkGray),
                 ),
                 Span::styled(
                     truncate_str(ctx_l, inner_w),
-                    Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                    Style::default().fg(RC::DarkGray),
                 ),
             ]));
         }
@@ -529,16 +523,15 @@ impl OutputRenderer {
             let ln = start_line + i;
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("     {ln:>3} "),
+                    format!("{RESULT_INDENT}{ln:>gutter_w$} -  "),
                     Style::default().fg(RC::DarkGray),
                 ),
-                Span::styled("- ", Style::default().fg(RC::Red).add_modifier(Modifier::BOLD)),
                 Span::styled(truncate_str(old_l, inner_w), Style::default().fg(RC::Red)),
             ]));
         }
         if old_lines.len() > MAX_DIFF_LINES {
             lines.push(Line::from(Span::styled(
-                format!("         … ({} more old lines)", old_lines.len() - MAX_DIFF_LINES),
+                format!("{RESULT_INDENT}… ({} more old lines)", old_lines.len() - MAX_DIFF_LINES),
                 Style::default().fg(RC::DarkGray),
             )));
         }
@@ -548,46 +541,45 @@ impl OutputRenderer {
             let ln = start_line + i;
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("     {ln:>3} "),
+                    format!("{RESULT_INDENT}{ln:>gutter_w$} +  "),
                     Style::default().fg(RC::DarkGray),
                 ),
-                Span::styled("+ ", Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
                 Span::styled(truncate_str(new_l, inner_w), Style::default().fg(RC::Green)),
             ]));
         }
         if new_lines.len() > MAX_DIFF_LINES {
             lines.push(Line::from(Span::styled(
-                format!("         … ({} more new lines)", new_lines.len() - MAX_DIFF_LINES),
+                format!("{RESULT_INDENT}… ({} more new lines)", new_lines.len() - MAX_DIFF_LINES),
                 Style::default().fg(RC::DarkGray),
             )));
         }
 
-        // Context after
+        // Context after (dim)
         for (ln, ctx_l) in &ctx_after {
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("     {ln:>3}   "),
-                    Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                    format!("{RESULT_INDENT}{ln:>gutter_w$}    "),
+                    Style::default().fg(RC::DarkGray),
                 ),
                 Span::styled(
                     truncate_str(ctx_l, inner_w),
-                    Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                    Style::default().fg(RC::DarkGray),
                 ),
             ]));
         }
 
         let height = lines.len() as u16;
         self.with_insert_before(height, move |buf| {
-            let area = padded_rect(*buf.area(), CONTENT_PAD);
-            Paragraph::new(lines).render(area, buf);
+            Paragraph::new(lines).render(*buf.area(), buf);
         })
     }
 
-    /// Bash result — Letta Code style: first output line on the `⎿` line,
-    /// remaining lines indented 5 spaces. Capped at 5 lines total.
+    /// Bash result — Letta Code CollapsedOutputDisplay style:
+    /// first line on `  ⎿  `, continuation on `     `, capped at 5 lines.
     pub fn tool_bash_result(&mut self, output: &str) -> Result<()> {
         self.update_width();
-        let inner_w = self.term_width.saturating_sub(CONTENT_PAD * 2 + 6) as usize;
+        // 5 chars for RESULT_PREFIX
+        let inner_w = self.term_width.saturating_sub(5) as usize;
         let all_lines: Vec<&str> = output.lines().collect();
         let count = all_lines.len();
         const PREVIEW: usize = 5;
@@ -597,25 +589,25 @@ impl OutputRenderer {
 
         if count == 0 {
             lines.push(Line::from(vec![
-                Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
+                Span::styled(RESULT_PREFIX, Style::default().fg(RC::DarkGray)),
                 Span::styled("(no output)", Style::default().fg(RC::DarkGray)),
             ]));
         } else {
-            // First line inline with ⎿
+            // First line on the ⎿ line
             lines.push(Line::from(vec![
-                Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
+                Span::styled(RESULT_PREFIX, Style::default().fg(RC::DarkGray)),
                 Span::styled(truncate_str(all_lines[0], inner_w), Style::default().fg(RC::DarkGray)),
             ]));
-            // Remaining lines aligned under the content (5 spaces = "  ⎿  ")
+            // Continuation lines: 5-space indent (RESULT_INDENT)
             for line_str in &all_lines[1..show_n] {
                 lines.push(Line::from(vec![
-                    Span::raw("     "),
+                    Span::raw(RESULT_INDENT),
                     Span::styled(truncate_str(line_str, inner_w), Style::default().fg(RC::DarkGray)),
                 ]));
             }
             if count > PREVIEW {
                 lines.push(Line::from(Span::styled(
-                    format!("     … ({} more lines)", count - PREVIEW),
+                    format!("{RESULT_INDENT}… ({} more lines)", count - PREVIEW),
                     Style::default().fg(RC::DarkGray),
                 )));
             }
@@ -623,8 +615,7 @@ impl OutputRenderer {
 
         let height = lines.len() as u16;
         self.with_insert_before(height, move |buf| {
-            let area = padded_rect(*buf.area(), CONTENT_PAD);
-            Paragraph::new(lines).render(area, buf);
+            Paragraph::new(lines).render(*buf.area(), buf);
         })
     }
 
