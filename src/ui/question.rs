@@ -101,8 +101,11 @@ pub struct QuestionWidget;
 impl QuestionWidget {
     /// Present `question` interactively.
     ///
-    /// Returns `Some(answer)` on submission or `None` if the user pressed Esc / Ctrl+C.
-    pub fn ask(question: &Question<'_>) -> Result<Option<QuestionAnswer>> {
+    /// Returns `(Some(answer), viewport_height)` on submission or `(None, viewport_height)`
+    /// if the user pressed Esc / Ctrl+C.  The caller should pass `viewport_height` to
+    /// `OutputRenderer::note_blank_rows()` so the blank rows left by the widget's cleanup
+    /// are tracked and reused by the next `with_insert_before` call.
+    pub fn ask(question: &Question<'_>) -> Result<(Option<QuestionAnswer>, u16)> {
         // ── Build the effective options list ──────────────────────────────────
         // Slots: provided options + optional "Type something." + optional "Submit"
         let n_real = question.options.len();
@@ -430,6 +433,6 @@ impl QuestionWidget {
         let _ = execute!(out, cursor::MoveToRow(final_h.saturating_sub(1)));
         let _ = out.flush();
 
-        Ok(answer)
+        Ok((answer, viewport_height))
     }
 }

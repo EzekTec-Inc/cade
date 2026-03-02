@@ -125,8 +125,12 @@ impl OutputRenderer {
     /// Must be called before `ThinkingBar::start()` and after it stops.
     pub fn set_status_bar(&mut self, active: bool) {
         self.status_bar_height = if active { 1 } else { 0 };
-        // Anchor row changes; any pending blank-row offset is no longer valid.
-        self.blank_rows_at_bottom = 0;
+        if active {
+            // ThinkingBar claims the bottom content row (old anchor). Decrement
+            // rather than reset so the remaining blank rows stay tracked.
+            self.blank_rows_at_bottom = self.blank_rows_at_bottom.saturating_sub(1);
+        }
+        // Deactivation: former ThinkingBar row has text (not blank); count unchanged.
     }
 
     /// Record N blank rows that the InputWidget left at the bottom of the content
@@ -764,7 +768,8 @@ impl OutputRenderer {
             write!(out, "\x1b[r")?;                    // reset DECSTBM
         }
 
-        self.blank_rows_at_bottom = 0;
+        // Keep tracking: blank rows left at bottom of content area after compaction.
+        self.blank_rows_at_bottom = remaining;
 
         out.flush()?;
         Ok(())

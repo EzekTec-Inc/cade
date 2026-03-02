@@ -2431,7 +2431,9 @@ impl Repl {
             progress: None,
         };
 
-        match QuestionWidget::ask(&q)? {
+        let (qa, vp_h) = QuestionWidget::ask(&q)?;
+        self.output.lock().unwrap().note_blank_rows(vp_h);
+        match qa {
             None => Ok(false), // Esc / Ctrl+C = deny
             Some(answer) => {
                 let label = answer.as_str();
@@ -2551,7 +2553,9 @@ impl Repl {
                 progress: if total > 1 { Some((i + 1, total)) } else { None },
             };
 
-            match QuestionWidget::ask(&q)? {
+            let (qa, vp_h) = QuestionWidget::ask(&q)?;
+            self.output.lock().unwrap().note_blank_rows(vp_h);
+            match qa {
                 None => {
                     let msg = "User cancelled the question prompt.".to_string();
                     self.output.lock().unwrap().tool_result(true, &msg)?;
