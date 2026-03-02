@@ -17,8 +17,6 @@ use crossterm::{
     terminal,
 };
 use ratatui::{
-    Terminal, TerminalOptions, Viewport,
-    backend::CrosstermBackend,
     buffer::Buffer,
     layout::Rect,
     style::{Color as RC, Modifier, Style},
@@ -80,6 +78,12 @@ pub struct OutputRenderer {
     /// written to this shared string rather than via raw stdout writes.
     /// The ThinkingBar task reads this to display animated status.
     bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
+
+    /// Number of blank rows sitting at the bottom of the content area left over
+    /// from the most recent InputWidget viewport clear.  `with_insert_before`
+    /// reuses these rows instead of scrolling new blank ones, then compacts any
+    /// remaining gap with ANSI Delete-Line so content stays adjacent to the banner.
+    blank_rows_at_bottom: u16,
 }
 
 impl OutputRenderer {
@@ -96,6 +100,7 @@ impl OutputRenderer {
             reason_buf: String::new(),
             status_bar_height: 0,
             bar_text: None,
+            blank_rows_at_bottom: 0,
         }
     }
 
@@ -120,6 +125,15 @@ impl OutputRenderer {
     /// Must be called before `ThinkingBar::start()` and after it stops.
     pub fn set_status_bar(&mut self, active: bool) {
         self.status_bar_height = if active { 1 } else { 0 };
+        // Anchor row changes; any pending blank-row offset is no longer valid.
+        self.blank_rows_at_bottom = 0;
+    }
+
+    /// Record N blank rows that the InputWidget left at the bottom of the content
+    /// area after clearing its viewport.  The next `with_insert_before` call will
+    /// reuse these rows and compact any remaining gap.
+    pub fn note_blank_rows(&mut self, n: u16) {
+        self.blank_rows_at_bottom = n;
     }
 
     /// Insert a blank spacer line after an agent turn so consecutive response
@@ -674,39 +688,85 @@ impl OutputRenderer {
         self.term_width.saturating_sub(CONTENT_PAD * 2) as usize
     }
 
-    /// Create a minimal Viewport::Inline(0) terminal, call `insert_before(height, f)`,
-    /// then immediately drop the terminal.
+    /// Scroll `height` rows of space into the content area and render `f` there.
     ///
-    /// IMPORTANT: `insert_before` only works correctly when the viewport is at the
-    /// terminal bottom. It issues a terminal ScrollUp(N) which renders content at
-    /// the last N rows. If the cursor is mid-screen, the rendered content appears
-    /// at the terminal bottom but the viewport is left mid-screen — subsequent
-    /// calls then render at inconsistent positions.
+    /// Uses DECSTBM (scroll-region escape) to scroll only the content rows,
+    /// keeping the ThinkingBar row untouched.  Renders the ratatui `Buffer`
+    /// directly with raw ANSI codes — **no** `Terminal::with_options` and **no**
+    /// cursor-position query (`\033[6n`).
     ///
-    /// Fix: anchor cursor at the terminal bottom row before creating the viewport.
-    /// `cursor::MoveToRow(N)` repositions without printing/scrolling, so no extra
-    /// blank lines appear. After each call, the cursor returns to term_h - 1.
-    fn with_insert_before<F>(&self, height: u16, f: F) -> Result<()>
+    /// Eliminating cursor-position queries removes the race with the REPL's
+    /// `crossterm::event::read()` that caused CPR bytes (`\033[row;colR`) to
+    /// appear as visible text in the terminal output.
+    fn with_insert_before<F>(&mut self, height: u16, f: F) -> Result<()>
     where
         F: FnOnce(&mut Buffer),
     {
-        // Anchor to terminal bottom so insert_before works correctly.
-        // When a ThinkingBar is active it owns the very last row; anchor one
-        // row above it so content scrolls above the status bar.
-        if let Ok((_, term_h)) = terminal::size() {
-            let anchor = term_h
-                .saturating_sub(1)
-                .saturating_sub(self.status_bar_height);
-            let _ = execute!(io::stdout(), cursor::MoveToRow(anchor));
+        let height = height.max(1);
+        let Ok((term_w, term_h)) = terminal::size() else { return Ok(()); };
+
+        // Build ratatui buffer in memory (widget API unchanged for callers).
+        let area = Rect::new(0, 0, term_w, height);
+        let mut buf = Buffer::empty(area);
+        f(&mut buf);
+
+        // anchor: last content row (0-indexed), just above the status bar.
+        let anchor = term_h.saturating_sub(1).saturating_sub(self.status_bar_height);
+        // Clamp height to the available content rows to avoid writing past anchor.
+        let height = height.min(anchor + 1);
+
+        // How many pre-existing blank rows (left by InputWidget) can we reuse?
+        // Clamped to [0, anchor+1] to stay in-bounds.
+        let blank = self.blank_rows_at_bottom.min(anchor + 1);
+        // Rows we must scroll in vs rows we can reuse from the blank region.
+        let used       = blank.min(height);
+        let new_rows   = height - used;           // newlines to emit
+        let remaining  = blank.saturating_sub(height); // blank rows left after write
+
+        let mut out = io::stdout();
+
+        // 1. Restrict the scroll region to rows [0, anchor] (DECSTBM, 1-indexed).
+        //    Newlines at `anchor` now scroll only the content area; the ThinkingBar
+        //    at term_h-1 is outside the region and is completely unaffected.
+        write!(out, "\x1b[1;{}r", anchor + 1)?;
+
+        // 2. Move to the bottom of the scroll region, emit `new_rows` newlines.
+        //    Each newline at the bottom of the scroll region scrolls everything
+        //    within the region up by 1 and keeps the cursor at `anchor`.
+        //    When `new_rows < height`, we reuse pre-existing blank rows instead of
+        //    scrolling new ones, avoiding spurious gaps in the output.
+        execute!(out, cursor::MoveToRow(anchor), cursor::MoveToColumn(0))?;
+        for _ in 0..new_rows {
+            write!(out, "\n")?;
         }
-        let backend = CrosstermBackend::new(io::stdout());
-        let mut term = Terminal::with_options(
-            backend,
-            TerminalOptions {
-                viewport: Viewport::Inline(0),
-            },
-        )?;
-        term.insert_before(height, f)?;
+
+        // 3. Reset scroll region to the full terminal (rows 1..term_h).
+        write!(out, "\x1b[r")?;
+
+        // 4. Write buffer rows into the space at [anchor-height+1 .. anchor].
+        //    After `new_rows` newlines the blank region (pre-existing + scrolled-in)
+        //    covers exactly `height` rows ending at `anchor`.
+        let write_start = anchor.saturating_sub(height.saturating_sub(1));
+        for y in 0..height {
+            execute!(out, cursor::MoveTo(0, write_start + y))?;
+            render_buf_row(&mut out, &buf, y)?;
+        }
+
+        // 5. Compact any remaining blank rows that sit between the previous content
+        //    and the newly written rows.  ANSI Delete Line (\x1b[nM]) at the first
+        //    blank row deletes those rows and shifts the written rows UP, closing
+        //    the gap without leaving visible whitespace.
+        if remaining > 0 {
+            let blank_row_start = write_start.saturating_sub(remaining);
+            write!(out, "\x1b[1;{}r", anchor + 1)?;   // DECSTBM [0, anchor]
+            execute!(out, cursor::MoveTo(0, blank_row_start))?;
+            write!(out, "\x1b[{}M", remaining)?;       // delete `remaining` lines
+            write!(out, "\x1b[r")?;                    // reset DECSTBM
+        }
+
+        self.blank_rows_at_bottom = 0;
+
+        out.flush()?;
         Ok(())
     }
 
@@ -911,6 +971,77 @@ fn parse_list_prefix(s: &str) -> Option<(&str, &str)> {
     }
     let rest = s[end..].strip_prefix(". ")?;
     Some((&s[..end], rest))
+}
+
+// ── Direct terminal rendering helpers ─────────────────────────────────────────
+//
+// Used by `with_insert_before` to write a ratatui Buffer to the terminal
+// WITHOUT creating a `Terminal::with_options(Viewport::Inline)`.  That
+// constructor queries cursor position (`\033[6n` → stdin), which races with
+// `crossterm::event::read()` on the REPL's event loop and causes CPR bytes
+// (`\033[row;colR`) to leak into the terminal output as visible text.
+
+/// Convert ratatui Color to crossterm Color for raw ANSI output.
+fn rc_to_ct(c: RC) -> Color {
+    match c {
+        RC::Black         => Color::Black,
+        RC::Red           => Color::DarkRed,
+        RC::Green         => Color::DarkGreen,
+        RC::Yellow        => Color::DarkYellow,
+        RC::Blue          => Color::DarkBlue,
+        RC::Magenta       => Color::DarkMagenta,
+        RC::Cyan          => Color::DarkCyan,
+        RC::Gray          => Color::Grey,
+        RC::DarkGray      => Color::DarkGrey,
+        RC::LightRed      => Color::Red,
+        RC::LightGreen    => Color::Green,
+        RC::LightYellow   => Color::Yellow,
+        RC::LightBlue     => Color::Blue,
+        RC::LightMagenta  => Color::Magenta,
+        RC::LightCyan     => Color::Cyan,
+        RC::White         => Color::White,
+        RC::Rgb(r, g, b)  => Color::Rgb { r, g, b },
+        RC::Indexed(i)    => Color::AnsiValue(i),
+        RC::Reset         => Color::Reset,
+    }
+}
+
+/// Write one row of a ratatui `Buffer` to `out` using raw ANSI codes.
+///
+/// Emits SGR (Select Graphic Rendition) codes only when the style changes,
+/// then writes `cell.symbol()` for each cell.  Ends with a full attribute
+/// reset (`\x1b[0m`) and an "erase to end of line" (`\x1b[K`) so no stale
+/// content from a previous render bleeds through.
+fn render_buf_row(out: &mut impl io::Write, buf: &Buffer, y: u16) -> io::Result<()> {
+    let width = buf.area().width;
+    let mut prev_fg = RC::Reset;
+    let mut prev_modifier = Modifier::empty();
+
+    for x in 0..width {
+        let Some(cell) = buf.cell((x, y)) else { continue; };
+
+        if cell.fg != prev_fg || cell.modifier != prev_modifier {
+            // Full reset then reapply — simplest way to handle modifier removal.
+            write!(out, "\x1b[0m")?;
+            prev_fg = RC::Reset;
+            prev_modifier = Modifier::empty();
+
+            if cell.modifier.contains(Modifier::BOLD)   { write!(out, "\x1b[1m")?; }
+            if cell.modifier.contains(Modifier::DIM)    { write!(out, "\x1b[2m")?; }
+            if cell.modifier.contains(Modifier::ITALIC) { write!(out, "\x1b[3m")?; }
+            match cell.fg {
+                RC::Reset => { /* already reset above */ }
+                c => execute!(out, SetForegroundColor(rc_to_ct(c)))?,
+            }
+            prev_fg = cell.fg;
+            prev_modifier = cell.modifier;
+        }
+
+        write!(out, "{}", cell.symbol())?;
+    }
+    // Reset all attributes and erase any stale content to the right.
+    write!(out, "\x1b[0m\x1b[K")?;
+    Ok(())
 }
 
 // ── Assistant line builder ─────────────────────────────────────────────────────

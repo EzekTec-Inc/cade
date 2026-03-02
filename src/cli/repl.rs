@@ -295,13 +295,16 @@ impl Repl {
                 None => break,
             };
             let input = input.trim().to_string();
+            // Notify OutputRenderer of the blank rows left by the InputWidget clear.
+            let blank_n = self.input_widget.last_viewport_height;
+            self.output.lock().unwrap().note_blank_rows(blank_n);
             if input.is_empty() {
                 continue;
             }
             history.push(input.clone());
             hist_idx = None;
 
-            // Echo user message — Letta Code style: "> text" with white text
+            // Echo user message — Letta Code style: \"> text\" with white text
             let _ = self.output.lock().unwrap().user_message(&input);
 
             // Direct bash: lines starting with '!'

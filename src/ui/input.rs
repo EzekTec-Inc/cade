@@ -63,6 +63,9 @@ pub struct InputWidget {
     cursor_pos: usize,
     term_width: u16,
     pub last_status: Option<String>,
+    /// Height of the most recently cleared inline viewport (set on every cleanup).
+    /// Exposed so the caller can tell OutputRenderer how many blank rows were left.
+    pub last_viewport_height: u16,
 }
 
 impl InputWidget {
@@ -75,6 +78,7 @@ impl InputWidget {
             cursor_pos: 0,
             term_width,
             last_status: None,
+            last_viewport_height: 0,
         }
     }
 
@@ -461,6 +465,8 @@ impl InputWidget {
         let (_, final_term_h) = terminal::size().unwrap_or((80, 24));
         let _ = execute!(out, cursor::MoveToRow(final_term_h.saturating_sub(1)));
         let _ = out.flush();
+        // Record cleared viewport height so OutputRenderer can compact the blank rows.
+        self.last_viewport_height = viewport_height;
         result
     }
 }
