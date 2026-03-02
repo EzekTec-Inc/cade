@@ -235,6 +235,11 @@ impl Repl {
     pub async fn run(mut self) -> Result<()> {
         let mut stdout = io::stdout();
 
+        // Clear the terminal before the banner so old content from previous
+        // sessions doesn't bleed through into the new session's view.
+        execute!(stdout, terminal::Clear(terminal::ClearType::All), cursor::MoveTo(0, 0))?;
+        stdout.flush()?;
+
         // Banner + agent info via OutputRenderer
         self.output.lock().unwrap().banner(
             BANNER,
@@ -1836,7 +1841,9 @@ impl Repl {
             true, false, Ordering::SeqCst, Ordering::SeqCst
         ).is_ok() {
             let env = self.build_env_context();
-            format!("{env}\n\n{input}")
+            // Explicitly instruct the agent not to turn the env context into a
+            // self-introduction. Without this it often opens with "I am CADE…"
+            format!("{env}\n\n<system>Do not introduce yourself. Answer the user's message directly.</system>\n\n{input}")
         } else {
             input.to_string()
         };

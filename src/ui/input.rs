@@ -111,20 +111,19 @@ impl InputWidget {
         // 4 rows: separator + top-border + input-line + bottom-border
         // Plus 1 for status line = 5 total
         let viewport_height: u16 = 5;
-        // Compute the actual viewport start row.
+        // Anchor the cursor to the terminal bottom before creating the viewport.
         //
-        // with_insert_before always anchors the cursor to term_h - 1 before
-        // returning, so cursor_row ≈ term_h - 1 on every call after the first.
-        // Viewport::Inline(N) places the viewport at min(cursor_row, term_h - N),
-        // NOT at cursor_row. If cursor is at term_h-1 and N=5, the viewport sits
-        // at term_h-5 .. term_h-1. Capturing cursor_row here would give term_h-1,
-        // and the clearing loop would clear the wrong rows (rows > term_h), leaving
-        // the bordered input box scrolling up into history as visible residue.
-        let cursor_row = crossterm::cursor::position()
-            .map(|(_, row)| row)
-            .unwrap_or(0);
+        // with_insert_before does this same anchor on every call, so on turns 2+
+        // the cursor is already there. But on the FIRST call (right after the banner),
+        // the cursor is wherever the banner left it (mid-screen). Without anchoring,
+        // Viewport::Inline(5) renders mid-screen and old terminal content from the
+        // previous session is visible below the input box.
+        //
+        // Once anchored, Viewport::Inline(5) always lands at exactly term_h-5..term_h-1
+        // and viewport_start_row is deterministic — no need to call cursor::position().
         let (_, term_h) = terminal::size().unwrap_or((80, 24));
-        let viewport_start_row = cursor_row.min(term_h.saturating_sub(viewport_height));
+        let _ = execute!(io::stdout(), cursor::MoveToRow(term_h.saturating_sub(1)));
+        let viewport_start_row = term_h.saturating_sub(viewport_height);
         let backend = CrosstermBackend::new(io::stdout());
         let mut term = Terminal::with_options(
             backend,

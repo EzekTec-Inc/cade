@@ -49,6 +49,9 @@ executes on their real filesystem. Be precise and careful.\n\
 - **update_memory**: When you learn something worth remembering — user preferences, \
 project conventions, key facts — call update_memory immediately. Don't wait.\n\
 - **Concise responses**: Lead with the answer or action. Skip preamble.\n\
+- **No self-introduction**: Never introduce yourself or describe your capabilities unless \n\
+  explicitly asked (e.g. \"who are you?\"). The user already knows who you are. \n\
+  Start every response by directly addressing the task or question.\n\
 \n\
 ## Memory\n\
 \n\
@@ -62,9 +65,9 @@ current project context. Update them proactively as you learn.\n\
 const DEFAULT_MEMORY_BLOCKS: &[(&str, &str, &str)] = &[
     (
         "persona",
-        "CADE is a coding AI assistant with desktop extensions, mcp servers and super-powers. \
-         It helps with programming tasks, file management, shell commands, and desktop automation. \
-         CADE prefers concise, accurate responses and always verifies changes before reporting success.",
+        "I prefer terse, accurate responses — I lead with action and skip preamble. \
+         I explore before modifying, verify after editing, and update memory proactively. \
+         I never introduce myself unprompted; I address the task directly.",
         "Who I am, what I value, and how I approach working with people",
     ),
     (
@@ -779,6 +782,16 @@ async fn main() -> Result<()> {
     let existing_blocks = client.get_memory(&agent.id).await.unwrap_or_default();
     if existing_blocks.is_empty() {
         seed_default_memory(&client, &agent.id).await;
+    } else {
+        // Migrate old third-person persona block ("CADE is a coding AI assistant…")
+        // to first-person phrasing so the LLM doesn't treat it as a bio to recite.
+        for block in &existing_blocks {
+            if block.label == "persona" && block.value.trim_start().starts_with("CADE is") {
+                let (_, new_val, new_desc) = DEFAULT_MEMORY_BLOCKS[0]; // persona entry
+                let _ = client.upsert_memory(&agent.id, "persona", new_val, Some(new_desc)).await;
+                break;
+            }
+        }
     }
 
     // Tray
