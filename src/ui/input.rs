@@ -1,18 +1,11 @@
 /// Ratatui-based input widget for the CADE REPL.
 ///
-/// Replaces the raw-crossterm `read_line()` with a proper inline ratatui
-/// input box that shows:
-///   - A separator line
-///   - A bordered input area with mode indicator
-///   - A status line: model · agent · [mode] · tokens
-///
-/// Layout (Viewport::Inline(4)):
+/// Layout matches Letta Code's InputRich component (Viewport::Inline(4)):
 /// ```
-///  ─────────────────────────────────────────────── (separator)
-///  ╭─ cade [yolo] ──────────────────────────────╮
-///  │ > Type a message…  (Shift+Enter for newline) │
-///  ╰─────────────────────────────────────────────╯
-///   claude-opus · agent-xyz · in: 1,234  out: 567
+///  ─────────────────────────────────────────────── (dim separator, full width)
+///  > user types here                               (prompt char + text field)
+///  ─────────────────────────────────────────────── (dim separator, full width)
+///  plan (read-only) mode ⏸       AgentName [model] (footer: left=mode, right=agent/model)
 /// ```
 
 use std::io::{self, Write};
@@ -30,7 +23,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout},
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Paragraph, Wrap},
 };
 
 use crate::permissions::PermissionMode;
@@ -102,15 +95,14 @@ impl InputWidget {
         permissions: &crate::permissions::PermissionManager,
         agent_name: &str,
         model: &str,
-        in_tokens: u64,
-        out_tokens: u64,
+        _in_tokens: u64,
+        _out_tokens: u64,
     ) -> Result<Option<String>> {
         self.buf.clear();
         self.cursor_pos = 0;
 
-        // 4 rows: separator + top-border + input-line + bottom-border
-        // Plus 1 for status line = 5 total
-        let viewport_height: u16 = 5;
+        // 4 rows: separator + input-line + separator + footer (Letta Code layout)
+        let viewport_height: u16 = 4;
         // Anchor the cursor to the terminal bottom before creating the viewport.
         //
         // with_insert_before does this same anchor on every call, so on turns 2+
@@ -139,119 +131,110 @@ impl InputWidget {
                 // ── Draw ──────────────────────────────────────────────────────
                 let buf_snapshot = self.buf.clone();
                 let cursor_pos = self.cursor_pos;
-                let mode_tag = mode_title(mode);
                 let agent_name = agent_name.to_string();
                 let model = model.to_string();
 
                 term.draw(|frame| {
                     let area = frame.area();
 
-                    // Horizontal padding: shrink content area by CONTENT_PAD on each side
-                    let cols = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([
-                            Constraint::Length(CONTENT_PAD),
-                            Constraint::Min(0),
-                            Constraint::Length(CONTENT_PAD),
-                        ])
-                        .split(area);
-
+                    // Layout: separator | input-line | separator | footer
                     let chunks = Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([
-                            Constraint::Length(1), // separator
-                            Constraint::Length(3), // input box (border + 1 content row)
-                            Constraint::Length(1), // status bar
+                            Constraint::Length(1), // row 0: separator
+                            Constraint::Length(1), // row 1: prompt + text
+                            Constraint::Length(1), // row 2: separator
+                            Constraint::Length(1), // row 3: footer
                         ])
-                        .split(cols[1]);
+                        .split(area);
 
-                    // ── Separator ─────────────────────────────────────────────
+                    // ── Separator (rows 0 and 2) ──────────────────────────────
+                    let sep_color = mode_sep_color(mode);
                     let sep = "─".repeat(chunks[0].width as usize);
-                    let sep_para = Paragraph::new(Span::styled(
-                        sep,
-                        Style::default().fg(RC::DarkGray),
+                    let sep_line = Paragraph::new(Span::styled(
+                        sep.clone(),
+                        Style::default().fg(sep_color),
                     ));
-                    frame.render_widget(sep_para, chunks[0]);
+                    frame.render_widget(sep_line, chunks[0]);
+                    let sep_line2 = Paragraph::new(Span::styled(
+                        sep,
+                        Style::default().fg(sep_color),
+                    ));
+                    frame.render_widget(sep_line2, chunks[2]);
 
-                    // ── Input box ─────────────────────────────────────────────
-                    let border_color = mode_color(mode);
-                    let block = Block::default()
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(border_color))
-                        .title(Span::styled(
-                            format!(" cade{mode_tag} "),
-                            Style::default()
-                                .fg(border_color)
-                                .add_modifier(Modifier::BOLD),
-                        ));
-                    let inner = block.inner(chunks[1]);
-
-                    // Show placeholder when empty
+                    // ── Prompt + text input (row 1) ───────────────────────────
                     let display = if buf_snapshot.is_empty() {
                         Line::from(vec![
-                            Span::raw("> "),
+                            Span::styled("> ", Style::default().fg(RC::White)),
                             Span::styled(
-                                "Type a message…  (Shift+Enter for newline)",
+                                "Type a message…",
                                 Style::default().fg(RC::DarkGray),
                             ),
                         ])
                     } else {
                         Line::from(vec![
-                            Span::raw("> "),
+                            Span::styled("> ", Style::default().fg(RC::White)),
                             Span::styled(
                                 buf_snapshot.replace('\n', "↵ "),
                                 Style::default().fg(RC::White),
                             ),
                         ])
                     };
+                    frame.render_widget(
+                        Paragraph::new(display).wrap(Wrap { trim: false }),
+                        chunks[1],
+                    );
 
-                    let input_para = Paragraph::new(display)
-                        .wrap(Wrap { trim: false });
-                    frame.render_widget(block, chunks[1]);
-                    frame.render_widget(input_para, inner);
-
-                    // Cursor position: after "> " prefix + cursor_pos chars
-                    // For multi-line input, count newlines before cursor_pos to find the row.
+                    // Cursor: col = 2 ("> " prefix) + col in current line
                     let before_cursor = &buf_snapshot[..cursor_pos.min(buf_snapshot.len())];
                     let line_idx = before_cursor.chars().filter(|&c| c == '\n').count() as u16;
                     let last_line_start = before_cursor.rfind('\n').map(|i| i + 1).unwrap_or(0);
                     let col_in_line = before_cursor[last_line_start..].chars().count() as u16;
-                    let cursor_col = inner.x + 2 + col_in_line.min(inner.width.saturating_sub(3));
-                    let cursor_row = (inner.y + line_idx).min(inner.y + inner.height.saturating_sub(1));
+                    let cursor_col = chunks[1].x + 2 + col_in_line.min(chunks[1].width.saturating_sub(3));
+                    let cursor_row = (chunks[1].y + line_idx).min(chunks[1].y + chunks[1].height.saturating_sub(1));
                     frame.set_cursor_position((cursor_col, cursor_row));
 
-                    // ── Status bar ────────────────────────────────────────────
-                    let (mode_icon, mode_label) = mode_status(mode);
-                    let tok_in = fmt_tokens(in_tokens);
-                    let tok_out = fmt_tokens(out_tokens);
-                    let status = Line::from(vec![
-                        Span::styled(
-                            format!(" {model}"),
-                            Style::default().fg(RC::Cyan),
-                        ),
-                        Span::styled(" · ", Style::default().fg(RC::DarkGray)),
-                        Span::styled(
-                            agent_name.clone(),
-                            Style::default().fg(RC::DarkGray),
-                        ),
-                        Span::styled(
-                            format!("  {mode_icon} {mode_label}"),
-                            Style::default()
-                                .fg(border_color)
-                                .add_modifier(Modifier::BOLD),
-                        ),
-                        Span::styled(
-                            format!("  in:{tok_in}  out:{tok_out}"),
-                            Style::default().fg(RC::DarkGray),
-                        ),
-                        Span::styled(
-                            "  Shift+Tab: cycle mode",
-                            Style::default().fg(RC::DarkGray),
-                        ),
-                    ]);
+                    // ── Footer (row 3) ────────────────────────────────────────
+                    // Left: mode info (color-coded, matches Letta Code)
+                    // Right: AgentName [model] (agent in purple, model dim)
+                    let mut footer_spans: Vec<Span> = Vec::new();
+                    if let Some((label, glyph, color)) = mode_footer_info(mode) {
+                        footer_spans.push(Span::styled(
+                            label,
+                            Style::default().fg(color).add_modifier(Modifier::BOLD),
+                        ));
+                        if !glyph.is_empty() {
+                            footer_spans.push(Span::styled(
+                                format!(" {glyph}"),
+                                Style::default().fg(color),
+                            ));
+                        }
+                    }
+
+                    // Right side: "AgentName [model]"
+                    let right = format!("{agent_name} [{}]", truncate_str(&model, 30));
+                    let right_len = right.chars().count() as u16;
+                    let left_len: u16 = footer_spans.iter()
+                        .map(|s| s.content.chars().count() as u16)
+                        .sum();
+                    let pad = chunks[3].width.saturating_sub(left_len + right_len) as usize;
+                    footer_spans.push(Span::styled(
+                        " ".repeat(pad),
+                        Style::default(),
+                    ));
+                    // Agent name in #8C8CF9 purple (Letta Code: colors.footer.agentName)
+                    footer_spans.push(Span::styled(
+                        agent_name.clone(),
+                        Style::default().fg(RC::Rgb(140, 140, 249)),
+                    ));
+                    footer_spans.push(Span::styled(
+                        format!(" [{}]", truncate_str(&model, 30)),
+                        Style::default().fg(RC::DarkGray),
+                    ));
+
                     frame.render_widget(
-                        Paragraph::new(status),
-                        chunks[2],
+                        Paragraph::new(Line::from(footer_spans)),
+                        chunks[3],
                     );
                 })?;
 
@@ -430,13 +413,12 @@ impl InputWidget {
         // Drop the ratatui terminal before touching the cursor so its internal
         // state is released first.
         drop(term);
-        // Selectively clear the input box rows:
-        //   Row 0 (viewport_start_row)     = separator ─────  → KEEP as turn divider
-        //   Rows 1-4 (box borders+content) = ┌──┐ content └──┘ + status → CLEAR
+        // Selectively clear the input rows:
+        //   Row 0 (viewport_start_row)  = separator ───────  → KEEP as turn divider
+        //   Rows 1-3 (input+sep+footer) = "> text", "────", footer → CLEAR
         //
-        // If we cleared all 5 rows (including the separator), the history would
-        // have blank gaps between responses. Keeping the separator gives a clean
-        // visual divider between conversation turns while hiding the box borders.
+        // Keeping the separator gives a clean visual divider between conversation
+        // turns while hiding the prompt field and footer.
         let mut out = io::stdout();
         for row in (viewport_start_row + 1)..viewport_start_row.saturating_add(viewport_height) {
             let _ = execute!(out, cursor::MoveTo(0, row), terminal::Clear(ClearType::CurrentLine));
@@ -457,30 +439,22 @@ impl Default for InputWidget {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-fn mode_title(mode: PermissionMode) -> &'static str {
+/// Separator line color — matches Letta Code's bash-mode red vs default dim.
+fn mode_sep_color(mode: PermissionMode) -> RC {
     match mode {
-        PermissionMode::Default           => "",
-        PermissionMode::AcceptEdits       => " [edits]",
-        PermissionMode::Plan              => " [plan]",
-        PermissionMode::BypassPermissions => " [yolo]",
+        PermissionMode::BypassPermissions => RC::DarkGray,
+        _ => RC::DarkGray,
     }
 }
 
-fn mode_color(mode: PermissionMode) -> RC {
+/// Footer mode info: (label, glyph, color) — matches Letta Code's modeInfo.
+/// Returns None for Default mode (no label shown).
+fn mode_footer_info(mode: PermissionMode) -> Option<(&'static str, &'static str, RC)> {
     match mode {
-        PermissionMode::Default           => RC::Green,
-        PermissionMode::AcceptEdits       => RC::Magenta,
-        PermissionMode::Plan              => RC::Cyan,
-        PermissionMode::BypassPermissions => RC::Yellow,
-    }
-}
-
-fn mode_status(mode: PermissionMode) -> (&'static str, &'static str) {
-    match mode {
-        PermissionMode::Default           => ("✅", "default"),
-        PermissionMode::AcceptEdits       => ("📝", "acceptEdits"),
-        PermissionMode::Plan              => ("📖", "plan"),
-        PermissionMode::BypassPermissions => ("⚡", "yolo"),
+        PermissionMode::Default           => None,
+        PermissionMode::AcceptEdits       => Some(("accept edits", "", RC::Rgb(140, 140, 249))),
+        PermissionMode::Plan              => Some(("plan (read-only) mode", "⏸", RC::Green)),
+        PermissionMode::BypassPermissions => Some(("yolo (allow all) mode", "⚡︎", RC::Red)),
     }
 }
 
@@ -493,14 +467,11 @@ fn cycle_mode(mode: PermissionMode) -> PermissionMode {
     }
 }
 
-fn fmt_tokens(n: u64) -> String {
-    if n == 0 {
-        "0".to_string()
-    } else if n >= 1_000_000 {
-        format!("{:.1}M", n as f64 / 1_000_000.0)
-    } else if n >= 1_000 {
-        format!("{:.1}k", n as f64 / 1_000.0)
+fn truncate_str(s: &str, max: usize) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= max {
+        s.to_string()
     } else {
-        n.to_string()
+        format!("{}…", chars[..max.saturating_sub(1)].iter().collect::<String>())
     }
 }

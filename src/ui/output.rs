@@ -280,8 +280,33 @@ impl OutputRenderer {
 
     // ── Bounded paths (ratatui insert_before) ─────────────────────────────────
 
+    /// Echo user message — Letta Code's UserMessage style.
+    /// Shows `> first line` then `  continuation` with white text.
+    pub fn user_message(&mut self, text: &str) -> Result<()> {
+        self.close_streaming()?;
+        let mut out = io::stdout();
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        use crossterm::style::Attribute;
+        execute!(out, Print("\n"))?;
+        for (i, line) in trimmed.lines().enumerate() {
+            let prefix = if i == 0 { "> " } else { "  " };
+            execute!(
+                out,
+                crossterm::style::SetAttribute(Attribute::Reset),
+                SetForegroundColor(Color::White),
+                Print(format!("{prefix}{line}\n")),
+                ResetColor,
+            )?;
+        }
+        out.flush()?;
+        Ok(())
+    }
+
     /// Tool call — Letta Code-style: `● Name(args…)` on a single line.
-    /// ● is green, Name is bold-white, (args) is plain — matching Letta Code exactly.
+    /// ● is green, Name is bold-white (or purple for memory tools), (args) is plain.
     pub fn tool_call(&mut self, name: &str, preview: &str) -> Result<()> {
         self.close_streaming()?;
         self.update_width();
@@ -289,9 +314,17 @@ impl OutputRenderer {
         // Budget: full width minus "● " (2) minus display name minus parens
         let args_budget = self.term_width.saturating_sub(2 + display.len() as u16 + 2) as usize;
 
+        // Memory tools get Letta Code's colors.tool.memoryName = #8C8CF9 (purple)
+        let is_memory = name.to_ascii_lowercase().contains("memory");
+        let name_style = if is_memory {
+            Style::default().add_modifier(Modifier::BOLD).fg(RC::Rgb(140, 140, 249))
+        } else {
+            Style::default().add_modifier(Modifier::BOLD)
+        };
+
         let mut spans = vec![
             Span::styled("● ", Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
-            Span::styled(display.clone(), Style::default().add_modifier(Modifier::BOLD)),
+            Span::styled(display.clone(), name_style),
         ];
         if !preview.is_empty() {
             let truncated = truncate_str(preview, args_budget);

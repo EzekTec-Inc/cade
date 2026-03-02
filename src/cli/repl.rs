@@ -296,6 +296,9 @@ impl Repl {
             history.push(input.clone());
             hist_idx = None;
 
+            // Echo user message — Letta Code style: "> text" with white text
+            let _ = self.output.lock().unwrap().user_message(&input);
+
             // Direct bash: lines starting with '!'
             if let Some(cmd) = input.strip_prefix('!') {
                 let cmd = cmd.trim();
