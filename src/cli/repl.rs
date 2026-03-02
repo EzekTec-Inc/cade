@@ -1846,8 +1846,6 @@ impl Repl {
         // Stopped by the first on_event call via the shared AtomicBool.
         let spinner_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
         let spinner_flag   = spinner_active.clone();
-        // Small newline so the spinner appears on its own line below the input
-        println!();
         let spinner_task = tokio::spawn(async move {
             const FRAMES: &[&str] = &["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
             let mut i = 0usize;
@@ -1855,7 +1853,9 @@ impl Repl {
                 if !spinner_flag.load(std::sync::atomic::Ordering::SeqCst) { break; }
                 {
                     use std::io::Write;
-                    print!("\r    {} waiting…", FRAMES[i % FRAMES.len()]);
+                    // \x1b[2K clears the entire current line before printing;
+                    // prevents banner/previous text bleeding through the spinner.
+                    print!("\x1b[2K\r    {} waiting…", FRAMES[i % FRAMES.len()]);
                     let _ = std::io::stdout().flush();
                 }
                 i += 1;
@@ -1863,7 +1863,7 @@ impl Repl {
             }
             // Erase spinner line on exit
             use std::io::Write;
-            print!("\r{}\r", " ".repeat(30));
+            print!("\x1b[2K\r");
             let _ = std::io::stdout().flush();
         });
 

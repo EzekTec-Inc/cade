@@ -472,10 +472,29 @@ pub async fn stream_message(
     let run_id_clone  = run_id.clone();
     let db_clone      = state.db.clone();
 
-    // Open LLM stream
+    // Open LLM stream.
+    // On failure, return a well-formed SSE stream with an error event + [DONE]
+    // instead of a raw HTTP 502. This prevents reqwest_eventsource from
+    // triggering the client's SSE fallback (which would re-persist the user
+    // message and call the blocking endpoint — duplicating DB entries).
     let llm_stream = match state.llm.stream(&req).await {
         Ok(s) => s,
-        Err(e) => return err(StatusCode::BAD_GATEWAY, &e.to_string()),
+        Err(e) => {
+            let err_msg = e.to_string();
+            tracing::error!("LLM stream open failed: {err_msg}");
+            if let Some(rid) = &run_id {
+                let _ = sqlite::finish_run(&state.db, rid, "failed");
+            }
+            let s = futures::stream::iter([
+                Ok::<Event, std::convert::Infallible>(
+                    Event::default().data(json!({ "error": err_msg }).to_string())
+                ),
+                Ok::<Event, std::convert::Infallible>(
+                    Event::default().data("[DONE]")
+                ),
+            ]);
+            return Sse::new(s).into_response();
+        }
     };
 
     let acc = std::sync::Arc::new(std::sync::Mutex::new((String::new(), Vec::<Value>::new())));

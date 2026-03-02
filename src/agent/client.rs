@@ -694,6 +694,16 @@ impl CadeClient {
                         es.close();
                         break;
                     }
+                    // Check for server-side error events (e.g. LLM 404/5xx).
+                    // The server emits {"error":"..."} as a proper SSE event so
+                    // we can show the real error without falling back to /messages
+                    // (which would re-persist the user message → duplicate in DB).
+                    if let Ok(v) = serde_json::from_str::<Value>(data) {
+                        if let Some(err_msg) = v["error"].as_str() {
+                            es.close();
+                            return Err(anyhow::anyhow!("{}", err_msg));
+                        }
+                    }
                     match serde_json::from_str::<CadeMessage>(data) {
                         Ok(lm) => {
                             on_event(&lm);
@@ -715,9 +725,22 @@ impl CadeClient {
                     }
                 }
                 Err(reqwest_eventsource::Error::StreamEnded) => break,
+                Err(reqwest_eventsource::Error::InvalidStatusCode(status, _)) => {
+                    // Server returned a non-200 HTTP status (e.g. 401, 404, 502).
+                    // DON'T fall back to /messages — that would re-persist the user
+                    // message and call the same failing LLM again.
+                    // After Fix 3 (messages.rs), CADE's own server returns a proper
+                    // SSE error stream instead of 502, so this path is only hit when
+                    // connecting to external/legacy servers that return raw HTTP errors.
+                    es.close();
+                    return Err(anyhow::anyhow!("Server returned HTTP {status}"));
+                }
                 Err(e) => {
-                    // Non-streaming fallback: if stream endpoint fails, use regular
-                    tracing::debug!("SSE error: {e}, falling back to send_message");
+                    // Network / transport errors (connection refused, timeout, etc.).
+                    // Fall back to the blocking endpoint only for transport errors —
+                    // these typically mean the SSE endpoint is unavailable but the
+                    // server itself might still respond to regular POST.
+                    tracing::debug!("SSE transport error: {e}, falling back to send_message");
                     es.close();
                     let fallback = self.send_message(agent_id, input).await?;
                     for lm in &fallback {

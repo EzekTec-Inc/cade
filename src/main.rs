@@ -380,9 +380,57 @@ async fn main() -> Result<()> {
     let client = CadeClient::new(base_url.clone(), api_key).context("create CADE server")?;
 
     if !client.health().await.unwrap_or(false) {
-        bail!(
-            "Cannot connect to CADE server at {base_url}. Check CADE_API_KEY and CADE_SERVER_URL."
-        );
+        // Auto-start cade-server from the same directory as the cade binary.
+        // This allows the user to run a single `./cade` command without
+        // needing a separate terminal for the server.
+        let server_bin = std::env::current_exe()
+            .ok()
+            .map(|p| p.with_file_name("cade-server"))
+            .filter(|p| p.exists());
+
+        if let Some(server_bin) = server_bin {
+            eprintln!("cade-server not running — starting…");
+            let mut cmd = std::process::Command::new(&server_bin);
+            // Log server output to /tmp/cade-server.log for debugging
+            if let Ok(log) = std::fs::OpenOptions::new()
+                .create(true).append(true).open("/tmp/cade-server.log")
+            {
+                use std::os::unix::io::IntoRawFd;
+                let fd = log.into_raw_fd();
+                // SAFETY: we own the fd; it is valid and open
+                unsafe {
+                    use std::os::unix::io::FromRawFd;
+                    cmd.stdout(std::fs::File::from_raw_fd(fd));
+                    cmd.stderr(std::fs::File::from_raw_fd(fd));
+                }
+            } else {
+                cmd.stdout(std::process::Stdio::null())
+                   .stderr(std::process::Stdio::null());
+            }
+            let _child = cmd.spawn().context("auto-start cade-server")?;
+
+            // Poll up to 5 s for the server to become ready
+            let mut ready = false;
+            for _ in 0..10 {
+                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+                if client.health().await.unwrap_or(false) {
+                    ready = true;
+                    break;
+                }
+            }
+            if !ready {
+                bail!(
+                    "cade-server failed to start. Check /tmp/cade-server.log\n\
+                     Or start it manually: {}", server_bin.display()
+                );
+            }
+            eprintln!("cade-server ready.");
+        } else {
+            bail!(
+                "Cannot connect to CADE server at {base_url}.\n\
+                 Start cade-server first: ./target/release/cade-server"
+            );
+        }
     }
 
     // Push any API keys from the CLI's environment to the server.

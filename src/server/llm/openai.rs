@@ -263,6 +263,9 @@ impl LlmProvider for OpenAiProvider {
                     }
                 }
             }
+            // Byte stream exhausted without explicit [DONE] — always send Done
+            // so the SSE client doesn't fall back to the blocking endpoint.
+            yield Ok(StreamChunk::Done);
         };
         Ok(Box::pin(s))
     }

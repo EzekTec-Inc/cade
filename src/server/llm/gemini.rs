@@ -262,6 +262,10 @@ impl LlmProvider for GeminiProvider {
                     }
                 }
             }
+            // Byte stream exhausted without an explicit finishReason chunk.
+            // Always yield Done so the SSE handler sends [DONE] and the client
+            // doesn't trigger its fallback-to-blocking-endpoint path.
+            yield Ok(StreamChunk::Done);
         };
         Ok(Box::pin(s))
     }
