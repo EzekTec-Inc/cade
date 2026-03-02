@@ -832,12 +832,17 @@ async fn main() -> Result<()> {
     // Interactive REPL
     let settings_arc = Arc::new(Mutex::new(settings));
     let session_arc = Arc::new(Mutex::new(session));
+    // Use the agent's actual model from DB as the initial REPL model.
+    // default_model is the server-detected default for NEW agents;
+    // for EXISTING agents the DB value is what the server actually uses for inference.
+    let initial_model = agent.model.clone().unwrap_or(default_model.clone());
+
     let repl = Repl::new(
         client,
         agent.id,
         agent.name,
         permissions,
-        default_model.clone(),
+        initial_model,
         settings_arc,
         session_arc,
         cwd.clone(),

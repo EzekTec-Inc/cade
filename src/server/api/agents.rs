@@ -146,8 +146,11 @@ pub async fn patch_agent(
         state.llm_router.read().await.validate_model(model).map_err(|e| {
             (StatusCode::BAD_REQUEST, Json(json!({ "detail": e.to_string() })))
         })?;
-        sqlite::update_agent_model(&state.db, &agent_id, model)
+        let updated = sqlite::update_agent_model(&state.db, &agent_id, model)
             .map_err(|e| server_err(e.to_string()))?;
+        if !updated {
+            return Err((StatusCode::NOT_FOUND, Json(json!({"detail": format!("Agent '{agent_id}' not found")}))));
+        }
         updated_model = model.clone();
         tracing::info!("Agent {agent_id}: model → {model}");
     }
