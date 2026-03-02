@@ -9,6 +9,32 @@ use tokio_stream::Stream;
 
 use super::{bare_model, provider_error, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
 
+/// Recursively strip JSON Schema fields that Gemini's functionDeclarations format rejects.
+///
+/// Gemini accepts a strict subset of JSON Schema — the following fields cause 400 errors
+/// when present anywhere in the parameter schema tree:
+///   - `$schema`            — JSON Schema meta-schema declaration
+///   - `additionalProperties` — not supported in Gemini's schema dialect
+///
+/// This function walks the entire Value tree and removes those keys in-place.
+fn clean_gemini_schema(v: &mut Value) {
+    match v {
+        Value::Object(map) => {
+            map.remove("$schema");
+            map.remove("additionalProperties");
+            for val in map.values_mut() {
+                clean_gemini_schema(val);
+            }
+        }
+        Value::Array(arr) => {
+            for val in arr.iter_mut() {
+                clean_gemini_schema(val);
+            }
+        }
+        _ => {}
+    }
+}
+
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_LIST_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200";
 
@@ -140,11 +166,15 @@ impl GeminiProvider {
 impl LlmProvider for GeminiProvider {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
         let (system_text, contents) = Self::to_gemini_contents(req);
-        let tools: Vec<Value> = req.tools.iter().map(|s| json!({
-            "name": s["name"],
-            "description": s["description"],
-            "parameters": s["parameters"]
-        })).collect();
+        let tools: Vec<Value> = req.tools.iter().map(|s| {
+            let mut params = s["parameters"].clone();
+            clean_gemini_schema(&mut params);
+            json!({
+                "name": s["name"],
+                "description": s["description"],
+                "parameters": params
+            })
+        }).collect();
 
         let mut body = json!({ "contents": contents });
         if let Some(sys) = system_text {
@@ -173,9 +203,11 @@ impl LlmProvider for GeminiProvider {
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
         let (system_text, contents) = Self::to_gemini_contents(req);
-        let tools: Vec<Value> = req.tools.iter().map(|s| json!({
-            "name": s["name"], "description": s["description"], "parameters": s["parameters"]
-        })).collect();
+        let tools: Vec<Value> = req.tools.iter().map(|s| {
+            let mut params = s["parameters"].clone();
+            clean_gemini_schema(&mut params);
+            json!({"name": s["name"], "description": s["description"], "parameters": params})
+        }).collect();
 
         let mut body = json!({ "contents": contents });
         if let Some(sys) = system_text {
