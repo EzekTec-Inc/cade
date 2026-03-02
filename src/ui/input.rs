@@ -111,11 +111,20 @@ impl InputWidget {
         // 4 rows: separator + top-border + input-line + bottom-border
         // Plus 1 for status line = 5 total
         let viewport_height: u16 = 5;
-        // Capture the cursor row BEFORE the viewport is created so we can
-        // return to it on exit and clear the input box residue.
-        let viewport_start_row = crossterm::cursor::position()
+        // Compute the actual viewport start row.
+        //
+        // with_insert_before always anchors the cursor to term_h - 1 before
+        // returning, so cursor_row ≈ term_h - 1 on every call after the first.
+        // Viewport::Inline(N) places the viewport at min(cursor_row, term_h - N),
+        // NOT at cursor_row. If cursor is at term_h-1 and N=5, the viewport sits
+        // at term_h-5 .. term_h-1. Capturing cursor_row here would give term_h-1,
+        // and the clearing loop would clear the wrong rows (rows > term_h), leaving
+        // the bordered input box scrolling up into history as visible residue.
+        let cursor_row = crossterm::cursor::position()
             .map(|(_, row)| row)
             .unwrap_or(0);
+        let (_, term_h) = terminal::size().unwrap_or((80, 24));
+        let viewport_start_row = cursor_row.min(term_h.saturating_sub(viewport_height));
         let backend = CrosstermBackend::new(io::stdout());
         let mut term = Terminal::with_options(
             backend,
@@ -422,18 +431,20 @@ impl InputWidget {
         // Drop the ratatui terminal before touching the cursor so its internal
         // state is released first.
         drop(term);
-        // Clear ONLY the 5 input box rows individually. Using Clear(FromCursorDown)
-        // was too aggressive (cleared from viewport_start_row to terminal bottom)
-        // and left the cursor mid-screen, breaking insert_before which needs the
-        // viewport to be anchored at the terminal bottom to work correctly.
+        // Selectively clear the input box rows:
+        //   Row 0 (viewport_start_row)     = separator ─────  → KEEP as turn divider
+        //   Rows 1-4 (box borders+content) = ┌──┐ content └──┘ + status → CLEAR
+        //
+        // If we cleared all 5 rows (including the separator), the history would
+        // have blank gaps between responses. Keeping the separator gives a clean
+        // visual divider between conversation turns while hiding the box borders.
         let mut out = io::stdout();
-        for row in viewport_start_row..viewport_start_row.saturating_add(viewport_height) {
+        for row in (viewport_start_row + 1)..viewport_start_row.saturating_add(viewport_height) {
             let _ = execute!(out, cursor::MoveTo(0, row), terminal::Clear(ClearType::CurrentLine));
         }
-        // Position cursor just below the (now-blank) input box area.
-        // with_insert_before will anchor to terminal bottom on each call, so
-        // this just needs to be anywhere at or below the cleared rows.
-        let _ = execute!(out, cursor::MoveTo(0, viewport_start_row.saturating_add(viewport_height)));
+        // Leave cursor on the separator row; with_insert_before re-anchors to
+        // terminal bottom on every call so this position doesn't need to be exact.
+        let _ = execute!(out, cursor::MoveTo(0, viewport_start_row));
         let _ = out.flush();
         result
     }
