@@ -22,7 +22,7 @@ use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
-    terminal,
+    terminal::{self, ClearType},
 };
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
@@ -111,6 +111,11 @@ impl InputWidget {
         // 4 rows: separator + top-border + input-line + bottom-border
         // Plus 1 for status line = 5 total
         let viewport_height: u16 = 5;
+        // Capture the cursor row BEFORE the viewport is created so we can
+        // return to it on exit and clear the input box residue.
+        let viewport_start_row = crossterm::cursor::position()
+            .map(|(_, row)| row)
+            .unwrap_or(0);
         let backend = CrosstermBackend::new(io::stdout());
         let mut term = Terminal::with_options(
             backend,
@@ -414,11 +419,24 @@ impl InputWidget {
         })();
 
         drop(_raw); // restore cooked mode before returning
-        // Move cursor below the entire viewport so that subsequent streaming output
-        // does not overwrite the input box area. MoveDown clamps at screen bottom.
-        let _ = execute!(io::stdout(), cursor::MoveDown(viewport_height), cursor::MoveToColumn(0));
-        // Drop term so its inline rows are released before next streaming turn
+        // Drop the ratatui terminal before touching the cursor so its internal
+        // state is released first.
         drop(term);
+        // Return cursor to the row where the input box started and clear from
+        // there to the end of the visible screen. This erases the old input box
+        // (separator + border + text + status) so that subsequent insert_before
+        // calls don't interleave response content with leftover box drawing.
+        //
+        // Previous approach (MoveDown(viewport_height)) was wrong: the last
+        // draw() positions the cursor at the inner text row (Y+2), so
+        // MoveDown(5) landed at Y+7 — two rows past the box bottom. Short
+        // responses then never scrolled enough to clear the old box, producing
+        // the garbled overlap visible in the terminal.
+        let _ = execute!(
+            io::stdout(),
+            cursor::MoveTo(0, viewport_start_row),
+            terminal::Clear(ClearType::FromCursorDown),
+        );
         result
     }
 }
