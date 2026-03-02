@@ -12,8 +12,10 @@
 
 pub mod input;
 pub mod output;
+pub mod question;
 pub mod status;
 
 pub use input::{InputWidget, RawModeGuard};
 pub use output::{OutputRenderer, make_relative_path};
+pub use question::{QuestionWidget, QuestionAnswer, QuestionOption, Question};
 pub use status::ThinkingBar;

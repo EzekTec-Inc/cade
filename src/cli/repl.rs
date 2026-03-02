@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crossterm::{
     cursor,
-    event::{self, Event, KeyCode, KeyEvent},
+    event::KeyCode,
     execute,
     style::{Color, Print, ResetColor, SetForegroundColor},
     terminal::{self, ClearType},
@@ -235,10 +235,13 @@ impl Repl {
     pub async fn run(mut self) -> Result<()> {
         let mut stdout = io::stdout();
 
-        // Clear the terminal before the banner.  Do NOT MoveTo(0,0): the banner
-        // now uses with_insert_before which anchors to the terminal bottom, so
-        // leaving the cursor at its current position lets the banner appear right
-        // above the input widget with no blank-space gap.
+        // Clear the terminal before the banner.  \033[3J erases the scrollback
+        // buffer so previous sessions' "I am CADE…" messages don't bleed through
+        // above the new banner.  \033[2J then clears the visible screen.
+        // Do NOT MoveTo(0,0): the banner uses with_insert_before which anchors to
+        // the terminal bottom, so leaving the cursor at its current position lets
+        // the banner appear right above the input widget with no blank-space gap.
+        write!(stdout, "\x1b[3J")?; // erase scrollback (xterm/VTE/Kitty)
         execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
         stdout.flush()?;
 
@@ -2269,6 +2272,9 @@ impl Repl {
         if tool_name == "run_subagent" {
             return self.handle_run_subagent(call_id, args, stdout).await;
         }
+        if tool_name == "ask_user_question" {
+            return self.handle_ask_user_question(call_id, args).await;
+        }
 
         // Permission check — plan mode / deny rules
         if self.permissions.is_blocked(tool_name, args) {
@@ -2364,60 +2370,78 @@ impl Repl {
 
     /// Prompt the user to approve/deny a tool call.
     /// Returns true = approved, false = denied.
-    /// `A` adds a session-allow rule (approve always for this session) and approves.
+    ///
+    /// Shows a ratatui inline menu with three options:
+    ///   1. Yes — run once
+    ///   2. Yes, don't ask again — session-allow + run
+    ///   3. No — deny
     fn prompt_approval(
         &self,
-        stdout: &mut io::Stdout,
+        _stdout: &mut io::Stdout,
         tool_name: &str,
         args: &serde_json::Value,
     ) -> Result<bool> {
-        // For bash: show the command being run
-        if let Some(cmd) = args.get("command").and_then(|v| v.as_str()) {
-            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                Print(format!("  > {}\n", truncate(cmd, 120))), ResetColor)?;
-        }
-        // For edit_file: diff already shown via tool_edit_call() before this prompt
+        use crate::ui::question::{Question, QuestionOption, QuestionWidget};
 
-        execute!(stdout, SetForegroundColor(Color::Yellow),
-            Print(format!("  Allow {tool_name}? [y/N/A] ")),
-            ResetColor)?;
-        stdout.flush()?;
+        // One-line preview of what is being requested
+        let preview: String = if let Some(cmd) = args["command"].as_str() {
+            truncate(cmd, 100).to_string()
+        } else if let Some(fp) = args["file_path"].as_str().or(args["path"].as_str()) {
+            fp.to_string()
+        } else if let Some(pat) = args["pattern"].as_str() {
+            format!("\"{}\"", truncate(pat, 60))
+        } else {
+            String::new()
+        };
 
-        // Read single keypress
-        let _raw = crate::ui::RawModeGuard::enable()?;
-        let choice = loop {
-            if let Ok(Event::Key(KeyEvent { code, .. })) = event::read() {
-                match code {
-                    KeyCode::Char('y') | KeyCode::Char('Y') => break 'y',
-                    KeyCode::Char('a') | KeyCode::Char('A') => break 'a',
-                    _ => break 'n',
+        // Header chip — tool name, max 12 chars
+        let header_raw = tool_name.replace('_', " ");
+        let header: String = header_raw.chars().take(12).collect();
+
+        let question_text = if preview.is_empty() {
+            format!("Run {tool_name}?")
+        } else {
+            format!("{preview}")
+        };
+
+        let opts = vec![
+            QuestionOption {
+                label: "Yes".to_string(),
+                description: "Run this tool once".to_string(),
+            },
+            QuestionOption {
+                label: "Yes, don't ask again".to_string(),
+                description: "Allow this tool for the rest of the session".to_string(),
+            },
+            QuestionOption {
+                label: "No".to_string(),
+                description: "Deny this tool call".to_string(),
+            },
+        ];
+
+        let q = Question {
+            header: &header,
+            text: &question_text,
+            options: &opts,
+            multi_select: false,
+            allow_other: false,
+            progress: None,
+        };
+
+        match QuestionWidget::ask(&q)? {
+            None => Ok(false), // Esc / Ctrl+C = deny
+            Some(answer) => {
+                let label = answer.as_str();
+                if label.starts_with("Yes, don't") {
+                    self.permissions.add_session_allow(tool_name);
+                    Ok(true)
+                } else if label.starts_with("Yes") {
+                    Ok(true)
+                } else {
+                    Ok(false)
                 }
             }
-        };
-        drop(_raw);
-
-        let approved = match choice {
-            'y' => {
-                execute!(stdout, Print("y\n"))?;
-                true
-            }
-            'a' => {
-                // Always allow this tool for the rest of the session
-                execute!(stdout, Print("A\n"))?;
-                self.permissions.add_session_allow(tool_name);
-                execute!(stdout, SetForegroundColor(Color::Cyan),
-                    Print(format!("  ✓ Session: {tool_name} always allowed\n")),
-                    ResetColor)?;
-                true
-            }
-            _ => {
-                execute!(stdout, Print("N\n"))?;
-                false
-            }
-        };
-
-        stdout.flush()?;
-        Ok(approved)
+        }
     }
 
     /// Handle the agent's `update_memory` tool call natively.
@@ -2470,6 +2494,93 @@ impl Repl {
                 is_error: true,
             }),
         }
+    }
+
+    /// Interactive `ask_user_question` tool intercept.
+    ///
+    /// Parses the LLM's structured questions, shows the `QuestionWidget` for
+    /// each one sequentially, then returns a formatted result string to the agent.
+    async fn handle_ask_user_question(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+    ) -> Result<crate::tools::ToolResult> {
+        use crate::tools::AskUserQuestionTool;
+        use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+        use std::collections::HashMap;
+
+        // Parse and validate
+        let ask_questions = match AskUserQuestionTool::parse_questions(args) {
+            Ok(q) => q,
+            Err(e) => {
+                let msg = format!("Invalid ask_user_question args: {e}");
+                self.output.lock().unwrap().tool_result(true, &msg)?;
+                return Ok(crate::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "ask_user_question".to_string(),
+                    output: msg,
+                    is_error: true,
+                });
+            }
+        };
+
+        let total = ask_questions.len();
+
+        // Pause ThinkingBar streaming while we take over the terminal
+        self.output.lock().unwrap().close_streaming()?;
+
+        let mut answers: HashMap<String, String> = HashMap::new();
+
+        for (i, aq) in ask_questions.iter().enumerate() {
+            let opts: Vec<QuestionOption> = aq.options.iter()
+                .map(|o| QuestionOption {
+                    label: o.label.clone(),
+                    description: o.description.clone(),
+                })
+                .collect();
+
+            let q = Question {
+                header: &aq.header,
+                text: &aq.question,
+                options: &opts,
+                multi_select: aq.multi_select,
+                allow_other: true,
+                progress: if total > 1 { Some((i + 1, total)) } else { None },
+            };
+
+            match QuestionWidget::ask(&q)? {
+                None => {
+                    let msg = "User cancelled the question prompt.".to_string();
+                    self.output.lock().unwrap().tool_result(true, &msg)?;
+                    return Ok(crate::tools::ToolResult {
+                        tool_call_id: call_id.to_string(),
+                        tool_name: "ask_user_question".to_string(),
+                        output: msg,
+                        is_error: true,
+                    });
+                }
+                Some(answer) => {
+                    // Print answer to scrollback so the user can see what was selected
+                    self.output.lock().unwrap().system(
+                        &format!("{}: {}", aq.header, answer.as_str())
+                    )?;
+                    answers.insert(aq.question.clone(), answer.as_str());
+                }
+            }
+        }
+
+        let result = AskUserQuestionTool::format_result(&answers);
+        self.output.lock().unwrap().tool_result(
+            false,
+            &format!("{} answer{} collected", total, if total == 1 { "" } else { "s" }),
+        )?;
+
+        Ok(crate::tools::ToolResult {
+            tool_call_id: call_id.to_string(),
+            tool_name: "ask_user_question".to_string(),
+            output: result,
+            is_error: false,
+        })
     }
 
     /// Return the full body of a skill by ID — `load_skill` tool intercept.

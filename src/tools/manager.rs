@@ -2,6 +2,7 @@ use anyhow::Result;
 use serde_json::Value;
 
 use super::{
+    ask::AskUserQuestionTool,
     bash::BashTool,
     desktop::{DesktopCaptureTool, DesktopControlTool, DesktopListWindowsTool, DesktopNotifyTool},
     fs::{ApplyPatchTool, EditTool, ReadTool, WriteTool},
@@ -94,6 +95,9 @@ pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
         ],
     };
     schemas.extend(desktop);
+    // AskUserQuestion is intercepted before dispatch — but the schema must still be
+    // sent to the LLM so it knows the tool exists.
+    schemas.push(AskUserQuestionTool::schema());
     schemas
 }
 
