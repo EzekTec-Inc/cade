@@ -287,36 +287,35 @@ impl OutputRenderer {
 
     // ── Bounded paths (ratatui insert_before) ─────────────────────────────────
 
-    /// Tool call — Letta Code-style bullet header + indented arg preview.
+    /// Tool call — Letta Code-style: `● Name(args…)` on a single line.
     pub fn tool_call(&mut self, name: &str, preview: &str) -> Result<()> {
         self.close_streaming()?;
         self.update_width();
-        let inner_w = self.term_width.saturating_sub(CONTENT_PAD * 2 + 2) as usize;
-        let preview_trunc = truncate_str(preview, inner_w);
+        // Budget: width minus padding, bullet, parens
+        let inner_w = self.term_width.saturating_sub(CONTENT_PAD * 2 + 4) as usize;
+        let display = display_tool_name(name);
+        let label = if preview.is_empty() {
+            display.clone()
+        } else {
+            format!("{}({})", display, truncate_str(preview, inner_w.saturating_sub(display.len() + 2)))
+        };
 
-        let lines: Vec<Line> = vec![
-            Line::from(vec![
-                Span::styled("● ", Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
-                Span::styled(name.to_string(), Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
-            ]),
-            Line::from(vec![
-                Span::raw("  "),
-                Span::styled(preview_trunc, Style::default().fg(RC::DarkGray)),
-            ]),
-        ];
-        let height = lines.len() as u16;
-        self.with_insert_before(height, move |buf| {
+        let line = Line::from(vec![
+            Span::styled("● ", Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
+            Span::styled(label, Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
+        ]);
+        self.with_insert_before(1, move |buf| {
             let area = padded_rect(*buf.area(), CONTENT_PAD);
-            Paragraph::new(lines).render(area, buf);
+            Paragraph::new(line).render(area, buf);
         })
     }
 
-    /// Tool result — `⎿ summary` line in green (success) or red (error).
+    /// Tool result — `  ⎿  summary` line in green (success) or red (error).
     pub fn tool_result(&mut self, is_error: bool, summary: &str) -> Result<()> {
         let color = if is_error { RC::Red } else { RC::Green };
         let max = self.term_width.saturating_sub(CONTENT_PAD * 2 + 6) as usize;
         let line = Line::from(vec![
-            Span::styled("  ⎿ ", Style::default().fg(RC::DarkGray)),
+            Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
             Span::styled(truncate_str(summary, max), Style::default().fg(color).add_modifier(Modifier::BOLD)),
         ]);
         self.with_insert_before(1, move |buf| {
@@ -363,7 +362,7 @@ impl OutputRenderer {
     /// Hook continuation notice.
     pub fn hook_continuation(&mut self, reason: &str) -> Result<()> {
         let line = Line::from(vec![
-            Span::styled("  ⎿ ", Style::default().fg(RC::DarkGray)),
+            Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
             Span::styled(format!("Hook continuing: {reason}"), Style::default().fg(RC::DarkGray)),
         ]);
         self.with_insert_before(1, move |buf| {
@@ -431,8 +430,17 @@ impl OutputRenderer {
         })
     }
 
-    /// Edit tool call — shows bullet header + file path + styled diff (old/new lines).
-    /// Called instead of `tool_call()` for `edit_file` / `apply_patch`.
+    /// Edit tool call — Letta Code style:
+    ///   `● Edit(relative_path)`
+    ///   `  ⎿  Updated ./relative/path`
+    ///   `     Showing ~N context line(s)`
+    ///   `     N-2   context_before`  (dim, unchanged)
+    ///   `     N   - old_line`        (red)
+    ///   `     N   + new_line`        (green)
+    ///   `     N+1   context_after`   (dim, unchanged)
+    ///
+    /// The `⎿ Updated` result is embedded here so `repl.rs` must NOT call
+    /// `tool_result` separately for edit_file / apply_patch.
     pub fn tool_edit_call(
         &mut self,
         tool_name: &str,
@@ -442,50 +450,86 @@ impl OutputRenderer {
     ) -> Result<()> {
         self.close_streaming()?;
         self.update_width();
-        let inner_w = self.term_width.saturating_sub(CONTENT_PAD * 2 + 6) as usize;
+        let inner_w = self.term_width.saturating_sub(CONTENT_PAD * 2 + 10) as usize;
 
-        // Find start line number by reading the file
-        let start_line: usize = std::fs::read_to_string(file_path)
-            .ok()
-            .and_then(|content| {
-                // Find byte offset of old_str in file, then count preceding newlines
-                content.find(old_str).map(|byte_off| {
-                    content[..byte_off].lines().count() + 1
-                })
-            })
+        // Relative path for display
+        let rel_path = make_relative_path(file_path);
+
+        // Read the file to extract context lines and the exact start line
+        let file_content = std::fs::read_to_string(file_path).unwrap_or_default();
+        let file_lines: Vec<&str> = file_content.lines().collect();
+
+        let start_line: usize = file_content
+            .find(old_str)
+            .map(|byte_off| file_content[..byte_off].lines().count() + 1)
             .unwrap_or(1);
 
         let old_lines: Vec<&str> = old_str.lines().collect();
         let new_lines: Vec<&str> = new_str.lines().collect();
-        const MAX_DIFF_LINES: usize = 4;
+        const MAX_DIFF_LINES: usize = 6;
+        const CONTEXT_LINES: usize = 2;
         let show_old = old_lines.len().min(MAX_DIFF_LINES);
         let show_new = new_lines.len().min(MAX_DIFF_LINES);
         let context_n = show_old.max(show_new);
 
+        // ── Collect context lines from file ──────────────────────────────────
+        // Lines before the diff (0-indexed in file_lines = start_line - 1)
+        let diff_start_0 = start_line.saturating_sub(1); // 0-indexed
+        let ctx_before_start = diff_start_0.saturating_sub(CONTEXT_LINES);
+        let ctx_before: Vec<(usize, &str)> = (ctx_before_start..diff_start_0)
+            .filter_map(|i| file_lines.get(i).map(|l| (i + 1, *l)))
+            .collect();
+        // Lines after the diff
+        let diff_end_0 = diff_start_0 + old_lines.len();
+        let ctx_after: Vec<(usize, &str)> = (diff_end_0..diff_end_0 + CONTEXT_LINES)
+            .filter_map(|i| file_lines.get(i).map(|l| (i + 1, *l)))
+            .collect();
+
+        // ── Build line list ───────────────────────────────────────────────────
         let mut lines: Vec<Line> = vec![
-            // ● edit_file (header)
+            // ● Edit(relative_path)
             Line::from(vec![
                 Span::styled("● ", Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
-                Span::styled(tool_name.to_string(), Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{}({})", display_tool_name(tool_name), rel_path),
+                    Style::default().fg(RC::Green).add_modifier(Modifier::BOLD),
+                ),
             ]),
-            // file path
+            // ⎿  Updated ./rel/path
             Line::from(vec![
-                Span::raw("  "),
-                Span::styled(file_path.to_string(), Style::default().fg(RC::DarkGray)),
+                Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
+                Span::styled(
+                    format!("Updated {rel_path}"),
+                    Style::default().fg(RC::Green).add_modifier(Modifier::BOLD),
+                ),
             ]),
             // Showing ~N context line(s)
             Line::from(Span::styled(
-                format!("  Showing ~{context_n} context line(s)"),
+                format!("     Showing ~{context_n} context line(s)"),
                 Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
             )),
         ];
+
+        // Context before
+        for (ln, ctx_l) in &ctx_before {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("     {ln:>3}   "),
+                    Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                ),
+                Span::styled(
+                    truncate_str(ctx_l, inner_w),
+                    Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                ),
+            ]));
+        }
 
         // Old lines (red -)
         for (i, old_l) in old_lines[..show_old].iter().enumerate() {
             let ln = start_line + i;
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("  {ln:>3} "),
+                    format!("     {ln:>3} "),
                     Style::default().fg(RC::DarkGray),
                 ),
                 Span::styled("- ", Style::default().fg(RC::Red).add_modifier(Modifier::BOLD)),
@@ -494,7 +538,7 @@ impl OutputRenderer {
         }
         if old_lines.len() > MAX_DIFF_LINES {
             lines.push(Line::from(Span::styled(
-                format!("      … ({} more old lines)", old_lines.len() - MAX_DIFF_LINES),
+                format!("         … ({} more old lines)", old_lines.len() - MAX_DIFF_LINES),
                 Style::default().fg(RC::DarkGray),
             )));
         }
@@ -504,7 +548,7 @@ impl OutputRenderer {
             let ln = start_line + i;
             lines.push(Line::from(vec![
                 Span::styled(
-                    format!("  {ln:>3} "),
+                    format!("     {ln:>3} "),
                     Style::default().fg(RC::DarkGray),
                 ),
                 Span::styled("+ ", Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
@@ -513,9 +557,23 @@ impl OutputRenderer {
         }
         if new_lines.len() > MAX_DIFF_LINES {
             lines.push(Line::from(Span::styled(
-                format!("      … ({} more new lines)", new_lines.len() - MAX_DIFF_LINES),
+                format!("         … ({} more new lines)", new_lines.len() - MAX_DIFF_LINES),
                 Style::default().fg(RC::DarkGray),
             )));
+        }
+
+        // Context after
+        for (ln, ctx_l) in &ctx_after {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    format!("     {ln:>3}   "),
+                    Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                ),
+                Span::styled(
+                    truncate_str(ctx_l, inner_w),
+                    Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                ),
+            ]));
         }
 
         let height = lines.len() as u16;
@@ -525,39 +583,42 @@ impl OutputRenderer {
         })
     }
 
-    /// Bash result — `⎿ N lines` header + first 5 lines of stdout preview.
+    /// Bash result — Letta Code style: first output line on the `⎿` line,
+    /// remaining lines indented 5 spaces. Capped at 5 lines total.
     pub fn tool_bash_result(&mut self, output: &str) -> Result<()> {
         self.update_width();
-        let inner_w = self.term_width.saturating_sub(CONTENT_PAD * 2 + 4) as usize;
+        let inner_w = self.term_width.saturating_sub(CONTENT_PAD * 2 + 6) as usize;
         let all_lines: Vec<&str> = output.lines().collect();
         let count = all_lines.len();
-        let preview_n = count.min(5);
+        const PREVIEW: usize = 5;
+        let show_n = count.min(PREVIEW);
 
-        let mut lines: Vec<Line> = vec![
-            Line::from(vec![
-                Span::styled("  ⎿ ", Style::default().fg(RC::DarkGray)),
-                Span::styled(
-                    if count == 0 { "(no output)".to_string() } else { format!("{count} lines") },
-                    if count == 0 {
-                        Style::default().fg(RC::DarkGray)
-                    } else {
-                        Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)
-                    },
-                ),
-            ]),
-        ];
+        let mut lines: Vec<Line> = Vec::new();
 
-        for line_str in &all_lines[..preview_n] {
+        if count == 0 {
             lines.push(Line::from(vec![
-                Span::raw("    "),
-                Span::styled(truncate_str(line_str, inner_w), Style::default().fg(RC::DarkGray)),
+                Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
+                Span::styled("(no output)", Style::default().fg(RC::DarkGray)),
             ]));
-        }
-        if count > preview_n {
-            lines.push(Line::from(Span::styled(
-                format!("    … ({} more lines)", count - preview_n),
-                Style::default().fg(RC::DarkGray),
-            )));
+        } else {
+            // First line inline with ⎿
+            lines.push(Line::from(vec![
+                Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
+                Span::styled(truncate_str(all_lines[0], inner_w), Style::default().fg(RC::DarkGray)),
+            ]));
+            // Remaining lines aligned under the content (5 spaces = "  ⎿  ")
+            for line_str in &all_lines[1..show_n] {
+                lines.push(Line::from(vec![
+                    Span::raw("     "),
+                    Span::styled(truncate_str(line_str, inner_w), Style::default().fg(RC::DarkGray)),
+                ]));
+            }
+            if count > PREVIEW {
+                lines.push(Line::from(Span::styled(
+                    format!("     … ({} more lines)", count - PREVIEW),
+                    Style::default().fg(RC::DarkGray),
+                )));
+            }
         }
 
         let height = lines.len() as u16;
@@ -793,6 +854,62 @@ fn parse_list_prefix(s: &str) -> Option<(&str, &str)> {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Map internal tool names to display names (capitalized, user-facing).
+fn display_tool_name(name: &str) -> String {
+    match name {
+        "bash" | "run_command" | "execute_command" | "shell" => "Bash",
+        "read_file" | "read"                                  => "Read",
+        "write_file" | "create_file" | "write"               => "Write",
+        "edit_file" | "edit"                                  => "Edit",
+        "apply_patch" | "patch"                               => "Patch",
+        "glob" | "find_files" | "list_files"                  => "Glob",
+        "grep" | "search" | "search_files" | "Search"         => "Search",
+        "list_directory" | "ls" | "list"                      => "List",
+        "delete_file" | "remove_file"                         => "Delete",
+        "move_file" | "rename_file"                           => "Move",
+        "copy_file"                                           => "Copy",
+        "update_memory" | "memory"                            => "Memory",
+        "load_skill"                                          => "Skill",
+        "run_subagent"                                        => "Agent",
+        other => {
+            // Capitalize first letter, leave rest unchanged
+            let mut c = other.chars();
+            return match c.next() {
+                None    => String::new(),
+                Some(f) => f.to_uppercase().collect::<String>() + c.as_str(),
+            };
+        }
+    }.to_string()
+}
+
+/// Convert an absolute file path to a compact relative path for display.
+/// Returns `../N/path` style if the path is under the current working directory,
+/// otherwise returns the full absolute path.
+pub fn make_relative_path(path: &str) -> String {
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let p = std::path::Path::new(path);
+    if let Ok(rel) = p.strip_prefix(&cwd) {
+        format!("./{}", rel.display())
+    } else {
+        // Try a parent-relative path: find common prefix depth
+        let mut cwd_parts: Vec<_> = cwd.components().collect();
+        let mut path_parts: Vec<_> = p.components().collect();
+        let common = cwd_parts.iter().zip(path_parts.iter())
+            .take_while(|(a, b)| a == b)
+            .count();
+        cwd_parts.drain(..common);
+        path_parts.drain(..common);
+        let ups = cwd_parts.len();
+        let rest: std::path::PathBuf = path_parts.iter().collect();
+        if ups == 0 {
+            format!("./{}", rest.display())
+        } else {
+            let prefix: std::path::PathBuf = std::iter::repeat("..").take(ups).collect();
+            format!("{}", prefix.join(rest).display())
+        }
+    }
+}
 
 fn truncate_str(s: &str, max_chars: usize) -> String {
     let s = s.trim();

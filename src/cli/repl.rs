@@ -2094,7 +2094,7 @@ impl Repl {
             }
             let a = args;
             if let Some(cmd) = a["command"].as_str() {
-                format!("$ {}", short(cmd, 80))
+                short(cmd, 80).to_string()
             } else if let Some(fp) = a["file_path"].as_str().or(a["path"].as_str()) {
                 let extra = if let Some(old) = a["old_string"].as_str() {
                     format!("  \"{}\"", short(old, 40))
@@ -2221,9 +2221,7 @@ impl Repl {
                     self.output.lock().unwrap().tool_bash_result(&result.output)?;
                 }
                 "edit_file" | "apply_patch" => {
-                    let fp = args["file_path"].as_str().unwrap_or("file");
-                    let display = make_relative_path(fp);
-                    self.output.lock().unwrap().tool_result(false, &format!("Updated {display}"))?;
+                    // ⎿ Updated is already rendered inside tool_edit_call — skip extra tool_result
                 }
                 _ => {
                     let summary = match tool_name {
@@ -3495,13 +3493,9 @@ fn truncate(s: &str, max: usize) -> String {
 }
 
 /// Return a display path relative to the current working directory if possible.
+/// Delegates to the ui module's implementation.
 fn make_relative_path(path: &str) -> String {
-    if let Ok(cwd) = std::env::current_dir() {
-        if let Ok(rel) = std::path::Path::new(path).strip_prefix(&cwd) {
-            return rel.display().to_string();
-        }
-    }
-    path.to_string()
+    crate::ui::make_relative_path(path)
 }
 
 /// Read a line from stdin with no echo (for API key input).
