@@ -1,11 +1,10 @@
 /// Streaming and bounded output renderer for the CADE REPL.
 ///
-/// Two rendering paths:
-/// 1. **Streaming** (reasoning/assistant chunks): raw text via direct stdout
-///    writes while the LLM is generating. On completion, raw lines are erased
-///    and re-rendered via ratatui `insert_before` with proper markdown styling.
-/// 2. **Bounded** (tool calls, system msgs, headers): ratatui `insert_before`
-///    with styled `Paragraph`/`Line`/`Span` widgets.
+/// All output is rendered via ratatui `insert_before` (committed to scrollback).
+/// The ThinkingBar (one row at terminal bottom) is the sole live element —
+/// it shows streaming progress (tool name, word count) while the agent works.
+/// Completed content (assistant text, tool calls, results) is committed in full
+/// with Letta Code-style formatting: `●` prefix, dim separators, colored ⎿.
 
 use std::io::{self, Write};
 use unicode_width::UnicodeWidthStr;
@@ -14,8 +13,8 @@ use anyhow::Result;
 use crossterm::{
     cursor,
     execute,
-    style::{Attribute, Color, Print, ResetColor, SetAttribute, SetForegroundColor},
-    terminal::{self, ClearType},
+    style::{Color, Print, ResetColor, SetForegroundColor},
+    terminal,
 };
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
@@ -71,6 +70,16 @@ pub struct OutputRenderer {
     response_buf: String,
     /// Full reasoning text (accumulated while streaming).
     reason_buf: String,
+
+    /// Number of rows reserved at the terminal bottom by an active ThinkingBar.
+    /// When non-zero, `with_insert_before` anchors to `term_h - 1 - status_bar_height`
+    /// so content scrolls above the status bar rather than through it.
+    status_bar_height: u16,
+
+    /// When set, streaming progress updates (reasoning/assistant chunks) are
+    /// written to this shared string rather than via raw stdout writes.
+    /// The ThinkingBar task reads this to display animated status.
+    bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
 }
 
 impl OutputRenderer {
@@ -85,7 +94,39 @@ impl OutputRenderer {
             stream_col: 0,
             response_buf: String::new(),
             reason_buf: String::new(),
+            status_bar_height: 0,
+            bar_text: None,
         }
+    }
+
+    /// Attach the ThinkingBar's shared text — streaming updates route here.
+    pub fn attach_bar(&mut self, text: std::sync::Arc<std::sync::Mutex<String>>) {
+        self.bar_text = Some(text);
+    }
+
+    /// Detach the ThinkingBar (call just before stopping the bar task).
+    pub fn detach_bar(&mut self) {
+        self.bar_text = None;
+    }
+
+    /// Update the bar text (helper used by streaming methods).
+    fn update_bar(&self, msg: impl Into<String>) {
+        if let Some(ref bar) = self.bar_text {
+            *bar.lock().unwrap() = msg.into();
+        }
+    }
+
+    /// Activate (height=1) or deactivate (height=0) the ThinkingBar reservation.
+    /// Must be called before `ThinkingBar::start()` and after it stops.
+    pub fn set_status_bar(&mut self, active: bool) {
+        self.status_bar_height = if active { 1 } else { 0 };
+    }
+
+    /// Insert a blank spacer line after an agent turn so consecutive response
+    /// blocks are visually separated.
+    pub fn turn_end(&mut self) -> Result<()> {
+        self.close_streaming()?;
+        self.with_insert_before(1, |_buf| {})
     }
 
     /// Refresh terminal width (call on resize events).
@@ -107,138 +148,77 @@ impl OutputRenderer {
     //   2) cleared the entire visible terminal for long responses (> term height)
     //   3) raced with println!() calls on the main thread (print_help, etc.)
 
-    /// Start of a reasoning block — print spinner, init state.
+    /// Start of a reasoning block — init state and set ThinkingBar text.
+    /// No raw stdout writes; the ThinkingBar shows the animated status.
     pub fn reasoning_header(&mut self) -> io::Result<()> {
         self.in_reasoning = true;
         self.stream_col = 0;
-        let mut out = io::stdout();
-        execute!(
-            out,
-            Print("\n"),
-            SetForegroundColor(Color::DarkGrey),
-            SetAttribute(Attribute::Italic),
-            Print("💭 thinking…"),
-            cursor::MoveToColumn(0),
-        )?;
-        out.flush()
+        self.update_bar("💭 thinking…");
+        Ok(())
     }
 
-    /// Write one chunk of reasoning text — buffer it, update spinner.
+    /// Write one chunk of reasoning text — buffer it, update ThinkingBar text.
     pub fn reasoning_chunk(&mut self, text: &str) -> io::Result<()> {
         self.reason_buf.push_str(text);
-        // Overwrite spinner in-place with word count update
         let words = self.reason_buf.split_whitespace().count();
-        let mut out = io::stdout();
-        execute!(
-            out,
-            cursor::MoveToColumn(0),
-            terminal::Clear(ClearType::CurrentLine),
-            SetForegroundColor(Color::DarkGrey),
-            SetAttribute(Attribute::Italic),
-            Print(format!("💭 thinking… ({words} words)")),
-            cursor::MoveToColumn(0),
-        )?;
-        out.flush()
+        self.update_bar(format!("💭 thinking… ({words} words)"));
+        Ok(())
     }
 
-    /// Close reasoning block — erase spinner, re-render via ratatui.
+    /// Close reasoning block — commit a collapsed header (Letta Code style), reset bar.
+    /// Only the summary line is shown; the full text is not rendered (keeps screen clean).
     pub fn reasoning_done(&mut self) -> Result<()> {
         if !self.in_reasoning {
             return Ok(());
         }
         self.in_reasoning = false;
         self.stream_col = 0;
+        self.update_bar("CADE thinking…");
         let buf = std::mem::take(&mut self.reason_buf);
         self.update_width();
 
-        let mut out = io::stdout();
-        // Erase ONLY the spinner line (cursor already at col 0 from last chunk update)
-        execute!(
-            out,
-            cursor::MoveToColumn(0),
-            terminal::Clear(ClearType::CurrentLine),
-            SetAttribute(Attribute::Reset),
-            ResetColor,
-        )?;
-        out.flush()?;
-
-        // Re-render with ratatui: italic gray header + body
         if !buf.trim().is_empty() {
-            let width = self.wrap_width();
-            let mut lines: Vec<Line> = vec![Line::from(Span::styled(
-                "💭 thinking…",
+            let words = buf.split_whitespace().count();
+            // Collapsed: just show "💭 Reasoning (N words)" — matches Letta Code default
+            let header = Line::from(Span::styled(
+                format!("💭 Reasoning ({words} words)"),
                 Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC),
-            ))];
-            for text_line in buf.lines() {
-                lines.push(Line::from(Span::styled(
-                    text_line.to_string(),
-                    Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC),
-                )));
-            }
-            let height = estimate_height(&lines, width);
-            self.with_insert_before(height, move |buf_ref| {
-                Paragraph::new(lines).wrap(Wrap { trim: false }).render(*buf_ref.area(), buf_ref);
+            ));
+            self.with_insert_before(1, move |buf_ref| {
+                Paragraph::new(header).render(*buf_ref.area(), buf_ref);
             })?;
         }
         Ok(())
     }
 
-    /// Write one chunk of assistant text — buffer it, update spinner.
+    /// Write one chunk of assistant text — buffer it, update ThinkingBar text.
+    /// Content is committed as a styled block when the stream finishes.
     pub fn assistant_chunk(&mut self, text: &str) -> io::Result<()> {
         if !self.in_assistant {
             self.in_assistant = true;
             self.stream_col = 0;
-            let mut out = io::stdout();
-            execute!(
-                out,
-                SetAttribute(Attribute::Reset),
-                ResetColor,
-                SetForegroundColor(Color::DarkGrey),
-                Print("\n● generating…"),
-                cursor::MoveToColumn(0),
-            )?;
-            out.flush()?;
         }
         self.response_buf.push_str(text);
-        // Overwrite spinner in-place with token count
         let words = self.response_buf.split_whitespace().count();
-        let mut out = io::stdout();
-        execute!(
-            out,
-            cursor::MoveToColumn(0),
-            terminal::Clear(ClearType::CurrentLine),
-            SetForegroundColor(Color::DarkGrey),
-            Print(format!("● generating… ({words} words)")),
-            cursor::MoveToColumn(0),
-        )?;
-        out.flush()
+        self.update_bar(format!("● generating… ({words} words)"));
+        Ok(())
     }
 
-    /// Close assistant block — erase spinner, re-render via ratatui with markdown.
+    /// Close assistant block — commit text with Letta Code-style purple ● prefix.
     pub fn assistant_done(&mut self) -> Result<()> {
         if !self.in_assistant {
             return Ok(());
         }
         self.in_assistant = false;
         self.stream_col = 0;
+        self.update_bar("CADE thinking…");
         let buf = std::mem::take(&mut self.response_buf);
         self.update_width();
 
-        let mut out = io::stdout();
-        // Erase ONLY the spinner line (cursor at col 0 from last chunk update)
-        execute!(
-            out,
-            cursor::MoveToColumn(0),
-            terminal::Clear(ClearType::CurrentLine),
-            SetAttribute(Attribute::Reset),
-            ResetColor,
-        )?;
-        out.flush()?;
-
-        // Re-render with ratatui markdown formatting
         if !buf.trim().is_empty() {
             let width = self.wrap_width();
-            let lines = parse_markdown_lines(&buf);
+            // Letta Code style: first line gets purple ●, continuations are indented
+            let lines = build_assistant_lines(&buf);
             let height = estimate_height(&lines, width);
             self.with_insert_before(height, move |buf_ref| {
                 Paragraph::new(lines).wrap(Wrap { trim: false }).render(*buf_ref.area(), buf_ref);
@@ -281,35 +261,43 @@ impl OutputRenderer {
     // ── Bounded paths (ratatui insert_before) ─────────────────────────────────
 
     /// Echo user message — Letta Code's UserMessage style.
-    /// Shows `> first line` then `  continuation` with white text.
+    /// Renders via `with_insert_before` so it stays in line with all other output.
+    /// Prepends a turn-separator (───) above the user text.
     pub fn user_message(&mut self, text: &str) -> Result<()> {
         self.close_streaming()?;
-        let mut out = io::stdout();
+        self.update_width();
         let trimmed = text.trim();
         if trimmed.is_empty() {
             return Ok(());
         }
-        use crossterm::style::Attribute;
-        execute!(out, Print("\n"))?;
+        let wrap_w = self.wrap_width();
+        let sep = "─".repeat(wrap_w as usize);
+        let mut lines: Vec<Line<'static>> = vec![
+            Line::from(Span::styled(sep, Style::default().fg(RC::DarkGray))),
+        ];
         for (i, line) in trimmed.lines().enumerate() {
             let prefix = if i == 0 { "> " } else { "  " };
-            execute!(
-                out,
-                crossterm::style::SetAttribute(Attribute::Reset),
-                SetForegroundColor(Color::White),
-                Print(format!("{prefix}{line}\n")),
-                ResetColor,
-            )?;
+            lines.push(Line::from(Span::styled(
+                format!("{prefix}{line}"),
+                Style::default().fg(RC::White),
+            )));
         }
-        out.flush()?;
-        Ok(())
+        let height = estimate_height(&lines, wrap_w as usize);
+        self.with_insert_before(height, move |buf| {
+            Paragraph::new(lines)
+                .wrap(Wrap { trim: false })
+                .render(*buf.area(), buf);
+        })
     }
 
     /// Tool call — Letta Code-style: `● Name(args…)` on a single line.
     /// ● is green, Name is bold-white (or purple for memory tools), (args) is plain.
+    /// Preceded by a 1-row blank spacer for visual breathing room.
     pub fn tool_call(&mut self, name: &str, preview: &str) -> Result<()> {
         self.close_streaming()?;
         self.update_width();
+        // Blank spacer before each tool group (Letta Code block spacing)
+        self.with_insert_before(1, |_buf| {})?;
         let display = display_tool_name(name);
         // Budget: full width minus "● " (2) minus display name minus parens
         let args_budget = self.term_width.saturating_sub(2 + display.len() as u16 + 2) as usize;
@@ -322,8 +310,12 @@ impl OutputRenderer {
             Style::default().add_modifier(Modifier::BOLD)
         };
 
+        // Letta Code: tool dot is GRAY while running (#A5A8AB = streaming/running phase)
+        // It turns green only after the result arrives — we can't retroactively update the
+        // committed dot, so the result ⎿ line carries the green/red success indicator.
+        let dot_color = RC::Rgb(165, 168, 171); // #A5A8AB
         let mut spans = vec![
-            Span::styled("● ", Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)),
+            Span::styled("● ", Style::default().fg(dot_color).add_modifier(Modifier::BOLD)),
             Span::styled(display.clone(), name_style),
         ];
         if !preview.is_empty() {
@@ -338,7 +330,12 @@ impl OutputRenderer {
 
     /// Tool result — `  ⎿  summary` line in green (success) or red (error).
     pub fn tool_result(&mut self, is_error: bool, summary: &str) -> Result<()> {
-        let color = if is_error { RC::Red } else { RC::Green };
+        // Letta Code palette: completed=green #64CF64, error=pink #F1689F
+        let color = if is_error {
+            RC::Rgb(241, 104, 159) // #F1689F
+        } else {
+            RC::Rgb(100, 207, 100) // #64CF64
+        };
         // 5 chars for "  ⎿  " prefix
         let max = self.term_width.saturating_sub(5) as usize;
         let line = Line::from(vec![
@@ -395,7 +392,8 @@ impl OutputRenderer {
         })
     }
 
-    /// Print the CADE banner (crossterm, one-shot).
+    /// Print the CADE banner via `with_insert_before` so it anchors to the
+    /// terminal bottom — eliminating the blank-space gap before the input widget.
     pub fn banner(
         &mut self,
         banner: &str,
@@ -404,20 +402,36 @@ impl OutputRenderer {
         model: &str,
         mode: &str,
     ) -> io::Result<()> {
-        let mut out = io::stdout();
-        execute!(
-            out,
-            SetForegroundColor(Color::Cyan),
-            Print(banner),
-            ResetColor,
-            SetForegroundColor(Color::DarkGrey),
-            Print(format!(
-                " Agent : {} ({})\n Model : {}\n Mode  : {}\n\n",
-                agent_name, agent_id, model, mode
-            )),
-            ResetColor,
-        )?;
-        out.flush()
+        // Build ratatui Lines: ASCII art in cyan, info lines in dark-gray.
+        let info = format!(
+            " Agent : {} ({})\n Model : {}\n Mode  : {}\n",
+            agent_name, agent_id, model, mode
+        );
+        let full = format!("{}{}", banner, info);
+        let lines: Vec<Line<'static>> = full
+            .lines()
+            .map(|l| {
+                let owned = l.to_string();
+                // Heuristic: info lines start with " Agent", " Model", " Mode",
+                // or "Type /help".  Everything else is the ASCII art → cyan.
+                let is_info = owned.trim_start().starts_with("Agent")
+                    || owned.trim_start().starts_with("Model")
+                    || owned.trim_start().starts_with("Mode")
+                    || owned.trim_start().starts_with("Type /");
+                if is_info {
+                    Line::from(Span::styled(owned, Style::default().fg(RC::DarkGray)))
+                } else if owned.trim().is_empty() {
+                    Line::from(owned)
+                } else {
+                    Line::from(Span::styled(owned, Style::default().fg(RC::Cyan)))
+                }
+            })
+            .collect();
+        let height = lines.len() as u16;
+        self.with_insert_before(height, move |buf| {
+            Paragraph::new(lines).render(*buf.area(), buf);
+        })
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
 
     /// Display a completed background subagent result.
@@ -472,6 +486,8 @@ impl OutputRenderer {
     ) -> Result<()> {
         self.close_streaming()?;
         self.update_width();
+        // Blank spacer before each tool group (Letta Code block spacing)
+        self.with_insert_before(1, |_buf| {})?;
 
         // Relative path for display
         let rel_path = make_relative_path(file_path);
@@ -674,9 +690,14 @@ impl OutputRenderer {
     where
         F: FnOnce(&mut Buffer),
     {
-        // Anchor to terminal bottom so insert_before works correctly
+        // Anchor to terminal bottom so insert_before works correctly.
+        // When a ThinkingBar is active it owns the very last row; anchor one
+        // row above it so content scrolls above the status bar.
         if let Ok((_, term_h)) = terminal::size() {
-            let _ = execute!(io::stdout(), cursor::MoveToRow(term_h.saturating_sub(1)));
+            let anchor = term_h
+                .saturating_sub(1)
+                .saturating_sub(self.status_bar_height);
+            let _ = execute!(io::stdout(), cursor::MoveToRow(anchor));
         }
         let backend = CrosstermBackend::new(io::stdout());
         let mut term = Terminal::with_options(
@@ -688,6 +709,7 @@ impl OutputRenderer {
         term.insert_before(height, f)?;
         Ok(())
     }
+
 }
 
 impl Default for OutputRenderer {
@@ -889,6 +911,44 @@ fn parse_list_prefix(s: &str) -> Option<(&str, &str)> {
     }
     let rest = s[end..].strip_prefix(". ")?;
     Some((&s[..end], rest))
+}
+
+// ── Assistant line builder ─────────────────────────────────────────────────────
+
+/// Build ratatui lines for a committed (or live-streaming) assistant message.
+///
+/// Format (Letta Code style):
+///   `●  first markdown line`   ← purple ● (processing color #8C8CF9)
+///   `   continuation…`         ← 3-space indent for subsequent lines
+///
+/// The first parsed text line gets the `●` prefix; subsequent lines get
+/// a 3-space indent so they align under the text (not the dot).
+fn build_assistant_lines(text: &str) -> Vec<Line<'static>> {
+    // Purple processing color: Letta Code colors.status.processing = #8C8CF9
+    const PURPLE: RC = RC::Rgb(140, 140, 249);
+    const CONT_INDENT: &str = "   "; // 3 spaces align with text after "●  "
+
+    let mut markdown_lines = parse_markdown_lines(text);
+    if markdown_lines.is_empty() {
+        return vec![];
+    }
+
+    // Prepend the ● to the very first line
+    let first = markdown_lines.remove(0);
+    let mut first_spans: Vec<Span<'static>> = vec![
+        Span::styled("● ", Style::default().fg(PURPLE).add_modifier(Modifier::BOLD)),
+    ];
+    first_spans.extend(first.spans);
+    markdown_lines.insert(0, Line::from(first_spans));
+
+    // For each continuation line, prepend 3-space indent
+    for line in markdown_lines.iter_mut().skip(1) {
+        let mut spans: Vec<Span<'static>> = vec![Span::raw(CONT_INDENT)];
+        spans.extend(std::mem::take(&mut line.spans));
+        line.spans = spans;
+    }
+
+    markdown_lines
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

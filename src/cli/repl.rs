@@ -18,7 +18,7 @@ use crate::skills::Skill;
 use crate::subagents::{BackgroundResult, discover_all_subagents, find_subagent};
 use crate::toolsets::Toolset;
 use crate::tools::dispatch;
-use crate::ui::{InputWidget, OutputRenderer};
+use crate::ui::{InputWidget, OutputRenderer, ThinkingBar};
 
 const BANNER: &str = r#"
    ___    _    ____  _____
@@ -235,9 +235,11 @@ impl Repl {
     pub async fn run(mut self) -> Result<()> {
         let mut stdout = io::stdout();
 
-        // Clear the terminal before the banner so old content from previous
-        // sessions doesn't bleed through into the new session's view.
-        execute!(stdout, terminal::Clear(terminal::ClearType::All), cursor::MoveTo(0, 0))?;
+        // Clear the terminal before the banner.  Do NOT MoveTo(0,0): the banner
+        // now uses with_insert_before which anchors to the terminal bottom, so
+        // leaving the cursor at its current position lets the banner appear right
+        // above the input widget with no blank-space gap.
+        execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
         stdout.flush()?;
 
         // Banner + agent info via OutputRenderer
@@ -614,8 +616,8 @@ impl Repl {
                     // ── New commands ──────────────────────────────────────────
 
                     SlashCmd::Clear => {
-                        // Clear terminal
-                        execute!(stdout, terminal::Clear(ClearType::All), cursor::MoveTo(0, 0))?;
+                        // Clear terminal (no MoveTo(0,0): output anchors to bottom via insert_before)
+                        execute!(stdout, terminal::Clear(ClearType::All))?;
                         // Clear context window on server
                         match self.client.clear_messages(&self.agent_id()).await {
                             Ok(n) => {
@@ -956,6 +958,7 @@ impl Repl {
                              Acknowledge and summarise what you learned in 2-3 sentences."
                         );
                         self.agent_turn(&mut stdout, &init_prompt).await?;
+                        let _ = self.output.lock().unwrap().turn_end();
                     }
 
                     SlashCmd::Remember(text) => {
@@ -970,6 +973,7 @@ impl Repl {
                             format!("[/remember] {text}")
                         };
                         self.agent_turn(&mut stdout, &msg).await?;
+                        let _ = self.output.lock().unwrap().turn_end();
                     }
 
                     SlashCmd::Memory => {
@@ -1291,6 +1295,7 @@ impl Repl {
                                                  Use load_skill(id) to load any skill's full content.]"
                                             );
                                             self.agent_turn(&mut stdout, &notify).await?;
+                                            let _ = self.output.lock().unwrap().turn_end();
                                         }
                                 }
                             }
@@ -1740,6 +1745,7 @@ impl Repl {
 
             // Send to agent and handle tool loop
             self.agent_turn(&mut stdout, &input).await?;
+            let _ = self.output.lock().unwrap().turn_end();
         }
 
         // SessionEnd hook (non-blocking)
@@ -1822,8 +1828,12 @@ impl Repl {
     }
 
     /// Send a user message and drive the tool-call loop with live SSE streaming.
-    async fn agent_turn(&self, stdout: &mut io::Stdout, input: &str) -> Result<()> {
+    async fn agent_turn(&mut self, stdout: &mut io::Stdout, input: &str) -> Result<()> {
         use std::sync::atomic::Ordering;
+
+        let turn_start = std::time::Instant::now();
+        let in_tok_before  = self.session_input_tokens.load(Ordering::SeqCst);
+        let out_tok_before = self.session_output_tokens.load(Ordering::SeqCst);
 
         // Reset cancel flag and spawn SIGINT watcher for the duration of this turn
         self.cancel_turn.store(false, Ordering::SeqCst);
@@ -1851,52 +1861,90 @@ impl Repl {
             input.to_string()
         };
 
-        // ── Thinking spinner ─────────────────────────────────────────────────
-        // Show a braille spinner while waiting for the first streaming event.
-        // Stopped by the first on_event call via the shared AtomicBool.
-        let spinner_active = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true));
-        let spinner_flag   = spinner_active.clone();
-        let spinner_task = tokio::spawn(async move {
-            const FRAMES: &[&str] = &["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"];
-            let mut i = 0usize;
+        // ── ThinkingBar ──────────────────────────────────────────────────────
+        // Activate a 1-row animated status bar pinned to the terminal bottom.
+        // OutputRenderer anchors content to term_h-2 while the bar is active.
+        // Also attach bar_text to the OutputRenderer so streaming methods
+        // (assistant_chunk, reasoning_chunk) update it instead of raw-printing.
+        self.output.lock().unwrap().set_status_bar(true);
+        let (bar, bar_task) = ThinkingBar::start();
+        let bar_text = bar.text.clone();
+        self.output.lock().unwrap().attach_bar(bar_text.clone());
+
+        // ── Assessing timer task ────────────────────────────────────────────
+        // Ticks every second and updates the ThinkingBar with Letta Code's
+        // "assessing… (esc to interrupt · Xs · N↑)" format.
+        // Only overwrites the bar when it's in a "passthrough" state (not showing
+        // an active tool name or generating count).
+        {
+            let bar_initial = bar_text.clone();
+            *bar_initial.lock().unwrap() = "assessing… (esc to interrupt · 0s · 0↑)".to_string();
+        }
+        let timer_bar = bar_text.clone();
+        let timer_cancel = self.cancel_turn.clone();
+        let timer_tokens = self.session_output_tokens.clone();
+        let timer_start = turn_start;
+        let timer_base_tokens = out_tok_before;
+        let assessing_timer = tokio::spawn(async move {
             loop {
-                if !spinner_flag.load(std::sync::atomic::Ordering::SeqCst) { break; }
-                {
-                    use std::io::Write;
-                    // \x1b[2K clears the entire current line before printing;
-                    // prevents banner/previous text bleeding through the spinner.
-                    print!("\x1b[2K\r{} waiting…", FRAMES[i % FRAMES.len()]);
-                    let _ = std::io::stdout().flush();
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                if timer_cancel.load(Ordering::SeqCst) { break; }
+                let secs = timer_start.elapsed().as_secs();
+                let toks = timer_tokens.load(Ordering::SeqCst).saturating_sub(timer_base_tokens);
+                let hint = format!("assessing… (esc to interrupt · {secs}s · {toks}↑)");
+                let mut text = timer_bar.lock().unwrap();
+                // Only update when the bar shows an "assessing" or "CADE thinking" state,
+                // not when it's showing an active tool or "generating" progress.
+                let cur = text.as_str();
+                let is_passthrough = cur.starts_with("assessing")
+                    || cur.starts_with("CADE thinking");
+                if is_passthrough {
+                    *text = hint;
                 }
-                i += 1;
-                tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
             }
-            // Erase spinner line on exit
-            use std::io::Write;
-            print!("\x1b[2K\r");
-            let _ = std::io::stdout().flush();
         });
 
+        // Pass bar_text into stream_turn so tool_call_message events update it.
         let messages = self.stream_turn(
             stdout, &effective_input, false, "", "",
-            Some(spinner_active.clone()),
+            None, // spinner AtomicBool no longer used — ThinkingBar replaces it
+            Some(bar_text.clone()),
         ).await;
 
-        // Ensure spinner is stopped (handles error paths)
-        spinner_active.store(false, Ordering::SeqCst);
-        let _ = spinner_task.await;
-
         let messages = messages?;
+
         // Clear cancel flag after turn completes
         self.cancel_turn.store(false, Ordering::SeqCst);
-        self.dispatch_tool_calls(stdout, messages, input).await
+        self.dispatch_tool_calls(stdout, messages, input, Some(bar_text)).await?;
+
+        // ── Stop ThinkingBar + assessing timer ───────────────────────────────
+        assessing_timer.abort();
+        let _ = assessing_timer.await; // ignore JoinError (expected on abort)
+        self.output.lock().unwrap().detach_bar();
+        bar.stop();
+        let _ = bar_task.await;
+        self.output.lock().unwrap().set_status_bar(false);
+
+        // ── Completion summary → status row ─────────────────────────────────
+        let elapsed = turn_start.elapsed();
+        let secs = elapsed.as_secs();
+        let in_delta  = self.session_input_tokens.load(Ordering::SeqCst).saturating_sub(in_tok_before);
+        let out_delta = self.session_output_tokens.load(Ordering::SeqCst).saturating_sub(out_tok_before);
+        let summary = if secs >= 60 {
+            format!("✻ Considered for {}m {}s · ↑{} ↓{} tokens", secs / 60, secs % 60, in_delta, out_delta)
+        } else {
+            format!("✻ Considered for {}s · ↑{} ↓{} tokens", secs, in_delta, out_delta)
+        };
+        self.input_widget.last_status = Some(summary);
+
+        Ok(())
     }
 
     /// Stream one turn (user message or tool return) and render live.
     /// Returns the complete collected message list.
     ///
-    /// `spinner`: optional `AtomicBool` set to `true` while a waiting spinner is
-    /// active. The first SSE event sets it to `false` to stop the spinner.
+    /// `bar_text`: optional shared string updated by tool_call_message events
+    /// to keep the ThinkingBar status current.
     async fn stream_turn(
         &self,
         _stdout: &mut io::Stdout,
@@ -1904,7 +1952,8 @@ impl Repl {
         is_tool_return: bool,
         tool_call_id: &str,
         tool_output: &str,
-        spinner: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        _spinner: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+        bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
     ) -> Result<Vec<CadeMessage>> {
         // ── Shared render state for the on_event closure ────────────────────────
         // OutputRenderer is on self but closures need Arcs for shared mutability.
@@ -1930,19 +1979,9 @@ impl Repl {
         // Clone the Arc so the on_event closure can access the renderer without
         // unsafe pointer gymnastics. The Mutex ensures exclusive access per event.
         let out_arc = self.output.clone();
-        // Clone spinner flag for capture in on_event
-        let spinner_arc = spinner;
+        let bar_text_arc = bar_text;
 
         let on_event = move |msg: &CadeMessage| {
-            // Stop the waiting spinner on the very first SSE event (idempotent)
-            if let Some(ref flag) = spinner_arc {
-                if flag.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                    // Was true → we're the one to clear the line
-                    use std::io::Write;
-                    print!("\r{}\r", " ".repeat(35));
-                    let _ = std::io::stdout().flush();
-                }
-            }
             let mut out = out_arc.lock().unwrap();
             let out = &mut *out;
             match msg.msg_type() {
@@ -1994,6 +2033,19 @@ impl Repl {
                     let _ = out.close_streaming();
                     *in_reasoning2.lock().unwrap() = false;
                     *in_assistant2.lock().unwrap() = false;
+                    // Update ThinkingBar to show the current tool name
+                    if let Some(ref bar) = bar_text_arc {
+                        let tool_name = msg.data["tool_calls"][0]["function"]["name"]
+                            .as_str()
+                            .unwrap_or("tool");
+                        // Strip MCP server prefix (e.g. "developer__shell" → "shell")
+                        let display = if let Some(pos) = tool_name.rfind("__") {
+                            &tool_name[pos + 2..]
+                        } else {
+                            tool_name
+                        };
+                        *bar.lock().unwrap() = format!("● {}…", display);
+                    }
                 }
                 "usage_statistics" => {
                     use std::sync::atomic::Ordering;
@@ -2099,6 +2151,7 @@ impl Repl {
         stdout: &mut io::Stdout,
         messages: Vec<CadeMessage>,
         user_input: &str,
+        bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
     ) -> Result<()> {
         let tool_calls: Vec<(String, String, serde_json::Value)> = messages
             .iter()
@@ -2117,21 +2170,31 @@ impl Repl {
             if let crate::hooks::HookOutcome::Block { reason } = stop_outcome {
                 let _ = self.output.lock().unwrap().hook_continuation(&reason);
                 // Feed the hook's stderr back to the agent as a new turn
-                let follow_msgs = self.stream_turn(stdout, &reason, false, "", "", None).await?;
-                Box::pin(self.dispatch_tool_calls(stdout, follow_msgs, user_input)).await?;
+                let follow_msgs = self.stream_turn(stdout, &reason, false, "", "", None, bar_text.clone()).await?;
+                Box::pin(self.dispatch_tool_calls(stdout, follow_msgs, user_input, bar_text)).await?;
             }
             return Ok(());
         }
 
         for (call_id, tool_name, args) in tool_calls {
+            // Update bar text for this tool execution
+            if let Some(ref bar) = bar_text {
+                let display = if let Some(pos) = tool_name.rfind("__") {
+                    &tool_name[pos + 2..]
+                } else {
+                    &tool_name
+                };
+                *bar.lock().unwrap() = format!("● {}…", display);
+            }
+
             let result = self.execute_tool(stdout, &call_id, &tool_name, &args).await?;
 
             // Stream the tool return and process any chained tool calls
             let follow = self
-                .stream_turn(stdout, "", true, &call_id, &result.output, None)
+                .stream_turn(stdout, "", true, &call_id, &result.output, None, bar_text.clone())
                 .await?;
 
-            Box::pin(self.dispatch_tool_calls(stdout, follow, user_input)).await?;
+            Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text.clone())).await?;
         }
 
         Ok(())
