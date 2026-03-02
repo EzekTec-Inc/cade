@@ -1,12 +1,14 @@
 /// Ratatui-based input widget for the CADE REPL.
 ///
-/// Layout matches Letta Code's InputRich component (Viewport::Inline(4)):
+/// Layout matches Letta Code's InputRich component (Viewport::Inline(N)):
 /// ```
 ///  ─────────────────────────────────────────────── (dim separator, full width)
 ///  > user types here                               (prompt char + text field)
 ///  ─────────────────────────────────────────────── (dim separator, full width)
 ///  plan (read-only) mode ⏸       AgentName [model] (footer: left=mode, right=agent/model)
 /// ```
+/// The input area grows dynamically (up to MAX_INPUT_ROWS) as the user types or
+/// presses Shift+Enter.
 
 use std::io::{self, Write};
 
@@ -27,20 +29,20 @@ use ratatui::{
 };
 
 use crate::permissions::PermissionMode;
-use crate::ui::output::CONTENT_PAD;
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+/// Fixed rows: status(1) + top_sep(1) + bot_sep(1) + footer(1).
+const FIXED_ROWS: u16 = 4;
+/// Maximum rows the input area may occupy before capping.
+const MAX_INPUT_ROWS: u16 = 6;
 
 // ── RawModeGuard ──────────────────────────────────────────────────────────────
 
 /// RAII guard that enables raw mode on construction and disables it on drop.
-///
-/// Replaces the scattered `enable_raw_mode()` / `disable_raw_mode()` call pairs
-/// across repl.rs and input.rs. Guarantees the terminal is always restored even
-/// if code paths panic or early-return between enable/disable.
 pub struct RawModeGuard;
 
 impl RawModeGuard {
-    /// Enable raw mode and return the guard.
-    /// The terminal will be restored to cooked mode when the guard is dropped.
     pub fn enable() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
         Ok(Self)
@@ -57,14 +59,9 @@ impl Drop for RawModeGuard {
 
 /// Persistent state for the input widget across REPL iterations.
 pub struct InputWidget {
-    /// Current input buffer.
     buf: String,
-    /// Cursor position (byte offset into `buf`).
     cursor_pos: usize,
-    /// Terminal width for drawing.
     term_width: u16,
-    /// Completion summary shown in the status row after the agent finishes a turn.
-    /// Example: "✻ Considered for 3s · ↑1200 ↓800 tokens"
     pub last_status: Option<String>,
 }
 
@@ -81,7 +78,6 @@ impl InputWidget {
         }
     }
 
-    /// Refresh terminal width (call on resize events).
     pub fn update_width(&mut self) {
         if let Ok((w, _)) = crossterm::terminal::size() {
             self.term_width = w;
@@ -89,7 +85,6 @@ impl InputWidget {
     }
 
     /// Show the ratatui input box and read one user message.
-    ///
     /// Returns `None` on Ctrl+D (exit signal).
     pub fn read(
         &mut self,
@@ -105,20 +100,12 @@ impl InputWidget {
         self.buf.clear();
         self.cursor_pos = 0;
 
-        // 5 rows: status | separator | input-line | separator | footer
-        let viewport_height: u16 = 5;
-        // Anchor to terminal bottom, then pre-scroll `viewport_height` rows upward
-        // so the input widget never overwrites the last lines of agent output.
-        //
-        // Strategy:
-        //  1. MoveToRow(term_h-1) — anchor without printing.
-        //  2. Create a zero-height viewport and call insert_before(viewport_height)
-        //     with an empty render.  This scrolls content up by viewport_height rows
-        //     and leaves viewport_height blank rows at the terminal bottom.
-        //  3. Re-anchor, then create the real Viewport::Inline(viewport_height)
-        //     which renders the input widget into those blank rows.
-        let (_, term_h) = terminal::size().unwrap_or((80, 24));
-        let _ = execute!(io::stdout(), cursor::MoveToRow(term_h.saturating_sub(1)));
+        // Dynamic viewport: starts at FIXED_ROWS + 1; grows up to FIXED_ROWS + MAX_INPUT_ROWS.
+        let mut current_input_rows: u16 = 1;
+        let mut viewport_height: u16 = FIXED_ROWS + current_input_rows;
+
+        let (_, init_term_h) = terminal::size().unwrap_or((80, 24));
+        let _ = execute!(io::stdout(), cursor::MoveToRow(init_term_h.saturating_sub(1)));
         {
             let pre_backend = CrosstermBackend::new(io::stdout());
             let mut pre_term = Terminal::with_options(
@@ -127,49 +114,84 @@ impl InputWidget {
             )?;
             let _ = pre_term.insert_before(viewport_height, |_buf| {});
         }
-        // Re-anchor after the pre-scroll.
-        let _ = execute!(io::stdout(), cursor::MoveToRow(term_h.saturating_sub(1)));
-        let viewport_start_row = term_h.saturating_sub(viewport_height);
+        let _ = execute!(io::stdout(), cursor::MoveToRow(init_term_h.saturating_sub(1)));
         let backend = CrosstermBackend::new(io::stdout());
         let mut term = Terminal::with_options(
             backend,
-            TerminalOptions {
-                viewport: Viewport::Inline(viewport_height),
-            },
+            TerminalOptions { viewport: Viewport::Inline(viewport_height) },
         )?;
+        let mut viewport_start_row = init_term_h.saturating_sub(viewport_height);
 
         let _raw = RawModeGuard::enable()?;
 
         let result: Result<Option<String>> = (|| {
             loop {
-                // ── Draw ──────────────────────────────────────────────────────
+                // ── Snapshots ─────────────────────────────────────────────
                 let buf_snapshot = self.buf.clone();
-                let cursor_pos = self.cursor_pos;
-                let agent_name = agent_name.to_string();
-                let model = model.to_string();
-
+                let cursor_pos   = self.cursor_pos;
+                let agent_name   = agent_name.to_string();
+                let model        = model.to_string();
                 let last_status_snapshot = self.last_status.clone();
+
+                // ── Dynamic resize ────────────────────────────────────────
+                // available_w: width available for text after "> " prefix.
+                let available_w = self.term_width.saturating_sub(2).max(1);
+                let needed_rows = calc_input_rows(&buf_snapshot, available_w)
+                    .min(MAX_INPUT_ROWS);
+                if needed_rows != current_input_rows {
+                    let new_vh = FIXED_ROWS + needed_rows;
+                    let (_, th) = terminal::size().unwrap_or((80, 24));
+                    // Clear old viewport rows.
+                    let old_start = th.saturating_sub(viewport_height);
+                    let mut out = io::stdout();
+                    for row in old_start..old_start.saturating_add(viewport_height) {
+                        let _ = execute!(
+                            out,
+                            cursor::MoveTo(0, row),
+                            terminal::Clear(ClearType::CurrentLine)
+                        );
+                    }
+                    let _ = out.flush();
+                    // Re-anchor, pre-scroll, create new terminal.
+                    let _ = execute!(io::stdout(), cursor::MoveToRow(th.saturating_sub(1)));
+                    {
+                        let pre = CrosstermBackend::new(io::stdout());
+                        let mut pre_t = Terminal::with_options(
+                            pre,
+                            TerminalOptions { viewport: Viewport::Inline(0) },
+                        )?;
+                        let _ = pre_t.insert_before(new_vh, |_| {});
+                    }
+                    let _ = execute!(io::stdout(), cursor::MoveToRow(th.saturating_sub(1)));
+                    let new_backend = CrosstermBackend::new(io::stdout());
+                    let new_term = Terminal::with_options(
+                        new_backend,
+                        TerminalOptions { viewport: Viewport::Inline(new_vh) },
+                    )?;
+                    // Replacing drops the old terminal.
+                    term = new_term;
+                    viewport_start_row = th.saturating_sub(new_vh);
+                    current_input_rows = needed_rows;
+                    viewport_height    = new_vh;
+                }
+
+                // ── Draw ──────────────────────────────────────────────────
+                let cur_input_rows = current_input_rows;
                 term.draw(|frame| {
                     let area = frame.area();
 
-                    // 5-row layout:
-                    //  row 0: status line (completion summary or blank)
-                    //  row 1: top separator
-                    //  row 2: prompt + text input
-                    //  row 3: bottom separator
-                    //  row 4: footer (mode | agent [model])
                     let chunks = Layout::default()
                         .direction(Direction::Vertical)
                         .constraints([
-                            Constraint::Length(1), // row 0: status
-                            Constraint::Length(1), // row 1: separator
-                            Constraint::Length(1), // row 2: prompt + text
-                            Constraint::Length(1), // row 3: separator
-                            Constraint::Length(1), // row 4: footer
+                            Constraint::Length(1),              // status
+                            Constraint::Length(1),              // top separator
+                            Constraint::Length(cur_input_rows), // input (dynamic)
+                            Constraint::Length(1),              // bottom separator
+                            Constraint::Length(1),              // footer
                         ])
                         .split(area);
 
-                    // ── Status row (row 0) ────────────────────────────────────
+                    // ── Status row ────────────────────────────────────────
                     if let Some(ref status) = last_status_snapshot {
                         frame.render_widget(
                             Paragraph::new(Span::styled(
@@ -182,7 +204,7 @@ impl InputWidget {
                         );
                     }
 
-                    // ── Separators (rows 1 and 3) ─────────────────────────────
+                    // ── Separators ────────────────────────────────────────
                     let sep_color = mode_sep_color(mode);
                     let sep = "─".repeat(chunks[1].width as usize);
                     frame.render_widget(
@@ -194,7 +216,7 @@ impl InputWidget {
                         chunks[3],
                     );
 
-                    // ── Prompt + text input (row 2) ───────────────────────────
+                    // ── Input area ────────────────────────────────────────
                     let display = if buf_snapshot.is_empty() {
                         Line::from(vec![
                             Span::styled("> ", Style::default().fg(RC::White)),
@@ -217,18 +239,16 @@ impl InputWidget {
                         chunks[2],
                     );
 
-                    // Cursor: col = 2 ("> " prefix) + col in current line
+                    // ── Cursor position ───────────────────────────────────
                     let before_cursor = &buf_snapshot[..cursor_pos.min(buf_snapshot.len())];
-                    let line_idx = before_cursor.chars().filter(|&c| c == '\n').count() as u16;
-                    let last_line_start = before_cursor.rfind('\n').map(|i| i + 1).unwrap_or(0);
-                    let col_in_line = before_cursor[last_line_start..].chars().count() as u16;
-                    let cursor_col = chunks[2].x + 2 + col_in_line.min(chunks[2].width.saturating_sub(3));
-                    let cursor_row = (chunks[2].y + line_idx).min(chunks[2].y + chunks[2].height.saturating_sub(1));
+                    let (vis_row, vis_col) = calc_visual_cursor(before_cursor, available_w);
+                    let cursor_col = (chunks[2].x + vis_col)
+                        .min(chunks[2].x + chunks[2].width.saturating_sub(1));
+                    let cursor_row = (chunks[2].y + vis_row)
+                        .min(chunks[2].y + chunks[2].height.saturating_sub(1));
                     frame.set_cursor_position((cursor_col, cursor_row));
 
-                    // ── Footer (row 4) ────────────────────────────────────────
-                    // Left: mode info (or "Press / for commands" for Default)
-                    // Right: AgentName [model]
+                    // ── Footer ────────────────────────────────────────────
                     let (left_label, left_glyph, left_color) = mode_footer_left(mode);
                     let mut footer_spans: Vec<Span> = vec![
                         Span::styled(
@@ -242,8 +262,6 @@ impl InputWidget {
                             Style::default().fg(left_color),
                         ));
                     }
-
-                    // Right side: "AgentName [model]"
                     let right_agent = format!("{agent_name}");
                     let right_model = format!(" [{}]", truncate_str(&model, 30));
                     let right_len = (right_agent.chars().count() + right_model.chars().count()) as u16;
@@ -260,14 +278,13 @@ impl InputWidget {
                         right_model,
                         Style::default().fg(RC::DarkGray),
                     ));
-
                     frame.render_widget(
                         Paragraph::new(Line::from(footer_spans)),
                         chunks[4],
                     );
                 })?;
 
-                // ── Event ─────────────────────────────────────────────────────
+                // ── Event ─────────────────────────────────────────────────
                 if !event::poll(std::time::Duration::from_millis(50))? {
                     continue;
                 }
@@ -275,11 +292,7 @@ impl InputWidget {
                 match event::read()? {
                     Event::Key(KeyEvent { code, modifiers, .. }) => {
                         match (code, modifiers) {
-                            // ── Mode cycling ──────────────────────────────────
-                            // Tab = forward cycle, Shift+Tab = backward cycle.
-                            // Both signal the caller via empty return so the REPL
-                            // re-reads the mode from PermissionManager on the next
-                            // input_widget.read() call.
+                            // ── Mode cycling ──────────────────────────────
                             (KeyCode::Tab, _) => {
                                 let next = cycle_mode(mode);
                                 permissions.set_mode(next);
@@ -291,69 +304,70 @@ impl InputWidget {
                                 return Ok(Some(String::new()));
                             }
 
-                            // ── Submit (Enter) ────────────────────────────────
+                            // ── Shift+Enter: insert newline (expands input) ─
                             (KeyCode::Enter, m) if m == KeyModifiers::SHIFT => {
                                 self.buf.insert(self.cursor_pos, '\n');
                                 self.cursor_pos += 1;
                             }
+                            // ── Enter: submit ─────────────────────────────
                             (KeyCode::Enter, _) => {
                                 let line = self.buf.clone();
                                 return Ok(Some(line));
                             }
 
-                            // ── Exit (Ctrl+D on empty) ────────────────────────
+                            // ── Exit (Ctrl+D on empty) ────────────────────
                             (KeyCode::Char('d'), KeyModifiers::CONTROL)
                                 if self.buf.is_empty() =>
                             {
                                 return Ok(None);
                             }
 
-                            // ── Clear (Ctrl+C) ────────────────────────────────
+                            // ── Clear (Ctrl+C) ────────────────────────────
                             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                                 self.buf.clear();
                                 self.cursor_pos = 0;
                                 return Ok(Some(String::new()));
                             }
 
-                            // ── Esc: clear buffer ─────────────────────────────
+                            // ── Esc: clear buffer ─────────────────────────
                             (KeyCode::Esc, _) => {
                                 self.buf.clear();
                                 self.cursor_pos = 0;
                             }
 
-                            // ── Kill line (Ctrl+U) ────────────────────────────
+                            // ── Kill line (Ctrl+U) ────────────────────────
                             (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
                                 self.buf.drain(..self.cursor_pos);
                                 self.cursor_pos = 0;
                             }
 
-                            // ── Delete word (Ctrl+W) ──────────────────────────
+                            // ── Delete word (Ctrl+W) ──────────────────────
                             (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
-                                // Find start of previous word
                                 let end = self.cursor_pos;
                                 let start = self.buf[..end]
                                     .rfind(|c: char| !c.is_whitespace())
-                                    .and_then(|p| self.buf[..p].rfind(char::is_whitespace).map(|q| q + 1))
+                                    .and_then(|p| {
+                                        self.buf[..p].rfind(char::is_whitespace).map(|q| q + 1)
+                                    })
                                     .unwrap_or(0);
                                 self.buf.drain(start..end);
                                 self.cursor_pos = start;
                             }
 
-                            // ── Home / Ctrl+A ─────────────────────────────────
+                            // ── Home / Ctrl+A ─────────────────────────────
                             (KeyCode::Home, _)
                             | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
                                 self.cursor_pos = 0;
                             }
 
-                            // ── End / Ctrl+E ──────────────────────────────────
+                            // ── End / Ctrl+E ──────────────────────────────
                             (KeyCode::End, _)
                             | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
                                 self.cursor_pos = self.buf.len();
                             }
 
-                            // ── Cursor left ───────────────────────────────────
+                            // ── Cursor left ───────────────────────────────
                             (KeyCode::Left, _) if self.cursor_pos > 0 => {
-                                // Move one char (UTF-8 safe)
                                 self.cursor_pos -= self.buf[..self.cursor_pos]
                                     .chars()
                                     .last()
@@ -361,7 +375,7 @@ impl InputWidget {
                                     .unwrap_or(1);
                             }
 
-                            // ── Cursor right ──────────────────────────────────
+                            // ── Cursor right ──────────────────────────────
                             (KeyCode::Right, _) if self.cursor_pos < self.buf.len() => {
                                 self.cursor_pos += self.buf[self.cursor_pos..]
                                     .chars()
@@ -370,7 +384,7 @@ impl InputWidget {
                                     .unwrap_or(1);
                             }
 
-                            // ── History up ────────────────────────────────────
+                            // ── History up ────────────────────────────────
                             (KeyCode::Up, _) if !history.is_empty() => {
                                 let new_idx = match *hist_idx {
                                     None => history.len() - 1,
@@ -382,7 +396,7 @@ impl InputWidget {
                                 self.cursor_pos = self.buf.len();
                             }
 
-                            // ── History down ──────────────────────────────────
+                            // ── History down ──────────────────────────────
                             (KeyCode::Down, _) => {
                                 if let Some(i) = *hist_idx {
                                     if i + 1 < history.len() {
@@ -397,7 +411,7 @@ impl InputWidget {
                                 }
                             }
 
-                            // ── Backspace ─────────────────────────────────────
+                            // ── Backspace ─────────────────────────────────
                             (KeyCode::Backspace, _) if self.cursor_pos > 0 => {
                                 let char_len = self.buf[..self.cursor_pos]
                                     .chars()
@@ -408,14 +422,14 @@ impl InputWidget {
                                 self.buf.remove(self.cursor_pos);
                             }
 
-                            // ── Delete ────────────────────────────────────────
+                            // ── Delete ────────────────────────────────────
                             (KeyCode::Delete, _)
                                 if self.cursor_pos < self.buf.len() =>
                             {
                                 self.buf.remove(self.cursor_pos);
                             }
 
-                            // ── Regular character ─────────────────────────────
+                            // ── Regular character ─────────────────────────
                             (KeyCode::Char(c), mods)
                                 if mods == KeyModifiers::NONE
                                     || mods == KeyModifiers::SHIFT =>
@@ -437,21 +451,15 @@ impl InputWidget {
             }
         })();
 
-        drop(_raw); // restore cooked mode before returning
-        // Drop the ratatui terminal before touching the cursor so its internal
-        // state is released first.
+        drop(_raw);
         drop(term);
-        // Clear ALL 4 input-widget rows so no stale prompt text lingers.
-        // The turn separator is now rendered as the first line of user_message()
-        // via with_insert_before, keeping it visually consistent with all other
-        // output and eliminating blank rows between the separator and content.
+        // Clear ALL viewport rows so no stale prompt text lingers.
         let mut out = io::stdout();
         for row in viewport_start_row..viewport_start_row.saturating_add(viewport_height) {
             let _ = execute!(out, cursor::MoveTo(0, row), terminal::Clear(ClearType::CurrentLine));
         }
-        // Position cursor at terminal bottom so with_insert_before always works
-        // correctly on the next output call.
-        let _ = execute!(out, cursor::MoveToRow(term_h.saturating_sub(1)));
+        let (_, final_term_h) = terminal::size().unwrap_or((80, 24));
+        let _ = execute!(out, cursor::MoveToRow(final_term_h.saturating_sub(1)));
         let _ = out.flush();
         result
     }
@@ -465,36 +473,84 @@ impl Default for InputWidget {
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-/// Separator line color — matches Letta Code's bash-mode red vs default dim.
+/// Calculate how many visual rows `buf` needs given `available_width` columns
+/// for text (after the "> " prefix on the first logical line).
+///
+/// Capped at [`MAX_INPUT_ROWS`].
+fn calc_input_rows(buf: &str, available_width: u16) -> u16 {
+    let w = available_width.max(1) as usize;
+    if buf.is_empty() {
+        return 1;
+    }
+    let mut total: u16 = 0;
+    for (i, line) in buf.split('\n').enumerate() {
+        let chars = line.chars().count();
+        // First logical line: 2 cols taken by "> " prefix.
+        let row_w = if i == 0 { w.saturating_sub(2) } else { w }.max(1);
+        let rows = if chars == 0 { 1 } else { ((chars + row_w - 1) / row_w) as u16 };
+        total += rows;
+    }
+    total.max(1).min(MAX_INPUT_ROWS)
+}
+
+/// Return `(visual_row, visual_col)` of the cursor within the input area.
+///
+/// Correctly handles:
+/// - The `"> "` prefix (2 columns) on the very first visual row only.
+/// - `\n` characters (Shift+Enter) as explicit row breaks.
+/// - Visual wrapping when a line's length exceeds the available width.
+fn calc_visual_cursor(before_cursor: &str, available_width: u16) -> (u16, u16) {
+    let w = available_width.max(1) as usize;
+    let first_row_w = w.saturating_sub(2).max(1);
+
+    let mut vis_row: u16 = 0;
+    let mut vis_col: u16 = 2; // starts right after "> "
+    let mut is_first_visual_row = true;
+    let mut chars_on_row: usize = 0;
+
+    for ch in before_cursor.chars() {
+        if ch == '\n' {
+            vis_row += 1;
+            vis_col = 0;
+            chars_on_row = 0;
+            is_first_visual_row = false;
+        } else {
+            chars_on_row += 1;
+            let cap = if is_first_visual_row { first_row_w } else { w };
+            if chars_on_row > cap {
+                // Visual wrap.
+                vis_row += 1;
+                chars_on_row = 1;
+                is_first_visual_row = false;
+                vis_col = 1;
+            } else {
+                let prefix: u16 = if is_first_visual_row { 2 } else { 0 };
+                vis_col = prefix + chars_on_row as u16;
+            }
+        }
+    }
+
+    (vis_row, vis_col)
+}
+
 fn mode_sep_color(mode: PermissionMode) -> RC {
-    // Separator adopts the mode accent color (Letta Code: input.border = textDisabled for default,
-    // otherwise the mode's accent color as a subtle visual hint)
     match mode {
-        PermissionMode::Default           => RC::Rgb(70, 72, 74),   // #46484A textDisabled
-        PermissionMode::AcceptEdits       => RC::Rgb(140, 140, 249), // #8C8CF9 purple
+        PermissionMode::Default           => RC::Rgb(70, 72, 74),
+        PermissionMode::AcceptEdits       => RC::Rgb(140, 140, 249),
         PermissionMode::Plan              => RC::Green,
         PermissionMode::BypassPermissions => RC::Red,
     }
 }
 
-/// Footer left side: (label, glyph, color).
-/// Default mode → "Press / for commands" (dim gray).
-/// Other modes → mode name + glyph in their accent color.
 fn mode_footer_left(mode: PermissionMode) -> (&'static str, &'static str, RC) {
-    // Colors + glyphs matching Letta Code exactly (colors.ts)
     match mode {
-        // Default: dim border color, hint text — no glyph
         PermissionMode::Default           => ("Press / for commands", "", RC::Rgb(70, 72, 74)),
-        // AcceptEdits: purple #8C8CF9 + ⏵⏵ (double-play symbol)
         PermissionMode::AcceptEdits       => ("accept edits", "⏵⏵", RC::Rgb(140, 140, 249)),
-        // Plan: green + ⏸ (pause)
         PermissionMode::Plan              => ("plan mode", "⏸", RC::Green),
-        // Bypass: red + ⚡ (lightning)
         PermissionMode::BypassPermissions => ("bypass (allow all)", "⚡", RC::Red),
     }
 }
 
-/// Forward mode cycle: Default → AcceptEdits → Plan → BypassPermissions → Default.
 fn cycle_mode(mode: PermissionMode) -> PermissionMode {
     match mode {
         PermissionMode::Default           => PermissionMode::AcceptEdits,
@@ -504,7 +560,6 @@ fn cycle_mode(mode: PermissionMode) -> PermissionMode {
     }
 }
 
-/// Backward mode cycle (Shift+Tab).
 fn cycle_mode_back(mode: PermissionMode) -> PermissionMode {
     match mode {
         PermissionMode::Default           => PermissionMode::BypassPermissions,
