@@ -29,32 +29,22 @@
 /// Enter to toggle · ↑↓ navigate · Enter on Submit to confirm · Esc to cancel
 /// ```
 
-use std::io::{self, Write};
-
 use anyhow::Result;
-use crossterm::{
-    cursor,
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
-    terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
-};
+use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
-    Terminal, TerminalOptions, Viewport,
-    backend::CrosstermBackend,
+    DefaultTerminal,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
 
-use super::input::RawModeGuard;
-
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// One labelled option in a question.
 #[derive(Debug, Clone)]
 pub struct QuestionOption {
-    pub label: String,
+    pub label:       String,
     pub description: String,
 }
 
@@ -88,8 +78,8 @@ impl QuestionAnswer {
     /// Flat string representation (multi joined with ", ").
     pub fn as_str(&self) -> String {
         match self {
-            Self::Single(s)  => s.clone(),
-            Self::Multi(v)   => v.join(", "),
+            Self::Single(s) => s.clone(),
+            Self::Multi(v)  => v.join(", "),
         }
     }
 }
@@ -99,83 +89,49 @@ impl QuestionAnswer {
 pub struct QuestionWidget;
 
 impl QuestionWidget {
-    /// Present `question` interactively.
+    /// Present `question` interactively using the provided terminal.
     ///
-    /// Returns `Some(answer)` on submission or `None` if the user pressed Esc / Ctrl+C.
-    ///
-    /// The widget renders in the **alternate screen buffer** so the main screen
-    /// (content, ThinkingBar, etc.) is restored exactly when the modal closes — no
-    /// blank rows are created and no blank-row bookkeeping is required from the caller.
-    pub fn ask(question: &Question<'_>) -> Result<Option<QuestionAnswer>> {
+    /// The question is rendered over the full screen.  Caller is responsible for
+    /// redrawing the normal CADE UI after this returns.  Raw mode must already be
+    /// active (guaranteed when called from TuiApp context).
+    pub fn ask(
+        terminal: &mut DefaultTerminal,
+        question: &Question<'_>,
+    ) -> Result<Option<QuestionAnswer>> {
         // ── Build the effective options list ──────────────────────────────────
-        // Slots: provided options + optional "Type something." + optional "Submit"
-        let n_real = question.options.len();
+        let n_real     = question.options.len();
         let has_other  = question.allow_other;
         let has_submit = question.multi_select;
-        // Total selectable items in the list
         let total_items = n_real + usize::from(has_other) + usize::from(has_submit);
 
-        // Helper: index of "Type something." option (-1 if absent)
-        let other_idx  = if has_other  { n_real }                    else { usize::MAX };
-        // Helper: index of "Submit" option (-1 if absent)
+        let other_idx  = if has_other  { n_real } else { usize::MAX };
         let submit_idx = if has_submit { n_real + usize::from(has_other) } else { usize::MAX };
 
         // ── State ─────────────────────────────────────────────────────────────
         let mut cursor_pos: usize = 0;
-        let mut custom_text: String = String::new();
-        // Multi-select: which real option indices are checked
+        let mut custom_text = String::new();
         let mut checked: Vec<bool> = vec![false; n_real];
-
-        // ── Viewport height calculation ───────────────────────────────────────
-        // separator(1) + header(1) + blank(1) + question(1) + blank(1)
-        // + progress(1) + blank(1) if progress is Some, else 0
-        // + options * 2 (label + description)
-        // + "Submit" item(1) if multi_select
-        // + blank(1) + footer(1)
-        let progress_rows = if question.progress.is_some() { 2 } else { 0 };
-        let option_rows   = total_items * 2;
-        let viewport_height = (1 + 1 + 1 + 1 + 1 + progress_rows + option_rows + 1 + 1) as u16;
-
-        // ── Terminal setup ─────────────────────────────────────────────────────
-        // Switch to the alternate screen buffer.  The main screen (content rows,
-        // ThinkingBar, cursor position) is frozen and will be restored exactly by
-        // LeaveAlternateScreen — no blank rows are created in the main screen.
-        let mut out = io::stdout();
-        execute!(out, EnterAlternateScreen)?;
-
-        let (_, init_h) = terminal::size().unwrap_or((80, 24));
-        // Position the cursor at the bottom; Viewport::Inline will scroll the
-        // (blank) alternate screen to create the viewport without disturbing anything.
-        let _ = execute!(out, cursor::MoveToRow(init_h.saturating_sub(1)));
-
-        let backend = CrosstermBackend::new(io::stdout());
-        let mut term = Terminal::with_options(
-            backend,
-            TerminalOptions { viewport: Viewport::Inline(viewport_height) },
-        )?;
-
-        let _raw = RawModeGuard::enable()?;
 
         let answer: Option<QuestionAnswer> = 'widget: loop {
             // ── Draw ──────────────────────────────────────────────────────────
-            let (term_w, _) = terminal::size().unwrap_or((80, 24));
+            let (term_w, _) = crossterm::terminal::size().unwrap_or((80, 24));
             let sep = "─".repeat(term_w as usize);
 
-            term.draw(|frame| {
+            terminal.draw(|frame| {
                 let area = frame.area();
-                // Build all lines
                 let mut lines: Vec<Line<'static>> = Vec::new();
 
                 // Separator
-                lines.push(Line::from(Span::styled(sep.clone(), Style::default().fg(Color::DarkGray))));
+                lines.push(Line::from(Span::styled(
+                    sep.clone(),
+                    Style::default().fg(Color::DarkGray),
+                )));
 
                 // Header chip
                 lines.push(Line::from(Span::styled(
                     question.header.to_string(),
                     Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
                 )));
-
-                // Blank
                 lines.push(Line::from(""));
 
                 // Question text
@@ -183,8 +139,6 @@ impl QuestionWidget {
                     question.text.to_string(),
                     Style::default().fg(Color::White),
                 )));
-
-                // Blank
                 lines.push(Line::from(""));
 
                 // Progress indicator
@@ -199,31 +153,26 @@ impl QuestionWidget {
                 // Options
                 for idx in 0..total_items {
                     let is_selected = cursor_pos == idx;
-                    let selector = if is_selected { "❯" } else { " " };
+                    let selector    = if is_selected { "❯" } else { " " };
 
                     if idx == submit_idx {
-                        // "Submit" row
                         let label_style = if is_selected {
                             Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
                         } else {
                             Style::default().fg(Color::DarkGray)
                         };
-                        lines.push(Line::from(vec![
-                            Span::styled(
-                                format!("{selector} {idx_num}.    Submit",
-                                    idx_num = idx + 1),
-                                label_style,
-                            ),
-                        ]));
+                        lines.push(Line::from(Span::styled(
+                            format!("{selector} {}.    Submit", idx + 1),
+                            label_style,
+                        )));
                         lines.push(Line::from(""));
                         continue;
                     }
 
                     if idx == other_idx {
-                        // "Type something." row
                         let display = if cursor_pos == idx {
                             if custom_text.is_empty() {
-                                format!("Type something.█")
+                                "Type something.█".to_string()
                             } else {
                                 format!("{}█", custom_text)
                             }
@@ -237,10 +186,7 @@ impl QuestionWidget {
                             .add_modifier(Modifier::ITALIC);
                         lines.push(Line::from(vec![
                             Span::styled(selector.to_string(), Style::default().fg(Color::Green)),
-                            Span::styled(
-                                format!(" {}.    {display}", idx + 1),
-                                other_style,
-                            ),
+                            Span::styled(format!(" {}.    {display}", idx + 1), other_style),
                         ]));
                         lines.push(Line::from(""));
                         continue;
@@ -248,14 +194,11 @@ impl QuestionWidget {
 
                     // Regular option
                     let opt = &question.options[idx];
-
-                    // Checkbox prefix for multi-select
                     let checkbox = if question.multi_select {
                         if checked[idx] { "[✓] " } else { "[ ] " }
                     } else {
                         ""
                     };
-
                     let label_style = if is_selected {
                         Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
                     } else {
@@ -290,10 +233,11 @@ impl QuestionWidget {
                     Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
                 )));
 
-                // Render all lines into the viewport
-                let constraints: Vec<Constraint> = lines.iter()
-                    .map(|_| Constraint::Length(1))
-                    .collect();
+                // Render: each line gets one row; clip to terminal height.
+                let max_lines = area.height as usize;
+                let lines = lines.into_iter().take(max_lines).collect::<Vec<_>>();
+                let constraints: Vec<Constraint> =
+                    lines.iter().map(|_| Constraint::Length(1)).collect();
                 let chunks = Layout::default()
                     .direction(Direction::Vertical)
                     .constraints(constraints)
@@ -309,130 +253,88 @@ impl QuestionWidget {
             if !event::poll(std::time::Duration::from_millis(50))? {
                 continue;
             }
-
             match event::read()? {
                 Event::Key(KeyEvent { code, modifiers, .. }) => {
                     match (code, modifiers) {
                         // Cancel
-                        (KeyCode::Esc, _)
-                        | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                        (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                             break 'widget None;
                         }
-
-                        // Navigation up
+                        // Navigation
                         (KeyCode::Up, _) => {
-                            if cursor_pos > 0 {
-                                cursor_pos -= 1;
-                            }
+                            if cursor_pos > 0 { cursor_pos -= 1; }
                         }
-
-                        // Navigation down
                         (KeyCode::Down, _) => {
-                            if cursor_pos + 1 < total_items {
-                                cursor_pos += 1;
-                            }
+                            if cursor_pos + 1 < total_items { cursor_pos += 1; }
                         }
-
-                        // Tab forward
                         (KeyCode::Tab, _) => {
                             cursor_pos = (cursor_pos + 1) % total_items;
                         }
-
-                        // Number quick-select (1–9)
+                        (KeyCode::BackTab, _) => {
+                            cursor_pos = if cursor_pos == 0 { total_items - 1 } else { cursor_pos - 1 };
+                        }
+                        // Number quick-select
                         (KeyCode::Char(c), KeyModifiers::NONE)
                             if c.is_ascii_digit() && c != '0' =>
                         {
-                            let n = (c as usize) - ('0' as usize);
-                            let idx = n.saturating_sub(1);
+                            let idx = (c as usize) - ('0' as usize) - 1;
                             if idx < total_items {
                                 if question.multi_select {
-                                    // Toggle checkbox if it's a real option
                                     if idx < n_real {
                                         checked[idx] = !checked[idx];
                                         cursor_pos = idx;
                                     }
+                                } else if idx != other_idx {
+                                    let label = question.options[idx].label.clone();
+                                    break 'widget Some(QuestionAnswer::Single(label));
                                 } else {
-                                    // Immediate submit
                                     cursor_pos = idx;
-                                    if idx == other_idx {
-                                        // Move to other but don't submit yet
-                                    } else {
-                                        let label = question.options[idx].label.clone();
-                                        break 'widget Some(QuestionAnswer::Single(label));
-                                    }
                                 }
                             }
                         }
-
-                        // Backspace (custom text input)
+                        // Backspace for custom text
                         (KeyCode::Backspace, _) if cursor_pos == other_idx => {
                             custom_text.pop();
                         }
-
                         // Enter
                         (KeyCode::Enter, _) => {
                             if question.multi_select {
                                 if cursor_pos == submit_idx {
-                                    // Collect checked options
-                                    let selected: Vec<String> = checked
-                                        .iter()
-                                        .enumerate()
+                                    let selected: Vec<String> = checked.iter().enumerate()
                                         .filter(|(_, &c)| c)
                                         .map(|(i, _)| question.options[i].label.clone())
                                         .collect();
-                                    if selected.is_empty() {
-                                        // Nothing checked yet — don't submit
-                                        continue;
-                                    }
+                                    if selected.is_empty() { continue; }
                                     break 'widget Some(QuestionAnswer::Multi(selected));
                                 } else if cursor_pos == other_idx {
-                                    // Toggle custom text option (treated as a checkbox)
-                                    // If text is non-empty, include it in multi
                                     if !custom_text.is_empty() {
                                         break 'widget Some(QuestionAnswer::Multi(vec![custom_text.clone()]));
                                     }
                                 } else if cursor_pos < n_real {
-                                    // Toggle checkbox
                                     checked[cursor_pos] = !checked[cursor_pos];
                                 }
-                            } else {
-                                // Single-select submit
-                                if cursor_pos == other_idx {
-                                    if !custom_text.is_empty() {
-                                        break 'widget Some(QuestionAnswer::Single(custom_text.clone()));
-                                    }
-                                    // No text typed yet — stay
-                                } else {
-                                    let label = question.options[cursor_pos].label.clone();
-                                    break 'widget Some(QuestionAnswer::Single(label));
+                            } else if cursor_pos == other_idx {
+                                if !custom_text.is_empty() {
+                                    break 'widget Some(QuestionAnswer::Single(custom_text.clone()));
                                 }
+                            } else {
+                                let label = question.options[cursor_pos].label.clone();
+                                break 'widget Some(QuestionAnswer::Single(label));
                             }
                         }
-
-                        // Regular character input (for "Type something." row)
-                        (KeyCode::Char(c), mods)
+                        // Regular character input for "Type something." row
+                        (KeyCode::Char(c), m)
                             if cursor_pos == other_idx
-                                && (mods == KeyModifiers::NONE || mods == KeyModifiers::SHIFT) =>
+                                && (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT) =>
                         {
                             custom_text.push(c);
                         }
-
                         _ => {}
                     }
                 }
-
                 _ => {}
             }
         };
-
-        // ── Cleanup: drop raw mode and terminal, leave alternate screen ────────
-        // LeaveAlternateScreen restores the main screen buffer exactly as it was
-        // before EnterAlternateScreen — content, ThinkingBar, cursor all intact.
-        drop(_raw);
-        drop(term);
-        let mut out = io::stdout();
-        execute!(out, LeaveAlternateScreen)?;
-        let _ = out.flush();
 
         Ok(answer)
     }

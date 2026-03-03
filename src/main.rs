@@ -777,19 +777,38 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Migrate old system prompt: if the stored prompt is the minimal server fallback
+    // (no "Never introduce yourself" rule) update it to BASE_SYSTEM_PROMPT.
+    // This runs once per old agent; after the update the check is skipped.
+    if agent.system_prompt.as_deref()
+        .map(|p| !p.contains("Never introduce yourself"))
+        .unwrap_or(true)
+    {
+        if let Err(e) = client.patch_agent_system_prompt(&agent.id, BASE_SYSTEM_PROMPT).await {
+            tracing::warn!("migrate system_prompt: {e}");
+        } else {
+            tracing::info!("Migrated system_prompt for agent {}", agent.id);
+        }
+    }
+
     // Seed default memory blocks if this agent has none yet
     // (covers agents created before default block seeding was introduced)
     let existing_blocks = client.get_memory(&agent.id).await.unwrap_or_default();
     if existing_blocks.is_empty() {
         seed_default_memory(&client, &agent.id).await;
     } else {
-        // Migrate old third-person persona block ("CADE is a coding AI assistant…")
-        // to first-person phrasing so the LLM doesn't treat it as a bio to recite.
+        // Migrate old persona blocks that describe CADE in a way that triggers
+        // self-introductions: third-person ("CADE is…") or first-person intro
+        // ("I am CADE…").  Replace with behavioral first-person phrasing.
         for block in &existing_blocks {
-            if block.label == "persona" && block.value.trim_start().starts_with("CADE is") {
-                let (_, new_val, new_desc) = DEFAULT_MEMORY_BLOCKS[0]; // persona entry
-                let _ = client.upsert_memory(&agent.id, "persona", new_val, Some(new_desc)).await;
-                break;
+            if block.label == "persona" {
+                let v = block.value.trim_start();
+                let needs_migration = v.starts_with("CADE is") || v.starts_with("I am CADE");
+                if needs_migration {
+                    let (_, new_val, new_desc) = DEFAULT_MEMORY_BLOCKS[0]; // persona entry
+                    let _ = client.upsert_memory(&agent.id, "persona", new_val, Some(new_desc)).await;
+                    break;
+                }
             }
         }
     }

@@ -20,6 +20,11 @@ use crate::server::{
 const CONV_TITLE_MAX: usize = 60;
 /// Number of DB message rows to load per turn (~100 full tool-call cycles at 200 rows).
 const HISTORY_LIMIT: usize = 200;
+/// Appended to the system prompt when the stored prompt doesn't already include it.
+/// Prevents old agents (created before BASE_SYSTEM_PROMPT was written) from
+/// generating self-introductions on every turn.
+const NO_INTRO_RULE: &str = "\n\nIMPORTANT: Never introduce yourself or describe your capabilities \
+    unprompted. Always respond directly to the user's message without any preamble or self-description.";
 /// Max output tokens per LLM response. Claude 3.7/4.x and GPT-4.1 support 16k+.
 const MAX_TOKENS: u32 = 16384;
 /// Cap on a single tool-result content string (chars). ~8k tokens.
@@ -139,10 +144,18 @@ async fn build_context(
         .collect::<Vec<_>>()
         .join("\n\n");
 
-    let system_prompt = if memory.is_empty() {
-        agent.system_prompt.clone().unwrap_or_default()
+    let base = agent.system_prompt.clone().unwrap_or_default();
+    // Ensure the no-intro rule is always enforced, regardless of when the agent
+    // was created (old agents predate the BASE_SYSTEM_PROMPT no-intro section).
+    let base = if base.contains("Never introduce yourself") {
+        base
     } else {
-        format!("{}\n\n# Memory\n{memory}", agent.system_prompt.unwrap_or_default())
+        format!("{base}{NO_INTRO_RULE}")
+    };
+    let system_prompt = if memory.is_empty() {
+        base
+    } else {
+        format!("{base}\n\n# Memory\n{memory}")
     };
 
     // Message history from DB — oldest first, scoped to conversation

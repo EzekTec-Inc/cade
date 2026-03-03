@@ -17,7 +17,7 @@ use crate::server::{
 const CADE_SYSTEM_PROMPT: &str = "\
 You are CADE (Coding AI assistant with Desktop Extensions), a stateful AI coding agent. \
 Use your tools to explore, edit, and run code on the user's machine. \
-Be concise, accurate, and verify your changes after making them.";
+Be concise, accurate, and verify your changes before and after making them.";
 
 // ── Request / Response DTOs ───────────────────────────────────────────────────
 
@@ -39,11 +39,18 @@ pub struct AgentResponse {
     pub name: String,
     pub model: Option<String>,
     pub description: Option<String>,
+    pub system_prompt: Option<String>,
 }
 
 impl From<AgentRow> for AgentResponse {
     fn from(r: AgentRow) -> Self {
-        Self { id: r.id, name: r.name, model: Some(r.model), description: r.description }
+        Self {
+            id: r.id,
+            name: r.name,
+            model: Some(r.model),
+            description: r.description,
+            system_prompt: r.system_prompt,
+        }
     }
 }
 
@@ -55,7 +62,8 @@ pub async fn create_agent(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let id = format!("agent-{}", Uuid::new_v4());
     let name = body.name.unwrap_or_else(|| format!("CADE-{}", &id[6..14]));
-    let system_prompt = body.system_prompt
+    let system_prompt = body
+        .system_prompt
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| CADE_SYSTEM_PROMPT.to_string());
 
@@ -87,7 +95,10 @@ pub async fn get_agent(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     match sqlite::get_agent(&state.db, &agent_id).map_err(|e| server_err(e.to_string()))? {
         Some(row) => Ok(Json(json!(AgentResponse::from(row)))),
-        None => Err((StatusCode::NOT_FOUND, Json(json!({"detail": format!("Agent '{agent_id}' not found")})))),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": format!("Agent '{agent_id}' not found")})),
+        )),
     }
 }
 
@@ -103,9 +114,15 @@ pub async fn delete_agent(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    let deleted = sqlite::delete_agent(&state.db, &agent_id).map_err(|e| server_err(e.to_string()))?;
-    if deleted { Ok(StatusCode::NO_CONTENT) } else {
-        Err((StatusCode::NOT_FOUND, Json(json!({"detail": "Agent not found"}))))
+    let deleted =
+        sqlite::delete_agent(&state.db, &agent_id).map_err(|e| server_err(e.to_string()))?;
+    if deleted {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "Agent not found"})),
+        ))
     }
 }
 
@@ -125,15 +142,23 @@ pub async fn patch_agent(
     // Verify agent exists
     let existing = sqlite::get_agent(&state.db, &agent_id)
         .map_err(|e| server_err(e.to_string()))?
-        .ok_or_else(|| (StatusCode::NOT_FOUND, Json(json!({"detail": "Agent not found"}))))?;
+        .ok_or_else(|| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": "Agent not found"})),
+            )
+        })?;
 
     let mut updated_model = existing.model.clone();
-    let mut updated_name  = existing.name.clone();
+    let mut updated_name = existing.name.clone();
 
     if let Some(name) = &body.name {
         let name = name.trim();
         if name.is_empty() {
-            return Err((StatusCode::BAD_REQUEST, Json(json!({ "detail": "name cannot be empty" }))));
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "detail": "name cannot be empty" })),
+            ));
         }
         sqlite::update_agent_name(&state.db, &agent_id, name)
             .map_err(|e| server_err(e.to_string()))?;
@@ -143,16 +168,37 @@ pub async fn patch_agent(
 
     if let Some(model) = &body.model {
         // Validate the model is routable before persisting
-        state.llm_router.read().await.validate_model(model).map_err(|e| {
-            (StatusCode::BAD_REQUEST, Json(json!({ "detail": e.to_string() })))
-        })?;
+        state
+            .llm_router
+            .read()
+            .await
+            .validate_model(model)
+            .map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "detail": e.to_string() })),
+                )
+            })?;
         let updated = sqlite::update_agent_model(&state.db, &agent_id, model)
             .map_err(|e| server_err(e.to_string()))?;
         if !updated {
-            return Err((StatusCode::NOT_FOUND, Json(json!({"detail": format!("Agent '{agent_id}' not found")}))));
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": format!("Agent '{agent_id}' not found")})),
+            ));
         }
         updated_model = model.clone();
         tracing::info!("Agent {agent_id}: model → {model}");
+    }
+
+    if let Some(prompt) = &body.system_prompt {
+        let prompt = prompt.trim();
+        sqlite::update_agent_system_prompt(&state.db, &agent_id, prompt)
+            .map_err(|e| server_err(e.to_string()))?;
+        tracing::info!(
+            "Agent {agent_id}: system_prompt updated ({} chars)",
+            prompt.len()
+        );
     }
 
     Ok(Json(json!({
@@ -169,8 +215,8 @@ pub async fn get_memory(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let blocks = sqlite::get_memory_blocks(&state.db, &agent_id)
-        .map_err(|e| server_err(e.to_string()))?;
+    let blocks =
+        sqlite::get_memory_blocks(&state.db, &agent_id).map_err(|e| server_err(e.to_string()))?;
     let arr: Vec<Value> = blocks.into_iter()
         .map(|(label, value, description)| json!({ "label": label, "value": value, "description": description }))
         .collect();
@@ -184,8 +230,14 @@ pub async fn delete_memory(
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
     let found = sqlite::delete_memory_block(&state.db, &agent_id, &label)
         .map_err(|e| server_err(e.to_string()))?;
-    if found { Ok(StatusCode::NO_CONTENT) }
-    else { Err((StatusCode::NOT_FOUND, Json(json!({"detail": format!("Memory block '{label}' not found")})))) }
+    if found {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": format!("Memory block '{label}' not found")})),
+        ))
+    }
 }
 
 /// PUT /v1/agents/:id/memory/:label
@@ -194,7 +246,7 @@ pub async fn upsert_memory(
     Path((agent_id, label)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
-    let value       = body["value"].as_str().unwrap_or("").to_string();
+    let value = body["value"].as_str().unwrap_or("").to_string();
     let description = body["description"].as_str();
     sqlite::upsert_memory_block(&state.db, &agent_id, &label, &value, description)
         .map_err(|e| server_err(e.to_string()))?;
@@ -223,17 +275,25 @@ pub async fn search_messages_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let query = params.get("q").map(String::as_str).unwrap_or("");
     if query.is_empty() {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({"detail": "missing ?q= parameter"}))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({"detail": "missing ?q= parameter"})),
+        ));
     }
     let conv_id = params.get("conversation_id").map(String::as_str);
     let rows = sqlite::search_messages(&state.db, &agent_id, query, conv_id)
         .map_err(|e| server_err(e.to_string()))?;
-    let messages: Vec<Value> = rows.into_iter().map(|r| json!({
-        "id": r.id,
-        "role": r.role,
-        "content": r.content,
-        "conversation_id": r.conversation_id,
-    })).collect();
+    let messages: Vec<Value> = rows
+        .into_iter()
+        .map(|r| {
+            json!({
+                "id": r.id,
+                "role": r.role,
+                "content": r.content,
+                "conversation_id": r.conversation_id,
+            })
+        })
+        .collect();
     Ok(Json(json!({ "messages": messages })))
 }
 
@@ -257,8 +317,8 @@ pub async fn list_conversations(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let rows = sqlite::list_conversations(&state.db, &agent_id)
-        .map_err(|e| server_err(e.to_string()))?;
+    let rows =
+        sqlite::list_conversations(&state.db, &agent_id).map_err(|e| server_err(e.to_string()))?;
     let convs: Vec<Value> = rows.iter().map(conv_to_json).collect();
     Ok(Json(json!({ "conversations": convs })))
 }
@@ -283,16 +343,22 @@ pub async fn delete_conversation(
     // Verify ownership
     match sqlite::get_conversation(&state.db, &conv_id) {
         Ok(Some(c)) if c.agent_id != agent_id => {
-            return Err((StatusCode::FORBIDDEN, Json(json!({"detail": "conversation not owned by this agent"}))));
+            return Err((
+                StatusCode::FORBIDDEN,
+                Json(json!({"detail": "conversation not owned by this agent"})),
+            ));
         }
         Ok(None) => {
-            return Err((StatusCode::NOT_FOUND, Json(json!({"detail": "conversation not found"}))));
+            return Err((
+                StatusCode::NOT_FOUND,
+                Json(json!({"detail": "conversation not found"})),
+            ));
         }
         Err(e) => return Err(server_err(e.to_string())),
         Ok(Some(_)) => {}
     }
-    let deleted = sqlite::delete_conversation(&state.db, &conv_id)
-        .map_err(|e| server_err(e.to_string()))?;
+    let deleted =
+        sqlite::delete_conversation(&state.db, &conv_id).map_err(|e| server_err(e.to_string()))?;
     Ok(Json(json!({ "deleted": deleted })))
 }
 
@@ -339,5 +405,8 @@ pub async fn detach_tools(
 
 fn server_err(msg: String) -> (StatusCode, Json<Value>) {
     tracing::error!("500 Internal Server Error: {msg}");
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": msg})))
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"detail": msg})),
+    )
 }

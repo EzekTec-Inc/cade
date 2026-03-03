@@ -1,12 +1,7 @@
 use anyhow::Result;
-use crossterm::{
-    cursor,
-    event::KeyCode,
-    execute,
-    style::{Color, Print, ResetColor, SetForegroundColor},
-    terminal::{self, ClearType},
-};
 use std::io::{self, Write};
+use crossterm::{execute, style::{Color, Print, ResetColor, SetForegroundColor}, terminal::{self, ClearType}, cursor};
+use crossterm::event::KeyCode;
 
 use std::sync::{Arc, Mutex};
 
@@ -18,7 +13,7 @@ use crate::skills::Skill;
 use crate::subagents::{BackgroundResult, discover_all_subagents, find_subagent};
 use crate::toolsets::Toolset;
 use crate::tools::dispatch;
-use crate::ui::{InputWidget, OutputRenderer, ThinkingBar};
+use crate::ui::{TuiApp, RenderLine, cycle_mode, cycle_mode_back};
 
 const BANNER: &str = r#"
    ___    _    ____  _____
@@ -172,10 +167,8 @@ pub struct Repl {
     /// Cumulative token usage for the session (input, output).
     session_input_tokens:  std::sync::Arc<std::sync::atomic::AtomicU64>,
     session_output_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    /// ratatui-based output renderer (streaming + bounded content).
-    output: Arc<Mutex<OutputRenderer>>,
-    /// ratatui-based input widget (replaces raw read_line()).
-    input_widget: InputWidget,
+    /// Fullscreen ratatui TUI — single render path for all output + input.
+    app: Arc<Mutex<TuiApp>>,
 }
 
 impl Repl {
@@ -195,6 +188,9 @@ impl Repl {
         conversation_id: Option<String>,
         mcp: std::sync::Arc<crate::mcp::McpManager>,
     ) -> Self {
+        let perm_mode        = permissions.mode();
+        let agent_name_clone = agent_name.clone();
+        let current_model_clone = current_model.clone();
         Self {
             client,
             agent_id:   Arc::new(Mutex::new(agent_id)),
@@ -216,8 +212,11 @@ impl Repl {
             streaming_enabled:     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             session_input_tokens:  std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            output:       Arc::new(Mutex::new(OutputRenderer::new())),
-            input_widget: InputWidget::new(),
+            app: Arc::new(Mutex::new(TuiApp::new(
+                perm_mode,
+                agent_name_clone.clone(),
+                current_model_clone.clone(),
+            ))),
         }
     }
 
@@ -235,24 +234,19 @@ impl Repl {
     pub async fn run(mut self) -> Result<()> {
         let mut stdout = io::stdout();
 
-        // Clear the terminal before the banner.  \033[3J erases the scrollback
-        // buffer so previous sessions' "I am CADE…" messages don't bleed through
-        // above the new banner.  \033[2J then clears the visible screen.
-        // Do NOT MoveTo(0,0): the banner uses with_insert_before which anchors to
-        // the terminal bottom, so leaving the cursor at its current position lets
-        // the banner appear right above the input widget with no blank-space gap.
-        write!(stdout, "\x1b[3J")?; // erase scrollback (xterm/VTE/Kitty)
-        execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
-        stdout.flush()?;
-
-        // Banner + agent info via OutputRenderer
-        self.output.lock().unwrap().banner(
-            BANNER,
-            &self.agent_name(),
-            &self.agent_id(),
-            &self.current_model.lock().unwrap().clone(),
-            &format!("{}", self.permissions.mode()),
-        )?;
+        // Push banner + agent info into TuiApp content.
+        {
+            let mut app = self.app.lock().unwrap();
+            let agent_id   = self.agent_id.lock().unwrap().clone();
+            let agent_name = self.agent_name.lock().unwrap().clone();
+            let model      = self.current_model.lock().unwrap().clone();
+            let mode_str   = format!("{}", self.permissions.mode());
+            let banner_text = format!(
+                "{BANNER}\n  Agent  : {agent_name}  ({agent_id})\n  Model  : {model}\n  Mode   : {mode_str}"
+            );
+            app.push_silent(RenderLine::SystemMsg(banner_text));
+            app.draw()?;
+        }
 
         // SessionStart hook (non-blocking)
         self.hooks.session_start(&self.agent_id()).await;
@@ -265,12 +259,11 @@ impl Repl {
             {
                 let mut results = self.background_results.lock().unwrap();
                 for r in results.drain(..) {
-                    let _ = self.output.lock().unwrap().background_result(
-                        &r.subagent,
-                        &r.prompt_preview,
-                        &r.result,
+                    let msg = format!(
+                        "  ✓ Subagent '{}' finished:\n{}",
+                        r.subagent, r.result
                     );
-                    // Inject result into main agent's conversation
+                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(msg));
                     let notify = format!(
                         "[Background subagent '{}' completed (task ID: {})]:\n{}",
                         r.subagent, r.task_id, r.result
@@ -279,33 +272,41 @@ impl Repl {
                 }
             }
 
-            // Read input via ratatui InputWidget (shows bordered input box + status bar)
-            let mode = self.permissions.mode();
-            let model = self.current_model.lock().unwrap().clone();
-            let agent_name = self.agent_name();
-            let in_tok  = self.session_input_tokens.load(std::sync::atomic::Ordering::SeqCst);
-            let out_tok = self.session_output_tokens.load(std::sync::atomic::Ordering::SeqCst);
-            let input = match self.input_widget.read(
-                &mut history, &mut hist_idx,
-                mode, &self.permissions,
-                &agent_name, &model,
-                in_tok, out_tok,
-            )? {
+            // Update app footer to reflect current mode/model before reading input.
+            {
+                let mut app = self.app.lock().unwrap();
+                app.update_mode(self.permissions.mode());
+                app.update_model(self.current_model.lock().unwrap().clone());
+                app.update_agent_name(self.agent_name());
+            }
+
+            // Read input via TuiApp (fullscreen input widget at bottom of screen).
+            let input = match self.app.lock().unwrap().read_input(&mut history, &mut hist_idx)? {
                 Some(s) => s,
                 None => break,
             };
             let input = input.trim().to_string();
-            // Notify OutputRenderer of the blank rows left by the InputWidget clear.
-            let blank_n = self.input_widget.last_viewport_height;
-            self.output.lock().unwrap().note_blank_rows(blank_n);
-            if input.is_empty() {
+
+            // Handle Tab / BackTab mode-cycle sentinels.
+            if input == "__TAB__" {
+                let next = cycle_mode(self.permissions.mode());
+                self.permissions.set_mode(next);
+                self.app.lock().unwrap().update_mode(next);
                 continue;
             }
+            if input == "__BACKTAB__" {
+                let prev = cycle_mode_back(self.permissions.mode());
+                self.permissions.set_mode(prev);
+                self.app.lock().unwrap().update_mode(prev);
+                continue;
+            }
+
+            if input.is_empty() { continue; }
             history.push(input.clone());
             hist_idx = None;
 
-            // Echo user message — Letta Code style: \"> text\" with white text
-            let _ = self.output.lock().unwrap().user_message(&input);
+            // Echo user message.
+            let _ = self.app.lock().unwrap().push(RenderLine::UserMessage(input.clone()));
 
             // Direct bash: lines starting with '!'
             if let Some(cmd) = input.strip_prefix('!') {
@@ -323,14 +324,12 @@ impl Repl {
                             } else {
                                 String::from_utf8_lossy(&out.stdout).to_string()
                             };
-                            execute!(stdout, SetForegroundColor(Color::White), Print(text), ResetColor)?;
+                            let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(text));
                         }
                         Err(e) => {
-                            execute!(stdout, SetForegroundColor(Color::Red),
-                                Print(format!("  bash error: {e}\n")), ResetColor)?;
+                            let _ = self.app.lock().unwrap().push(RenderLine::ErrorMsg(format!("bash: {e}")));
                         }
                     }
-                    stdout.flush()?;
                 }
                 continue;
             }
@@ -343,41 +342,38 @@ impl Repl {
                         let in_tok  = self.session_input_tokens.load(Ordering::SeqCst);
                         let out_tok = self.session_output_tokens.load(Ordering::SeqCst);
                         if in_tok > 0 || out_tok > 0 {
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print(format!("\n  Session tokens — in: {in_tok}  out: {out_tok}  total: {}\n",
-                                    in_tok + out_tok)),
-                                ResetColor)?;
+                            let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
+                                format!("  Session tokens — in: {in_tok}  out: {out_tok}  total: {}", in_tok + out_tok)
+                            ));
                         }
-                        execute!(stdout, Print("\nBye!\n"))?;
+                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Bye!".to_string()));
                         break;
                     }
                     // SlashCmd::Clear is handled below (with context clearing)
                     SlashCmd::Help => {
                         let text = Self::help_text();
-                        self.output.lock().unwrap().print_block(&text)?;
+                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(text));
                     }
                     SlashCmd::Agent => {
-                        println!("\nAgent: {} ({})", self.agent_name(), self.agent_id());
+                        let msg = format!("  Agent: {} ({})", self.agent_name(), self.agent_id());
+                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(msg));
                     }
                     SlashCmd::Info => {
-                        execute!(stdout, ResetColor)?;
-                        stdout.flush()?;
-                        println!();
-                        println!("  Agent   : {} ({})", self.agent_name(), self.agent_id());
-                        println!("  Conv    : {}", self.conversation_id().as_deref().unwrap_or("default"));
-                        println!("  Model   : {}", self.model());
-                        println!("  Mode    : {}", self.permissions.mode());
-                        println!("  CWD     : {}", self.cwd.display());
-                        println!("  Version : {}", env!("CARGO_PKG_VERSION"));
+                        let msg = format!(
+                            "  Agent   : {} ({})\n  Conv    : {}\n  Model   : {}\n  Mode    : {}\n  CWD     : {}\n  Version : {}",
+                            self.agent_name(), self.agent_id(),
+                            self.conversation_id().as_deref().unwrap_or("default"),
+                            self.model(), self.permissions.mode(),
+                            self.cwd.display(), env!("CARGO_PKG_VERSION")
+                        );
+                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(msg));
                     }
                     SlashCmd::Yolo => {
                         self.permissions.set_mode(PermissionMode::BypassPermissions);
-                        execute!(stdout,
-                            SetForegroundColor(Color::Yellow),
-                            Print("\n⚡ Permission mode: bypassPermissions — all tools auto-approved\n"),
-                            ResetColor,
-                        )?;
-                        stdout.flush()?;
+                        self.app.lock().unwrap().update_mode(PermissionMode::BypassPermissions);
+                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
+                            "⚡ Permission mode: bypassPermissions — all tools auto-approved".to_string()
+                        ));
                     }
                     SlashCmd::Mcp => {
                         let statuses = self.mcp.status();
@@ -415,15 +411,13 @@ impl Repl {
                                         ResetColor,
                                     )?;
                                 }
-                                println!();
+                                let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                             }
                         }
-                        stdout.flush()?;
                     }
                     SlashCmd::Link => {
                         execute!(stdout, SetForegroundColor(Color::DarkGrey),
                             Print("\n  Linking tools…\n"), ResetColor)?;
-                        stdout.flush()?;
                         let client2  = self.client.clone();
                         let mcp2     = std::sync::Arc::clone(&self.mcp);
                         let toolset2 = *self.current_toolset.lock().unwrap();
@@ -444,7 +438,6 @@ impl Repl {
                         execute!(stdout, SetForegroundColor(Color::Green),
                             Print(format!("  ✓ Linked {n_native} native + {n_mcp} MCP tool(s)\n")),
                             ResetColor)?;
-                        stdout.flush()?;
                     }
                     SlashCmd::Unlink => {
                         let agent_id = self.agent_id();
@@ -459,7 +452,6 @@ impl Repl {
                                     Print(format!("\n  ✗ {e}\n")), ResetColor)?;
                             }
                         }
-                        stdout.flush()?;
                     }
                     SlashCmd::Stream => {
                         use std::sync::atomic::Ordering;
@@ -468,7 +460,6 @@ impl Repl {
                         let label = if !current { "on" } else { "off" };
                         execute!(stdout, SetForegroundColor(Color::Cyan),
                             Print(format!("\n  Streaming: {label}\n")), ResetColor)?;
-                        stdout.flush()?;
                     }
                     SlashCmd::Usage => {
                         use std::sync::atomic::Ordering;
@@ -486,7 +477,6 @@ impl Repl {
                                 Print("    (no usage recorded yet — requires Anthropic/OpenAI)\n"),
                                 ResetColor)?;
                         }
-                        stdout.flush()?;
                     }
                     SlashCmd::Logout => {
                         if let Ok(mut s) = self.settings.lock() {
@@ -496,7 +486,6 @@ impl Repl {
                             Print("\n  ✓ API key cleared from ~/.cade/settings.json\n"),
                             Print("    Restart CADE to re-authenticate.\n"),
                             ResetColor)?;
-                        stdout.flush()?;
                         return Ok(());
                     }
                     SlashCmd::Plan => {
@@ -507,7 +496,6 @@ impl Repl {
                             Print("   Use /default to resume normal mode\n"),
                             ResetColor,
                         )?;
-                        stdout.flush()?;
                     }
                     SlashCmd::Default => {
                         self.permissions.set_mode(PermissionMode::Default);
@@ -516,7 +504,6 @@ impl Repl {
                             Print("\n✅ Permission mode: default — tools require approval\n"),
                             ResetColor,
                         )?;
-                        stdout.flush()?;
                     }
                     SlashCmd::Mode(arg) => {
                         match arg.as_deref() {
@@ -526,7 +513,6 @@ impl Repl {
                                 execute!(stdout,
                                     Print(format!("\n{icon} Current mode: {label}  {hint}\n")),
                                 )?;
-                                stdout.flush()?;
                             }
                             Some(name) => {
                                 // Switch to named mode
@@ -559,7 +545,6 @@ impl Repl {
                                             ResetColor)?;
                                     }
                                 }
-                                stdout.flush()?;
                             }
                         }
                     }
@@ -578,7 +563,6 @@ impl Repl {
                         let old_toolset = *self.current_toolset.lock().unwrap();
                         execute!(stdout, SetForegroundColor(Color::DarkGrey),
                             Print(format!("\n  Switching model → {m}…\n")), ResetColor)?;
-                        stdout.flush()?;
                         match self.client.patch_agent_model(&self.agent_id(), &m).await {
                             Ok(new_model) => {
                                 *self.current_model.lock().unwrap() = new_model.clone();
@@ -616,7 +600,6 @@ impl Repl {
                                     Print(format!("  ✗ {e}\n")), ResetColor)?;
                             }
                         }
-                        stdout.flush()?;
                     }
 
                     // ── New commands ──────────────────────────────────────────
@@ -637,7 +620,6 @@ impl Repl {
                                     ResetColor)?;
                             }
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::New => {
@@ -660,13 +642,11 @@ impl Repl {
                                     Print(format!("\n  ✗ {e}\n")), ResetColor)?;
                             }
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::NewAgent => {
                         execute!(stdout, SetForegroundColor(Color::DarkGrey),
                             Print("\n  Creating new agent…\n"), ResetColor)?;
-                        stdout.flush()?;
                         let model = self.model();
                         let req = crate::agent::client::CreateAgentRequest {
                             name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
@@ -717,13 +697,11 @@ impl Repl {
                                     Print(format!("  ✗ {e}\n")), ResetColor)?;
                             }
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::Resume => {
                         execute!(stdout, SetForegroundColor(Color::DarkGrey),
                             Print("\n  Fetching conversations…\n"), ResetColor)?;
-                        stdout.flush()?;
                         let agent_id = self.agent_id();
                         match self.client.list_conversations(&agent_id).await {
                             Ok(convs) => {
@@ -746,7 +724,6 @@ impl Repl {
                             }
                             Err(e) => self.print_error(&mut stdout, &e.to_string())?,
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::Pin => {
@@ -765,13 +742,11 @@ impl Repl {
                             },
                             Err(_) => {}
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::Agents => {
                         execute!(stdout, SetForegroundColor(Color::DarkGrey),
                             Print("\n  Fetching agents…\n"), ResetColor)?;
-                        stdout.flush()?;
                         match self.client.list_agents().await {
                             Ok(agents) if agents.is_empty() => {
                                 execute!(stdout, Print("  (no agents found)\n"))?;
@@ -841,7 +816,6 @@ impl Repl {
                             }
                             Err(e) => self.print_error(&mut stdout, &e.to_string())?,
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::Delete(target) => {
@@ -862,7 +836,6 @@ impl Repl {
                                     let a = matched[0];
                                     execute!(stdout, SetForegroundColor(Color::Yellow),
                                         Print(format!("\n  Delete '{}'? [y/N]: ", a.name)), ResetColor)?;
-                                    stdout.flush()?;
                                     let _raw = crate::ui::RawModeGuard::enable()?;
                                     let confirmed = loop {
                                         if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
@@ -895,7 +868,6 @@ impl Repl {
                             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                                 Print("\n  /delete <name-or-id>  or  /agents then press d\n"), ResetColor)?;
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::Init => {
@@ -904,7 +876,6 @@ impl Repl {
                         execute!(stdout, SetForegroundColor(Color::DarkGrey),
                             Print(format!("  Analysing project at {}…\n", self.cwd.display())),
                             ResetColor)?;
-                        stdout.flush()?;
 
                         let explore_prompt = format!(
                             "Analyse the project at '{}'. \
@@ -964,7 +935,7 @@ impl Repl {
                              Acknowledge and summarise what you learned in 2-3 sentences."
                         );
                         self.agent_turn(&mut stdout, &init_prompt).await?;
-                        let _ = self.output.lock().unwrap().turn_end();
+                        let _ = self.app.lock().unwrap().commit_streaming();
                     }
 
                     SlashCmd::Remember(text) => {
@@ -979,7 +950,7 @@ impl Repl {
                             format!("[/remember] {text}")
                         };
                         self.agent_turn(&mut stdout, &msg).await?;
-                        let _ = self.output.lock().unwrap().turn_end();
+                        let _ = self.app.lock().unwrap().commit_streaming();
                     }
 
                     SlashCmd::Memory => {
@@ -997,7 +968,7 @@ impl Repl {
                                 match self.client.get_memory(&id).await {
                                     Ok(blocks) => {
                                         if let Some(b) = blocks.iter().find(|b| b.label == label) {
-                                            println!();
+                                            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                                             execute!(stdout, SetForegroundColor(Color::Cyan),
                                                 Print(format!("  [{label}]")), ResetColor)?;
                                             if let Some(desc) = &b.description {
@@ -1006,7 +977,7 @@ impl Repl {
                                                         Print(format!("  {desc}")), ResetColor)?;
                                                 }
                                             }
-                                            println!();
+                                            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                                             if b.value.is_empty() {
                                                 execute!(stdout, SetForegroundColor(Color::DarkGrey),
                                                     Print("  (empty)\n"), ResetColor)?;
@@ -1052,12 +1023,11 @@ impl Repl {
                                     .unwrap_or_default();
 
                                 execute!(stdout, ResetColor)?;
-                                stdout.flush()?;
                                 println!("\n  Editing [{label}]");
-                                println!("  Current value:\n  ---");
+                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Current value:  ---".to_string()));
                                 for line in current.lines() { println!("  {line}"); }
-                                println!("  ---");
-                                println!("  Enter new content (empty line = done, .clear = erase):");
+                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("---".to_string()));
+                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Enter new content (empty line = done, .clear = erase):".to_string()));
 
                                 terminal::disable_raw_mode()?;
                                 let mut lines: Vec<String> = Vec::new();
@@ -1074,7 +1044,7 @@ impl Repl {
 
                                 let new_value = if clear_mode { String::new() } else { lines.join("\n") };
                                 if new_value.is_empty() && !clear_mode {
-                                    println!("  (cancelled — no changes)");
+                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("(cancelled — no changes)".to_string()));
                                 } else {
                                     match self.client.upsert_memory(&id, label, &new_value, None).await {
                                         Ok(_) => println!("  ✓ [{label}] updated"),
@@ -1087,14 +1057,12 @@ impl Repl {
                                 match self.client.get_memory(&self.agent_id()).await {
                                     Ok(blocks) if blocks.is_empty() => {
                                         execute!(stdout, ResetColor)?;
-                                        stdout.flush()?;
-                                        println!("\n  (no memory blocks)");
-                                        println!("  Run /init to populate, or use update_memory tool");
+                                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("(no memory blocks)".to_string()));
+                                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Run /init to populate, or use update_memory tool".to_string()));
                                     }
                                     Ok(blocks) => {
                                         execute!(stdout, ResetColor)?;
-                                        stdout.flush()?;
-                                        println!();
+                                        let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                                         for b in &blocks {
                                             // Label + description
                                             execute!(stdout, SetForegroundColor(Color::Cyan),
@@ -1105,7 +1073,7 @@ impl Repl {
                                                         Print(format!("  {desc}")), ResetColor)?;
                                                 }
                                             }
-                                            println!();
+                                            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                                             // Value preview
                                             if b.value.is_empty() {
                                                 execute!(stdout, SetForegroundColor(Color::DarkGrey),
@@ -1121,7 +1089,6 @@ impl Repl {
                                 }
                             }
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::Search(query) => {
@@ -1152,7 +1119,6 @@ impl Repl {
                                     Print(format!("\n  ✗ {e}\n")), ResetColor)?;
                             }
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::Skills(arg) => {
@@ -1167,11 +1133,10 @@ impl Repl {
                             "list" | "" => {
                                 let skills = self.skills.lock().unwrap();
                                 execute!(stdout, ResetColor)?;
-                                stdout.flush()?;
                                 if skills.is_empty() {
-                                    println!("\n  No skills loaded.");
-                                    println!("  Create one: /skills create <name>");
-                                    println!("  Skills dirs: .skills/  ~/.cade/skills/  ~/.cade/agents/<id>/skills/");
+                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("No skills loaded.".to_string()));
+                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Create one: /skills create <name>".to_string()));
+                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Skills dirs: .skills/  ~/.cade/skills/  ~/.cade/agents/<id>/skills/".to_string()));
                                 } else {
                                     println!("\n  Skills ({} loaded):\n", skills.len());
                                     for s in skills.iter() {
@@ -1181,15 +1146,15 @@ impl Repl {
                                         println!("  {:<10} {:<28} {:<12} {}",
                                             format!("[{}]", s.scope), s.id, cat, s.description);
                                     }
-                                    println!();
-                                    println!("  Agent uses load_skill(<id>) to load full content on-demand.");
+                                    let _ = self.app.lock().unwrap().push(RenderLine::Blank);
+                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Agent uses load_skill(<id>) to load full content on-demand.".to_string()));
                                 }
                             }
 
                             "create" => {
                                 let name_raw = sub_arg.trim().to_string();
                                 if name_raw.is_empty() {
-                                    println!("\n  Usage: /skills create <name>");
+                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Usage: /skills create <name>".to_string()));
                                 } else {
                                     let slug: String = name_raw
                                         .to_lowercase()
@@ -1226,7 +1191,7 @@ impl Repl {
                                                 match std::fs::write(&skill_file, template) {
                                                     Ok(_) => {
                                                         println!("\n  ✓ Created: {}", skill_file.display());
-                                                        println!("    Edit the file, then run /skills reload to activate it.");
+                                                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Edit the file, then run /skills reload to activate it.".to_string()));
                                                     }
                                                     Err(e) => println!("\n  ✗ Failed to write skill file: {e}"),
                                                 }
@@ -1246,7 +1211,6 @@ impl Repl {
                                     }
                                     Some(s) => {
                                         execute!(stdout, ResetColor)?;
-                                        stdout.flush()?;
                                         println!("\n  [{id}]");
                                         println!("  Name       : {}", s.name);
                                         println!("  Description: {}", s.description);
@@ -1291,7 +1255,7 @@ impl Repl {
                                         *self.skills.lock().unwrap() = new_skills;
 
                                         println!("\n  ✓ Reloaded: {new_count} skills (was {prev_count})");
-                                        println!("  ✓ Skills listing updated (on-demand via load_skill)");
+                                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("✓ Skills listing updated (on-demand via load_skill)".to_string()));
 
                                         // Notify agent in current conversation
                                         if new_count > 0 {
@@ -1301,31 +1265,29 @@ impl Repl {
                                                  Use load_skill(id) to load any skill's full content.]"
                                             );
                                             self.agent_turn(&mut stdout, &notify).await?;
-                                            let _ = self.output.lock().unwrap().turn_end();
+                                            let _ = self.app.lock().unwrap().commit_streaming();
                                         }
                                 }
                             }
 
                             other => {
                                 println!("\n  Unknown /skills subcommand: '{other}'");
-                                println!("  Usage: /skills [list | create <name> | show <id> | reload]");
+                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Usage: /skills [list | create <name> | show <id> | reload]".to_string()));
                             }
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::Subagents => {
                         let all = discover_all_subagents(&self.cwd);
                         execute!(stdout, ResetColor)?;
-                        stdout.flush()?;
                         println!("\n  Available subagents ({}):\n", all.len());
                         for def in &all {
                             println!("{}", def.summary());
                         }
-                        println!();
-                        println!("  Usage: ask the agent to run_subagent(type, task)");
-                        println!("  Custom: create .cade/agents/<name>.md in this project");
-                        println!("  Global: create ~/.cade/agents/<name>.md");
+                        let _ = self.app.lock().unwrap().push(RenderLine::Blank);
+                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Usage: ask the agent to run_subagent(type, task)".to_string()));
+                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Custom: create .cade/agents/<name>.md in this project".to_string()));
+                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Global: create ~/.cade/agents/<name>.md".to_string()));
                     }
 
                     SlashCmd::Providers => {
@@ -1350,19 +1312,19 @@ impl Repl {
                                         ))
                                     )?;
                                 }
-                                println!();
-                                println!("  /connect <name>    — add a provider");
-                                println!("  /disconnect <name> — remove a provider");
+                                let _ = self.app.lock().unwrap().push(RenderLine::Blank);
+                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("/connect <name>    — add a provider".to_string()));
+                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("/disconnect <name> — remove a provider".to_string()));
                                 let presets = self.client.list_provider_presets().await;
                                 if !presets.is_empty() {
-                                    println!("\n  OpenAI-compatible presets:");
+                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("OpenAI-compatible presets:".to_string()));
                                     for p in &presets {
                                         let n = p["name"].as_str().unwrap_or("?");
                                         let u = p["base_url"].as_str().unwrap_or("?");
                                         println!("    /connect {n:<14} — {u}");
                                     }
                                 }
-                                println!();
+                                let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                             }
                             Err(e) => self.print_error(&mut stdout, &e.to_string())?,
                         }
@@ -1385,7 +1347,6 @@ impl Repl {
                                 }
                                 Err(e) => self.print_error(&mut stdout, &e.to_string())?,
                             }
-                            stdout.flush()?;
                         }
                     }
 
@@ -1433,7 +1394,7 @@ impl Repl {
                                         Print("\n"),
                                     )?;
                                 }
-                                println!();
+                                let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                             }
                             if !deny.is_empty() {
                                 execute!(stdout, SetForegroundColor(Color::Red),
@@ -1450,7 +1411,7 @@ impl Repl {
                                         Print("\n"),
                                     )?;
                                 }
-                                println!();
+                                let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                             }
                         }
 
@@ -1491,7 +1452,6 @@ impl Repl {
                             )?;
                             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                                 Print("  Save to settings.json? [y/N] "), ResetColor)?;
-                            stdout.flush()?;
                             let _raw = crate::ui::RawModeGuard::enable()?;
                             let save = loop {
                                 if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
@@ -1512,8 +1472,7 @@ impl Repl {
                                     Err(e) => self.print_error(&mut stdout, &e.to_string())?,
                                 }
                             }
-                            println!();
-                            stdout.flush()?;
+                            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                         } else {
                             self.print_error(&mut stdout, &format!("invalid pattern: {pattern:?}\n  Expected: Tool  or  Tool(arg)  or  Tool(prefix:*)"))?;
                         }
@@ -1543,7 +1502,6 @@ impl Repl {
                             )?;
                             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                                 Print("  Save to settings.json? [y/N] "), ResetColor)?;
-                            stdout.flush()?;
                             let _raw = crate::ui::RawModeGuard::enable()?;
                             let save = loop {
                                 if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
@@ -1564,8 +1522,7 @@ impl Repl {
                                     Err(e) => self.print_error(&mut stdout, &e.to_string())?,
                                 }
                             }
-                            println!();
-                            stdout.flush()?;
+                            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                         } else {
                             self.print_error(&mut stdout, &format!("invalid pattern: {pattern:?}\n  Expected: Tool  or  Tool(arg)  or  Tool(prefix:*)"))?;
                         }
@@ -1631,7 +1588,7 @@ impl Repl {
                                                 )?;
                                             }
                                         }
-                                        println!();
+                                        let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                                     }
                                 };
                             }
@@ -1649,7 +1606,6 @@ impl Repl {
                                 Print("  Config: ~/.cade/settings.json  ·  .cade/settings.json  ·  .cade/settings.local.json\n\n"),
                                 ResetColor)?;
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::Rename(new_name) => {
@@ -1659,7 +1615,6 @@ impl Repl {
                             // Prompt for name interactively
                             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                                 Print("\n  New name: "), ResetColor)?;
-                            stdout.flush()?;
                             terminal::disable_raw_mode()?;
                             let mut buf = String::new();
                             std::io::stdin().read_line(&mut buf).unwrap_or(0);
@@ -1681,7 +1636,6 @@ impl Repl {
                                 Err(e) => self.print_error(&mut stdout, &e.to_string())?,
                             }
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::Toolset(arg) => {
@@ -1695,7 +1649,6 @@ impl Repl {
                                 None => {
                                     execute!(stdout, SetForegroundColor(Color::DarkGrey),
                                         Print("\n  Toolsets: default | codex | gemini\n\n"), ResetColor)?;
-                                    stdout.flush()?;
                                     continue;
                                 }
                             }
@@ -1711,7 +1664,6 @@ impl Repl {
                                 Print("  /toolset default | codex | gemini\n\n"),
                                 ResetColor,
                             )?;
-                            stdout.flush()?;
                             continue;
                         };
                         let _ = fake_arg; // silence unused warning
@@ -1723,7 +1675,6 @@ impl Repl {
                             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                                 Print(format!("\n  Toolset already: {new_toolset:?}\n")), ResetColor)?;
                         }
-                        stdout.flush()?;
                     }
 
                     SlashCmd::Feedback => {
@@ -1733,7 +1684,6 @@ impl Repl {
                             SetForegroundColor(Color::White),
                             Print("  https://github.com/EzekTec-Inc/CADE/issues\n"),
                             ResetColor)?;
-                        stdout.flush()?;
                     }
                 }
                 continue;
@@ -1745,13 +1695,12 @@ impl Repl {
             {
                 execute!(stdout, SetForegroundColor(Color::Yellow),
                     Print(format!("\n  ⚠ Hook blocked prompt: {reason}\n")), ResetColor)?;
-                stdout.flush()?;
                 continue;
             }
 
             // Send to agent and handle tool loop
             self.agent_turn(&mut stdout, &input).await?;
-            let _ = self.output.lock().unwrap().turn_end();
+            let _ = self.app.lock().unwrap().commit_streaming();
         }
 
         // SessionEnd hook (non-blocking)
@@ -1867,53 +1816,42 @@ impl Repl {
             input.to_string()
         };
 
-        // ── ThinkingBar ──────────────────────────────────────────────────────
-        // Activate a 1-row animated status bar pinned to the terminal bottom.
-        // OutputRenderer anchors content to term_h-2 while the bar is active.
-        // Also attach bar_text to the OutputRenderer so streaming methods
-        // (assistant_chunk, reasoning_chunk) update it instead of raw-printing.
-        self.output.lock().unwrap().set_status_bar(true);
-        let (bar, bar_task) = ThinkingBar::start();
-        let bar_text = bar.text.clone();
-        self.output.lock().unwrap().attach_bar(bar_text.clone(), bar.pause_flag.clone());
+        // ── Thinking animation ────────────────────────────────────────────────
+        let bar_text = self.app.lock().unwrap().start_thinking(
+            "assessing… (esc to interrupt · 0s · 0↑)"
+        );
 
-        // ── Assessing timer task ────────────────────────────────────────────
-        // Ticks every second and updates the ThinkingBar with Letta Code's
-        // "assessing… (esc to interrupt · Xs · N↑)" format.
-        // Only overwrites the bar when it's in a "passthrough" state (not showing
-        // an active tool name or generating count).
-        {
-            let bar_initial = bar_text.clone();
-            *bar_initial.lock().unwrap() = "assessing… (esc to interrupt · 0s · 0↑)".to_string();
-        }
-        let timer_bar = bar_text.clone();
-        let timer_cancel = self.cancel_turn.clone();
-        let timer_tokens = self.session_output_tokens.clone();
-        let timer_start = turn_start;
-        let timer_base_tokens = out_tok_before;
-        let assessing_timer = tokio::spawn(async move {
+        // Redraw tick task — updates the spinner animation and assessing timer.
+        let tick_app     = self.app.clone();
+        let tick_cancel  = self.cancel_turn.clone();
+        let tick_tokens  = self.session_output_tokens.clone();
+        let tick_base    = out_tok_before;
+        let tick_start   = turn_start;
+        let tick_bar     = bar_text.clone();
+        let tick_handle  = tokio::spawn(async move {
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-                if timer_cancel.load(Ordering::SeqCst) { break; }
-                let secs = timer_start.elapsed().as_secs();
-                let toks = timer_tokens.load(Ordering::SeqCst).saturating_sub(timer_base_tokens);
-                let hint = format!("assessing… (esc to interrupt · {secs}s · {toks}↑)");
-                let mut text = timer_bar.lock().unwrap();
-                // Only update when the bar shows an "assessing" or "CADE thinking" state,
-                // not when it's showing an active tool or "generating" progress.
-                let cur = text.as_str();
-                let is_passthrough = cur.starts_with("assessing")
-                    || cur.starts_with("CADE thinking");
-                if is_passthrough {
-                    *text = hint;
+                tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
+                if tick_cancel.load(Ordering::SeqCst) { break; }
+                // Update assessing text once per second
+                let secs = tick_start.elapsed().as_secs();
+                let toks = tick_tokens.load(Ordering::SeqCst).saturating_sub(tick_base);
+                {
+                    let cur = tick_bar.lock().unwrap().clone();
+                    if cur.starts_with("assessing") || cur.starts_with("CADE thinking") {
+                        *tick_bar.lock().unwrap() =
+                            format!("assessing… (esc to interrupt · {secs}s · {toks}↑)");
+                    }
+                }
+                // Try to redraw; skip if the lock is contended (brief miss is OK).
+                if let Ok(mut app) = tick_app.try_lock() {
+                    let _ = app.draw();
                 }
             }
         });
 
-        // Pass bar_text into stream_turn so tool_call_message events update it.
         let messages = self.stream_turn(
             stdout, &effective_input, false, "", "",
-            None, // spinner AtomicBool no longer used — ThinkingBar replaces it
+            None,
             Some(bar_text.clone()),
         ).await;
 
@@ -1923,17 +1861,10 @@ impl Repl {
         self.cancel_turn.store(false, Ordering::SeqCst);
         self.dispatch_tool_calls(stdout, messages, input, Some(bar_text)).await?;
 
-        // ── Stop ThinkingBar + assessing timer ───────────────────────────────
-        assessing_timer.abort();
-        let _ = assessing_timer.await; // ignore JoinError (expected on abort)
-        self.output.lock().unwrap().detach_bar();
-        bar.stop();
-        let _ = bar_task.await;
-        self.output.lock().unwrap().set_status_bar(false);
-
-        // ── Completion summary → status row ─────────────────────────────────
-        let elapsed = turn_start.elapsed();
-        let secs = elapsed.as_secs();
+        // ── Stop thinking animation ───────────────────────────────────────────
+        tick_handle.abort();
+        let _ = tick_handle.await;
+        let secs = self.app.lock().unwrap().stop_thinking();
         let in_delta  = self.session_input_tokens.load(Ordering::SeqCst).saturating_sub(in_tok_before);
         let out_delta = self.session_output_tokens.load(Ordering::SeqCst).saturating_sub(out_tok_before);
         let summary = if secs >= 60 {
@@ -1941,7 +1872,8 @@ impl Repl {
         } else {
             format!("✻ Considered for {}s · ↑{} ↓{} tokens", secs, in_delta, out_delta)
         };
-        self.input_widget.last_status = Some(summary);
+        self.app.lock().unwrap().set_last_status(Some(summary));
+        let _ = self.app.lock().unwrap().draw();
 
         Ok(())
     }
@@ -1982,17 +1914,13 @@ impl Repl {
         let run_id_cell2   = run_id_cell.clone();
         let seq_id_cell2   = seq_id_cell.clone();
 
-        // Clone the Arc so the on_event closure can access the renderer without
-        // unsafe pointer gymnastics. The Mutex ensures exclusive access per event.
-        let out_arc = self.output.clone();
+        // Clone the Arc so the on_event closure can access TuiApp.
+        let app_arc      = self.app.clone();
         let bar_text_arc = bar_text;
 
         let on_event = move |msg: &CadeMessage| {
-            let mut out = out_arc.lock().unwrap();
-            let out = &mut *out;
             match msg.msg_type() {
                 "stream_start" => {
-                    // Server emits this as the first SSE event with conversation_id + run_id
                     if let Some(cid) = msg.data["conversation_id"].as_str() {
                         if !cid.is_empty() && conv_arc.lock().unwrap().as_deref() != Some(cid) {
                             let cid: String = cid.to_string();
@@ -2009,42 +1937,43 @@ impl Repl {
                 "reasoning_message" => {
                     if let Some(text) = msg.reasoning_text() {
                         let mut flag = in_reasoning2.lock().unwrap();
-                        if !*flag {
-                            // First chunk: print the thinking header
-                            let _ = out.reasoning_header();
-                            *flag = true;
-                        }
-                        let _ = out.reasoning_chunk(text);
+                        if !*flag { *flag = true; }
+                        // Accumulate reasoning text; committed as collapsed header on done.
+                        app_arc.lock().unwrap().push_reasoning_chunk(text);
                     }
                 }
                 "assistant_message" => {
-                    // Close reasoning block if open
                     {
                         let mut rflag = in_reasoning2.lock().unwrap();
                         if *rflag {
-                            let _ = out.reasoning_done();
+                            let _ = app_arc.lock().unwrap().commit_reasoning();
                             *rflag = false;
                         }
                     }
                     if let Some(text) = msg.assistant_text() {
                         if !text.is_empty() {
-                            let mut aflag = in_assistant2.lock().unwrap();
-                            let _ = out.assistant_chunk(text);
-                            *aflag = true;
+                            *in_assistant2.lock().unwrap() = true;
+                            let _ = app_arc.lock().unwrap().push_streaming_chunk(text);
+                            // Update thinking bar to show generation progress.
+                            if let Some(ref bar) = bar_text_arc {
+                                let words = app_arc.lock().unwrap()
+                                    // count words in streaming_text via a snapshot
+                                    .lines.len(); // rough proxy — update bar text
+                                let cur = bar.lock().unwrap().clone();
+                                if !cur.starts_with("●") {
+                                    *bar.lock().unwrap() = "generating…".to_string();
+                                }
+                            }
                         }
                     }
                 }
                 "tool_call_message" => {
-                    // Close any open streaming block before tool call display
-                    let _ = out.close_streaming();
+                    let _ = app_arc.lock().unwrap().commit_streaming();
                     *in_reasoning2.lock().unwrap() = false;
                     *in_assistant2.lock().unwrap() = false;
-                    // Update ThinkingBar to show the current tool name
                     if let Some(ref bar) = bar_text_arc {
                         let tool_name = msg.data["tool_calls"][0]["function"]["name"]
-                            .as_str()
-                            .unwrap_or("tool");
-                        // Strip MCP server prefix (e.g. "developer__shell" → "shell")
+                            .as_str().unwrap_or("tool");
                         let display = if let Some(pos) = tool_name.rfind("__") {
                             &tool_name[pos + 2..]
                         } else {
@@ -2064,7 +1993,6 @@ impl Repl {
                 }
                 _ => {}
             }
-            // Track seq_id from every event for reconnect checkpointing
             if let Some(s) = msg.seq_id() {
                 *seq_id_cell2.lock().unwrap() = Some(s);
             }
@@ -2087,13 +2015,15 @@ impl Repl {
             {
                 Ok(m) => m,
                 Err(e) if is_cancel(&e) => {
-                    let _ = self.output.lock().unwrap().close_streaming();
-                    let _ = self.output.lock().unwrap().error("Turn interrupted");
+                    let mut app = self.app.lock().unwrap();
+                    app.discard_streaming();
+                    let _ = app.push(RenderLine::ErrorMsg("Turn interrupted".to_string()));
                     return Ok(vec![]);
                 }
                 Err(e) => {
-                    let _ = self.output.lock().unwrap().close_streaming();
-                    let _ = self.output.lock().unwrap().error(&e.to_string());
+                    let mut app = self.app.lock().unwrap();
+                    app.discard_streaming();
+                    let _ = app.push(RenderLine::ErrorMsg(e.to_string()));
                     return Ok(vec![]);
                 }
             }
@@ -2104,13 +2034,15 @@ impl Repl {
                 match self.client.stream_message_cancellable(&agent_id, input, conv_ref, on_event, Some(cancel)).await {
                     Ok(m) => m,
                     Err(e) if is_cancel(&e) => {
-                        let _ = self.output.lock().unwrap().close_streaming();
-                        let _ = self.output.lock().unwrap().error("Turn interrupted");
+                        let mut app = self.app.lock().unwrap();
+                        app.discard_streaming();
+                        let _ = app.push(RenderLine::ErrorMsg("Turn interrupted".to_string()));
                         return Ok(vec![]);
                     }
                     Err(e) => {
-                        let _ = self.output.lock().unwrap().close_streaming();
-                        let _ = self.output.lock().unwrap().error(&e.to_string());
+                        let mut app = self.app.lock().unwrap();
+                        app.discard_streaming();
+                        let _ = app.push(RenderLine::ErrorMsg(e.to_string()));
                         return Ok(vec![]);
                     }
                 }
@@ -2121,23 +2053,23 @@ impl Repl {
                         for msg in &msgs {
                             if let Some(text) = msg.assistant_text() {
                                 if !text.is_empty() {
-                                    let _ = self.output.lock().unwrap().assistant_chunk(text);
+                                    let _ = self.app.lock().unwrap().push_streaming_chunk(text);
                                 }
                             }
                         }
-                        let _ = self.output.lock().unwrap().assistant_done();
+                        let _ = self.app.lock().unwrap().commit_streaming();
                         msgs
                     }
                     Err(e) => {
-                        let _ = self.output.lock().unwrap().error(&e.to_string());
+                        let _ = self.app.lock().unwrap().push(RenderLine::ErrorMsg(e.to_string()));
                         return Ok(vec![]);
                     }
                 }
             }
         };
 
-        // Close any open streaming blocks (reasoning/assistant) after streaming ends
-        let _ = self.output.lock().unwrap().close_streaming();
+        // Commit any open streaming blocks after streaming ends.
+        let _ = self.app.lock().unwrap().commit_streaming();
 
         // Save run_id + last seq_id for crash recovery / reconnect
         let saved_run_id  = run_id_cell.lock().unwrap().clone();
@@ -2174,7 +2106,9 @@ impl Repl {
             // Stop hook — exit 2 feeds stderr back to agent as a continuation
             let stop_outcome = self.hooks.stop("end_turn", user_input, &assistant_msg).await;
             if let crate::hooks::HookOutcome::Block { reason } = stop_outcome {
-                let _ = self.output.lock().unwrap().hook_continuation(&reason);
+                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
+                    format!("  ⎿  Hook continuing: {reason}")
+                ));
                 // Feed the hook's stderr back to the agent as a new turn
                 let follow_msgs = self.stream_turn(stdout, &reason, false, "", "", None, bar_text.clone()).await?;
                 Box::pin(self.dispatch_tool_calls(stdout, follow_msgs, user_input, bar_text)).await?;
@@ -2250,17 +2184,11 @@ impl Repl {
                 }).unwrap_or_default()
             }
         };
-        // Show tool call — edit_file gets a styled diff display; everything else gets the bullet header
-        let is_edit = (tool_name == "edit_file" || tool_name == "apply_patch")
-            && args["file_path"].as_str().is_some();
-        if is_edit {
-            let fp  = args["file_path"].as_str().unwrap_or("");
-            let old = args["old_string"].as_str().unwrap_or("");
-            let new = args["new_string"].as_str().unwrap_or("");
-            self.output.lock().unwrap().tool_edit_call(tool_name, fp, old, new)?;
-        } else {
-            self.output.lock().unwrap().tool_call(tool_name, &preview)?;
-        }
+        // Show tool call header.
+        let _ = self.app.lock().unwrap().push(RenderLine::ToolCall {
+            name:    tool_name.to_string(),
+            preview: preview.clone(),
+        });
 
         // Native tool intercepts (handled without going through generic dispatch)
         if tool_name == "update_memory" {
@@ -2282,7 +2210,7 @@ impl Repl {
         // Permission check — plan mode / deny rules
         if self.permissions.is_blocked(tool_name, args) {
             let msg = self.permissions.block_reason(tool_name, args);
-            self.output.lock().unwrap().tool_result(true, &msg)?;
+            let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: msg.clone() });
             return Ok(crate::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -2296,7 +2224,10 @@ impl Repl {
             if let crate::hooks::HookOutcome::Block { reason } =
                 self.hooks.permission_request(tool_name, args).await
             {
-                self.output.lock().unwrap().tool_result(true, &format!("Hook denied: {reason}"))?;
+                let _ = self.app.lock().unwrap().push(RenderLine::ToolResult {
+                    is_error: true,
+                    content: format!("Hook denied: {reason}"),
+                });
                 return Ok(crate::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: tool_name.to_string(),
@@ -2308,7 +2239,7 @@ impl Repl {
             // Prompt for approval
             if !self.prompt_approval(stdout, tool_name, args)? {
                 let msg = format!("Tool '{tool_name}' denied by user");
-                self.output.lock().unwrap().tool_result(true, &msg)?;
+                let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: msg.clone() });
                 return Ok(crate::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: tool_name.to_string(),
@@ -2322,7 +2253,7 @@ impl Repl {
         if let crate::hooks::HookOutcome::Block { reason } =
             self.hooks.pre_tool_use(tool_name, args).await
         {
-            self.output.lock().unwrap().tool_result(true, &format!("Hook blocked: {reason}"))?;
+            let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: format!("Hook blocked: {reason}") });
             return Ok(crate::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -2343,30 +2274,22 @@ impl Repl {
             }
         }
 
-        // Show result summary via OutputRenderer
-        if result.is_error {
-            self.output.lock().unwrap().tool_result(true, &truncate(&result.output, 120))?;
+        // Show result summary.
+        let (is_err, content) = if result.is_error {
+            (true, truncate(&result.output, 200).to_string())
         } else {
             match tool_name {
                 "bash" | "run_command" | "execute_command" => {
-                    // Show first 5 lines of stdout as a preview
-                    self.output.lock().unwrap().tool_bash_result(&result.output)?;
+                    (false, result.output.clone())
                 }
-                "edit_file" | "apply_patch" => {
-                    // ⎿ Updated is already rendered inside tool_edit_call — skip extra tool_result
+                "write_file" | "create_file" => {
+                    (false, format!("written ({} chars)", result.output.len()))
                 }
-                _ => {
-                    let summary = match tool_name {
-                        "write_file" | "create_file" => {
-                            format!("written ({} chars)", result.output.len())
-                        }
-                        "delete_file" | "move_file" | "rename_file" => "done".to_string(),
-                        _ => format!("{} lines", result.output.lines().count()),
-                    };
-                    self.output.lock().unwrap().tool_result(false, &summary)?;
-                }
+                "delete_file" | "move_file" | "rename_file" => (false, "done".to_string()),
+                _ => (false, format!("{} lines", result.output.lines().count())),
             }
-        }
+        };
+        let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: is_err, content });
 
         Ok(result)
     }
@@ -2431,12 +2354,14 @@ impl Repl {
             progress: None,
         };
 
-        // Pause ThinkingBar so it does not write to the alternate screen while
-        // the modal is active, then restore immediately after.
-        self.output.lock().unwrap().pause_bar(true);
-        let qa = QuestionWidget::ask(&q)?;
-        self.output.lock().unwrap().pause_bar(false);
-        // Alternate screen restored the main screen exactly — no blank rows created.
+        // Render the question through TuiApp's terminal (already in alternate screen + raw mode).
+        let qa = {
+            let mut app = self.app.lock().unwrap();
+            let result = QuestionWidget::ask(&mut app.terminal, &q)?;
+            // Redraw normal CADE UI after the question widget.
+            let _ = app.draw();
+            result
+        };
 
         match qa {
             None => Ok(false), // Esc / Ctrl+C = deny
@@ -2524,7 +2449,7 @@ impl Repl {
             Ok(q) => q,
             Err(e) => {
                 let msg = format!("Invalid ask_user_question args: {e}");
-                self.output.lock().unwrap().tool_result(true, &msg)?;
+                let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: msg.clone() });
                 return Ok(crate::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: "ask_user_question".to_string(),
@@ -2535,9 +2460,7 @@ impl Repl {
         };
 
         let total = ask_questions.len();
-
-        // Pause ThinkingBar streaming while we take over the terminal
-        self.output.lock().unwrap().close_streaming()?;
+        let _ = self.app.lock().unwrap().commit_streaming();
 
         let mut answers: HashMap<String, String> = HashMap::new();
 
@@ -2558,14 +2481,17 @@ impl Repl {
                 progress: if total > 1 { Some((i + 1, total)) } else { None },
             };
 
-            self.output.lock().unwrap().pause_bar(true);
-            let qa = QuestionWidget::ask(&q)?;
-            self.output.lock().unwrap().pause_bar(false);
+            let qa = {
+                let mut app = self.app.lock().unwrap();
+                let res = QuestionWidget::ask(&mut app.terminal, &q)?;
+                let _ = app.draw();
+                res
+            };
 
             match qa {
                 None => {
                     let msg = "User cancelled the question prompt.".to_string();
-                    self.output.lock().unwrap().tool_result(true, &msg)?;
+                    let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: msg.clone() });
                     return Ok(crate::tools::ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "ask_user_question".to_string(),
@@ -2574,20 +2500,19 @@ impl Repl {
                     });
                 }
                 Some(answer) => {
-                    // Print answer to scrollback so the user can see what was selected
-                    self.output.lock().unwrap().system(
-                        &format!("{}: {}", aq.header, answer.as_str())
-                    )?;
+                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
+                        format!("  {}: {}", aq.header, answer.as_str())
+                    ));
                     answers.insert(aq.question.clone(), answer.as_str());
                 }
             }
         }
 
         let result = AskUserQuestionTool::format_result(&answers);
-        self.output.lock().unwrap().tool_result(
-            false,
-            &format!("{} answer{} collected", total, if total == 1 { "" } else { "s" }),
-        )?;
+        let _ = self.app.lock().unwrap().push(RenderLine::ToolResult {
+            is_error: false,
+            content: format!("{} answer{} collected", total, if total == 1 { "" } else { "s" }),
+        });
 
         Ok(crate::tools::ToolResult {
             tool_call_id: call_id.to_string(),
@@ -2662,7 +2587,6 @@ impl Repl {
 
         execute!(stdout, SetForegroundColor(Color::DarkGrey),
             Print(format!("  Downloading skill from {}…\n", url)), ResetColor)?;
-        stdout.flush()?;
 
         match crate::skills::install_skill_from_url(&url, &target_dir).await {
             Ok(skill) => {
@@ -2682,7 +2606,6 @@ impl Repl {
 
                 execute!(stdout, SetForegroundColor(Color::Green),
                     Print(format!("  ✓ Installed: {name} [{id}]\n")), ResetColor)?;
-                stdout.flush()?;
 
                 Ok(crate::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
@@ -2694,7 +2617,6 @@ impl Repl {
             Err(e) => {
                 execute!(stdout, SetForegroundColor(Color::Red),
                     Print(format!("  ✗ Install failed: {e}\n")), ResetColor)?;
-                stdout.flush()?;
                 Ok(crate::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: "install_skill".to_string(),
@@ -2738,7 +2660,7 @@ impl Repl {
             }
         } else {
             // Interactive picker
-            println!();
+            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
             execute!(stdout, SetForegroundColor(Color::Cyan),
                 Print("  /connect — Choose a provider\n\n"), ResetColor)?;
 
@@ -2775,7 +2697,6 @@ impl Repl {
                 }
                 execute!(stdout, SetForegroundColor(Color::DarkGrey),
                     Print("\r\n  ↑↓ / j/k navigate  Enter select  Esc cancel\r\n"), ResetColor)?;
-                stdout.flush()?;
                 Ok(())
             };
 
@@ -2805,7 +2726,6 @@ impl Repl {
 
             drop(_raw);
             execute!(stdout, cursor::Show, ResetColor, Print("\r\n"))?;
-            stdout.flush()?;
 
             let Some(idx) = chosen else { return Ok(()); };
             let (n, _, base) = all_options.remove(idx);
@@ -2823,12 +2743,10 @@ impl Repl {
             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                 Print(format!("\n  API key for '{name}' (input hidden, Enter to skip): ")),
                 ResetColor)?;
-            stdout.flush()?;
             terminal::disable_raw_mode()?;
             let key = rpassword_read()?;
             // rpassword_read leaves raw mode off — add newline in normal mode
             execute!(stdout, Print("\r\n"))?;
-            stdout.flush()?;
             if key.trim().is_empty() { None } else { Some(key.trim().to_string()) }
         } else {
             None
@@ -2839,7 +2757,6 @@ impl Repl {
             execute!(stdout, SetForegroundColor(Color::DarkGrey),
                 Print("  Base URL (e.g. https://api.example.com/v1/chat/completions): "),
                 ResetColor)?;
-            stdout.flush()?;
             let mut line = String::new();
             terminal::disable_raw_mode()?;
             std::io::stdin().read_line(&mut line).ok();
@@ -2852,7 +2769,6 @@ impl Repl {
 
         execute!(stdout, SetForegroundColor(Color::DarkGrey),
             Print(format!("\n  Connecting to '{name}'…\n")), ResetColor)?;
-        stdout.flush()?;
 
         match self.client.add_provider(
             &name,
@@ -2870,7 +2786,6 @@ impl Repl {
             }
             Err(e) => self.print_error(stdout, &e.to_string())?,
         }
-        stdout.flush()?;
         Ok(())
     }
 
@@ -2979,7 +2894,6 @@ impl Repl {
                             SetForegroundColor(Color::Yellow),
                             Print(format!("\n  Delete conversation \"{title}\"? [y/N] ")),
                             ResetColor)?;
-                        stdout.flush()?;
                         crossterm::terminal::enable_raw_mode()?;
                         if let Ok(Event::Key(k2)) = event::read() {
                             crossterm::terminal::disable_raw_mode()?;
@@ -3197,7 +3111,6 @@ impl Repl {
         drop(term);
         drop(_raw);
         execute!(stdout, cursor::Show, ResetColor)?;
-        stdout.flush()?;
         Ok(result)
     }
 
@@ -3217,7 +3130,6 @@ impl Repl {
 
         execute!(stdout, SetForegroundColor(Color::DarkGrey),
             Print("\n  Fetching models…\r\n"), ResetColor)?;
-        stdout.flush()?;
 
         let current = self.model();
 
@@ -3265,7 +3177,6 @@ impl Repl {
                     Print("  Could not fetch models from server.\r\n"),
                     Print("  Specify model directly: /model provider/model-name\r\n\n"),
                     ResetColor)?;
-                stdout.flush()?;
                 return Ok(None);
             }
         }
@@ -3282,7 +3193,6 @@ impl Repl {
             execute!(stdout, Print("\n  No models available.\r\n"),
                 SetForegroundColor(Color::DarkGrey),
                 Print("  Connect a provider: /connect\r\n\n"), ResetColor)?;
-            stdout.flush()?;
             return Ok(None);
         }
 
@@ -3491,7 +3401,6 @@ impl Repl {
         drop(term);
         drop(_raw);
         execute!(stdout, cursor::Show, ResetColor)?;
-        stdout.flush()?;
         Ok(result)
     }
 
@@ -3531,7 +3440,6 @@ impl Repl {
                 if background { " (background)" } else { "" }
             )),
             ResetColor)?;
-        stdout.flush()?;
 
         // Clone what we need for the async task
         let client     = self.client.clone();
@@ -3630,7 +3538,6 @@ impl Repl {
                     Print(format!("  ✓ Subagent [{}] complete\n", subagent_type)),
                     ResetColor)?;
             }
-            stdout.flush()?;
 
             // If hook blocked, append its reason to the output so the agent sees it
             let final_output = match hook_outcome {
@@ -3655,7 +3562,6 @@ impl Repl {
             Print(format!("\nError: {msg}\n")),
             ResetColor
         )?;
-        stdout.flush()?;
         Ok(())
     }
 

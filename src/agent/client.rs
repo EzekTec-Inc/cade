@@ -21,6 +21,7 @@ pub struct AgentState {
     pub name: String,
     pub model: Option<String>,
     pub description: Option<String>,
+    pub system_prompt: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -379,6 +380,21 @@ impl CadeClient {
         }
         let body: serde_json::Value = resp.json().await?;
         Ok(body["model"].as_str().unwrap_or(model).to_string())
+    }
+
+    /// Update the system prompt for an existing agent.
+    pub async fn patch_agent_system_prompt(&self, agent_id: &str, prompt: &str) -> Result<()> {
+        let resp = self.client
+            .patch(self.url(&format!("/agents/{agent_id}")))
+            .header(self.auth().0, self.auth().1)
+            .json(&serde_json::json!({ "system_prompt": prompt }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            bail!("{text}");
+        }
+        Ok(())
     }
 
     pub async fn create_agent(&self, req: CreateAgentRequest) -> Result<AgentState> {

@@ -296,6 +296,15 @@ pub fn update_agent_name(db: &Db, id: &str, name: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
+pub fn update_agent_system_prompt(db: &Db, id: &str, prompt: &str) -> Result<bool> {
+    let conn = db.lock().unwrap();
+    let n = conn.execute(
+        "UPDATE agents SET system_prompt = ?1 WHERE id = ?2",
+        params![prompt, id],
+    )?;
+    Ok(n > 0)
+}
+
 /// Associate a set of tool IDs with an agent (upsert).
 pub fn attach_tools_to_agent(db: &Db, agent_id: &str, tool_ids: &[String]) -> Result<()> {
     let conn = db.lock().unwrap();
