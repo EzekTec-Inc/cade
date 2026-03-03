@@ -469,6 +469,36 @@ impl Drop for TuiApp {
     }
 }
 
+// ── Scroll helpers ────────────────────────────────────────────────────────────
+
+/// Count the number of visual (terminal) rows a single `Line` occupies when
+/// word-wrapped to `content_w` columns.  Uses unicode display-width so emoji
+/// and CJK characters are measured correctly.
+///
+/// Matches ratatui's `WordWrapper` behaviour: words are broken on whitespace;
+/// a word that would overflow the current row starts a new row.
+fn count_wrapped_rows(line: &Line<'_>, content_w: u16) -> u16 {
+    if content_w == 0 { return 1; }
+    // Concatenate all spans into a single string for word counting.
+    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    if text.is_empty() { return 1; }
+    let width = content_w as usize;
+    let mut rows: u16 = 1;
+    let mut row_w: usize = 0;
+    // split_inclusive preserves the trailing space/tab on each "word" token,
+    // which keeps the total width calculation correct.
+    for word in text.split_inclusive(|c: char| c == ' ' || c == '\t') {
+        let word_w = UnicodeWidthStr::width(word);
+        if row_w > 0 && row_w + word_w > width {
+            rows += 1;
+            row_w = word_w;
+        } else {
+            row_w += word_w;
+        }
+    }
+    rows
+}
+
 // ── Frame renderer ────────────────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -519,12 +549,11 @@ fn render_frame(
         render_assistant_lines(s, w, &mut text_lines);
     }
 
-    // Count visual rows (accounting for line-wrap at content width).
+    // Count visual rows (word-wrap at content width, matching ratatui's WordWrapper).
     let content_w = area.width.saturating_sub(0).max(1);
-    let total_visual: u16 = text_lines.iter().map(|l| {
-        let char_count: usize = l.spans.iter().map(|s| s.content.chars().count()).sum();
-        if char_count == 0 { 1 } else { ((char_count as u16).saturating_sub(1) / content_w) + 1 }
-    }).sum();
+    let total_visual: u16 = text_lines.iter()
+        .map(|l| count_wrapped_rows(l, content_w))
+        .sum();
 
     let visible = content_height;
     let para_scroll = if total_visual > visible {
