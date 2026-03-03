@@ -171,6 +171,9 @@ impl TuiApp {
     /// Append a streaming chunk and redraw.
     pub fn push_streaming_chunk(&mut self, text: &str) -> Result<()> {
         self.commit_reasoning_inner();
+        if !self.streaming_active {
+            self.scroll = 0; // snap to bottom on first chunk of any new streaming session
+        }
         self.streaming_active = true;
         self.streaming_text.push_str(text);
         self.draw()
@@ -245,6 +248,7 @@ impl TuiApp {
     /// Start the thinking animation.  Returns the shared text Arc so callers
     /// can update the status text (e.g. assessing timer, tool name updates).
     pub fn start_thinking(&mut self, text: impl Into<String>) -> Arc<Mutex<String>> {
+        self.scroll = 0; // snap to bottom at the start of every agent turn
         let arc = Arc::new(Mutex::new(text.into()));
         self.thinking = Some(ThinkingState { text: arc.clone(), started: Instant::now() });
         arc
