@@ -79,6 +79,32 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         tracing::info!("Migration complete: memory_blocks UNIQUE constraint added");
     }
 
+    // Migration 3: add `max_chars` column to memory_blocks if missing.
+    let has_max_chars: bool = conn.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('memory_blocks') WHERE name='max_chars'",
+        [],
+        |r| r.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+    if !has_max_chars {
+        tracing::info!("Running migration: adding max_chars column to memory_blocks");
+        conn.execute_batch(
+            "ALTER TABLE memory_blocks ADD COLUMN max_chars INTEGER;"
+        )?;
+        tracing::info!("Migration complete: memory_blocks.max_chars added");
+    }
+
+    // Migration 4: create memory_history table if it doesn't exist.
+    conn.execute_batch(r#"
+        CREATE TABLE IF NOT EXISTS memory_history (
+            id         TEXT PRIMARY KEY,
+            block_id   TEXT NOT NULL,
+            value      TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_history_block_id
+            ON memory_history(block_id, updated_at DESC);
+    "#)?;
+
     // Migration 2: add `description` column to memory_blocks if missing.
     // SQLite supports ADD COLUMN directly (no table rebuild needed).
     let has_description: bool = conn.query_row(
@@ -170,10 +196,19 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             label       TEXT NOT NULL,
             value       TEXT NOT NULL DEFAULT '',
             description TEXT NOT NULL DEFAULT '',
+            max_chars   INTEGER,
             updated_at  INTEGER NOT NULL,
             UNIQUE (agent_id, label),
             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
         );
+        CREATE TABLE IF NOT EXISTS memory_history (
+            id         TEXT PRIMARY KEY,
+            block_id   TEXT NOT NULL,
+            value      TEXT NOT NULL,
+            updated_at INTEGER NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_memory_history_block_id
+            ON memory_history(block_id, updated_at DESC);
 
         CREATE TABLE IF NOT EXISTS tools (
             id          TEXT PRIMARY KEY,
@@ -620,40 +655,98 @@ pub fn list_messages(
 
 // ── Memory blocks ─────────────────────────────────────────────────────────────
 
+/// Upsert a memory block.
+///
+/// `max_chars`: if `Some(n)`, enforces a hard character limit on `value`.
+///   - On **set**: returns `Err` if value exceeds `n` (agent must summarise first).
+///   - On **append** (caller passes pre-appended string): trims the oldest (front)
+///     content to fit within `n` chars, preserving the newest content.
+///
+/// The previous value is snapshotted into `memory_history` before overwrite
+/// (up to 5 revisions kept per block).
 pub fn upsert_memory_block(
     db: &Db,
     agent_id: &str,
     label: &str,
     value: &str,
     description: Option<&str>,
+    max_chars: Option<usize>,
 ) -> Result<()> {
     let conn = db.lock().unwrap();
-    let existing: Option<String> = conn.query_row(
-        "SELECT id FROM memory_blocks WHERE agent_id = ?1 AND label = ?2",
+
+    // Fetch existing block (id, old value, stored max_chars)
+    let existing: Option<(String, String, Option<usize>)> = conn.query_row(
+        "SELECT id, value, max_chars FROM memory_blocks WHERE agent_id = ?1 AND label = ?2",
         params![agent_id, label],
-        |r| r.get(0),
+        |r| Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, Option<i64>>(2)?.map(|n| n as usize),
+        )),
     ).optional()?;
 
-    if existing.is_some() {
+    // Effective limit: prefer caller-supplied, else stored, else none.
+    let effective_limit = max_chars.or_else(|| existing.as_ref().and_then(|(_, _, mc)| *mc));
+
+    // Apply size limit to the incoming value.
+    let final_value: String = if let Some(limit) = effective_limit {
+        let char_count = value.chars().count();
+        if char_count > limit {
+            // Trim oldest (front) content — keep the tail (newest).
+            let start_byte = value
+                .char_indices()
+                .nth(char_count - limit)
+                .map(|(i, _)| i)
+                .unwrap_or(0);
+            format!("[…trimmed]\n{}", &value[start_byte..])
+        } else {
+            value.to_string()
+        }
+    } else {
+        value.to_string()
+    };
+
+    let ts = now_ts();
+
+    if let Some((block_id, old_value, _)) = existing {
+        // Snapshot old value into history (skip if unchanged)
+        if old_value != final_value {
+            let hist_id = uuid::Uuid::new_v4().to_string();
+            let _ = conn.execute(
+                "INSERT INTO memory_history (id, block_id, value, updated_at) VALUES (?1, ?2, ?3, ?4)",
+                params![hist_id, block_id, old_value, ts],
+            );
+            // Prune to last 5 revisions
+            let _ = conn.execute(
+                "DELETE FROM memory_history WHERE block_id = ?1
+                 AND id NOT IN (
+                     SELECT id FROM memory_history WHERE block_id = ?1
+                     ORDER BY updated_at DESC LIMIT 5
+                 )",
+                params![block_id],
+            );
+        }
+
         if let Some(desc) = description {
             conn.execute(
-                "UPDATE memory_blocks SET value = ?1, description = ?2, updated_at = ?3
-                 WHERE agent_id = ?4 AND label = ?5",
-                params![value, desc, now_ts(), agent_id, label],
+                "UPDATE memory_blocks SET value = ?1, description = ?2, max_chars = ?3, updated_at = ?4
+                 WHERE agent_id = ?5 AND label = ?6",
+                params![final_value, desc, max_chars.map(|n| n as i64), ts, agent_id, label],
             )?;
         } else {
             conn.execute(
                 "UPDATE memory_blocks SET value = ?1, updated_at = ?2
                  WHERE agent_id = ?3 AND label = ?4",
-                params![value, now_ts(), agent_id, label],
+                params![final_value, ts, agent_id, label],
             )?;
         }
     } else {
         let id = uuid::Uuid::new_v4().to_string();
         conn.execute(
-            "INSERT INTO memory_blocks (id, agent_id, label, value, description, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![id, agent_id, label, value, description.unwrap_or(""), now_ts()],
+            "INSERT INTO memory_blocks (id, agent_id, label, value, description, max_chars, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, agent_id, label, final_value, description.unwrap_or(""),
+                    max_chars.map(|n| n as i64), ts],
         )?;
     }
     Ok(())
@@ -682,6 +775,70 @@ pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String,
         ))
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Returns (label, value, description, updated_at) ordered by updated_at DESC (most recent first).
+/// Used by build_context to apply the memory budget with recency priority.
+pub fn get_memory_blocks_with_ts(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String, i64)>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT label, value, description, updated_at FROM memory_blocks
+         WHERE agent_id = ?1 ORDER BY updated_at DESC"
+    )?;
+    let rows = stmt.query_map(params![agent_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2).unwrap_or_default(),
+            row.get::<_, i64>(3).unwrap_or(0),
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Returns the last N revisions of a memory block: (id, value, updated_at).
+pub fn get_memory_history(db: &Db, agent_id: &str, label: &str, limit: usize) -> Result<Vec<(String, String, i64)>> {
+    let conn = db.lock().unwrap();
+    let block_id: Option<String> = conn.query_row(
+        "SELECT id FROM memory_blocks WHERE agent_id = ?1 AND label = ?2",
+        params![agent_id, label],
+        |r| r.get(0),
+    ).optional()?;
+    let Some(block_id) = block_id else { return Ok(vec![]); };
+    let mut stmt = conn.prepare(
+        "SELECT id, value, updated_at FROM memory_history
+         WHERE block_id = ?1 ORDER BY updated_at DESC LIMIT ?2"
+    )?;
+    let rows = stmt.query_map(params![block_id, limit as i64], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, i64>(2)?,
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Restore a memory block to a specific history revision.
+pub fn restore_memory_from_history(db: &Db, agent_id: &str, label: &str, hist_id: &str) -> Result<bool> {
+    let conn = db.lock().unwrap();
+    let block_id: Option<String> = conn.query_row(
+        "SELECT id FROM memory_blocks WHERE agent_id = ?1 AND label = ?2",
+        params![agent_id, label],
+        |r| r.get(0),
+    ).optional()?;
+    let Some(block_id) = block_id else { return Ok(false); };
+    let hist_value: Option<String> = conn.query_row(
+        "SELECT value FROM memory_history WHERE id = ?1 AND block_id = ?2",
+        params![hist_id, block_id],
+        |r| r.get(0),
+    ).optional()?;
+    let Some(hist_value) = hist_value else { return Ok(false); };
+    conn.execute(
+        "UPDATE memory_blocks SET value = ?1, updated_at = ?2 WHERE id = ?3",
+        params![hist_value, now_ts(), block_id],
+    )?;
+    Ok(true)
 }
 
 // ── Tools ─────────────────────────────────────────────────────────────────────

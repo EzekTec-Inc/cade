@@ -499,9 +499,23 @@ impl CadeClient {
         value: &str,
         description: Option<&str>,
     ) -> Result<()> {
+        self.upsert_memory_with_limit(agent_id, label, value, description, None).await
+    }
+
+    pub async fn upsert_memory_with_limit(
+        &self,
+        agent_id: &str,
+        label: &str,
+        value: &str,
+        description: Option<&str>,
+        max_chars: Option<usize>,
+    ) -> Result<()> {
         let mut body = json!({ "value": value });
         if let Some(desc) = description {
             body["description"] = json!(desc);
+        }
+        if let Some(n) = max_chars {
+            body["max_chars"] = json!(n);
         }
         let resp = self.client
             .put(self.url(&format!("/agents/{agent_id}/memory/{label}")))
@@ -510,6 +524,42 @@ impl CadeClient {
             .send().await?;
         if !resp.status().is_success() {
             bail!("upsert_memory failed {}", resp.status());
+        }
+        Ok(())
+    }
+
+    /// List the last `limit` revisions of a memory block.
+    pub async fn list_memory_history(
+        &self,
+        agent_id: &str,
+        label: &str,
+        limit: usize,
+    ) -> Result<Vec<serde_json::Value>> {
+        let resp = self.client
+            .get(self.url(&format!("/agents/{agent_id}/memory/{label}/history?limit={limit}")))
+            .header(self.auth().0, self.auth().1)
+            .send().await?;
+        if !resp.status().is_success() {
+            bail!("list_memory_history failed {}", resp.status());
+        }
+        let body: serde_json::Value = resp.json().await?;
+        Ok(body.as_array().cloned().unwrap_or_default())
+    }
+
+    /// Restore a memory block to a specific history revision.
+    pub async fn restore_memory(
+        &self,
+        agent_id: &str,
+        label: &str,
+        rev_id: &str,
+    ) -> Result<()> {
+        let resp = self.client
+            .put(self.url(&format!("/agents/{agent_id}/memory/{label}/restore/{rev_id}")))
+            .header(self.auth().0, self.auth().1)
+            .json(&serde_json::Value::Null)
+            .send().await?;
+        if !resp.status().is_success() {
+            bail!("restore_memory failed {}", resp.status());
         }
         Ok(())
     }

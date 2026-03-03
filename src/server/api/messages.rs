@@ -20,6 +20,10 @@ use crate::server::{
 const CONV_TITLE_MAX: usize = 60;
 /// Number of DB message rows to load per turn (~100 full tool-call cycles at 200 rows).
 const HISTORY_LIMIT: usize = 200;
+/// Hard cap on all memory blocks combined in the system prompt (~2k tokens).
+/// Blocks are prioritised by recency (most recently updated first).
+/// Blocks whose value is empty are always skipped regardless of this budget.
+const MEMORY_CHAR_BUDGET: usize = 8_000;
 /// Appended to the system prompt when the stored prompt doesn't already include it.
 /// Prevents old agents (created before BASE_SYSTEM_PROMPT was written) from
 /// generating self-introductions on every turn.
@@ -130,19 +134,41 @@ async fn build_context(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
 
-    // Memory blocks → appended to system prompt
-    let memory = sqlite::get_memory_blocks(&state.db, agent_id)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(label, val, desc)| {
-            if desc.is_empty() {
-                format!("[{label}]\n{val}")
-            } else {
-                format!("[{label}] — {desc}\n{val}")
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
+    // Memory blocks → appended to system prompt.
+    // Rules:
+    //   1. Skip empty-value blocks (nothing useful to inject).
+    //   2. Sort by updated_at DESC so most-recently-written blocks have priority.
+    //   3. Greedily include blocks until MEMORY_CHAR_BUDGET is reached; append a
+    //      notice when blocks are omitted so the agent knows to use /memory.
+    let raw_blocks = sqlite::get_memory_blocks_with_ts(&state.db, agent_id)
+        .unwrap_or_default();
+    let mut budget_remaining = MEMORY_CHAR_BUDGET;
+    let mut included_blocks: Vec<String> = Vec::new();
+    let mut omitted_count = 0usize;
+    for (label, val, desc, _ts) in &raw_blocks {
+        if val.trim().is_empty() { continue; }  // S6: skip empty blocks
+        let entry = if desc.is_empty() {
+            format!("[{label}]\n{val}")
+        } else {
+            format!("[{label}] — {desc}\n{val}")
+        };
+        let entry_chars = entry.chars().count();
+        if entry_chars <= budget_remaining {
+            budget_remaining -= entry_chars;
+            included_blocks.push(entry);
+        } else {
+            omitted_count += 1;
+        }
+    }
+    let memory = if omitted_count > 0 {
+        let mut parts = included_blocks;
+        parts.push(format!(
+            "[…{omitted_count} block(s) omitted — memory budget reached. Use /memory to manage.]"
+        ));
+        parts.join("\n\n")
+    } else {
+        included_blocks.join("\n\n")
+    };
 
     let base = agent.system_prompt.clone().unwrap_or_default();
     // Ensure the no-intro rule is always enforced, regardless of when the agent

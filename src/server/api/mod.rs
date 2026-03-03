@@ -26,8 +26,10 @@ pub fn router(state: AppState) -> Router {
                .post(agents::attach_tools)
                .delete(agents::detach_tools))
         // Agent memory
-        .route("/v1/agents/:id/memory",         get(agents::get_memory))
-        .route("/v1/agents/:id/memory/:label",  put(agents::upsert_memory).delete(agents::delete_memory))
+        .route("/v1/agents/:id/memory",                             get(agents::get_memory))
+        .route("/v1/agents/:id/memory/:label",                      put(agents::upsert_memory).delete(agents::delete_memory))
+        .route("/v1/agents/:id/memory/:label/history",              get(agents::get_memory_history))
+        .route("/v1/agents/:id/memory/:label/restore/:rev_id",      put(agents::restore_memory_revision))
         // Conversations
         .route("/v1/agents/:id/conversations",
                get(agents::list_conversations).post(agents::create_conversation))

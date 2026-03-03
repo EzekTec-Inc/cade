@@ -82,7 +82,8 @@ pub async fn create_agent(
         let label = block["label"].as_str().unwrap_or("memory");
         let value = block["value"].as_str().unwrap_or("");
         let desc = block["description"].as_str();
-        let _ = sqlite::upsert_memory_block(&state.db, &id, label, value, desc);
+        let max_chars = block["max_chars"].as_u64().map(|n| n as usize);
+        let _ = sqlite::upsert_memory_block(&state.db, &id, label, value, desc, max_chars);
     }
 
     tracing::info!("Created agent: {name} ({id}) model={}", body.model);
@@ -248,9 +249,42 @@ pub async fn upsert_memory(
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
     let value = body["value"].as_str().unwrap_or("").to_string();
     let description = body["description"].as_str();
-    sqlite::upsert_memory_block(&state.db, &agent_id, &label, &value, description)
+    let max_chars = body["max_chars"].as_u64().map(|n| n as usize);
+    sqlite::upsert_memory_block(&state.db, &agent_id, &label, &value, description, max_chars)
         .map_err(|e| server_err(e.to_string()))?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// GET /v1/agents/:id/memory/:label/history?limit=5
+pub async fn get_memory_history(
+    State(state): State<AppState>,
+    Path((agent_id, label)): Path<(String, String)>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let limit = params.get("limit")
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(5)
+        .min(20);
+    let history = sqlite::get_memory_history(&state.db, &agent_id, &label, limit)
+        .map_err(|e| server_err(e.to_string()))?;
+    let items: Vec<Value> = history.iter().map(|(id, val, ts)| json!({
+        "id": id, "value": val, "updated_at": ts
+    })).collect();
+    Ok(Json(json!(items)))
+}
+
+/// PUT /v1/agents/:id/memory/:label/restore/:rev_id
+pub async fn restore_memory_revision(
+    State(state): State<AppState>,
+    Path((agent_id, label, rev_id)): Path<(String, String, String)>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    let found = sqlite::restore_memory_from_history(&state.db, &agent_id, &label, &rev_id)
+        .map_err(|e| server_err(e.to_string()))?;
+    if found {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((StatusCode::NOT_FOUND, Json(json!({"detail": "revision not found"}))))
+    }
 }
 
 // ── Messages endpoints ────────────────────────────────────────────────────────

@@ -61,31 +61,39 @@ current project context. Update them proactively as you learn.\n\
 ";
 
 /// Default memory block labels and their seed values.
-/// (label, value, description)
-const DEFAULT_MEMORY_BLOCKS: &[(&str, &str, &str)] = &[
+/// (label, value, description, max_chars)
+const DEFAULT_MEMORY_BLOCKS: &[(&str, &str, &str, usize)] = &[
     (
         "persona",
         "I prefer terse, accurate responses — I lead with action and skip preamble. \
          I explore before modifying, verify after editing, and update memory proactively. \
          I never introduce myself unprompted; I address the task directly.",
         "Who I am, what I value, and how I approach working with people",
+        2_000,
     ),
     (
         "human",
         "",
         "What I know about the person I'm working with — their name, preferences, and working style",
+        3_000,
     ),
     (
         "project",
         "",
         "Current project context, tech stack, conventions, and ongoing work",
+        5_000,
     ),
 ];
 
+/// Default max_chars for user-created memory blocks (not in DEFAULT_MEMORY_BLOCKS).
+const DEFAULT_USER_BLOCK_MAX_CHARS: usize = 4_000;
+
 /// Seed default memory blocks for a newly created agent.
 async fn seed_default_memory(client: &CadeClient, agent_id: &str) {
-    for (label, value, description) in DEFAULT_MEMORY_BLOCKS {
-        if let Err(e) = client.upsert_memory(agent_id, label, value, Some(description)).await {
+    for (label, value, description, max_chars) in DEFAULT_MEMORY_BLOCKS {
+        if let Err(e) = client.upsert_memory_with_limit(
+            agent_id, label, value, Some(description), Some(*max_chars)
+        ).await {
             tracing::warn!("seed_memory {label}: {e}");
         }
     }
@@ -805,7 +813,7 @@ async fn main() -> Result<()> {
                 let v = block.value.trim_start();
                 let needs_migration = v.starts_with("CADE is") || v.starts_with("I am CADE");
                 if needs_migration {
-                    let (_, new_val, new_desc) = DEFAULT_MEMORY_BLOCKS[0]; // persona entry
+                    let (_, new_val, new_desc, _) = DEFAULT_MEMORY_BLOCKS[0]; // persona entry
                     let _ = client.upsert_memory(&agent.id, "persona", new_val, Some(new_desc)).await;
                     break;
                 }

@@ -645,8 +645,43 @@ impl Repl {
                     }
 
                     SlashCmd::NewAgent => {
-                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                            Print("\n  Creating new agent…\n"), ResetColor)?;
+                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("  Creating new agent…".to_string()));
+
+                        // S5: Offer to copy `human` and `project` blocks from current agent
+                        let prev_agent_id = self.agent_id();
+                        let inherit_blocks: Vec<(String, String, String)> = {
+                            let blocks = self.client.get_memory(&prev_agent_id).await.unwrap_or_default();
+                            blocks.into_iter()
+                                .filter(|b| (b.label == "human" || b.label == "project") && !b.value.trim().is_empty())
+                                .map(|b| (b.label.clone(), b.value.clone(), b.description.clone().unwrap_or_default()))
+                                .collect()
+                        };
+                        let copy_memory = if !inherit_blocks.is_empty() {
+                            let summary: String = inherit_blocks.iter()
+                                .map(|(l, v, _)| format!("{} ({} chars)", l, v.chars().count()))
+                                .collect::<Vec<_>>().join(", ");
+                            let q = crate::ui::question::Question {
+                                header: "Copy memory",
+                                text: &format!("Copy memory to new agent? ({summary})"),
+                                options: &[
+                                    crate::ui::question::QuestionOption { label: "Yes — copy human + project blocks".to_string(), description: "Start new agent with existing context".to_string() },
+                                    crate::ui::question::QuestionOption { label: "No — start fresh".to_string(), description: "New agent gets empty memory blocks".to_string() },
+                                ],
+                                multi_select: false,
+                                allow_other: false,
+                                progress: None,
+                            };
+                            let ans = {
+                                let mut app = self.app.lock().unwrap();
+                                let r = crate::ui::question::QuestionWidget::ask(&mut app.terminal, &q);
+                                let _ = app.draw();
+                                r
+                            };
+                            matches!(ans, Ok(Some(ref a)) if a.as_str().starts_with("Yes"))
+                        } else {
+                            false
+                        };
+
                         let model = self.model();
                         let req = crate::agent::client::CreateAgentRequest {
                             name: Some(format!("CADE-{}", chrono::Local::now().format("%Y%m%d-%H%M%S"))),
@@ -667,9 +702,21 @@ impl Repl {
                                 if let Ok(mut s) = self.session.lock() {
                                     let _ = s.set_agent(a.id.clone(), Some(a.name.clone()));
                                 }
-                                execute!(stdout, SetForegroundColor(Color::Green),
-                                    Print(format!("  ✓ New agent: {} ({})\n", a.name, a.id)),
-                                    ResetColor)?;
+                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
+                                    format!("  ✓ New agent: {} ({})", a.name, a.id)
+                                ));
+
+                                // S5: copy inherited blocks to new agent
+                                if copy_memory {
+                                    for (label, value, desc) in &inherit_blocks {
+                                        let desc_opt = if desc.is_empty() { None } else { Some(desc.as_str()) };
+                                        let _ = self.client.upsert_memory(&a.id, label, value, desc_opt).await;
+                                    }
+                                    let n = inherit_blocks.len();
+                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
+                                        format!("  ✓ Copied {n} memory block(s) from previous agent")
+                                    ));
+                                }
 
                                 // Attach native + MCP tools in background
                                 let client2  = self.client.clone();
@@ -1049,6 +1096,57 @@ impl Repl {
                                     match self.client.upsert_memory(&id, label, &new_value, None).await {
                                         Ok(_) => println!("  ✓ [{label}] updated"),
                                         Err(e) => println!("  ✗ {e}"),
+                                    }
+                                }
+                            }
+                            // /memory history <label> — show last 5 revisions
+                            "history" if parts.len() >= 2 => {
+                                let label = parts[1];
+                                let id = self.agent_id();
+                                match self.client.list_memory_history(&id, label, 5).await {
+                                    Ok(revs) if revs.is_empty() => {
+                                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
+                                            format!("  [{label}] no history recorded yet")
+                                        ));
+                                    }
+                                    Ok(revs) => {
+                                        let _ = self.app.lock().unwrap().push(RenderLine::Blank);
+                                        for (i, rev) in revs.iter().enumerate() {
+                                            let rev_id = rev["id"].as_str().unwrap_or("");
+                                            let ts = rev["updated_at"].as_i64().unwrap_or(0);
+                                            let val = rev["value"].as_str().unwrap_or("");
+                                            let preview: String = val.chars().take(120).collect();
+                                            let ellipsis = if val.len() > 120 { "…" } else { "" };
+                                            let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
+                                                format!("  [{i}] {ts}  id={rev_id}")
+                                            ));
+                                            let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
+                                                format!("      {preview}{ellipsis}")
+                                            ));
+                                            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
+                                        }
+                                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
+                                            format!("  Use: /memory restore {label} <id>")
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        let _ = self.app.lock().unwrap().push(RenderLine::ErrorMsg(format!("  ✗ {e}")));
+                                    }
+                                }
+                            }
+                            // /memory restore <label> <rev_id>
+                            "restore" if parts.len() >= 3 => {
+                                let label = parts[1];
+                                let rev_id = parts[2];
+                                let id = self.agent_id();
+                                match self.client.restore_memory(&id, label, rev_id).await {
+                                    Ok(_) => {
+                                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
+                                            format!("  ✓ [{label}] restored to revision {rev_id}")
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        let _ = self.app.lock().unwrap().push(RenderLine::ErrorMsg(format!("  ✗ {e}")));
                                     }
                                 }
                             }
@@ -2406,6 +2504,17 @@ impl Repl {
                 .find(|b| b.label == label)
                 .map(|b| b.value)
                 .unwrap_or_default();
+            // S3: deduplication — skip append if content is already present
+            let normalised_new = value.split_whitespace().collect::<String>();
+            let normalised_existing = existing.split_whitespace().collect::<String>();
+            if !normalised_new.is_empty() && normalised_existing.contains(&normalised_new) {
+                return Ok(crate::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "update_memory".to_string(),
+                    output: format!("Memory block '{label}' already contains this information — no change."),
+                    is_error: false,
+                });
+            }
             if existing.is_empty() { value } else { format!("{existing}\n{value}") }
         } else {
             value
@@ -3610,8 +3719,10 @@ impl Repl {
         s.push_str("    /memory                    - list memory blocks (label + description + preview)\n");
         s.push_str("    /memory view <label>       - show full block content\n");
         s.push_str("    /memory set <label> <val>  - set a block directly\n");
-        s.push_str("    /memory delete <label>     - delete a block\n");
-        s.push_str("    /memory edit <label>       - multi-line inline editor\n");
+        s.push_str("    /memory delete <label>              - delete a block\n");
+        s.push_str("    /memory edit <label>                - multi-line inline editor\n");
+        s.push_str("    /memory history <label>             - show last 5 revisions\n");
+        s.push_str("    /memory restore <label> <rev_id>    - restore a revision\n");
         s.push_str("    /remember [text]           - ask agent to store something in memory\n");
         s.push_str("    /init                      - analyse project + init memory\n");
         s.push_str("    /search <q>                - search past messages\n");
