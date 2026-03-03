@@ -191,6 +191,7 @@ impl TuiApp {
     /// Commit any in-progress assistant streaming to `lines`.
     pub fn commit_streaming(&mut self) -> Result<()> {
         self.commit_streaming_inner();
+        self.scroll = 0; // snap to bottom at end of every LLM response
         self.draw()
     }
 
