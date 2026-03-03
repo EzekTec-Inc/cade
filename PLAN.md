@@ -14,3 +14,15 @@
 - `src/ui/output.rs` — `blank_rows_at_bottom` field; `note_blank_rows()`; `set_status_bar()` reset; `with_insert_before()` reuse + compact logic
 - `src/ui/input.rs` — `last_viewport_height` field; recorded on cleanup
 - `src/cli/repl.rs` — `note_blank_rows(last_viewport_height)` injected after `input_widget.read()` returns
+
+---
+
+### 2026-03-03T17:22 UTC — Viewport scroll: mouse wheel + keyboard remap
+**Files modified**: `src/ui/app.rs`, `src/cli/repl.rs`
+**Reason**: Mouse wheel scroll was completely absent (no `EnableMouseCapture`, no `Event::Mouse` handler). Keyboard scroll keymaps updated per user instruction.
+**Previous behaviour**: `PageUp`/`PageDown`/`Alt+Up`/`Alt+Down` = ±10 rows keyboard-only; mouse ignored.
+**New behaviour**:
+- Mouse wheel `ScrollUp`/`ScrollDown` = ±3 rows (works during input-wait and streaming).
+- Keyboard `Shift+K` = +10 rows up; `Shift+J` = -10 rows down (replaces PageUp/PageDown/Alt keymaps).
+- Mouse capture enabled on `TuiApp::new()`, disabled on `Drop`.
+**Rollback**: `git revert HEAD` (single commit).

@@ -25,7 +25,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::Result;
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{
+    self, EnableMouseCapture, DisableMouseCapture,
+    Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind,
+};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
@@ -129,6 +132,7 @@ impl TuiApp {
     /// (enters alternate screen + enables raw mode).
     pub fn new(mode: PermissionMode, agent_name: String, model: String) -> Self {
         let terminal = ratatui::init();
+        let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
         Self {
             terminal,
             lines: Vec::new(),
@@ -324,6 +328,13 @@ impl TuiApp {
                     }
                 }
                 Event::Resize(_, _) => { /* ratatui picks up resize on next draw */ }
+                Event::Mouse(m) => {
+                    match m.kind {
+                        MouseEventKind::ScrollUp   => { self.scroll = self.scroll.saturating_add(3); }
+                        MouseEventKind::ScrollDown => { self.scroll = self.scroll.saturating_sub(3); }
+                        _ => {}
+                    }
+                }
                 _ => {}
             }
         }
@@ -423,10 +434,11 @@ impl TuiApp {
             }
 
             // ── Content scroll ────────────────────────────────────────────
-            (KeyCode::PageUp, _) | (KeyCode::Up, KeyModifiers::ALT) => {
+            // Shift+K = up 10 rows,  Shift+J = down 10 rows
+            (KeyCode::Char('K'), _) => {
                 self.scroll = self.scroll.saturating_add(10);
             }
-            (KeyCode::PageDown, _) | (KeyCode::Down, KeyModifiers::ALT) => {
+            (KeyCode::Char('J'), _) => {
                 self.scroll = self.scroll.saturating_sub(10);
             }
 
@@ -465,6 +477,7 @@ impl TuiApp {
 
 impl Drop for TuiApp {
     fn drop(&mut self) {
+        let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
         ratatui::restore();
     }
 }

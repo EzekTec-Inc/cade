@@ -1729,12 +1729,21 @@ impl Repl {
                             let _ = app.draw();
                         }
                     }
-                    Some(Ok(Event::Key(k))) = reader.next() => {
+                    Some(Ok(evt)) = reader.next() => {
                         if tick_cancel.load(Ordering::SeqCst) { break; }
                         if let Ok(mut app) = tick_app.try_lock() {
-                            match k.code {
-                                KeyCode::PageUp   => { app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
-                                KeyCode::PageDown => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
+                            use crossterm::event::MouseEventKind;
+                            match evt {
+                                Event::Key(k) => match k.code {
+                                    KeyCode::Char('K') => { app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
+                                    KeyCode::Char('J') => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
+                                    _ => {}
+                                },
+                                Event::Mouse(m) => match m.kind {
+                                    MouseEventKind::ScrollUp   => { app.scroll = app.scroll.saturating_add(3); let _ = app.draw(); }
+                                    MouseEventKind::ScrollDown => { app.scroll = app.scroll.saturating_sub(3); let _ = app.draw(); }
+                                    _ => {}
+                                },
                                 _ => {}
                             }
                         }
