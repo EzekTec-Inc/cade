@@ -642,6 +642,7 @@ impl Repl {
                             let ans = {
                                 let mut app = self.app.lock().unwrap();
                                 let r = crate::ui::question::QuestionWidget::ask(&mut app.terminal, &q);
+                                app.scroll = 0;
                                 let _ = app.draw();
                                 r
                             };
@@ -839,6 +840,7 @@ impl Repl {
                                     let confirmed = {
                                         let mut app = self.app.lock().unwrap();
                                         let r = QuestionWidget::ask(&mut app.terminal, &q_widget)?;
+                                        app.scroll = 0;
                                         let _ = app.draw();
                                         matches!(r, Some(ref a) if a.as_str().starts_with("Yes"))
                                     };
@@ -1019,6 +1021,7 @@ impl Repl {
                                 let ans = {
                                     let mut app = self.app.lock().unwrap();
                                     let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                                    app.scroll = 0;
                                     let _ = app.draw();
                                     r
                                 };
@@ -1417,6 +1420,7 @@ impl Repl {
                             let save = {
                                 let mut app = self.app.lock().unwrap();
                                 let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                                app.scroll = 0;
                                 let _ = app.draw();
                                 matches!(r, Some(ref a) if a.as_str().starts_with("Yes"))
                             };
@@ -1449,6 +1453,7 @@ impl Repl {
                             let save = {
                                 let mut app = self.app.lock().unwrap();
                                 let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                                app.scroll = 0;
                                 let _ = app.draw();
                                 matches!(r, Some(ref a) if a.as_str().starts_with("Yes"))
                             };
@@ -1515,6 +1520,7 @@ impl Repl {
                             let ans = {
                                 let mut app = self.app.lock().unwrap();
                                 let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                                app.scroll = 0;
                                 let _ = app.draw();
                                 r
                             };
@@ -2345,7 +2351,7 @@ impl Repl {
         let qa = {
             let mut app = self.app.lock().unwrap();
             let result = QuestionWidget::ask(&mut app.terminal, &q)?;
-            // Redraw normal CADE UI after the question widget.
+            app.scroll = 0; // snap to bottom after approval modal
             let _ = app.draw();
             result
         };
@@ -2483,6 +2489,7 @@ impl Repl {
             let qa = {
                 let mut app = self.app.lock().unwrap();
                 let res = QuestionWidget::ask(&mut app.terminal, &q)?;
+                app.scroll = 0; // snap to bottom after question modal
                 let _ = app.draw();
                 res
             };
@@ -2674,6 +2681,7 @@ impl Repl {
             let ans = {
                 let mut app = self.app.lock().unwrap();
                 let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                app.scroll = 0;
                 let _ = app.draw();
                 r
             };
@@ -2698,6 +2706,7 @@ impl Repl {
             let ans = {
                 let mut app = self.app.lock().unwrap();
                 let r = QuestionWidget::ask(&mut app.terminal, &kq)?;
+                app.scroll = 0;
                 let _ = app.draw();
                 r
             };
@@ -2718,6 +2727,7 @@ impl Repl {
             let ans = {
                 let mut app = self.app.lock().unwrap();
                 let r = QuestionWidget::ask(&mut app.terminal, &uq)?;
+                app.scroll = 0;
                 let _ = app.draw();
                 r
             };
@@ -2829,6 +2839,8 @@ impl Repl {
                         let ans = {
                             let mut app = app_arc.lock().unwrap();
                             let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                            app.scroll = 0;
+                            let _ = app.draw();
                             r
                         };
                         if matches!(ans, Some(ref a) if a.as_str().starts_with("Yes")) {
@@ -2979,6 +2991,8 @@ impl Repl {
                         let confirmed = {
                             let mut app = app_arc.lock().unwrap();
                             let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                            app.scroll = 0;
+                            let _ = app.draw();
                             matches!(r, Some(ref a) if a.as_str().starts_with("Yes"))
                         };
                         if confirmed {
@@ -3001,7 +3015,10 @@ impl Repl {
                         };
                         let ans = {
                             let mut app = app_arc.lock().unwrap();
-                            QuestionWidget::ask(&mut app.terminal, &q)?
+                            let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                            app.scroll = 0;
+                            let _ = app.draw();
+                            r
                         };
                         if let Some(ref answer) = ans {
                             let new_name = answer.as_str();
@@ -3269,7 +3286,10 @@ impl Repl {
                                 multi_select: false, allow_other: true, progress: None };
                             let ans = {
                                 let mut app = app_arc.lock().unwrap();
-                                QuestionWidget::ask(&mut app.terminal, &q)?
+                                let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                                app.scroll = 0;
+                                let _ = app.draw();
+                                r
                             };
                             if let Some(ref a) = ans {
                                 let typed = a.as_str();
