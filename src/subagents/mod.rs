@@ -140,6 +140,43 @@ Be specific — include file paths and line numbers. Prioritise findings by seve
             scope:       SubagentScope::Builtin,
             path:        None,
         },
+        SubagentDef {
+            name:        "reflection".to_string(),
+            description: "Background agent — reflects on the conversation and updates memory blocks".to_string(),
+            model:       None,
+            tools:       SubagentTools::List(vec![
+                "update_memory".to_string(),
+                "read_file".to_string(),
+                "glob".to_string(),
+            ]),
+            system_prompt: "\
+You are a background memory-maintenance agent. Your sole job is to reflect on the recent \
+conversation summary provided and update the agent's memory blocks to capture:\n\
+1. New facts learned about the project, user preferences, or codebase structure.\n\
+2. Corrections to outdated information.\n\
+3. Important decisions made during this session.\n\
+\n\
+Use the update_memory tool to upsert memory blocks. Keep each block concise and factual. \
+Do NOT summarise the conversation itself — only distil persistent knowledge. \
+Do NOT create memory blocks for transient task details.".to_string(),
+            skills:      vec![],
+            scope:       SubagentScope::Builtin,
+            path:        None,
+        },
+        SubagentDef {
+            name:        "recall".to_string(),
+            description: "Search past conversation history for relevant context".to_string(),
+            model:       None,
+            tools:       SubagentTools::Readonly,
+            system_prompt: "\
+You are a conversation history search agent. The user or main agent needs to recall something \
+from past interactions. Search the provided conversation history or files for the requested \
+information and return a precise, concise answer with source references (message index or \
+file path and line). If nothing relevant is found, say so clearly.".to_string(),
+            skills:      vec![],
+            scope:       SubagentScope::Builtin,
+            path:        None,
+        },
     ]
 }
 

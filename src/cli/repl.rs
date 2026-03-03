@@ -38,6 +38,8 @@ enum AgentPickerResult {
 enum SlashCmd {
     Help,
     Menu,
+    /// Invoke a loaded skill by its id (e.g. /commit → RunSkill("commit"))
+    RunSkill(String),
     Exit,
     Clear,
     Agent,
@@ -79,6 +81,10 @@ enum SlashCmd {
 }
 
 fn parse_slash(input: &str) -> Option<SlashCmd> {
+    parse_slash_with_skills(input, &[])
+}
+
+fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
     let trimmed = input.trim();
     if !trimmed.starts_with('/') {
         return None;
@@ -124,7 +130,10 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
         "logout" => Some(SlashCmd::Logout),
         "stream" => Some(SlashCmd::Stream),
         "usage"  => Some(SlashCmd::Usage),
-        // "toolset" now handled as SlashCmd::Toolset above
+        // Skill slash commands: /commit, /review, etc.
+        other if skill_ids.iter().any(|id| id == other) => {
+            Some(SlashCmd::RunSkill(other.to_string()))
+        }
         _ => None,
     }
 }
@@ -339,8 +348,10 @@ impl Repl {
                 continue;
             }
 
-            // Slash commands
-            if let Some(cmd) = parse_slash(&input) {
+            // Slash commands (include loaded skill ids so /commit etc. work)
+            let skill_ids: Vec<String> = self.skills.lock().unwrap()
+                .iter().map(|s| s.id.clone()).collect();
+            if let Some(cmd) = parse_slash_with_skills(&input, &skill_ids) {
                 match cmd {
                     SlashCmd::Exit => {
                         use std::sync::atomic::Ordering;
@@ -355,6 +366,24 @@ impl Repl {
                         break;
                     }
                     // SlashCmd::Clear is handled below (with context clearing)
+                    SlashCmd::RunSkill(skill_id) => {
+                        // Find the skill, build a prompt that injects its content,
+                        // and send it as an agent turn so the agent follows the skill.
+                        let skill_body = self.skills.lock().unwrap()
+                            .iter()
+                            .find(|s| s.id == skill_id)
+                            .map(|s| s.to_context_block());
+                        if let Some(body) = skill_body {
+                            let prompt = format!(
+                                "[Skill invoked: /{skill_id}]\n\nFollow this skill:\n\n{body}"
+                            );
+                            self.tui_sys(format!("  Running skill: /{skill_id}"));
+                            self.agent_turn(&mut stdout, &prompt).await?;
+                        } else {
+                            self.tui_err(format!("  Skill '{skill_id}' not found. Try /skills reload"));
+                        }
+                        continue;
+                    }
                     SlashCmd::Help | SlashCmd::Menu => {
                         // Open full-screen command browser
                         let chosen = {
@@ -2166,6 +2195,73 @@ impl Repl {
     ///   1. Yes — run once
     ///   2. Yes, don't ask again — session-allow + run
     ///   3. No — deny
+    /// Generate a diff preview for file-mutation tools shown before the approval prompt.
+    fn build_diff_preview(tool_name: &str, args: &serde_json::Value) -> Option<Vec<RenderLine>> {
+        match tool_name {
+            "edit_file" => {
+                let path       = args["path"].as_str()?;
+                let old_string = args["old_string"].as_str()?;
+                let new_string = args["new_string"].as_str()?;
+                let existing   = std::fs::read_to_string(path).ok()?;
+                let offset = existing.find(old_string)
+                    .map(|byte| existing[..byte].lines().count())
+                    .unwrap_or(0);
+                let mut out: Vec<RenderLine> = vec![
+                    RenderLine::DimMsg(format!("--- {path}")),
+                ];
+                for (i, ln) in old_string.lines().enumerate() {
+                    out.push(RenderLine::ErrorMsg(
+                        format!("- {ln}  (L{})", offset + i + 1)
+                    ));
+                }
+                for ln in new_string.lines() {
+                    out.push(RenderLine::SuccessMsg(format!("+ {ln}")));
+                }
+                Some(out)
+            }
+            "write_file" | "create_file" => {
+                let path    = args["path"].as_str()?;
+                let content = args["content"].as_str()?;
+                let is_new  = !std::path::Path::new(path).exists();
+                let lines: Vec<&str> = content.lines().collect();
+                let show    = lines.len().min(12);
+                let mut out: Vec<RenderLine> = vec![
+                    RenderLine::DimMsg(format!("{} {path}",
+                        if is_new { "new file:" } else { "overwrite:" })),
+                ];
+                for ln in &lines[..show] {
+                    out.push(RenderLine::SuccessMsg(format!("+ {ln}")));
+                }
+                if lines.len() > show {
+                    out.push(RenderLine::DimMsg(
+                        format!("  … ({} more lines)", lines.len() - show)
+                    ));
+                }
+                Some(out)
+            }
+            "apply_patch" => {
+                let patch = args["patch"].as_str()?;
+                let mut out: Vec<RenderLine> = vec![RenderLine::DimMsg("(patch)".to_string())];
+                for ln in patch.lines().take(20) {
+                    if ln.starts_with('-') && !ln.starts_with("---") {
+                        out.push(RenderLine::ErrorMsg(ln.to_string()));
+                    } else if ln.starts_with('+') && !ln.starts_with("+++") {
+                        out.push(RenderLine::SuccessMsg(ln.to_string()));
+                    } else {
+                        out.push(RenderLine::DimMsg(ln.to_string()));
+                    }
+                }
+                if patch.lines().count() > 20 {
+                    out.push(RenderLine::DimMsg(
+                        format!("… ({} more lines)", patch.lines().count() - 20)
+                    ));
+                }
+                Some(out)
+            }
+            _ => None,
+        }
+    }
+
     fn prompt_approval(
         &self,
         _stdout: &mut io::Stdout,
@@ -2173,6 +2269,15 @@ impl Repl {
         args: &serde_json::Value,
     ) -> Result<bool> {
         use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+
+        // Show diff preview for file-mutation tools before the approval prompt.
+        if let Some(diff_lines) = Self::build_diff_preview(tool_name, args) {
+            let mut app = self.app.lock().unwrap();
+            for line in diff_lines {
+                let _ = app.push(line);
+            }
+            let _ = app.draw();
+        }
 
         // One-line preview of what is being requested
         let preview: String = if let Some(cmd) = args["command"].as_str() {
