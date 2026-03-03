@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{bare_model, provider_error, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk};
+use super::{bare_model, provider_error, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
 
 /// Recursively strip JSON Schema fields that Gemini's functionDeclarations format rejects.
 ///
@@ -258,6 +258,12 @@ impl LlmProvider for GeminiProvider {
                         }
                     }
                     if candidate["finishReason"].as_str().is_some() {
+                        // Extract token usage from the same final chunk
+                        let in_tok  = v["usageMetadata"]["promptTokenCount"].as_u64().unwrap_or(0) as u32;
+                        let out_tok = v["usageMetadata"]["candidatesTokenCount"].as_u64().unwrap_or(0) as u32;
+                        if in_tok > 0 || out_tok > 0 {
+                            yield Ok(StreamChunk::Usage(TokenUsage { input_tokens: in_tok, output_tokens: out_tok }));
+                        }
                         yield Ok(StreamChunk::Done); return;
                     }
                 }

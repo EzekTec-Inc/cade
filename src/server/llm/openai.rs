@@ -199,7 +199,8 @@ impl LlmProvider for OpenAiProvider {
             "model": bare_model(&req.model),
             "messages": Self::to_openai_messages(req),
             "max_tokens": req.max_tokens,
-            "stream": true
+            "stream": true,
+            "stream_options": { "include_usage": true }
         });
         if !req.tools.is_empty() {
             body["tools"] = Self::build_tools(req);
@@ -253,13 +254,17 @@ impl LlmProvider for OpenAiProvider {
                             yield Ok(StreamChunk::ToolCall(LlmToolCall { id: tool_id.clone(), name: tool_name.clone(), arguments: args }));
                             tool_name.clear(); tool_id.clear(); tool_args.clear();
                         }
-                        // OpenAI may include usage in the last chunk (stream_options.include_usage)
-                        let in_tok  = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0) as u32;
-                        let out_tok = v["usage"]["completion_tokens"].as_u64().unwrap_or(0) as u32;
+                        // Don't return here — OpenAI sends usage in a separate chunk
+                        // before [DONE] when stream_options.include_usage=true.
+                    }
+                    // Usage chunk: may arrive in any chunk, including the separate
+                    // empty-choices chunk OpenAI sends after finish_reason.
+                    if let Some(usage) = v.get("usage").filter(|u| !u.is_null()) {
+                        let in_tok  = usage["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+                        let out_tok = usage["completion_tokens"].as_u64().unwrap_or(0) as u32;
                         if in_tok > 0 || out_tok > 0 {
                             yield Ok(StreamChunk::Usage(TokenUsage { input_tokens: in_tok, output_tokens: out_tok }));
                         }
-                        yield Ok(StreamChunk::Done);
                     }
                 }
             }

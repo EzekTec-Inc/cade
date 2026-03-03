@@ -25,10 +25,10 @@ const HISTORY_LIMIT: usize = 200;
 /// Blocks whose value is empty are always skipped regardless of this budget.
 const MEMORY_CHAR_BUDGET: usize = 8_000;
 /// Appended to the system prompt when the stored prompt doesn't already include it.
-/// Prevents old agents (created before BASE_SYSTEM_PROMPT was written) from
-/// generating self-introductions on every turn.
-const NO_INTRO_RULE: &str = "\n\nIMPORTANT: Never introduce yourself or describe your capabilities \
-    unprompted. Always respond directly to the user's message without any preamble or self-description.";
+/// Prevents agents from prefacing every response with "I am CADE..." identity text.
+const NO_INTRO_RULE: &str = "\n\nIMPORTANT: Never start a response with \"I am CADE\", your name, \
+    or any identity preamble. Answer questions directly and concisely. \
+    If explicitly asked who you are, answer in one brief sentence only.";
 /// Max output tokens per LLM response. Claude 3.7/4.x and GPT-4.1 support 16k+.
 const MAX_TOKENS: u32 = 16384;
 /// Cap on a single tool-result content string (chars). ~8k tokens.
@@ -173,7 +173,7 @@ async fn build_context(
     let base = agent.system_prompt.clone().unwrap_or_default();
     // Ensure the no-intro rule is always enforced, regardless of when the agent
     // was created (old agents predate the BASE_SYSTEM_PROMPT no-intro section).
-    let base = if base.contains("Never introduce yourself") {
+    let base = if base.contains("Never start a response with") || base.contains("Never introduce yourself") {
         base
     } else {
         format!("{base}{NO_INTRO_RULE}")
