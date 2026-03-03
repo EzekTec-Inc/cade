@@ -36,7 +36,7 @@ use crossterm::{
     cursor,
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
     execute,
-    terminal::{self, ClearType},
+    terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use ratatui::{
     Terminal, TerminalOptions, Viewport,
@@ -101,11 +101,12 @@ pub struct QuestionWidget;
 impl QuestionWidget {
     /// Present `question` interactively.
     ///
-    /// Returns `(Some(answer), viewport_height)` on submission or `(None, viewport_height)`
-    /// if the user pressed Esc / Ctrl+C.  The caller should pass `viewport_height` to
-    /// `OutputRenderer::note_blank_rows()` so the blank rows left by the widget's cleanup
-    /// are tracked and reused by the next `with_insert_before` call.
-    pub fn ask(question: &Question<'_>) -> Result<(Option<QuestionAnswer>, u16)> {
+    /// Returns `Some(answer)` on submission or `None` if the user pressed Esc / Ctrl+C.
+    ///
+    /// The widget renders in the **alternate screen buffer** so the main screen
+    /// (content, ThinkingBar, etc.) is restored exactly when the modal closes — no
+    /// blank rows are created and no blank-row bookkeeping is required from the caller.
+    pub fn ask(question: &Question<'_>) -> Result<Option<QuestionAnswer>> {
         // ── Build the effective options list ──────────────────────────────────
         // Slots: provided options + optional "Type something." + optional "Submit"
         let n_real = question.options.len();
@@ -136,20 +137,22 @@ impl QuestionWidget {
         let viewport_height = (1 + 1 + 1 + 1 + 1 + progress_rows + option_rows + 1 + 1) as u16;
 
         // ── Terminal setup ─────────────────────────────────────────────────────
+        // Switch to the alternate screen buffer.  The main screen (content rows,
+        // ThinkingBar, cursor position) is frozen and will be restored exactly by
+        // LeaveAlternateScreen — no blank rows are created in the main screen.
+        let mut out = io::stdout();
+        execute!(out, EnterAlternateScreen)?;
+
         let (_, init_h) = terminal::size().unwrap_or((80, 24));
-        // Pre-scroll to make room
-        {
-            let pre = CrosstermBackend::new(io::stdout());
-            let mut pre_t = Terminal::with_options(pre, TerminalOptions { viewport: Viewport::Inline(0) })?;
-            let _ = pre_t.insert_before(viewport_height, |_| {});
-        }
-        let _ = execute!(io::stdout(), cursor::MoveToRow(init_h.saturating_sub(1)));
+        // Position the cursor at the bottom; Viewport::Inline will scroll the
+        // (blank) alternate screen to create the viewport without disturbing anything.
+        let _ = execute!(out, cursor::MoveToRow(init_h.saturating_sub(1)));
+
         let backend = CrosstermBackend::new(io::stdout());
         let mut term = Terminal::with_options(
             backend,
             TerminalOptions { viewport: Viewport::Inline(viewport_height) },
         )?;
-        let viewport_start_row = init_h.saturating_sub(viewport_height);
 
         let _raw = RawModeGuard::enable()?;
 
@@ -422,17 +425,15 @@ impl QuestionWidget {
             }
         };
 
-        // ── Cleanup: drop raw mode and terminal, clear viewport rows ──────────
+        // ── Cleanup: drop raw mode and terminal, leave alternate screen ────────
+        // LeaveAlternateScreen restores the main screen buffer exactly as it was
+        // before EnterAlternateScreen — content, ThinkingBar, cursor all intact.
         drop(_raw);
         drop(term);
         let mut out = io::stdout();
-        for row in viewport_start_row..viewport_start_row.saturating_add(viewport_height) {
-            let _ = execute!(out, cursor::MoveTo(0, row), terminal::Clear(ClearType::CurrentLine));
-        }
-        let (_, final_h) = terminal::size().unwrap_or((80, 24));
-        let _ = execute!(out, cursor::MoveToRow(final_h.saturating_sub(1)));
+        execute!(out, LeaveAlternateScreen)?;
         let _ = out.flush();
 
-        Ok((answer, viewport_height))
+        Ok(answer)
     }
 }

@@ -79,6 +79,10 @@ pub struct OutputRenderer {
     /// The ThinkingBar task reads this to display animated status.
     bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
 
+    /// ThinkingBar pause flag — set while a modal owns the terminal so the bar
+    /// does not write to the alternate screen.
+    bar_pause: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
+
     /// Number of blank rows sitting at the bottom of the content area left over
     /// from the most recent InputWidget viewport clear.  `with_insert_before`
     /// reuses these rows instead of scrolling new blank ones, then compacts any
@@ -100,18 +104,34 @@ impl OutputRenderer {
             reason_buf: String::new(),
             status_bar_height: 0,
             bar_text: None,
+            bar_pause: None,
             blank_rows_at_bottom: 0,
         }
     }
 
-    /// Attach the ThinkingBar's shared text — streaming updates route here.
-    pub fn attach_bar(&mut self, text: std::sync::Arc<std::sync::Mutex<String>>) {
-        self.bar_text = Some(text);
+    /// Attach the ThinkingBar's shared text and pause flag — streaming updates
+    /// route to bar_text; pause_bar() uses bar_pause to suppress rendering during
+    /// modal dialogs that use the alternate screen.
+    pub fn attach_bar(
+        &mut self,
+        text:  std::sync::Arc<std::sync::Mutex<String>>,
+        pause: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    ) {
+        self.bar_text  = Some(text);
+        self.bar_pause = Some(pause);
+    }
+
+    /// Pause or resume ThinkingBar rendering (use while a modal owns the terminal).
+    pub fn pause_bar(&self, paused: bool) {
+        if let Some(ref f) = self.bar_pause {
+            f.store(paused, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     /// Detach the ThinkingBar (call just before stopping the bar task).
     pub fn detach_bar(&mut self) {
-        self.bar_text = None;
+        self.bar_text  = None;
+        self.bar_pause = None;
     }
 
     /// Update the bar text (helper used by streaming methods).
@@ -129,15 +149,24 @@ impl OutputRenderer {
             // ThinkingBar claims the bottom content row (old anchor). Decrement
             // rather than reset so the remaining blank rows stay tracked.
             self.blank_rows_at_bottom = self.blank_rows_at_bottom.saturating_sub(1);
+        } else {
+            // Former ThinkingBar row is now part of the content area and will be
+            // overwritten by the next output call. Treat it as one extra blank row
+            // so the compaction formula (blank_row_start = write_start - remaining)
+            // stays correct after the anchor increases by 1.
+            self.blank_rows_at_bottom = self.blank_rows_at_bottom.saturating_add(1);
         }
-        // Deactivation: former ThinkingBar row has text (not blank); count unchanged.
     }
 
     /// Record N blank rows that the InputWidget left at the bottom of the content
     /// area after clearing its viewport.  The next `with_insert_before` call will
     /// reuse these rows and compact any remaining gap.
+    ///
+    /// `status_bar_height` is subtracted so that, when the ThinkingBar is active,
+    /// the row it occupies is not counted as a blank content row — preventing the
+    /// compaction formula from pointing at a non-blank row.
     pub fn note_blank_rows(&mut self, n: u16) {
-        self.blank_rows_at_bottom = n;
+        self.blank_rows_at_bottom = n.saturating_sub(self.status_bar_height);
     }
 
     /// Insert a blank spacer line after an agent turn so consecutive response

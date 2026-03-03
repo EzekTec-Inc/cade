@@ -1875,7 +1875,7 @@ impl Repl {
         self.output.lock().unwrap().set_status_bar(true);
         let (bar, bar_task) = ThinkingBar::start();
         let bar_text = bar.text.clone();
-        self.output.lock().unwrap().attach_bar(bar_text.clone());
+        self.output.lock().unwrap().attach_bar(bar_text.clone(), bar.pause_flag.clone());
 
         // ── Assessing timer task ────────────────────────────────────────────
         // Ticks every second and updates the ThinkingBar with Letta Code's
@@ -2431,8 +2431,13 @@ impl Repl {
             progress: None,
         };
 
-        let (qa, vp_h) = QuestionWidget::ask(&q)?;
-        self.output.lock().unwrap().note_blank_rows(vp_h);
+        // Pause ThinkingBar so it does not write to the alternate screen while
+        // the modal is active, then restore immediately after.
+        self.output.lock().unwrap().pause_bar(true);
+        let qa = QuestionWidget::ask(&q)?;
+        self.output.lock().unwrap().pause_bar(false);
+        // Alternate screen restored the main screen exactly — no blank rows created.
+
         match qa {
             None => Ok(false), // Esc / Ctrl+C = deny
             Some(answer) => {
@@ -2553,8 +2558,10 @@ impl Repl {
                 progress: if total > 1 { Some((i + 1, total)) } else { None },
             };
 
-            let (qa, vp_h) = QuestionWidget::ask(&q)?;
-            self.output.lock().unwrap().note_blank_rows(vp_h);
+            self.output.lock().unwrap().pause_bar(true);
+            let qa = QuestionWidget::ask(&q)?;
+            self.output.lock().unwrap().pause_bar(false);
+
             match qa {
                 None => {
                     let msg = "User cancelled the question prompt.".to_string();
