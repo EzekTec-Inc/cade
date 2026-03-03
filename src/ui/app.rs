@@ -34,7 +34,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
-    widgets::{Paragraph, Widget, Wrap},
+    widgets::{Block, Padding, Paragraph, Widget, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -46,6 +46,9 @@ use crate::permissions::PermissionMode;
 const FIXED_ROWS: u16 = 4;
 /// Maximum rows the input area may grow to.
 const MAX_INPUT_ROWS: u16 = 6;
+/// Vertical padding (rows) inside the scrollable content area.
+const CONTENT_PAD_TOP: u16 = 1;
+const CONTENT_PAD_BOT: u16 = 1;
 /// Braille spinner frames for thinking animation.
 const BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 /// Result prefix: "  ⎿  "
@@ -572,7 +575,7 @@ fn render_frame(
         .map(|l| count_wrapped_rows(l, content_w))
         .sum();
 
-    let visible = content_height;
+    let visible = content_height.saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT);
     let para_scroll = if total_visual > visible {
         let max_skip     = total_visual - visible;
         let effective_up = (scroll as u16).min(max_skip);
@@ -583,7 +586,8 @@ fn render_frame(
 
     frame.render_widget(
         Paragraph::new(text_lines)
-            .wrap(ratatui::widgets::Wrap { trim: false })
+            .block(Block::new().padding(Padding::vertical(1)))
+            .wrap(Wrap { trim: false })
             .scroll((para_scroll, 0)),
         chunks[0],
     );
