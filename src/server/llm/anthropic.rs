@@ -81,7 +81,7 @@ impl AnthropicProvider {
                     }
                     anthropic_messages.push(json!({ "role": "user", "content": tool_results }));
                 }
-                "assistant" if m.tool_calls.is_some() => {
+                "assistant" if m.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()) => {
                     let tool_uses: Vec<Value> = m.tool_calls.as_ref().unwrap().iter().map(|tc| json!({
                         "type": "tool_use",
                         "id": tc.id,

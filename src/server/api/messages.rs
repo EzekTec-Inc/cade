@@ -278,11 +278,14 @@ fn db_row_to_llm(row: &MessageRow) -> Vec<LlmMessage> {
             // A single DB row may have both text content and tool_calls
             let text = row.content["content"].as_str().unwrap_or("").to_string();
             let tool_calls: Option<Vec<LlmToolCall>> =
-                row.content["tool_calls"].as_array().map(|arr| {
-                    arr.iter()
-                        .filter_map(|tc| serde_json::from_value(tc.clone()).ok())
-                        .collect()
-                });
+                row.content["tool_calls"]
+                    .as_array()
+                    .filter(|arr| !arr.is_empty())  // treat [] same as absent
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|tc| serde_json::from_value(tc.clone()).ok())
+                            .collect()
+                    });
             vec![LlmMessage {
                 role: "assistant".to_string(),
                 content: text,

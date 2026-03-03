@@ -2081,6 +2081,14 @@ impl Repl {
                 format!("\"{}\"", short(task, 60))
             } else if let Some(patch) = a["patch"].as_str() {
                 format!("\"{}\"", short(patch, 60))
+            } else if tool_name == "ask_user_question" {
+                let qs = a["questions"].as_array();
+                let first = qs.and_then(|v| v.first()).and_then(|q| q["header"].as_str());
+                match (first, qs.map(|v| v.len())) {
+                    (Some(h), Some(1)) => h.to_string(),
+                    (Some(h), Some(n)) => format!("{h} +{} more", n - 1),
+                    _ => String::new(),
+                }
             } else {
                 a.as_object().and_then(|m| {
                     m.values().find_map(|v| v.as_str()).map(|s| short(s, 60))
@@ -2453,6 +2461,7 @@ impl Repl {
         let _ = self.app.lock().unwrap().commit_streaming();
 
         let mut answers: HashMap<String, String> = HashMap::new();
+        let mut answers_display: Vec<(String, String)> = Vec::new();
 
         for (i, aq) in ask_questions.iter().enumerate() {
             let opts: Vec<QuestionOption> = aq.options.iter()
@@ -2490,18 +2499,25 @@ impl Repl {
                     });
                 }
                 Some(answer) => {
-                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
-                        format!("  {}: {}", aq.header, answer.as_str())
-                    ));
+                    answers_display.push((aq.header.clone(), answer.as_str()));
                     answers.insert(aq.question.clone(), answer.as_str());
                 }
             }
         }
 
+        // Show answers inline under the tool call header (⎿ answer / ⎿ h: a\n  h: b)
+        let result_content = if total == 1 {
+            answers_display[0].1.clone()
+        } else {
+            answers_display.iter()
+                .map(|(h, a)| format!("{h}: {a}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
         let result = AskUserQuestionTool::format_result(&answers);
         let _ = self.app.lock().unwrap().push(RenderLine::ToolResult {
             is_error: false,
-            content: format!("{} answer{} collected", total, if total == 1 { "" } else { "s" }),
+            content: result_content,
         });
 
         Ok(crate::tools::ToolResult {

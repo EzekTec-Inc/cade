@@ -117,7 +117,7 @@ impl OpenAiProvider {
                     "tool_call_id": m.tool_call_id,
                     "content": m.content
                 }),
-                "assistant" if m.tool_calls.is_some() => {
+                "assistant" if m.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()) => {
                     let tcs: Vec<Value> = m.tool_calls.as_ref().unwrap().iter().map(|tc| json!({
                         "id": tc.id,
                         "type": "function",
