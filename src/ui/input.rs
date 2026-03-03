@@ -109,24 +109,32 @@ impl InputWidget {
         let mut viewport_height: u16 = FIXED_ROWS + current_input_rows;
 
         let (_, init_term_h) = terminal::size().unwrap_or((80, 24));
-        let _ = execute!(io::stdout(), cursor::MoveToRow(init_term_h.saturating_sub(1)));
+        // Pre-scroll viewport_height rows using DECSTBM (no CPR / \033[6n query).
+        // Scrolls prior content UP within [0..anchor], creating viewport_height
+        // blank rows at the bottom for the widget to render into without
+        // overwriting recently committed output (e.g. agent text after tool use).
         {
-            let pre_backend = CrosstermBackend::new(io::stdout());
-            let mut pre_term = Terminal::with_options(
-                pre_backend,
-                TerminalOptions { viewport: Viewport::Inline(0) },
-            )?;
-            let _ = pre_term.insert_before(viewport_height, |_buf| {});
+            let anchor = init_term_h.saturating_sub(1);
+            let mut out = io::stdout();
+            write!(out, "\x1b[1;{}r", anchor + 1)?;  // DECSTBM [0..anchor]
+            execute!(out, cursor::MoveToRow(anchor), cursor::MoveToColumn(0))?;
+            for _ in 0..viewport_height {
+                write!(out, "\n")?;
+            }
+            write!(out, "\x1b[r")?;  // reset scroll region to full terminal
+            out.flush()?;
         }
         let _ = execute!(io::stdout(), cursor::MoveToRow(init_term_h.saturating_sub(1)));
+        // Enable raw mode BEFORE creating the viewport Terminal so that ratatui's
+        // internal cursor-position query (CPR) is handled correctly in raw mode
+        // and its response bytes are not echoed as visible garbage to the screen.
+        let _raw = RawModeGuard::enable()?;
         let backend = CrosstermBackend::new(io::stdout());
         let mut term = Terminal::with_options(
             backend,
             TerminalOptions { viewport: Viewport::Inline(viewport_height) },
         )?;
         let mut viewport_start_row = init_term_h.saturating_sub(viewport_height);
-
-        let _raw = RawModeGuard::enable()?;
 
         let result: Result<Option<String>> = (|| {
             loop {
@@ -157,14 +165,17 @@ impl InputWidget {
                     }
                     let _ = out.flush();
                     // Re-anchor, pre-scroll, create new terminal.
-                    let _ = execute!(io::stdout(), cursor::MoveToRow(th.saturating_sub(1)));
+                    // DECSTBM pre-scroll for resize (no CPR).
                     {
-                        let pre = CrosstermBackend::new(io::stdout());
-                        let mut pre_t = Terminal::with_options(
-                            pre,
-                            TerminalOptions { viewport: Viewport::Inline(0) },
-                        )?;
-                        let _ = pre_t.insert_before(new_vh, |_| {});
+                        let anchor = th.saturating_sub(1);
+                        let mut out = io::stdout();
+                        write!(out, "\x1b[1;{}r", anchor + 1)?;
+                        execute!(out, cursor::MoveToRow(anchor), cursor::MoveToColumn(0))?;
+                        for _ in 0..new_vh {
+                            write!(out, "\n")?;
+                        }
+                        write!(out, "\x1b[r")?;
+                        out.flush()?;
                     }
                     let _ = execute!(io::stdout(), cursor::MoveToRow(th.saturating_sub(1)));
                     let new_backend = CrosstermBackend::new(io::stdout());
