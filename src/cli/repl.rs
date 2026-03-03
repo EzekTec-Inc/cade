@@ -1,6 +1,5 @@
 use anyhow::Result;
-use std::io::{self, Write};
-use crossterm::{execute, style::{Color, Print, ResetColor, SetForegroundColor}, terminal::{self, ClearType}, cursor};
+use std::io;
 use crossterm::event::KeyCode;
 
 use std::sync::{Arc, Mutex};
@@ -38,6 +37,7 @@ enum AgentPickerResult {
 #[derive(Debug)]
 enum SlashCmd {
     Help,
+    Menu,
     Exit,
     Clear,
     Agent,
@@ -86,7 +86,7 @@ fn parse_slash(input: &str) -> Option<SlashCmd> {
     let parts: Vec<&str> = trimmed[1..].splitn(2, ' ').collect();
     let arg = parts.get(1).map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
     match parts[0] {
-        "help" | "?"             => Some(SlashCmd::Help),
+        "help" | "?" | "menu"    => Some(SlashCmd::Help),
         "exit" | "quit" | "q"   => Some(SlashCmd::Exit),
         "clear"                  => Some(SlashCmd::Clear),
         "agent"                  => Some(SlashCmd::Agent),
@@ -254,6 +254,7 @@ impl Repl {
         let mut history: Vec<String> = Vec::new();
         let mut hist_idx: Option<usize> = None;
 
+        let mut pending_input: Option<String> = None;
         loop {
             // Check for completed background subagent results
             {
@@ -280,12 +281,16 @@ impl Repl {
                 app.update_agent_name(self.agent_name());
             }
 
-            // Read input via TuiApp (fullscreen input widget at bottom of screen).
-            let input = match self.app.lock().unwrap().read_input(&mut history, &mut hist_idx)? {
-                Some(s) => s,
-                None => break,
+            // Read input — either from pending (menu dispatch) or from the user.
+            let input = if let Some(cmd) = pending_input.take() {
+                cmd
+            } else {
+                match self.app.lock().unwrap().read_input(&mut history, &mut hist_idx)? {
+                    Some(s) => s,
+                    None => break,
+                }
             };
-            let input = input.trim().to_string();
+            let mut input = input.trim().to_string();
 
             // Handle Tab / BackTab mode-cycle sentinels.
             if input == "__TAB__" {
@@ -350,9 +355,17 @@ impl Repl {
                         break;
                     }
                     // SlashCmd::Clear is handled below (with context clearing)
-                    SlashCmd::Help => {
-                        let text = Self::help_text();
-                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(text));
+                    SlashCmd::Help | SlashCmd::Menu => {
+                        // Open full-screen command browser
+                        let chosen = {
+                            let mut app = self.app.lock().unwrap();
+                            crate::ui::menu::show_command_menu(&mut app.terminal)?
+                        };
+                        let _ = self.app.lock().unwrap().draw();
+                        if let Some(cmd) = chosen {
+                            pending_input = Some(cmd);
+                        }
+                        continue;
                     }
                     SlashCmd::Agent => {
                         let msg = format!("  Agent: {} ({})", self.agent_name(), self.agent_id());
@@ -377,47 +390,34 @@ impl Repl {
                     }
                     SlashCmd::Mcp => {
                         let statuses = self.mcp.status();
-                        execute!(stdout, Print("\n"), SetForegroundColor(Color::Cyan),
-                            Print("  MCP Servers\n\n"), ResetColor)?;
+                        self.tui_blank();
+                        self.tui_hdr("  MCP Servers");
+                        self.tui_blank();
                         if statuses.is_empty() {
-                            execute!(stdout,
-                                SetForegroundColor(Color::DarkGrey),
-                                Print("  No MCP servers configured.\n\n"),
-                                ResetColor,
-                                Print("  Add servers to ~/.cade/settings.json:\n"),
-                                SetForegroundColor(Color::DarkGrey),
-                                Print("  {\n    \"mcpServers\": {\n"),
-                                Print("      \"git\": { \"command\": \"/path/to/git-mcp-server\" }\n"),
-                                Print("    }\n  }\n\n"),
-                                ResetColor,
-                            )?;
+                            self.tui_dim("  No MCP servers configured.");
+                            self.tui_blank();
+                            self.tui_dim("  Add servers to ~/.cade/settings.json:");
+                            self.tui_dim("  {");
+                            self.tui_dim("    \"mcpServers\": {");
+                            self.tui_dim("      \"git\": { \"command\": \"/path/to/git-mcp-server\" }");
+                            self.tui_dim("    }");
+                            self.tui_dim("  }");
                         } else {
                             for s in &statuses {
-                                execute!(stdout,
-                                    SetForegroundColor(Color::Green), Print("  ● "), ResetColor,
-                                    SetForegroundColor(Color::White), Print(format!("{:<16}", s.key)), ResetColor,
-                                    SetForegroundColor(Color::DarkGrey),
-                                    Print(format!("{} tool(s)\n", s.tools.len())),
-                                    ResetColor,
-                                )?;
+                                self.tui_ok(format!("  ● {:<16} {} tool(s)", s.key, s.tools.len()));
                                 // Show tool names (strip prefix for clarity)
                                 for chunk in s.tools.chunks(4) {
                                     let names: Vec<&str> = chunk.iter()
                                         .map(|t| t.splitn(2, "__").nth(1).unwrap_or(t))
                                         .collect();
-                                    execute!(stdout,
-                                        SetForegroundColor(Color::DarkGrey),
-                                        Print(format!("    {}\n", names.join("  "))),
-                                        ResetColor,
-                                    )?;
+                                    self.tui_dim(format!("    {}", names.join("  ")));
                                 }
-                                let _ = self.app.lock().unwrap().push(RenderLine::Blank);
+                                self.tui_blank();
                             }
                         }
                     }
                     SlashCmd::Link => {
-                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                            Print("\n  Linking tools…\n"), ResetColor)?;
+                        self.tui_dim("  Linking tools…");
                         let client2  = self.client.clone();
                         let mcp2     = std::sync::Arc::clone(&self.mcp);
                         let toolset2 = *self.current_toolset.lock().unwrap();
@@ -435,22 +435,13 @@ impl Repl {
                         if !mcp_ids.is_empty() {
                             let _ = client2.attach_agent_tools(&agent_id, &mcp_ids).await;
                         }
-                        execute!(stdout, SetForegroundColor(Color::Green),
-                            Print(format!("  ✓ Linked {n_native} native + {n_mcp} MCP tool(s)\n")),
-                            ResetColor)?;
+                        self.tui_ok(format!("  ✓ Linked {n_native} native + {n_mcp} MCP tool(s)"));
                     }
                     SlashCmd::Unlink => {
                         let agent_id = self.agent_id();
                         match self.client.detach_agent_tools(&agent_id).await {
-                            Ok(n) => {
-                                execute!(stdout, SetForegroundColor(Color::Green),
-                                    Print(format!("\n  ✓ Detached {n} tool(s) from agent\n")),
-                                    ResetColor)?;
-                            }
-                            Err(e) => {
-                                execute!(stdout, SetForegroundColor(Color::Red),
-                                    Print(format!("\n  ✗ {e}\n")), ResetColor)?;
-                            }
+                            Ok(n)  => self.tui_ok(format!("  ✓ Detached {n} tool(s) from agent")),
+                            Err(e) => self.tui_err(e.to_string()),
                         }
                     }
                     SlashCmd::Stream => {
@@ -458,91 +449,63 @@ impl Repl {
                         let current = self.streaming_enabled.load(Ordering::SeqCst);
                         self.streaming_enabled.store(!current, Ordering::SeqCst);
                         let label = if !current { "on" } else { "off" };
-                        execute!(stdout, SetForegroundColor(Color::Cyan),
-                            Print(format!("\n  Streaming: {label}\n")), ResetColor)?;
+                        self.tui_hdr(format!("  Streaming: {label}"));
                     }
                     SlashCmd::Usage => {
                         use std::sync::atomic::Ordering;
                         let in_tok  = self.session_input_tokens.load(Ordering::SeqCst);
                         let out_tok = self.session_output_tokens.load(Ordering::SeqCst);
                         let total   = in_tok + out_tok;
-                        execute!(stdout, SetForegroundColor(Color::Cyan), Print("\n  Token usage this session:\n"), ResetColor)?;
-                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                            Print(format!("    Input  : {:>8}\n", in_tok)),
-                            Print(format!("    Output : {:>8}\n", out_tok)),
-                            Print(format!("    Total  : {:>8}\n", total)),
-                            ResetColor)?;
+                        self.tui_blank();
+                        self.tui_hdr("  Token usage this session:");
+                        self.tui_dim(format!("    Input  : {:>8}", in_tok));
+                        self.tui_dim(format!("    Output : {:>8}", out_tok));
+                        self.tui_dim(format!("    Total  : {:>8}", total));
                         if total == 0 {
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("    (no usage recorded yet — requires Anthropic/OpenAI)\n"),
-                                ResetColor)?;
+                            self.tui_dim("    (no usage recorded yet — requires Anthropic/OpenAI)");
                         }
                     }
                     SlashCmd::Logout => {
                         if let Ok(mut s) = self.settings.lock() {
                             s.clear_api_key();
                         }
-                        execute!(stdout, SetForegroundColor(Color::Green),
-                            Print("\n  ✓ API key cleared from ~/.cade/settings.json\n"),
-                            Print("    Restart CADE to re-authenticate.\n"),
-                            ResetColor)?;
+                        self.tui_ok("  ✓ API key cleared. Restart CADE to re-authenticate.");
                         return Ok(());
                     }
                     SlashCmd::Plan => {
                         self.permissions.set_mode(PermissionMode::Plan);
-                        execute!(stdout,
-                            SetForegroundColor(Color::Cyan),
-                            Print("\n📖 Permission mode: plan (read-only) — write/exec tools blocked\n"),
-                            Print("   Use /default to resume normal mode\n"),
-                            ResetColor,
-                        )?;
+                        self.tui_hdr("📖 Permission mode: plan (read-only) — write/exec tools blocked. Use /default to resume.");
                     }
                     SlashCmd::Default => {
                         self.permissions.set_mode(PermissionMode::Default);
-                        execute!(stdout,
-                            SetForegroundColor(Color::Green),
-                            Print("\n✅ Permission mode: default — tools require approval\n"),
-                            ResetColor,
-                        )?;
+                        self.tui_ok("✅ Permission mode: default — tools require approval");
                     }
                     SlashCmd::Mode(arg) => {
                         match arg.as_deref() {
                             None | Some("") => {
-                                // Show current mode
                                 let (icon, label, hint) = mode_display(self.permissions.mode());
-                                execute!(stdout,
-                                    Print(format!("\n{icon} Current mode: {label}  {hint}\n")),
-                                )?;
+                                self.tui_sys(format!("{icon} Current mode: {label}  {hint}"));
                             }
                             Some(name) => {
-                                // Switch to named mode
                                 match name.to_lowercase().as_str() {
                                     "default" | "normal" => {
                                         self.permissions.set_mode(PermissionMode::Default);
-                                        execute!(stdout, SetForegroundColor(Color::Green),
-                                            Print("\n✅ Permission mode: default\n"), ResetColor)?;
+                                        self.tui_ok("✅ Permission mode: default");
                                     }
                                     "plan" | "readonly" | "read-only" => {
                                         self.permissions.set_mode(PermissionMode::Plan);
-                                        execute!(stdout, SetForegroundColor(Color::Cyan),
-                                            Print("\n📖 Permission mode: plan (read-only)\n"),
-                                            Print("   Use /default to resume normal mode\n"),
-                                            ResetColor)?;
+                                        self.tui_hdr("📖 Permission mode: plan (read-only). Use /default to resume.");
                                     }
                                     "yolo" | "bypass" | "bypasspermissions" => {
                                         self.permissions.set_mode(PermissionMode::BypassPermissions);
-                                        execute!(stdout, SetForegroundColor(Color::Yellow),
-                                            Print("\n⚡ Permission mode: bypassPermissions\n"), ResetColor)?;
+                                        self.tui_sys("⚡ Permission mode: bypassPermissions");
                                     }
                                     "acceptedits" | "accept-edits" | "edits" => {
                                         self.permissions.set_mode(PermissionMode::AcceptEdits);
-                                        execute!(stdout, SetForegroundColor(Color::Green),
-                                            Print("\n📝 Permission mode: acceptEdits — file edits auto-approved\n"), ResetColor)?;
+                                        self.tui_ok("📝 Permission mode: acceptEdits — file edits auto-approved");
                                     }
                                     other => {
-                                        execute!(stdout, SetForegroundColor(Color::Red),
-                                            Print(format!("\n  Unknown mode '{other}'\n  Valid: default | plan | yolo | acceptEdits\n")),
-                                            ResetColor)?;
+                                        self.tui_err(format!("Unknown mode '{other}'. Valid: default | plan | yolo | acceptEdits"));
                                     }
                                 }
                             }
@@ -552,24 +515,21 @@ impl Repl {
                     SlashCmd::Model(m) => {
                         // Empty arg → open interactive picker
                         let m = if m.is_empty() {
-                            match self.interactive_model_picker(&mut stdout).await? {
+                            match self.interactive_model_picker(Arc::clone(&self.app)).await? {
                                 Some(picked) => picked,
-                                None => { stdout.flush()?; continue; }
+                                None => { let _ = self.app.lock().unwrap().draw(); continue; }
                             }
                         } else {
                             m
                         };
                         let new_toolset = Toolset::for_model(&m);
                         let old_toolset = *self.current_toolset.lock().unwrap();
-                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                            Print(format!("\n  Switching model → {m}…\n")), ResetColor)?;
+                        self.tui_dim(format!("  Switching model → {m}…"));
                         match self.client.patch_agent_model(&self.agent_id(), &m).await {
                             Ok(new_model) => {
                                 *self.current_model.lock().unwrap() = new_model.clone();
-                                // Auto-switch toolset if model family changed
                                 if new_toolset != old_toolset {
                                     *self.current_toolset.lock().unwrap() = new_toolset;
-                                    // Re-register + re-attach tools for the new toolset
                                     let agent_id = self.agent_id();
                                     let client = self.client.clone();
                                     let mcp_ts  = std::sync::Arc::clone(&self.mcp);
@@ -588,42 +548,26 @@ impl Repl {
                                             let _ = client.attach_agent_tools(&agent_id, &mcp_ids).await;
                                         }
                                     });
-                                    execute!(stdout, SetForegroundColor(Color::Cyan),
-                                        Print(format!("  Toolset → {}\n", new_toolset.display_name())),
-                                        ResetColor)?;
+                                    self.tui_hdr(format!("  Toolset → {}", new_toolset.display_name()));
                                 }
-                                execute!(stdout, SetForegroundColor(Color::Green),
-                                    Print(format!("  ✓ Model: {new_model}\n")), ResetColor)?;
+                                self.tui_ok(format!("  ✓ Model: {new_model}"));
+                                let _ = self.app.lock().unwrap().draw();
                             }
-                            Err(e) => {
-                                execute!(stdout, SetForegroundColor(Color::Red),
-                                    Print(format!("  ✗ {e}\n")), ResetColor)?;
-                            }
+                            Err(e) => self.tui_err(e.to_string()),
                         }
                     }
 
                     // ── New commands ──────────────────────────────────────────
 
                     SlashCmd::Clear => {
-                        // Clear terminal (no MoveTo(0,0): output anchors to bottom via insert_before)
-                        execute!(stdout, terminal::Clear(ClearType::All))?;
-                        // Clear context window on server
+                        let _ = self.app.lock().unwrap().clear_content();
                         match self.client.clear_messages(&self.agent_id()).await {
-                            Ok(n) => {
-                                execute!(stdout, SetForegroundColor(Color::Green),
-                                    Print(format!("✓ Context window cleared ({n} messages deleted)\n")),
-                                    ResetColor)?;
-                            }
-                            Err(e) => {
-                                execute!(stdout, SetForegroundColor(Color::Yellow),
-                                    Print(format!("⚠ Screen cleared (context clear failed: {e})\n")),
-                                    ResetColor)?;
-                            }
+                            Ok(n)  => self.tui_ok(format!("✓ Context window cleared ({n} messages deleted)")),
+                            Err(e) => self.tui_sys(format!("⚠ Screen cleared (context clear failed: {e})")),
                         }
                     }
 
                     SlashCmd::New => {
-                        // Start a fresh conversation on the current agent
                         let agent_id = self.agent_id();
                         match self.client.create_conversation(&agent_id, "").await {
                             Ok(conv) => {
@@ -633,14 +577,9 @@ impl Repl {
                                     let _ = s.set_conversation(Some(cid.clone()));
                                 }
                                 self.first_turn.store(true, std::sync::atomic::Ordering::SeqCst);
-                                execute!(stdout, SetForegroundColor(Color::Green),
-                                    Print(format!("\n  ✓ New conversation started  ({})\n", &cid[..cid.len().min(20)])),
-                                    ResetColor)?;
+                                self.tui_ok(format!("  ✓ New conversation started  ({})", &cid[..cid.len().min(20)]));
                             }
-                            Err(e) => {
-                                execute!(stdout, SetForegroundColor(Color::Red),
-                                    Print(format!("\n  ✗ {e}\n")), ResetColor)?;
-                            }
+                            Err(e) => self.tui_err(e.to_string()),
                         }
                     }
 
@@ -739,67 +678,53 @@ impl Repl {
                                     }
                                 });
                             }
-                            Err(e) => {
-                                execute!(stdout, SetForegroundColor(Color::Red),
-                                    Print(format!("  ✗ {e}\n")), ResetColor)?;
-                            }
+                            Err(e) => self.tui_err(e.to_string()),
                         }
                     }
 
                     SlashCmd::Resume => {
-                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                            Print("\n  Fetching conversations…\n"), ResetColor)?;
+                        self.tui_dim("  Fetching conversations…");
                         let agent_id = self.agent_id();
                         match self.client.list_conversations(&agent_id).await {
                             Ok(convs) => {
                                 if convs.is_empty() {
-                                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                        Print("  No saved conversations yet. Use /new to start one.\n\n"),
-                                        ResetColor)?;
-                                } else if let Some(picked) = self.conversation_picker(&mut stdout, &convs, &agent_id).await? {
+                                    let _ = self.app.lock().unwrap().push(RenderLine::DimMsg("  No saved conversations yet. Use /new to start one.".to_string()));
+                                } else if let Some(picked) = self.conversation_picker(Arc::clone(&self.app), &convs, &agent_id).await? {
                                     let cid = picked["id"].as_str().unwrap_or("").to_string();
                                     *self.conversation_id.lock().unwrap() = Some(cid.clone());
                                     if let Ok(mut s) = self.session.lock() {
                                         let _ = s.set_conversation(Some(cid));
                                     }
                                     self.first_turn.store(false, std::sync::atomic::Ordering::SeqCst);
-                                    execute!(stdout, SetForegroundColor(Color::Green),
-                                        Print(format!("  ✓ Switched to: {}\n",
-                                            picked["title"].as_str().unwrap_or("(untitled)"))),
-                                        ResetColor)?;
+                                    let _ = self.app.lock().unwrap().push(RenderLine::SuccessMsg(
+                                        format!("  ✓ Switched to: {}", picked["title"].as_str().unwrap_or("(untitled)"))
+                                    ));
                                 }
+                                let _ = self.app.lock().unwrap().draw();
                             }
-                            Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                            Err(e) => { let _ = self.app.lock().unwrap().push(RenderLine::ErrorMsg(e.to_string())); }
                         }
                     }
 
                     SlashCmd::Pin => {
                         let id   = self.agent_id();
                         let name = self.agent_name();
-                        match self.settings.lock() {
-                            Ok(mut s) => match s.pin_agent(&id, &name) {
-                                Ok(_) => {
-                                    execute!(stdout, SetForegroundColor(Color::Green),
-                                        Print(format!("\n  ✓ Pinned: {name} ({id})\n")), ResetColor)?;
-                                }
-                                Err(e) => {
-                                    execute!(stdout, SetForegroundColor(Color::Red),
-                                        Print(format!("\n  ✗ Pin failed: {e}\n")), ResetColor)?;
-                                }
-                            },
-                            Err(_) => {}
+                        if let Ok(mut s) = self.settings.lock() {
+                            match s.pin_agent(&id, &name) {
+                                Ok(_)  => self.tui_ok(format!("  ✓ Pinned: {name} ({id})")),
+                                Err(e) => self.tui_err(format!("Pin failed: {e}")),
+                            }
                         }
                     }
 
                     SlashCmd::Agents => {
-                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                            Print("\n  Fetching agents…\n"), ResetColor)?;
+                        self.tui_dim("  Fetching agents…");
                         match self.client.list_agents().await {
                             Ok(agents) if agents.is_empty() => {
-                                execute!(stdout, Print("  (no agents found)\n"))?;
+                                self.tui_dim("  (no agents found)");
                             }
                             Ok(mut agents) => {
-                                if let Some(result) = self.agent_picker(&mut stdout, &mut agents).await? {
+                                if let Some(result) = self.agent_picker(Arc::clone(&self.app), &mut agents).await? {
                                     match result {
                                         AgentPickerResult::Switch(a) => {
                                             *self.agent_id.lock().unwrap()   = a.id.clone();
@@ -807,22 +732,17 @@ impl Repl {
                                             if let Ok(mut s) = self.settings.lock() {
                                                 let _ = s.set_last_agent(&a.id);
                                             }
-                                            execute!(stdout, SetForegroundColor(Color::Green),
-                                                Print(format!("  ✓ Switched to: {} ({})\n", a.name, a.id)),
-                                                ResetColor)?;
+                                            self.tui_ok(format!("  ✓ Switched to: {} ({})", a.name, a.id));
                                         }
                                         AgentPickerResult::Rename { agent, new_name } => {
                                             match self.client.rename_agent(&agent.id, &new_name).await {
                                                 Ok(_) => {
-                                                    // Update live state if active agent was renamed
                                                     if agent.id == self.agent_id() {
                                                         *self.agent_name.lock().unwrap() = new_name.clone();
                                                     }
-                                                    execute!(stdout, SetForegroundColor(Color::Green),
-                                                        Print(format!("  ✓ Renamed '{}' → '{new_name}'\n", agent.name)),
-                                                        ResetColor)?;
+                                                    self.tui_ok(format!("  ✓ Renamed '{}' → '{new_name}'", agent.name));
                                                 }
-                                                Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                                                Err(e) => self.tui_err(e.to_string()),
                                             }
                                         }
                                         AgentPickerResult::DeleteMany(to_delete) => {
@@ -831,14 +751,12 @@ impl Repl {
                                             for a in &to_delete {
                                                 match self.client.delete_agent(&a.id).await {
                                                     Ok(_) => {
-                                                        execute!(stdout, SetForegroundColor(Color::Green),
-                                                            Print(format!("  ✓ Deleted: {}\n", a.name)), ResetColor)?;
+                                                        self.tui_ok(format!("  ✓ Deleted: {}", a.name));
                                                         if a.id == current_id { deleted_active = true; }
                                                     }
-                                                    Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                                                    Err(e) => self.tui_err(e.to_string()),
                                                 }
                                             }
-                                            // If the active agent was deleted, auto-switch
                                             if deleted_active {
                                                 match self.client.list_agents().await {
                                                     Ok(remaining) if !remaining.is_empty() => {
@@ -848,20 +766,19 @@ impl Repl {
                                                         if let Ok(mut s) = self.settings.lock() {
                                                             let _ = s.set_last_agent(&first.id);
                                                         }
-                                                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                                            Print(format!("  → Now using: {}\n", first.name)), ResetColor)?;
+                                                        self.tui_dim(format!("  → Now using: {}", first.name));
                                                     }
                                                     _ => {
-                                                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                                            Print("  No remaining agents — run /new to create one\n"), ResetColor)?;
+                                                        self.tui_dim("  No remaining agents — run /new to create one");
                                                     }
                                                 }
                                             }
                                         }
                                     }
                                 }
+                                let _ = self.app.lock().unwrap().draw();
                             }
-                            Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                            Err(e) => self.tui_err(e.to_string()),
                         }
                     }
 
@@ -871,58 +788,54 @@ impl Repl {
                             Ok(a) => a,
                             Err(e) => { self.print_error(&mut stdout, &e.to_string())?; vec![] }
                         };
-                        if agents.is_empty() { execute!(stdout, Print("  (no agents)\n"))?; }
+                        if agents.is_empty() { self.tui_dim("  (no agents)"); }
                         else if let Some(query) = target {
                             let q = query.to_lowercase();
                             let matched: Vec<_> = agents.iter()
                                 .filter(|a| a.name.to_lowercase().contains(&q) || a.id.starts_with(&q))
                                 .collect();
                             match matched.len() {
-                                0 => self.print_error(&mut stdout, &format!("No agent matching '{query}'"))?,
+                                0 => self.tui_err(format!("No agent matching '{query}'")),
                                 1 => {
                                     let a = matched[0];
-                                    execute!(stdout, SetForegroundColor(Color::Yellow),
-                                        Print(format!("\n  Delete '{}'? [y/N]: ", a.name)), ResetColor)?;
-                                    let _raw = crate::ui::RawModeGuard::enable()?;
-                                    let confirmed = loop {
-                                        if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
-                                            break matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y'));
-                                        }
+                                    use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                                    let opts = vec![
+                                        QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
+                                        QuestionOption { label: "No — cancel".to_string(),  description: String::new() },
+                                    ];
+                                    let q_widget = Question {
+                                        header: "Confirm delete", text: &format!("Delete '{}'?", a.name),
+                                        options: &opts, multi_select: false, allow_other: false, progress: None,
                                     };
-                                    drop(_raw);
-                                    execute!(stdout, Print("\n"))?;
+                                    let confirmed = {
+                                        let mut app = self.app.lock().unwrap();
+                                        let r = QuestionWidget::ask(&mut app.terminal, &q_widget)?;
+                                        let _ = app.draw();
+                                        matches!(r, Some(ref a) if a.as_str().starts_with("Yes"))
+                                    };
                                     if confirmed {
                                         match self.client.delete_agent(&a.id).await {
                                             Ok(_) => {
-                                                execute!(stdout, SetForegroundColor(Color::Green),
-                                                    Print(format!("  ✓ Deleted: {}\n", a.name)), ResetColor)?;
+                                                self.tui_ok(format!("  ✓ Deleted: {}", a.name));
                                                 if a.id == self.agent_id() {
-                                                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                                        Print("  Active agent deleted — use /new or /agents to continue\n"), ResetColor)?;
+                                                    self.tui_dim("  Active agent deleted — use /new or /agents to continue");
                                                 }
                                             }
-                                            Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                                            Err(e) => self.tui_err(e.to_string()),
                                         }
                                     } else {
-                                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                            Print("  (cancelled)\n"), ResetColor)?;
+                                        self.tui_dim("  (cancelled)");
                                     }
                                 }
-                                n => self.print_error(&mut stdout, &format!("{n} agents match '{query}' — be more specific"))?,
+                                n => self.tui_err(format!("{n} agents match '{query}' — be more specific")),
                             }
                         } else {
-                            // No arg → open the agents TUI picker directly in delete mode
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("\n  /delete <name-or-id>  or  /agents then press d\n"), ResetColor)?;
+                            self.tui_dim("  Usage: /delete <name-or-id>  or  /agents then press d");
                         }
                     }
 
                     SlashCmd::Init => {
-                        // Spawn an explore subagent to do the analysis — keeps main
-                        // agent's context clean, only the summary comes back.
-                        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                            Print(format!("  Analysing project at {}…\n", self.cwd.display())),
-                            ResetColor)?;
+                        self.tui_dim(format!("  Analysing project at {}…", self.cwd.display()));
 
                         let explore_prompt = format!(
                             "Analyse the project at '{}'. \
@@ -1015,27 +928,24 @@ impl Repl {
                                 match self.client.get_memory(&id).await {
                                     Ok(blocks) => {
                                         if let Some(b) = blocks.iter().find(|b| b.label == label) {
-                                            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
-                                            execute!(stdout, SetForegroundColor(Color::Cyan),
-                                                Print(format!("  [{label}]")), ResetColor)?;
+                                            self.tui_blank();
+                                            self.tui_hdr(format!("  [{label}]"));
                                             if let Some(desc) = &b.description {
-                                                if !desc.is_empty() {
-                                                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                                        Print(format!("  {desc}")), ResetColor)?;
+                                                if !desc.is_empty() { self.tui_dim(format!("  {desc}")); }
+                                            }
+                                            self.tui_blank();
+                                            if b.value.is_empty() {
+                                                self.tui_dim("  (empty)");
+                                            } else {
+                                                for ln in b.value.lines() {
+                                                    self.tui_sys(ln.to_string());
                                                 }
                                             }
-                                            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
-                                            if b.value.is_empty() {
-                                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                                    Print("  (empty)\n"), ResetColor)?;
-                                            } else {
-                                                println!("{}\n", b.value);
-                                            }
                                         } else {
-                                            println!("\n  ✗ Block '{label}' not found");
+                                            self.tui_err(format!("Block '{label}' not found"));
                                         }
                                     }
-                                    Err(e) => println!("\n  ✗ {e}"),
+                                    Err(e) => self.tui_err(e.to_string()),
                                 }
                             }
                             // /memory set <label> <value>
@@ -1044,8 +954,8 @@ impl Repl {
                                 let value = parts[2..].join(" ");
                                 let id = self.agent_id();
                                 match self.client.upsert_memory(&id, label, &value, None).await {
-                                    Ok(_) => println!("\n  ✓ [{label}] updated"),
-                                    Err(e) => println!("\n  ✗ {e}"),
+                                    Ok(_) => self.tui_ok(format!("  ✓ [{label}] updated")),
+                                    Err(e) => self.tui_err(e.to_string()),
                                 }
                             }
                             // /memory delete <label>
@@ -1053,49 +963,44 @@ impl Repl {
                                 let label = parts[1];
                                 let id = self.agent_id();
                                 match self.client.delete_memory(&id, label).await {
-                                    Ok(_) => println!("\n  ✓ [{label}] deleted"),
-                                    Err(e) => println!("\n  ✗ {e}"),
+                                    Ok(_) => self.tui_ok(format!("  ✓ [{label}] deleted")),
+                                    Err(e) => self.tui_err(e.to_string()),
                                 }
                             }
-                            // /memory edit <label> — inline multi-line editor
+                            // /memory edit <label> — inline multi-line editor via QuestionWidget
                             "edit" if parts.len() >= 2 => {
                                 let label = parts[1];
                                 let id = self.agent_id();
-                                // Fetch current value
                                 let current = self.client.get_memory(&id).await
                                     .unwrap_or_default()
                                     .into_iter()
                                     .find(|b| b.label == label)
                                     .map(|b| b.value)
                                     .unwrap_or_default();
-
-                                execute!(stdout, ResetColor)?;
-                                println!("\n  Editing [{label}]");
-                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Current value:  ---".to_string()));
-                                for line in current.lines() { println!("  {line}"); }
-                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("---".to_string()));
-                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Enter new content (empty line = done, .clear = erase):".to_string()));
-
-                                terminal::disable_raw_mode()?;
-                                let mut lines: Vec<String> = Vec::new();
-                                let mut clear_mode = false;
-                                loop {
-                                    let mut buf = String::new();
-                                    std::io::stdin().read_line(&mut buf).unwrap_or(0);
-                                    let line = buf.trim_end_matches('\n').trim_end_matches('\r');
-                                    if line == ".clear" { clear_mode = true; break; }
-                                    if line.is_empty() { break; }
-                                    lines.push(line.to_string());
-                                }
-                                terminal::enable_raw_mode()?;
-
-                                let new_value = if clear_mode { String::new() } else { lines.join("\n") };
-                                if new_value.is_empty() && !clear_mode {
-                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("(cancelled — no changes)".to_string()));
-                                } else {
+                                use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                                let opts = vec![
+                                    QuestionOption { label: format!("Keep: {}…", current.chars().take(60).collect::<String>()), description: String::new() },
+                                    QuestionOption { label: "Clear (erase block)".to_string(), description: String::new() },
+                                ];
+                                let q = Question {
+                                    header: "Edit memory",
+                                    text: &format!("Type new value for [{label}] or pick action:"),
+                                    options: &opts, multi_select: false, allow_other: true, progress: None,
+                                };
+                                let ans = {
+                                    let mut app = self.app.lock().unwrap();
+                                    let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                                    let _ = app.draw();
+                                    r
+                                };
+                                if let Some(ref a) = ans {
+                                    let val = a.as_str();
+                                    let new_value = if val.starts_with("Clear") { String::new() }
+                                        else if val.starts_with("Keep") { current }
+                                        else { val.to_string() };
                                     match self.client.upsert_memory(&id, label, &new_value, None).await {
-                                        Ok(_) => println!("  ✓ [{label}] updated"),
-                                        Err(e) => println!("  ✗ {e}"),
+                                        Ok(_) => self.tui_ok(format!("  ✓ [{label}] updated")),
+                                        Err(e) => self.tui_err(e.to_string()),
                                     }
                                 }
                             }
@@ -1154,36 +1059,28 @@ impl Repl {
                             _ => {
                                 match self.client.get_memory(&self.agent_id()).await {
                                     Ok(blocks) if blocks.is_empty() => {
-                                        execute!(stdout, ResetColor)?;
-                                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("(no memory blocks)".to_string()));
-                                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Run /init to populate, or use update_memory tool".to_string()));
+                                        self.tui_dim("  (no memory blocks)");
+                                        self.tui_dim("  Run /init to populate, or use update_memory tool");
                                     }
                                     Ok(blocks) => {
-                                        execute!(stdout, ResetColor)?;
-                                        let _ = self.app.lock().unwrap().push(RenderLine::Blank);
+                                        self.tui_blank();
                                         for b in &blocks {
-                                            // Label + description
-                                            execute!(stdout, SetForegroundColor(Color::Cyan),
-                                                Print(format!("  [{}]", b.label)), ResetColor)?;
+                                            self.tui_hdr(format!("  [{}]", b.label));
                                             if let Some(desc) = &b.description {
-                                                if !desc.is_empty() {
-                                                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                                        Print(format!("  {desc}")), ResetColor)?;
-                                                }
+                                                if !desc.is_empty() { self.tui_dim(format!("  {desc}")); }
                                             }
-                                            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
-                                            // Value preview
+                                            self.tui_blank();
                                             if b.value.is_empty() {
-                                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                                    Print("  (empty)\n\n"), ResetColor)?;
+                                                self.tui_dim("  (empty)");
                                             } else {
                                                 let preview: String = b.value.chars().take(300).collect();
                                                 let ellipsis = if b.value.len() > 300 { "…  (/memory view to see all)" } else { "" };
-                                                println!("  {preview}{ellipsis}\n");
+                                                self.tui_sys(format!("  {preview}{ellipsis}"));
                                             }
+                                            self.tui_blank();
                                         }
                                     }
-                                    Err(e) => println!("\n  ✗ {e}"),
+                                    Err(e) => self.tui_err(e.to_string()),
                                 }
                             }
                         }
@@ -1192,11 +1089,12 @@ impl Repl {
                     SlashCmd::Search(query) => {
                         match self.client.search_messages(&self.agent_id(), &query).await {
                             Ok(msgs) if msgs.is_empty() => {
-                                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                    Print(format!("\n  No results for '{query}'\n")), ResetColor)?;
+                                self.tui_dim(format!("  No results for '{query}'"));
                             }
                             Ok(msgs) => {
-                                execute!(stdout, Print(format!("\n  {} result(s) for '{query}':\n\n", msgs.len())))?;
+                                self.tui_blank();
+                                self.tui_hdr(format!("  {} result(s) for '{query}':", msgs.len()));
+                                self.tui_blank();
                                 for m in msgs.iter().take(10) {
                                     let role = m["role"].as_str().unwrap_or("?");
                                     let content = m["content"]["content"].as_str()
@@ -1204,18 +1102,10 @@ impl Repl {
                                         .unwrap_or("");
                                     let preview: String = content.chars().take(120).collect();
                                     let ellipsis = if content.len() > 120 { "…" } else { "" };
-                                    execute!(stdout,
-                                        SetForegroundColor(Color::DarkGrey),
-                                        Print(format!("  [{role}] ")),
-                                        SetForegroundColor(Color::White),
-                                        Print(format!("{preview}{ellipsis}\n")),
-                                        ResetColor)?;
+                                    self.tui_dim(format!("  [{role}]  {preview}{ellipsis}"));
                                 }
                             }
-                            Err(e) => {
-                                execute!(stdout, SetForegroundColor(Color::Red),
-                                    Print(format!("\n  ✗ {e}\n")), ResetColor)?;
-                            }
+                            Err(e) => self.tui_err(e.to_string()),
                         }
                     }
 
@@ -1230,29 +1120,30 @@ impl Repl {
                         match sub_cmd {
                             "list" | "" => {
                                 let skills = self.skills.lock().unwrap();
-                                execute!(stdout, ResetColor)?;
                                 if skills.is_empty() {
-                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("No skills loaded.".to_string()));
-                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Create one: /skills create <name>".to_string()));
-                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Skills dirs: .skills/  ~/.cade/skills/  ~/.cade/agents/<id>/skills/".to_string()));
+                                    self.tui_dim("  No skills loaded.");
+                                    self.tui_dim("  Create one: /skills create <name>");
+                                    self.tui_dim("  Skills dirs: .skills/  ~/.cade/skills/  ~/.cade/agents/<id>/skills/");
                                 } else {
-                                    println!("\n  Skills ({} loaded):\n", skills.len());
+                                    self.tui_blank();
+                                    self.tui_hdr(format!("  Skills ({} loaded):", skills.len()));
+                                    self.tui_blank();
                                     for s in skills.iter() {
                                         let cat = s.category.as_deref()
                                             .map(|c| format!("[{}]", c))
                                             .unwrap_or_default();
-                                        println!("  {:<10} {:<28} {:<12} {}",
-                                            format!("[{}]", s.scope), s.id, cat, s.description);
+                                        self.tui_sys(format!("  {:<10} {:<28} {:<12} {}",
+                                            format!("[{}]", s.scope), s.id, cat, s.description));
                                     }
-                                    let _ = self.app.lock().unwrap().push(RenderLine::Blank);
-                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Agent uses load_skill(<id>) to load full content on-demand.".to_string()));
+                                    self.tui_blank();
+                                    self.tui_dim("  Agent uses load_skill(<id>) to load full content on-demand.");
                                 }
                             }
 
                             "create" => {
                                 let name_raw = sub_arg.trim().to_string();
                                 if name_raw.is_empty() {
-                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Usage: /skills create <name>".to_string()));
+                                    self.tui_dim("  Usage: /skills create <name>");
                                 } else {
                                     let slug: String = name_raw
                                         .to_lowercase()
@@ -1264,8 +1155,7 @@ impl Repl {
                                     let skill_dir = self.skills_dir.join(&slug);
                                     let skill_file = skill_dir.join("SKILL.MD");
                                     if skill_file.exists() {
-                                        println!("\n  ✗ Skill '{}' already exists: {}",
-                                            slug, skill_file.display());
+                                        self.tui_err(format!("Skill '{}' already exists: {}", slug, skill_file.display()));
                                     } else {
                                         match std::fs::create_dir_all(&skill_dir) {
                                             Ok(_) => {
@@ -1288,13 +1178,13 @@ impl Repl {
                                                 );
                                                 match std::fs::write(&skill_file, template) {
                                                     Ok(_) => {
-                                                        println!("\n  ✓ Created: {}", skill_file.display());
-                                                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Edit the file, then run /skills reload to activate it.".to_string()));
+                                                        self.tui_ok(format!("  ✓ Created: {}", skill_file.display()));
+                                                        self.tui_dim("  Edit the file, then run /skills reload to activate it.");
                                                     }
-                                                    Err(e) => println!("\n  ✗ Failed to write skill file: {e}"),
+                                                    Err(e) => self.tui_err(format!("Failed to write skill file: {e}")),
                                                 }
                                             }
-                                            Err(e) => println!("\n  ✗ Failed to create directory: {e}"),
+                                            Err(e) => self.tui_err(format!("Failed to create directory: {e}")),
                                         }
                                     }
                                 }
@@ -1305,20 +1195,23 @@ impl Repl {
                                 let skills = self.skills.lock().unwrap();
                                 match skills.iter().find(|s| s.id == id) {
                                     None => {
-                                        println!("\n  Skill '{}' not found. Run /skills to list.", id);
+                                        self.tui_dim(format!("  Skill '{id}' not found. Run /skills to list."));
                                     }
                                     Some(s) => {
-                                        execute!(stdout, ResetColor)?;
-                                        println!("\n  [{id}]");
-                                        println!("  Name       : {}", s.name);
-                                        println!("  Description: {}", s.description);
+                                        self.tui_blank();
+                                        self.tui_hdr(format!("  [{id}]"));
+                                        self.tui_sys(format!("  Name       : {}", s.name));
+                                        self.tui_sys(format!("  Description: {}", s.description));
                                         if let Some(cat) = &s.category {
-                                            println!("  Category   : {cat}");
+                                            self.tui_sys(format!("  Category   : {cat}"));
                                         }
                                         if !s.tags.is_empty() {
-                                            println!("  Tags       : {}", s.tags.join(", "));
+                                            self.tui_sys(format!("  Tags       : {}", s.tags.join(", ")));
                                         }
-                                        println!("\n---\n{}\n---", s.body);
+                                        self.tui_blank();
+                                        self.tui_dim("---");
+                                        for ln in s.body.lines() { self.tui_sys(ln.to_string()); }
+                                        self.tui_dim("---");
                                     }
                                 }
                             }
@@ -1330,7 +1223,6 @@ impl Repl {
                                         let new_count = new_skills.len();
                                         let agent_id = self.agent_id();
 
-                                        // Clear old per-skill blocks, upsert new ones individually
                                         let existing = self.client.get_memory(&agent_id).await.unwrap_or_default();
                                         for block in &existing {
                                             if block.label.starts_with("skill:") {
@@ -1344,7 +1236,6 @@ impl Repl {
                                             names.push(skill.name.clone());
                                         }
 
-                                        // Compact listing for system prompt
                                         let listing = crate::skills::skills_listing(&new_skills);
                                         let _ = self.client.upsert_memory(
                                             &agent_id, "skills", listing.as_deref().unwrap_or(""), None
@@ -1352,10 +1243,8 @@ impl Repl {
 
                                         *self.skills.lock().unwrap() = new_skills;
 
-                                        println!("\n  ✓ Reloaded: {new_count} skills (was {prev_count})");
-                                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("✓ Skills listing updated (on-demand via load_skill)".to_string()));
+                                        self.tui_ok(format!("  ✓ Reloaded: {new_count} skills (was {prev_count})"));
 
-                                        // Notify agent in current conversation
                                         if new_count > 0 {
                                             let list = names.join(", ");
                                             let notify = format!(
@@ -1369,23 +1258,24 @@ impl Repl {
                             }
 
                             other => {
-                                println!("\n  Unknown /skills subcommand: '{other}'");
-                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Usage: /skills [list | create <name> | show <id> | reload]".to_string()));
+                                self.tui_err(format!("Unknown /skills subcommand: '{other}'"));
+                                self.tui_dim("  Usage: /skills [list | create <name> | show <id> | reload]");
                             }
                         }
                     }
 
                     SlashCmd::Subagents => {
                         let all = discover_all_subagents(&self.cwd);
-                        execute!(stdout, ResetColor)?;
-                        println!("\n  Available subagents ({}):\n", all.len());
+                        self.tui_blank();
+                        self.tui_hdr(format!("  Available subagents ({}):", all.len()));
+                        self.tui_blank();
                         for def in &all {
-                            println!("{}", def.summary());
+                            self.tui_sys(def.summary());
                         }
-                        let _ = self.app.lock().unwrap().push(RenderLine::Blank);
-                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Usage: ask the agent to run_subagent(type, task)".to_string()));
-                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Custom: create .cade/agents/<name>.md in this project".to_string()));
-                        let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("Global: create ~/.cade/agents/<name>.md".to_string()));
+                        self.tui_blank();
+                        self.tui_dim("  Usage: ask the agent to run_subagent(type, task)");
+                        self.tui_dim("  Custom: create .cade/agents/<name>.md in this project");
+                        self.tui_dim("  Global: create ~/.cade/agents/<name>.md");
                     }
 
                     SlashCmd::Providers => {
@@ -1393,7 +1283,8 @@ impl Repl {
                             Ok(body) => {
                                 let empty = vec![];
                                 let providers = body["providers"].as_array().unwrap_or(&empty);
-                                println!("\n  Configured providers ({}):\n", providers.len());
+                                self.tui_blank();
+                                self.tui_hdr(format!("  Configured providers ({}):", providers.len()));
                                 for p in providers {
                                     let name    = p["name"].as_str().unwrap_or("?");
                                     let kind    = p["kind"].as_str().unwrap_or("?");
@@ -1401,30 +1292,28 @@ impl Repl {
                                     let source  = p["source"].as_str().unwrap_or("db");
                                     let enabled = p["enabled"].as_bool().unwrap_or(true);
                                     let status  = if live { "✓ live" } else { "✗ offline" };
-                                    execute!(stdout,
-                                        SetForegroundColor(if live { Color::Green } else { Color::Red }),
-                                        Print(format!("  {status:<10}")),
-                                        ResetColor,
-                                        Print(format!("{:<18} [{kind}] ({source})\n",
-                                            if enabled { name.to_string() } else { format!("{name} (disabled)") }
-                                        ))
-                                    )?;
+                                    let display_name = if enabled { name.to_string() } else { format!("{name} (disabled)") };
+                                    if live {
+                                        self.tui_ok(format!("  {status:<10} {display_name:<18} [{kind}] ({source})"));
+                                    } else {
+                                        self.tui_err(format!("  {status:<10} {display_name:<18} [{kind}] ({source})"));
+                                    }
                                 }
-                                let _ = self.app.lock().unwrap().push(RenderLine::Blank);
-                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("/connect <name>    — add a provider".to_string()));
-                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("/disconnect <name> — remove a provider".to_string()));
+                                self.tui_blank();
+                                self.tui_dim("  /connect <name>    — add a provider");
+                                self.tui_dim("  /disconnect <name> — remove a provider");
                                 let presets = self.client.list_provider_presets().await;
                                 if !presets.is_empty() {
-                                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg("OpenAI-compatible presets:".to_string()));
+                                    self.tui_dim("  OpenAI-compatible presets:");
                                     for p in &presets {
                                         let n = p["name"].as_str().unwrap_or("?");
                                         let u = p["base_url"].as_str().unwrap_or("?");
-                                        println!("    /connect {n:<14} — {u}");
+                                        self.tui_dim(format!("    /connect {n:<14} — {u}"));
                                     }
                                 }
-                                let _ = self.app.lock().unwrap().push(RenderLine::Blank);
+                                self.tui_blank();
                             }
-                            Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                            Err(e) => self.tui_err(e.to_string()),
                         }
                     }
 
@@ -1434,16 +1323,12 @@ impl Repl {
 
                     SlashCmd::Disconnect(name) => {
                         if name.is_empty() {
-                            self.print_error(&mut stdout, "/disconnect requires a provider name")?;
+                            self.tui_err("/disconnect requires a provider name");
                         } else {
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print(format!("\n  Disconnecting provider '{name}'…\n")), ResetColor)?;
+                            self.tui_dim(format!("  Disconnecting provider '{name}'…"));
                             match self.client.remove_provider(&name).await {
-                                Ok(_) => {
-                                    execute!(stdout, SetForegroundColor(Color::Green),
-                                        Print(format!("  ✓ Provider '{name}' removed\n")), ResetColor)?;
-                                }
-                                Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                                Ok(_)  => self.tui_ok(format!("  ✓ Provider '{name}' removed")),
+                                Err(e) => self.tui_err(e.to_string()),
                             }
                         }
                     }
@@ -1453,7 +1338,6 @@ impl Repl {
                         let allow = self.permissions.allow_rules();
                         let deny  = self.permissions.deny_rules();
 
-                        // Mode header — icon + label in cyan, hint in grey
                         let (icon, label, _) = mode_display(mode);
                         let mode_hint = match mode {
                             crate::permissions::PermissionMode::Default           => "ask before each tool call",
@@ -1461,248 +1345,132 @@ impl Repl {
                             crate::permissions::PermissionMode::Plan              => "read-only; write operations blocked",
                             crate::permissions::PermissionMode::BypassPermissions => "all tools auto-approved (deny rules still apply)",
                         };
-                        execute!(stdout,
-                            Print("\n"),
-                            Print("  Mode: "),
-                            SetForegroundColor(Color::Cyan),
-                            Print(format!("{icon} {label}")),
-                            ResetColor,
-                            SetForegroundColor(Color::DarkGrey),
-                            Print(format!("  —  {mode_hint}\n\n")),
-                            ResetColor,
-                        )?;
+                        self.tui_blank();
+                        self.tui_hdr(format!("  Mode: {icon} {label}  —  {mode_hint}"));
+                        self.tui_blank();
 
-                        // Rules
                         if allow.is_empty() && deny.is_empty() {
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("  No allow/deny rules active.\n\n"), ResetColor)?;
+                            self.tui_dim("  No allow/deny rules active.");
                         } else {
                             if !allow.is_empty() {
-                                execute!(stdout, SetForegroundColor(Color::Green),
-                                    Print(format!("  Allow rules ({}):\n", allow.len())), ResetColor)?;
+                                self.tui_ok(format!("  Allow rules ({}):", allow.len()));
                                 for r in &allow {
-                                    execute!(stdout,
-                                        Print("    "),
-                                        SetForegroundColor(Color::Cyan),
-                                        Print(format!("{:<12}", r.tool())),
-                                        ResetColor,
-                                        SetForegroundColor(Color::DarkGrey),
-                                        Print(r.arg_display()),
-                                        ResetColor,
-                                        Print("\n"),
-                                    )?;
+                                    self.tui_dim(format!("    {:<12} {}", r.tool(), r.arg_display()));
                                 }
                                 let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                             }
                             if !deny.is_empty() {
-                                execute!(stdout, SetForegroundColor(Color::Red),
-                                    Print(format!("  Deny rules ({}):\n", deny.len())), ResetColor)?;
+                                self.tui_err(format!("  Deny rules ({}):", deny.len()));
                                 for r in &deny {
-                                    execute!(stdout,
-                                        Print("    "),
-                                        SetForegroundColor(Color::Cyan),
-                                        Print(format!("{:<12}", r.tool())),
-                                        ResetColor,
-                                        SetForegroundColor(Color::DarkGrey),
-                                        Print(r.arg_display()),
-                                        ResetColor,
-                                        Print("\n"),
-                                    )?;
+                                    self.tui_dim(format!("    {:<12} {}", r.tool(), r.arg_display()));
                                 }
-                                let _ = self.app.lock().unwrap().push(RenderLine::Blank);
+                                self.tui_blank();
                             }
                         }
-
-                        // Usage hints with color-coded command names
-                        execute!(stdout,
-                            SetForegroundColor(Color::Green),  Print("  /approve-always"),
-                            ResetColor,                        Print(" <pattern>    "),
-                            SetForegroundColor(Color::Red),    Print("/deny-always"),
-                            ResetColor,                        Print(" <pattern>\n"),
-                            SetForegroundColor(Color::DarkGrey),
-                            Print("  Pattern:  Bash(cargo test)  ·  Read(src/**)  ·  Bash(rm -rf:*)\n\n"),
-                            ResetColor,
-                        )?;
+                        self.tui_dim("  /approve-always <pattern>    /deny-always <pattern>");
+                        self.tui_dim("  Pattern:  Bash(cargo test)  ·  Read(src/**)  ·  Bash(rm -rf:*)");
                     }
 
                     SlashCmd::ApproveAlways(pattern) => {
                         if pattern.is_empty() {
-                            execute!(stdout,
-                                Print("\n  "),
-                                SetForegroundColor(Color::Green), Print("/approve-always"), ResetColor,
-                                SetForegroundColor(Color::DarkGrey), Print(" <pattern>\n"), ResetColor,
-                                SetForegroundColor(Color::DarkGrey),
-                                Print("  Pattern examples:\n"),
-                                Print("    Bash(cargo test)    — exact command\n"),
-                                Print("    Read(src/**)        — path prefix\n"),
-                                Print("    Bash(git commit:*)  — command prefix\n"),
-                                Print("    Bash                — all bash calls\n\n"),
-                                ResetColor,
-                            )?;
+                            self.tui_dim("  /approve-always <pattern>");
+                            self.tui_dim("  Examples:  Bash(cargo test)  Read(src/**)  Bash(git commit:*)  Bash");
                         } else if let Some(rule) = crate::permissions::PermissionRule::parse(&pattern) {
                             self.permissions.add_allow_rule(rule.clone());
-                            execute!(stdout,
-                                Print("\n  "),
-                                SetForegroundColor(Color::Green), Print("✓ Allow  "), ResetColor,
-                                SetForegroundColor(Color::Cyan),  Print(format!("{:<12}", rule.tool())), ResetColor,
-                                SetForegroundColor(Color::DarkGrey), Print(rule.arg_display()), ResetColor,
-                                Print("\n"),
-                            )?;
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("  Save to settings.json? [y/N] "), ResetColor)?;
-                            let _raw = crate::ui::RawModeGuard::enable()?;
-                            let save = loop {
-                                if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
-                                    match k.code {
-                                        crossterm::event::KeyCode::Char('y') | crossterm::event::KeyCode::Char('Y') => break true,
-                                        _ => break false,
-                                    }
-                                }
+                            self.tui_ok(format!("  ✓ Allow  {:<12} {}", rule.tool(), rule.arg_display()));
+                            use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                            let opts = vec![
+                                QuestionOption { label: "Yes — save to settings.json".to_string(), description: String::new() },
+                                QuestionOption { label: "No — session only".to_string(), description: String::new() },
+                            ];
+                            let q = Question { header: "Save rule?", text: "Persist this rule to settings.json?",
+                                options: &opts, multi_select: false, allow_other: false, progress: None };
+                            let save = {
+                                let mut app = self.app.lock().unwrap();
+                                let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                                let _ = app.draw();
+                                matches!(r, Some(ref a) if a.as_str().starts_with("Yes"))
                             };
-                            drop(_raw);
-                            execute!(stdout, SetForegroundColor(if save { Color::Green } else { Color::DarkGrey }),
-                                Print(if save { "y\n" } else { "N\n" }), ResetColor)?;
                             if save {
                                 let mut settings = self.settings.lock().unwrap();
                                 match settings.save_allow_rule(&pattern) {
-                                    Ok(_) => execute!(stdout, SetForegroundColor(Color::Green),
-                                        Print("  ✓ Saved\n"), ResetColor)?,
-                                    Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                                    Ok(_)  => self.tui_ok("  ✓ Saved"),
+                                    Err(e) => self.tui_err(e.to_string()),
                                 }
                             }
-                            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                         } else {
-                            self.print_error(&mut stdout, &format!("invalid pattern: {pattern:?}\n  Expected: Tool  or  Tool(arg)  or  Tool(prefix:*)"))?;
+                            self.tui_err(format!("invalid pattern: {pattern:?}  Expected: Tool  or  Tool(arg)  or  Tool(prefix:*)"));
                         }
                     }
 
                     SlashCmd::DenyAlways(pattern) => {
                         if pattern.is_empty() {
-                            execute!(stdout,
-                                Print("\n  "),
-                                SetForegroundColor(Color::Red), Print("/deny-always"), ResetColor,
-                                SetForegroundColor(Color::DarkGrey), Print(" <pattern>\n"), ResetColor,
-                                SetForegroundColor(Color::DarkGrey),
-                                Print("  Pattern examples:\n"),
-                                Print("    Bash(rm -rf:*)          — prefix wildcard\n"),
-                                Print("    Bash(git push --force)  — exact command\n"),
-                                Print("    Bash                    — all bash calls\n\n"),
-                                ResetColor,
-                            )?;
+                            self.tui_dim("  /deny-always <pattern>");
+                            self.tui_dim("  Examples:  Bash(rm -rf:*)  Bash(git push --force)  Bash");
                         } else if let Some(rule) = crate::permissions::PermissionRule::parse(&pattern) {
                             self.permissions.add_deny_rule(rule.clone());
-                            execute!(stdout,
-                                Print("\n  "),
-                                SetForegroundColor(Color::Red),  Print("✗ Deny   "), ResetColor,
-                                SetForegroundColor(Color::Cyan), Print(format!("{:<12}", rule.tool())), ResetColor,
-                                SetForegroundColor(Color::DarkGrey), Print(rule.arg_display()), ResetColor,
-                                Print("\n"),
-                            )?;
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("  Save to settings.json? [y/N] "), ResetColor)?;
-                            let _raw = crate::ui::RawModeGuard::enable()?;
-                            let save = loop {
-                                if let Ok(crossterm::event::Event::Key(k)) = crossterm::event::read() {
-                                    match k.code {
-                                        crossterm::event::KeyCode::Char('y') | crossterm::event::KeyCode::Char('Y') => break true,
-                                        _ => break false,
-                                    }
-                                }
+                            self.tui_err(format!("  ✗ Deny   {:<12} {}", rule.tool(), rule.arg_display()));
+                            use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                            let opts = vec![
+                                QuestionOption { label: "Yes — save to settings.json".to_string(), description: String::new() },
+                                QuestionOption { label: "No — session only".to_string(), description: String::new() },
+                            ];
+                            let q = Question { header: "Save rule?", text: "Persist this rule to settings.json?",
+                                options: &opts, multi_select: false, allow_other: false, progress: None };
+                            let save = {
+                                let mut app = self.app.lock().unwrap();
+                                let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                                let _ = app.draw();
+                                matches!(r, Some(ref a) if a.as_str().starts_with("Yes"))
                             };
-                            drop(_raw);
-                            execute!(stdout, SetForegroundColor(if save { Color::Red } else { Color::DarkGrey }),
-                                Print(if save { "y\n" } else { "N\n" }), ResetColor)?;
                             if save {
                                 let mut settings = self.settings.lock().unwrap();
                                 match settings.save_deny_rule(&pattern) {
-                                    Ok(_) => execute!(stdout, SetForegroundColor(Color::Red),
-                                        Print("  ✓ Saved\n"), ResetColor)?,
-                                    Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                                    Ok(_)  => self.tui_ok("  ✓ Saved"),
+                                    Err(e) => self.tui_err(e.to_string()),
                                 }
                             }
-                            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                         } else {
-                            self.print_error(&mut stdout, &format!("invalid pattern: {pattern:?}\n  Expected: Tool  or  Tool(arg)  or  Tool(prefix:*)"))?;
+                            self.tui_err(format!("invalid pattern: {pattern:?}  Expected: Tool  or  Tool(arg)  or  Tool(prefix:*)"));
                         }
                     }
 
                     SlashCmd::Hooks => {
                         let merged = self.settings.lock().unwrap().merged_hooks();
+                        self.tui_blank();
                         if merged.is_empty() {
-                            execute!(stdout,
-                                Print("\n"),
-                                SetForegroundColor(Color::DarkGrey),
-                                Print("  No hooks configured.\n\n"),
-                                ResetColor,
-                                Print("  Configure in "),
-                                SetForegroundColor(Color::Cyan), Print("~/.cade/settings.json"), ResetColor,
-                                Print(" or "),
-                                SetForegroundColor(Color::Cyan), Print(".cade/settings.json\n\n"), ResetColor,
-                                SetForegroundColor(Color::DarkGrey),
-                                Print("  Example:\n"),
-                                Print("  {\n"),
-                                Print("    \"hooks\": {\n"),
-                                Print("      \"PreToolUse\": [{\n"),
-                                Print("        \"matcher\": \"Bash\",\n"),
-                                Print("        \"hooks\": [{ \"type\": \"command\", \"command\": \"./hooks/validate.sh\" }]\n"),
-                                Print("      }],\n"),
-                                Print("      \"Stop\": [{\n"),
-                                Print("        \"hooks\": [{ \"type\": \"command\", \"command\": \"./hooks/run-tests.sh\" }]\n"),
-                                Print("      }]\n"),
-                                Print("    }\n"),
-                                Print("  }\n\n"),
-                                Print("  Exit codes:  0=allow  1=log+continue  2=block (stderr→agent)\n\n"),
-                                ResetColor,
-                            )?;
+                            self.tui_dim("  No hooks configured.");
+                            self.tui_dim("  Configure in ~/.cade/settings.json or .cade/settings.json");
+                            self.tui_blank();
+                            self.tui_dim("  Example: { \"hooks\": { \"PreToolUse\": [{ \"matcher\": \"Bash\", \"hooks\": [{ \"type\": \"command\", \"command\": \"./validate.sh\" }] }] } }");
+                            self.tui_dim("  Exit codes:  0=allow  1=log+continue  2=block (stderr→agent)");
                         } else {
-                            execute!(stdout,
-                                Print("\n  "),
-                                SetForegroundColor(Color::Cyan), Print("Hooks"), ResetColor,
-                                Print("\n\n"),
-                            )?;
-                            let stdout_ref = &mut stdout;
-                            macro_rules! show_hook_section {
-                                ($name:expr, $entries:expr, $color:expr) => {
-                                    if !$entries.is_empty() {
-                                        execute!(stdout_ref,
-                                            Print("  "),
-                                            SetForegroundColor($color), Print($name), ResetColor,
-                                            SetForegroundColor(Color::DarkGrey),
-                                            Print(format!("  ({})\n", $entries.len())),
-                                            ResetColor,
-                                        )?;
-                                        for entry in $entries {
-                                            let m = entry.matcher.as_deref().unwrap_or("*");
-                                            execute!(stdout_ref,
-                                                SetForegroundColor(Color::DarkGrey),
-                                                Print(format!("    matcher: {m}\n")),
-                                                ResetColor,
-                                            )?;
-                                            for hook in &entry.hooks {
-                                                execute!(stdout_ref,
-                                                    SetForegroundColor(Color::DarkGrey),
-                                                    Print(format!("      {hook}\n")),
-                                                    ResetColor,
-                                                )?;
-                                            }
+                            self.tui_hdr("  Hooks");
+                            self.tui_blank();
+                            let show_section = |name: &str, entries: &[crate::settings::manager::HookEntry]| {
+                                if !entries.is_empty() {
+                                    self.tui_hdr(format!("  {name}  ({}):", entries.len()));
+                                    for entry in entries {
+                                        let m = entry.matcher.as_deref().unwrap_or("*");
+                                        self.tui_dim(format!("    matcher: {m}"));
+                                        for hook in &entry.hooks {
+                                            self.tui_dim(format!("      {hook}"));
                                         }
-                                        let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                                     }
-                                };
-                            }
-                            show_hook_section!("PreToolUse",         &merged.pre_tool_use,          Color::Yellow);
-                            show_hook_section!("PostToolUse",        &merged.post_tool_use,         Color::Green);
-                            show_hook_section!("PostToolUseFailure", &merged.post_tool_use_failure,  Color::Red);
-                            show_hook_section!("PermissionRequest",  &merged.permission_request,    Color::Yellow);
-                            show_hook_section!("UserPromptSubmit",   &merged.user_prompt_submit,    Color::Cyan);
-                            show_hook_section!("Stop",               &merged.stop,                  Color::Cyan);
-                            show_hook_section!("SubagentStop",       &merged.subagent_stop,         Color::Cyan);
-                            show_hook_section!("SessionStart",       &merged.session_start,         Color::DarkGrey);
-                            show_hook_section!("SessionEnd",         &merged.session_end,           Color::DarkGrey);
-                            show_hook_section!("Notification",       &merged.notification,          Color::DarkGrey);
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("  Config: ~/.cade/settings.json  ·  .cade/settings.json  ·  .cade/settings.local.json\n\n"),
-                                ResetColor)?;
+                                    self.tui_blank();
+                                }
+                            };
+                            show_section("PreToolUse",         &merged.pre_tool_use);
+                            show_section("PostToolUse",        &merged.post_tool_use);
+                            show_section("PostToolUseFailure", &merged.post_tool_use_failure);
+                            show_section("PermissionRequest",  &merged.permission_request);
+                            show_section("UserPromptSubmit",   &merged.user_prompt_submit);
+                            show_section("Stop",               &merged.stop);
+                            show_section("SubagentStop",       &merged.subagent_stop);
+                            show_section("SessionStart",       &merged.session_start);
+                            show_section("SessionEnd",         &merged.session_end);
+                            show_section("Notification",       &merged.notification);
+                            self.tui_dim("  Config: ~/.cade/settings.json  ·  .cade/settings.json  ·  .cade/settings.local.json");
                         }
                     }
 
@@ -1710,78 +1478,63 @@ impl Repl {
                         let id = self.agent_id();
                         let new_name = new_name.trim().to_string();
                         let name = if new_name.is_empty() {
-                            // Prompt for name interactively
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("\n  New name: "), ResetColor)?;
-                            terminal::disable_raw_mode()?;
-                            let mut buf = String::new();
-                            std::io::stdin().read_line(&mut buf).unwrap_or(0);
-                            terminal::enable_raw_mode()?;
-                            buf.trim().to_string()
+                            // Prompt for name via QuestionWidget
+                            use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                            let opts = vec![QuestionOption { label: "Cancel".to_string(), description: String::new() }];
+                            let q = Question { header: "Rename agent", text: "Enter new agent name:",
+                                options: &opts, multi_select: false, allow_other: true, progress: None };
+                            let ans = {
+                                let mut app = self.app.lock().unwrap();
+                                let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                                let _ = app.draw();
+                                r
+                            };
+                            match ans {
+                                Some(ref a) if a.as_str() != "Cancel" && !a.as_str().is_empty() => a.as_str().to_string(),
+                                _ => String::new(),
+                            }
                         } else {
                             new_name
                         };
                         if name.is_empty() {
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print("  (cancelled)\n"), ResetColor)?;
+                            self.tui_dim("  (cancelled)");
                         } else {
                             match self.client.rename_agent(&id, &name).await {
                                 Ok(_) => {
                                     *self.agent_name.lock().unwrap() = name.clone();
-                                    execute!(stdout, SetForegroundColor(Color::Green),
-                                        Print(format!("\n  ✓ Renamed to: {name}\n")), ResetColor)?;
+                                    self.tui_ok(format!("  ✓ Renamed to: {name}"));
                                 }
-                                Err(e) => self.print_error(&mut stdout, &e.to_string())?,
+                                Err(e) => self.tui_err(e.to_string()),
                             }
                         }
                     }
 
                     SlashCmd::Toolset(arg) => {
-                        // Reuse the model command's toolset-switching logic
-                        let fake_arg = format!("__toolset__{}", arg.as_deref().unwrap_or(""));
-                        // Delegate by recursing into the Model handler logic inline
                         let old_toolset = *self.current_toolset.lock().unwrap();
                         let new_toolset = if let Some(name) = arg.as_deref() {
                             match crate::toolsets::Toolset::from_str(name) {
                                 Some(t) => t,
                                 None => {
-                                    execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                        Print("\n  Toolsets: default | codex | gemini\n\n"), ResetColor)?;
+                                    self.tui_dim("  Toolsets: default | codex | gemini");
                                     continue;
                                 }
                             }
                         } else {
-                            // No arg — show current and options
-                            execute!(stdout,
-                                Print("\n  Current: "),
-                                SetForegroundColor(Color::Cyan),
-                                Print(format!("{old_toolset:?}")),
-                                ResetColor,
-                                Print("\n"),
-                                SetForegroundColor(Color::DarkGrey),
-                                Print("  /toolset default | codex | gemini\n\n"),
-                                ResetColor,
-                            )?;
+                            self.tui_hdr(format!("  Current toolset: {old_toolset:?}"));
+                            self.tui_dim("  /toolset default | codex | gemini");
                             continue;
                         };
-                        let _ = fake_arg; // silence unused warning
                         if new_toolset != old_toolset {
                             *self.current_toolset.lock().unwrap() = new_toolset;
-                            execute!(stdout, SetForegroundColor(Color::Green),
-                                Print(format!("\n  ✓ Toolset: {new_toolset:?}\n")), ResetColor)?;
+                            self.tui_ok(format!("  ✓ Toolset: {new_toolset:?}"));
                         } else {
-                            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                                Print(format!("\n  Toolset already: {new_toolset:?}\n")), ResetColor)?;
+                            self.tui_dim(format!("  Toolset already: {new_toolset:?}"));
                         }
                     }
 
                     SlashCmd::Feedback => {
-                        execute!(stdout,
-                            SetForegroundColor(Color::Cyan),
-                            Print("\n  Report issues or give feedback:\n"),
-                            SetForegroundColor(Color::White),
-                            Print("  https://github.com/EzekTec-Inc/CADE/issues\n"),
-                            ResetColor)?;
+                        self.tui_hdr("  Report issues or give feedback:");
+                        self.tui_sys("  https://github.com/EzekTec-Inc/CADE/issues");
                     }
                 }
                 continue;
@@ -1791,8 +1544,7 @@ impl Repl {
             if let crate::hooks::HookOutcome::Block { reason } =
                 self.hooks.user_prompt_submit(&input).await
             {
-                execute!(stdout, SetForegroundColor(Color::Yellow),
-                    Print(format!("\n  ⚠ Hook blocked prompt: {reason}\n")), ResetColor)?;
+                self.tui_sys(format!("  ⚠ Hook blocked prompt: {reason}"));
                 continue;
             }
 
@@ -1927,22 +1679,37 @@ impl Repl {
         let tick_start   = turn_start;
         let tick_bar     = bar_text.clone();
         let tick_handle  = tokio::spawn(async move {
+            use crossterm::event::{EventStream, Event, KeyCode};
+            use futures::StreamExt;
+            let mut reader = EventStream::new();
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_millis(120)).await;
-                if tick_cancel.load(Ordering::SeqCst) { break; }
-                // Update assessing text once per second
-                let secs = tick_start.elapsed().as_secs();
-                let toks = tick_tokens.load(Ordering::SeqCst).saturating_sub(tick_base);
-                {
-                    let cur = tick_bar.lock().unwrap().clone();
-                    if cur.starts_with("assessing") || cur.starts_with("CADE thinking") {
-                        *tick_bar.lock().unwrap() =
-                            format!("assessing… (esc to interrupt · {secs}s · {toks}↑)");
+                tokio::select! {
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                        if tick_cancel.load(Ordering::SeqCst) { break; }
+                        // Update assessing text once per second
+                        let secs = tick_start.elapsed().as_secs();
+                        let toks = tick_tokens.load(Ordering::SeqCst).saturating_sub(tick_base);
+                        {
+                            let cur = tick_bar.lock().unwrap().clone();
+                            if cur.starts_with("assessing") || cur.starts_with("CADE thinking") {
+                                *tick_bar.lock().unwrap() =
+                                    format!("assessing… (esc to interrupt · {secs}s · {toks}↑)");
+                            }
+                        }
+                        if let Ok(mut app) = tick_app.try_lock() {
+                            let _ = app.draw();
+                        }
                     }
-                }
-                // Try to redraw; skip if the lock is contended (brief miss is OK).
-                if let Ok(mut app) = tick_app.try_lock() {
-                    let _ = app.draw();
+                    Some(Ok(Event::Key(k))) = reader.next() => {
+                        if tick_cancel.load(Ordering::SeqCst) { break; }
+                        if let Ok(mut app) = tick_app.try_lock() {
+                            match k.code {
+                                KeyCode::PageUp   => { app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
+                                KeyCode::PageDown => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
+                                _ => {}
+                            }
+                        }
+                    }
                 }
             }
         });
@@ -2694,16 +2461,13 @@ impl Repl {
             self.skills_dir.clone()
         };
 
-        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-            Print(format!("  Downloading skill from {}…\n", url)), ResetColor)?;
+        self.tui_dim(format!("  Downloading skill from {}…", url));
 
         match crate::skills::install_skill_from_url(&url, &target_dir).await {
             Ok(skill) => {
                 let name = skill.name.clone();
                 let id   = skill.id.clone();
-                // Add to in-memory list
                 self.skills.lock().unwrap().push(skill);
-                // Update agent memory listing
                 let agent_id = self.agent_id();
                 let skills   = self.skills.lock().unwrap().clone();
                 let listing  = crate::skills::skills_listing(&skills);
@@ -2712,10 +2476,7 @@ impl Repl {
                     listing.as_deref().unwrap_or(""), None
                 ).await;
                 drop(skills);
-
-                execute!(stdout, SetForegroundColor(Color::Green),
-                    Print(format!("  ✓ Installed: {name} [{id}]\n")), ResetColor)?;
-
+                self.tui_ok(format!("  ✓ Installed: {name} [{id}]"));
                 Ok(crate::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: "install_skill".to_string(),
@@ -2724,8 +2485,7 @@ impl Repl {
                 })
             }
             Err(e) => {
-                execute!(stdout, SetForegroundColor(Color::Red),
-                    Print(format!("  ✗ Install failed: {e}\n")), ResetColor)?;
+                self.tui_err(format!("  ✗ Install failed: {e}"));
                 Ok(crate::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: "install_skill".to_string(),
@@ -2740,11 +2500,10 @@ impl Repl {
     async fn handle_connect(
         &self,
         preset: Option<String>,
-        stdout: &mut io::Stdout,
+        _stdout: &mut io::Stdout,
     ) -> Result<()> {
-        use crossterm::event::{self, Event, KeyCode};
+        use crate::ui::question::{Question, QuestionOption, QuestionWidget};
 
-        // Known built-in provider types (non-OpenAI-compatible)
         const BUILTIN: &[(&str, &str)] = &[
             ("anthropic", "Anthropic (Claude models)"),
             ("openai",    "OpenAI (GPT / Codex models)"),
@@ -2752,27 +2511,19 @@ impl Repl {
             ("ollama",    "Ollama (local models, no key needed)"),
         ];
 
-        // Fetch presets from server
         let presets = self.client.list_provider_presets().await;
 
-        // If a preset name was given (e.g. /connect openrouter) skip the picker
         let (name, kind, default_base_url) = if let Some(p) = preset {
-            // Check built-in first
             if let Some(&(n, _)) = BUILTIN.iter().find(|(n, _)| *n == p.as_str()) {
                 (n.to_string(), n.to_string(), None)
             } else if let Some(preset_val) = presets.iter().find(|v| v["name"].as_str() == Some(&p)) {
                 let base = preset_val["base_url"].as_str().map(String::from);
                 (p.clone(), "openai-compatible".to_string(), base)
             } else {
-                // Treat as custom openai-compatible
                 (p.clone(), "openai-compatible".to_string(), None)
             }
         } else {
-            // Interactive picker
-            let _ = self.app.lock().unwrap().push(RenderLine::Blank);
-            execute!(stdout, SetForegroundColor(Color::Cyan),
-                Print("  /connect — Choose a provider\n\n"), ResetColor)?;
-
+            // Interactive picker via QuestionWidget
             let mut all_options: Vec<(String, String, Option<String>)> = BUILTIN.iter()
                 .map(|(n, label)| (n.to_string(), label.to_string(), None))
                 .collect();
@@ -2783,159 +2534,103 @@ impl Repl {
             }
             all_options.push(("custom".to_string(), "Custom OpenAI-compatible URL…".to_string(), None));
 
-            let total = all_options.len();
-            let mut sel = 0usize;
-
-            // Lines per render: total_options + 1 blank + 1 hint = total + 2
-            let connect_draw_lines = (all_options.len() + 2) as u16;
-
-            // Draw list — \r\n required in raw mode
-            let draw_list = |stdout: &mut io::Stdout, sel: usize| -> Result<()> {
-                execute!(stdout, cursor::MoveToColumn(0),
-                    terminal::Clear(terminal::ClearType::FromCursorDown))?;
-                for (i, (_, label, _)) in all_options.iter().enumerate() {
-                    let arrow = if i == sel { "  ▶ " } else { "    " };
-                    let color = if i == sel { Color::White } else { Color::DarkGrey };
-                    execute!(stdout,
-                        SetForegroundColor(if i == sel { Color::Green } else { Color::DarkGrey }),
-                        Print(arrow),
-                        SetForegroundColor(color),
-                        Print(format!("{label}\r\n")),
-                        ResetColor,
-                    )?;
-                }
-                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                    Print("\r\n  ↑↓ / j/k navigate  Enter select  Esc cancel\r\n"), ResetColor)?;
-                Ok(())
+            let opts: Vec<QuestionOption> = all_options.iter()
+                .map(|(_, label, _)| QuestionOption { label: label.clone(), description: String::new() })
+                .collect();
+            let q = Question {
+                header: "Connect provider", text: "Choose a provider to connect:",
+                options: &opts, multi_select: false, allow_other: false, progress: None,
             };
-
-            let _raw = crate::ui::RawModeGuard::enable()?;
-            execute!(stdout, cursor::Hide)?;
-            draw_list(stdout, sel)?;
-
-            let chosen = loop {
-                if let Ok(Event::Key(key)) = event::read() {
-                    match key.code {
-                        KeyCode::Esc | KeyCode::Char('q') => { break None; }
-                        KeyCode::Enter => { break Some(sel); }
-                        KeyCode::Up | KeyCode::Char('k') => {
-                            sel = if sel == 0 { total - 1 } else { sel - 1 };
-                            execute!(stdout, cursor::MoveToPreviousLine(connect_draw_lines))?;
-                            draw_list(stdout, sel)?;
-                        }
-                        KeyCode::Down | KeyCode::Char('j') => {
-                            sel = (sel + 1) % total;
-                            execute!(stdout, cursor::MoveToPreviousLine(connect_draw_lines))?;
-                            draw_list(stdout, sel)?;
-                        }
-                        _ => {}
-                    }
-                }
+            let ans = {
+                let mut app = self.app.lock().unwrap();
+                let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                let _ = app.draw();
+                r
             };
-
-            drop(_raw);
-            execute!(stdout, cursor::Show, ResetColor, Print("\r\n"))?;
-
-            let Some(idx) = chosen else { return Ok(()); };
+            let Some(chosen) = ans else { return Ok(()); };
+            let label = chosen.as_str();
+            let idx = all_options.iter().position(|(_, l, _)| l.as_str() == label).unwrap_or(0);
             let (n, _, base) = all_options.remove(idx);
-            let k = if BUILTIN.iter().any(|(bn, _)| *bn == n.as_str()) {
-                n.clone()
-            } else {
-                "openai-compatible".to_string()
-            };
+            let k = if BUILTIN.iter().any(|(bn, _)| *bn == n.as_str()) { n.clone() }
+                    else { "openai-compatible".to_string() };
             (n, k, base)
         };
 
-        // Prompt for API key (masked input)
+        // Ask for API key
         let needs_key = kind != "ollama";
         let api_key = if needs_key {
-            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                Print(format!("\n  API key for '{name}' (input hidden, Enter to skip): ")),
-                ResetColor)?;
-            terminal::disable_raw_mode()?;
-            let key = rpassword_read()?;
-            // rpassword_read leaves raw mode off — add newline in normal mode
-            execute!(stdout, Print("\r\n"))?;
-            if key.trim().is_empty() { None } else { Some(key.trim().to_string()) }
-        } else {
-            None
-        };
-
-        // For custom: prompt for base URL
-        let base_url = if kind == "openai-compatible" && default_base_url.is_none() {
-            execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                Print("  Base URL (e.g. https://api.example.com/v1/chat/completions): "),
-                ResetColor)?;
-            let mut line = String::new();
-            terminal::disable_raw_mode()?;
-            std::io::stdin().read_line(&mut line).ok();
-            terminal::enable_raw_mode()?;
-            let u = line.trim().to_string();
-            if u.is_empty() { None } else { Some(u) }
-        } else {
-            default_base_url
-        };
-
-        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-            Print(format!("\n  Connecting to '{name}'…\n")), ResetColor)?;
-
-        match self.client.add_provider(
-            &name,
-            &kind,
-            api_key.as_deref(),
-            base_url.as_deref(),
-        ).await {
-            Ok(_) => {
-                execute!(stdout, SetForegroundColor(Color::Green),
-                    Print(format!("  ✓ Provider '{name}' connected and hot-loaded\n")),
-                    ResetColor)?;
-                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                    Print(format!("    Use: /model {name}/<model-name>\n")),
-                    ResetColor)?;
+            let key_opts = vec![QuestionOption { label: "Skip (no key)".to_string(), description: String::new() }];
+            let kq = Question {
+                header: "API Key",
+                text: &format!("API key for '{name}' (type key or select Skip):"),
+                options: &key_opts, multi_select: false, allow_other: true, progress: None,
+            };
+            let ans = {
+                let mut app = self.app.lock().unwrap();
+                let r = QuestionWidget::ask(&mut app.terminal, &kq)?;
+                let _ = app.draw();
+                r
+            };
+            match ans {
+                Some(ref a) if a.as_str() != "Skip (no key)" && !a.as_str().is_empty() => Some(a.as_str().to_string()),
+                _ => None,
             }
-            Err(e) => self.print_error(stdout, &e.to_string())?,
+        } else { None };
+
+        // Ask for base URL if needed
+        let base_url = if kind == "openai-compatible" && default_base_url.is_none() {
+            let url_opts = vec![QuestionOption { label: "Cancel".to_string(), description: String::new() }];
+            let uq = Question {
+                header: "Base URL",
+                text: "Base URL (e.g. https://api.example.com/v1):",
+                options: &url_opts, multi_select: false, allow_other: true, progress: None,
+            };
+            let ans = {
+                let mut app = self.app.lock().unwrap();
+                let r = QuestionWidget::ask(&mut app.terminal, &uq)?;
+                let _ = app.draw();
+                r
+            };
+            match ans {
+                Some(ref a) if a.as_str() != "Cancel" && !a.as_str().is_empty() => Some(a.as_str().to_string()),
+                _ => None,
+            }
+        } else { default_base_url };
+
+        self.tui_dim(format!("  Connecting to '{name}'…"));
+        match self.client.add_provider(&name, &kind, api_key.as_deref(), base_url.as_deref()).await {
+            Ok(_) => {
+                self.tui_ok(format!("  ✓ Provider '{name}' connected and hot-loaded"));
+                self.tui_dim(format!("    Use: /model {name}/<model-name>"));
+            }
+            Err(e) => self.tui_err(e.to_string()),
         }
         Ok(())
     }
 
-    /// `/resume` conversation picker — ratatui Viewport::Inline.
+    /// `/resume` conversation picker — full-screen on TuiApp terminal.
     ///
     /// Keys: ↑/↓ move · Enter select · d delete · Esc/q cancel.
     /// Returns the picked conversation JSON, or None if cancelled.
     async fn conversation_picker(
         &self,
-        stdout: &mut io::Stdout,
+        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
         convs: &[serde_json::Value],
         agent_id: &str,
     ) -> Result<Option<serde_json::Value>> {
         use crossterm::event::{self, Event, KeyCode, KeyModifiers};
         use ratatui::{
-            Terminal,
-            backend::CrosstermBackend,
-
             style::{Color as RC, Modifier, Style},
             text::{Line, Span},
             widgets::{Block, Borders, List, ListItem, ListState},
-            Viewport,
         };
 
         if convs.is_empty() {
             return Ok(None);
         }
 
-        let term_h = crossterm::terminal::size().map(|(_, h)| h as u16).unwrap_or(24);
-        let view_h = (convs.len() as u16 + 2).min(term_h.saturating_sub(2)).max(4);
-
-        let backend  = CrosstermBackend::new(io::stdout());
-        let mut term = Terminal::with_options(
-            backend,
-            ratatui::TerminalOptions { viewport: Viewport::Inline(view_h) },
-        )?;
-
-        let _raw = crate::ui::RawModeGuard::enable()?;
         let mut sel:    usize = 0;
         let mut result: Option<serde_json::Value> = None;
-        let mut list_state = ListState::default().with_selected(Some(0));
 
         let build_items = |sel: usize| -> Vec<ListItem<'static>> {
             convs.iter().enumerate().map(|(i, c)| {
@@ -2948,7 +2643,7 @@ impl Repl {
                         .with_timezone(&chrono::Local);
                     dt.format("%m/%d %H:%M").to_string()
                 } else { String::new() };
-                let label = format!("{title}  ({cnt} msgs)  {date}");
+                let label = format!("  {title}  ({cnt} msgs)  {date}");
                 let style = if i == sel {
                     Style::default().fg(RC::Black).bg(RC::Cyan).add_modifier(Modifier::BOLD)
                 } else {
@@ -2958,80 +2653,84 @@ impl Repl {
             }).collect()
         };
 
-        macro_rules! redraw {
-            () => {{
-                let items = build_items(sel);
-                let n     = convs.len();
-                term.draw(|f| {
-                    let area = f.area();
-                    let block = Block::default()
-                        .borders(Borders::ALL)
-                        .title(format!(" Conversations [{}/{}] · Enter select · d delete · Esc cancel ", sel + 1, n))
-                        .border_style(Style::default().fg(RC::Cyan));
-                    let list = List::new(items).block(block)
-                        .highlight_style(Style::default().fg(RC::Black).bg(RC::Cyan));
-                    f.render_stateful_widget(list, area, &mut list_state);
-                })?;
-                list_state = ListState::default().with_selected(Some(sel));
-            }};
+        // Initial draw
+        {
+            let mut app = app_arc.lock().unwrap();
+            let items = build_items(sel);
+            let n     = convs.len();
+            let mut ls = ListState::default().with_selected(Some(sel));
+            app.terminal.draw(|f| {
+                let area  = f.area();
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Conversations [{}/{}]  ↑↓ navigate · Enter select · d delete · Esc cancel ", sel + 1, n))
+                    .border_style(Style::default().fg(RC::Cyan));
+                let list = List::new(items).block(block);
+                f.render_stateful_widget(list, area, &mut ls);
+            })?;
         }
-
-        redraw!();
 
         loop {
             if !event::poll(std::time::Duration::from_millis(200))? { continue; }
             match event::read()? {
                 Event::Key(k) => match (k.code, k.modifiers) {
                     (KeyCode::Char('q') | KeyCode::Esc, _) => break,
-                    (KeyCode::Up   | KeyCode::Char('k'), _) => { if sel > 0 { sel -= 1; } redraw!(); }
+                    (KeyCode::Up   | KeyCode::Char('k'), _) => { if sel > 0 { sel -= 1; } }
                     (KeyCode::Down | KeyCode::Char('j'), _) => {
                         if sel + 1 < convs.len() { sel += 1; }
-                        redraw!();
                     }
                     (KeyCode::Enter, _) => {
                         result = convs.get(sel).cloned();
                         break;
                     }
                     (KeyCode::Char('d') | KeyCode::Delete, _) => {
-                        // Confirm + delete
                         let conv_id = convs[sel]["id"].as_str().unwrap_or("").to_string();
                         let title   = convs[sel]["title"].as_str().unwrap_or("(untitled)").to_string();
-                        term.clear()?;
-                        drop(term);
-                        crossterm::terminal::disable_raw_mode()?;
-                        execute!(stdout,
-                            SetForegroundColor(Color::Yellow),
-                            Print(format!("\n  Delete conversation \"{title}\"? [y/N] ")),
-                            ResetColor)?;
-                        crossterm::terminal::enable_raw_mode()?;
-                        if let Ok(Event::Key(k2)) = event::read() {
-                            crossterm::terminal::disable_raw_mode()?;
-                            if matches!(k2.code, KeyCode::Char('y') | KeyCode::Char('Y')) {
-                                let _ = self.client.delete_conversation(agent_id, &conv_id).await;
-                                execute!(stdout, SetForegroundColor(Color::Green),
-                                    Print("  Deleted.\n"), ResetColor)?;
-                            } else {
-                                execute!(stdout, Print("\n"))?;
-                            }
-                        } else {
-                            crossterm::terminal::disable_raw_mode()?;
+                        // Use QuestionWidget for confirmation
+                        use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                        let opts = vec![
+                            QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
+                            QuestionOption { label: "No — keep".to_string(),    description: String::new() },
+                        ];
+                        let q = Question {
+                            header: "Delete?", text: &format!("Delete conversation \"{title}\"?"),
+                            options: &opts, multi_select: false, allow_other: false, progress: None,
+                        };
+                        let ans = {
+                            let mut app = app_arc.lock().unwrap();
+                            let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                            r
+                        };
+                        if matches!(ans, Some(ref a) if a.as_str().starts_with("Yes")) {
+                            let _ = self.client.delete_conversation(agent_id, &conv_id).await;
                         }
-                        return Ok(None); // close picker after delete
+                        return Ok(None);
                     }
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
                     _ => {}
                 },
                 _ => {}
             }
+            // Redraw after state change
+            let mut app = app_arc.lock().unwrap();
+            let items = build_items(sel);
+            let n     = convs.len();
+            let mut ls = ListState::default().with_selected(Some(sel));
+            app.terminal.draw(|f| {
+                let area  = f.area();
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Conversations [{}/{}]  ↑↓ navigate · Enter select · d delete · Esc cancel ", sel + 1, n))
+                    .border_style(Style::default().fg(RC::Cyan));
+                let list = List::new(items).block(block);
+                f.render_stateful_widget(list, area, &mut ls);
+            })?;
         }
 
-        term.clear()?;
-        drop(term);
-        drop(_raw);
         Ok(result)
     }
 
-    /// `/agents` TUI picker — rendered via ratatui `Viewport::Inline`.
+    /// `/agents` TUI picker — full-screen on TuiApp terminal.
     ///
     /// Keys:
     ///   ↑/↓  j/k  — move cursor
@@ -3042,15 +2741,13 @@ impl Repl {
     ///   Esc / q    — cancel
     async fn agent_picker(
         &self,
-        stdout: &mut io::Stdout,
+        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
         agents: &mut Vec<AgentState>,
     ) -> Result<Option<AgentPickerResult>> {
         use crossterm::event::{self, Event, KeyCode};
         use std::collections::HashSet;
         use ratatui::{
-            Terminal, TerminalOptions, Viewport,
-            backend::CrosstermBackend,
-            widgets::{List, ListItem, ListState, Block},
+            widgets::{List, ListItem, ListState, Block, Borders},
             style::{Style, Color as RC, Modifier},
             text::{Line, Span},
         };
@@ -3066,28 +2763,23 @@ impl Repl {
             .unwrap_or(0);
         let mut marked: HashSet<usize> = HashSet::new();
 
-        // ── Build list items ─────────────────────────────────────────────────
-        // Returns owned ListItems so the ratatui draw closure is 'static-safe.
         let build_items = |agents: &[AgentState], sel: usize,
                            marked: &HashSet<usize>, current: &str| -> Vec<ListItem<'static>> {
             agents.iter().enumerate().map(|(i, a)| {
                 let is_sel    = i == sel;
                 let is_marked = marked.contains(&i);
                 let is_active = a.id == current;
-                let short_id  = if a.id.len() > 16 { a.id[..16].to_string() + "…" }
+                let short_id  = if a.id.len() > 22 { a.id[..22].to_string() + "…" }
                                 else { a.id.clone() };
-
-                let arrow_style = Style::default().fg(if is_sel { RC::Green } else { RC::DarkGray });
-                let name_style  = Style::default()
-                    .fg(if is_sel { RC::White } else { RC::DarkGray })
-                    .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() });
-                let check_style = Style::default()
-                    .fg(if is_marked { RC::Yellow } else { RC::DarkGray });
-
                 ListItem::new(Line::from(vec![
-                    Span::styled(if is_sel { "▶ " } else { "  " }.to_string(), arrow_style),
-                    Span::styled(if is_marked { "☑ " } else { "☐ " }.to_string(), check_style),
-                    Span::styled(format!("{:<30}", a.name), name_style),
+                    Span::styled(if is_sel { " ▶ " } else { "   " }.to_string(),
+                        Style::default().fg(if is_sel { RC::Green } else { RC::DarkGray })),
+                    Span::styled(if is_marked { "☑ " } else { "☐ " }.to_string(),
+                        Style::default().fg(if is_marked { RC::Yellow } else { RC::DarkGray })),
+                    Span::styled(format!("{:<32}", a.name),
+                        Style::default()
+                            .fg(if is_sel { RC::White } else { RC::DarkGray })
+                            .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() })),
                     Span::styled(short_id, Style::default().fg(RC::DarkGray)),
                     Span::styled(
                         if is_active { "  ← active".to_string() } else { String::new() },
@@ -3097,38 +2789,34 @@ impl Repl {
             }).collect()
         };
 
-        // ── Terminal setup ───────────────────────────────────────────────────
-        let term_rows = terminal::size().map(|(_, r)| r as usize).unwrap_or(24);
-        let view_h    = (total + 3).min(term_rows.saturating_sub(2)).max(3) as u16;
+        let do_draw = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+                       agents: &[AgentState], sel: usize,
+                       marked: &HashSet<usize>, current: &str| -> Result<()> {
+            let mut app = app_arc.lock().unwrap();
+            let items  = build_items(agents, sel, marked, current);
+            let n      = marked.len();
+            let hint   = if n == 0 {
+                " ↑↓/jk  Space mark  r rename  d delete  Enter switch  q cancel ".to_string()
+            } else {
+                format!(" [{n} marked]  d delete all  q cancel ")
+            };
+            let mut ls = ListState::default().with_selected(Some(sel));
+            app.terminal.draw(|f| {
+                let area  = f.area();
+                let block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Agents {hint}"))
+                    .border_style(Style::default().fg(RC::Cyan));
+                let list  = List::new(items).block(block);
+                f.render_stateful_widget(list, area, &mut ls);
+            })?;
+            Ok(())
+        };
 
-        let _raw = crate::ui::RawModeGuard::enable()?;
-        execute!(stdout, cursor::Hide)?;
-        let mut term = Terminal::with_options(
-            CrosstermBackend::new(&mut *stdout),
-            TerminalOptions { viewport: Viewport::Inline(view_h) },
-        )?;
+        do_draw(&app_arc, agents, selected, &marked, &current)?;
 
-        // ── Draw helper ──────────────────────────────────────────────────────
-        macro_rules! redraw {
-            () => {{
-                let items = build_items(agents, selected, &marked, &current);
-                let n     = marked.len();
-                let title = if n == 0 {
-                    " Agents  ↑↓/jk navigate  Space mark  r rename  d delete  Enter switch  q cancel "
-                        .to_string()
-                } else {
-                    format!(" Agents  [{n} marked]  d delete all marked  Esc/q cancel ")
-                };
-                let list = List::new(items)
-                    .block(Block::default().title(title));
-                let mut ls = ListState::default().with_selected(Some(selected));
-                term.draw(|f| f.render_stateful_widget(list, f.area(), &mut ls))?;
-            }};
-        }
-        redraw!();
-
-        // ── Event loop ───────────────────────────────────────────────────────
         let result = loop {
+            if !event::poll(std::time::Duration::from_millis(200))? { continue; }
             if let Ok(Event::Key(key)) = event::read() {
                 match (key.code, key.modifiers) {
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
@@ -3143,102 +2831,90 @@ impl Repl {
                     (KeyCode::Char(' '), _) => {
                         if marked.contains(&selected) { marked.remove(&selected); }
                         else                          { marked.insert(selected);  }
-                        redraw!();
                     }
 
                     (KeyCode::Char('d'), _) | (KeyCode::Delete, _) => {
-                        let targets: Vec<usize> = if marked.is_empty() {
-                            vec![selected]
-                        } else {
-                            let mut v: Vec<usize> = marked.iter().copied().collect();
-                            v.sort_unstable(); v
+                        let targets: Vec<usize> = if marked.is_empty() { vec![selected] }
+                            else { let mut v: Vec<usize> = marked.iter().copied().collect(); v.sort_unstable(); v };
+                        let names: Vec<String> = targets.iter().map(|&i| agents[i].name.clone()).collect();
+                        let label = if targets.len() == 1 { format!("Delete '{}'?", names[0]) }
+                            else { format!("Delete {} agents ({})?", targets.len(), names.join(", ")) };
+                        use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                        let opts = vec![
+                            QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
+                            QuestionOption { label: "No — cancel".to_string(),  description: String::new() },
+                        ];
+                        let q = Question { header: "Confirm", text: &label, options: &opts,
+                            multi_select: false, allow_other: false, progress: None };
+                        let confirmed = {
+                            let mut app = app_arc.lock().unwrap();
+                            let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                            matches!(r, Some(ref a) if a.as_str().starts_with("Yes"))
                         };
-                        let names: Vec<String> = targets.iter()
-                            .map(|&i| agents[i].name.clone())
-                            .collect();
-                        let prompt = if targets.len() == 1 {
-                            format!("\n  Delete '{}'? [y/N]: ", names[0])
-                        } else {
-                            format!("\n  Delete {} agents ({})? [y/N]: ",
-                                targets.len(), names.join(", "))
-                        };
-                        execute!(term.backend_mut(),
-                            cursor::Show,
-                            SetForegroundColor(Color::Yellow),
-                            Print(&prompt), ResetColor)?;
-                        term.backend_mut().flush()?;
-
-                        let confirmed = loop {
-                            if let Ok(Event::Key(k)) = event::read() {
-                                break matches!(k.code, KeyCode::Char('y') | KeyCode::Char('Y'));
-                            }
-                        };
-                        execute!(term.backend_mut(), cursor::Hide, Print("\n"))?;
-
                         if confirmed {
-                            let to_delete: Vec<AgentState> = targets.iter()
-                                .map(|&i| agents[i].clone())
-                                .collect();
+                            let to_delete: Vec<AgentState> = targets.iter().map(|&i| agents[i].clone()).collect();
                             break Some(AgentPickerResult::DeleteMany(to_delete));
-                        } else {
-                            redraw!();
                         }
                     }
 
                     (KeyCode::Char('r'), _) => {
                         let a = agents[selected].clone();
-                        terminal::disable_raw_mode()?;
-                        execute!(term.backend_mut(),
-                            cursor::Show,
-                            SetForegroundColor(Color::Yellow),
-                            Print(format!("\n  Rename '{}' → new name: ", a.name)),
-                            ResetColor)?;
-                        term.backend_mut().flush()?;
-                        let mut buf = String::new();
-                        std::io::stdin().read_line(&mut buf).unwrap_or(0);
-                        let new_name = buf.trim().to_string();
-                        terminal::enable_raw_mode()?;
-                        execute!(term.backend_mut(), cursor::Hide)?;
-                        if new_name.is_empty() { redraw!(); }
-                        else { break Some(AgentPickerResult::Rename { agent: a, new_name }); }
+                        // Collect new name via QuestionWidget (allow_other = freetext)
+                        use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                        let opts = vec![
+                            QuestionOption { label: "Keep current name".to_string(), description: String::new() },
+                        ];
+                        let q = Question {
+                            header: "Rename agent",
+                            text: &format!("New name for '{}':", a.name),
+                            options: &opts, multi_select: false, allow_other: true, progress: None,
+                        };
+                        let ans = {
+                            let mut app = app_arc.lock().unwrap();
+                            QuestionWidget::ask(&mut app.terminal, &q)?
+                        };
+                        if let Some(ref answer) = ans {
+                            let new_name = answer.as_str();
+                            if !new_name.is_empty() && new_name != "Keep current name" {
+                                break Some(AgentPickerResult::Rename { agent: a, new_name });
+                            }
+                        }
                     }
 
                     (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
                         selected = if selected == 0 { total - 1 } else { selected - 1 };
-                        redraw!();
                     }
                     (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
                         selected = (selected + 1) % total;
-                        redraw!();
                     }
                     _ => {}
                 }
+                do_draw(&app_arc, agents, selected, &marked, &current)?;
             }
         };
 
-        term.clear()?;
-        drop(term);
-        drop(_raw);
-        execute!(stdout, cursor::Show, ResetColor)?;
         Ok(result)
     }
 
-    /// Interactive model picker — rendered via ratatui `Viewport::Inline`.
+    /// Interactive model picker — full-screen on TuiApp terminal.
     /// Returns the selected model string or None if cancelled.
-    async fn interactive_model_picker(&self, stdout: &mut io::Stdout) -> Result<Option<String>> {
+    async fn interactive_model_picker(
+        &self,
+        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+    ) -> Result<Option<String>> {
         use crossterm::event::{self, Event, KeyCode};
         use ratatui::{
-            Terminal, TerminalOptions, Viewport,
-            backend::CrosstermBackend,
-            widgets::{List, ListItem, ListState, Block,
+            widgets::{List, ListItem, ListState, Block, Borders,
                       Scrollbar, ScrollbarOrientation, ScrollbarState},
             layout::{Constraint, Layout, Direction},
             style::{Style, Color as RC, Modifier},
             text::{Line, Span},
         };
 
-        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-            Print("\n  Fetching models…\r\n"), ResetColor)?;
+        {
+            let mut app = app_arc.lock().unwrap();
+            let _ = app.push(crate::ui::RenderLine::DimMsg("  Fetching models…".to_string()));
+        }
 
         let current = self.model();
 
@@ -3282,10 +2958,8 @@ impl Repl {
                 }
             }
             Err(_) => {
-                execute!(stdout, SetForegroundColor(Color::DarkGrey),
-                    Print("  Could not fetch models from server.\r\n"),
-                    Print("  Specify model directly: /model provider/model-name\r\n\n"),
-                    ResetColor)?;
+                let mut app = app_arc.lock().unwrap();
+                let _ = app.push(crate::ui::RenderLine::ErrorMsg("Could not fetch models. Specify directly: /model provider/model-name".to_string()));
                 return Ok(None);
             }
         }
@@ -3299,9 +2973,8 @@ impl Repl {
                      String::new(), String::new(), false));
 
         if models.len() == 1 {
-            execute!(stdout, Print("\n  No models available.\r\n"),
-                SetForegroundColor(Color::DarkGrey),
-                Print("  Connect a provider: /connect\r\n\n"), ResetColor)?;
+            let mut app = app_arc.lock().unwrap();
+            let _ = app.push(crate::ui::RenderLine::DimMsg("  No models available. Connect a provider: /connect".to_string()));
             return Ok(None);
         }
 
@@ -3412,48 +3085,42 @@ impl Repl {
             }).collect()
         };
 
-        // ── Terminal setup ────────────────────────────────────────────────────
-        let term_rows = terminal::size().map(|(_, r)| r as usize).unwrap_or(24);
-        let view_h    = term_rows.saturating_sub(3).max(5) as u16;
-
-        let _raw = crate::ui::RawModeGuard::enable()?;
-        execute!(stdout, cursor::Hide)?;
-        let mut term = Terminal::with_options(
-            CrosstermBackend::new(&mut *stdout),
-            TerminalOptions { viewport: Viewport::Inline(view_h) },
-        )?;
-
-        // ── Draw macro ────────────────────────────────────────────────────────
-        macro_rules! redraw {
-            () => {{
-                let sel_model = model_at(list_pos);
-                let title = format!(
-                    " Models  ↑↓/jk/PgUp/PgDn  Enter select  q cancel  [{}/{}] ",
-                    sel_model + 1, n_models
+        // ── Draw helper ───────────────────────────────────────────────────────
+        let do_draw_model = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+                             list_pos: usize| -> Result<()> {
+            let sel_model = model_at(list_pos);
+            let title = format!(
+                " Models  ↑↓/jk/PgUp/PgDn  Enter select  q cancel  [{}/{}] ",
+                sel_model + 1, n_models
+            );
+            let items = build_items(list_pos, &current);
+            let list = List::new(items)
+                .block(Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .border_style(Style::default().fg(RC::Cyan)));
+            let mut ls = ListState::default().with_selected(Some(list_pos));
+            let mut sb = ScrollbarState::new(disp_len).position(list_pos);
+            let mut app = app_arc.lock().unwrap();
+            app.terminal.draw(|f| {
+                let area   = f.area();
+                let chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Fill(1), Constraint::Length(1)])
+                    .split(area);
+                f.render_stateful_widget(list, chunks[0], &mut ls);
+                f.render_stateful_widget(
+                    Scrollbar::new(ScrollbarOrientation::VerticalRight),
+                    chunks[1], &mut sb,
                 );
-                let items = build_items(list_pos, &current);
-                let list = List::new(items)
-                    .block(Block::default().title(title));
-                let mut ls = ListState::default().with_selected(Some(list_pos));
-                let mut sb = ScrollbarState::new(disp_len).position(list_pos);
-                term.draw(|f| {
-                    let area = f.area();
-                    let chunks = Layout::default()
-                        .direction(Direction::Horizontal)
-                        .constraints([Constraint::Fill(1), Constraint::Length(1)])
-                        .split(area);
-                    f.render_stateful_widget(list, chunks[0], &mut ls);
-                    f.render_stateful_widget(
-                        Scrollbar::new(ScrollbarOrientation::VerticalRight),
-                        chunks[1], &mut sb,
-                    );
-                })?;
-            }};
-        }
-        redraw!();
+            })?;
+            Ok(())
+        };
+        do_draw_model(&app_arc, list_pos)?;
 
         // ── Event loop ────────────────────────────────────────────────────────
         let result = loop {
+            if !event::poll(std::time::Duration::from_millis(200))? { continue; }
             if let Ok(Event::Key(key)) = event::read() {
                 match (key.code, key.modifiers) {
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
@@ -3462,24 +3129,27 @@ impl Repl {
                         let sel = model_at(list_pos);
                         let (provider, _, id, _, _) = &models[sel];
                         if provider == "__custom__" || id.ends_with('/') {
-                            // Text input — write directly to backend
-                            terminal::disable_raw_mode()?;
-                            let prefix = if id.ends_with('/') && id.len() > 1 {
-                                id.as_str()
-                            } else { "" };
-                            execute!(term.backend_mut(),
-                                cursor::Show, Print("\n"),
-                                SetForegroundColor(Color::DarkGrey),
-                                Print(format!("  Model ID: {prefix}")), ResetColor)?;
-                            term.backend_mut().flush()?;
-                            let mut input = String::new();
-                            std::io::stdin().read_line(&mut input).unwrap_or(0);
-                            let typed = input.trim().to_string();
-                            if typed.is_empty() { break None; }
-                            let full = if prefix.is_empty() || typed.starts_with(prefix) {
-                                typed
-                            } else { format!("{prefix}{typed}") };
-                            break Some(full);
+                            // Freetext input via QuestionWidget
+                            let prefix = if id.ends_with('/') && id.len() > 1 { id.as_str() } else { "" };
+                            use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                            let opts = vec![QuestionOption { label: "Cancel".to_string(), description: String::new() }];
+                            let prompt = if prefix.is_empty() { "Enter model ID (e.g. provider/model-name):".to_string() }
+                                         else { format!("Enter model for {prefix}") };
+                            let q = Question { header: "Custom model", text: &prompt, options: &opts,
+                                multi_select: false, allow_other: true, progress: None };
+                            let ans = {
+                                let mut app = app_arc.lock().unwrap();
+                                QuestionWidget::ask(&mut app.terminal, &q)?
+                            };
+                            if let Some(ref a) = ans {
+                                let typed = a.as_str();
+                                if !typed.is_empty() && typed != "Cancel" {
+                                    let full = if prefix.is_empty() || typed.starts_with(prefix) { typed }
+                                               else { format!("{prefix}{typed}") };
+                                    break Some(full);
+                                }
+                            }
+                            break None;
                         } else {
                             break Some(id.clone());
                         }
@@ -3487,29 +3157,25 @@ impl Repl {
 
                     (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
                         list_pos = prev_pos(list_pos);
-                        redraw!();
+                        do_draw_model(&app_arc, list_pos)?;
                     }
                     (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
                         list_pos = next_pos(list_pos);
-                        redraw!();
+                        do_draw_model(&app_arc, list_pos)?;
                     }
                     (KeyCode::PageDown, _) => {
-                        for _ in 0..view_h { list_pos = next_pos(list_pos); }
-                        redraw!();
+                        for _ in 0..10 { list_pos = next_pos(list_pos); }
+                        do_draw_model(&app_arc, list_pos)?;
                     }
                     (KeyCode::PageUp, _) => {
-                        for _ in 0..view_h { list_pos = prev_pos(list_pos); }
-                        redraw!();
+                        for _ in 0..10 { list_pos = prev_pos(list_pos); }
+                        do_draw_model(&app_arc, list_pos)?;
                     }
                     _ => {}
                 }
             }
         };
 
-        term.clear()?;
-        drop(term);
-        drop(_raw);
-        execute!(stdout, cursor::Show, ResetColor)?;
         Ok(result)
     }
 
@@ -3543,12 +3209,8 @@ impl Repl {
         let _use_existing_agent = agent_id_arg.is_some();
 
         // Show progress
-        execute!(stdout, SetForegroundColor(Color::DarkGrey),
-            Print(format!("  Launching subagent [{}]{}…\n",
-                subagent_type,
-                if background { " (background)" } else { "" }
-            )),
-            ResetColor)?;
+        self.tui_dim(format!("  Launching subagent [{}]{}…", subagent_type,
+            if background { " (background)" } else { "" }));
 
         // Clone what we need for the async task
         let client     = self.client.clone();
@@ -3643,9 +3305,7 @@ impl Repl {
             let hook_outcome = self.hooks.subagent_stop(&subagent_type, &output, is_error).await;
 
             if !is_error {
-                execute!(stdout, SetForegroundColor(Color::Green),
-                    Print(format!("  ✓ Subagent [{}] complete\n", subagent_type)),
-                    ResetColor)?;
+                self.tui_ok(format!("  ✓ Subagent [{}] complete", subagent_type));
             }
 
             // If hook blocked, append its reason to the output so the agent sees it
@@ -3664,13 +3324,34 @@ impl Repl {
         }
     }
 
-    fn print_error(&self, stdout: &mut io::Stdout, msg: &str) -> Result<()> {
-        execute!(
-            stdout,
-            SetForegroundColor(Color::Red),
-            Print(format!("\nError: {msg}\n")),
-            ResetColor
-        )?;
+    /// Push a success line (green) to the TUI.
+    fn tui_ok(&self, msg: impl Into<String>) {
+        let _ = self.app.lock().unwrap().push(crate::ui::RenderLine::SuccessMsg(msg.into()));
+    }
+    /// Push an error line (red) to the TUI.
+    fn tui_err(&self, msg: impl Into<String>) {
+        let _ = self.app.lock().unwrap().push(crate::ui::RenderLine::ErrorMsg(msg.into()));
+    }
+    /// Push a section header (cyan bold) to the TUI.
+    fn tui_hdr(&self, msg: impl Into<String>) {
+        let _ = self.app.lock().unwrap().push(crate::ui::RenderLine::InfoHeader(msg.into()));
+    }
+    /// Push a dim hint / secondary text to the TUI.
+    fn tui_dim(&self, msg: impl Into<String>) {
+        let _ = self.app.lock().unwrap().push(crate::ui::RenderLine::DimMsg(msg.into()));
+    }
+    /// Push a plain system message (gray) to the TUI.
+    fn tui_sys(&self, msg: impl Into<String>) {
+        let _ = self.app.lock().unwrap().push(crate::ui::RenderLine::SystemMsg(msg.into()));
+    }
+    /// Push a blank line to the TUI.
+    fn tui_blank(&self) {
+        let _ = self.app.lock().unwrap().push(crate::ui::RenderLine::Blank);
+    }
+
+    #[allow(dead_code)]
+    fn print_error(&self, _stdout: &mut io::Stdout, msg: &str) -> Result<()> {
+        self.tui_err(format!("Error: {msg}"));
         Ok(())
     }
 

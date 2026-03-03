@@ -69,6 +69,14 @@ pub enum RenderLine {
     ReasoningHeader(usize),
     /// System / info message (dim gray).
     SystemMsg(String),
+    /// Success message (green, ✓ prefix).
+    SuccessMsg(String),
+    /// Section header (cyan bold — e.g. "  MCP Servers").
+    InfoHeader(String),
+    /// Dim hint / secondary text (dark gray italic).
+    DimMsg(String),
+    /// Key-value pair aligned with padding between them.
+    Pair { label: String, value: String },
     /// Error message (red).
     ErrorMsg(String),
     /// Blank spacer line.
@@ -511,18 +519,26 @@ fn render_frame(
         render_assistant_lines(s, w, &mut text_lines);
     }
 
-    let total    = text_lines.len() as u16;
-    let visible  = content_height;
-    let para_scroll = if total > visible {
-        let max_skip      = total - visible;
-        let effective_up  = (scroll as u16).min(max_skip);
+    // Count visual rows (accounting for line-wrap at content width).
+    let content_w = area.width.saturating_sub(0).max(1);
+    let total_visual: u16 = text_lines.iter().map(|l| {
+        let char_count: usize = l.spans.iter().map(|s| s.content.chars().count()).sum();
+        if char_count == 0 { 1 } else { ((char_count as u16).saturating_sub(1) / content_w) + 1 }
+    }).sum();
+
+    let visible = content_height;
+    let para_scroll = if total_visual > visible {
+        let max_skip     = total_visual - visible;
+        let effective_up = (scroll as u16).min(max_skip);
         max_skip - effective_up
     } else {
         0
     };
 
     frame.render_widget(
-        Paragraph::new(text_lines).scroll((para_scroll, 0)),
+        Paragraph::new(text_lines)
+            .wrap(ratatui::widgets::Wrap { trim: false })
+            .scroll((para_scroll, 0)),
         chunks[0],
     );
 
@@ -703,8 +719,41 @@ fn render_line_to_text(rl: &RenderLine, width: usize, out: &mut Vec<Line<'static
         }
         RenderLine::SystemMsg(text) => {
             for ln in text.lines() {
-                out.push(Line::from(Span::raw(ln.to_string())));
+                out.push(Line::from(Span::styled(
+                    ln.to_string(),
+                    Style::default().fg(RC::Gray),
+                )));
             }
+        }
+        RenderLine::SuccessMsg(text) => {
+            for ln in text.lines() {
+                out.push(Line::from(Span::styled(
+                    ln.to_string(),
+                    Style::default().fg(RC::Green),
+                )));
+            }
+        }
+        RenderLine::InfoHeader(text) => {
+            for ln in text.lines() {
+                out.push(Line::from(Span::styled(
+                    ln.to_string(),
+                    Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD),
+                )));
+            }
+        }
+        RenderLine::DimMsg(text) => {
+            for ln in text.lines() {
+                out.push(Line::from(Span::styled(
+                    ln.to_string(),
+                    Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                )));
+            }
+        }
+        RenderLine::Pair { label, value } => {
+            out.push(Line::from(vec![
+                Span::styled(format!("  {label:<20}"), Style::default().fg(RC::DarkGray)),
+                Span::styled(value.clone(), Style::default().fg(RC::White)),
+            ]));
         }
         RenderLine::ErrorMsg(text) => {
             for ln in text.lines() {
