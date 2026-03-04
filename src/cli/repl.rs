@@ -78,6 +78,7 @@ enum SlashCmd {
     Logout,
     Stream,
     Usage,
+    Copy,
 }
 
 fn parse_slash(input: &str) -> Option<SlashCmd> {
@@ -130,6 +131,7 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         "logout" => Some(SlashCmd::Logout),
         "stream" => Some(SlashCmd::Stream),
         "usage"  => Some(SlashCmd::Usage),
+        "copy"   => Some(SlashCmd::Copy),
         // Skill slash commands: /commit, /review, etc.
         other if skill_ids.iter().any(|id| id == other) => {
             Some(SlashCmd::RunSkill(other.to_string()))
@@ -593,6 +595,20 @@ impl Repl {
                         match self.client.clear_messages(&self.agent_id()).await {
                             Ok(n)  => self.tui_ok(format!("✓ Context window cleared ({n} messages deleted)")),
                             Err(e) => self.tui_sys(format!("⚠ Screen cleared (context clear failed: {e})")),
+                        }
+                    }
+
+                    SlashCmd::Copy => {
+                        let mut app = self.app.lock().unwrap();
+                        app.toggle_copy_mode();
+                        if app.copy_mode {
+                            let _ = app.push(RenderLine::SystemMsg(
+                                "Copy mode ON — mouse scroll disabled. Click and drag to select text. /copy to restore.".into()
+                            ));
+                        } else {
+                            let _ = app.push(RenderLine::SuccessMsg(
+                                "Copy mode OFF — mouse scroll restored.".into()
+                            ));
                         }
                     }
 
@@ -1769,6 +1785,9 @@ impl Repl {
         // Clear cancel flag after turn completes
         self.cancel_turn.store(false, Ordering::SeqCst);
         self.dispatch_tool_calls(stdout, messages, input, Some(bar_text)).await?;
+
+        // Blank line after every agent turn for visual block separation.
+        let _ = self.app.lock().unwrap().push(RenderLine::Blank);
 
         // ── Stop thinking animation ───────────────────────────────────────────
         tick_handle.abort();

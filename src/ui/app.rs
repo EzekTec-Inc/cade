@@ -128,6 +128,9 @@ pub struct TuiApp {
     pub mode:       PermissionMode,
     pub agent_name: String,
     pub model:      String,
+
+    // ── Copy mode (disables mouse capture for OS text selection) ───────────
+    pub copy_mode: bool,
 }
 
 impl TuiApp {
@@ -151,6 +154,7 @@ impl TuiApp {
             mode,
             agent_name,
             model,
+            copy_mode: false,
         }
     }
 
@@ -210,6 +214,18 @@ impl TuiApp {
     }
 
     pub fn has_streaming(&self) -> bool { self.streaming_active }
+
+    /// Toggle OS text-selection copy mode on/off.
+    /// When ON: mouse capture is disabled so the terminal lets the user select text.
+    /// When OFF: mouse capture is restored so scroll wheel works normally.
+    pub fn toggle_copy_mode(&mut self) {
+        self.copy_mode = !self.copy_mode;
+        if self.copy_mode {
+            let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+        } else {
+            let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
+        }
+    }
 
     /// Clear all content (e.g. /clear).
     pub fn clear_content(&mut self) -> Result<()> {
@@ -365,6 +381,8 @@ impl TuiApp {
             }
             (KeyCode::Enter, _) => {
                 let line = self.input.clone();
+                self.input.clear();   // clear input immediately so it's empty during agent turn
+                self.cursor_pos = 0;
                 self.scroll = 0; // snap to bottom on submit
                 return Ok(Some(Some(line)));
             }
@@ -596,11 +614,20 @@ fn render_frame(
     // ── Status row ────────────────────────────────────────────────────────────
     let (status_text, status_style) = if let Some(elapsed) = thinking_elapsed {
         let text = thinking_text.unwrap_or("thinking…");
-        let frame_idx = (elapsed.as_millis() / 120) as usize;
+        let ms = elapsed.as_millis();
+        let frame_idx = (ms / 80) as usize; // faster: 80ms vs 120ms
         let spinner   = BRAILLE[frame_idx % BRAILLE.len()];
+        // Pulse through bright-cyan shades (~400ms per step)
+        let palette: &[(u8, u8, u8)] = &[
+            (80,  190, 255),
+            (120, 215, 255),
+            (160, 235, 255),
+            (100, 200, 255),
+        ];
+        let (r, g, b) = palette[(ms / 400) as usize % palette.len()];
         (
             format!("{spinner} {text}"),
-            Style::default().fg(RC::DarkGray),
+            Style::default().fg(RC::Rgb(r, g, b)).add_modifier(Modifier::BOLD),
         )
     } else if let Some(s) = last_status {
         (
