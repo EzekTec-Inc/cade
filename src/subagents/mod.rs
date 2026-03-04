@@ -105,7 +105,7 @@ and relevant code snippets. Be thorough but succinct.".to_string(),
             name:        "general-purpose".to_string(),
             description: "Full-capability agent — research, plan, and implement changes".to_string(),
             model:       None,
-            tools:       SubagentTools::All,
+            tools:       SubagentTools::List(vec!["bash".to_string(), "read_file".to_string(), "write_file".to_string(), "edit_file".to_string(), "glob".to_string(), "grep_search".to_string()]),
             system_prompt: "\
 You are a general-purpose coding assistant. Complete the assigned task thoroughly, \
 making all necessary file changes. Report back with a clear summary of what you did, \
@@ -118,7 +118,7 @@ what files were changed, and any important decisions made.".to_string(),
             name:        "coder".to_string(),
             description: "Focused code implementation — edits files, runs tests".to_string(),
             model:       None,
-            tools:       SubagentTools::All,
+            tools:       SubagentTools::List(vec!["bash".to_string(), "read_file".to_string(), "write_file".to_string(), "edit_file".to_string(), "glob".to_string(), "grep_search".to_string()]),
             system_prompt: "\
 You are a focused coding agent. Implement the requested changes cleanly and correctly. \
 Follow the existing code style and patterns. Run tests if available. \

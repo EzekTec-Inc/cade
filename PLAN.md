@@ -71,3 +71,13 @@
 - Removed unused `_stdout` parameter from `handle_run_subagent` and `handle_install_skill`.
 - Updated `metadata.json` track status to complete.
 
+
+## 2026-03-04 UTC - Implement Token Efficiency Improvements
+- Reduced `TOOL_RESULT_MAX_CHARS` to 8,192.
+- Reduced `CONTEXT_CHAR_BUDGET` to 200,000.
+- Reduced `HISTORY_LIMIT` to 100 rows.
+- Moved `NO_INTRO_RULE` injection from every turn to agent creation.
+- Curated tools for `general-purpose` and `coder` subagents to avoid full toollist injection.
+- Disabled injection of memory block descriptions into system prompt.
+- Deprecated `skills_context` to prevent token bloat.
+- Optimized `auth()` calls in client by evaluating token format once.

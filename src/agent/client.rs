@@ -186,16 +186,12 @@ impl CadeClient {
         format!("{}/v1{}", self.base_url.trim_end_matches('/'), path)
     }
 
-    fn auth(&self) -> (&'static str, String) {
-        ("Authorization", format!("Bearer {}", self.api_key))
-    }
-
     // ── Health + server config ────────────────────────────────────────────────
 
     pub async fn health(&self) -> Result<bool> {
         let resp = self.client
             .get(self.url("/health"))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await?;
         Ok(resp.status().is_success())
@@ -208,7 +204,7 @@ impl CadeClient {
     pub async fn list_providers(&self) -> anyhow::Result<serde_json::Value> {
         let resp = self.client
             .get(self.url("/providers"))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await?;
         Ok(resp.json().await?)
     }
@@ -225,7 +221,7 @@ impl CadeClient {
         if let Some(u) = base_url { body["base_url"] = u.into(); }
         let resp = self.client
             .post(self.url("/providers"))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&body)
             .send().await?;
         if !resp.status().is_success() {
@@ -238,7 +234,7 @@ impl CadeClient {
     pub async fn remove_provider(&self, name: &str) -> anyhow::Result<()> {
         let resp = self.client
             .delete(self.url(&format!("/providers/{name}")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await?;
         if !resp.status().is_success() && resp.status().as_u16() != 404 {
             let txt = resp.text().await.unwrap_or_default();
@@ -250,7 +246,7 @@ impl CadeClient {
     pub async fn list_provider_presets(&self) -> Vec<serde_json::Value> {
         let resp = self.client
             .get(self.url("/providers/presets"))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await;
         let Ok(r) = resp else { return vec![] };
         let Ok(body): Result<serde_json::Value, _> = r.json().await else { return vec![] };
@@ -261,7 +257,7 @@ impl CadeClient {
     pub async fn available_providers(&self) -> Vec<String> {
         let resp = self.client
             .get(self.url("/providers"))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await;
         let Ok(r) = resp else { return vec!["ollama".to_string()] };
         let Ok(body): Result<serde_json::Value, _> = r.json().await else {
@@ -281,7 +277,7 @@ impl CadeClient {
     pub async fn list_models(&self) -> anyhow::Result<serde_json::Value> {
         let resp = self.client
             .get(self.url("/models"))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await?;
         if !resp.status().is_success() {
             anyhow::bail!("list_models failed {}", resp.status());
@@ -293,7 +289,7 @@ impl CadeClient {
         let fallback = "anthropic/claude-sonnet-4-5-20250929".to_string();
         let resp = match self.client
             .get(self.url("/config"))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await
         {
@@ -316,7 +312,7 @@ impl CadeClient {
     pub async fn attach_agent_tools(&self, agent_id: &str, tool_ids: &[String]) -> Result<()> {
         let resp = self.client
             .post(self.url(&format!("/agents/{agent_id}/tools")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&serde_json::json!({ "tool_ids": tool_ids }))
             .send()
             .await?;
@@ -331,7 +327,7 @@ impl CadeClient {
     pub async fn detach_agent_tools(&self, agent_id: &str) -> Result<usize> {
         let resp = self.client
             .delete(self.url(&format!("/agents/{agent_id}/tools")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -347,7 +343,7 @@ impl CadeClient {
     pub async fn get_agent_tools(&self, agent_id: &str) -> Result<Vec<(String, String)>> {
         let resp = self.client
             .get(self.url(&format!("/agents/{agent_id}/tools")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -365,7 +361,7 @@ impl CadeClient {
     pub async fn patch_agent_model(&self, agent_id: &str, model: &str) -> Result<String> {
         let resp = self.client
             .patch(self.url(&format!("/agents/{agent_id}")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&serde_json::json!({ "model": model }))
             .send()
             .await?;
@@ -386,7 +382,7 @@ impl CadeClient {
     pub async fn patch_agent_system_prompt(&self, agent_id: &str, prompt: &str) -> Result<()> {
         let resp = self.client
             .patch(self.url(&format!("/agents/{agent_id}")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&serde_json::json!({ "system_prompt": prompt }))
             .send()
             .await?;
@@ -400,7 +396,7 @@ impl CadeClient {
     pub async fn create_agent(&self, req: CreateAgentRequest) -> Result<AgentState> {
         let resp = self.client
             .post(self.url("/agents"))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&req)
             .send()
             .await?;
@@ -415,7 +411,7 @@ impl CadeClient {
     pub async fn delete_agent(&self, agent_id: &str) -> Result<()> {
         let resp = self.client
             .delete(self.url(&format!("/agents/{agent_id}")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await?;
         if !resp.status().is_success() && resp.status().as_u16() != 404 {
             bail!("delete_agent failed {}", resp.status());
@@ -426,7 +422,7 @@ impl CadeClient {
     pub async fn get_agent(&self, agent_id: &str) -> Result<AgentState> {
         let resp = self.client
             .get(self.url(&format!("/agents/{agent_id}")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -440,7 +436,7 @@ impl CadeClient {
     pub async fn rename_agent(&self, agent_id: &str, name: &str) -> Result<()> {
         let resp = self.client
             .patch(self.url(&format!("/agents/{agent_id}")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&serde_json::json!({ "name": name }))
             .send()
             .await?;
@@ -454,7 +450,7 @@ impl CadeClient {
     pub async fn list_agents(&self) -> Result<Vec<AgentState>> {
         let resp = self.client
             .get(self.url("/agents"))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -469,7 +465,7 @@ impl CadeClient {
     pub async fn get_memory(&self, agent_id: &str) -> Result<Vec<MemoryBlock>> {
         let resp = self.client
             .get(self.url(&format!("/agents/{agent_id}/memory")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await?;
         if !resp.status().is_success() {
             bail!("get_memory failed {}", resp.status());
@@ -483,7 +479,7 @@ impl CadeClient {
     pub async fn delete_memory(&self, agent_id: &str, label: &str) -> Result<()> {
         let resp = self.client
             .delete(self.url(&format!("/agents/{agent_id}/memory/{label}")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await?;
         if !resp.status().is_success() && resp.status().as_u16() != 404 {
             bail!("delete_memory failed {}", resp.status());
@@ -519,7 +515,7 @@ impl CadeClient {
         }
         let resp = self.client
             .put(self.url(&format!("/agents/{agent_id}/memory/{label}")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&body)
             .send().await?;
         if !resp.status().is_success() {
@@ -537,7 +533,7 @@ impl CadeClient {
     ) -> Result<Vec<serde_json::Value>> {
         let resp = self.client
             .get(self.url(&format!("/agents/{agent_id}/memory/{label}/history?limit={limit}")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await?;
         if !resp.status().is_success() {
             bail!("list_memory_history failed {}", resp.status());
@@ -555,7 +551,7 @@ impl CadeClient {
     ) -> Result<()> {
         let resp = self.client
             .put(self.url(&format!("/agents/{agent_id}/memory/{label}/restore/{rev_id}")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&serde_json::Value::Null)
             .send().await?;
         if !resp.status().is_success() {
@@ -570,7 +566,7 @@ impl CadeClient {
     pub async fn clear_messages(&self, agent_id: &str) -> Result<usize> {
         let resp = self.client
             .delete(self.url(&format!("/agents/{agent_id}/messages")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await?;
         if !resp.status().is_success() {
             bail!("clear_messages failed {}", resp.status());
@@ -583,7 +579,7 @@ impl CadeClient {
     pub async fn search_messages(&self, agent_id: &str, query: &str) -> Result<Vec<Value>> {
         let resp = self.client
             .get(self.url(&format!("/agents/{agent_id}/messages")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .query(&[("q", query)])
             .send().await?;
         if !resp.status().is_success() {
@@ -606,7 +602,7 @@ impl CadeClient {
     pub async fn list_conversations(&self, agent_id: &str) -> Result<Vec<serde_json::Value>> {
         let resp = self.client
             .get(self.url(&format!("/agents/{agent_id}/conversations")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await?;
         if !resp.status().is_success() {
             anyhow::bail!("list_conversations failed {}", resp.status());
@@ -618,7 +614,7 @@ impl CadeClient {
     pub async fn create_conversation(&self, agent_id: &str, title: &str) -> Result<serde_json::Value> {
         let resp = self.client
             .post(self.url(&format!("/agents/{agent_id}/conversations")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&json!({ "title": title }))
             .send().await?;
         if !resp.status().is_success() {
@@ -631,7 +627,7 @@ impl CadeClient {
     pub async fn delete_conversation(&self, agent_id: &str, conv_id: &str) -> Result<()> {
         let resp = self.client
             .delete(self.url(&format!("/agents/{agent_id}/conversations/{conv_id}")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await?;
         if !resp.status().is_success() && resp.status().as_u16() != 404 {
             let txt = resp.text().await.unwrap_or_default();
@@ -645,7 +641,7 @@ impl CadeClient {
     pub async fn get_run(&self, run_id: &str) -> Result<serde_json::Value> {
         let resp = self.client
             .get(self.url(&format!("/runs/{run_id}")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send().await?;
         if !resp.status().is_success() {
             anyhow::bail!("get_run failed {}", resp.status());
@@ -667,7 +663,7 @@ impl CadeClient {
         let url = self.url(&format!("/runs/{run_id}/stream"));
         let request = self.client
             .get(&url)
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .query(&[("starting_after", after_seq.to_string())]);
 
         let mut es = EventSource::new(request)
@@ -732,7 +728,7 @@ impl CadeClient {
         let request = self
             .client
             .post(&url)
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&body);
 
         let mut es = EventSource::new(request)
@@ -883,7 +879,7 @@ impl CadeClient {
         let request = self
             .client
             .post(&url)
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&body);
 
         let mut es = EventSource::new(request)
@@ -929,7 +925,7 @@ impl CadeClient {
     async fn post_messages(&self, agent_id: &str, body: &Value) -> Result<Vec<CadeMessage>> {
         let resp = self.client
             .post(self.url(&format!("/agents/{agent_id}/messages")))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(body)
             .send()
             .await?;
@@ -964,7 +960,7 @@ impl CadeClient {
     pub async fn create_tool(&self, req: CreateToolRequest) -> Result<ToolDef> {
         let resp = self.client
             .post(self.url("/tools"))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .json(&req)
             .send()
             .await?;
@@ -979,7 +975,7 @@ impl CadeClient {
     pub async fn list_tools(&self) -> Result<Vec<ToolDef>> {
         let resp = self.client
             .get(self.url("/tools"))
-            .header(self.auth().0, self.auth().1)
+            .header("Authorization", format!("Bearer {}", self.api_key))
             .send()
             .await?;
         if !resp.status().is_success() {

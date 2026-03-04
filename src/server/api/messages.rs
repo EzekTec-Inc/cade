@@ -19,24 +19,19 @@ use crate::server::{
 /// Maximum length for auto-generated conversation titles (chars from first user message).
 const CONV_TITLE_MAX: usize = 60;
 /// Number of DB message rows to load per turn (~100 full tool-call cycles at 200 rows).
-const HISTORY_LIMIT: usize = 200;
+const HISTORY_LIMIT: usize = 100;
 /// Hard cap on all memory blocks combined in the system prompt (~2k tokens).
 /// Blocks are prioritised by recency (most recently updated first).
 /// Blocks whose value is empty are always skipped regardless of this budget.
 const MEMORY_CHAR_BUDGET: usize = 8_000;
-/// Appended to the system prompt when the stored prompt doesn't already include it.
-/// Prevents agents from prefacing every response with "I am CADE..." identity text.
-const NO_INTRO_RULE: &str = "\n\nIMPORTANT: Never start a response with \"I am CADE\", your name, \
-    or any identity preamble. Answer questions directly and concisely. \
-    If explicitly asked who you are, answer in one brief sentence only.";
 /// Max output tokens per LLM response. Claude 3.7/4.x and GPT-4.1 support 16k+.
 const MAX_TOKENS: u32 = 16384;
 /// Cap on a single tool-result content string (chars). ~8k tokens.
 /// Prevents huge outputs (screenshots, logs) from blowing the context window.
-const TOOL_RESULT_MAX_CHARS: usize = 32_768;
+const TOOL_RESULT_MAX_CHARS: usize = 8_192;
 /// Total character budget for all messages sent to the LLM (~150k tokens, leaving 50k headroom).
 /// Oldest non-system messages are dropped when the budget is exceeded.
-const CONTEXT_CHAR_BUDGET: usize = 600_000;
+const CONTEXT_CHAR_BUDGET: usize = 200_000;
 
 // ── Message history sanitizer ─────────────────────────────────────────────────
 //
@@ -145,13 +140,9 @@ async fn build_context(
     let mut budget_remaining = MEMORY_CHAR_BUDGET;
     let mut included_blocks: Vec<String> = Vec::new();
     let mut omitted_count = 0usize;
-    for (label, val, desc, _ts) in &raw_blocks {
+    for (label, val, _desc, _ts) in &raw_blocks {
         if val.trim().is_empty() { continue; }  // S6: skip empty blocks
-        let entry = if desc.is_empty() {
-            format!("[{label}]\n{val}")
-        } else {
-            format!("[{label}] — {desc}\n{val}")
-        };
+        let entry = format!("[{label}]\n{val}");
         let entry_chars = entry.chars().count();
         if entry_chars <= budget_remaining {
             budget_remaining -= entry_chars;
@@ -171,13 +162,6 @@ async fn build_context(
     };
 
     let base = agent.system_prompt.clone().unwrap_or_default();
-    // Ensure the no-intro rule is always enforced, regardless of when the agent
-    // was created (old agents predate the BASE_SYSTEM_PROMPT no-intro section).
-    let base = if base.contains("Never start a response with") || base.contains("Never introduce yourself") {
-        base
-    } else {
-        format!("{base}{NO_INTRO_RULE}")
-    };
     let system_prompt = if memory.is_empty() {
         base
     } else {
