@@ -17,16 +17,16 @@
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Improve Markdown Rendering' (Protocol in workflow.md)
 
 ## Phase 3: Visual Feedback and Layouts
-- [~] Task: Enhance loading spinners
-    - [ ] Write unit tests for spinner state management.
-    - [ ] Implement a smoother, non-blocking spinner for background operations.
-- [ ] Task: Implement structured layouts for lists
-    - [ ] Write unit tests for layout generation.
-    - [ ] Update commands like `/skills`, `/mcp`, and `/agents` to display results in formatted tables or lists using `ratatui` widgets.
+- [x] Task: Enhance loading spinners d3e4f5a
+    - [x] Write unit tests for spinner state management.
+    - [x] Implement a smoother, non-blocking spinner for background operations.
+- [x] Task: Implement structured layouts for lists e5f6a7b
+    - [x] Write unit tests for layout generation.
+    - [x] Update commands like `/skills`, `/mcp`, and `/agents` to display results in formatted tables or lists using `ratatui` widgets.
 - [ ] Task: Conductor - User Manual Verification 'Phase 3: Visual Feedback and Layouts' (Protocol in workflow.md)
 
 ## Phase 4: Streaming Polish and Integration
-- [ ] Task: Refine SSE streaming rendering
+- [~] Task: Refine SSE streaming rendering
     - [ ] Write unit tests for streaming token insertion.
     - [ ] Ensure token-by-token rendering handles terminal boundaries and newlines cleanly without screen flickering.
 - [ ] Task: Final Polish and Refactoring
