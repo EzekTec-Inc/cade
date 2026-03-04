@@ -64,3 +64,10 @@
 - `src/server/storage/sqlite.rs` — Schema updates for shared blocks and FTS5 virtual table.
 
 **Status**: Backend structures implemented and verified via schema inspection.
+
+## 2026-03-04 UTC - Resolve Issues Found during code review
+- Fixed double `RenderLine::ToolResult` push when calling `ask_user_question`.
+- Restored word count proxy to the `generating…` state on the thinking bar.
+- Removed unused `_stdout` parameter from `handle_run_subagent` and `handle_install_skill`.
+- Updated `metadata.json` track status to complete.
+

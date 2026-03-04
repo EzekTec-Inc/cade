@@ -1890,12 +1890,12 @@ impl Repl {
                             let _ = app_arc.lock().unwrap().push_streaming_chunk(text);
                             // Update thinking bar to show generation progress.
                             if let Some(ref bar) = bar_text_arc {
-                                let _words = app_arc.lock().unwrap()
+                                let words = app_arc.lock().unwrap()
                                     // count words in streaming_text via a snapshot
                                     .lines.len(); // rough proxy — update bar text
                                 let cur = bar.lock().unwrap().clone();
                                 if !cur.starts_with("●") {
-                                    *bar.lock().unwrap() = "generating…".to_string();
+                                    *bar.lock().unwrap() = format!("generating… ({words} lines)");
                                 }
                             }
                         }
@@ -2153,10 +2153,10 @@ impl Repl {
             return self.handle_load_skill(call_id, args).await;
         }
         if tool_name == "install_skill" {
-            return self.handle_install_skill(call_id, args, stdout).await;
+            return self.handle_install_skill(call_id, args).await;
         }
         if tool_name == "run_subagent" {
-            return self.handle_run_subagent(call_id, args, stdout).await;
+            return self.handle_run_subagent(call_id, args).await;
         }
         if tool_name == "ask_user_question" {
             return self.handle_ask_user_question(call_id, args).await;
@@ -2553,13 +2553,9 @@ impl Repl {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
-        let result = AskUserQuestionTool::format_result(&answers);
+        // Removed internal ToolResult push since dispatch_tool_calls pushes it unconditionally.
         {
             let mut app = self.app.lock().unwrap();
-            let _ = app.push(RenderLine::ToolResult {
-                is_error: false,
-                content: result_content,
-            });
             // Force a redraw to ensure the viewport updates immediately after the
             // question modal is dismissed, fixing a race condition where the
             // result of the next tool call would not be displayed.
@@ -2569,7 +2565,7 @@ impl Repl {
         Ok(crate::tools::ToolResult {
             tool_call_id: call_id.to_string(),
             tool_name: "ask_user_question".to_string(),
-            output: result,
+            output: result_content,
             is_error: false,
         })
     }
@@ -2614,7 +2610,6 @@ impl Repl {
         &self,
         call_id: &str,
         args: &serde_json::Value,
-        _stdout: &mut io::Stdout,
     ) -> Result<crate::tools::ToolResult> {
         let url   = args["url"].as_str().unwrap_or("").trim().to_string();
         let scope = args["scope"].as_str().unwrap_or("project");
@@ -3355,7 +3350,6 @@ impl Repl {
         &self,
         call_id: &str,
         args: &serde_json::Value,
-        _stdout: &mut io::Stdout,
     ) -> Result<crate::tools::ToolResult> {
         let subagent_type = args["subagent_type"].as_str().unwrap_or("general-purpose").trim().to_string();
         let prompt        = args["prompt"].as_str().unwrap_or("").trim().to_string();
