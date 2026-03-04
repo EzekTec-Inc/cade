@@ -45,3 +45,22 @@
 - `src/cli/repl.rs`
 
 **Status**: Verified via code inspection; pending compiler check for uncommitted changes.
+
+---
+
+## 2026-03-03 UTC — Memory System Enhancements (Letta Code Alignment)
+
+**Summary**: Implemented Shared Memory and Archival Memory structures to align with Letta Code concepts.
+
+**Shared Memory**: 
+- Added `shared_memory_blocks` and `agent_memory_blocks` tables to SQLite.
+- Enables memory blocks to be shared across multiple agents rather than being strictly siloed.
+
+**Archival Memory**:
+- Implemented `messages_fts` using SQLite FTS5 for full-text search across conversation history.
+- Added triggers (`messages_ai`, `messages_ad`, `messages_au`) to keep the search index synchronized with the `messages` table.
+
+**Files modified**:
+- `src/server/storage/sqlite.rs` — Schema updates for shared blocks and FTS5 virtual table.
+
+**Status**: Backend structures implemented and verified via schema inspection.

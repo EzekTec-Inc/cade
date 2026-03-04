@@ -2552,10 +2552,17 @@ impl Repl {
                 .join("\n")
         };
         let result = AskUserQuestionTool::format_result(&answers);
-        let _ = self.app.lock().unwrap().push(RenderLine::ToolResult {
-            is_error: false,
-            content: result_content,
-        });
+        {
+            let mut app = self.app.lock().unwrap();
+            let _ = app.push(RenderLine::ToolResult {
+                is_error: false,
+                content: result_content,
+            });
+            // Force a redraw to ensure the viewport updates immediately after the
+            // question modal is dismissed, fixing a race condition where the
+            // result of the next tool call would not be displayed.
+            let _ = app.draw();
+        }
 
         Ok(crate::tools::ToolResult {
             tool_call_id: call_id.to_string(),
