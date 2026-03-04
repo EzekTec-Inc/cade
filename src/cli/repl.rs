@@ -2062,6 +2062,12 @@ impl Repl {
 
             let result = self.execute_tool(stdout, &call_id, &tool_name, &args).await?;
 
+            // Render the successful tool result to the UI immediately.
+            let _ = self.app.lock().unwrap().push(RenderLine::ToolResult {
+                is_error: result.is_error,
+                content: result.output.clone(),
+            });
+
             // Stream the tool return and process any chained tool calls
             let follow = self
                 .stream_turn(stdout, "", true, &call_id, &result.output, None, bar_text.clone())
