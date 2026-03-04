@@ -86,9 +86,6 @@ const DEFAULT_MEMORY_BLOCKS: &[(&str, &str, &str, usize)] = &[
 ];
 
 /// Default max_chars for user-created memory blocks (not in DEFAULT_MEMORY_BLOCKS).
-const DEFAULT_USER_BLOCK_MAX_CHARS: usize = 4_000;
-
-/// Seed default memory blocks for a newly created agent.
 async fn seed_default_memory(client: &CadeClient, agent_id: &str) {
     for (label, value, description, max_chars) in DEFAULT_MEMORY_BLOCKS {
         if let Err(e) = client.upsert_memory_with_limit(
