@@ -3,12 +3,12 @@
 ## Phase 1: Setup and Foundation
 - [x] Task: Review current REPL UI architecture f7d2a1b
     - [x] Read `src/cli/repl.rs` and `src/ui/output.rs` to understand the existing rendering logic.
-- [~] Task: Evaluate `ratatui` UI components
-    - [ ] Research `ratatui` widgets for layout, lists, and advanced text rendering.
+- [x] Task: Evaluate `ratatui` UI components a8d2e3b
+    - [x] Research `ratatui` widgets for layout, lists, and advanced text rendering.
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Setup and Foundation' (Protocol in workflow.md)
 
 ## Phase 2: Improve Markdown Rendering
-- [ ] Task: Implement advanced markdown parsing
+- [~] Task: Implement advanced markdown parsing
     - [ ] Write unit tests for the markdown parser (e.g., in `src/ui/output.rs` or a new module).
     - [ ] Update `parse_markdown_lines` to correctly handle nested structures (lists, blockquotes).
 - [ ] Task: Implement syntax highlighting for code blocks
