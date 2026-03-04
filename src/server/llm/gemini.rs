@@ -241,30 +241,38 @@ impl LlmProvider for GeminiProvider {
                     buf = buf[pos + 1..].to_string();
                     let data = match line.strip_prefix("data: ") { Some(d) => d, None => continue };
                     let v: Value = match serde_json::from_str(data) { Ok(v) => v, Err(_) => continue };
-                    let candidate = &v["candidates"][0];
 
-                    if let Some(parts) = candidate["content"]["parts"].as_array() {
-                        for part in parts {
-                            if let Some(text) = part["text"].as_str() {
-                                if !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
-                            }
-                            if let Some(fc) = part.get("functionCall") {
-                                yield Ok(StreamChunk::ToolCall(LlmToolCall {
-                                    id:        uuid::Uuid::new_v4().to_string(),
-                                    name:      fc["name"].as_str().unwrap_or("").to_string(),
-                                    arguments: fc["args"].clone(),
-                                }));
-                            }
-                        }
-                    }
-                    if candidate["finishReason"].as_str().is_some() {
-                        // Extract token usage from the same final chunk
-                        let in_tok  = v["usageMetadata"]["promptTokenCount"].as_u64().unwrap_or(0) as u32;
-                        let out_tok = v["usageMetadata"]["candidatesTokenCount"].as_u64().unwrap_or(0) as u32;
+                    // 1. Always check for usage metadata at the root if it's present
+                    if let Some(usage) = v.get("usageMetadata") {
+                        let in_tok  = usage["promptTokenCount"].as_u64().unwrap_or(0) as u32;
+                        let out_tok = usage["candidatesTokenCount"].as_u64().unwrap_or(0) as u32;
                         if in_tok > 0 || out_tok > 0 {
                             yield Ok(StreamChunk::Usage(TokenUsage { input_tokens: in_tok, output_tokens: out_tok }));
                         }
-                        yield Ok(StreamChunk::Done); return;
+                    }
+
+                    // 2. Parse candidates (content, tool calls, finishReason)
+                    if let Some(candidates) = v.get("candidates").and_then(|c| c.as_array()) {
+                        if let Some(candidate) = candidates.first() {
+                            if let Some(parts) = candidate["content"]["parts"].as_array() {
+                                for part in parts {
+                                    if let Some(text) = part["text"].as_str() {
+                                        if !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
+                                    }
+                                    if let Some(fc) = part.get("functionCall") {
+                                        yield Ok(StreamChunk::ToolCall(LlmToolCall {
+                                            id:        uuid::Uuid::new_v4().to_string(),
+                                            name:      fc["name"].as_str().unwrap_or("").to_string(),
+                                            arguments: fc["args"].clone(),
+                                        }));
+                                    }
+                                }
+                            }
+                            
+                            if candidate["finishReason"].as_str().is_some() {
+                                yield Ok(StreamChunk::Done); return;
+                            }
+                        }
                     }
                 }
             }

@@ -7,6 +7,7 @@
 pub mod app;
 pub mod question;
 pub mod menu;
+pub mod markdown;
 
 pub use app::{TuiApp, RenderLine, cycle_mode, cycle_mode_back, truncate_str, RawModeGuard, make_relative_path};
 pub use question::{QuestionWidget, QuestionAnswer, QuestionOption, Question};

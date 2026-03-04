@@ -434,17 +434,22 @@ impl Repl {
                             self.tui_dim("    }");
                             self.tui_dim("  }");
                         } else {
+                            let mut rows = Vec::new();
                             for s in &statuses {
-                                self.tui_ok(format!("  ● {:<16} {} tool(s)", s.key, s.tools.len()));
-                                // Show tool names (strip prefix for clarity)
-                                for chunk in s.tools.chunks(4) {
-                                    let names: Vec<&str> = chunk.iter()
-                                        .map(|t| t.splitn(2, "__").nth(1).unwrap_or(t))
-                                        .collect();
-                                    self.tui_dim(format!("    {}", names.join("  ")));
-                                }
-                                self.tui_blank();
+                                let tool_list = s.tools.iter()
+                                    .map(|t| t.splitn(2, "__").nth(1).unwrap_or(t))
+                                    .collect::<Vec<_>>()
+                                    .join(", ");
+                                rows.push(vec![
+                                    s.key.clone(),
+                                    format!("{} tools", s.tools.len()),
+                                    crate::ui::truncate_str(&tool_list, 60),
+                                ]);
                             }
+                            let _ = self.app.lock().unwrap().push(RenderLine::Table {
+                                headers: vec!["Server".to_string(), "Count".to_string(), "Tools".to_string()],
+                                rows,
+                            });
                         }
                     }
                     SlashCmd::Link => {
@@ -1176,14 +1181,20 @@ impl Repl {
                                     self.tui_blank();
                                     self.tui_hdr(format!("  Skills ({} loaded):", skills.len()));
                                     self.tui_blank();
+                                    let mut rows = Vec::new();
                                     for s in skills.iter() {
-                                        let cat = s.category.as_deref()
-                                            .map(|c| format!("[{}]", c))
-                                            .unwrap_or_default();
-                                        self.tui_sys(format!("  {:<10} {:<28} {:<12} {}",
-                                            format!("[{}]", s.scope), s.id, cat, s.description));
+                                        let cat = s.category.as_deref().unwrap_or("general").to_string();
+                                        rows.push(vec![
+                                            s.scope.to_string(),
+                                            s.id.clone(),
+                                            cat,
+                                            s.description.clone(),
+                                        ]);
                                     }
-                                    self.tui_blank();
+                                    let _ = self.app.lock().unwrap().push(RenderLine::Table {
+                                        headers: vec!["Scope".to_string(), "ID".to_string(), "Category".to_string(), "Description".to_string()],
+                                        rows,
+                                    });
                                     self.tui_dim("  Agent uses load_skill(<id>) to load full content on-demand.");
                                 }
                             }

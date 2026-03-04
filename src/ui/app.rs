@@ -8,7 +8,7 @@
 /// state change, eliminating all the CPR / DECSTBM / blank-row-tracking hacks.
 ///
 /// Layout (each frame):
-/// ```
+/// ```text
 /// ┌─────────────────────────────────────────┐
 /// │       Content area  (scrollable)        │  term_h - (4 + input_rows)
 /// ├─────────────────────────────────────────┤
@@ -51,10 +51,9 @@ const CONTENT_PAD_TOP: u16 = 1;
 const CONTENT_PAD_BOT: u16 = 1;
 /// Braille spinner frames for thinking animation.
 const BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+const DOTS: &[&str] = &["⠁", "⠂", "⠄", "⠐", "⠠", "⠐", "⠄", "⠂"];
 /// Result prefix: "  ⎿  "
 const RESULT_PREFIX: &str = "  ⎿  ";
-/// Left-margin indent for markdown paragraphs (matches Letta Code style).
-const INDENT: &str = "";
 
 // ── RenderLine ────────────────────────────────────────────────────────────────
 
@@ -85,6 +84,11 @@ pub enum RenderLine {
     Pair { label: String, value: String },
     /// Error message (red).
     ErrorMsg(String),
+    /// Structured table data.
+    Table {
+        headers: Vec<String>,
+        rows: Vec<Vec<String>>,
+    },
     /// Blank spacer line.
     Blank,
 }
@@ -164,7 +168,11 @@ impl TuiApp {
     pub fn push(&mut self, line: RenderLine) -> Result<()> {
         self.commit_streaming_inner();
         self.commit_reasoning_inner();
+        let at_bottom = self.scroll == 0;
         self.lines.push(line);
+        if at_bottom {
+            self.scroll = 0; // Only snap to bottom if we were already there
+        }
         self.draw()
     }
 
@@ -615,8 +623,14 @@ fn render_frame(
     let (status_text, status_style) = if let Some(elapsed) = thinking_elapsed {
         let text = thinking_text.unwrap_or("thinking…");
         let ms = elapsed.as_millis();
-        let frame_idx = (ms / 80) as usize; // faster: 80ms vs 120ms
-        let spinner   = BRAILLE[frame_idx % BRAILLE.len()];
+        
+        // Dynamic spinner selection based on elapsed time or just variety
+        let spinner = if (ms / 3000) % 2 == 0 {
+            BRAILLE[(ms / 80) as usize % BRAILLE.len()]
+        } else {
+            DOTS[(ms / 100) as usize % DOTS.len()]
+        };
+
         // Pulse through bright-cyan shades (~400ms per step)
         let palette: &[(u8, u8, u8)] = &[
             (80,  190, 255),
@@ -625,6 +639,7 @@ fn render_frame(
             (100, 200, 255),
         ];
         let (r, g, b) = palette[(ms / 400) as usize % palette.len()];
+        
         (
             format!("{spinner} {text}"),
             Style::default().fg(RC::Rgb(r, g, b)).add_modifier(Modifier::BOLD),
@@ -841,11 +856,51 @@ fn render_line_to_text(rl: &RenderLine, width: usize, out: &mut Vec<Line<'static
                 )));
             }
         }
+        RenderLine::Table { headers, rows } => {
+            if rows.is_empty() { return; }
+            let n_cols = headers.len();
+            let mut widths = vec![0; n_cols];
+            for (i, h) in headers.iter().enumerate() {
+                widths[i] = h.len();
+            }
+            for row in rows {
+                for (i, cell) in row.iter().enumerate() {
+                    if i < n_cols {
+                        widths[i] = widths[i].max(cell.len());
+                    }
+                }
+            }
+
+            // Draw header
+            let mut header_spans = Vec::new();
+            for (i, h) in headers.iter().enumerate() {
+                header_spans.push(Span::styled(
+                    format!("  {:<width$}  ", h, width = widths[i]),
+                    Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                ));
+            }
+            out.push(Line::from(header_spans));
+
+            // Draw rows
+            for row in rows {
+                let mut row_spans = Vec::new();
+                for (i, cell) in row.iter().enumerate() {
+                    if i < n_cols {
+                        row_spans.push(Span::styled(
+                            format!("  {:<width$}  ", cell, width = widths[i]),
+                            Style::default().fg(RC::Gray),
+                        ));
+                    }
+                }
+                out.push(Line::from(row_spans));
+            }
+            out.push(Line::from(""));
+        }
     }
 }
 
 fn render_assistant_lines(text: &str, _width: usize, out: &mut Vec<Line<'static>>) {
-    let md_lines = parse_markdown_lines(text);
+    let md_lines = crate::ui::markdown::parse_markdown_lines(text);
     if md_lines.is_empty() {
         out.push(Line::from(Span::styled(
             "● ",
@@ -866,158 +921,6 @@ fn render_assistant_lines(text: &str, _width: usize, out: &mut Vec<Line<'static>
             out.push(ml);
         }
     }
-}
-
-// ── Markdown parser (ported from output.rs) ───────────────────────────────────
-
-fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut in_fence = false;
-
-    for raw_line in text.lines() {
-        let trimmed = raw_line.trim_start();
-
-        // Code fence toggle
-        if trimmed.starts_with("```") {
-            in_fence = !in_fence;
-            if in_fence {
-                let lang = trimmed.trim_start_matches('`').trim();
-                if !lang.is_empty() {
-                    lines.push(Line::from(Span::styled(
-                        format!("{INDENT}  {lang}"),
-                        Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
-                    )));
-                }
-            }
-            continue;
-        }
-        if in_fence {
-            lines.push(Line::from(Span::styled(
-                format!("{INDENT}  {raw_line}"),
-                Style::default().fg(RC::Yellow),
-            )));
-            continue;
-        }
-        if raw_line.trim().is_empty() {
-            lines.push(Line::from(""));
-            continue;
-        }
-        // Headings
-        if let Some(rest) = trimmed.strip_prefix("### ") {
-            lines.push(Line::from(Span::styled(
-                format!("{INDENT}{rest}"),
-                Style::default().fg(RC::Cyan),
-            )));
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("## ") {
-            lines.push(Line::from(Span::styled(
-                format!("{INDENT}{rest}"),
-                Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD),
-            )));
-            continue;
-        }
-        if let Some(rest) = trimmed.strip_prefix("# ") {
-            lines.push(Line::from(Span::styled(
-                format!("{INDENT}{rest}"),
-                Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )));
-            continue;
-        }
-        // Horizontal rule
-        if trimmed == "---" || trimmed == "***" || trimmed == "===" {
-            lines.push(Line::from(Span::styled(
-                format!("{INDENT}{}", "─".repeat(40)),
-                Style::default().fg(RC::DarkGray),
-            )));
-            continue;
-        }
-        // Bullets
-        let bullet = trimmed.strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix("* "))
-            .or_else(|| trimmed.strip_prefix("• "));
-        if let Some(rest) = bullet {
-            let mut spans: Vec<Span<'static>> = vec![
-                Span::raw(format!("{INDENT}  ")),
-                Span::styled("• ", Style::default().fg(RC::Green)),
-            ];
-            spans.extend(parse_inline(rest));
-            lines.push(Line::from(spans));
-            continue;
-        }
-        // Numbered list
-        if let Some((num, rest)) = parse_list_prefix(trimmed) {
-            let mut spans: Vec<Span<'static>> = vec![
-                Span::raw(format!("{INDENT}  ")),
-                Span::styled(
-                    format!("{num}. "),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ),
-            ];
-            spans.extend(parse_inline(rest));
-            lines.push(Line::from(spans));
-            continue;
-        }
-        // Normal paragraph
-        let mut spans: Vec<Span<'static>> = vec![Span::raw(INDENT)];
-        spans.extend(parse_inline(trimmed));
-        lines.push(Line::from(spans));
-    }
-    lines
-}
-
-fn parse_inline(text: &str) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut rest  = text.to_string();
-    while !rest.is_empty() {
-        if let Some(pos) = rest.find("**") {
-            let before = rest[..pos].to_string();
-            if !before.is_empty() { spans.push(Span::raw(before)); }
-            let after = &rest[pos + 2..];
-            if let Some(end) = after.find("**") {
-                spans.push(Span::styled(after[..end].to_string(), Style::default().add_modifier(Modifier::BOLD)));
-                rest = after[end + 2..].to_string();
-                continue;
-            }
-            spans.push(Span::raw(format!("**{after}")));
-            break;
-        }
-        if let Some(pos) = rest.find('`') {
-            let before = rest[..pos].to_string();
-            if !before.is_empty() { spans.push(Span::raw(before)); }
-            let after = &rest[pos + 1..];
-            if let Some(end) = after.find('`') {
-                spans.push(Span::styled(after[..end].to_string(), Style::default().fg(RC::Yellow)));
-                rest = after[end + 1..].to_string();
-                continue;
-            }
-            spans.push(Span::raw(format!("`{after}")));
-            break;
-        }
-        if let Some(pos) = rest.find('*') {
-            let before = rest[..pos].to_string();
-            if !before.is_empty() { spans.push(Span::raw(before)); }
-            let after = &rest[pos + 1..];
-            if let Some(end) = after.find('*') {
-                spans.push(Span::styled(after[..end].to_string(), Style::default().add_modifier(Modifier::ITALIC)));
-                rest = after[end + 1..].to_string();
-                continue;
-            }
-            spans.push(Span::raw(format!("*{after}")));
-            break;
-        }
-        spans.push(Span::raw(rest.clone()));
-        break;
-    }
-    if spans.is_empty() { spans.push(Span::raw(String::new())); }
-    spans
-}
-
-fn parse_list_prefix(s: &str) -> Option<(&str, &str)> {
-    let end = s.find(|c: char| !c.is_ascii_digit())?;
-    if end == 0 { return None; }
-    let rest = s[end..].strip_prefix(". ")?;
-    Some((&s[..end], rest))
 }
 
 // ── Input helpers (ported from input.rs) ──────────────────────────────────────
