@@ -11,13 +11,13 @@
 - [x] Task: Implement advanced markdown parsing b9d2e1c
     - [x] Write unit tests for the markdown parser (e.g., in `src/ui/output.rs` or a new module).
     - [x] Update `parse_markdown_lines` to correctly handle nested structures (lists, blockquotes).
-- [~] Task: Implement syntax highlighting for code blocks
-    - [ ] Write unit tests for syntax highlighting logic.
-    - [ ] Integrate a lightweight syntax highlighting library or implement basic coloring for common languages.
+- [x] Task: Implement syntax highlighting for code blocks c2d3e4f
+    - [x] Write unit tests for syntax highlighting logic.
+    - [x] Integrate a lightweight syntax highlighting library or implement basic coloring for common languages.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Improve Markdown Rendering' (Protocol in workflow.md)
 
 ## Phase 3: Visual Feedback and Layouts
-- [ ] Task: Enhance loading spinners
+- [~] Task: Enhance loading spinners
     - [ ] Write unit tests for spinner state management.
     - [ ] Implement a smoother, non-blocking spinner for background operations.
 - [ ] Task: Implement structured layouts for lists
