@@ -129,6 +129,7 @@ pub struct TuiApp {
     pub lines:    Vec<RenderLine>,
     /// Lines scrolled up from the bottom.  0 = show latest content.
     pub scroll:   usize,
+    pub expand_all: bool,
 
     // ── Streaming state ────────────────────────────────────────────────────
     streaming_text:   String,
@@ -163,6 +164,7 @@ impl TuiApp {
             terminal,
             lines: Vec::new(),
             scroll: 0,
+            expand_all: false,
             streaming_text: String::new(),
             streaming_active: false,
             reasoning_text: String::new(),
@@ -332,6 +334,7 @@ impl TuiApp {
         let last_status     = self.last_status.clone();
         let thinking_text   = self.thinking.as_ref().map(|ts| ts.text.lock().unwrap().clone());
         let thinking_elapsed = self.thinking.as_ref().map(|ts| ts.started.elapsed());
+        let expand_all      = self.expand_all;
 
         self.terminal.draw(move |frame| {
             render_frame(
@@ -339,6 +342,7 @@ impl TuiApp {
                 &lines,
                 streaming.as_deref(),
                 scroll,
+                expand_all,
                 &input,
                 cursor_pos,
                 mode,
@@ -617,6 +621,11 @@ impl TuiApp {
                 return Ok(Some(Some("__BACKTAB__".to_string())));
             }
 
+            // ── Expand/Collapse Tool Outputs ──────────────────────────────
+            (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
+                self.expand_all = !self.expand_all;
+            }
+
             // ── Editing ───────────────────────────────────────────────────
             (KeyCode::Backspace, _) if self.cursor_pos > 0 => {
                 let char_len = self.input[..self.cursor_pos]
@@ -684,6 +693,7 @@ fn render_frame(
     lines:            &[RenderLine],
     streaming:        Option<&str>,
     scroll:           usize,
+    expand_all:       bool,
     input:            &str,
     cursor_pos:       usize,
     mode:             PermissionMode,
@@ -721,7 +731,7 @@ fn render_frame(
     // ── Content area ─────────────────────────────────────────────────────────
     let mut text_lines: Vec<Line<'static>> = Vec::new();
     for rl in lines {
-        render_line_to_text(rl, w, &mut text_lines);
+        render_line_to_text(rl, w, expand_all, &mut text_lines);
     }
     if let Some(s) = streaming {
         render_assistant_lines(s, w, &mut text_lines);
@@ -914,7 +924,7 @@ fn render_active_question(aq: &ActiveQuestionState<'_>, _width: usize, lines: &m
 
 // ── Line renderers ────────────────────────────────────────────────────────────
 
-fn render_line_to_text(rl: &RenderLine, width: usize, out: &mut Vec<Line<'static>>) {
+fn render_line_to_text(rl: &RenderLine, width: usize, expand_all: bool, out: &mut Vec<Line<'static>>) {
     match rl {
         RenderLine::Separator => {
             out.push(Line::from(Span::styled(
@@ -982,14 +992,14 @@ fn render_line_to_text(rl: &RenderLine, width: usize, out: &mut Vec<Line<'static
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
                 ]));
-                let show = lns.len().min(5);
+                let show = if expand_all { lns.len() } else { lns.len().min(5) };
                 for ln in &lns[1..show] {
                     out.push(Line::from(vec![
                         Span::raw("     "),
                         Span::styled(truncate_str(ln, inner_w), Style::default().fg(color)),
                     ]));
                 }
-                if lns.len() > 5 {
+                if !expand_all && lns.len() > 5 {
                     out.push(Line::from(Span::styled(
                         format!("     … ({} more lines)", lns.len() - 5),
                         Style::default().fg(RC::DarkGray),

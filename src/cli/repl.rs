@@ -1761,9 +1761,10 @@ impl Repl {
                         if let Ok(mut app) = tick_app.try_lock() {
                             use crossterm::event::MouseEventKind;
                             match evt {
-                                Event::Key(k) => match k.code {
-                                    KeyCode::Char('K') => { app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
-                                    KeyCode::Char('J') => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
+                                Event::Key(k) => match (k.code, k.modifiers) {
+                                    (KeyCode::Char('K'), _) => { app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
+                                    (KeyCode::Char('J'), _) => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
+                                    (KeyCode::Char('o'), crossterm::event::KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
                                     _ => {}
                                 },
                                 Event::Mouse(m) => match m.kind {
