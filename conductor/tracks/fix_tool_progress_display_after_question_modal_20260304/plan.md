@@ -2,5 +2,5 @@
 
 ## Phase: Implement UI rendering for tool results
 
-- [ ] Task: Push `RenderLine::ToolResult` to `TuiApp` after tool execution
+- [x] Task: Push `RenderLine::ToolResult` to `TuiApp` after tool execution `ccc4adb`
 
