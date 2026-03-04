@@ -1902,8 +1902,14 @@ impl Repl {
                     }
                 }
                 "tool_call_message" => {
+                    {
+                        let mut rflag = in_reasoning2.lock().unwrap();
+                        if *rflag {
+                            let _ = app_arc.lock().unwrap().commit_reasoning();
+                            *rflag = false;
+                        }
+                    }
                     let _ = app_arc.lock().unwrap().commit_streaming();
-                    *in_reasoning2.lock().unwrap() = false;
                     *in_assistant2.lock().unwrap() = false;
                     if let Some(ref bar) = bar_text_arc {
                         let tool_name = msg.data["tool_calls"][0]["function"]["name"]
@@ -2003,6 +2009,7 @@ impl Repl {
         };
 
         // Commit any open streaming blocks after streaming ends.
+        let _ = self.app.lock().unwrap().commit_reasoning();
         let _ = self.app.lock().unwrap().commit_streaming();
 
         // Save run_id + last seq_id for crash recovery / reconnect

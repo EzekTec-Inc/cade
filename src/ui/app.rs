@@ -70,8 +70,8 @@ pub enum RenderLine {
     ToolCall { name: String, preview: String },
     /// Tool result: `  ⎿  summary`.
     ToolResult { is_error: bool, content: String },
-    /// Collapsed reasoning block: `💭 Reasoning (N words)`.
-    ReasoningHeader(usize),
+    /// Collapsed reasoning block. Expandable via Ctrl+O.
+    Reasoning { words: usize, content: String },
     /// System / info message (dim gray).
     SystemMsg(String),
     /// Success message (green, ✓ prefix).
@@ -276,7 +276,7 @@ impl TuiApp {
             let text = std::mem::take(&mut self.reasoning_text);
             let words = text.split_whitespace().count();
             if words > 0 {
-                self.lines.push(RenderLine::ReasoningHeader(words));
+                self.lines.push(RenderLine::Reasoning { words, content: text });
             }
             self.reasoning_active = false;
         }
@@ -1007,11 +1007,20 @@ fn render_line_to_text(rl: &RenderLine, width: usize, expand_all: bool, out: &mu
                 }
             }
         }
-        RenderLine::ReasoningHeader(words) => {
+        RenderLine::Reasoning { words, content } => {
             out.push(Line::from(Span::styled(
                 format!("💭 Reasoning ({words} words)"),
                 Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC),
             )));
+            if expand_all {
+                let inner_w = width.saturating_sub(5);
+                for ln in content.lines() {
+                    out.push(Line::from(vec![
+                        Span::raw("     "),
+                        Span::styled(truncate_str(ln, inner_w), Style::default().fg(RC::DarkGray)),
+                    ]));
+                }
+            }
         }
         RenderLine::SystemMsg(text) => {
             for ln in text.lines() {
