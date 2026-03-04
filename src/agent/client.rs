@@ -910,6 +910,10 @@ impl CadeClient {
                     }
                 }
                 Err(reqwest_eventsource::Error::StreamEnded) => break,
+                Err(reqwest_eventsource::Error::InvalidStatusCode(status, _)) => {
+                    es.close();
+                    return Err(anyhow::anyhow!("Server returned HTTP {status}"));
+                }
                 Err(_) => {
                     // Fallback to non-streaming
                     es.close();

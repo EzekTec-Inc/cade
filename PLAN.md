@@ -81,3 +81,6 @@
 - Disabled injection of memory block descriptions into system prompt.
 - Deprecated `skills_context` to prevent token bloat.
 - Optimized `auth()` calls in client by evaluating token format once.
+
+## 2026-03-04 UTC - Fix stream_tool_return_cancellable silent error discard
+- Explicitly handle `InvalidStatusCode` inside `stream_tool_return_cancellable` to mirror behavior of `stream_message_cancellable`. This correctly propagates server HTTP errors instead of falling back to a non-streaming endpoint.
