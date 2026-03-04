@@ -119,12 +119,14 @@ CADE/
 │   ├── agent/               ← REST client for cade-server
 │   │   ├── client.rs        ← CadeClient (HTTP + SSE)
 │   │   ├── session.rs       ← SessionStore (agent ID persistence)
-│   │   └── tools.rs         ← built-in tool schema registration
+│   │   ├── tools.rs         ← built-in tool schema registration
+│   │   └── mod.rs
 │   │
 │   ├── cli/                 ← user-facing interfaces
 │   │   ├── args.rs          ← clap CLI argument definitions
 │   │   ├── repl.rs          ← interactive REPL (ratatui + crossterm)
-│   │   └── headless.rs      ← pipe/stdin headless mode
+│   │   ├── headless.rs      ← pipe/stdin headless mode
+│   │   └── mod.rs
 │   │
 │   ├── mcp/                 ← MCP server integration (rmcp)
 │   │   └── mod.rs           ← McpManager: spawn, handshake, route tool calls
@@ -134,7 +136,9 @@ CADE/
 │   │   ├── fs.rs            ← file read/write/edit/glob
 │   │   ├── search.rs        ← grep (regex file search)
 │   │   ├── desktop.rs       ← screenshot, notify, window control
-│   │   └── manager.rs       ← tool dispatch + schema registry
+│   │   ├── ask.rs           ← interactive user questions (ask_user_question)
+│   │   ├── manager.rs       ← tool dispatch + schema registry
+│   │   └── mod.rs
 │   │
 │   ├── toolsets/            ← model-specific tool family selection
 │   │   └── mod.rs           ← Default (Claude) / Codex (OpenAI) / Gemini
@@ -155,7 +159,8 @@ CADE/
 │   │   ├── capture.rs       ← xcap screen capture
 │   │   ├── control.rs       ← xdotool/ydotool input control
 │   │   ├── notify.rs        ← OS notifications (notify-rust)
-│   │   └── tray.rs          ← system tray (ksni / D-Bus)
+│   │   ├── tray.rs          ← system tray (ksni / D-Bus)
+│   │   └── mod.rs
 │   │
 │   ├── server/              ← cade-server internals
 │   │   ├── api/             ← Axum route handlers
@@ -166,23 +171,34 @@ CADE/
 │   │   │   ├── providers.rs ← LLM provider management
 │   │   │   ├── models.rs    ← model listing
 │   │   │   └── health.rs    ← health check
+│   │   │   └── mod.rs
 │   │   ├── llm/             ← LLM provider adapters
 │   │   │   ├── anthropic.rs
 │   │   │   ├── openai.rs
 │   │   │   ├── gemini.rs
 │   │   │   ├── ollama.rs
-│   │   │   └── catalogue.rs ← model catalogue
+│   │   │   ├── catalogue.rs ← model catalogue
+│   │   │   └── mod.rs
 │   │   ├── storage/
-│   │   │   └── sqlite.rs    ← all DB operations (rusqlite)
+│   │   │   ├── sqlite.rs    ← all DB operations (rusqlite)
+│   │   │   └── mod.rs
 │   │   ├── config.rs        ← ServerConfig (env-driven)
 │   │   └── state.rs         ← AppState (shared across handlers)
+│   │   └── mod.rs
 │   │
 │   ├── settings/            ← settings.json loader
-│   │   └── manager.rs       ← SettingsManager, McpServerConfig, HooksConfig
+│   │   ├── manager.rs       ← SettingsManager, McpServerConfig, HooksConfig
+│   │   └── mod.rs
 │   │
 │   └── ui/                  ← terminal rendering helpers
-│       ├── input.rs         ← keyboard/mouse input handling
-│       └── output.rs        ← markdown rendering, streaming output
+│       ├── app.rs           ← TuiApp (central unified render loop)
+│       ├── input.rs         ← keyboard/mouse input logic
+│       ├── output.rs        ← formatted output blocks
+│       ├── markdown.rs      ← markdown to ratatui span parsing
+│       ├── question.rs      ← interactive question widget
+│       ├── menu.rs          ← TUI menus and pickers
+│       ├── status.rs        ← thinking bar and status display
+│       └── mod.rs
 │
 ├── .cade/                   ← runtime config (gitignored)
 │   ├── settings.local.json  ← local overrides (MCP servers, hooks, etc.)
@@ -199,19 +215,19 @@ CADE/
 
 ```
 lib.rs
- ├── agent      ← CadeClient (REST), SessionStore, tool schema registration
- ├── cli        ← Args (clap), Repl (ratatui), Headless (stdin/stdout)
- ├── desktop    ← capture, control, notify, tray
- ├── hooks      ← HookEngine, HookOutcome (PreToolUse / PostToolUse / …)
- ├── mcp        ← McpManager (rmcp, stdio transport)
- ├── permissions← PermissionManager, PermissionRule, PermissionMode
- ├── server     ← Axum API, LlmRouter, SQLite storage, AppState
- ├── settings   ← SettingsManager, McpServerConfig, HooksConfig
- ├── skills     ← discover_all_skills, skills_listing, load_skill
- ├── subagents  ← SubagentDef, SubagentTools, SubagentScope
- ├── toolsets   ← Toolset (Default / Codex / Gemini)
- ├── tools      ← bash, fs, search, desktop; ToolManager dispatch
- └── ui         ← input handling, markdown output rendering
+ ├── agent      ← REST client (CadeClient), session persistence, tool schema registry
+ ├── cli        ← user interfaces: Args (clap), Repl (TUI loop), Headless (pipes)
+ ├── desktop    ← OS integration: capture (xcap), notify, tray, control
+ ├── hooks      ← Lifecycle HookEngine (pre/post tool, prompt submit, etc.)
+ ├── mcp        ← MCP Manager (rmcp): server lifecycle, tool namespacing, dispatch
+ ├── permissions← PermissionManager: interactive prompts, allow/deny persistence
+ ├── server     ← cade-server: Axum API, LLM adapters, SQLite storage
+ ├── settings   ← SettingsManager: config merging (global/project/local)
+ ├── skills     ← Skill discovery, on-demand loading, content parsing
+ ├── subagents  ← Subagent spawning, context isolation, tool restriction
+ ├── toolsets   ← Model-specific behaviors (OpenAI vs Anthropic vs Gemini)
+ ├── tools      ← Core tool implementations: bash, fs, search, ask, desktop
+ └── ui         ← Unified TUI rendering: TuiApp, RenderLine, markdown parsing
 ```
 
 ---
@@ -319,10 +335,11 @@ Args (clap)
  └── -p / --print     headless: prompt from CLI arg
 
 Repl (ratatui + crossterm)
- ├── Markdown rendering (custom parse_markdown_lines: headings, bullets, code fences, bold/italic)
- ├── Single-line spinner during generation; insert_before re-render on completion
- ├── Slash commands: /help /memory /mcp /skills /subagents /clear /exit …
- └── Multi-line input (Shift+Enter)
+ ├── **Unified Render Loop:** `TuiApp` maintains all conversation state as `RenderLine` variants, redrawing the full screen on every event (no hybrid scrolling region hacks).
+ ├── **Markdown Rendering:** `markdown.rs` parses tokens into ratatui Spans with full support for headings, code blocks, and emphasis.
+ ├── **Live Status:** A dedicated status row (Thinking Bar) provides immediate feedback on agent activity and elapsed time.
+ ├── **Slash Commands:** Extensible command system (`/help`, `/memory`, `/mcp`, `/skills`, `/subagents`, `/clear`, `/exit`).
+ └── **Multi-line Input:** Interactive input area with Shift+Enter support, command history, and auto-growing rows.
 
 Headless mode (headless.rs)
  └── stdin → cade-server → stdout (scriptable / pipe-friendly)
@@ -401,7 +418,8 @@ Tool call from LLM
   │           apply_patch   (fs.rs)    │
   │           grep          (search.rs)│
   │           glob          (fs.rs)    │
-  │           desktop_*     (desktop.rs│
+  │           ask_user_question (ask.rs)│
+  │           desktop_*     (desktop.rs)│
   └─────────────────────────────────────┘
         │
         ▼
@@ -424,11 +442,10 @@ Tool call from LLM
 ### Memory System
 
 Memory is stored server-side in SQLite as named blocks. The agent can read and
-update them via the `update_memory` meta-tool. Blocks are injected into every
-system prompt turn.
+update them via the `update_memory` meta-tool.
 
 ```
-Default memory blocks:
+Core memory blocks:
   ┌────────────┬──────────────────────────────────────────────────┐
   │ Label      │ Purpose                                          │
   ├────────────┼──────────────────────────────────────────────────┤
@@ -438,9 +455,10 @@ Default memory blocks:
   │ skills     │ Auto-injected: available skills listing          │
   └────────────┴──────────────────────────────────────────────────┘
 
-update_memory operations:
-  set    → replace the block entirely
-  append → concatenate new content to existing block
+Memory Features:
+  Shared Memory   → multiple agents can be linked to the same block (for team collaboration)
+  Archival Memory → persistent storage of past messages, searchable via SQLite FTS5
+  update_memory   → set (replace) or append operations
 ```
 
 ---
