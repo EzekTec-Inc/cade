@@ -662,7 +662,7 @@ impl Repl {
                             };
                             let ans = {
                                 let mut app = self.app.lock().unwrap();
-                                let r = crate::ui::question::QuestionWidget::ask(&mut app.terminal, &q);
+                                let r = app.ask_question(&q);
                                 app.scroll = 0;
                                 let _ = app.draw();
                                 r
@@ -860,7 +860,7 @@ impl Repl {
                                     };
                                     let confirmed = {
                                         let mut app = self.app.lock().unwrap();
-                                        let r = QuestionWidget::ask(&mut app.terminal, &q_widget)?;
+                                        let r = app.ask_question(&q_widget)?;
                                         app.scroll = 0;
                                         let _ = app.draw();
                                         matches!(r, Some(ref a) if a.as_str().starts_with("Yes"))
@@ -1041,10 +1041,7 @@ impl Repl {
                                 };
                                 let ans = {
                                     let mut app = self.app.lock().unwrap();
-                                    let r = QuestionWidget::ask(&mut app.terminal, &q)?;
-                                    app.scroll = 0;
-                                    let _ = app.draw();
-                                    r
+                                    app.ask_question(&q)?
                                 };
                                 if let Some(ref a) = ans {
                                     let val = a.as_str();
@@ -1446,7 +1443,7 @@ impl Repl {
                                 options: &opts, multi_select: false, allow_other: false, progress: None };
                             let save = {
                                 let mut app = self.app.lock().unwrap();
-                                let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                                let r = app.ask_question(&q)?;
                                 app.scroll = 0;
                                 let _ = app.draw();
                                 matches!(r, Some(ref a) if a.as_str().starts_with("Yes"))
@@ -1479,7 +1476,7 @@ impl Repl {
                                 options: &opts, multi_select: false, allow_other: false, progress: None };
                             let save = {
                                 let mut app = self.app.lock().unwrap();
-                                let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                                let r = app.ask_question(&q)?;
                                 app.scroll = 0;
                                 let _ = app.draw();
                                 matches!(r, Some(ref a) if a.as_str().starts_with("Yes"))
@@ -1546,10 +1543,7 @@ impl Repl {
                                 options: &opts, multi_select: false, allow_other: true, progress: None };
                             let ans = {
                                 let mut app = self.app.lock().unwrap();
-                                let r = QuestionWidget::ask(&mut app.terminal, &q)?;
-                                app.scroll = 0;
-                                let _ = app.draw();
-                                r
+                                app.ask_question(&q)?
                             };
                             match ans {
                                 Some(ref a) if a.as_str() != "Cancel" && !a.as_str().is_empty() => a.as_str().to_string(),
@@ -1895,7 +1889,7 @@ impl Repl {
                             let _ = app_arc.lock().unwrap().push_streaming_chunk(text);
                             // Update thinking bar to show generation progress.
                             if let Some(ref bar) = bar_text_arc {
-                                let words = app_arc.lock().unwrap()
+                                let _words = app_arc.lock().unwrap()
                                     // count words in streaming_text via a snapshot
                                     .lines.len(); // rough proxy — update bar text
                                 let cur = bar.lock().unwrap().clone();
@@ -2380,10 +2374,7 @@ impl Repl {
         // Render the question through TuiApp's terminal (already in alternate screen + raw mode).
         let qa = {
             let mut app = self.app.lock().unwrap();
-            let result = QuestionWidget::ask(&mut app.terminal, &q)?;
-            app.scroll = 0; // snap to bottom after approval modal
-            let _ = app.draw();
-            result
+            app.ask_question(&q)?
         };
 
         match qa {
@@ -2518,10 +2509,7 @@ impl Repl {
 
             let qa = {
                 let mut app = self.app.lock().unwrap();
-                let res = QuestionWidget::ask(&mut app.terminal, &q)?;
-                app.scroll = 0; // snap to bottom after question modal
-                let _ = app.draw();
-                res
+                app.ask_question(&q)?
             };
 
             match qa {
@@ -2612,7 +2600,7 @@ impl Repl {
         &self,
         call_id: &str,
         args: &serde_json::Value,
-        stdout: &mut io::Stdout,
+        _stdout: &mut io::Stdout,
     ) -> Result<crate::tools::ToolResult> {
         let url   = args["url"].as_str().unwrap_or("").trim().to_string();
         let scope = args["scope"].as_str().unwrap_or("project");
@@ -2717,10 +2705,7 @@ impl Repl {
             };
             let ans = {
                 let mut app = self.app.lock().unwrap();
-                let r = QuestionWidget::ask(&mut app.terminal, &q)?;
-                app.scroll = 0;
-                let _ = app.draw();
-                r
+                app.ask_question(&q)?
             };
             let Some(chosen) = ans else { return Ok(()); };
             let label = chosen.as_str();
@@ -2742,10 +2727,7 @@ impl Repl {
             };
             let ans = {
                 let mut app = self.app.lock().unwrap();
-                let r = QuestionWidget::ask(&mut app.terminal, &kq)?;
-                app.scroll = 0;
-                let _ = app.draw();
-                r
+                app.ask_question(&kq)?
             };
             match ans {
                 Some(ref a) if a.as_str() != "Skip (no key)" && !a.as_str().is_empty() => Some(a.as_str().to_string()),
@@ -2763,10 +2745,7 @@ impl Repl {
             };
             let ans = {
                 let mut app = self.app.lock().unwrap();
-                let r = QuestionWidget::ask(&mut app.terminal, &uq)?;
-                app.scroll = 0;
-                let _ = app.draw();
-                r
+                app.ask_question(&uq)?
             };
             match ans {
                 Some(ref a) if a.as_str() != "Cancel" && !a.as_str().is_empty() => Some(a.as_str().to_string()),
@@ -2875,10 +2854,7 @@ impl Repl {
                         };
                         let ans = {
                             let mut app = app_arc.lock().unwrap();
-                            let r = QuestionWidget::ask(&mut app.terminal, &q)?;
-                            app.scroll = 0;
-                            let _ = app.draw();
-                            r
+                            app.ask_question(&q)?
                         };
                         if matches!(ans, Some(ref a) if a.as_str().starts_with("Yes")) {
                             let _ = self.client.delete_conversation(agent_id, &conv_id).await;
@@ -3027,7 +3003,7 @@ impl Repl {
                             multi_select: false, allow_other: false, progress: None };
                         let confirmed = {
                             let mut app = app_arc.lock().unwrap();
-                            let r = QuestionWidget::ask(&mut app.terminal, &q)?;
+                            let r = app.ask_question(&q)?;
                             app.scroll = 0;
                             let _ = app.draw();
                             matches!(r, Some(ref a) if a.as_str().starts_with("Yes"))
@@ -3052,10 +3028,7 @@ impl Repl {
                         };
                         let ans = {
                             let mut app = app_arc.lock().unwrap();
-                            let r = QuestionWidget::ask(&mut app.terminal, &q)?;
-                            app.scroll = 0;
-                            let _ = app.draw();
-                            r
+                            app.ask_question(&q)?
                         };
                         if let Some(ref answer) = ans {
                             let new_name = answer.as_str();
@@ -3323,10 +3296,7 @@ impl Repl {
                                 multi_select: false, allow_other: true, progress: None };
                             let ans = {
                                 let mut app = app_arc.lock().unwrap();
-                                let r = QuestionWidget::ask(&mut app.terminal, &q)?;
-                                app.scroll = 0;
-                                let _ = app.draw();
-                                r
+                                app.ask_question(&q)?
                             };
                             if let Some(ref a) = ans {
                                 let typed = a.as_str();
@@ -3371,7 +3341,7 @@ impl Repl {
         &self,
         call_id: &str,
         args: &serde_json::Value,
-        stdout: &mut io::Stdout,
+        _stdout: &mut io::Stdout,
     ) -> Result<crate::tools::ToolResult> {
         let subagent_type = args["subagent_type"].as_str().unwrap_or("general-purpose").trim().to_string();
         let prompt        = args["prompt"].as_str().unwrap_or("").trim().to_string();
