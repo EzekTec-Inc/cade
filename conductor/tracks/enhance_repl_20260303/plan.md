@@ -8,10 +8,10 @@
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Setup and Foundation' (Protocol in workflow.md)
 
 ## Phase 2: Improve Markdown Rendering
-- [~] Task: Implement advanced markdown parsing
-    - [ ] Write unit tests for the markdown parser (e.g., in `src/ui/output.rs` or a new module).
-    - [ ] Update `parse_markdown_lines` to correctly handle nested structures (lists, blockquotes).
-- [ ] Task: Implement syntax highlighting for code blocks
+- [x] Task: Implement advanced markdown parsing b9d2e1c
+    - [x] Write unit tests for the markdown parser (e.g., in `src/ui/output.rs` or a new module).
+    - [x] Update `parse_markdown_lines` to correctly handle nested structures (lists, blockquotes).
+- [~] Task: Implement syntax highlighting for code blocks
     - [ ] Write unit tests for syntax highlighting logic.
     - [ ] Integrate a lightweight syntax highlighting library or implement basic coloring for common languages.
 - [ ] Task: Conductor - User Manual Verification 'Phase 2: Improve Markdown Rendering' (Protocol in workflow.md)
