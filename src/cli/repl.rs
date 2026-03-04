@@ -301,7 +301,7 @@ impl Repl {
                     None => break,
                 }
             };
-            let mut input = input.trim().to_string();
+            let input = input.trim().to_string();
 
             // Handle Tab / BackTab mode-cycle sentinels.
             if input == "__TAB__" {
@@ -2788,7 +2788,7 @@ impl Repl {
         convs: &[serde_json::Value],
         agent_id: &str,
     ) -> Result<Option<serde_json::Value>> {
-        use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+        use crossterm::event::{self, Event, KeyModifiers};
         use ratatui::{
             style::{Color as RC, Modifier, Style},
             text::{Line, Span},

@@ -138,6 +138,82 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         tracing::info!("Migration complete: messages.conversation_id added");
     }
 
+    // Migration 5: Shared Memory Blocks
+    let has_shared_memory: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='shared_memory_blocks'",
+        [],
+        |r| r.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    if !has_shared_memory {
+        tracing::info!("Running migration: implement Shared Memory schema");
+        conn.execute_batch(r#"
+            BEGIN;
+            CREATE TABLE shared_memory_blocks (
+                id          TEXT PRIMARY KEY,
+                label       TEXT NOT NULL,
+                value       TEXT NOT NULL DEFAULT '',
+                description TEXT NOT NULL DEFAULT '',
+                max_chars   INTEGER,
+                updated_at  INTEGER NOT NULL
+            );
+            CREATE TABLE agent_memory_blocks (
+                agent_id TEXT NOT NULL,
+                block_id TEXT NOT NULL,
+                PRIMARY KEY (agent_id, block_id),
+                FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+                FOREIGN KEY (block_id) REFERENCES shared_memory_blocks(id) ON DELETE CASCADE
+            );
+            -- Migrate existing memory_blocks to shared_memory_blocks
+            INSERT INTO shared_memory_blocks (id, label, value, description, max_chars, updated_at)
+                SELECT id, label, value, description, max_chars, updated_at FROM memory_blocks;
+            -- Create the links
+            INSERT INTO agent_memory_blocks (agent_id, block_id)
+                SELECT agent_id, id FROM memory_blocks;
+            COMMIT;
+        "#)?;
+        tracing::info!("Migration complete: Shared Memory schema implemented");
+    }
+
+    // Migration 6: Archival Memory (FTS5)
+    let has_fts: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts'",
+        [],
+        |r| r.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    if !has_fts {
+        tracing::info!("Running migration: implement FTS5 Archival Memory");
+        let res = conn.execute_batch(r#"
+            BEGIN;
+            CREATE VIRTUAL TABLE messages_fts USING fts5(
+                content,
+                content='messages',
+                content_rowid='id'
+            );
+            -- Populate initial data
+            INSERT INTO messages_fts(rowid, content) SELECT rowid, content FROM messages;
+            
+            -- Triggers to keep FTS index in sync
+            CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+                INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+            END;
+            CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+            END;
+            CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+                INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+                INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+            END;
+            COMMIT;
+        "#);
+        if let Err(e) = res {
+            tracing::error!("FTS5 migration failed: {}. SQLite may not have FTS5 extension enabled.", e);
+        } else {
+            tracing::info!("Migration complete: FTS5 Archival Memory implemented");
+        }
+    }
+
     Ok(())
 }
 
@@ -190,6 +266,23 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS shared_memory_blocks (
+            id          TEXT PRIMARY KEY,
+            label       TEXT NOT NULL,
+            value       TEXT NOT NULL DEFAULT '',
+            description TEXT NOT NULL DEFAULT '',
+            max_chars   INTEGER,
+            updated_at  INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS agent_memory_blocks (
+            agent_id TEXT NOT NULL,
+            block_id TEXT NOT NULL,
+            PRIMARY KEY (agent_id, block_id),
+            FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
+            FOREIGN KEY (block_id) REFERENCES shared_memory_blocks(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS memory_blocks (
             id          TEXT PRIMARY KEY,
             agent_id    TEXT NOT NULL,
@@ -209,6 +302,24 @@ fn apply_schema(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_memory_history_block_id
             ON memory_history(block_id, updated_at DESC);
+
+        -- FTS5 Archival Memory
+        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+            content,
+            content='messages',
+            content_rowid='id'
+        );
+
+        CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
+            INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+        END;
+        CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
+            INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
+            INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
+        END;
 
         CREATE TABLE IF NOT EXISTS tools (
             id          TEXT PRIMARY KEY,
@@ -674,9 +785,11 @@ pub fn upsert_memory_block(
 ) -> Result<()> {
     let conn = db.lock().unwrap();
 
-    // Fetch existing block (id, old value, stored max_chars)
+    // Fetch existing block linked to this agent with this label
     let existing: Option<(String, String, Option<usize>)> = conn.query_row(
-        "SELECT id, value, max_chars FROM memory_blocks WHERE agent_id = ?1 AND label = ?2",
+        "SELECT b.id, b.value, b.max_chars FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.label = ?2",
         params![agent_id, label],
         |r| Ok((
             r.get::<_, String>(0)?,
@@ -729,33 +842,52 @@ pub fn upsert_memory_block(
 
         if let Some(desc) = description {
             conn.execute(
-                "UPDATE memory_blocks SET value = ?1, description = ?2, max_chars = ?3, updated_at = ?4
-                 WHERE agent_id = ?5 AND label = ?6",
-                params![final_value, desc, max_chars.map(|n| n as i64), ts, agent_id, label],
+                "UPDATE shared_memory_blocks SET value = ?1, description = ?2, max_chars = ?3, updated_at = ?4
+                 WHERE id = ?5",
+                params![final_value, desc, max_chars.map(|n| n as i64), ts, block_id],
             )?;
         } else {
             conn.execute(
-                "UPDATE memory_blocks SET value = ?1, updated_at = ?2
-                 WHERE agent_id = ?3 AND label = ?4",
-                params![final_value, ts, agent_id, label],
+                "UPDATE shared_memory_blocks SET value = ?1, updated_at = ?2
+                 WHERE id = ?3",
+                params![final_value, ts, block_id],
             )?;
         }
     } else {
+        // Create a new shared block and link it to the agent
         let id = uuid::Uuid::new_v4().to_string();
         conn.execute(
-            "INSERT INTO memory_blocks (id, agent_id, label, value, description, max_chars, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, agent_id, label, final_value, description.unwrap_or(""),
+            "INSERT INTO shared_memory_blocks (id, label, value, description, max_chars, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![id, label, final_value, description.unwrap_or(""),
                     max_chars.map(|n| n as i64), ts],
+        )?;
+        conn.execute(
+            "INSERT INTO agent_memory_blocks (agent_id, block_id) VALUES (?1, ?2)",
+            params![agent_id, id],
         )?;
     }
     Ok(())
 }
 
+/// Link an existing shared memory block to an agent.
+pub fn link_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Result<()> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "INSERT OR IGNORE INTO agent_memory_blocks (agent_id, block_id) VALUES (?1, ?2)",
+        params![agent_id, block_id],
+    )?;
+    Ok(())
+}
+
 pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
     let conn = db.lock().unwrap();
+    // We only remove the link, not the shared block itself (to avoid orphan issues if shared)
+    // Actually, Letta docs imply it's removed from the agent's view.
     let n = conn.execute(
-        "DELETE FROM memory_blocks WHERE agent_id = ?1 AND label = ?2",
+        "DELETE FROM agent_memory_blocks WHERE agent_id = ?1 AND block_id IN (
+            SELECT id FROM shared_memory_blocks WHERE label = ?2
+        )",
         params![agent_id, label],
     )?;
     Ok(n > 0)
@@ -765,7 +897,9 @@ pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool>
 pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String)>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT label, value, description FROM memory_blocks WHERE agent_id = ?1 ORDER BY label"
+        "SELECT b.label, b.value, b.description FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 ORDER BY b.label"
     )?;
     let rows = stmt.query_map(params![agent_id], |row| {
         Ok((
@@ -782,8 +916,9 @@ pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String,
 pub fn get_memory_blocks_with_ts(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String, i64)>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT label, value, description, updated_at FROM memory_blocks
-         WHERE agent_id = ?1 ORDER BY updated_at DESC"
+        "SELECT b.label, b.value, b.description, b.updated_at FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 ORDER BY b.updated_at DESC"
     )?;
     let rows = stmt.query_map(params![agent_id], |row| {
         Ok((
@@ -800,7 +935,9 @@ pub fn get_memory_blocks_with_ts(db: &Db, agent_id: &str) -> Result<Vec<(String,
 pub fn get_memory_history(db: &Db, agent_id: &str, label: &str, limit: usize) -> Result<Vec<(String, String, i64)>> {
     let conn = db.lock().unwrap();
     let block_id: Option<String> = conn.query_row(
-        "SELECT id FROM memory_blocks WHERE agent_id = ?1 AND label = ?2",
+        "SELECT b.id FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.label = ?2",
         params![agent_id, label],
         |r| r.get(0),
     ).optional()?;
@@ -823,7 +960,9 @@ pub fn get_memory_history(db: &Db, agent_id: &str, label: &str, limit: usize) ->
 pub fn restore_memory_from_history(db: &Db, agent_id: &str, label: &str, hist_id: &str) -> Result<bool> {
     let conn = db.lock().unwrap();
     let block_id: Option<String> = conn.query_row(
-        "SELECT id FROM memory_blocks WHERE agent_id = ?1 AND label = ?2",
+        "SELECT b.id FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.label = ?2",
         params![agent_id, label],
         |r| r.get(0),
     ).optional()?;
@@ -835,7 +974,7 @@ pub fn restore_memory_from_history(db: &Db, agent_id: &str, label: &str, hist_id
     ).optional()?;
     let Some(hist_value) = hist_value else { return Ok(false); };
     conn.execute(
-        "UPDATE memory_blocks SET value = ?1, updated_at = ?2 WHERE id = ?3",
+        "UPDATE shared_memory_blocks SET value = ?1, updated_at = ?2 WHERE id = ?3",
         params![hist_value, now_ts(), block_id],
     )?;
     Ok(true)
@@ -902,34 +1041,48 @@ pub fn search_messages(
     conversation_id: Option<&str>,
 ) -> Result<Vec<MessageRow>> {
     let conn = db.lock().unwrap();
-    let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+    
+    // We use the FTS5 table for fast searching, then join back to messages for full row data.
+    // If conversation_id is provided, we filter the results.
     let sql = if conversation_id.is_some() {
-        "SELECT id, agent_id, conversation_id, role, content FROM messages \
-         WHERE agent_id = ?1 AND content LIKE ?2 ESCAPE '\\' \
-         AND conversation_id = ?4 \
-         ORDER BY rowid DESC LIMIT 50"
+        "SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content FROM messages m
+         JOIN messages_fts f ON f.rowid = m.rowid
+         WHERE m.agent_id = ?1 AND m.conversation_id = ?2 AND messages_fts MATCH ?3
+         ORDER BY m.rowid DESC LIMIT 50"
     } else {
-        "SELECT id, agent_id, conversation_id, role, content FROM messages \
-         WHERE agent_id = ?1 AND content LIKE ?2 ESCAPE '\\' \
-         ORDER BY rowid DESC LIMIT 50"
+        "SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content FROM messages m
+         JOIN messages_fts f ON f.rowid = m.rowid
+         WHERE m.agent_id = ?1 AND messages_fts MATCH ?2
+         ORDER BY m.rowid DESC LIMIT 50"
     };
+
     let mut stmt = conn.prepare(sql)?;
-    let rows = stmt.query_map(
-        params![agent_id, pattern, "", conversation_id.unwrap_or("")],
-        |r| {
-            let content_str: String = r.get(4)?;
-            let content = serde_json::from_str(&content_str)
-                .unwrap_or(serde_json::Value::String(content_str));
-            Ok(MessageRow {
-                id:              r.get(0)?,
-                agent_id:        r.get(1)?,
-                conversation_id: r.get(2)?,
-                role:            r.get(3)?,
-                content,
-            })
-        },
-    )?;
-    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    
+    // FTS5 MATCH query: if simple string, wrap in quotes to handle special chars or spaces
+    let fts_query = format!("\"{}\"", query.replace('"', "\"\""));
+
+    let mapper = |r: &rusqlite::Row| {
+        let content_str: String = r.get(4)?;
+        let content = serde_json::from_str(&content_str)
+            .unwrap_or(serde_json::Value::String(content_str));
+        Ok(MessageRow {
+            id:              r.get(0)?,
+            agent_id:        r.get(1)?,
+            conversation_id: r.get(2)?,
+            role:            r.get(3)?,
+            content,
+        })
+    };
+
+    let result: Vec<MessageRow> = if let Some(conv_id) = conversation_id {
+        stmt.query_map(params![agent_id, conv_id, fts_query], mapper)?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    } else {
+        stmt.query_map(params![agent_id, fts_query], mapper)?
+            .collect::<rusqlite::Result<Vec<_>>>()?
+    };
+
+    Ok(result)
 }
 
 pub fn pending_tool_results(
@@ -1041,4 +1194,94 @@ pub fn delete_provider(db: &Db, name: &str) -> Result<bool> {
     let conn = db.lock().unwrap();
     let n = conn.execute("DELETE FROM providers WHERE name = ?1", params![name])?;
     Ok(n > 0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn setup_mem_db() -> Db {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        apply_schema(&conn).unwrap();
+        run_migrations(&conn).unwrap();
+        Arc::new(Mutex::new(conn))
+    }
+
+    #[test]
+    fn test_shared_memory() {
+        let db = setup_mem_db();
+        let agent1 = "agent-1";
+        let agent2 = "agent-2";
+
+        // Create agents
+        create_agent(&db, &AgentRow {
+            id: agent1.to_string(), name: "A1".to_string(), model: "m".to_string(),
+            description: None, system_prompt: None
+        }).unwrap();
+        create_agent(&db, &AgentRow {
+            id: agent2.to_string(), name: "A2".to_string(), model: "m".to_string(),
+            description: None, system_prompt: None
+        }).unwrap();
+
+        // 1. Agent 1 creates a block
+        upsert_memory_block(&db, agent1, "shared_fact", "Initial value", None, None).unwrap();
+        
+        // Find the block ID
+        let block_id: String = {
+            let conn = db.lock().unwrap();
+            conn.query_row(
+                "SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?1",
+                params![agent1],
+                |r| r.get(0)
+            ).unwrap()
+        };
+
+        // 2. Link Agent 2 to the same block
+        link_shared_memory_block(&db, agent2, &block_id).unwrap();
+
+        // 3. Verify both see the same value
+        let b1 = get_memory_blocks(&db, agent1).unwrap();
+        let b2 = get_memory_blocks(&db, agent2).unwrap();
+        assert_eq!(b1[0].1, "Initial value");
+        assert_eq!(b2[0].1, "Initial value");
+
+        // 4. Agent 2 updates the block
+        upsert_memory_block(&db, agent2, "shared_fact", "Updated by A2", None, None).unwrap();
+
+        // 5. Verify Agent 1 sees the update
+        let b1_new = get_memory_blocks(&db, agent1).unwrap();
+        assert_eq!(b1_new[0].1, "Updated by A2");
+    }
+
+    #[test]
+    fn test_archival_memory_fts() {
+        let db = setup_mem_db();
+        let agent_id = "agent-fts";
+
+        create_agent(&db, &AgentRow {
+            id: agent_id.to_string(), name: "A".to_string(), model: "m".to_string(),
+            description: None, system_prompt: None
+        }).unwrap();
+
+        insert_message(&db, &MessageRow {
+            id: "m1".to_string(), agent_id: agent_id.to_string(), conversation_id: None,
+            role: "user".to_string(), content: serde_json::json!("Rust is a systems programming language")
+        }).unwrap();
+
+        insert_message(&db, &MessageRow {
+            id: "m2".to_string(), agent_id: agent_id.to_string(), conversation_id: None,
+            role: "assistant".to_string(), content: serde_json::json!("I agree, Rust is safe and fast.")
+        }).unwrap();
+
+        // Search for "systems"
+        let res = search_messages(&db, agent_id, "systems", None).unwrap();
+        assert_eq!(res.len(), 1);
+        assert!(res[0].content.as_str().unwrap().contains("systems"));
+
+        // Search for "safe"
+        let res2 = search_messages(&db, agent_id, "safe", None).unwrap();
+        assert_eq!(res2.len(), 1);
+        assert!(res2[0].content.as_str().unwrap().contains("fast"));
+    }
 }

@@ -26,3 +26,22 @@
 - Keyboard `Shift+K` = +10 rows up; `Shift+J` = -10 rows down (replaces PageUp/PageDown/Alt keymaps).
 - Mouse capture enabled on `TuiApp::new()`, disabled on `Drop`.
 **Rollback**: `git revert HEAD` (single commit).
+
+---
+
+## 2026-03-03 UTC — Gemini usage parsing & UI responsiveness
+
+**Summary**: Fixed Gemini token usage rendering and improved UI snap-to-bottom behavior.
+
+**Gemini Fix**: Modified `src/server/llm/gemini.rs` to parse `usageMetadata` from the root of the SSE JSON objects. Previously, it only checked within `candidates`, which missed usage updates sent in separate chunks.
+
+**UI Fixes**: 
+- Updated `src/ui/app.rs` to snap scroll to bottom (`scroll = 0`) when lines are pushed or streaming is committed.
+- Thinking animation (`● tool_name...`) is now correctly initialized in `repl.rs` via `start_thinking`.
+
+**Files modified**:
+- `src/server/llm/gemini.rs`
+- `src/ui/app.rs`
+- `src/cli/repl.rs`
+
+**Status**: Verified via code inspection; pending compiler check for uncommitted changes.
