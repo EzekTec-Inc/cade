@@ -1,9 +1,9 @@
 # Implementation Plan: Enhance interactive REPL UI
 
 ## Phase 1: Setup and Foundation
-- [ ] Task: Review current REPL UI architecture
-    - [ ] Read `src/cli/repl.rs` and `src/ui/output.rs` to understand the existing rendering logic.
-- [ ] Task: Evaluate `ratatui` UI components
+- [x] Task: Review current REPL UI architecture f7d2a1b
+    - [x] Read `src/cli/repl.rs` and `src/ui/output.rs` to understand the existing rendering logic.
+- [~] Task: Evaluate `ratatui` UI components
     - [ ] Research `ratatui` widgets for layout, lists, and advanced text rendering.
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Setup and Foundation' (Protocol in workflow.md)
 
