@@ -27,9 +27,15 @@ const MEMORY_CHAR_BUDGET: usize = 8_000;
 /// Cap on a single tool-result content string (chars). ~8k tokens.
 /// Prevents huge outputs (screenshots, logs) from blowing the context window.
 const TOOL_RESULT_MAX_CHARS: usize = 8_192;
-/// Total character budget for all messages sent to the LLM (~150k tokens, leaving 50k headroom).
-/// Oldest non-system messages are dropped when the budget is exceeded.
-const CONTEXT_CHAR_BUDGET: usize = 200_000;
+/// Chars-per-token approximation used to convert a model's token context window
+/// into a character budget. 3 chars ≈ 1 token is conservative across English,
+/// code, and mixed content; keeps a ~25% headroom below the hard token limit.
+const CHARS_PER_TOKEN: usize = 3;
+/// Minimum character budget regardless of model window (guards tiny local models).
+const MIN_CONTEXT_CHARS: usize = 8_000;
+/// Maximum character budget cap — avoids enormous payloads on multi-million
+/// token windows (e.g. Gemini 1.5 Pro at 2 M tokens).
+const MAX_CONTEXT_CHARS: usize = 600_000;
 
 // ── Message history sanitizer ─────────────────────────────────────────────────
 //
@@ -190,13 +196,24 @@ async fn build_context(
     }
 
     // Character-budget trimming: drop oldest non-system messages until total
-    // content is under CONTEXT_CHAR_BUDGET (~150k tokens).
+    // content fits within the model's context window.
     // Always keeps the system prompt and the last user+assistant turn (≥3 msgs).
-    // Count chars (codepoints), not bytes — CONTEXT_CHAR_BUDGET is a char budget.
+    // Count chars (codepoints), not bytes — budget is a char budget.
+    let context_char_budget = {
+        let window_tokens = crate::server::llm::catalogue::context_window_for_model(&agent.model);
+        let raw = (window_tokens as usize).saturating_mul(CHARS_PER_TOKEN);
+        raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)
+    };
+    tracing::debug!(
+        "Context budget for model '{}': {} chars ({} tokens * {})",
+        agent.model, context_char_budget,
+        crate::server::llm::catalogue::context_window_for_model(&agent.model),
+        CHARS_PER_TOKEN
+    );
     let total_chars = |msgs: &[LlmMessage]| -> usize {
         msgs.iter().map(|m| m.content.chars().count()).sum()
     };
-    while total_chars(&messages) > CONTEXT_CHAR_BUDGET && messages.len() > 3 {
+    while total_chars(&messages) > context_char_budget && messages.len() > 3 {
         // messages[0] is always the system prompt — remove messages[1]
         messages.remove(1);
     }
