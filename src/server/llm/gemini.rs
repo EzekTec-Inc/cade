@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{bare_model, provider_error, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
+use super::{bare_model, provider_error, retry_with_backoff, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
 
 /// Recursively strip JSON Schema fields that Gemini's functionDeclarations format rejects.
 ///
@@ -177,25 +177,28 @@ impl LlmProvider for GeminiProvider {
         }).collect();
 
         let mut body = json!({ "contents": contents });
-        if let Some(sys) = system_text {
+        if let Some(sys) = &system_text {
             body["systemInstruction"] = json!({"parts": [{"text": sys}]});
         }
         if !tools.is_empty() {
             body["tools"] = json!([{"functionDeclarations": tools}]);
         }
 
-        let resp = self.client
-            .post(self.url(&req.model, false))
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(provider_error("Gemini", status, &text));
-        }
-        Ok(Self::parse_response(&resp.json::<Value>().await?))
+        let url = self.url(&req.model, false);
+        retry_with_backoff("Gemini::complete", 3, std::time::Duration::from_secs(1), |_| {
+            let client = self.client.clone();
+            let url    = url.clone();
+            let body   = body.clone();
+            async move {
+                let resp = client.post(&url).json(&body).send().await?;
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(provider_error("Gemini", status, &text));
+                }
+                Ok(Self::parse_response(&resp.json::<Value>().await?))
+            }
+        }).await
     }
 
     async fn stream(
@@ -210,24 +213,28 @@ impl LlmProvider for GeminiProvider {
         }).collect();
 
         let mut body = json!({ "contents": contents });
-        if let Some(sys) = system_text {
+        if let Some(sys) = &system_text {
             body["systemInstruction"] = json!({"parts": [{"text": sys}]});
         }
         if !tools.is_empty() {
             body["tools"] = json!([{"functionDeclarations": tools}]);
         }
 
-        let resp = self.client
-            .post(self.url(&req.model, true))
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(provider_error("Gemini", status, &text));
-        }
+        let url = self.url(&req.model, true);
+        let resp = retry_with_backoff("Gemini::stream", 3, std::time::Duration::from_secs(1), |_| {
+            let client = self.client.clone();
+            let url    = url.clone();
+            let body   = body.clone();
+            async move {
+                let resp = client.post(&url).json(&body).send().await?;
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(provider_error("Gemini", status, &text));
+                }
+                Ok(resp)
+            }
+        }).await?;
 
         let mut byte_stream = resp.bytes_stream();
         let s = stream! {

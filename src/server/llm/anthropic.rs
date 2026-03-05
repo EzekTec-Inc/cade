@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{bare_model, provider_error, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
+use super::{bare_model, provider_error, retry_with_backoff, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
@@ -155,22 +155,28 @@ impl AnthropicProvider {
 impl LlmProvider for AnthropicProvider {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
         let body = self.build_body(req, false);
-        let resp = self.client
-            .post(API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(provider_error("Anthropic", status, &text));
-        }
-        let json: Value = resp.json().await?;
-        Ok(Self::parse_response(&json))
+        retry_with_backoff("Anthropic::complete", 3, std::time::Duration::from_secs(1), |_| {
+            let client  = self.client.clone();
+            let api_key = self.api_key.clone();
+            let body    = body.clone();
+            async move {
+                let resp = client
+                    .post(API_URL)
+                    .header("x-api-key", &api_key)
+                    .header("anthropic-version", "2023-06-01")
+                    .header("content-type", "application/json")
+                    .json(&body)
+                    .send()
+                    .await?;
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(provider_error("Anthropic", status, &text));
+                }
+                let json: serde_json::Value = resp.json().await?;
+                Ok(Self::parse_response(&json))
+            }
+        }).await
     }
 
     async fn stream(
@@ -178,20 +184,29 @@ impl LlmProvider for AnthropicProvider {
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
         let body = self.build_body(req, true);
-        let resp = self.client
-            .post(API_URL)
-            .header("x-api-key", &self.api_key)
-            .header("anthropic-version", "2023-06-01")
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(provider_error("Anthropic", status, &text));
-        }
+        // Retry the HTTP handshake only; the byte stream itself is not retried
+        // (partial streams can't be safely resumed without re-sending the request).
+        let resp = retry_with_backoff("Anthropic::stream", 3, std::time::Duration::from_secs(1), |_| {
+            let client  = self.client.clone();
+            let api_key = self.api_key.clone();
+            let body    = body.clone();
+            async move {
+                let resp = client
+                    .post(API_URL)
+                    .header("x-api-key", &api_key)
+                    .header("anthropic-version", "2023-06-01")
+                    .header("content-type", "application/json")
+                    .json(&body)
+                    .send()
+                    .await?;
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(provider_error("Anthropic", status, &text));
+                }
+                Ok(resp)
+            }
+        }).await?;
 
         let mut byte_stream = resp.bytes_stream();
 

@@ -77,6 +77,87 @@ pub trait LlmProvider: Send + Sync {
     ) -> Result<std::pin::Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>>;
 }
 
+// ── Retry helper ──────────────────────────────────────────────────────────────
+
+/// Which HTTP status codes are worth retrying (transient / rate-limit errors).
+/// 400, 401, 403, 404 are permanent — fail fast.
+pub fn is_retryable_status(status: reqwest::StatusCode) -> bool {
+    matches!(
+        status.as_u16(),
+        429 | 500 | 502 | 503 | 504
+    )
+}
+
+/// Retry an async fallible operation with exponential backoff.
+///
+/// - `max_attempts`: total tries (1 = no retry)
+/// - `base_delay`:   wait before 2nd attempt
+/// - Multiplier:     2× per attempt, capped at 8 s
+/// - Retries on:     connection errors OR `is_retryable_status()`
+///
+/// The closure receives the attempt number (1-based) and returns a Future.
+pub async fn retry_with_backoff<F, Fut, T>(
+    op_name: &str,
+    max_attempts: u32,
+    base_delay: std::time::Duration,
+    mut f: F,
+) -> Result<T>
+where
+    F: FnMut(u32) -> Fut,
+    Fut: std::future::Future<Output = Result<T>>,
+{
+    let mut last_err = anyhow::anyhow!("retry_with_backoff: no attempts made");
+    for attempt in 1..=max_attempts {
+        match f(attempt).await {
+            Ok(v) => return Ok(v),
+            Err(e) => {
+                // Check if this is a retryable HTTP status embedded in the error message.
+                // providers call provider_error() which formats as "Provider 429: ..."
+                let retryable = is_retryable_error(&e);
+                if attempt < max_attempts && retryable {
+                    let delay = std::cmp::min(
+                        base_delay * 2u32.pow(attempt - 1),
+                        std::time::Duration::from_secs(8),
+                    );
+                    tracing::warn!(
+                        "{op_name}: attempt {attempt}/{max_attempts} failed ({e:#}), \
+                         retrying in {}ms…",
+                        delay.as_millis()
+                    );
+                    tokio::time::sleep(delay).await;
+                    last_err = e;
+                } else {
+                    return Err(e);
+                }
+            }
+        }
+    }
+    Err(last_err)
+}
+
+/// Returns true if the error looks like a transient / rate-limit failure.
+/// Checks for connection errors (reqwest) and for "NNN:" prefixed status codes
+/// embedded in provider_error() formatted strings.
+fn is_retryable_error(e: &anyhow::Error) -> bool {
+    // reqwest network-level errors (connection refused, timeout, etc.)
+    if let Some(re) = e.downcast_ref::<reqwest::Error>() {
+        if re.is_connect() || re.is_timeout() || re.is_request() {
+            return true;
+        }
+        if let Some(status) = re.status() {
+            return is_retryable_status(status);
+        }
+    }
+    // provider_error() formats as "Anthropic 429: ..." — scan the message
+    let msg = e.to_string();
+    for code in ["429", "500", "502", "503", "504"] {
+        if msg.contains(code) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Extract a human-readable error message from a provider's JSON error body.
 ///
 /// All major providers (Anthropic, OpenAI, Gemini) use `{"error":{"message":"..."}}`.

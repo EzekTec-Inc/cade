@@ -7,7 +7,7 @@ use serde_json::{json, Value};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{bare_model, provider_error, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
+use super::{bare_model, provider_error, retry_with_backoff, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 
@@ -176,19 +176,26 @@ impl LlmProvider for OpenAiProvider {
             body["tools"] = Self::build_tools(req);
         }
 
-        let resp = self.client
-            .post(&self.base_url)
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(provider_error("OpenAI", status, &text));
-        }
-        Ok(Self::parse_response(&resp.json::<Value>().await?))
+        retry_with_backoff("OpenAI::complete", 3, std::time::Duration::from_secs(1), |_| {
+            let client   = self.client.clone();
+            let base_url = self.base_url.clone();
+            let api_key  = self.api_key.clone();
+            let body     = body.clone();
+            async move {
+                let resp = client
+                    .post(&base_url)
+                    .bearer_auth(&api_key)
+                    .json(&body)
+                    .send()
+                    .await?;
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(provider_error("OpenAI", status, &text));
+                }
+                Ok(Self::parse_response(&resp.json::<Value>().await?))
+            }
+        }).await
     }
 
     async fn stream(
@@ -206,18 +213,26 @@ impl LlmProvider for OpenAiProvider {
             body["tools"] = Self::build_tools(req);
         }
 
-        let resp = self.client
-            .post(&self.base_url)
-            .bearer_auth(&self.api_key)
-            .json(&body)
-            .send()
-            .await?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            return Err(provider_error("OpenAI", status, &text));
-        }
+        let resp = retry_with_backoff("OpenAI::stream", 3, std::time::Duration::from_secs(1), |_| {
+            let client   = self.client.clone();
+            let base_url = self.base_url.clone();
+            let api_key  = self.api_key.clone();
+            let body     = body.clone();
+            async move {
+                let resp = client
+                    .post(&base_url)
+                    .bearer_auth(&api_key)
+                    .json(&body)
+                    .send()
+                    .await?;
+                if !resp.status().is_success() {
+                    let status = resp.status();
+                    let text = resp.text().await.unwrap_or_default();
+                    return Err(provider_error("OpenAI", status, &text));
+                }
+                Ok(resp)
+            }
+        }).await?;
 
         let mut byte_stream = resp.bytes_stream();
         let s = stream! {
