@@ -197,7 +197,7 @@ fn render_table(rows: &[String]) -> Vec<Line<'static>> {
         }
 
         let mut spans = vec![Span::styled(format!("{INDENT}│ "), Style::default().fg(RC::DarkGray))];
-        for (i, cell) in row.into_iter().enumerate() {
+        for (i, cell) in row.into_iter().take(num_cols).enumerate() {
             let style = if row_idx == 0 {
                 Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)
             } else {
@@ -399,6 +399,13 @@ mod tests {
         let md = "| Col 1 | Col 2 |\n|---|---|\n| val 1 | val 2 |";
         let lines = parse_markdown_lines(md);
         // Header line + Data line (separator skipped)
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn test_asymmetric_table_parsing() {
+        let md = "| Col 1 | Col 2 |\n|---|---|\n| val 1 | val 2 | val 3 |";
+        let lines = parse_markdown_lines(md);
         assert_eq!(lines.len(), 2);
     }
 }
