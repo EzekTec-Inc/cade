@@ -9,6 +9,7 @@ use cade::server::{
     api::router,
     config::ServerConfig,
     llm::{CompletionRequest, LlmRouter},
+    rate_limit::{RateLimiter, rate_limit_middleware},
     state::AppState,
     storage::{open as open_db, sqlite},
 };
@@ -82,6 +83,7 @@ async fn main() -> Result<()> {
         llm,
         llm_router,
         config: Arc::new(config.clone()),
+        rate_limiter: RateLimiter::from_env(),
     };
 
     let trace_layer = TraceLayer::new_for_http()

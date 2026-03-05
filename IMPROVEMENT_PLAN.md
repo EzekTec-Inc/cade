@@ -247,7 +247,7 @@ format!("http://localhost:{port}")
 | M-02 | Live skill file watcher | 🟡 Medium | `[x]` |
 | M-03 | Agent export / import | 🟡 Medium | `[x]` |
 | M-04 | Semantic memory / search | 🟡 Medium | `[x]` |
-| M-05 | API rate limiting | 🟡 Medium | `[ ]` |
+| M-05 | API rate limiting | 🟡 Medium | `[x]` |
 | L-01 | Real regex in hook matcher | 🟢 Low | `[ ]` |
 | L-02 | Consistent startup logging | 🟢 Low | `[ ]` |
 | L-03 | Timestamps in AgentResponse | 🟢 Low | `[ ]` |
