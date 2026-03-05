@@ -102,7 +102,7 @@ impl ServerConfig {
             .ok()
             .and_then(|p| p.parse().ok())
             .unwrap_or(8284);
-        let addr: SocketAddr = format!("0.0.0.0:{port}").parse()?;
+        let addr: SocketAddr = format!("127.0.0.1:{port}").parse()?;
 
         let home = dirs::home_dir()
             .map(|h| h.join(".cade").join("cade.db").to_string_lossy().to_string())
