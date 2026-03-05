@@ -418,12 +418,16 @@ impl LlmRouter {
                         let ol = ollama::OllamaProvider::new(url);
                         ol.list_models().await
                             .into_iter()
-                            .map(|m| ModelEntry {
-                                provider:     "ollama".into(),
-                                id:           format!("ollama/{m}"),
-                                display_name: m,
-                                toolset:      "default".into(),
-                                dynamic:      true,
+                            .map(|m| {
+                                let id = format!("ollama/{m}");
+                                ModelEntry {
+                                    provider:     "ollama".into(),
+                                    id:           id.clone(),
+                                    display_name: m,
+                                    toolset:      "default".into(),
+                                    max_tokens:   catalogue::max_tokens_for_model(&id),
+                                    dynamic:      true,
+                                }
                             })
                             .collect()
                     }));
@@ -440,12 +444,16 @@ impl LlmRouter {
                                 .map(catalogue::ModelEntry::from_catalogue)
                                 .collect()
                         } else {
-                            live.into_iter().map(|(id, display)| ModelEntry {
-                                provider:     "anthropic".into(),
-                                id:           format!("anthropic/{id}"),
-                                display_name: display,
-                                toolset:      "default".into(),
-                                dynamic:      true,
+                            live.into_iter().map(|(id, display)| {
+                                let full_id = format!("anthropic/{id}");
+                                ModelEntry {
+                                    provider:     "anthropic".into(),
+                                    id:           full_id.clone(),
+                                    display_name: display,
+                                    toolset:      "default".into(),
+                                    max_tokens:   catalogue::max_tokens_for_model(&full_id),
+                                    dynamic:      true,
+                                }
                             }).collect()
                         }
                     }));
@@ -461,12 +469,16 @@ impl LlmRouter {
                                 .map(catalogue::ModelEntry::from_catalogue)
                                 .collect()
                         } else {
-                            ids.into_iter().map(|id| ModelEntry {
-                                provider:     "openai".into(),
-                                id:           format!("openai/{id}"),
-                                display_name: id.clone(),
-                                toolset:      "codex".into(),
-                                dynamic:      true,
+                            ids.into_iter().map(|id| {
+                                let full_id = format!("openai/{id}");
+                                ModelEntry {
+                                    provider:     "openai".into(),
+                                    id:           full_id.clone(),
+                                    display_name: id.clone(),
+                                    toolset:      "codex".into(),
+                                    max_tokens:   catalogue::max_tokens_for_model(&full_id),
+                                    dynamic:      true,
+                                }
                             }).collect()
                         }
                     }));
@@ -483,12 +495,16 @@ impl LlmRouter {
                                 .map(catalogue::ModelEntry::from_catalogue)
                                 .collect()
                         } else {
-                            live.into_iter().map(|(id, display)| ModelEntry {
-                                provider:     n.clone(),
-                                id:           format!("{n}/{id}"),
-                                display_name: display,
-                                toolset:      "gemini".into(),
-                                dynamic:      true,
+                            live.into_iter().map(|(id, display)| {
+                                let full_id = format!("{n}/{id}");
+                                ModelEntry {
+                                    provider:     n.clone(),
+                                    id:           full_id.clone(),
+                                    display_name: display,
+                                    toolset:      "gemini".into(),
+                                    max_tokens:   catalogue::max_tokens_for_model(&full_id),
+                                    dynamic:      true,
+                                }
                             }).collect()
                         }
                     }));
@@ -503,12 +519,16 @@ impl LlmRouter {
                             tasks.push(Box::pin(async move {
                                 openai::fetch_model_ids(&url, &key).await
                                     .into_iter()
-                                    .map(|id| ModelEntry {
-                                        provider:     n.clone(),
-                                        id:           format!("{n}/{id}"),
-                                        display_name: id,
-                                        toolset:      "default".into(),
-                                        dynamic:      true,
+                                    .map(|id| {
+                                        let full_id = format!("{n}/{id}");
+                                        ModelEntry {
+                                            provider:     n.clone(),
+                                            id:           full_id.clone(),
+                                            display_name: id,
+                                            toolset:      "default".into(),
+                                            max_tokens:   catalogue::max_tokens_for_model(&full_id),
+                                            dynamic:      true,
+                                        }
                                     })
                                     .collect()
                             }));

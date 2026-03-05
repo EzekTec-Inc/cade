@@ -24,8 +24,6 @@ const HISTORY_LIMIT: usize = 100;
 /// Blocks are prioritised by recency (most recently updated first).
 /// Blocks whose value is empty are always skipped regardless of this budget.
 const MEMORY_CHAR_BUDGET: usize = 8_000;
-/// Max output tokens per LLM response. Claude 3.7/4.x and GPT-4.1 support 16k+.
-const MAX_TOKENS: u32 = 16384;
 /// Cap on a single tool-result content string (chars). ~8k tokens.
 /// Prevents huge outputs (screenshots, logs) from blowing the context window.
 const TOOL_RESULT_MAX_CHARS: usize = 8_192;
@@ -361,7 +359,8 @@ pub async fn send_message(
     };
 
     // 3. Call LLM
-    let req = CompletionRequest { model, messages, tools, max_tokens: MAX_TOKENS };
+    let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
+    let req = CompletionRequest { model, messages, tools, max_tokens };
     match state.llm.complete(&req).await {
         Ok(resp) => {
             let tool_calls_json: Vec<Value> = resp.tool_calls.iter().map(|tc| json!({
@@ -419,7 +418,8 @@ async fn handle_tool_return_blocking(
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
 
-    let req = CompletionRequest { model, messages, tools, max_tokens: MAX_TOKENS };
+    let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
+    let req = CompletionRequest { model, messages, tools, max_tokens };
     match state.llm.complete(&req).await {
         Ok(resp) => {
             let tool_calls_json: Vec<Value> = resp.tool_calls.iter().map(|tc| json!({
@@ -506,7 +506,8 @@ pub async fn stream_message(
     let run = sqlite::create_run(&state.db, &agent_id, conv_id_ref);
     let run_id: Option<String> = run.ok().map(|r| r.id);
 
-    let req = CompletionRequest { model, messages, tools, max_tokens: MAX_TOKENS };
+    let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
+    let req = CompletionRequest { model, messages, tools, max_tokens };
     let state_clone = state.clone();
     let agent_id_clone = agent_id.clone();
     let conv_id_clone = conv_str.clone();

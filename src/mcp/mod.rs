@@ -204,7 +204,14 @@ impl McpManager {
                     .to_string();
 
                 // Convert MCP input_schema (JsonObject) to OpenAI parameters Value
-                let parameters = Value::Object((*tool.input_schema).clone());
+                let mut parameters = Value::Object((*tool.input_schema).clone());
+
+                // Bug 1 fix: OpenAI requires "properties" even if empty for "type": "object"
+                if let Some(obj) = parameters.as_object_mut() {
+                    if obj.get("type").and_then(|t| t.as_str()) == Some("object") && !obj.contains_key("properties") {
+                        obj.insert("properties".to_string(), json!({}));
+                    }
+                }
 
                 // Infer write tool:
                 // 1. Explicit config.write_tools list (if non-empty → whitelist mode)

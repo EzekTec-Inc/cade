@@ -12,7 +12,6 @@ use super::{bare_model, provider_error, CompletionRequest, CompletionResponse, L
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-const DEFAULT_MAX_TOKENS: u32 = 8192;
 
 /// Fetch all models available to this API key from Anthropic's models endpoint.
 /// Returns `(id, display_name)` pairs, newest first (as returned by the API).
@@ -111,7 +110,7 @@ impl AnthropicProvider {
 
         let mut body = json!({
             "model": bare_model(&req.model),
-            "max_tokens": req.max_tokens.max(DEFAULT_MAX_TOKENS),
+            "max_tokens": req.max_tokens.max(4096), // At least 4096, but allows higher if specified
             "messages": anthropic_messages,
             "stream": stream
         });
