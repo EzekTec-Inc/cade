@@ -2355,10 +2355,19 @@ impl Repl {
         let header_raw = tool_name.replace('_', " ");
         let header: String = header_raw.chars().take(12).collect();
 
+        let mut warning_text = String::new();
+        if tool_name == "bash" {
+            if let Some(cmd) = args["command"].as_str() {
+                if crate::permissions::bash_command_is_suspicious(cmd) {
+                    warning_text = "\n⚠️  WARNING: Suspicious command detected (nested shell, network, or obfuscation)".to_string();
+                }
+            }
+        }
+
         let question_text = if preview.is_empty() {
-            format!("Run {tool_name}?")
+            format!("Run {tool_name}?{warning_text}")
         } else {
-            format!("{preview}")
+            format!("{preview}{warning_text}")
         };
 
         let opts = vec![

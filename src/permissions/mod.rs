@@ -231,6 +231,37 @@ pub fn bash_command_is_write(command: &str) -> bool {
     false
 }
 
+/// Returns true if the command contains high-risk patterns that should be flagged.
+pub fn bash_command_is_suspicious(command: &str) -> bool {
+    let cmd = command.to_lowercase();
+    
+    // 1. Nested shell execution / execution of arbitrary input
+    let nested = ["$(", "`", "sh ", "bash ", "zsh ", "python ", "perl ", "php ", "ruby ", "node "];
+    if nested.iter().any(|&p| cmd.contains(p)) {
+        return true;
+    }
+
+    // 2. Suspicious network operations
+    let network = ["curl", "wget", "nc ", "netcat", "ssh ", "telnet"];
+    if network.iter().any(|&p| cmd.contains(p)) {
+        return true;
+    }
+
+    // 3. Obfuscation attempts
+    let obfuscation = ["base64", "hex", "xxd", "eval"];
+    if obfuscation.iter().any(|&p| cmd.contains(p)) {
+        return true;
+    }
+
+    // 4. Critical system files/dirs (if not just 'ls' or 'cat')
+    let critical = ["/etc/passwd", "/etc/shadow", "/root/", "~/.ssh/", ".env"];
+    if critical.iter().any(|&p| cmd.contains(p)) {
+        return true;
+    }
+
+    false
+}
+
 fn contains_write_redirect(cmd: &str) -> bool {
     // Crude but effective: look for > that is not part of >>
     // and not inside a quoted string

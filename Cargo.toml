@@ -77,6 +77,12 @@ rmcp = { version = "0.2", features = [
 # Utilities
 uuid = { version = "1", features = ["v4"] }
 tempfile = "3"
+aes-gcm = "0.10"
+pbkdf2 = { version = "0.12", features = ["simple"] }
+sha2 = "0.10"
+hmac = "0.12"
+getrandom = "0.2"
+machine-uid = "0.3"
 
 # Server (cade-server binary)
 axum             = { version = "0.7", features = ["macros"] }

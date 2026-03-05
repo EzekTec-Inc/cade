@@ -143,6 +143,36 @@ Introduce a `max_tokens` field in the static model catalogue, pass it dynamicall
 
 ---
 
+## Issue #8 — SEC-02: API keys stored plaintext in SQLite (Security)
+
+**Severity:** Critical
+**Status:** Closed
+**Files:** src/server/storage/sqlite.rs, src/server/crypto.rs
+
+### Description
+LLM provider API keys were stored as raw strings in the `providers` table. This posed a significant risk if the database file was accessed by an unauthorized user.
+
+### Suggested Fix
+Implement encryption at rest for API keys.
+*(Fixed by implementing AES-256-GCM encryption with a machine-derived key).*
+
+---
+
+## Issue #9 — SEC-03: Unrestricted bash execution from LLM output (Security)
+
+**Severity:** Critical
+**Status:** Closed
+**Files:** src/permissions/mod.rs, src/cli/repl.rs
+
+### Description
+The `bash` tool executed LLM-generated strings directly. While user approval was requested, suspicious patterns (nested shells, obfuscated commands) were not proactively flagged.
+
+### Suggested Fix
+Implement a robust "suspicious command" detection logic and warn the user prominently during approval.
+*(Fixed by adding `bash_command_is_suspicious` check and UI warnings).*
+
+---
+
 ## Summary Table
 
 | # | Issue | Severity | Status | File |
@@ -154,3 +184,5 @@ Introduce a `max_tokens` field in the static model catalogue, pass it dynamicall
 | 5 | No automated test coverage for modal to viewport path | Medium | Open | N/A |
 | 6 | OpenAI 400 object schema missing properties for no-arg tools | High | Closed | src/mcp/mod.rs |
 | 7 | Anthropic 400 max_tokens limit exceeded | High | Closed | src/server/llm/anthropic.rs, src/server/api/messages.rs, src/server/llm/catalogue.rs |
+| 8 | SEC-02 — API keys stored plaintext in SQLite | Critical | Closed | src/server/storage/sqlite.rs, src/server/crypto.rs |
+| 9 | SEC-03 — Unrestricted bash execution from LLM output | Critical | Closed | src/permissions/mod.rs, src/cli/repl.rs |
