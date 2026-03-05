@@ -107,6 +107,42 @@ Add tests covering:
 
 ---
 
+## Issue #6 — OpenAI 400: object schema missing properties (Bug)
+
+**Severity:** High
+**Status:** Closed
+**File:** src/mcp/mod.rs
+
+### Description
+When an MCP tool has no parameters, the MCP spec allows returning `{"type": "object"}` for the input schema. However, OpenAI's strict JSON schema parser rejects this, requiring `{"type": "object", "properties": {}}` at a minimum.
+
+### Impact
+Tools with no arguments registered via MCP fail to execute or get attached to the agent when using OpenAI models.
+
+### Suggested Fix
+Update the parameter conversion in `src/mcp/mod.rs` to dynamically inject an empty `properties` object if the type is `object` but `properties` is missing.
+*(Fixed by injecting the empty properties object).*
+
+---
+
+## Issue #7 — Anthropic 400: max_tokens: 16384 > 4096 (Bug)
+
+**Severity:** High
+**Status:** Closed
+**Files:** src/server/api/messages.rs, src/server/llm/anthropic.rs, src/server/llm/catalogue.rs
+
+### Description
+CADE was hardcoding `MAX_TOKENS = 16384` for all CompletionRequests. While this works for GPT-4.5 and Claude 3.5 Sonnet, older models like Claude 3 Haiku and Opus enforce a strict 4096 limit. The Anthropic client also used a `DEFAULT_MAX_TOKENS = 8192` which overwrote smaller limits.
+
+### Impact
+Models with smaller token bounds (like Claude 3 Haiku) return HTTP 400 errors and fail to stream responses.
+
+### Suggested Fix
+Introduce a `max_tokens` field in the static model catalogue, pass it dynamically through the `CompletionRequest`, and remove the hardcoded global constants.
+*(Fixed by implementing dynamic token limits via the catalogue).*
+
+---
+
 ## Summary Table
 
 | # | Issue | Severity | Status | File |
@@ -116,3 +152,5 @@ Add tests covering:
 | 3 | Unused _stdout parameter in meta-tool handlers | Low | Open | src/cli/repl.rs |
 | 4 | Track metadata status mismatch | Low | Open | conductor/tracks/.../metadata.json |
 | 5 | No automated test coverage for modal to viewport path | Medium | Open | N/A |
+| 6 | OpenAI 400 object schema missing properties for no-arg tools | High | Closed | src/mcp/mod.rs |
+| 7 | Anthropic 400 max_tokens limit exceeded | High | Closed | src/server/llm/anthropic.rs, src/server/api/messages.rs, src/server/llm/catalogue.rs |
