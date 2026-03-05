@@ -237,7 +237,7 @@ format!("http://localhost:{port}")
 | ID | Title | Priority | Status |
 |----|-------|----------|--------|
 | C-01 | LLM retry + exponential backoff | 🔴 Critical | `[x]` |
-| C-02 | Dynamic context budget | 🔴 Critical | `[ ]` |
+| C-02 | Dynamic context budget | 🔴 Critical | `[x]` |
 | C-03 | Fix unsafe fd in server auto-start | 🔴 Critical | `[ ]` |
 | H-01 | Parallel tool dispatch | 🔴 High | `[ ]` |
 | H-02 | MCP server reconnect on crash | 🔴 High | `[ ]` |

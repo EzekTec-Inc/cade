@@ -399,17 +399,21 @@ async fn main() -> Result<()> {
         if let Some(server_bin) = server_bin {
             eprintln!("cade-server not running — starting…");
             let mut cmd = std::process::Command::new(&server_bin);
-            // Log server output to /tmp/cade-server.log for debugging
+            // Redirect server stdout + stderr to /tmp/cade-server.log for debugging.
+            // try_clone() performs a proper OS-level dup(2) — no unsafe required.
             if let Ok(log) = std::fs::OpenOptions::new()
                 .create(true).append(true).open("/tmp/cade-server.log")
             {
-                use std::os::unix::io::IntoRawFd;
-                let fd = log.into_raw_fd();
-                // SAFETY: we own the fd; it is valid and open
-                unsafe {
-                    use std::os::unix::io::FromRawFd;
-                    cmd.stdout(std::fs::File::from_raw_fd(fd));
-                    cmd.stderr(std::fs::File::from_raw_fd(fd));
+                match log.try_clone() {
+                    Ok(log_stderr) => {
+                        cmd.stdout(log);
+                        cmd.stderr(log_stderr);
+                    }
+                    Err(_) => {
+                        // dup failed — silence both rather than leaving one unredirected
+                        cmd.stdout(std::process::Stdio::null())
+                           .stderr(std::process::Stdio::null());
+                    }
                 }
             } else {
                 cmd.stdout(std::process::Stdio::null())
