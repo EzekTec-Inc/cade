@@ -6,6 +6,17 @@
 //!
 //! Tool names are prefixed with `{server_key}__` to avoid collisions:
 //!   `git__status`, `developer__bash`, etc.
+//!
+//! ## Reconnect behaviour
+//!
+//! If `call_tool` fails (process crash, broken pipe, etc.) the manager
+//! automatically attempts to reconnect the affected server up to
+//! `MAX_RECONNECT_ATTEMPTS` times with `RECONNECT_DELAY_SECS` between
+//! each attempt.  After all attempts are exhausted the server is marked
+//! `disabled`; its tools remain visible in the schema list (so the LLM
+//! doesn't need to forget about them) but every call returns an error
+//! explaining the situation. A `tracing::warn!` is emitted for each
+//! reconnect attempt and a `tracing::error!` when a server is disabled.
 
 use anyhow::{Context, Result};
 use rmcp::{
@@ -17,9 +28,15 @@ use rmcp::{
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use tokio::process::Command;
-use tracing::{info, warn};
+use tokio::sync::RwLock;
+use tracing::{error, info, warn};
 
 use crate::settings::McpServerConfig;
+
+// ── Reconnect constants ───────────────────────────────────────────────────────
+
+const MAX_RECONNECT_ATTEMPTS: u32 = 3;
+const RECONNECT_DELAY_SECS:   u64 = 2;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -29,6 +46,7 @@ pub struct McpStatus {
     pub key:      String,
     pub command:  String,
     pub tools:    Vec<String>, // prefixed names
+    pub disabled: bool,
 }
 
 /// A cached tool schema in OpenAI-compatible format.
@@ -48,6 +66,12 @@ struct McpServer {
     key:     String,
     command: String,
     tools:   Vec<McpToolSchema>,
+    /// Original config — needed to reconnect the child process.
+    config:  McpServerConfig,
+    /// Consecutive failed reconnect attempts since last success.
+    reconnect_attempts: u32,
+    /// If true, all reconnect attempts have been exhausted; calls fail immediately.
+    disabled: bool,
     /// The live peer — kept alive as long as this struct exists.
     _service: RunningService<RoleClient, ()>,
     peer:     rmcp::Peer<RoleClient>,
@@ -58,9 +82,10 @@ struct McpServer {
 /// Manages all active MCP server connections.
 ///
 /// Constructed once at startup; passed as `Arc<McpManager>` to the REPL.
-/// All methods take `&self` (thread-safe).
+/// All methods take `&self` (thread-safe via interior `RwLock`).
 pub struct McpManager {
-    servers: Vec<McpServer>,
+    /// Interior-mutable server list so `call_tool(&self)` can reconnect.
+    servers: RwLock<Vec<McpServer>>,
 }
 
 impl McpManager {
@@ -89,75 +114,190 @@ impl McpManager {
             }
         }
 
-        McpManager { servers }
+        McpManager { servers: RwLock::new(servers) }
     }
 
     /// No-op (empty) manager — used when no servers are configured.
     pub fn empty() -> Self {
-        McpManager { servers: vec![] }
+        McpManager { servers: RwLock::new(vec![]) }
     }
 
     /// Returns true if any servers are configured.
-    pub fn is_empty(&self) -> bool {
-        self.servers.is_empty()
+    pub async fn is_empty(&self) -> bool {
+        self.servers.read().await.is_empty()
     }
 
     /// All tool schemas across all servers (OpenAI-compatible).
-    pub fn all_tool_schemas(&self) -> Vec<Value> {
+    pub async fn all_tool_schemas(&self) -> Vec<Value> {
         self.servers
+            .read()
+            .await
             .iter()
             .flat_map(|s| s.tools.iter().map(|t| t.schema.clone()))
             .collect()
     }
 
     /// Returns true if this manager owns the given prefixed tool name.
-    pub fn owns_tool(&self, prefixed_name: &str) -> bool {
-        self.find_tool(prefixed_name).is_some()
+    pub async fn owns_tool(&self, prefixed_name: &str) -> bool {
+        self.find_tool_idx(prefixed_name).await.is_some()
     }
 
-    /// Call a prefixed MCP tool. Returns `None` if no server owns it.
+    /// Call a prefixed MCP tool with automatic reconnect on failure.
+    /// Returns `None` if no server owns the tool.
     pub async fn call_tool(
         &self,
         prefixed_name: &str,
         args: &Value,
     ) -> Option<Result<(String, bool)>> {
-        let (server_idx, original_name) = self.find_tool(prefixed_name)?;
-        let server = &self.servers[server_idx];
+        let server_idx = self.find_tool_idx(prefixed_name).await?.0;
+
+        // ── Fast path: try the call directly ─────────────────────────────────
+        // Extract what we need under the read lock, then drop it before .await
+        let (is_disabled, server_key, original_name, peer) = {
+            let servers = self.servers.read().await;
+            let server  = &servers[server_idx];
+            let orig = server.tools
+                .iter()
+                .find(|t| t.prefixed_name == prefixed_name)
+                .map(|t| t.original_name.clone())
+                .unwrap_or_default();
+            (server.disabled, server.key.clone(), orig, server.peer.clone())
+        };
+
+        if is_disabled {
+            return Some(Err(anyhow::anyhow!(
+                "MCP server '{}' is disabled after {} failed reconnect attempts",
+                server_key, MAX_RECONNECT_ATTEMPTS
+            )));
+        }
 
         let arguments = args.as_object().cloned();
-        let result = server
-            .peer
+        let call_result = peer
             .call_tool(CallToolRequestParam {
                 name: original_name.into(),
                 arguments,
             })
             .await;
 
-        Some(match result {
+        let call_err = match call_result {
             Ok(ctr) => {
                 let is_error = ctr.is_error.unwrap_or(false);
                 let text = extract_content_text(&ctr.content);
-                Ok((text, is_error))
+                return Some(Ok((text, is_error)));
             }
-            Err(e) => Err(anyhow::anyhow!("MCP call failed: {e}")),
-        })
+            Err(e) => e,
+        };
+
+        // ── Slow path: call failed — attempt reconnect ────────────────────────
+        let error_msg = call_err.to_string();
+        warn!(
+            "MCP server call failed for '{}': {error_msg} — attempting reconnect",
+            prefixed_name
+        );
+
+        for attempt in 1..=MAX_RECONNECT_ATTEMPTS {
+            warn!(
+                "MCP reconnect attempt {attempt}/{MAX_RECONNECT_ATTEMPTS} for server at index {server_idx}…"
+            );
+            tokio::time::sleep(tokio::time::Duration::from_secs(RECONNECT_DELAY_SECS)).await;
+
+            // Re-read config for reconnect
+            let (key, config) = {
+                let servers = self.servers.read().await;
+                let s = &servers[server_idx];
+                (s.key.clone(), s.config.clone())
+            };
+
+            match Self::connect_server(&key, &config).await {
+                Ok(new_server) => {
+                    info!("MCP server '{}' reconnected successfully", key);
+
+                    // Retry the original call on the new connection
+                    let original_name = new_server.tools
+                        .iter()
+                        .find(|t| t.prefixed_name == prefixed_name)
+                        .map(|t| t.original_name.clone());
+
+                    let call_result = if let Some(orig) = original_name {
+                        let arguments = args.as_object().cloned();
+                        new_server
+                            .peer
+                            .call_tool(CallToolRequestParam {
+                                name: orig.into(),
+                                arguments,
+                            })
+                            .await
+                    } else {
+                        // Tool disappeared after reconnect — server API changed
+                        let mut servers = self.servers.write().await;
+                        servers[server_idx] = new_server;
+                        return Some(Err(anyhow::anyhow!(
+                            "Tool '{prefixed_name}' not found after MCP server reconnect"
+                        )));
+                    };
+
+                    // Replace old server entry with the fresh connection
+                    {
+                        let mut servers = self.servers.write().await;
+                        servers[server_idx] = new_server;
+                    }
+
+                    return Some(match call_result {
+                        Ok(ctr) => {
+                            let is_error = ctr.is_error.unwrap_or(false);
+                            let text = extract_content_text(&ctr.content);
+                            Ok((text, is_error))
+                        }
+                        Err(e) => Err(anyhow::anyhow!("MCP call failed after reconnect: {e}")),
+                    });
+                }
+                Err(e) => {
+                    warn!(
+                        "MCP reconnect attempt {attempt}/{MAX_RECONNECT_ATTEMPTS} failed for '{}': {e}",
+                        key
+                    );
+                    // Update reconnect_attempts counter
+                    let mut servers = self.servers.write().await;
+                    servers[server_idx].reconnect_attempts += 1;
+                }
+            }
+        }
+
+        // All reconnect attempts exhausted — disable the server
+        {
+            let mut servers = self.servers.write().await;
+            let s = &mut servers[server_idx];
+            s.disabled = true;
+            error!(
+                "MCP server '{}' disabled after {MAX_RECONNECT_ATTEMPTS} failed reconnect attempts",
+                s.key
+            );
+        }
+
+        Some(Err(anyhow::anyhow!(
+            "MCP server disabled: all {MAX_RECONNECT_ATTEMPTS} reconnect attempts failed \
+             (original error: {error_msg})"
+        )))
     }
 
     /// Whether a tool requires user permission (mutable tools).
-    pub fn is_write_tool(&self, prefixed_name: &str) -> bool {
-        self.find_tool_schema(prefixed_name)
+    pub async fn is_write_tool(&self, prefixed_name: &str) -> bool {
+        self.find_tool_schema(prefixed_name).await
             .map(|t| t.is_write)
             .unwrap_or(true) // default to write (safe)
     }
 
     /// Summary of all active servers (for `/mcp` command).
-    pub fn status(&self) -> Vec<McpStatus> {
+    pub async fn status(&self) -> Vec<McpStatus> {
         self.servers
+            .read()
+            .await
             .iter()
             .map(|s| McpStatus {
-                key:     s.key.clone(),
-                command: s.command.clone(),
-                tools:   s.tools.iter().map(|t| t.prefixed_name.clone()).collect(),
+                key:      s.key.clone(),
+                command:  s.command.clone(),
+                tools:    s.tools.iter().map(|t| t.prefixed_name.clone()).collect(),
+                disabled: s.disabled,
             })
             .collect()
     }
@@ -247,14 +387,18 @@ impl McpManager {
             key:      key.to_string(),
             command:  config.command.clone(),
             tools,
+            config:   config.clone(),
+            reconnect_attempts: 0,
+            disabled: false,
             _service: service,
             peer,
         })
     }
 
     /// Find (server_index, original_tool_name) for a prefixed tool name.
-    fn find_tool(&self, prefixed_name: &str) -> Option<(usize, String)> {
-        for (i, server) in self.servers.iter().enumerate() {
+    async fn find_tool_idx(&self, prefixed_name: &str) -> Option<(usize, String)> {
+        let servers = self.servers.read().await;
+        for (i, server) in servers.iter().enumerate() {
             if let Some(t) = server.tools.iter().find(|t| t.prefixed_name == prefixed_name) {
                 return Some((i, t.original_name.clone()));
             }
@@ -262,11 +406,14 @@ impl McpManager {
         None
     }
 
-    fn find_tool_schema(&self, prefixed_name: &str) -> Option<&McpToolSchema> {
+    async fn find_tool_schema(&self, prefixed_name: &str) -> Option<McpToolSchema> {
         self.servers
+            .read()
+            .await
             .iter()
-            .flat_map(|s| &s.tools)
+            .flat_map(|s| s.tools.iter())
             .find(|t| t.prefixed_name == prefixed_name)
+            .cloned()
     }
 }
 

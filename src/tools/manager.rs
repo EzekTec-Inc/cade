@@ -132,12 +132,12 @@ pub fn is_native_write_tool(name: &str) -> bool {
 }
 
 /// Returns true if the tool (native or MCP) can mutate state.
-pub fn is_write_tool(name: &str, mcp: &McpManager) -> bool {
+pub async fn is_write_tool(name: &str, mcp: &McpManager) -> bool {
     if is_native_write_tool(name) {
         return true;
     }
-    if mcp.owns_tool(name) {
-        return mcp.is_write_tool(name);
+    if mcp.owns_tool(name).await {
+        return mcp.is_write_tool(name).await;
     }
     false
 }

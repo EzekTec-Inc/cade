@@ -415,7 +415,7 @@ impl Repl {
                         ));
                     }
                     SlashCmd::Mcp => {
-                        let statuses = self.mcp.status();
+                        let statuses = self.mcp.status().await;
                         self.tui_blank();
                         self.tui_hdr("  MCP Servers");
                         self.tui_blank();
@@ -460,7 +460,7 @@ impl Repl {
                         if !native_ids.is_empty() {
                             let _ = client2.attach_agent_tools(&agent_id, &native_ids).await;
                         }
-                        let mcp_ids: Vec<String> = register_mcp_tools(&client2, mcp2.all_tool_schemas())
+                        let mcp_ids: Vec<String> = register_mcp_tools(&client2, mcp2.all_tool_schemas().await)
                             .await.unwrap_or_default().into_iter().map(|t| t.id).collect();
                         let n_mcp = mcp_ids.len();
                         if !mcp_ids.is_empty() {
@@ -572,7 +572,7 @@ impl Repl {
                                         if !ids.is_empty() {
                                             let _ = client.attach_agent_tools(&agent_id, &ids).await;
                                         }
-                                        let mcp_ids: Vec<String> = register_mcp_tools(&client, mcp_ts.all_tool_schemas())
+                                        let mcp_ids: Vec<String> = register_mcp_tools(&client, mcp_ts.all_tool_schemas().await)
                                             .await.unwrap_or_default()
                                             .into_iter().map(|t| t.id).collect();
                                         if !mcp_ids.is_empty() {
@@ -716,7 +716,7 @@ impl Repl {
                                     if !native_ids.is_empty() {
                                         let _ = client2.attach_agent_tools(&new_id, &native_ids).await;
                                     }
-                                    let mcp_ids: Vec<String> = register_mcp_tools(&client2, mcp2.all_tool_schemas())
+                                    let mcp_ids: Vec<String> = register_mcp_tools(&client2, mcp2.all_tool_schemas().await)
                                         .await.unwrap_or_default()
                                         .into_iter().map(|t| t.id).collect();
                                     if !mcp_ids.is_empty() {

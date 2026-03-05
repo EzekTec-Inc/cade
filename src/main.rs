@@ -712,7 +712,7 @@ async fn main() -> Result<()> {
     } else {
         println!("Starting {} MCP server(s)…", mcp_configs.len());
         let mgr = McpManager::start(&mcp_configs).await;
-        let count = mgr.status().len();
+        let count = mgr.status().await.len();
         let total  = mcp_configs.len();
         if count == 0 {
             eprintln!("Warning: no MCP servers started successfully");
@@ -723,9 +723,9 @@ async fn main() -> Result<()> {
     };
 
     // Register MCP tool schemas with cade-server + attach to agent
-    if !mcp.is_empty() {
+    if !mcp.is_empty().await {
         use agent::tools::register_mcp_tools;
-        let mcp_tool_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas())
+        let mcp_tool_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas().await)
             .await
             .unwrap_or_default()
             .into_iter()
@@ -761,9 +761,9 @@ async fn main() -> Result<()> {
     // --link: (re-)attach native + MCP tools to agent, then continue
     if args.link {
         register_and_attach(&client, &agent.id, toolset).await;
-        if !mcp.is_empty() {
+        if !mcp.is_empty().await {
             use agent::tools::register_mcp_tools;
-            let mcp_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas())
+            let mcp_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas().await)
                 .await.unwrap_or_default().into_iter().map(|t| t.id).collect();
             if !mcp_ids.is_empty() {
                 let _ = client.attach_agent_tools(&agent.id, &mcp_ids).await;
