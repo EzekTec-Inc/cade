@@ -1,4 +1,5 @@
 pub mod agents;
+pub mod auth;
 pub mod health;
 pub mod messages;
 pub mod models;
@@ -8,6 +9,7 @@ pub mod tools;
 
 use axum::{
     Router,
+    middleware,
     routing::{delete, get, post, put},
 };
 use crate::server::state::AppState;
@@ -50,5 +52,6 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/providers",          post(providers::add_provider).get(providers::list_providers))
         .route("/v1/providers/presets",  get(providers::list_presets))
         .route("/v1/providers/:name",    delete(providers::remove_provider))
-        .with_state(state)
+        .with_state(state.clone())
+        .layer(middleware::from_fn_with_state(state, auth::auth_middleware))
 }

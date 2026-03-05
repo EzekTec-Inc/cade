@@ -408,7 +408,15 @@ impl PermissionManager {
         }
         // Mode-based
         match self.mode() {
-            PermissionMode::BypassPermissions => true,
+            PermissionMode::BypassPermissions => {
+                // M-02: Audit log every auto-approved call in bypass mode
+                tracing::warn!(
+                    "bypassPermissions: auto-approving tool '{}' arg={:?}",
+                    tool_name,
+                    arg.as_deref().unwrap_or("<none>")
+                );
+                true
+            }
             PermissionMode::AcceptEdits => {
                 // File edits + apply_patch (Codex toolset)
                 matches!(tool_name, "write_file" | "edit_file" | "apply_patch")

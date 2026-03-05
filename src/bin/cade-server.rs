@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
-use axum::http::Request;
+use axum::http::{Request, HeaderValue, Method};
 
 use cade::server::{
     api::router,
@@ -75,7 +75,21 @@ async fn main() -> Result<()> {
         );
 
     let app = router(state)
-        .layer(CorsLayer::permissive())
+        .layer(
+            // H-03: Restrict CORS to localhost origins only (not permissive/open)
+            CorsLayer::new()
+                .allow_origin([
+                    "http://localhost".parse::<HeaderValue>().unwrap(),
+                    format!("http://localhost:{}", config.addr.port())
+                        .parse::<HeaderValue>().unwrap(),
+                    "http://127.0.0.1".parse::<HeaderValue>().unwrap(),
+                    format!("http://127.0.0.1:{}", config.addr.port())
+                        .parse::<HeaderValue>().unwrap(),
+                ])
+                .allow_methods([Method::GET, Method::POST, Method::PUT,
+                                Method::PATCH, Method::DELETE, Method::OPTIONS])
+                .allow_headers(tower_http::cors::Any),
+        )
         .layer(trace_layer);
 
     tracing::info!("Listening on http://{}", config.addr);
