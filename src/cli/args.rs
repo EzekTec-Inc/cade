@@ -98,6 +98,21 @@ pub struct Args {
     /// On timeout the process exits with code 124 (standard timeout exit code).
     #[arg(long = "timeout-secs", default_value_t = 0)]
     pub timeout_secs: u64,
+
+    /// Export an agent to a JSON file. Value is the agent name or ID.
+    /// Optionally combine with --output to set the output file (default: <name>-<timestamp>.json).
+    /// Example: cade --export-agent my-agent --output backup.json
+    #[arg(long = "export-agent", conflicts_with_all = ["prompt", "import_agent"])]
+    pub export_agent: Option<String>,
+
+    /// Output file for --export-agent (use "-" for stdout).
+    #[arg(long = "output", short = 'o')]
+    pub output: Option<String>,
+
+    /// Import an agent from a JSON export file. Value is the path to the file (use "-" for stdin).
+    /// Example: cade --import-agent backup.json
+    #[arg(long = "import-agent", conflicts_with_all = ["prompt", "export_agent"])]
+    pub import_agent: Option<String>,
 }
 
 impl Args {

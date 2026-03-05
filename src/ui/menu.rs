@@ -79,9 +79,10 @@ const SECTIONS: &[Section] = &[
         CmdEntry { cmd: "/feedback",      desc: "Report issues / give feedback" },
     ]},
     Section { name: "Misc", items: &[
-        CmdEntry { cmd: "/clear",         desc: "Clear screen + context window" },
-        CmdEntry { cmd: "/logout",        desc: "Clear stored API key and exit" },
-        CmdEntry { cmd: "/help",          desc: "Show this menu" },
+        CmdEntry { cmd: "/export",         desc: "/export [file.json]  — export agent to JSON" },
+        CmdEntry { cmd: "/clear",          desc: "Clear screen + context window" },
+        CmdEntry { cmd: "/logout",         desc: "Clear stored API key and exit" },
+        CmdEntry { cmd: "/help",           desc: "Show this menu" },
     ]},
 ];
 

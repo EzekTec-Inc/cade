@@ -963,6 +963,26 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Export agent
+    if let Some(ref name_or_id) = args.export_agent {
+        let target_id = cli::export_import::resolve_agent_id(&client, name_or_id).await
+            .context("--export-agent: resolve agent")?;
+        let out_path = args.output.clone().unwrap_or_else(|| {
+            cli::export_import::default_export_path(name_or_id)
+        });
+        cli::export_import::export_agent_to_file(&client, &target_id, &out_path).await
+            .context("--export-agent")?;
+        return Ok(());
+    }
+
+    // Import agent
+    if let Some(ref import_path) = args.import_agent {
+        let new_id = cli::export_import::import_agent_from_file(&client, import_path).await
+            .context("--import-agent")?;
+        println!("Agent ID: {new_id}");
+        return Ok(());
+    }
+
     // Interactive REPL
     let settings_arc = Arc::new(Mutex::new(settings));
     let session_arc = Arc::new(Mutex::new(session));

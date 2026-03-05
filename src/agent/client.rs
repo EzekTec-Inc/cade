@@ -611,6 +611,27 @@ impl CadeClient {
         Ok(body["conversations"].as_array().cloned().unwrap_or_default())
     }
 
+    /// Fetch messages for an agent, optionally filtered by conversation_id.
+    /// Pass an empty string for `conversation_id` to fetch legacy (no-conversation) messages.
+    pub async fn get_conversation_messages(
+        &self,
+        agent_id: &str,
+        conversation_id: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        let mut req = self.client
+            .get(self.url(&format!("/agents/{agent_id}/messages")))
+            .header("Authorization", format!("Bearer {}", self.api_key));
+        if !conversation_id.is_empty() {
+            req = req.query(&[("conversation_id", conversation_id)]);
+        }
+        let resp = req.send().await?;
+        if !resp.status().is_success() {
+            anyhow::bail!("get_conversation_messages failed {}", resp.status());
+        }
+        let body: serde_json::Value = resp.json().await?;
+        Ok(body["messages"].as_array().cloned().unwrap_or_default())
+    }
+
     pub async fn create_conversation(&self, agent_id: &str, title: &str) -> Result<serde_json::Value> {
         let resp = self.client
             .post(self.url(&format!("/agents/{agent_id}/conversations")))

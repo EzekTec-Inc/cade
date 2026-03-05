@@ -78,6 +78,8 @@ enum SlashCmd {
     Stream,
     Usage,
     Copy,
+    /// Export the current agent to a JSON file: /export [output.json]
+    Export(Option<String>),
 }
 
 fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
@@ -127,6 +129,7 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         "stream" => Some(SlashCmd::Stream),
         "usage"  => Some(SlashCmd::Usage),
         "copy"   => Some(SlashCmd::Copy),
+        "export" => Some(SlashCmd::Export(arg)),
         // Skill slash commands: /commit, /review, etc.
         other if skill_ids.iter().any(|id| id == other) => {
             Some(SlashCmd::RunSkill(other.to_string()))
@@ -635,6 +638,21 @@ impl Repl {
                             let _ = app.push(RenderLine::SuccessMsg(
                                 "Copy mode OFF — mouse scroll restored.".into()
                             ));
+                        }
+                    }
+
+                    SlashCmd::Export(out_arg) => {
+                        let agent_id   = self.agent_id();
+                        let agent_name = self.agent_name();
+                        let out_path   = out_arg.unwrap_or_else(||
+                            crate::cli::export_import::default_export_path(&agent_name)
+                        );
+                        self.tui_dim(format!("  Exporting agent '{agent_name}' → {out_path} …"));
+                        match crate::cli::export_import::export_agent_to_file(
+                            &self.client, &agent_id, &out_path
+                        ).await {
+                            Ok(_) => self.tui_ok(format!("  ✓ Exported → {out_path}")),
+                            Err(e) => self.tui_err(format!("  ✗ Export failed: {e}")),
                         }
                     }
 
