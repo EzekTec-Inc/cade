@@ -1,4 +1,5 @@
 use anyhow::Result;
+use futures::future::join_all;
 use serde_json::json;
 
 use crate::agent::{CadeClient, client::CadeMessage};
@@ -13,6 +14,19 @@ pub struct HeadlessStats {
     pub turn_count:   u32,
     pub tool_count:   u32,
     pub duration_ms:  u128,
+}
+
+// ── Tool classification ───────────────────────────────────────────────────────
+
+/// Returns true for tools that mutate shared agent state and must run sequentially.
+///
+/// These tools interact with the agent's memory or skills system and cannot be
+/// safely parallelised with other calls in the same turn:
+///   - `update_memory`   — writes to the agent memory block store
+///   - `load_skill`      — reads skills and triggers a follow-up turn
+///   - `install_skill`   — installs skills (file writes + agent state)
+fn is_sequential_tool(name: &str) -> bool {
+    matches!(name, "update_memory" | "load_skill" | "install_skill")
 }
 
 // ── Text mode (default) ───────────────────────────────────────────────────────
@@ -126,6 +140,72 @@ pub async fn run_headless_stream_json(
     }));
 }
 
+// ── Tool loop helpers ─────────────────────────────────────────────────────────
+
+/// Execute a single tool call, respecting permissions and intercepting
+/// native tools (update_memory, load_skill).
+///
+/// Returns `(call_id, output, is_error)`.
+async fn run_one_tool(
+    client: &CadeClient,
+    agent_id: &str,
+    call_id: String,
+    tool_name: String,
+    args: serde_json::Value,
+    permissions: &PermissionManager,
+    mcp: &McpManager,
+) -> (String, String, bool) {
+    // Permission check
+    if permissions.is_blocked(&tool_name, &args) {
+        let reason = permissions.block_reason(&tool_name, &args);
+        tracing::warn!("{reason}");
+        return (call_id, reason, true);
+    }
+
+    // Intercept: update_memory
+    if tool_name == "update_memory" {
+        let label     = args["label"].as_str().unwrap_or("").trim().to_string();
+        let value     = args["value"].as_str().unwrap_or("").to_string();
+        let operation = args["operation"].as_str().unwrap_or("set");
+        let final_value = if operation == "append" {
+            let existing = client.get_memory(agent_id).await
+                .unwrap_or_default()
+                .into_iter()
+                .find(|b| b.label == label)
+                .map(|b| b.value)
+                .unwrap_or_default();
+            if existing.is_empty() { value } else { format!("{existing}\n{value}") }
+        } else { value };
+        let description = args["description"].as_str().map(String::from);
+        let (msg, err) = match client.upsert_memory(agent_id, &label, &final_value, description.as_deref()).await {
+            Ok(_)  => (format!("Memory block '{label}' updated"), false),
+            Err(e) => (format!("Failed: {e}"), true),
+        };
+        return (call_id, msg, err);
+    }
+
+    // Intercept: load_skill
+    if tool_name == "load_skill" {
+        let id     = args["id"].as_str().unwrap_or("").trim().to_string();
+        let skills = crate::skills::discover_all_skills(
+            &std::env::current_dir().unwrap_or_default(), None, None
+        );
+        let (msg, err) = match skills.into_iter().find(|s| s.id == id) {
+            Some(s) => (s.to_context_block(), false),
+            None    => (format!("Skill '{id}' not found"), true),
+        };
+        return (call_id, msg, err);
+    }
+
+    // Generic tool dispatch
+    tracing::info!("Executing tool: {tool_name}");
+    let result = dispatch(call_id.clone(), &tool_name, &args, mcp).await;
+    tracing::debug!("Tool '{}': {} bytes", tool_name, result.output.len());
+    (call_id, result.output, result.is_error)
+}
+
+// ── Text-mode tool loop ───────────────────────────────────────────────────────
+
 async fn process_tool_calls(
     client: &CadeClient,
     agent_id: &str,
@@ -140,79 +220,122 @@ async fn process_tool_calls(
         .filter_map(|m| m.as_tool_call())
         .collect();
 
-    for (call_id, tool_name, args) in tool_calls {
-        if permissions.is_blocked(&tool_name, &args) {
-            let reason = permissions.block_reason(&tool_name, &args);
-            tracing::warn!("{reason}");
+    if tool_calls.is_empty() {
+        return Ok(());
+    }
+
+    // Split into sequential (state-mutating) and parallel (independent) calls.
+    // Sequential tools are handled one at a time in original order.
+    // If all calls in the batch are sequential, fall through to sequential path.
+    let all_sequential = tool_calls.iter().all(|(_, name, _)| is_sequential_tool(name));
+
+    if all_sequential || tool_calls.len() == 1 {
+        // ── Sequential path ───────────────────────────────────────────────────
+        for (call_id, tool_name, args) in tool_calls {
+            let (cid, out, is_err) = run_one_tool(
+                client, agent_id, call_id, tool_name, args, permissions, mcp
+            ).await;
+
             let follow = client
-                .stream_tool_return(agent_id, &call_id, &reason, true, |_| {})
+                .stream_tool_return(agent_id, &cid, &out, is_err, |msg| {
+                    if let Some(text) = msg.assistant_text() {
+                        print!("{text}");
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    }
+                })
                 .await?;
+
             collect_assistant_text(&follow, output);
             stats.turn_count += 1;
+            stats.tool_count += 1;
             Box::pin(process_tool_calls(client, agent_id, follow, permissions, output, mcp, stats)).await?;
-            continue;
+        }
+    } else {
+        // ── Parallel path ─────────────────────────────────────────────────────
+        // Execute all non-sequential tools concurrently, keep sequential ones
+        // in their original positions but run them after the parallel batch.
+        let total = tool_calls.len();
+        let mut parallel_batch: Vec<(String, String, serde_json::Value)> = Vec::new();
+        let mut sequential_remainder: Vec<(String, String, serde_json::Value)> = Vec::new();
+
+        for tc in tool_calls {
+            if is_sequential_tool(&tc.1) {
+                sequential_remainder.push(tc);
+            } else {
+                parallel_batch.push(tc);
+            }
         }
 
-        // Intercept update_memory — handled natively
-        if tool_name == "update_memory" {
-            let label = args["label"].as_str().unwrap_or("").trim().to_string();
-            let value = args["value"].as_str().unwrap_or("").to_string();
-            let operation = args["operation"].as_str().unwrap_or("set");
-            let final_value = if operation == "append" {
-                let existing = client.get_memory(agent_id).await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|b| b.label == label)
-                    .map(|b| b.value)
-                    .unwrap_or_default();
-                if existing.is_empty() { value } else { format!("{existing}\n{value}") }
-            } else { value };
-            let description = args["description"].as_str();
-            let (msg, err) = match client.upsert_memory(agent_id, &label, &final_value, description).await {
-                Ok(_) => (format!("Memory block '{label}' updated"), false),
-                Err(e) => (format!("Failed: {e}"), true),
-            };
-            let follow = client.stream_tool_return(agent_id, &call_id, &msg, err, |_| {}).await?;
-            collect_assistant_text(&follow, output);
-            stats.turn_count += 1;
-            Box::pin(process_tool_calls(client, agent_id, follow, permissions, output, mcp, stats)).await?;
-            continue;
-        }
+        tracing::info!(
+            "Parallel tool dispatch: {} concurrent + {} sequential",
+            parallel_batch.len(), sequential_remainder.len()
+        );
 
-        // load_skill — headless: return full body if skill found in current dir
-        if tool_name == "load_skill" {
-            let id = args["id"].as_str().unwrap_or("").trim().to_string();
-            let skills = crate::skills::discover_all_skills(
-                &std::env::current_dir().unwrap_or_default(), None, None
-            );
-            let (msg, err) = match skills.into_iter().find(|s| s.id == id) {
-                Some(s) => (s.to_context_block(), false),
-                None    => (format!("Skill '{id}' not found"), true),
-            };
-            let follow = client.stream_tool_return(agent_id, &call_id, &msg, err, |_| {}).await?;
-            collect_assistant_text(&follow, output);
-            stats.turn_count += 1;
-            Box::pin(process_tool_calls(client, agent_id, follow, permissions, output, mcp, stats)).await?;
-            continue;
-        }
-
-        tracing::info!("Executing tool: {tool_name}");
-        stats.tool_count += 1;
-        let result = dispatch(call_id.clone(), &tool_name, &args, mcp).await;
-        tracing::debug!("Tool '{}': {} bytes", tool_name, result.output.len());
-
-        let follow = client
-            .stream_tool_return(agent_id, &call_id, &result.output, result.is_error, |msg| {
-                if let Some(text) = msg.assistant_text() {
-                    print!("{text}");
-                    let _ = std::io::Write::flush(&mut std::io::stdout());
+        // Spawn all parallel tools concurrently
+        let futures: Vec<_> = parallel_batch
+            .into_iter()
+            .map(|(call_id, tool_name, args)| {
+                let client    = client.clone();
+                let agent_id  = agent_id.to_string();
+                let mcp       = mcp;
+                let perms     = permissions.clone();
+                async move {
+                    run_one_tool(&client, &agent_id, call_id, tool_name, args, &perms, &mcp).await
                 }
             })
-            .await?;
+            .collect();
 
-        collect_assistant_text(&follow, output);
-        stats.turn_count += 1;
-        Box::pin(process_tool_calls(client, agent_id, follow, permissions, output, mcp, stats)).await?;
+        let results: Vec<(String, String, bool)> = join_all(futures).await;
+        stats.tool_count += results.len() as u32;
+
+        // Submit all parallel results back.
+        // The server counts received vs expected: it only calls the LLM once all
+        // expected results for this turn have arrived. So we send N-1 results
+        // silently (they return empty messages), then send the last one which
+        // triggers the LLM response.
+        let result_count = results.len();
+        let mut follow_msgs: Vec<CadeMessage> = Vec::new();
+
+        for (i, (call_id, out, is_err)) in results.into_iter().enumerate() {
+            let is_last = i == result_count - 1 && sequential_remainder.is_empty();
+            if is_last {
+                // Last result — triggers LLM response
+                let follow = client
+                    .stream_tool_return(agent_id, &call_id, &out, is_err, |msg| {
+                        if let Some(text) = msg.assistant_text() {
+                            print!("{text}");
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
+                        }
+                    })
+                    .await?;
+                follow_msgs = follow;
+            } else {
+                // Non-last results — server buffers them, returns []
+                client.send_tool_return(agent_id, &call_id, &out, is_err).await?;
+            }
+        }
+
+        // Now handle any sequential tools that were in this batch
+        for (call_id, tool_name, args) in sequential_remainder {
+            let (cid, out, is_err) = run_one_tool(
+                client, agent_id, call_id, tool_name, args, permissions, mcp
+            ).await;
+
+            let follow = client
+                .stream_tool_return(agent_id, &cid, &out, is_err, |msg| {
+                    if let Some(text) = msg.assistant_text() {
+                        print!("{text}");
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    }
+                })
+                .await?;
+            follow_msgs = follow;
+            stats.tool_count += 1;
+        }
+
+        collect_assistant_text(&follow_msgs, output);
+        stats.turn_count += total as u32;
+        Box::pin(process_tool_calls(client, agent_id, follow_msgs, permissions, output, mcp, stats)).await?;
     }
 
     Ok(())
@@ -235,41 +358,146 @@ async fn process_tool_calls_stream_json(
         .filter_map(|m| m.as_tool_call())
         .collect();
 
-    for (call_id, tool_name, args) in tool_calls {
-        emit(json!({ "type": "tool_call", "tool": tool_name, "args": args }));
+    if tool_calls.is_empty() {
+        return Ok(());
+    }
 
-        let (result_output, is_error) = if permissions.is_blocked(&tool_name, &args) {
-            let reason = permissions.block_reason(&tool_name, &args);
-            (reason, true)
-        } else {
+    let all_sequential = tool_calls.iter().all(|(_, name, _)| is_sequential_tool(name));
+
+    if all_sequential || tool_calls.len() == 1 {
+        // ── Sequential path ───────────────────────────────────────────────────
+        for (call_id, tool_name, args) in tool_calls {
+            emit(json!({ "type": "tool_call", "tool": tool_name, "args": args }));
+
+            let (cid, result_output, is_error) = run_one_tool(
+                client, agent_id, call_id, tool_name.clone(), args, permissions, mcp
+            ).await;
+
+            emit(json!({
+                "type": "tool_result",
+                "tool": tool_name,
+                "output": result_output,
+                "is_error": is_error
+            }));
+
             stats.tool_count += 1;
-            let r = dispatch(call_id.clone(), &tool_name, &args, mcp).await;
-            (r.output, r.is_error)
-        };
+            let follow = client
+                .stream_tool_return(agent_id, &cid, &result_output, is_error, |msg| {
+                    if let Some(text) = msg.assistant_text() {
+                        emit(json!({
+                            "type": "message",
+                            "messageType": "assistant_message",
+                            "content": text
+                        }));
+                    }
+                })
+                .await?;
 
-        emit(json!({
-            "type": "tool_result",
-            "tool": tool_name,
-            "output": result_output,
-            "is_error": is_error
-        }));
+            collect_assistant_text(&follow, output);
+            stats.turn_count += 1;
+            Box::pin(process_tool_calls_stream_json(
+                client, agent_id, follow, permissions, output, mcp, stats, emit
+            )).await?;
+        }
+    } else {
+        // ── Parallel path ─────────────────────────────────────────────────────
+        let total = tool_calls.len();
+        let mut parallel_batch  = Vec::new();
+        let mut sequential_remainder = Vec::new();
 
-        let follow = client
-            .stream_tool_return(agent_id, &call_id, &result_output, is_error, |msg| {
-                if let Some(text) = msg.assistant_text() {
-                    emit(json!({
-                        "type": "message",
-                        "messageType": "assistant_message",
-                        "content": text
-                    }));
+        for tc in tool_calls {
+            emit(json!({ "type": "tool_call", "tool": tc.1, "args": tc.2 }));
+            if is_sequential_tool(&tc.1) {
+                sequential_remainder.push(tc);
+            } else {
+                parallel_batch.push(tc);
+            }
+        }
+
+        tracing::info!(
+            "Parallel tool dispatch (stream-json): {} concurrent + {} sequential",
+            parallel_batch.len(), sequential_remainder.len()
+        );
+
+        let futures: Vec<_> = parallel_batch
+            .into_iter()
+            .map(|(call_id, tool_name, args)| {
+                let client   = client.clone();
+                let agent_id = agent_id.to_string();
+                let mcp      = mcp;
+                let perms    = permissions.clone();
+                async move {
+                    let r = run_one_tool(&client, &agent_id, call_id, tool_name.clone(), args, &perms, &mcp).await;
+                    (tool_name, r)
                 }
             })
-            .await?;
+            .collect();
 
-        collect_assistant_text(&follow, output);
-        stats.turn_count += 1;
+        let results: Vec<(String, (String, String, bool))> = join_all(futures).await;
+        stats.tool_count += results.len() as u32;
+
+        // Emit tool results
+        for (tool_name, (_, ref out, is_err)) in &results {
+            emit(json!({
+                "type": "tool_result",
+                "tool": tool_name,
+                "output": out,
+                "is_error": is_err
+            }));
+        }
+
+        // Submit results back — server batches them until all expected arrive
+        let result_count = results.len();
+        let mut follow_msgs: Vec<CadeMessage> = Vec::new();
+
+        for (i, (_, (call_id, out, is_err))) in results.into_iter().enumerate() {
+            let is_last = i == result_count - 1 && sequential_remainder.is_empty();
+            if is_last {
+                let follow = client
+                    .stream_tool_return(agent_id, &call_id, &out, is_err, |msg| {
+                        if let Some(text) = msg.assistant_text() {
+                            emit(json!({
+                                "type": "message",
+                                "messageType": "assistant_message",
+                                "content": text
+                            }));
+                        }
+                    })
+                    .await?;
+                follow_msgs = follow;
+            } else {
+                client.send_tool_return(agent_id, &call_id, &out, is_err).await?;
+            }
+        }
+
+        for (call_id, tool_name, args) in sequential_remainder {
+            emit(json!({ "type": "tool_call", "tool": tool_name, "args": args }));
+            let (cid, out, is_err) = run_one_tool(
+                client, agent_id, call_id, tool_name.clone(), args, permissions, mcp
+            ).await;
+            emit(json!({
+                "type": "tool_result", "tool": tool_name,
+                "output": out, "is_error": is_err
+            }));
+            let follow = client
+                .stream_tool_return(agent_id, &cid, &out, is_err, |msg| {
+                    if let Some(text) = msg.assistant_text() {
+                        emit(json!({
+                            "type": "message",
+                            "messageType": "assistant_message",
+                            "content": text
+                        }));
+                    }
+                })
+                .await?;
+            follow_msgs = follow;
+            stats.tool_count += 1;
+        }
+
+        collect_assistant_text(&follow_msgs, output);
+        stats.turn_count += total as u32;
         Box::pin(process_tool_calls_stream_json(
-            client, agent_id, follow, permissions, output, mcp, stats, emit
+            client, agent_id, follow_msgs, permissions, output, mcp, stats, emit
         )).await?;
     }
 
