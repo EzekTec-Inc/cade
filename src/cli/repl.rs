@@ -1178,20 +1178,17 @@ impl Repl {
                                     self.tui_blank();
                                     self.tui_hdr(format!("  Skills ({} loaded):", skills.len()));
                                     self.tui_blank();
-                                    let mut rows = Vec::new();
                                     for s in skills.iter() {
-                                        let cat = s.category.as_deref().unwrap_or("general").to_string();
-                                        rows.push(vec![
+                                        let cat = s.category.as_deref().unwrap_or("general");
+                                        self.tui_sys(format!(
+                                            "  [{:<8}] {:<22} — {} ({})",
                                             s.scope.to_string(),
-                                            s.id.clone(),
-                                            cat,
-                                            s.description.clone(),
-                                        ]);
+                                            s.id,
+                                            s.description,
+                                            cat
+                                        ));
                                     }
-                                    let _ = self.app.lock().unwrap().push(RenderLine::Table {
-                                        headers: vec!["Scope".to_string(), "ID".to_string(), "Category".to_string(), "Description".to_string()],
-                                        rows,
-                                    });
+                                    self.tui_blank();
                                     self.tui_dim("  Agent uses load_skill(<id>) to load full content on-demand.");
                                 }
                             }
