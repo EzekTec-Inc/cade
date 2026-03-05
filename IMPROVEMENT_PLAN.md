@@ -242,7 +242,7 @@ format!("http://localhost:{port}")
 | H-01 | Parallel tool dispatch | 🔴 High | `[x]` |
 | H-02 | MCP server reconnect on crash | 🔴 High | `[x]` |
 | H-03 | Headless mode global timeout | 🔴 High | `[x]` |
-| H-04 | Configurable port client/server sync | 🔴 High | `[ ]` |
+| H-04 | Configurable port client/server sync | 🔴 High | `[x]` |
 | M-01 | Subagent concurrency cap | 🟡 Medium | `[ ]` |
 | M-02 | Live skill file watcher | 🟡 Medium | `[ ]` |
 | M-03 | Agent export / import | 🟡 Medium | `[ ]` |

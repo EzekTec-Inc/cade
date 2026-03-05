@@ -168,6 +168,9 @@ pub struct Repl {
     conversation_id: Arc<Mutex<Option<String>>>,
     /// MCP server manager — routes tool calls with `{server}__` prefix.
     mcp: std::sync::Arc<crate::mcp::McpManager>,
+    /// Semaphore limiting concurrent subagent LLM calls.
+    /// Capacity is read from CADE_MAX_SUBAGENTS at startup (default: 4).
+    subagent_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
     /// Whether SSE token streaming is enabled (toggled by /stream).
     streaming_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Cumulative token usage for the session (input, output).
@@ -215,6 +218,15 @@ impl Repl {
             cancel_turn:           std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             conversation_id:       Arc::new(Mutex::new(conversation_id)),
             mcp,
+            subagent_semaphore: {
+                let cap = std::env::var("CADE_MAX_SUBAGENTS")
+                    .ok()
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|&n| n > 0)
+                    .unwrap_or(4);
+                tracing::info!("Subagent concurrency cap: {cap} (set CADE_MAX_SUBAGENTS to override)");
+                std::sync::Arc::new(tokio::sync::Semaphore::new(cap))
+            },
             streaming_enabled:     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             session_input_tokens:  std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -3440,11 +3452,15 @@ impl Repl {
         };
 
         if background {
-            // Spawn and return immediately
+            // Acquire a permit — blocks if cap is reached, queues the task
+            let sem = std::sync::Arc::clone(&self.subagent_semaphore);
             let bg = bg_results;
             let st = subagent_type.clone();
             tokio::spawn(async move {
+                // Permit held for the lifetime of the spawned task
+                let _permit = sem.acquire_owned().await;
                 let (result, is_error) = run_task.await;
+                drop(_permit);
                 bg.lock().unwrap().push(BackgroundResult {
                     task_id: task_id.clone(),
                     subagent: st,
@@ -3464,8 +3480,10 @@ impl Repl {
                 is_error: false,
             })
         } else {
-            // Run synchronously — wait for result
+            // Run synchronously — acquire permit, wait for result, release
+            let _permit = self.subagent_semaphore.acquire().await;
             let (output, is_error) = run_task.await;
+            drop(_permit);
 
             // SubagentStop hook — can block (exit 2 continues the agent)
             let hook_outcome = self.hooks.subagent_stop(&subagent_type, &output, is_error).await;
