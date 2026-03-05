@@ -37,7 +37,6 @@ enum AgentPickerResult {
 #[derive(Debug)]
 enum SlashCmd {
     Help,
-    Menu,
     /// Invoke a loaded skill by its id (e.g. /commit → RunSkill("commit"))
     RunSkill(String),
     Exit,
@@ -79,10 +78,6 @@ enum SlashCmd {
     Stream,
     Usage,
     Copy,
-}
-
-fn parse_slash(input: &str) -> Option<SlashCmd> {
-    parse_slash_with_skills(input, &[])
 }
 
 fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
@@ -386,7 +381,7 @@ impl Repl {
                         }
                         continue;
                     }
-                    SlashCmd::Help | SlashCmd::Menu => {
+                    SlashCmd::Help => {
                         // Open full-screen command browser
                         let chosen = {
                             let mut app = self.app.lock().unwrap();
@@ -849,7 +844,7 @@ impl Repl {
                                 0 => self.tui_err(format!("No agent matching '{query}'")),
                                 1 => {
                                     let a = matched[0];
-                                    use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                                    use crate::ui::question::{Question, QuestionOption};
                                     let opts = vec![
                                         QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
                                         QuestionOption { label: "No — cancel".to_string(),  description: String::new() },
@@ -1029,7 +1024,7 @@ impl Repl {
                                     .find(|b| b.label == label)
                                     .map(|b| b.value)
                                     .unwrap_or_default();
-                                use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                                use crate::ui::question::{Question, QuestionOption};
                                 let opts = vec![
                                     QuestionOption { label: format!("Keep: {}…", current.chars().take(60).collect::<String>()), description: String::new() },
                                     QuestionOption { label: "Clear (erase block)".to_string(), description: String::new() },
@@ -1431,7 +1426,7 @@ impl Repl {
                         } else if let Some(rule) = crate::permissions::PermissionRule::parse(&pattern) {
                             self.permissions.add_allow_rule(rule.clone());
                             self.tui_ok(format!("  ✓ Allow  {:<12} {}", rule.tool(), rule.arg_display()));
-                            use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                            use crate::ui::question::{Question, QuestionOption};
                             let opts = vec![
                                 QuestionOption { label: "Yes — save to settings.json".to_string(), description: String::new() },
                                 QuestionOption { label: "No — session only".to_string(), description: String::new() },
@@ -1464,7 +1459,7 @@ impl Repl {
                         } else if let Some(rule) = crate::permissions::PermissionRule::parse(&pattern) {
                             self.permissions.add_deny_rule(rule.clone());
                             self.tui_err(format!("  ✗ Deny   {:<12} {}", rule.tool(), rule.arg_display()));
-                            use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                            use crate::ui::question::{Question, QuestionOption};
                             let opts = vec![
                                 QuestionOption { label: "Yes — save to settings.json".to_string(), description: String::new() },
                                 QuestionOption { label: "No — session only".to_string(), description: String::new() },
@@ -1534,7 +1529,7 @@ impl Repl {
                         let new_name = new_name.trim().to_string();
                         let name = if new_name.is_empty() {
                             // Prompt for name via QuestionWidget
-                            use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                            use crate::ui::question::{Question, QuestionOption};
                             let opts = vec![QuestionOption { label: "Cancel".to_string(), description: String::new() }];
                             let q = Question { header: "Rename agent", text: "Enter new agent name:",
                                 options: &opts, multi_select: false, allow_other: true, progress: None };
@@ -2326,7 +2321,7 @@ impl Repl {
         tool_name: &str,
         args: &serde_json::Value,
     ) -> Result<bool> {
-        use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+        use crate::ui::question::{Question, QuestionOption};
 
         // Show diff preview for file-mutation tools before the approval prompt.
         if let Some(diff_lines) = Self::build_diff_preview(tool_name, args) {
@@ -2486,7 +2481,7 @@ impl Repl {
         args: &serde_json::Value,
     ) -> Result<crate::tools::ToolResult> {
         use crate::tools::AskUserQuestionTool;
-        use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+        use crate::ui::question::{Question, QuestionOption};
         use std::collections::HashMap;
 
         // Parse and validate
@@ -2679,7 +2674,7 @@ impl Repl {
         preset: Option<String>,
         _stdout: &mut io::Stdout,
     ) -> Result<()> {
-        use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+        use crate::ui::question::{Question, QuestionOption};
 
         const BUILTIN: &[(&str, &str)] = &[
             ("anthropic", "Anthropic (Claude models)"),
@@ -2858,7 +2853,7 @@ impl Repl {
                         let conv_id = convs[sel]["id"].as_str().unwrap_or("").to_string();
                         let title   = convs[sel]["title"].as_str().unwrap_or("(untitled)").to_string();
                         // Use QuestionWidget for confirmation
-                        use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                        use crate::ui::question::{Question, QuestionOption};
                         let opts = vec![
                             QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
                             QuestionOption { label: "No — keep".to_string(),    description: String::new() },
@@ -3009,7 +3004,7 @@ impl Repl {
                         let names: Vec<String> = targets.iter().map(|&i| agents[i].name.clone()).collect();
                         let label = if targets.len() == 1 { format!("Delete '{}'?", names[0]) }
                             else { format!("Delete {} agents ({})?", targets.len(), names.join(", ")) };
-                        use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                        use crate::ui::question::{Question, QuestionOption};
                         let opts = vec![
                             QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
                             QuestionOption { label: "No — cancel".to_string(),  description: String::new() },
@@ -3032,7 +3027,7 @@ impl Repl {
                     (KeyCode::Char('r'), _) => {
                         let a = agents[selected].clone();
                         // Collect new name via QuestionWidget (allow_other = freetext)
-                        use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                        use crate::ui::question::{Question, QuestionOption};
                         let opts = vec![
                             QuestionOption { label: "Keep current name".to_string(), description: String::new() },
                         ];
@@ -3303,7 +3298,7 @@ impl Repl {
                         if provider == "__custom__" || id.ends_with('/') {
                             // Freetext input via QuestionWidget
                             let prefix = if id.ends_with('/') && id.len() > 1 { id.as_str() } else { "" };
-                            use crate::ui::question::{Question, QuestionOption, QuestionWidget};
+                            use crate::ui::question::{Question, QuestionOption};
                             let opts = vec![QuestionOption { label: "Cancel".to_string(), description: String::new() }];
                             let prompt = if prefix.is_empty() { "Enter model ID (e.g. provider/model-name):".to_string() }
                                          else { format!("Enter model for {prefix}") };
@@ -3526,117 +3521,13 @@ impl Repl {
         Ok(())
     }
 
-    /// Return the full help text as a string (used by /help via print_block).
-    fn help_text() -> String {
-        let mut s = String::new();
-        s.push_str("\nCommands:\n");
-        s.push_str("\n  Session:\n");
-        s.push_str("    /info           - agent, model, mode, cwd\n");
-        s.push_str("    /agent          - show current agent ID\n");
-        s.push_str("    /agents         - list all agents (Space mark, r rename, d delete, Enter switch)\n");
-        s.push_str("    /new            - start a new conversation on the current agent\n");
-        s.push_str("    /new-agent      - create a brand-new agent\n");
-        s.push_str("    /resume         - browse past conversations and switch to one\n");
-        s.push_str("    /rename [name]  - rename current agent\n");
-        s.push_str("    /delete <name>  - delete an agent by name or ID\n");
-        s.push_str("    /pin            - pin current agent for quick access\n");
-        s.push_str("    /clear          - clear screen + context window\n");
-        s.push_str("\n  Hooks:\n");
-        s.push_str("    /mcp            - list active MCP servers and their tools\n");
-        s.push_str("    /link           - (re-)attach CADE tools to current agent\n");
-        s.push_str("    /unlink         - remove all CADE tools from current agent\n");
-        s.push_str("    /hooks                    - show active hook configuration\n");
-        s.push_str("    (configure in ~/.cade/settings.json or .cade/settings.json)\n");
-        s.push_str("    events: PreToolUse PostToolUse Stop UserPromptSubmit SessionStart ...\n");
-        s.push_str("\n  Permissions:\n");
-        s.push_str("    /permissions              - show mode + active allow/deny rules\n");
-        s.push_str("    /approve-always <pattern> - always allow a tool pattern\n");
-        s.push_str("    /deny-always <pattern>    - always deny a tool pattern\n");
-        s.push_str("    pattern syntax: Bash(cargo test)  Read(src/**)  Bash(rm -rf:*)\n");
-        s.push_str("\n  Providers:\n");
-        s.push_str("    /providers           - list configured providers\n");
-        s.push_str("    /connect             - interactive provider setup\n");
-        s.push_str("    /connect <name>      - connect: anthropic, openai, gemini, openrouter, groq...\n");
-        s.push_str("    /disconnect <name>   - remove a provider (persisted + live)\n");
-        s.push_str("\n  Subagents:\n");
-        s.push_str("    /subagents      - list available subagents (built-in + custom)\n");
-        s.push_str("    ask agent to    - run_subagent(type, task) -- spawns subagent\n");
-        s.push_str("    custom def      - .cade/agents/<name>.md in project or ~/.cade/agents/\n");
-        s.push_str("\n  Skills:\n");
-        s.push_str("    /skills                - list loaded skills\n");
-        s.push_str("    /skills create <name>  - scaffold a new SKILL.MD file\n");
-        s.push_str("    /skills show <id>      - show full skill content\n");
-        s.push_str("    /skills reload         - re-discover skills + update agent memory\n");
-        s.push_str("\n  Memory:\n");
-        s.push_str("    /memory                    - list memory blocks (label + description + preview)\n");
-        s.push_str("    /memory view <label>       - show full block content\n");
-        s.push_str("    /memory set <label> <val>  - set a block directly\n");
-        s.push_str("    /memory delete <label>              - delete a block\n");
-        s.push_str("    /memory edit <label>                - multi-line inline editor\n");
-        s.push_str("    /memory history <label>             - show last 5 revisions\n");
-        s.push_str("    /memory restore <label> <rev_id>    - restore a revision\n");
-        s.push_str("    /remember [text]           - ask agent to store something in memory\n");
-        s.push_str("    /init                      - analyse project + init memory\n");
-        s.push_str("    /search <q>                - search past messages\n");
-        s.push_str("\n  Model / Toolset:\n");
-        s.push_str("    /model [name]   - show current or switch model\n");
-        s.push_str("    /toolset [name] - show current or switch toolset: default | codex | gemini\n");
-        s.push_str("\n  Permission modes:\n");
-        s.push_str("    /default        - ask before each tool  [Shift+Tab to cycle]\n");
-        s.push_str("    /plan           - read-only tools; write ops blocked\n");
-        s.push_str("    /yolo           - auto-approve all tools (bypassPermissions)\n");
-        s.push_str("    /mode [name]    - show/set: default | plan | yolo | acceptEdits | bypassPermissions\n");
-        s.push_str("\n  Direct bash (bypasses agent):\n");
-        s.push_str("    ! <cmd>         - e.g.  ! git status\n");
-        s.push_str("\n  Keyboard shortcuts:\n");
-        s.push_str("    Shift+Enter    - insert newline (multi-line input)\n");
-        s.push_str("    Esc            - clear current input line\n");
-        s.push_str("    Shift+Tab      - cycle permission mode\n");
-        s.push_str("    Up / Down      - navigate command history\n");
-        s.push_str("    Ctrl+C         - clear line / cancel current input / interrupt running turn\n");
-        s.push_str("    Ctrl+D         - exit (on empty line)\n");
-        s.push_str("\n    /stream         - toggle token streaming on/off\n");
-        s.push_str("    /usage          - show token usage for this session\n");
-        s.push_str("    /logout         - clear API credentials and exit\n");
-        s.push_str("    /feedback       - report issues\n");
-        s.push_str("    /help  /?       - this message\n");
-        s.push_str("    exit  /exit     - quit CADE\n");
-        s
-    }
 }
 
 fn truncate(s: &str, max: usize) -> String {
     super::truncate(s, max)
 }
 
-/// Return a display path relative to the current working directory if possible.
-/// Delegates to the ui module's implementation.
-fn make_relative_path(path: &str) -> String {
-    crate::ui::make_relative_path(path)
-}
 
-/// Read a line from stdin with no echo (for API key input).
-/// Falls back to normal readline if raw mode can't be set.
-/// Read a password from stdin with no echo. Caller must ensure raw mode is OFF before
-/// calling; this function enables and then disables raw mode internally.
-fn rpassword_read() -> anyhow::Result<String> {
-    use crossterm::event::{self, Event, KeyCode};
-    let mut buf = String::new();
-    let _raw = crate::ui::RawModeGuard::enable()?;
-    loop {
-        if let Ok(Event::Key(k)) = event::read() {
-            match k.code {
-                KeyCode::Enter     => break,
-                KeyCode::Backspace => { buf.pop(); }
-                KeyCode::Char(c)   => buf.push(c),
-                KeyCode::Esc       => { buf.clear(); break; }
-                _ => {}
-            }
-        }
-    }
-    drop(_raw); // always leave raw mode OFF on exit
-    Ok(buf)
-}
 
 
 /// Returns (icon, label, hint) for the current permission mode.
