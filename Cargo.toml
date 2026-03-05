@@ -50,6 +50,7 @@ atty  = "0.2"
 walkdir = "2"
 globset = "0.4"
 ignore = "0.4"
+notify = "6.1"                          # Cross-platform file system watcher (live skill reload)
 
 # Regex (Grep tool)
 regex = "1"

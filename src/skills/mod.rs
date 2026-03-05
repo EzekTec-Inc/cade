@@ -237,7 +237,100 @@ fn parse_frontmatter(fm: &str) -> Frontmatter {
     out
 }
 
-// ── Installation ──────────────────────────────────────────────────────────────
+// ── Live file watcher ─────────────────────────────────────────────────────────
+
+/// Spawn a background thread that watches all skills directories for changes.
+/// Any Create / Modify / Remove event sends a `()` on the returned channel.
+/// The REPL polls the receiver each loop iteration to trigger a reload.
+///
+/// Uses `notify` 6.x `RecommendedWatcher` (inotify on Linux, FSEvents on macOS,
+/// ReadDirectoryChangesW on Windows). The watcher runs on a dedicated std thread
+/// (notify is not async-native) and forwards events to a `tokio::sync::mpsc` channel.
+pub fn spawn_skill_watcher(
+    cwd: &Path,
+) -> tokio::sync::mpsc::Receiver<()> {
+    use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+    use notify::event::{CreateKind, ModifyKind, RemoveKind};
+
+    let (tx, rx) = tokio::sync::mpsc::channel::<()>(8);
+
+    // Collect directories to watch
+    let home = dirs::home_dir();
+    let cade_home = home.as_ref().map(|h| h.join(".cade"));
+
+    let mut watch_dirs: Vec<PathBuf> = Vec::new();
+
+    if let Some(ref ch) = cade_home {
+        let global_skills = ch.join("skills");
+        if global_skills.exists() {
+            watch_dirs.push(global_skills);
+        }
+    }
+
+    let project_skills = cwd.join(".skills");
+    if project_skills.exists() {
+        watch_dirs.push(project_skills.clone());
+    }
+
+    if watch_dirs.is_empty() {
+        // No dirs to watch yet — still return the receiver; caller can start
+        // without a watcher. The REPL will never receive on this channel.
+        return rx;
+    }
+
+    std::thread::spawn(move || {
+        // notify 6.x: create watcher with a sync std::sync::mpsc channel internally,
+        // then forward to tokio channel via try_send.
+        let (sync_tx, sync_rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
+
+        let mut watcher = match RecommendedWatcher::new(sync_tx, Config::default()) {
+            Ok(w)  => w,
+            Err(e) => {
+                tracing::warn!("skill watcher: failed to create watcher: {e}");
+                return;
+            }
+        };
+
+        for dir in &watch_dirs {
+            if let Err(e) = watcher.watch(dir, RecursiveMode::Recursive) {
+                tracing::warn!("skill watcher: cannot watch {}: {e}", dir.display());
+            } else {
+                tracing::info!("skill watcher: watching {}", dir.display());
+            }
+        }
+
+        // Forward relevant events to the tokio channel
+        for res in sync_rx {
+            match res {
+                Ok(event) => {
+                    let relevant = matches!(
+                        event.kind,
+                        EventKind::Create(CreateKind::File)
+                            | EventKind::Create(CreateKind::Any)
+                            | EventKind::Modify(ModifyKind::Data(_))
+                            | EventKind::Modify(ModifyKind::Any)
+                            | EventKind::Remove(RemoveKind::File)
+                            | EventKind::Remove(RemoveKind::Any)
+                    );
+                    // Only care about SKILL.MD files
+                    let is_skill_file = event.paths.iter().any(|p| {
+                        p.file_name()
+                            .and_then(|n| n.to_str())
+                            .map(|n| n.to_uppercase() == "SKILL.MD")
+                            .unwrap_or(false)
+                    });
+                    if relevant && is_skill_file {
+                        // Non-blocking send — drop if receiver is behind
+                        let _ = tx.try_send(());
+                    }
+                }
+                Err(e) => tracing::warn!("skill watcher error: {e}"),
+            }
+        }
+    });
+
+    rx
+}
 
 /// Convert a GitHub tree URL to a raw SKILL.MD URL.
 /// https://github.com/USER/REPO/tree/BRANCH/path → https://raw.../path/SKILL.MD

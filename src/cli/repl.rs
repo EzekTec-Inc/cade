@@ -171,6 +171,9 @@ pub struct Repl {
     /// Semaphore limiting concurrent subagent LLM calls.
     /// Capacity is read from CADE_MAX_SUBAGENTS at startup (default: 4).
     subagent_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
+    /// Receives a signal whenever a SKILL.MD file changes on disk.
+    /// The REPL polls this each loop iteration and triggers a reload.
+    skill_reload_rx: tokio::sync::mpsc::Receiver<()>,
     /// Whether SSE token streaming is enabled (toggled by /stream).
     streaming_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Cumulative token usage for the session (input, output).
@@ -200,6 +203,13 @@ impl Repl {
         let perm_mode        = permissions.mode();
         let agent_name_clone = agent_name.clone();
         let current_model_clone = current_model.clone();
+        let cap = std::env::var("CADE_MAX_SUBAGENTS")
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|&n| n > 0)
+            .unwrap_or(4);
+        tracing::info!("Subagent concurrency cap: {cap} (set CADE_MAX_SUBAGENTS to override)");
+        let skill_reload_rx = crate::skills::spawn_skill_watcher(&cwd);
         Self {
             client,
             agent_id:   Arc::new(Mutex::new(agent_id)),
@@ -218,15 +228,8 @@ impl Repl {
             cancel_turn:           std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             conversation_id:       Arc::new(Mutex::new(conversation_id)),
             mcp,
-            subagent_semaphore: {
-                let cap = std::env::var("CADE_MAX_SUBAGENTS")
-                    .ok()
-                    .and_then(|v| v.parse::<usize>().ok())
-                    .filter(|&n| n > 0)
-                    .unwrap_or(4);
-                tracing::info!("Subagent concurrency cap: {cap} (set CADE_MAX_SUBAGENTS to override)");
-                std::sync::Arc::new(tokio::sync::Semaphore::new(cap))
-            },
+            subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(cap)),
+            skill_reload_rx,
             streaming_enabled:     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             session_input_tokens:  std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -289,6 +292,17 @@ impl Repl {
                     );
                     let _ = self.client.send_message(&self.agent_id(), &notify).await;
                 }
+            }
+
+            // Check for skill file changes (live watcher) — reload if signalled
+            while self.skill_reload_rx.try_recv().is_ok() {
+                let new_skills = crate::skills::discover_all_skills(&self.cwd, None, None);
+                let new_count  = new_skills.len();
+                *self.skills.lock().unwrap() = new_skills.clone();
+                let names: Vec<String> = new_skills.iter().map(|s| s.name.clone()).collect();
+                let list = names.join(", ");
+                self.tui_ok(format!("  ↺ Skills auto-reloaded ({new_count} skills): {list}"));
+                tracing::info!("Skills auto-reloaded: {new_count} skills");
             }
 
             // Update app footer to reflect current mode/model before reading input.
