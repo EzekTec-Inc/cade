@@ -936,22 +936,11 @@ fn render_line_to_text(rl: &RenderLine, width: usize, expand_all: bool, out: &mu
         RenderLine::UserMessage(text) => {
             let sep = "─".repeat(width);
             out.push(Line::from(Span::styled(sep, Style::default().fg(RC::DarkGray))));
-            for (i, ln) in text.trim().lines().enumerate() {
-                let prefix = if i == 0 { "> " } else { "  " };
-                out.push(Line::from(Span::styled(
-                    format!("{prefix}{ln}"),
-                    Style::default().fg(RC::White),
-                )));
-            }
+            out.extend(crate::ui::markdown::parse_markdown_lines(text));
         }
         RenderLine::AssistantText(text) => {
             out.push(Line::from(""));
-            for ln in text.lines() {
-                out.push(Line::from(Span::styled(
-                    ln.to_string(),
-                    Style::default().fg(RC::White),
-                )));
-            }
+            out.extend(crate::ui::markdown::parse_markdown_lines(text));
             out.push(Line::from(""));
         }
         RenderLine::ToolCall { name, preview } => {

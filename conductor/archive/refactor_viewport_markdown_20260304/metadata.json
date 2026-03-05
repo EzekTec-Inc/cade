@@ -1,0 +1,8 @@
+{
+  "id": "refactor_viewport_markdown_20260304",
+  "name": "Refactor viewport for accurate Markdown and Table rendering",
+  "description": "Investigate and refactor the TUI viewport to ensure Markdown contents and tables are rendered correctly using a dedicated parser.",
+  "status": "complete",
+  "created_at": "2026-03-04T12:00:00Z",
+  "updated_at": "2026-03-04T12:00:00Z"
+}

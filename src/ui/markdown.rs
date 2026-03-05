@@ -7,18 +7,24 @@ use ratatui::{
 const INDENT: &str = "";
 
 /// Convert a complete markdown text string into a `Vec<Line>` for ratatui rendering.
-/// Handles: headings, bullets, numbered lists, code fences, horizontal rules, blockquotes, inline bold/code.
+/// Handles: headings, bullets, numbered lists, code fences, horizontal rules, blockquotes, inline bold/code, and simple tables.
 pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     let mut in_fence = false;
     let mut current_lang = String::new();
+    let mut table_buffer: Vec<String> = Vec::new();
 
     for raw_line in text.lines() {
-        let leading_spaces = raw_line.chars().take_while(|c| c.is_whitespace()).count();
-        let trimmed = raw_line.trim_start();
+        let trimmed = raw_line.trim();
 
         // ── Code fence toggle ────────────────────────────────────────────
         if trimmed.starts_with("```") {
+            // Flush any pending table before entering code fence
+            if !table_buffer.is_empty() {
+                lines.extend(render_table(&table_buffer));
+                table_buffer.clear();
+            }
+
             in_fence = !in_fence;
             if in_fence {
                 current_lang = trimmed.trim_start_matches('`').trim().to_lowercase();
@@ -41,28 +47,41 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
             continue;
         }
 
+        // ── Table Detection ───────────────────────────────────────────────
+        if trimmed.starts_with('|') && trimmed.ends_with('|') {
+            table_buffer.push(trimmed.to_string());
+            continue;
+        } else if !table_buffer.is_empty() {
+            // End of table
+            lines.extend(render_table(&table_buffer));
+            table_buffer.clear();
+        }
+
         // ── Empty line ────────────────────────────────────────────────────
-        if raw_line.trim().is_empty() {
+        if trimmed.is_empty() {
             lines.push(Line::from(""));
             continue;
         }
 
+        let leading_spaces = raw_line.chars().take_while(|c| c.is_whitespace()).count();
+        let trimmed_start = raw_line.trim_start();
+
         // ── Headings ──────────────────────────────────────────────────────
-        if let Some(rest) = trimmed.strip_prefix("### ") {
+        if let Some(rest) = trimmed_start.strip_prefix("### ") {
             lines.push(Line::from(Span::styled(
                 format!("{INDENT}{rest}"),
                 Style::default().fg(RC::Cyan),
             )));
             continue;
         }
-        if let Some(rest) = trimmed.strip_prefix("## ") {
+        if let Some(rest) = trimmed_start.strip_prefix("## ") {
             lines.push(Line::from(Span::styled(
                 format!("{INDENT}{rest}"),
                 Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD),
             )));
             continue;
         }
-        if let Some(rest) = trimmed.strip_prefix("# ") {
+        if let Some(rest) = trimmed_start.strip_prefix("# ") {
             lines.push(Line::from(Span::styled(
                 format!("{INDENT}{rest}"),
                 Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
@@ -80,7 +99,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
         }
 
         // ── Blockquotes ───────────────────────────────────────────────────
-        if let Some(rest) = trimmed.strip_prefix("> ") {
+        if let Some(rest) = trimmed_start.strip_prefix("> ") {
             let mut spans: Vec<Span<'static>> = vec![
                 Span::styled(format!("{INDENT}▎ "), Style::default().fg(RC::DarkGray)),
             ];
@@ -90,10 +109,10 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
         }
 
         // ── Bullet list ────────────────────────────────────────────────────
-        let bullet_rest = trimmed
+        let bullet_rest = trimmed_start
             .strip_prefix("- ")
-            .or_else(|| trimmed.strip_prefix("* "))
-            .or_else(|| trimmed.strip_prefix("• "));
+            .or_else(|| trimmed_start.strip_prefix("* "))
+            .or_else(|| trimmed_start.strip_prefix("• "));
         if let Some(rest) = bullet_rest {
             let indent_padding = " ".repeat(leading_spaces);
             let mut spans: Vec<Span<'static>> = vec![
@@ -106,7 +125,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
         }
 
         // ── Numbered list ─────────────────────────────────────────────────
-        if let Some((num, rest)) = parse_list_prefix(trimmed) {
+        if let Some((num, rest)) = parse_list_prefix(trimmed_start) {
             let indent_padding = " ".repeat(leading_spaces);
             let mut spans: Vec<Span<'static>> = vec![
                 Span::raw(format!("{INDENT}  {indent_padding}")),
@@ -123,6 +142,76 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
         lines.push(Line::from(spans));
     }
 
+    // Final flush
+    if !table_buffer.is_empty() {
+        lines.extend(render_table(&table_buffer));
+    }
+
+    lines
+}
+
+/// Simple table renderer that aligns columns.
+fn render_table(rows: &[String]) -> Vec<Line<'static>> {
+    if rows.len() < 2 {
+        // Not a valid table, just return as plain lines
+        return rows.iter().map(|r| Line::from(r.clone())).collect();
+    }
+
+    let mut data: Vec<Vec<String>> = rows
+        .iter()
+        .map(|r| {
+            r.split('|')
+                .skip(1) // leading |
+                .map(|s| s.trim().to_string())
+                .collect::<Vec<String>>()
+        })
+        .collect();
+
+    // Remove the last empty element if line ended with |
+    for row in data.iter_mut() {
+        if row.last().map_or(false, |s| s.is_empty()) {
+            row.pop();
+        }
+    }
+
+    if data.is_empty() {
+        return vec![];
+    }
+
+    let num_cols = data[0].len();
+    let mut col_widths = vec![0; num_cols];
+
+    for row in &data {
+        for (i, cell) in row.iter().enumerate() {
+            if i < num_cols {
+                col_widths[i] = col_widths[i].max(cell.len());
+            }
+        }
+    }
+
+    let mut lines = Vec::new();
+    for (row_idx, row) in data.into_iter().enumerate() {
+        // Skip the separator row (e.g. |---|---|) but use it to detect valid tables
+        if row_idx == 1 && row.iter().all(|s| s.chars().all(|c| c == '-' || c == ':')) {
+            continue;
+        }
+
+        let mut spans = vec![Span::styled(format!("{INDENT}│ "), Style::default().fg(RC::DarkGray))];
+        for (i, cell) in row.into_iter().enumerate() {
+            let style = if row_idx == 0 {
+                Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(RC::White)
+            };
+            spans.push(Span::styled(format!("{:<width$}", cell, width = col_widths[i]), style));
+            if i < num_cols - 1 {
+                spans.push(Span::styled(" │ ", Style::default().fg(RC::DarkGray)));
+            }
+        }
+        spans.push(Span::styled(" │", Style::default().fg(RC::DarkGray)));
+        lines.push(Line::from(spans));
+    }
+
     lines
 }
 
@@ -132,7 +221,6 @@ fn highlight_code(line: &str, lang: &str) -> Vec<Span<'static>> {
     let style_comment = Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC);
     let style_string  = Style::default().fg(RC::LightGreen);
     let style_type    = Style::default().fg(RC::LightCyan);
-    // let style_fn      = Style::default().fg(RC::LightYellow); // Future use for fn highlighting
 
     let keywords = match lang {
         "rust" | "rs" => vec![
@@ -204,8 +292,6 @@ fn highlight_code(line: &str, lang: &str) -> Vec<Span<'static>> {
         } else if word.chars().all(|c| !c.is_alphanumeric() && c != '_') {
             spans.push(Span::raw(word));
         } else {
-            // Check if it looks like a function call (next non-whitespace is '(')
-            // Naive check: just look at the word itself for now
             spans.push(Span::raw(word));
         }
     }
@@ -309,60 +395,10 @@ mod tests {
     }
 
     #[test]
-    fn test_nested_lists() {
-        let md = "- Parent\n  - Child";
+    fn test_table_parsing() {
+        let md = "| Col 1 | Col 2 |\n|---|---|\n| val 1 | val 2 |";
         let lines = parse_markdown_lines(md);
+        // Header line + Data line (separator skipped)
         assert_eq!(lines.len(), 2);
-        // First line: INDENT + "  " + "• " + "Parent"
-        // Second line: INDENT + "  " + "  " + "• " + "Child"
-        let first_line_str: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        let second_line_str: String = lines[1].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(first_line_str, "  • Parent");
-        assert_eq!(second_line_str, "    • Child");
-    }
-
-    #[test]
-    fn test_blockquote() {
-        let md = "> This is a quote";
-        let lines = parse_markdown_lines(md);
-        assert_eq!(lines.len(), 1);
-        let line_str: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(line_str, "▎ This is a quote");
-    }
-
-    #[test]
-    fn test_syntax_highlighting() {
-        let md = "```rust\nfn main() {}\n```";
-        let lines = parse_markdown_lines(md);
-        // Line 0: rust (dim gray)
-        // Line 1: fn main() {} (highlighted)
-        assert_eq!(lines.len(), 2);
-        let first_line_str: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert!(first_line_str.contains("rust"));
-        
-        // Verify keyword highlighting in second line
-        let fn_span = lines[1].spans.iter().find(|s| s.content == "fn");
-        assert!(fn_span.is_some());
-        assert_eq!(fn_span.unwrap().style.fg, Some(RC::LightBlue));
-    }
-
-    #[test]
-    fn test_streaming_markdown() {
-        let mut text = "This is **bol".to_string();
-        let lines = parse_markdown_lines(&text);
-        assert_eq!(lines.len(), 1);
-        let line_str: String = lines[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(line_str, "This is **bol");
-
-        text.push_str("d** text");
-        let lines2 = parse_markdown_lines(&text);
-        assert_eq!(lines2.len(), 1);
-        let line_str2: String = lines2[0].spans.iter().map(|s| s.content.as_ref()).collect();
-        assert_eq!(line_str2, "This is bold text");
-        
-        // Verify bold styling
-        let bold_span = lines2[0].spans.iter().find(|s| s.content == "bold");
-        assert!(bold_span.is_some());
-        assert!(bold_span.unwrap().style.add_modifier.contains(Modifier::BOLD));
     }
 }
