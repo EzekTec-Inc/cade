@@ -854,15 +854,60 @@ async fn main() -> Result<()> {
 
     if let Some(prompt) = headless_prompt {
         let fmt = args.effective_output_format();
+        let timeout_secs = args.timeout_secs;
 
         if fmt == "stream-json" {
-            cli::headless::run_headless_stream_json(
+            let run = cli::headless::run_headless_stream_json(
                 &client, &agent.id, &default_model, &prompt, &permissions, &mcp
-            ).await;
+            );
+            if timeout_secs > 0 {
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(timeout_secs),
+                    run
+                ).await {
+                    Ok(_) => {}
+                    Err(_) => {
+                        eprintln!("{}", serde_json::json!({
+                            "type":     "result",
+                            "subtype":  "error",
+                            "is_error": true,
+                            "error":    format!("Headless run timed out after {timeout_secs}s"),
+                            "agent_id": agent.id,
+                        }));
+                        std::process::exit(124);
+                    }
+                }
+            } else {
+                run.await;
+            }
             std::process::exit(0);
         }
 
-        let result = cli::headless::run_headless(&client, &agent.id, &prompt, &permissions, &mcp).await;
+        let run = cli::headless::run_headless(&client, &agent.id, &prompt, &permissions, &mcp);
+        let result = if timeout_secs > 0 {
+            match tokio::time::timeout(
+                std::time::Duration::from_secs(timeout_secs),
+                run
+            ).await {
+                Ok(r) => r,
+                Err(_) => {
+                    if fmt == "json" {
+                        eprintln!("{}", serde_json::json!({
+                            "type":     "result",
+                            "subtype":  "error",
+                            "is_error": true,
+                            "error":    format!("Headless run timed out after {timeout_secs}s"),
+                            "agent_id": agent.id,
+                        }));
+                    } else {
+                        eprintln!("Error: headless run timed out after {timeout_secs}s");
+                    }
+                    std::process::exit(124);
+                }
+            }
+        } else {
+            run.await
+        };
         match result {
             Ok((output, stats)) => {
                 if fmt == "json" {

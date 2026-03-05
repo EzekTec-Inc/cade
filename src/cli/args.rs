@@ -93,6 +93,11 @@ pub struct Args {
     /// Remove all CADE tools from the agent and start the session
     #[arg(long = "unlink")]
     pub unlink: bool,
+
+    /// Maximum wall-clock time for headless mode in seconds (0 = no limit).
+    /// On timeout the process exits with code 124 (standard timeout exit code).
+    #[arg(long = "timeout-secs", default_value_t = 0)]
+    pub timeout_secs: u64,
 }
 
 impl Args {
