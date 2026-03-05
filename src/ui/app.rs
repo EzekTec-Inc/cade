@@ -52,8 +52,6 @@ const CONTENT_PAD_BOT: u16 = 1;
 /// Braille spinner frames for thinking animation.
 const BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const DOTS: &[&str] = &["⠁", "⠂", "⠄", "⠐", "⠠", "⠐", "⠄", "⠂"];
-/// Result prefix: "  ⎿  "
-const RESULT_PREFIX: &str = "  ⎿  ";
 
 // ── RenderLine ────────────────────────────────────────────────────────────────
 
@@ -947,77 +945,88 @@ fn render_line_to_text(rl: &RenderLine, width: usize, expand_all: bool, out: &mu
             }
         }
         RenderLine::AssistantText(text) => {
-            render_assistant_lines(text, width, out);
+            out.push(Line::from(""));
+            for ln in text.lines() {
+                out.push(Line::from(Span::styled(
+                    ln.to_string(),
+                    Style::default().fg(RC::White),
+                )));
+            }
+            out.push(Line::from(""));
         }
         RenderLine::ToolCall { name, preview } => {
-            // Blank spacer before each tool group (Letta Code spacing).
+            // Blank spacer before each tool group.
             out.push(Line::from(""));
             let display = display_tool_name(name);
-            let is_memory = name.to_ascii_lowercase().contains("memory");
-            let name_style = if is_memory {
-                Style::default().add_modifier(Modifier::BOLD).fg(RC::Rgb(140, 140, 249))
-            } else {
-                Style::default().add_modifier(Modifier::BOLD)
-            };
-            let budget = width.saturating_sub(display.len() + 4);
+            let name_style = Style::default().add_modifier(Modifier::BOLD).fg(RC::Rgb(140, 140, 249));
+            let budget = width.saturating_sub(display.len() + 6);
             let args   = truncate_str(preview, budget);
-            let dot_color = RC::Rgb(165, 168, 171);
+            let dot_color = RC::Yellow;
             let mut spans: Vec<Span<'static>> = vec![
-                Span::styled("● ", Style::default().fg(dot_color).add_modifier(Modifier::BOLD)),
+                Span::styled("⚡ ", Style::default().fg(dot_color).add_modifier(Modifier::BOLD)),
                 Span::styled(display, name_style),
             ];
-            if !preview.is_empty() {
-                spans.push(Span::raw(format!("({args})")));
+            if expand_all || args.len() < 50 {
+                if !preview.is_empty() {
+                    spans.push(Span::styled(format!(" ({args})"), Style::default().fg(RC::DarkGray)));
+                }
+            } else {
+                spans.push(Span::styled(" (…)", Style::default().fg(RC::DarkGray)));
             }
             out.push(Line::from(spans));
         }
         RenderLine::ToolResult { is_error, content } => {
             let color = if *is_error {
-                RC::Rgb(241, 104, 159)   // Letta Code error pink
+                RC::Rgb(241, 104, 159)
             } else {
-                RC::Rgb(100, 207, 100)   // Letta Code success green
+                RC::Rgb(100, 207, 100)
             };
             let inner_w  = width.saturating_sub(5);
             let lns: Vec<&str> = content.lines().collect();
             if lns.is_empty() {
                 out.push(Line::from(vec![
-                    Span::styled(RESULT_PREFIX, Style::default().fg(RC::DarkGray)),
-                    Span::styled("(no output)", Style::default().fg(RC::DarkGray)),
+                    Span::styled("  ↳ ", Style::default().fg(RC::DarkGray)),
+                    Span::styled("success", Style::default().fg(color)),
+                ]));
+            } else if !expand_all {
+                out.push(Line::from(vec![
+                    Span::styled("  ↳ ", Style::default().fg(RC::DarkGray)),
+                    Span::styled(format!("output hidden ({} lines)", lns.len()), Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC)),
                 ]));
             } else {
                 out.push(Line::from(vec![
-                    Span::styled(RESULT_PREFIX, Style::default().fg(RC::DarkGray)),
+                    Span::styled("  ↳ ", Style::default().fg(RC::DarkGray)),
                     Span::styled(
                         truncate_str(lns[0], inner_w),
                         Style::default().fg(color).add_modifier(Modifier::BOLD),
                     ),
                 ]));
-                let show = if expand_all { lns.len() } else { lns.len().min(5) };
+                let show = lns.len().min(10);
                 for ln in &lns[1..show] {
                     out.push(Line::from(vec![
-                        Span::raw("     "),
+                        Span::raw("    "),
                         Span::styled(truncate_str(ln, inner_w), Style::default().fg(color)),
                     ]));
                 }
-                if !expand_all && lns.len() > 5 {
+                if lns.len() > 10 {
                     out.push(Line::from(Span::styled(
-                        format!("     … ({} more lines)", lns.len() - 5),
+                        format!("    … ({} more lines)", lns.len() - 10),
                         Style::default().fg(RC::DarkGray),
                     )));
                 }
             }
         }
-        RenderLine::Reasoning { words, content } => {
+        RenderLine::Reasoning { words: _, content } => {
             out.push(Line::from(Span::styled(
-                format!("💭 Reasoning ({words} words)"),
+                format!("💭 Thinking…"),
                 Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC),
             )));
             if expand_all {
                 let inner_w = width.saturating_sub(5);
                 for ln in content.lines() {
                     out.push(Line::from(vec![
-                        Span::raw("     "),
-                        Span::styled(truncate_str(ln, inner_w), Style::default().fg(RC::DarkGray)),
+                        Span::raw("   "),
+                        Span::styled(truncate_str(ln, inner_w), Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC)),
                     ]));
                 }
             }
