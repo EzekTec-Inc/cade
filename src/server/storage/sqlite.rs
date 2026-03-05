@@ -1034,55 +1034,150 @@ pub fn clear_messages(db: &Db, agent_id: &str, conversation_id: Option<&str>) ->
 }
 
 /// Full-text search over message content for an agent (optionally scoped to a conversation).
+/// A ranked search result from FTS5 message search.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct MessageSearchResult {
+    pub id:              String,
+    pub agent_id:        String,
+    pub conversation_id: Option<String>,
+    pub role:            String,
+    pub content:         Value,
+    /// BM25 relevance score (lower = more relevant in SQLite FTS5).
+    pub score:           f64,
+    /// Context snippet with match highlighted by `**` markers.
+    pub snippet:         String,
+}
+
+/// Search messages using FTS5 with BM25 ranking and context snippets.
+///
+/// Results are ordered by BM25 relevance (best match first).
+/// Each result includes a `snippet` field: up to 32 tokens of context
+/// around the best matching phrase, with matches wrapped in `**...**`.
+///
+/// Falls back to a plain LIKE search if FTS5 is unavailable.
 pub fn search_messages(
     db: &Db,
     agent_id: &str,
     query: &str,
     conversation_id: Option<&str>,
-) -> Result<Vec<MessageRow>> {
+) -> Result<Vec<MessageSearchResult>> {
     let conn = db.lock().unwrap();
-    
-    // We use the FTS5 table for fast searching, then join back to messages for full row data.
-    // If conversation_id is provided, we filter the results.
-    let sql = if conversation_id.is_some() {
-        "SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content FROM messages m
-         JOIN messages_fts f ON f.rowid = m.rowid
-         WHERE m.agent_id = ?1 AND m.conversation_id = ?2 AND messages_fts MATCH ?3
-         ORDER BY m.rowid DESC LIMIT 50"
-    } else {
-        "SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content FROM messages m
-         JOIN messages_fts f ON f.rowid = m.rowid
-         WHERE m.agent_id = ?1 AND messages_fts MATCH ?2
-         ORDER BY m.rowid DESC LIMIT 50"
-    };
 
-    let mut stmt = conn.prepare(sql)?;
-    
-    // FTS5 MATCH query: if simple string, wrap in quotes to handle special chars or spaces
+    // Build safe FTS5 query: wrap the whole phrase in double-quotes to handle
+    // spaces and special chars; escape internal quotes.
     let fts_query = format!("\"{}\"", query.replace('"', "\"\""));
+
+    // FTS5 bm25() returns negative values; ORDER BY bm25 ASC = best match first.
+    // snippet() extracts up to 32 tokens around the best match:
+    //   args: (fts_table, col_idx, before_match, after_match, ellipsis, max_tokens)
+    let sql = if conversation_id.is_some() {
+        "SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content,
+                bm25(messages_fts) AS score,
+                snippet(messages_fts, 0, '**', '**', '…', 32) AS snip
+         FROM messages m
+         JOIN messages_fts ON messages_fts.rowid = m.rowid
+         WHERE m.agent_id = ?1 AND m.conversation_id = ?2
+           AND messages_fts MATCH ?3
+         ORDER BY score ASC
+         LIMIT 20"
+    } else {
+        "SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content,
+                bm25(messages_fts) AS score,
+                snippet(messages_fts, 0, '**', '**', '…', 32) AS snip
+         FROM messages m
+         JOIN messages_fts ON messages_fts.rowid = m.rowid
+         WHERE m.agent_id = ?1
+           AND messages_fts MATCH ?2
+         ORDER BY score ASC
+         LIMIT 20"
+    };
 
     let mapper = |r: &rusqlite::Row| {
         let content_str: String = r.get(4)?;
         let content = serde_json::from_str(&content_str)
             .unwrap_or(serde_json::Value::String(content_str));
-        Ok(MessageRow {
+        Ok(MessageSearchResult {
             id:              r.get(0)?,
             agent_id:        r.get(1)?,
             conversation_id: r.get(2)?,
             role:            r.get(3)?,
             content,
+            score:           r.get::<_, f64>(5).unwrap_or(0.0),
+            snippet:         r.get::<_, String>(6).unwrap_or_default(),
         })
     };
 
-    let result: Vec<MessageRow> = if let Some(conv_id) = conversation_id {
-        stmt.query_map(params![agent_id, conv_id, fts_query], mapper)?
+    let result = if let Some(conv_id) = conversation_id {
+        conn.prepare(sql)?
+            .query_map(params![agent_id, conv_id, fts_query], mapper)?
             .collect::<rusqlite::Result<Vec<_>>>()?
     } else {
-        stmt.query_map(params![agent_id, fts_query], mapper)?
+        conn.prepare(sql)?
+            .query_map(params![agent_id, fts_query], mapper)?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
 
     Ok(result)
+}
+
+/// Search memory blocks for an agent using case-insensitive LIKE.
+/// Returns (label, value, snippet) where snippet is up to 200 chars around
+/// the first match in the value.
+///
+/// Memory blocks are small (< 8 KB each) so LIKE is fast enough without FTS5.
+pub fn search_memory(
+    db: &Db,
+    agent_id: &str,
+    query: &str,
+) -> Result<Vec<(String, String, String)>> {
+    let conn = db.lock().unwrap();
+    let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+    let mut stmt = conn.prepare(
+        "SELECT b.label, b.value FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1
+           AND (LOWER(b.label) LIKE LOWER(?2) ESCAPE '\\'
+                OR LOWER(b.value) LIKE LOWER(?2) ESCAPE '\\')
+         ORDER BY b.updated_at DESC
+         LIMIT 10"
+    )?;
+    let rows = stmt.query_map(params![agent_id, pattern], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+        ))
+    })?;
+
+    let q_lower = query.to_lowercase();
+    let results = rows
+        .filter_map(|r| r.ok())
+        .map(|(label, value)| {
+            // Generate a contextual snippet: find first match position, extract ±100 chars
+            let val_lower = value.to_lowercase();
+            let snippet = if let Some(pos) = val_lower.find(&q_lower) {
+                let start = pos.saturating_sub(80);
+                let end   = (pos + q_lower.len() + 80).min(value.len());
+                let prefix = if start > 0 { "…" } else { "" };
+                let suffix = if end < value.len() { "…" } else { "" };
+                // Find char boundaries
+                let s = value.char_indices()
+                    .map(|(i, _)| i)
+                    .find(|&i| i >= start)
+                    .unwrap_or(start);
+                let e = value.char_indices()
+                    .map(|(i, _)| i)
+                    .find(|&i| i >= end)
+                    .unwrap_or(end);
+                format!("{prefix}{}{suffix}", &value[s..e])
+            } else {
+                // Match is in label — return value preview
+                value.chars().take(160).collect::<String>()
+            };
+            (label, value, snippet)
+        })
+        .collect();
+
+    Ok(results)
 }
 
 pub fn pending_tool_results(

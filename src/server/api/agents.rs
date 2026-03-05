@@ -324,14 +324,16 @@ pub async fn search_messages_handler(
         .into_iter()
         .map(|r| {
             json!({
-                "id": r.id,
-                "role": r.role,
-                "content": r.content,
+                "id":              r.id,
+                "role":            r.role,
+                "content":         r.content,
                 "conversation_id": r.conversation_id,
+                "score":           r.score,
+                "snippet":         r.snippet,
             })
         })
         .collect();
-    Ok(Json(json!({ "messages": messages })))
+    Ok(Json(json!({ "messages": messages, "query": query })))
 }
 
 // ── Conversation endpoints ────────────────────────────────────────────────────
@@ -446,4 +448,32 @@ fn server_err(msg: String) -> (StatusCode, Json<Value>) {
         StatusCode::INTERNAL_SERVER_ERROR,
         Json(json!({"detail": msg})),
     )
+}
+
+/// GET /v1/agents/:id/memory?q=<query>  — search memory blocks by label or value.
+/// Returns ranked matches with contextual snippets.
+pub async fn search_memory_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let query = params.get("q").map(String::as_str).unwrap_or("");
+    if query.is_empty() {
+        // No ?q= → delegate to plain get_memory (list all)
+        let blocks = sqlite::get_memory_blocks(&state.db, &agent_id)
+            .map_err(|e| server_err(e.to_string()))?;
+        let out: Vec<Value> = blocks.iter().map(|(l, v, d)| json!({
+            "label": l, "value": v, "description": d
+        })).collect();
+        return Ok(Json(json!({ "blocks": out })));
+    }
+
+    let rows = sqlite::search_memory(&state.db, &agent_id, query)
+        .map_err(|e| server_err(e.to_string()))?;
+    let blocks: Vec<Value> = rows.iter().map(|(label, value, snippet)| json!({
+        "label":   label,
+        "value":   value,
+        "snippet": snippet,
+    })).collect();
+    Ok(Json(json!({ "blocks": blocks, "query": query })))
 }

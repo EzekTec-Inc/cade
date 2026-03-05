@@ -487,6 +487,21 @@ impl CadeClient {
         Ok(())
     }
 
+    /// Search memory blocks by label or value text.
+    /// Returns Vec of (label, value, snippet).
+    pub async fn search_memory(&self, agent_id: &str, query: &str) -> Result<Vec<Value>> {
+        let resp = self.client
+            .get(self.url(&format!("/agents/{agent_id}/memory")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .query(&[("q", query)])
+            .send().await?;
+        if !resp.status().is_success() {
+            bail!("search_memory failed {}", resp.status());
+        }
+        let body: Value = resp.json().await?;
+        Ok(body["blocks"].as_array().cloned().unwrap_or_default())
+    }
+
     /// Upsert a single memory block.
     pub async fn upsert_memory(
         &self,
