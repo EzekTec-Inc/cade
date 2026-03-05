@@ -1274,3 +1274,24 @@ pub fn make_relative_path(path: &str) -> String {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_question_result_formatting() {
+        let line = RenderLine::QuestionResult { 
+            header: "Decision".to_string(), 
+            answer: "Yes".to_string() 
+        };
+        
+        match line {
+            RenderLine::QuestionResult { header, answer } => {
+                assert_eq!(header, "Decision");
+                assert_eq!(answer, "Yes");
+            },
+            _ => panic!("Expected QuestionResult"),
+        }
+    }
+}
