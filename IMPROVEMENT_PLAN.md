@@ -241,7 +241,7 @@ format!("http://localhost:{port}")
 | C-03 | Fix unsafe fd in server auto-start | 🔴 Critical | `[x]` |
 | H-01 | Parallel tool dispatch | 🔴 High | `[x]` |
 | H-02 | MCP server reconnect on crash | 🔴 High | `[x]` |
-| H-03 | Headless mode global timeout | 🔴 High | `[ ]` |
+| H-03 | Headless mode global timeout | 🔴 High | `[x]` |
 | H-04 | Configurable port client/server sync | 🔴 High | `[ ]` |
 | M-01 | Subagent concurrency cap | 🟡 Medium | `[ ]` |
 | M-02 | Live skill file watcher | 🟡 Medium | `[ ]` |

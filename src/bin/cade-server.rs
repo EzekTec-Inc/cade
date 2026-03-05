@@ -1,4 +1,5 @@
 use anyhow::Result;
+use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
@@ -12,6 +13,15 @@ use cade::server::{
     storage::{open as open_db, sqlite},
 };
 
+/// CADE server — LLM gateway and agent state store
+#[derive(Parser, Debug)]
+#[command(name = "cade-server", version, about)]
+struct ServerArgs {
+    /// Port to listen on (overrides CADE_SERVER_PORT env var, default 8284)
+    #[arg(long = "port", short = 'p', env = "CADE_SERVER_PORT", default_value_t = 8284)]
+    port: u16,
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -22,6 +32,14 @@ async fn main() -> Result<()> {
         .init();
 
     let _ = dotenvy::dotenv();
+
+    // Parse CLI args first so --port / CADE_SERVER_PORT is available
+    let args = ServerArgs::parse();
+
+    // Inject the resolved port back into the environment so ServerConfig::from_env()
+    // picks it up consistently (other code that reads CADE_SERVER_PORT also benefits).
+    std::env::set_var("CADE_SERVER_PORT", args.port.to_string());
+
     let config = ServerConfig::from_env()?;
 
     tracing::info!(

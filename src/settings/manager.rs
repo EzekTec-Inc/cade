@@ -250,7 +250,15 @@ impl SettingsManager {
             .ok()
             .or_else(|| std::env::var("LETTA_BASE_URL").ok()) // backward-compat
             .or_else(|| self.global.env.server_url.clone())
-            .unwrap_or_else(|| "http://localhost:8284".to_string())
+            .unwrap_or_else(|| {
+                // Respect CADE_SERVER_PORT so client and server stay in sync
+                // when the user overrides the port via environment variable.
+                let port = std::env::var("CADE_SERVER_PORT")
+                    .ok()
+                    .and_then(|p| p.parse::<u16>().ok())
+                    .unwrap_or(8284);
+                format!("http://localhost:{port}")
+            })
     }
 
     /// Get the last used agent for this project directory
