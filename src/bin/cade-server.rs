@@ -9,7 +9,7 @@ use cade::server::{
     api::router,
     config::ServerConfig,
     llm::{CompletionRequest, LlmRouter},
-    rate_limit::{RateLimiter, rate_limit_middleware},
+    rate_limit::RateLimiter,
     state::AppState,
     storage::{open as open_db, sqlite},
 };
