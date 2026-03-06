@@ -12,50 +12,37 @@ Status legend: `[ ]` = not started · `[~]` = in progress · `[x]` = done
 ---
 
 ### C-01 · LLM retry + exponential backoff
-**Status:** `[ ]`  
+**Status:** `[x]`  
 **Files:** `src/server/llm/anthropic.rs`, `src/server/llm/openai.rs`, `src/server/llm/gemini.rs`, `src/server/llm/ollama.rs`  
 **Problem:** Any transient network error, 429 (rate limit), or 500 silently kills the turn. Zero retry logic exists anywhere in the codebase.  
 **Fix:**
-- Add a `retry_with_backoff(max_attempts, base_delay, f)` helper in `src/server/llm/mod.rs`
-- Wrap `complete()` and `stream()` calls in each provider with it
-- Retry on: connection errors, 429, 503 · Fail-fast on: 400, 401, 404
-- Max 3 attempts, base delay 1 s, multiplier 2× (caps at 8 s)
-- Surface attempt count to `tracing::warn!` so the user sees what's happening
+- `retry_with_backoff(op_name, max_attempts, base_delay, f)` helper added to `src/server/llm/mod.rs`
+- `complete()` and `stream()` in Anthropic, OpenAI, Gemini wrapped with it (3 attempts, 1 s base, 2× multiplier, 8 s cap)
+- Ollama delegates to `OpenAiProvider` — inherits retry automatically
+- Retries on: connection errors, timeout, 429, 500, 502, 503, 504 · Fail-fast on 400, 401, 403, 404
+- `is_retryable_error()` checks both `reqwest::Error` status and provider_error string prefix
+- Each retry attempt logged via `tracing::warn!`
 
 ---
 
 ### C-02 · Dynamic context budget tied to model context length
-**Status:** `[ ]`  
-**Files:** `src/server/api/messages.rs:32`, `src/server/llm/catalogue.rs`  
-**Problem:** `CONTEXT_CHAR_BUDGET` is a hardcoded `200_000` constant. This is correct for Claude 3.x/4.x (200K tokens) but wrong for GPT-4o (128K), Gemini Flash (1M), Llama 3.2 (128K), Groq models (32K). Overflow → silent truncation or API errors.  
+**Status:** `[x]`  
+**Files:** `src/server/api/messages.rs`, `src/server/llm/catalogue.rs`  
+**Problem:** `CONTEXT_CHAR_BUDGET` was a hardcoded `200_000` constant. This is correct for Claude 3.x/4.x (200K tokens) but wrong for GPT-4o (128K), Gemini Flash (1M), Llama 3.2 (128K), Groq models (32K). Overflow → silent truncation or API errors.  
 **Fix:**
-- Add `context_window: u32` field to `ModelEntry` in `catalogue.rs`
-- Populate for all known models in the catalogue
-- In `messages.rs`, look up the agent's model from the catalogue and use `(context_window * 3) as usize` as the char budget (3 chars ≈ 1 token on average)
-- Fall back to `200_000` if model not in catalogue
-- Expose `CADE_CONTEXT_BUDGET` env var override for power users
+- `context_window: u32` field added to `ModelEntry` in `catalogue.rs`; all catalogue entries populated
+- `context_window_for_model(model_id)` helper resolves window by exact match → provider prefix heuristic → 32K fallback
+- `CADE_CONTEXT_BUDGET` env var hard-overrides for power users / testing
+- `messages.rs` computes `context_char_budget = (window_tokens * CHARS_PER_TOKEN).clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)` — 3 chars/token, min 8K, max 600K chars
+- Budget logged per-turn via `tracing::debug!`
 
 ---
 
 ### C-03 · Fix unsafe fd duplication in server auto-start
-**Status:** `[ ]`  
-**Files:** `src/main.rs:403–413`  
-**Problem:** `IntoRawFd` + `FromRawFd` is used to duplicate a `File` into stdout and stderr of the child process. The fd is consumed by `into_raw_fd()` then reconstructed twice — second `from_raw_fd` creates a duplicate handle on the same fd, which is undefined behaviour if either handle is closed.  
-**Fix:**
-```rust
-// Before (unsafe):
-let fd = log.into_raw_fd();
-unsafe {
-    cmd.stdout(std::fs::File::from_raw_fd(fd));
-    cmd.stderr(std::fs::File::from_raw_fd(fd));
-}
-
-// After (safe):
-let stderr_log = log.try_clone()?;
-cmd.stdout(log);
-cmd.stderr(stderr_log);
-```
-`try_clone()` creates a proper OS-level dup2, which is safe and correct.
+**Status:** `[x]`  
+**Files:** `src/main.rs`  
+**Problem:** `IntoRawFd` + `FromRawFd` used to duplicate a `File` into stdout and stderr of the child process — undefined behaviour if either handle is closed.  
+**Fix:** Replaced with safe `log.try_clone()?` for a proper OS-level dup2.
 
 ---
 
