@@ -2064,6 +2064,7 @@ impl Repl {
                             // key is never silently dropped while the agent holds the
                             // app lock briefly (e.g. during a push/draw after tool run).
                             loop {
+                                if tick_cancel.load(Ordering::SeqCst) { break; }
                                 if let Ok(mut app) = tick_app.try_lock() {
                                     if app.active_question.is_some() {
                                         if let Event::Key(k) = evt { app.handle_question_key(k); }
