@@ -1468,25 +1468,42 @@ impl Repl {
                             "list" | "" => {
                                 let skills = self.skills.lock().unwrap();
                                 if skills.is_empty() {
-                                    self.tui_dim("  No skills loaded.");
-                                    self.tui_dim("  Create one: /skills create <name>");
-                                    self.tui_dim("  Skills dirs: .skills/  ~/.cade/skills/  ~/.cade/agents/<id>/skills/");
+                                    let _ = self.app.lock().unwrap().push(RenderLine::Blank);
+                                    let _ = self.app.lock().unwrap().push(RenderLine::DimMsg("  No skills loaded.".to_string()));
+                                    let _ = self.app.lock().unwrap().push(RenderLine::DimMsg("  Create one : /skills create <name>".to_string()));
+                                    let _ = self.app.lock().unwrap().push(RenderLine::DimMsg("  Skill dirs : .skills/  ~/.cade/skills/  ~/.cade/agents/<id>/skills/".to_string()));
+                                    let _ = self.app.lock().unwrap().push(RenderLine::Blank);
                                 } else {
-                                    self.tui_blank();
-                                    self.tui_hdr(format!("  Skills ({} loaded):", skills.len()));
-                                    self.tui_blank();
-                                    for s in skills.iter() {
-                                        let cat = s.category.as_deref().unwrap_or("general");
-                                        self.tui_sys(format!(
-                                            "  [{:<8}] {:<22} — {} ({})",
-                                            s.scope.to_string(),
-                                            s.id,
-                                            s.description,
-                                            cat
-                                        ));
-                                    }
-                                    self.tui_blank();
-                                    self.tui_dim("  Agent uses load_skill(<id>) to load full content on-demand.");
+                                    // Group by category for the table
+                                    let headers = vec![
+                                        "Scope".to_string(),
+                                        "ID".to_string(),
+                                        "Description".to_string(),
+                                        "Category".to_string(),
+                                        "Tags".to_string(),
+                                    ];
+                                    let rows: Vec<Vec<String>> = skills.iter().map(|s| vec![
+                                        s.scope.to_string(),
+                                        s.id.clone(),
+                                        s.description.clone(),
+                                        s.category.as_deref().unwrap_or("general").to_string(),
+                                        if s.tags.is_empty() { "—".to_string() } else { s.tags.join(", ") },
+                                    ]).collect();
+
+                                    let mut lines: Vec<RenderLine> = vec![
+                                        RenderLine::Blank,
+                                        RenderLine::InfoHeader(format!("  ◆ Skills  ({} loaded)", skills.len())),
+                                        RenderLine::Blank,
+                                        RenderLine::Table { headers, rows },
+                                        RenderLine::Blank,
+                                        RenderLine::DimMsg("  /skills show <id>    — view full skill body".to_string()),
+                                        RenderLine::DimMsg("  /skills create <name> — scaffold a new skill".to_string()),
+                                        RenderLine::DimMsg("  /skills reload        — rescan skill directories".to_string()),
+                                        RenderLine::DimMsg("  Agent calls load_skill(<id>) to inject on-demand.".to_string()),
+                                        RenderLine::Blank,
+                                    ];
+                                    let mut app = self.app.lock().unwrap();
+                                    for line in lines.drain(..) { let _ = app.push(line); }
                                 }
                             }
 
@@ -1545,23 +1562,35 @@ impl Repl {
                                 let skills = self.skills.lock().unwrap();
                                 match skills.iter().find(|s| s.id == id) {
                                     None => {
-                                        self.tui_dim(format!("  Skill '{id}' not found. Run /skills to list."));
+                                        let _ = self.app.lock().unwrap().push(RenderLine::DimMsg(
+                                            format!("  Skill '{id}' not found. Run /skills to list.")
+                                        ));
                                     }
                                     Some(s) => {
-                                        self.tui_blank();
-                                        self.tui_hdr(format!("  [{id}]"));
-                                        self.tui_sys(format!("  Name       : {}", s.name));
-                                        self.tui_sys(format!("  Description: {}", s.description));
-                                        if let Some(cat) = &s.category {
-                                            self.tui_sys(format!("  Category   : {cat}"));
-                                        }
+                                        let mut lines: Vec<RenderLine> = vec![
+                                            RenderLine::Blank,
+                                            RenderLine::InfoHeader(format!("  ◆ Skill: {}", s.id)),
+                                            RenderLine::Blank,
+                                            RenderLine::Pair { label: "Name".to_string(),        value: s.name.clone() },
+                                            RenderLine::Pair { label: "Description".to_string(),  value: s.description.clone() },
+                                            RenderLine::Pair { label: "Scope".to_string(),        value: s.scope.to_string() },
+                                            RenderLine::Pair { label: "Category".to_string(),     value: s.category.as_deref().unwrap_or("general").to_string() },
+                                        ];
                                         if !s.tags.is_empty() {
-                                            self.tui_sys(format!("  Tags       : {}", s.tags.join(", ")));
+                                            lines.push(RenderLine::Pair {
+                                                label: "Tags".to_string(),
+                                                value: s.tags.join(", "),
+                                            });
                                         }
-                                        self.tui_blank();
-                                        self.tui_dim("---");
-                                        for ln in s.body.lines() { self.tui_sys(ln.to_string()); }
-                                        self.tui_dim("---");
+                                        lines.push(RenderLine::Blank);
+                                        lines.push(RenderLine::InfoHeader("  Body".to_string()));
+                                        lines.push(RenderLine::Blank);
+                                        for ln in s.body.lines() {
+                                            lines.push(RenderLine::SystemMsg(format!("  {ln}")));
+                                        }
+                                        lines.push(RenderLine::Blank);
+                                        let mut app = self.app.lock().unwrap();
+                                        for line in lines.drain(..) { let _ = app.push(line); }
                                     }
                                 }
                             }
