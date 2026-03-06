@@ -1,739 +1,284 @@
 # CADE Architecture
 
-> **CADE** — Coding AI Assistant with Desktop Extensions  
+> **CADE** — Coding AI Assistant with Desktop Extensions
 > A stateful, multi-provider AI coding agent built in Rust.
 
 ---
 
-## Table of Contents
+## CADE's Architectural Pattern
 
-1. [Overview](#overview)
-2. [High-Level Architecture](#high-level-architecture)
-3. [Binary Layout](#binary-layout)
-4. [Module Map](#module-map)
-5. [Core Subsystems](#core-subsystems)
-   - [cade-server (Agent Backend)](#cade-server-agent-backend)
-   - [Agent Client](#agent-client)
-   - [REPL / CLI](#repl--cli)
-   - [MCP Integration](#mcp-integration)
-   - [Tool System](#tool-system)
-   - [Memory System](#memory-system)
-   - [Skills System](#skills-system)
-   - [Subagent System](#subagent-system)
-   - [Hook Engine](#hook-engine)
-   - [Permission System](#permission-system)
-   - [Desktop Extensions](#desktop-extensions)
-6. [Request Lifecycle](#request-lifecycle)
-7. [Data Flow](#data-flow)
-8. [Settings & Configuration](#settings--configuration)
-9. [Key Dependencies](#key-dependencies)
-
----
-
-## Overview
-
-CADE is a terminal-native AI coding agent. It consists of two Rust binaries that
-collaborate over a local HTTP API:
-
-| Binary | Role |
-|---|---|
-| `cade-server` | Stateful agent backend — manages agents, memory, message history, LLM routing |
-| `cade` | Interactive frontend — REPL/CLI, MCP clients, tool execution, desktop extensions |
-
-The two processes communicate via a REST + Server-Sent Events (SSE) streaming API,
-making the architecture cleanly separable. `cade-server` can be replaced by any
-Letta-compatible server; `cade` is the opinionated local front-end.
-
----
-
-## High-Level Architecture
+### Core Pattern: **Persistent HTTP-Driven Agentic Loop**
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              User's Terminal                                │
-│                                                                             │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                         cade  (CLI binary)                          │   │
-│  │                                                                     │   │
-│  │  ┌──────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │   │
-│  │  │   REPL / UI  │  │  CLI / Args  │  │    Headless / Pipe mode  │  │   │
-│  │  │  (ratatui +  │  │  (clap)      │  │    (stdin → stdout)      │  │   │
-│  │  │  crossterm)  │  │              │  │                          │  │   │
-│  │  └──────┬───────┘  └──────┬───────┘  └───────────┬─────────────┘  │   │
-│  │         └─────────────────┴──────────────────────┘                 │   │
-│  │                           │ user prompt                             │   │
-│  │                    ┌──────▼───────────────────┐                    │   │
-│  │                    │       Agent Client        │                    │   │
-│  │                    │  (REST + SSE streaming)   │                    │   │
-│  │                    └──────┬────────────────────┘                    │   │
-│  │                           │ HTTP/SSE                                │   │
-│  │  ┌────────────────────────│──────────────────────────────────────┐  │   │
-│  │  │                 Tool Execution Layer                          │  │   │
-│  │  │  ┌──────────┐ ┌──────────┐ ┌───────────┐ ┌────────────────┐ │  │   │
-│  │  │  │ Built-in │ │   MCP    │ │  Desktop  │ │ Permission +   │ │  │   │
-│  │  │  │  Tools   │ │ Manager  │ │Extensions │ │  Hook Engine   │ │  │   │
-│  │  │  │bash/fs/  │ │(rmcp)    │ │capture/   │ │                │ │  │   │
-│  │  │  │grep/glob │ │          │ │notify/tray│ │                │ │  │   │
-│  │  │  └──────────┘ └────┬─────┘ └───────────┘ └────────────────┘ │  │   │
-│  │  └───────────────────────────────────────────────────────────────┘  │   │
-│  │                        │ stdio (MCP protocol)                        │   │
-│  │              ┌─────────┴──────────────────────────┐                 │   │
-│  │              │         MCP Servers (child procs)   │                 │   │
-│  │              │  git │ developer │ desktop-commander │                 │   │
-│  │              │  lsp-rust │ lsp-typescript │ context7│                │   │
-│  │              └────────────────────────────────────┘                 │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                           │ HTTP REST + SSE                                 │
-│  ┌─────────────────────────────────────────────────────────────────────┐   │
-│  │                    cade-server  (Axum HTTP server)                  │   │
-│  │                                                                     │   │
-│  │  ┌─────────────┐  ┌──────────────┐  ┌──────────────────────────┐  │   │
-│  │  │  REST API   │  │  LLM Router  │  │     SQLite Storage        │  │   │
-│  │  │  /agents    │  │ Anthropic /  │  │  agents │ messages │      │  │   │
-│  │  │  /messages  │  │ OpenAI /     │  │  memory │ tools │ runs    │  │   │
-│  │  │  /runs      │  │ Gemini /     │  │                          │  │   │
-│  │  │  /tools     │  │ Ollama       │  │                          │  │   │
-│  │  │  /providers │  │              │  │                          │  │   │
-│  │  └─────────────┘  └──────────────┘  └──────────────────────────┘  │   │
-│  └─────────────────────────────────────────────────────────────────────┘   │
-│                           │ HTTPS                                           │
-│              ┌────────────┴──────────────────────────┐                     │
-│              │         LLM Provider APIs              │                     │
-│              │  Anthropic │ OpenAI │ Gemini │ Ollama  │                     │
-│              └────────────────────────────────────────┘                    │
-└─────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│                        CLI / Client                         │
+│         REPL  ·  Headless  ·  Stream-JSON  ·  Subagent      │
+└────────────────────────┬────────────────────────────────────┘
+                         │  HTTP + SSE
+┌────────────────────────▼────────────────────────────────────┐
+│                    Axum HTTP Server                         │
+│   /agents  /messages  /conversations  /tools  /memory       │
+└────────────────────────┬────────────────────────────────────┘
+                         │
+          ┌──────────────▼──────────────┐
+          │         Agent Turn          │  ← The core loop
+          │                             │
+          │  1. Load history (SQLite)   │
+          │  2. Inject memory blocks    │
+          │  3. Trim to context budget  │
+          │  4. Stream LLM response     │
+          │  5. Persist messages        │
+          │  6. Emit SSE events         │
+          └──────────────┬──────────────┘
+                         │ tool_calls in response?
+          ┌──────────────▼──────────────┐
+          │      Tool Dispatch Loop     │
+          │                             │
+          │  classify → sequential?     │
+          │      yes → run in order     │
+          │      no  → join_all()       │
+          │  collect results            │
+          │  → POST back to /messages   │
+          │  → repeat from step 1       │
+          └─────────────────────────────┘
 ```
 
 ---
 
-## Binary Layout
+## The 5 Interlocking Patterns
+
+### 1. 🔁 Agentic Loop (not a static graph)
+
+Unlike graph-based frameworks with fixed node edges, CADE's loop is **LLM-driven and dynamic**:
+
+- The LLM decides at runtime which tools to call, in what order, how many times
+- The loop runs until `finish_reason == "end_turn"` or max turns reached
+- No pre-wired edges — the LLM is the router
 
 ```
-CADE/
-├── src/
-│   ├── main.rs              ← cade binary entry point (REPL + tool execution)
-│   ├── lib.rs               ← shared library (all modules re-exported)
-│   ├── bin/
-│   │   └── cade-server.rs   ← cade-server binary entry point (Axum HTTP server)
-│   │
-│   ├── agent/               ← REST client for cade-server
-│   │   ├── client.rs        ← CadeClient (HTTP + SSE)
-│   │   ├── session.rs       ← SessionStore (agent ID persistence)
-│   │   ├── tools.rs         ← built-in tool schema registration
-│   │   └── mod.rs
-│   │
-│   ├── cli/                 ← user-facing interfaces
-│   │   ├── args.rs          ← clap CLI argument definitions
-│   │   ├── repl.rs          ← interactive REPL (ratatui + crossterm)
-│   │   ├── headless.rs      ← pipe/stdin headless mode
-│   │   └── mod.rs
-│   │
-│   ├── mcp/                 ← MCP server integration (rmcp)
-│   │   └── mod.rs           ← McpManager: spawn, handshake, route tool calls
-│   │
-│   ├── tools/               ← built-in tool implementations
-│   │   ├── bash.rs          ← shell command execution
-│   │   ├── fs.rs            ← file read/write/edit/glob
-│   │   ├── search.rs        ← grep (regex file search)
-│   │   ├── desktop.rs       ← screenshot, notify, window control
-│   │   ├── ask.rs           ← interactive user questions (ask_user_question)
-│   │   ├── manager.rs       ← tool dispatch + schema registry
-│   │   └── mod.rs
-│   │
-│   ├── toolsets/            ← model-specific tool family selection
-│   │   └── mod.rs           ← Default (Claude) / Codex (OpenAI) / Gemini
-│   │
-│   ├── skills/              ← skill discovery + on-demand loading
-│   │   └── mod.rs
-│   │
-│   ├── subagents/           ← subagent definitions + spawning
-│   │   └── mod.rs
-│   │
-│   ├── hooks/               ← lifecycle hook engine
-│   │   └── mod.rs
-│   │
-│   ├── permissions/         ← allow/deny rule matching
-│   │   └── mod.rs
-│   │
-│   ├── desktop/             ← desktop extension primitives
-│   │   ├── capture.rs       ← xcap screen capture
-│   │   ├── control.rs       ← xdotool/ydotool input control
-│   │   ├── notify.rs        ← OS notifications (notify-rust)
-│   │   ├── tray.rs          ← system tray (ksni / D-Bus)
-│   │   └── mod.rs
-│   │
-│   ├── server/              ← cade-server internals
-│   │   ├── api/             ← Axum route handlers
-│   │   │   ├── agents.rs    ← CRUD + memory management
-│   │   │   ├── messages.rs  ← send message + SSE stream
-│   │   │   ├── runs.rs      ← run lifecycle
-│   │   │   ├── tools.rs     ← tool registry API
-│   │   │   ├── providers.rs ← LLM provider management
-│   │   │   ├── models.rs    ← model listing
-│   │   │   └── health.rs    ← health check
-│   │   │   └── mod.rs
-│   │   ├── llm/             ← LLM provider adapters
-│   │   │   ├── anthropic.rs
-│   │   │   ├── openai.rs
-│   │   │   ├── gemini.rs
-│   │   │   ├── ollama.rs
-│   │   │   ├── catalogue.rs ← model catalogue
-│   │   │   └── mod.rs
-│   │   ├── storage/
-│   │   │   ├── sqlite.rs    ← all DB operations (rusqlite)
-│   │   │   └── mod.rs
-│   │   ├── config.rs        ← ServerConfig (env-driven)
-│   │   └── state.rs         ← AppState (shared across handlers)
-│   │   └── mod.rs
-│   │
-│   ├── settings/            ← settings.json loader
-│   │   ├── manager.rs       ← SettingsManager, McpServerConfig, HooksConfig
-│   │   └── mod.rs
-│   │
-│   └── ui/                  ← terminal rendering helpers
-│       ├── app.rs           ← TuiApp (central unified render loop)
-│       ├── input.rs         ← keyboard/mouse input logic
-│       ├── output.rs        ← formatted output blocks
-│       ├── markdown.rs      ← markdown to ratatui span parsing
-│       ├── question.rs      ← interactive question widget
-│       ├── menu.rs          ← TUI menus and pickers
-│       ├── status.rs        ← thinking bar and status display
-│       └── mod.rs
+stream → tool_calls? → dispatch → results → stream → tool_calls? → ...
+```
+
+### 2. 🗄️ Persistent Conversation State
+
+Every message, tool call, tool result, and memory block is **stored in SQLite** and reloaded on every turn. This makes CADE stateful across sessions — completely unlike ephemeral in-memory frameworks.
+
+```
+SQLite
+  ├── agents         (id, name, model, system_prompt)
+  ├── conversations  (id, agent_id, title)
+  ├── messages       (id, conv_id, role, content, tool_calls, tool_call_id)
+  ├── memory_blocks  (id, agent_id, label, value)
+  └── tools          (id, name, description, json_schema, executor)
+```
+
+### 3. 📡 Server-Sent Events (SSE) Streaming
+
+The server streams LLM output token-by-token to the client via SSE. The client reacts to each chunk as it arrives — not after the full response completes.
+
+```
+Server                         Client
+  │── text chunk ────────────►  │  print to terminal
+  │── text chunk ────────────►  │  print to terminal
+  │── tool_call_message ──────► │  dispatch tool
+  │── tool_result_message ────► │  (echoed back)
+  │── usage_message ──────────► │  track tokens
+  │── stop_reason ────────────► │  end turn
+```
+
+### 4. ⚡ Classified Parallel Tool Dispatch
+
+Tool calls in a single LLM response are classified then dispatched:
+
+```rust
+sequential tools  → run one-by-one  (update_memory, load_skill, install_skill)
+regular tools     → join_all()      (bash, read_file, grep, screenshot, …)
+```
+
+Sequential tools mutate shared agent state and cannot be safely parallelised.
+Regular tools are independent and run concurrently via `futures::future::join_all()`.
+
+### 5. 🧠 Memory + Skills Injection
+
+Before every LLM call, CADE dynamically assembles the system prompt by:
+
+- Loading memory blocks from SQLite (ordered by recency, capped by `MEMORY_CHAR_BUDGET`)
+- Injecting loaded skills (markdown documents with embedded instructions)
+- Trimming full message history to fit the model's context window
+
+```
+system_prompt = base_prompt + memory_blocks + skills
+messages      = sanitize(history[-N:]) trimmed to context_char_budget
+context_char_budget = (model_context_window_tokens × 3).clamp(8_000, 600_000)
+```
+
+---
+
+## Layer Map
+
+```
+src/
+├── bin/
+│   └── cade-server.rs          # Server binary entrypoint
+├── main.rs                     # CLI entrypoint + server auto-start
 │
-├── .cade/                   ← runtime config (gitignored)
-│   ├── settings.local.json  ← local overrides (MCP servers, hooks, etc.)
-│   └── agents/              ← custom subagent definitions (.md files)
+├── server/                     # HTTP server (Axum)
+│   ├── api/
+│   │   ├── agents.rs           # CRUD: agents, memory blocks
+│   │   ├── conversations.rs    # CRUD: conversations
+│   │   ├── messages.rs         # POST /messages → agentic loop + SSE
+│   │   ├── models.rs           # GET /v1/models (live + catalogue)
+│   │   ├── runs.rs             # Background runs (headless via API)
+│   │   └── tools.rs            # CRUD: registered tools
+│   ├── config.rs               # ServerConfig (env vars + defaults)
+│   ├── llm/
+│   │   ├── mod.rs              # LlmRouter, retry_with_backoff, provider_error
+│   │   ├── anthropic.rs        # Anthropic Claude provider
+│   │   ├── openai.rs           # OpenAI + OpenAI-compat providers
+│   │   ├── gemini.rs           # Google Gemini provider
+│   │   ├── ollama.rs           # Ollama local provider (delegates to OpenAI)
+│   │   └── catalogue.rs        # Static model catalogue + context_window_for_model
+│   ├── mcp/                    # MCP (Model Context Protocol) server
+│   ├── rate_limit.rs           # Per-agent token-bucket rate limiter
+│   ├── state.rs                # AppState (router, db, rate_limiter)
+│   └── storage/
+│       └── sqlite.rs           # All DB queries (agents, convos, messages, tools, memory)
 │
-└── .skills/                 ← project-scoped skills
-    ├── conventional-commits/
-    └── example/
+├── agent/
+│   ├── client.rs               # CadeClient — HTTP client for the CADE API
+│   ├── session.rs              # Session persistence (.cade/settings.local.json)
+│   ├── tools.rs                # Tool schema registration helpers
+│   └── mod.rs
+│
+├── cli/
+│   ├── repl.rs                 # Interactive REPL (3628 lines — full UI layer)
+│   └── headless.rs             # Headless + stream-json modes
+│
+├── subagents/
+│   └── mod.rs                  # SubagentDef, discovery, builtin subagents
+│
+├── skills/
+│   └── mod.rs                  # Skill discovery, parsing, file watcher
+│
+├── tools/
+│   └── dispatch.rs             # Tool execution dispatch (bash, files, grep, …)
+│
+├── mcp/
+│   └── mod.rs                  # MCP client manager (external tool servers)
+│
+└── permissions/
+    └── mod.rs                  # PermissionManager (block/allow rules)
 ```
 
 ---
 
-## Module Map
+## LLM Provider Architecture
 
 ```
-lib.rs
- ├── agent      ← REST client (CadeClient), session persistence, tool schema registry
- ├── cli        ← user interfaces: Args (clap), Repl (TUI loop), Headless (pipes)
- ├── desktop    ← OS integration: capture (xcap), notify, tray, control
- ├── hooks      ← Lifecycle HookEngine (pre/post tool, prompt submit, etc.)
- ├── mcp        ← MCP Manager (rmcp): server lifecycle, tool namespacing, dispatch
- ├── permissions← PermissionManager: interactive prompts, allow/deny persistence
- ├── server     ← cade-server: Axum API, LLM adapters, SQLite storage
- ├── settings   ← SettingsManager: config merging (global/project/local)
- ├── skills     ← Skill discovery, on-demand loading, content parsing
- ├── subagents  ← Subagent spawning, context isolation, tool restriction
- ├── toolsets   ← Model-specific behaviors (OpenAI vs Anthropic vs Gemini)
- ├── tools      ← Core tool implementations: bash, fs, search, ask, desktop
- └── ui         ← Unified TUI rendering: TuiApp, RenderLine, markdown parsing
-```
+LlmRouter
+  ├── anthropic   → AnthropicProvider  (native Anthropic API)
+  ├── openai      → OpenAiProvider     (OpenAI API)
+  ├── gemini      → GeminiProvider     (Google Gemini API)
+  ├── ollama      → OllamaProvider     (delegates to OpenAiProvider)
+  ├── openrouter  → OpenAiProvider     (OpenRouter compat, auto-detected from env)
+  ├── groq        → OpenAiProvider     (Groq compat, auto-detected from env)
+  ├── together    → OpenAiProvider     (Together AI compat, auto-detected from env)
+  ├── fireworks   → OpenAiProvider     (Fireworks compat, auto-detected from env)
+  └── deepinfra   → OpenAiProvider     (DeepInfra compat, auto-detected from env)
 
----
+All providers implement:
+  async fn complete(req) → CompletionResponse
+  async fn stream(req)   → Pin<Box<dyn Stream<Item = Result<StreamChunk>>>>
 
-## Core Subsystems
-
-### cade-server (Agent Backend)
-
-`cade-server` is a self-contained Axum HTTP server — the stateful brain of CADE.
-It is modeled after the Letta server API, making the two interchangeable.
-
-```
-┌─────────────────────────────────────────────────────┐
-│                    cade-server                      │
-│                                                     │
-│  REST Endpoints                                     │
-│  ─────────────────────────────────────────────────  │
-│  POST   /v1/agents                 create agent     │
-│  GET    /v1/agents                 list agents      │
-│  GET    /v1/agents/:id             get agent        │
-│  DELETE /v1/agents/:id             delete agent     │
-│  GET    /v1/agents/:id/memory      get memory       │
-│  PATCH  /v1/agents/:id/memory/…    upsert block     │
-│  POST   /v1/agents/:id/messages    send + stream    │
-│  GET    /v1/agents/:id/messages    message history  │
-│  GET    /v1/runs/:id               run status       │
-│  GET    /v1/tools                  list tools       │
-│  POST   /v1/tools                  register tool    │
-│  GET    /v1/providers              list providers   │
-│  POST   /v1/providers              add provider     │
-│  GET    /v1/models                 list models      │
-│  GET    /v1/health                 health check     │
-│                                                     │
-│  LLM Router                                         │
-│  ─────────────────────────────────────────────────  │
-│  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌─────────┐  │
-│  │Anthropic │ │ OpenAI   │ │ Gemini │ │ Ollama  │  │
-│  └──────────┘ └──────────┘ └────────┘ └─────────┘  │
-│  Auto-detected from env keys; DB-overridable        │
-│                                                     │
-│  SQLite Storage                                     │
-│  ─────────────────────────────────────────────────  │
-│  tables: agents, memory_blocks, messages,           │
-│           tools, runs, providers                    │
-└─────────────────────────────────────────────────────┘
-```
-
-**LLM Provider detection priority:**
-1. `CADE_LLM_PROVIDER` env var (explicit override)
-2. First found API key: `ANTHROPIC_API_KEY` → `OPENAI_API_KEY` → `GOOGLE_API_KEY`
-3. Ollama (always available as local fallback)
-
-**Default models by provider:**
-
-| Provider | Default Model |
-|---|---|
-| Anthropic | `claude-opus-4-5` |
-| OpenAI | `gpt-4o` |
-| Gemini | `gemini-2.0-flash` |
-| Ollama | `llama3.2` |
-
----
-
-### Agent Client
-
-`src/agent/client.rs` — `CadeClient` wraps `reqwest` to speak the cade-server REST API.
-It handles:
-- Agent creation and retrieval
-- Memory block upserts
-- Streaming message sends (SSE via `reqwest-eventsource`)
-- Tool registration
-
-```
-CadeClient
-  .create_agent(req)        → AgentState
-  .send_message(id, msg)    → impl Stream<Item = CadeMessage>
-  .upsert_memory(id, label) → ()
-  .create_tool(req)         → ()
-  .get_messages(id)         → Vec<CadeMessage>
-```
-
-`CadeMessage` is the wire format for all streamed events:
-
-```
-message_type = "assistant_message"      ← text to display
-             = "tool_call_message"      ← tool invocation request
-             = "tool_return_message"    ← tool result echo
-             = "stream_start"           ← run_id assigned
-             = "stream_end"             ← turn complete
+Wrapped with retry_with_backoff():
+  - 3 attempts, 1s base delay, 2× multiplier, 8s cap
+  - Retries:   429, 500, 502, 503, 504, connection errors, timeouts
+  - Fail-fast: 400, 401, 403, 404
 ```
 
 ---
 
-### REPL / CLI
-
-The user interface lives in `src/cli/`:
+## Subagent Architecture
 
 ```
-Args (clap)
- ├── --model          override LLM model
- ├── --server         cade-server URL (default: http://localhost:8284)
- ├── --agent          reuse a named agent
- ├── --permission-mode (auto / ask / deny)
- ├── --toolset        (default / codex / gemini)
- └── -p / --print     headless: prompt from CLI arg
-
-Repl (ratatui + crossterm)
- ├── **Unified Render Loop:** `TuiApp` maintains all conversation state as `RenderLine` variants, redrawing the full screen on every event (no hybrid scrolling region hacks).
- ├── **Markdown Rendering:** `markdown.rs` parses tokens into ratatui Spans with full support for headings, code blocks, and emphasis.
- ├── **Live Status:** A dedicated status row (Thinking Bar) provides immediate feedback on agent activity and elapsed time.
- ├── **Slash Commands:** Extensible command system (`/help`, `/memory`, `/mcp`, `/skills`, `/subagents`, `/clear`, `/exit`).
- └── **Multi-line Input:** Interactive input area with Shift+Enter support, command history, and auto-growing rows.
-
-Headless mode (headless.rs)
- └── stdin → cade-server → stdout (scriptable / pipe-friendly)
+Main Agent (REPL / Headless)
+  │
+  ├── detects @subagent or /agent command
+  │
+  ├── resolves SubagentDef
+  │   ├── Builtin:  explore, general-purpose, coder, reviewer, reflection, recall
+  │   ├── Global:   ~/.cade/subagents/*.md
+  │   └── Project:  .cade/subagents/*.md
+  │
+  ├── creates ephemeral CADE agent (HTTP POST /agents)
+  │
+  ├── dispatches via Arc<Semaphore> (concurrency cap)
+  │
+  └── streams subagent turn → collects result → injects as tool result
 ```
 
 ---
 
-### MCP Integration
-
-`src/mcp/mod.rs` — `McpManager` uses the `rmcp` crate to spawn MCP servers as child
-processes over stdio. Each server exposes a set of tools that are automatically
-namespaced with a `{server_key}__` prefix to avoid collisions.
+## Memory System
 
 ```
-Startup sequence:
-  settings.json
-       │  mcpServers config
-       ▼
-  McpManager::start()
-       │  for each enabled server:
-       │    Command::new(cmd) + args + env
-       │    TokioChildProcess transport
-       │    rmcp handshake (initialize)
-       │    list_tools() → Vec<McpToolSchema>
-       ▼
-  McpManager (ready)
-       │  tools prefixed: "git__status", "developer__bash", …
-       ▼
-  REPL tool dispatch
-```
+Memory Blocks (SQLite: memory_blocks)
+  ├── label     — unique key per agent (e.g. "project", "persona", "human")
+  ├── value     — free-text content
+  └── updated_at — used for recency ordering
 
-**Configured MCP servers:**
+Injection at turn time:
+  1. Load all blocks for agent, order by updated_at DESC
+  2. Accumulate into system prompt until MEMORY_CHAR_BUDGET (8,000 chars) reached
+  3. Empty blocks always skipped
 
-| Server key | What it provides |
-|---|---|
-| `git` | Git operations (`git__add`, `git__commit`, `git__push`, …) |
-| `developer` | Shell, file editor, grep, screen capture, LSP wrappers |
-| `desktop-commander` | Long-running processes, interactive sessions, system info |
-| `lsp-rust` | rust-analyzer LSP (diagnostics, hover, completions, …) |
-| `lsp-typescript` | TypeScript language server |
-| `context7` | Up-to-date library docs via Upstash Context7 API |
-
----
-
-### Tool System
-
-CADE has three categories of tools, all dispatched through the same loop:
-
-```
-Tool call from LLM
-        │
-        ▼
-  PermissionManager.check()  ──deny──► block + inform agent
-        │ allow
-        ▼
-  HookEngine.pre_tool_use()  ──block──► block + inform agent
-        │ allow
-        ▼
-  ┌─────────────────────────────────────┐
-  │        Tool Dispatch                │
-  │                                     │
-  │  is MCP-prefixed (contains "__")?   │
-  │  ├─yes─► McpManager.call_tool()    │
-  │  │                                  │
-  │  │  is meta-tool?                   │
-  │  ├─yes─► update_memory             │
-  │  │       load_skill                │
-  │  │       install_skill             │
-  │  │       run_subagent              │
-  │  │                                  │
-  │  └─no──► Built-in tools:           │
-  │           bash          (bash.rs)  │
-  │           read_file     (fs.rs)    │
-  │           write_file    (fs.rs)    │
-  │           edit_file     (fs.rs)    │
-  │           apply_patch   (fs.rs)    │
-  │           grep          (search.rs)│
-  │           glob          (fs.rs)    │
-  │           ask_user_question (ask.rs)│
-  │           desktop_*     (desktop.rs)│
-  └─────────────────────────────────────┘
-        │
-        ▼
-  HookEngine.post_tool_use()  → optional additionalContext appended to result
-        │
-        ▼
-  tool result sent back to agent
-```
-
-**Toolsets** — different model families get different editing tools:
-
-| Toolset | Models | Edit tool |
-|---|---|---|
-| `Default` | Claude, Llama, Mistral | `edit_file` (string-replace) |
-| `Codex` | GPT-4, o1, o3, o4 | `apply_patch` (unified diff) |
-| `Gemini` | Gemini | `edit_file` (string-replace) |
-
----
-
-### Memory System
-
-Memory is stored server-side in SQLite as named blocks. The agent can read and
-update them via the `update_memory` meta-tool.
-
-```
-Core memory blocks:
-  ┌────────────┬──────────────────────────────────────────────────┐
-  │ Label      │ Purpose                                          │
-  ├────────────┼──────────────────────────────────────────────────┤
-  │ persona    │ Agent identity, style, and behavioral defaults   │
-  │ human      │ User name, preferences, working style            │
-  │ project    │ Active project, stack, conventions, ongoing work │
-  │ skills     │ Auto-injected: available skills listing          │
-  └────────────┴──────────────────────────────────────────────────┘
-
-Memory Features:
-  Shared Memory   → multiple agents can be linked to the same block (for team collaboration)
-  Archival Memory → persistent storage of past messages, searchable via SQLite FTS5
-  update_memory   → set (replace) or append operations
+Update via tool:
+  update_memory(label, value, operation="set"|"append")
+  → intercepted by client before server round-trip
+  → written directly to SQLite
 ```
 
 ---
 
-### Skills System
-
-Skills are Markdown documents that give CADE domain-specific knowledge and
-workflows. They are loaded **on-demand** — only when relevant — to keep context
-clean.
+## Context Budget System
 
 ```
-Skill discovery (at startup):
-  ~/.cade/skills/        ← global skills  (scope: global)
-  .skills/               ← project skills (scope: project)
+Per-turn context window management:
 
-Skills listing injected into system prompt as:
-  ## Available Skills
-  - skill-name [scope] [tags]: description
-  …
+model_context_window  (tokens, from catalogue or provider-prefix heuristic)
+         ×  3         (chars per token — conservative, ~25% headroom)
+  .clamp(8_000, 600_000)  (min: tiny local models, max: Gemini 2M token window)
+         = context_char_budget
 
-Agent uses load_skill("id") tool to pull full content when task matches.
-Agent uses install_skill("url") tool to download + install new skills.
+History trimming:
+  while total_chars(messages) > context_char_budget AND len(messages) > 3:
+      remove messages[1]   ← oldest non-system message
 
-Skill file format (SKILL.MD):
-  ---
-  name: my-skill
-  description: What this skill does
-  tags: [git, testing]
-  scope: project
-  ---
-
-  # Full skill content here...
+Always preserved:
+  messages[0]             ← system prompt
+  messages[-2..]          ← last user + assistant turn
 ```
 
 ---
 
-### Subagent System
+## How It Compares to Other Frameworks
 
-`run_subagent` spawns a focused child agent that executes a task and returns
-only its final answer — keeping the main agent's context clean.
-
-```
-run_subagent call
-      │
-      ▼
-  SubagentDef resolved
-  ├── builtin: explore / general-purpose / coder / reviewer
-  ├── global:  ~/.cade/agents/*.md
-  └── project: .cade/agents/*.md
-
-      │
-      ▼
-  CadeClient.create_agent()  ← new ephemeral agent on cade-server
-      │
-      ├── background=false: stream until done, return final answer
-      └── background=true:  return immediately; notify on completion
-
-Subagent tool access levels:
-  All       → full tool access (same as parent)
-  Readonly  → bash (read-only), read_file, glob, grep only
-  List(…)   → explicit named subset
-```
+| Dimension | AgentFlow | LangChain | CADE |
+|---|---|---|---|
+| Routing | Static graph | Chain / DAG | LLM-driven, dynamic |
+| State | Ephemeral HashMap | Ephemeral | Persistent SQLite |
+| Multi-turn | No | Optional | Native (core feature) |
+| Streaming | No | Partial | Full SSE |
+| Tool dispatch | No | Sequential | Parallel + classified |
+| Multi-agent | Fixed set | Predefined | Dynamic, scoped, semaphore-guarded |
+| LLM providers | Via `rig` crate | Via LangChain | Own layer, hot-reload |
+| Memory | No | Vector store | Structured blocks + FTS5 search |
+| Scale | ~730 lines | Massive Python | ~15,000 lines Rust |
 
 ---
 
-### Hook Engine
+## One-Line Summary
 
-`src/hooks/mod.rs` — `HookEngine` fires user-defined shell scripts at key
-lifecycle events. Scripts receive a JSON payload on stdin and signal outcomes
-via exit code.
+> **CADE is a Persistent Multi-turn SSE-Streaming Agentic Server — the LLM is the router, SQLite is the brain, and the tool loop runs until the LLM says it's done.**
 
-```
-Events:
-  PreToolUse          → can block tool execution (exit 2)
-  PostToolUse         → can inject additionalContext into result
-  PostToolUseFailure  → notified on tool error
-  PermissionRequest   → triggered before interactive permission prompt
-  UserPromptSubmit    → fires when user submits a message
-  Stop                → fires when agent finishes a turn
-  SubagentStop        → fires when a subagent completes
-  SessionStart        → fires on REPL startup
-  SessionEnd          → fires on REPL exit
-  Notification        → general notification event
-
-Exit code semantics:
-  0  → allow / continue normally
-  1  → log the stderr output; continue
-  2  → block the action; send stderr to agent as context
-
-Hook matchers:
-  matcher: null / ""  → match all tools
-  matcher: "bash"     → match only the bash tool
-  matcher: ".*_file"  → regex match against tool name
-```
-
----
-
-### Permission System
-
-`src/permissions/mod.rs` — controls which tools run automatically vs. require
-interactive approval.
-
-```
-Permission modes (--permission-mode flag):
-  auto   → all tools run without asking
-  ask    → write/destructive tools prompt the user
-  deny   → write/destructive tools are blocked
-
-Rule syntax (in settings.json allowedTools / deniedTools):
-  Bash                    → all bash invocations
-  Bash(cargo test)        → bash where command == "cargo test"
-  Bash(rm -rf:*)          → bash where command starts with "rm -rf"
-  Read(src/**)            → read_file where path is under src/
-  Edit                    → any edit_file call
-
-Evaluation order:
-  1. deniedTools rules   → block if any match
-  2. allowedTools rules  → allow if any match
-  3. permission mode     → fallback (auto/ask/deny)
-```
-
----
-
-### Desktop Extensions
-
-`src/desktop/` provides OS-level capabilities beyond the terminal:
-
-```
-┌────────────────────────────────────────────────────┐
-│              Desktop Extensions                    │
-│                                                    │
-│  capture.rs  — xcap                                │
-│    desktop_screenshot()  → base64 PNG              │
-│    Supports multi-monitor; resizes large captures  │
-│                                                    │
-│  control.rs  — xdotool / ydotool                   │
-│    desktop_control(focus_window|type_text|         │
-│                    key_press|move_mouse|click)      │
-│    Auto-detects X11 vs Wayland                     │
-│                                                    │
-│  notify.rs  — notify-rust                          │
-│    desktop_notify(title, body, urgency)            │
-│    Sends native OS desktop notifications           │
-│                                                    │
-│  tray.rs  — ksni (D-Bus)                           │
-│    spawn_tray()                                    │
-│    System tray icon (Linux/D-Bus)                  │
-└────────────────────────────────────────────────────┘
-```
-
----
-
-## Request Lifecycle
-
-A complete turn from user input to assistant response:
-
-```
- User types a message in REPL
-          │
-          ▼
- HookEngine.user_prompt_submit()
-          │
-          ▼
- CadeClient.send_message(agent_id, text)
-          │  POST /v1/agents/:id/messages
-          ▼
- cade-server receives request
-  ├── load agent + memory from SQLite
-  ├── build system prompt  (base_prompt + memory blocks + skills listing)
-  ├── assemble message history
-  └── call LLM (streaming SSE)
-          │
-          ▼
- SSE stream back to cade binary:
-  ┌─ stream_start       → capture run_id
-  ├─ assistant_message  → render token-by-token in REPL
-  ├─ tool_call_message  → dispatch tool (see Tool System above)
-  │    ├── permission check
-  │    ├── pre-tool hook
-  │    ├── execute tool
-  │    ├── post-tool hook
-  │    └── POST /v1/runs/:id/tools  (submit result back to server)
-  │              │
-  │              └── server continues LLM stream with tool result
-  │                  (may produce more tool_call_messages → loop)
-  └─ stream_end         → turn complete
-          │
-          ▼
- HookEngine.stop()
-          │
-          ▼
- REPL shows prompt again
-```
-
----
-
-## Data Flow
-
-```
-                    ┌──────────────────────────────────┐
-                    │         settings.json            │
-                    │  mcpServers, hooks, permissions  │
-                    └──────────┬───────────────────────┘
-                               │ SettingsManager
-                               ▼
-┌──────────┐         ┌─────────────────────┐
-│  .skills/│────────►│   Skills Registry   │
-│ ~/.cade/ │         │  (in-memory index)  │
-│  skills/ │         └─────────┬───────────┘
-└──────────┘                   │ skills_listing injected into
-                               │ system prompt
-┌──────────┐         ┌─────────▼───────────┐        ┌────────────┐
-│ .cade/   │────────►│   SubagentDefs      │        │  SQLite DB │
-│ agents/  │         │  (builtin+custom)   │        │ (server)   │
-└──────────┘         └─────────────────────┘        │            │
-                                                     │ agents     │
-┌──────────┐         ┌─────────────────────┐        │ memory     │
-│  MCP     │────────►│   McpManager        │        │ messages   │
-│  servers │  stdio  │  tool schemas       │        │ tools      │
-│(children)│◄────────│  + routing          │        │ runs       │
-└──────────┘         └─────────────────────┘        └────────────┘
-```
-
----
-
-## Settings & Configuration
-
-CADE merges settings from three layers (lowest → highest priority):
-
-```
-1. ~/.cade/settings.json      ← global defaults
-2. .cade/settings.json        ← project overrides
-3. .cade/settings.local.json  ← local secrets (gitignored)
-
-Merged settings control:
-  mcpServers:   { key: { command, args, env, disabled } }
-  hooks:        { PreToolUse: [...], PostToolUse: [...], … }
-  permissions:  { allowedTools: [...], deniedTools: [...] }
-```
-
-**Environment variables** (for `cade-server`):
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `CADE_SERVER_PORT` | `8284` | Server listen port |
-| `CADE_DB_PATH` | `~/.cade/cade.db` | SQLite database path |
-| `CADE_LLM_PROVIDER` | auto-detect | Force a provider |
-| `CADE_DEFAULT_MODEL` | provider default | Force a model |
-| `CADE_API_KEY` | none | Auth token for server requests |
-| `ANTHROPIC_API_KEY` | — | Anthropic API key |
-| `OPENAI_API_KEY` | — | OpenAI API key |
-| `GOOGLE_API_KEY` | — | Google Gemini API key |
-
----
-
-## Key Dependencies
-
-| Crate | Version | Role |
-|---|---|---|
-| `tokio` | 1 | Async runtime (full features) |
-| `axum` | 0.7 | HTTP server framework (cade-server) |
-| `reqwest` | 0.12 | HTTP client + SSE streaming (cade) |
-| `reqwest-eventsource` | 0.6 | SSE client |
-| `rmcp` | 0.2 | MCP client (child-process stdio transport) |
-| `clap` | 4.5 | CLI argument parsing |
-| `ratatui` | 0.29 | Terminal UI rendering |
-| `crossterm` | 0.28 | Cross-platform terminal control |
-| `rusqlite` | 0.31 | SQLite (bundled) |
-| `serde` / `serde_json` | 1 | Serialization |
-| `xcap` | 0.8 | Cross-platform screen capture |
-| `notify-rust` | 4 | OS desktop notifications |
-| `ksni` | 0.2 | Linux system tray (D-Bus) |
-| `tracing` | 0.1 | Structured logging |
-| `anyhow` / `thiserror` | 1/2 | Error handling |
-| `globset` / `ignore` | 0.4 | Glob patterns + `.gitignore` |
-| `regex` | 1 | Grep tool pattern matching |
-| `chrono` | 0.4 | Timestamps |
-| `uuid` | 1 | Unique IDs |
+This is the architecture that production AI coding assistants (Claude Code, Cursor, Windsurf) converged on independently. CADE is a Rust-native implementation of that same pattern.
