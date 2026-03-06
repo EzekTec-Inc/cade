@@ -2052,13 +2052,22 @@ impl Repl {
                     }
                     Some(Ok(evt)) = reader.next() => {
                         if tick_cancel.load(Ordering::SeqCst) { break; }
-                        if let Ok(mut app) = tick_app.try_lock() {
-                            use crossterm::event::MouseEventKind;
-                            match evt {
-                                Event::Key(k) => {
+                        use crossterm::event::MouseEventKind;
+
+                        // For key events targeting an active question modal we MUST
+                        // not drop the event if the lock is momentarily held — retry
+                        // until we get it so the oneshot sender is always delivered.
+                        let needs_question_key = matches!(&evt, Event::Key(_));
+
+                        if needs_question_key {
+                            // Spin-wait (yielding to the runtime each attempt) so the
+                            // key is never silently dropped while the agent holds the
+                            // app lock briefly (e.g. during a push/draw after tool run).
+                            loop {
+                                if let Ok(mut app) = tick_app.try_lock() {
                                     if app.active_question.is_some() {
-                                        app.handle_question_key(k);
-                                    } else {
+                                        if let Event::Key(k) = evt { app.handle_question_key(k); }
+                                    } else if let Event::Key(k) = evt {
                                         match (k.code, k.modifiers) {
                                             (KeyCode::Char('K'), _) => { app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
                                             (KeyCode::Char('J'), _) => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
@@ -2066,7 +2075,14 @@ impl Repl {
                                             _ => {}
                                         }
                                     }
-                                },
+                                    break;
+                                }
+                                // Yield to runtime and retry — never drop the event
+                                tokio::task::yield_now().await;
+                            }
+                        } else if let Ok(mut app) = tick_app.try_lock() {
+                            // Mouse / resize — best-effort, fine to drop
+                            match evt {
                                 Event::Mouse(m) => match m.kind {
                                     MouseEventKind::ScrollUp   => { app.scroll = app.scroll.saturating_add(3); let _ = app.draw(); }
                                     MouseEventKind::ScrollDown => { app.scroll = app.scroll.saturating_sub(3); let _ = app.draw(); }
@@ -2393,12 +2409,6 @@ impl Repl {
                     stats.tool_calls_ok  += 1;
                 }
             }
-
-            // Render the successful tool result to the UI immediately.
-            let _ = self.app.lock().unwrap().push(RenderLine::ToolResult {
-                is_error: result.is_error,
-                content: result.output.clone(),
-            });
 
             // Stream the tool return and process any chained tool calls
             let follow = self
