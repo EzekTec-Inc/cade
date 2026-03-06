@@ -689,9 +689,9 @@ impl Repl {
                                 .map(|(l, v, _)| format!("{} ({} chars)", l, v.chars().count()))
                                 .collect::<Vec<_>>().join(", ");
                             let q = crate::ui::question::Question {
-                                header: "Copy memory",
-                                text: &format!("Copy memory to new agent? ({summary})"),
-                                options: &[
+                                header: "Copy memory".to_string(),
+                                text: format!("Copy memory to new agent? ({summary})"),
+                                options: vec![
                                     crate::ui::question::QuestionOption { label: "Yes — copy human + project blocks".to_string(), description: "Start new agent with existing context".to_string() },
                                     crate::ui::question::QuestionOption { label: "No — start fresh".to_string(), description: "New agent gets empty memory blocks".to_string() },
                                 ],
@@ -894,8 +894,8 @@ impl Repl {
                                         QuestionOption { label: "No — cancel".to_string(),  description: String::new() },
                                     ];
                                     let q_widget = Question {
-                                        header: "Confirm delete", text: &format!("Delete '{}'?", a.name),
-                                        options: &opts, multi_select: false, allow_other: false, progress: None,
+                                        header: "Confirm delete".to_string(), text: format!("Delete '{}'?", a.name),
+                                        options: opts.clone(), multi_select: false, allow_other: false, progress: None,
                                     };
                                     let confirmed = {
                                         let mut app = self.app.lock().unwrap();
@@ -1074,9 +1074,9 @@ impl Repl {
                                     QuestionOption { label: "Clear (erase block)".to_string(), description: String::new() },
                                 ];
                                 let q = Question {
-                                    header: "Edit memory",
-                                    text: &format!("Type new value for [{label}] or pick action:"),
-                                    options: &opts, multi_select: false, allow_other: true, progress: None,
+                                    header: "Edit memory".to_string(),
+                                    text: format!("Type new value for [{label}] or pick action:"),
+                                    options: opts.clone(), multi_select: false, allow_other: true, progress: None,
                                 };
                                 let ans = {
                                     let mut app = self.app.lock().unwrap();
@@ -1512,8 +1512,8 @@ impl Repl {
                                 QuestionOption { label: "Yes — save to settings.json".to_string(), description: String::new() },
                                 QuestionOption { label: "No — session only".to_string(), description: String::new() },
                             ];
-                            let q = Question { header: "Save rule?", text: "Persist this rule to settings.json?",
-                                options: &opts, multi_select: false, allow_other: false, progress: None };
+                            let q = Question { header: "Save rule?".to_string(), text: "Persist this rule to settings.json?".to_string(),
+                                options: opts.clone(), multi_select: false, allow_other: false, progress: None };
                             let save = {
                                 let mut app = self.app.lock().unwrap();
                                 let r = app.ask_question(&q)?;
@@ -1545,8 +1545,8 @@ impl Repl {
                                 QuestionOption { label: "Yes — save to settings.json".to_string(), description: String::new() },
                                 QuestionOption { label: "No — session only".to_string(), description: String::new() },
                             ];
-                            let q = Question { header: "Save rule?", text: "Persist this rule to settings.json?",
-                                options: &opts, multi_select: false, allow_other: false, progress: None };
+                            let q = Question { header: "Save rule?".to_string(), text: "Persist this rule to settings.json?".to_string(),
+                                options: opts.clone(), multi_select: false, allow_other: false, progress: None };
                             let save = {
                                 let mut app = self.app.lock().unwrap();
                                 let r = app.ask_question(&q)?;
@@ -1612,8 +1612,8 @@ impl Repl {
                             // Prompt for name via QuestionWidget
                             use crate::ui::question::{Question, QuestionOption};
                             let opts = vec![QuestionOption { label: "Cancel".to_string(), description: String::new() }];
-                            let q = Question { header: "Rename agent", text: "Enter new agent name:",
-                                options: &opts, multi_select: false, allow_other: true, progress: None };
+                            let q = Question { header: "Rename agent".to_string(), text: "Enter new agent name:".to_string(),
+                                options: opts.clone(), multi_select: false, allow_other: true, progress: None };
                             let ans = {
                                 let mut app = self.app.lock().unwrap();
                                 app.ask_question(&q)?
@@ -1834,11 +1834,17 @@ impl Repl {
                         if let Ok(mut app) = tick_app.try_lock() {
                             use crossterm::event::MouseEventKind;
                             match evt {
-                                Event::Key(k) => match (k.code, k.modifiers) {
-                                    (KeyCode::Char('K'), _) => { app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
-                                    (KeyCode::Char('J'), _) => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
-                                    (KeyCode::Char('o'), crossterm::event::KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
-                                    _ => {}
+                                Event::Key(k) => {
+                                    if app.active_question.is_some() {
+                                        app.handle_question_key(k);
+                                    } else {
+                                        match (k.code, k.modifiers) {
+                                            (KeyCode::Char('K'), _) => { app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
+                                            (KeyCode::Char('J'), _) => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
+                                            (KeyCode::Char('o'), crossterm::event::KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
+                                            _ => {}
+                                        }
+                                    }
                                 },
                                 Event::Mouse(m) => match m.kind {
                                     MouseEventKind::ScrollUp   => { app.scroll = app.scroll.saturating_add(3); let _ = app.draw(); }
@@ -2265,7 +2271,7 @@ impl Repl {
             }
 
             // Prompt for approval
-            if !self.prompt_approval(stdout, tool_name, args)? {
+            if !self.prompt_approval(stdout, tool_name, args).await? {
                 let msg = format!("Tool '{tool_name}' denied by user");
                 let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: msg.clone() });
                 return Ok(crate::tools::ToolResult {
@@ -2396,7 +2402,7 @@ impl Repl {
         }
     }
 
-    fn prompt_approval(
+    async fn prompt_approval(
         &self,
         _stdout: &mut io::Stdout,
         tool_name: &str,
@@ -2459,19 +2465,20 @@ impl Repl {
         ];
 
         let q = Question {
-            header: &header,
-            text: &question_text,
-            options: &opts,
+            header: header.clone(),
+            text: question_text.clone(),
+            options: opts.clone(),
             multi_select: false,
             allow_other: false,
             progress: None,
         };
 
-        // Render the question through TuiApp's terminal (already in alternate screen + raw mode).
-        let qa = {
+        let rx = {
             let mut app = self.app.lock().unwrap();
-            app.ask_question(&q)?
+            app.ask_question_async(q)?
         };
+
+        let qa = rx.await.unwrap_or(None);
 
         match qa {
             None => Ok(false), // Esc / Ctrl+C = deny
@@ -2595,18 +2602,20 @@ impl Repl {
                 .collect();
 
             let q = Question {
-                header: &aq.header,
-                text: &aq.question,
-                options: &opts,
+                header: aq.header.clone(),
+                text: aq.question.clone(),
+                options: opts.clone(),
                 multi_select: aq.multi_select,
                 allow_other: true,
                 progress: if total > 1 { Some((i + 1, total)) } else { None },
             };
 
-            let qa = {
+            let rx = {
                 let mut app = self.app.lock().unwrap();
-                app.ask_question(&q)?
+                app.ask_question_async(q)?
             };
+
+            let qa = rx.await.unwrap_or(None);
 
             match qa {
                 None => {
@@ -2791,8 +2800,8 @@ impl Repl {
                 .map(|(_, label, _)| QuestionOption { label: label.clone(), description: String::new() })
                 .collect();
             let q = Question {
-                header: "Connect provider", text: "Choose a provider to connect:",
-                options: &opts, multi_select: false, allow_other: false, progress: None,
+                header: "Connect provider".to_string(), text: "Choose a provider to connect:".to_string(),
+                options: opts.clone(), multi_select: false, allow_other: false, progress: None,
             };
             let ans = {
                 let mut app = self.app.lock().unwrap();
@@ -2812,9 +2821,9 @@ impl Repl {
         let api_key = if needs_key {
             let key_opts = vec![QuestionOption { label: "Skip (no key)".to_string(), description: String::new() }];
             let kq = Question {
-                header: "API Key",
-                text: &format!("API key for '{name}' (type key or select Skip):"),
-                options: &key_opts, multi_select: false, allow_other: true, progress: None,
+                header: "API Key".to_string(),
+                text: format!("API key for '{name}' (type key or select Skip):"),
+                options: key_opts.clone(), multi_select: false, allow_other: true, progress: None,
             };
             let ans = {
                 let mut app = self.app.lock().unwrap();
@@ -2830,9 +2839,9 @@ impl Repl {
         let base_url = if kind == "openai-compatible" && default_base_url.is_none() {
             let url_opts = vec![QuestionOption { label: "Cancel".to_string(), description: String::new() }];
             let uq = Question {
-                header: "Base URL",
-                text: "Base URL (e.g. https://api.example.com/v1):",
-                options: &url_opts, multi_select: false, allow_other: true, progress: None,
+                header: "Base URL".to_string(),
+                text: "Base URL (e.g. https://api.example.com/v1):".to_string(),
+                options: url_opts.clone(), multi_select: false, allow_other: true, progress: None,
             };
             let ans = {
                 let mut app = self.app.lock().unwrap();
@@ -2940,8 +2949,8 @@ impl Repl {
                             QuestionOption { label: "No — keep".to_string(),    description: String::new() },
                         ];
                         let q = Question {
-                            header: "Delete?", text: &format!("Delete conversation \"{title}\"?"),
-                            options: &opts, multi_select: false, allow_other: false, progress: None,
+                            header: "Delete?".to_string(), text: format!("Delete conversation \"{title}\"?"),
+                            options: opts.clone(), multi_select: false, allow_other: false, progress: None,
                         };
                         let ans = {
                             let mut app = app_arc.lock().unwrap();
@@ -3090,7 +3099,7 @@ impl Repl {
                             QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
                             QuestionOption { label: "No — cancel".to_string(),  description: String::new() },
                         ];
-                        let q = Question { header: "Confirm", text: &label, options: &opts,
+                        let q = Question { header: "Confirm".to_string(), text: label.clone(), options: opts.clone(),
                             multi_select: false, allow_other: false, progress: None };
                         let confirmed = {
                             let mut app = app_arc.lock().unwrap();
@@ -3113,9 +3122,9 @@ impl Repl {
                             QuestionOption { label: "Keep current name".to_string(), description: String::new() },
                         ];
                         let q = Question {
-                            header: "Rename agent",
-                            text: &format!("New name for '{}':", a.name),
-                            options: &opts, multi_select: false, allow_other: true, progress: None,
+                            header: "Rename agent".to_string(),
+                            text: format!("New name for '{}':", a.name),
+                            options: opts.clone(), multi_select: false, allow_other: true, progress: None,
                         };
                         let ans = {
                             let mut app = app_arc.lock().unwrap();
@@ -3383,7 +3392,7 @@ impl Repl {
                             let opts = vec![QuestionOption { label: "Cancel".to_string(), description: String::new() }];
                             let prompt = if prefix.is_empty() { "Enter model ID (e.g. provider/model-name):".to_string() }
                                          else { format!("Enter model for {prefix}") };
-                            let q = Question { header: "Custom model", text: &prompt, options: &opts,
+                            let q = Question { header: "Custom model".to_string(), text: prompt.clone(), options: opts.clone(),
                                 multi_select: false, allow_other: true, progress: None };
                             let ans = {
                                 let mut app = app_arc.lock().unwrap();

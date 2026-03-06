@@ -49,14 +49,14 @@ pub struct QuestionOption {
 }
 
 /// A single question to present to the user.
-#[derive(Debug)]
-pub struct Question<'a> {
+#[derive(Debug, Clone)]
+pub struct Question {
     /// Short chip/tag label shown above the question text (≤12 chars).
-    pub header: &'a str,
+    pub header: String,
     /// Full question text.
-    pub text: &'a str,
+    pub text: String,
     /// 2–N answer options.
-    pub options: &'a [QuestionOption],
+    pub options: Vec<QuestionOption>,
     /// If true, checkboxes are shown and a "Submit" option is appended.
     pub multi_select: bool,
     /// Append a free-text "Type something." option (omit for approval dialogs).
@@ -96,7 +96,7 @@ impl QuestionWidget {
     /// active (guaranteed when called from TuiApp context).
     pub fn ask(
         terminal: &mut DefaultTerminal,
-        question: &Question<'_>,
+        question: &Question,
     ) -> Result<Option<QuestionAnswer>> {
         // ── Build the effective options list ──────────────────────────────────
         let n_real     = question.options.len();

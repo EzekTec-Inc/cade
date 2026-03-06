@@ -1,3 +1,4 @@
 /target
 .cade/settings.local.json
 .env
+.gemini/

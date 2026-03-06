@@ -31,10 +31,10 @@ use crossterm::event::{
 };
 use ratatui::{
     DefaultTerminal, Frame,
-    layout::{Constraint, Layout},
+    layout::{Constraint, Layout, Rect},
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -104,17 +104,23 @@ pub struct ThinkingState {
 }
 
 // ── ActiveQuestionState ───────────────────────────────────────────────────────
-pub struct ActiveQuestionState<'a> {
-    pub question: &'a crate::ui::question::Question<'a>,
+#[derive(Debug, Clone)]
+pub struct ActiveQuestionDrawState {
+    pub question: crate::ui::question::Question,
     pub cursor_pos: usize,
-    pub custom_text: &'a str,
-    pub checked: &'a [bool],
+    pub custom_text: String,
+    pub checked: Vec<bool>,
     pub n_real: usize,
     pub has_other: bool,
     pub has_submit: bool,
     pub total_items: usize,
     pub other_idx: usize,
     pub submit_idx: usize,
+}
+
+pub struct ActiveQuestionState {
+    pub draw_state: ActiveQuestionDrawState,
+    pub tx: Option<tokio::sync::oneshot::Sender<Option<crate::ui::question::QuestionAnswer>>>,
 }
 
 // ── TuiApp ────────────────────────────────────────────────────────────────────
@@ -128,6 +134,7 @@ pub struct TuiApp {
     /// Lines scrolled up from the bottom.  0 = show latest content.
     pub scroll:   usize,
     pub expand_all: bool,
+    pub active_question: Option<ActiveQuestionState>,
 
     // ── Streaming state ────────────────────────────────────────────────────
     streaming_text:   String,
@@ -163,6 +170,7 @@ impl TuiApp {
             lines: Vec::new(),
             scroll: 0,
             expand_all: false,
+            active_question: None,
             streaming_text: String::new(),
             streaming_active: false,
             reasoning_text: String::new(),
@@ -317,9 +325,9 @@ impl TuiApp {
     // ── Rendering ─────────────────────────────────────────────────────────
 
     /// Redraw the full screen.
-    pub fn draw(&mut self) -> Result<()> { self.draw_impl(None) }
+    pub fn draw(&mut self) -> Result<()> { self.draw_impl() }
 
-    pub fn draw_impl(&mut self, active_question: Option<&ActiveQuestionState<'_>>) -> Result<()> {
+    pub fn draw_impl(&mut self) -> Result<()> {
         // Snapshot all rendering data (avoids borrow conflicts).
         let lines           = self.lines.clone();
         let streaming       = if self.streaming_active { Some(self.streaming_text.clone()) } else { None };
@@ -333,6 +341,7 @@ impl TuiApp {
         let thinking_text   = self.thinking.as_ref().map(|ts| ts.text.lock().unwrap().clone());
         let thinking_elapsed = self.thinking.as_ref().map(|ts| ts.started.elapsed());
         let expand_all      = self.expand_all;
+        let active_question = self.active_question.as_ref().map(|s| s.draw_state.clone());
 
         self.terminal.draw(move |frame| {
             render_frame(
@@ -349,7 +358,7 @@ impl TuiApp {
                 &last_status,
                 thinking_text.as_deref(),
                 thinking_elapsed,
-                active_question,
+                active_question.as_ref(),
             );
         })?;
         Ok(())
@@ -357,7 +366,7 @@ impl TuiApp {
 
     // ── Interactive Question ──────────────────────────────────────────────
 
-    pub fn ask_question(&mut self, question: &crate::ui::question::Question<'_>) -> Result<Option<crate::ui::question::QuestionAnswer>> {
+    pub fn ask_question(&mut self, question: &crate::ui::question::Question) -> Result<Option<crate::ui::question::QuestionAnswer>> {
         let n_real     = question.options.len();
         let has_other  = question.allow_other;
         let has_submit = question.multi_select;
@@ -374,20 +383,23 @@ impl TuiApp {
         self.scroll = 0;
 
         let answer: Option<crate::ui::question::QuestionAnswer> = 'widget: loop {
-            let aq = ActiveQuestionState {
-                question,
-                cursor_pos,
-                custom_text: &custom_text,
-                checked: &checked,
-                n_real,
-                has_other,
-                has_submit,
-                total_items,
-                other_idx,
-                submit_idx,
-            };
+            self.active_question = Some(ActiveQuestionState {
+                draw_state: ActiveQuestionDrawState {
+                    question: question.clone(),
+                    cursor_pos,
+                    custom_text: custom_text.clone(),
+                    checked: checked.clone(),
+                    n_real,
+                    has_other,
+                    has_submit,
+                    total_items,
+                    other_idx,
+                    submit_idx,
+                },
+                tx: None,
+            });
 
-            self.draw_impl(Some(&aq))?;
+            self.draw()?;
 
             if !event::poll(std::time::Duration::from_millis(50))? {
                 continue;
@@ -423,11 +435,12 @@ impl TuiApp {
                             if question.multi_select {
                                 if cursor_pos == submit_idx {
                                     let selected: Vec<String> = checked.iter().enumerate()
-                                        .filter(|(_, &c)| c)
+                                        .filter(|(_, c)| **c)
                                         .map(|(i, _)| question.options[i].label.clone())
                                         .collect();
-                                    if selected.is_empty() { continue; }
-                                    break 'widget Some(crate::ui::question::QuestionAnswer::Multi(selected));
+                                    if !selected.is_empty() {
+                                        break 'widget Some(crate::ui::question::QuestionAnswer::Multi(selected));
+                                    }
                                 } else if cursor_pos == other_idx {
                                     if !custom_text.is_empty() {
                                         break 'widget Some(crate::ui::question::QuestionAnswer::Multi(vec![custom_text.clone()]));
@@ -454,6 +467,8 @@ impl TuiApp {
             }
         };
 
+        self.active_question = None;
+
         if let Some(ref ans) = answer {
             self.push(RenderLine::QuestionResult {
                 header: question.header.to_string(),
@@ -464,6 +479,130 @@ impl TuiApp {
         }
 
         Ok(answer)
+    }
+
+    pub fn ask_question_async(
+        &mut self,
+        question: crate::ui::question::Question,
+    ) -> Result<tokio::sync::oneshot::Receiver<Option<crate::ui::question::QuestionAnswer>>> {
+        let n_real     = question.options.len();
+        let has_other  = question.allow_other;
+        let has_submit = question.multi_select;
+        let total_items = n_real + usize::from(has_other) + usize::from(has_submit);
+
+        let other_idx  = if has_other  { n_real } else { usize::MAX };
+        let submit_idx = if has_submit { n_real + usize::from(has_other) } else { usize::MAX };
+
+        let cursor_pos: usize = 0;
+        let custom_text = String::new();
+        let checked: Vec<bool> = vec![false; n_real];
+
+        // snap to bottom when asking
+        self.scroll = 0;
+
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.active_question = Some(ActiveQuestionState {
+            draw_state: ActiveQuestionDrawState {
+                question,
+                cursor_pos,
+                custom_text,
+                checked,
+                n_real,
+                has_other,
+                has_submit,
+                total_items,
+                other_idx,
+                submit_idx,
+            },
+            tx: Some(tx),
+        });
+
+        self.draw()?;
+        Ok(rx)
+    }
+
+    pub fn handle_question_key(&mut self, k: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let mut ans_opt: Option<Option<crate::ui::question::QuestionAnswer>> = None;
+
+        if let Some(aq) = &mut self.active_question {
+            let st = &mut aq.draw_state;
+            match (k.code, k.modifiers) {
+                (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                    ans_opt = Some(None);
+                }
+                (KeyCode::Up, _) => { if st.cursor_pos > 0 { st.cursor_pos -= 1; } }
+                (KeyCode::Down, _) => { if st.cursor_pos + 1 < st.total_items { st.cursor_pos += 1; } }
+                (KeyCode::Tab, _) => { st.cursor_pos = (st.cursor_pos + 1) % st.total_items; }
+                (KeyCode::BackTab, _) => { st.cursor_pos = if st.cursor_pos == 0 { st.total_items - 1 } else { st.cursor_pos - 1 }; }
+                (KeyCode::Char(c), KeyModifiers::NONE) if c.is_ascii_digit() && c != '0' => {
+                    let idx = (c as usize) - ('0' as usize) - 1;
+                    if idx < st.total_items {
+                        if st.question.multi_select {
+                            if idx < st.n_real {
+                                st.checked[idx] = !st.checked[idx];
+                                st.cursor_pos = idx;
+                            }
+                        } else if idx != st.other_idx {
+                            let label = st.question.options[idx].label.clone();
+                            ans_opt = Some(Some(crate::ui::question::QuestionAnswer::Single(label)));
+                        } else {
+                            st.cursor_pos = idx;
+                        }
+                    }
+                }
+                (KeyCode::Backspace, _) if st.cursor_pos == st.other_idx => { st.custom_text.pop(); }
+                (KeyCode::Enter, _) => {
+                    if st.question.multi_select {
+                        if st.cursor_pos == st.submit_idx {
+                            let selected: Vec<String> = st.checked.iter().enumerate()
+                                .filter(|(_, c)| **c)
+                                .map(|(i, _)| st.question.options[i].label.clone())
+                                .collect();
+                            if !selected.is_empty() {
+                                ans_opt = Some(Some(crate::ui::question::QuestionAnswer::Multi(selected)));
+                            }
+                        } else if st.cursor_pos == st.other_idx {
+                            if !st.custom_text.is_empty() {
+                                ans_opt = Some(Some(crate::ui::question::QuestionAnswer::Multi(vec![st.custom_text.clone()])));
+                            }
+                        } else if st.cursor_pos < st.n_real {
+                            st.checked[st.cursor_pos] = !st.checked[st.cursor_pos];
+                        }
+                    } else if st.cursor_pos == st.other_idx {
+                        if !st.custom_text.is_empty() {
+                            ans_opt = Some(Some(crate::ui::question::QuestionAnswer::Single(st.custom_text.clone())));
+                        }
+                    } else {
+                        let label = st.question.options[st.cursor_pos].label.clone();
+                        ans_opt = Some(Some(crate::ui::question::QuestionAnswer::Single(label)));
+                    }
+                }
+                (KeyCode::Char(c), m) if st.cursor_pos == st.other_idx && (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT) => {
+                    st.custom_text.push(c);
+                }
+                _ => {}
+            }
+        }
+
+        if let Some(ans) = ans_opt {
+            if let Some(mut aq) = self.active_question.take() {
+                if let Some(tx) = aq.tx.take() {
+                    let _ = tx.send(ans.clone());
+                }
+                if let Some(ref a) = ans {
+                    let _ = self.push(RenderLine::QuestionResult {
+                        header: aq.draw_state.question.header.clone(),
+                        answer: a.as_str(),
+                    });
+                } else {
+                    let _ = self.draw(); // clear question ui on cancel
+                }
+            }
+        } else {
+            let _ = self.draw();
+        }
     }
 
     // ── Input loop ────────────────────────────────────────────────────────
@@ -487,7 +626,9 @@ impl TuiApp {
             }
             match event::read()? {
                 Event::Key(k) => {
-                    if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
+                    if self.active_question.is_some() {
+                        self.handle_question_key(k);
+                    } else if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
                         return Ok(result);
                     }
                 }
@@ -700,7 +841,7 @@ fn render_frame(
     last_status:      &Option<String>,
     thinking_text:    Option<&str>,
     thinking_elapsed: Option<std::time::Duration>,
-    active_question: Option<&ActiveQuestionState<'_>>,
+    active_question: Option<&ActiveQuestionDrawState>,
 ) {
     let area = frame.area();
     let w    = area.width as usize;
@@ -733,10 +874,6 @@ fn render_frame(
     }
     if let Some(s) = streaming {
         render_assistant_lines(s, w, &mut text_lines);
-    }
-
-    if let Some(aq) = active_question {
-        render_active_question(aq, w, &mut text_lines);
     }
 
     // Count visual rows (word-wrap at content width, matching ratatui's WordWrapper).
@@ -860,64 +997,156 @@ fn render_frame(
     footer.push(Span::styled(right_model, Style::default().fg(RC::DarkGray)));
 
     frame.render_widget(Paragraph::new(Line::from(footer)), chunks[5]);
+
+    // ── Question overlay (rendered last — on top of everything) ───────────────
+    if let Some(aq) = active_question {
+        let popup = popup_area(area, 72, 24);
+        frame.render_widget(Clear, popup);
+        render_question_card(frame, aq, popup);
+    }
 }
 
-fn render_active_question(aq: &ActiveQuestionState<'_>, _width: usize, lines: &mut Vec<Line<'static>>) {
-    let q = aq.question;
+// ── Overlay helpers ───────────────────────────────────────────────────────────
+
+/// Compute a centred popup rect.
+/// `percent_w` — percentage of terminal width (0–100).
+/// `max_h`     — maximum height in rows.
+fn popup_area(area: Rect, percent_w: u16, max_h: u16) -> Rect {
+    let w = (area.width * percent_w / 100).min(area.width.saturating_sub(4)).max(20);
+    let h = max_h.min(area.height.saturating_sub(4)).max(6);
+    let x = area.x + area.width.saturating_sub(w) / 2;
+    let y = area.y + area.height.saturating_sub(h) / 2;
+    Rect { x, y, width: w, height: h }
+}
+
+/// Draw the bordered question card overlay.
+fn render_question_card(frame: &mut Frame, aq: &ActiveQuestionDrawState, area: Rect) {
+    let q = &aq.question;
+
+    // ── Outer border ─────────────────────────────────────────────────────────
+    let title = Span::styled(
+        format!(" {} ", q.header),
+        Style::default().fg(RC::Yellow).add_modifier(Modifier::BOLD),
+    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(RC::Rgb(140, 140, 249)))
+        .title(title);
+
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    // ── Card content ─────────────────────────────────────────────────────────
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Question text
     lines.push(Line::from(""));
-    let sep = "─".repeat(50);
-    lines.push(Line::from(Span::styled(sep, Style::default().fg(RC::DarkGray))));
-    lines.push(Line::from(Span::styled(q.header.to_string(), Style::default().fg(RC::White).add_modifier(Modifier::BOLD))));
-    lines.push(Line::from(""));
-    lines.push(Line::from(Span::styled(q.text.to_string(), Style::default().fg(RC::White))));
+    lines.push(Line::from(Span::styled(
+        q.text.clone(),
+        Style::default().fg(RC::White),
+    )));
     lines.push(Line::from(""));
 
+    // Progress indicator
     if let Some((cur, tot)) = q.progress {
-        lines.push(Line::from(Span::styled(format!("Question {cur} of {tot}"), Style::default().fg(RC::DarkGray))));
+        lines.push(Line::from(Span::styled(
+            format!("Question {cur} of {tot}"),
+            Style::default().fg(RC::DarkGray),
+        )));
         lines.push(Line::from(""));
     }
 
+    // Options
     for idx in 0..aq.total_items {
         let is_selected = aq.cursor_pos == idx;
         let selector    = if is_selected { "❯" } else { " " };
 
+        // Submit item (multi-select only)
         if idx == aq.submit_idx {
-            let label_style = if is_selected { Style::default().fg(RC::Green).add_modifier(Modifier::BOLD) } else { Style::default().fg(RC::DarkGray) };
-            lines.push(Line::from(Span::styled(format!("{selector} {}.    Submit", idx + 1), label_style)));
+            let style = if is_selected {
+                Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(RC::DarkGray)
+            };
+            lines.push(Line::from(Span::styled(
+                format!(" {selector} {}.  Submit", idx + 1),
+                style,
+            )));
             lines.push(Line::from(""));
             continue;
         }
 
+        // Free-text "Other" item
         if idx == aq.other_idx {
-            let display = if aq.cursor_pos == idx {
-                if aq.custom_text.is_empty() { "Type something.█".to_string() } else { format!("{}█", aq.custom_text) }
-            } else if !aq.custom_text.is_empty() { aq.custom_text.to_string() } else { "Type something.".to_string() };
-            let other_style = Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC);
+            let display = if is_selected {
+                if aq.custom_text.is_empty() {
+                    "Type something.█".to_string()
+                } else {
+                    format!("{}█", aq.custom_text)
+                }
+            } else if !aq.custom_text.is_empty() {
+                aq.custom_text.clone()
+            } else {
+                "Type something.".to_string()
+            };
             lines.push(Line::from(vec![
-                Span::styled(selector.to_string(), Style::default().fg(RC::Green)),
-                Span::styled(format!(" {}.    {display}", idx + 1), other_style),
+                Span::styled(
+                    format!(" {selector} {}.  ", idx + 1),
+                    Style::default().fg(if is_selected { RC::Green } else { RC::DarkGray }),
+                ),
+                Span::styled(
+                    display,
+                    Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC),
+                ),
             ]));
             lines.push(Line::from(""));
             continue;
         }
 
-        let opt = &q.options[idx];
-        let checkbox = if q.multi_select { if aq.checked[idx] { "[✓] " } else { "[ ] " } } else { "" };
-        let label_style = if is_selected { Style::default().fg(RC::White).add_modifier(Modifier::BOLD) } else { Style::default().fg(RC::White) };
-        let num_style = if is_selected { Style::default().fg(RC::Green) } else { Style::default().fg(RC::DarkGray) };
+        // Regular option
+        let opt      = &q.options[idx];
+        let checkbox = if q.multi_select {
+            if aq.checked[idx] { "[✓] " } else { "[ ] " }
+        } else {
+            ""
+        };
+        let num_style   = if is_selected { Style::default().fg(RC::Green) } else { Style::default().fg(RC::DarkGray) };
+        let label_style = if is_selected {
+            Style::default().fg(RC::White).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(RC::White)
+        };
 
         lines.push(Line::from(vec![
-            Span::styled(selector.to_string(), Style::default().fg(RC::Green)),
-            Span::styled(format!(" {}. ", idx + 1), num_style),
+            Span::styled(format!(" {selector} "), Style::default().fg(RC::Green)),
+            Span::styled(format!("{}. ", idx + 1), num_style),
             Span::styled(checkbox.to_string(), Style::default().fg(RC::Green)),
             Span::styled(opt.label.clone(), label_style),
         ]));
-        lines.push(Line::from(Span::styled(format!("     {}", opt.description), Style::default().fg(RC::DarkGray))));
+        if !opt.description.is_empty() {
+            lines.push(Line::from(Span::styled(
+                format!("       {}", opt.description),
+                Style::default().fg(RC::DarkGray),
+            )));
+        }
     }
 
-    let hint = if q.multi_select { "Enter to toggle · ↑↓ navigate · Enter on Submit to confirm · Esc to cancel" }
-               else { "Enter to select · ↑↓ navigate · 1-N quick select · Esc to cancel" };
-    lines.push(Line::from(Span::styled(hint.to_string(), Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM))));
+    // Hint line
+    lines.push(Line::from(""));
+    let hint = if q.multi_select {
+        "Enter toggle · ↑↓ navigate · Enter on Submit to confirm · Esc cancel"
+    } else {
+        "Enter select · ↑↓ navigate · 1-N quick-pick · Esc cancel"
+    };
+    lines.push(Line::from(Span::styled(
+        hint,
+        Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+    )));
+
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        inner,
+    );
 }
 
 // ── Line renderers ────────────────────────────────────────────────────────────
