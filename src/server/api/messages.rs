@@ -611,9 +611,11 @@ pub async fn stream_message(
                 }
                 // Emit usage_statistics event for client-side display
                 emit(json!({
-                    "message_type": "usage_statistics",
-                    "input_tokens":  u.input_tokens,
-                    "output_tokens": u.output_tokens,
+                    "message_type":     "usage_statistics",
+                    "input_tokens":     u.input_tokens,
+                    "output_tokens":    u.output_tokens,
+                    "cache_read_tokens": u.cache_read_tokens,
+                    "model":            u.model,
                 }))
             }
             Ok(StreamChunk::Done) => {

@@ -202,8 +202,9 @@ impl LlmProvider for OpenAiProvider {
         &self,
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
+        let req_model = req.model.clone();   // extracted before async_stream to avoid lifetime capture
         let mut body = json!({
-            "model": bare_model(&req.model),
+            "model": bare_model(&req_model),
             "messages": Self::to_openai_messages(req),
             "max_tokens": req.max_tokens,
             "stream": true,
@@ -275,10 +276,16 @@ impl LlmProvider for OpenAiProvider {
                     // Usage chunk: may arrive in any chunk, including the separate
                     // empty-choices chunk OpenAI sends after finish_reason.
                     if let Some(usage) = v.get("usage").filter(|u| !u.is_null()) {
-                        let in_tok  = usage["prompt_tokens"].as_u64().unwrap_or(0) as u32;
-                        let out_tok = usage["completion_tokens"].as_u64().unwrap_or(0) as u32;
-                        if in_tok > 0 || out_tok > 0 {
-                            yield Ok(StreamChunk::Usage(TokenUsage { input_tokens: in_tok, output_tokens: out_tok }));
+                        let in_tok   = usage["prompt_tokens"].as_u64().unwrap_or(0) as u32;
+                        let out_tok  = usage["completion_tokens"].as_u64().unwrap_or(0) as u32;
+                        let cache_tok = usage["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32;
+                        if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
+                            yield Ok(StreamChunk::Usage(TokenUsage {
+                                input_tokens:      in_tok,
+                                output_tokens:     out_tok,
+                                cache_read_tokens: cache_tok,
+                                model:             req_model.clone(),
+                            }));
                         }
                     }
                 }

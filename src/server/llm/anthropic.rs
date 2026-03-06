@@ -183,7 +183,8 @@ impl LlmProvider for AnthropicProvider {
         &self,
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
-        let body = self.build_body(req, true);
+        let body       = self.build_body(req, true);
+        let req_model  = req.model.clone();   // extracted before async_stream to avoid lifetime capture
         // Retry the HTTP handshake only; the byte stream itself is not retried
         // (partial streams can't be safely resumed without re-sending the request).
         let resp = retry_with_backoff("Anthropic::stream", 3, std::time::Duration::from_secs(1), |_| {
@@ -219,6 +220,7 @@ impl LlmProvider for AnthropicProvider {
             // Accumulate token usage across message_start + message_delta
             let mut input_tokens: u32 = 0;
             let mut output_tokens: u32 = 0;
+            let mut cache_read_tokens: u32 = 0;
 
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = match chunk {
@@ -278,9 +280,12 @@ impl LlmProvider for AnthropicProvider {
                             }
                         }
                         "message_start" => {
-                            // e.g. {"type":"message_start","message":{"usage":{"input_tokens":N}}}
+                            // e.g. {"type":"message_start","message":{"usage":{"input_tokens":N,"cache_read_input_tokens":N}}}
                             if let Some(n) = event["message"]["usage"]["input_tokens"].as_u64() {
                                 input_tokens += n as u32;
+                            }
+                            if let Some(n) = event["message"]["usage"]["cache_read_input_tokens"].as_u64() {
+                                cache_read_tokens += n as u32;
                             }
                         }
                         "message_delta" => {
@@ -290,8 +295,13 @@ impl LlmProvider for AnthropicProvider {
                             }
                         }
                         "message_stop" => {
-                            if input_tokens > 0 || output_tokens > 0 {
-                                yield Ok(StreamChunk::Usage(TokenUsage { input_tokens, output_tokens }));
+                            if input_tokens > 0 || output_tokens > 0 || cache_read_tokens > 0 {
+                                yield Ok(StreamChunk::Usage(TokenUsage {
+                                    input_tokens,
+                                    output_tokens,
+                                    cache_read_tokens,
+                                    model: req_model.clone(),
+                                }));
                             }
                             yield Ok(StreamChunk::Done);
                             break;

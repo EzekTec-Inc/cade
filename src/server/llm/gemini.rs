@@ -205,6 +205,7 @@ impl LlmProvider for GeminiProvider {
         &self,
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
+        let req_model = req.model.clone();   // extracted before async_stream to avoid lifetime capture
         let (system_text, contents) = Self::to_gemini_contents(req);
         let tools: Vec<Value> = req.tools.iter().map(|s| {
             let mut params = s["parameters"].clone();
@@ -220,7 +221,7 @@ impl LlmProvider for GeminiProvider {
             body["tools"] = json!([{"functionDeclarations": tools}]);
         }
 
-        let url = self.url(&req.model, true);
+        let url = self.url(&req_model, true);
         let resp = retry_with_backoff("Gemini::stream", 3, std::time::Duration::from_secs(1), |_| {
             let client = self.client.clone();
             let url    = url.clone();
@@ -251,10 +252,16 @@ impl LlmProvider for GeminiProvider {
 
                     // 1. Always check for usage metadata at the root if it's present
                     if let Some(usage) = v.get("usageMetadata") {
-                        let in_tok  = usage["promptTokenCount"].as_u64().unwrap_or(0) as u32;
-                        let out_tok = usage["candidatesTokenCount"].as_u64().unwrap_or(0) as u32;
-                        if in_tok > 0 || out_tok > 0 {
-                            yield Ok(StreamChunk::Usage(TokenUsage { input_tokens: in_tok, output_tokens: out_tok }));
+                        let in_tok   = usage["promptTokenCount"].as_u64().unwrap_or(0) as u32;
+                        let out_tok  = usage["candidatesTokenCount"].as_u64().unwrap_or(0) as u32;
+                        let cache_tok = usage["cachedContentTokenCount"].as_u64().unwrap_or(0) as u32;
+                        if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
+                            yield Ok(StreamChunk::Usage(TokenUsage {
+                                input_tokens:      in_tok,
+                                output_tokens:     out_tok,
+                                cache_read_tokens: cache_tok,
+                                model:             req_model.clone(),
+                            }));
                         }
                     }
 
