@@ -75,6 +75,7 @@ const SECTIONS: &[Section] = &[
         CmdEntry { cmd: "/search",        desc: "/search <query>  — search message history" },
         CmdEntry { cmd: "/usage",         desc: "Token usage this session" },
         CmdEntry { cmd: "/stats",         desc: "Full session stats — tokens, tool calls, timing, per-model breakdown" },
+        CmdEntry { cmd: "/stats model",   desc: "Per-model detail: requests, input, cache, output per model" },
         CmdEntry { cmd: "/stream",        desc: "Toggle streaming mode" },
         CmdEntry { cmd: "/hooks",         desc: "Show configured hooks" },
         CmdEntry { cmd: "/feedback",      desc: "Report issues / give feedback" },

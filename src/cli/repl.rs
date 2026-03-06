@@ -77,7 +77,8 @@ enum SlashCmd {
     Logout,
     Stream,
     Usage,
-    Stats,
+    /// /stats [model]
+    Stats(Option<String>),
     Copy,
     /// Export the current agent to a JSON file: /export [output.json]
     Export(Option<String>),
@@ -129,7 +130,7 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         "logout" => Some(SlashCmd::Logout),
         "stream" => Some(SlashCmd::Stream),
         "usage"  => Some(SlashCmd::Usage),
-        "stats"  => Some(SlashCmd::Stats),
+        "stats"  => Some(SlashCmd::Stats(arg)),
         "copy"   => Some(SlashCmd::Copy),
         "export" => Some(SlashCmd::Export(arg)),
         // Skill slash commands: /commit, /review, etc.
@@ -334,9 +335,110 @@ impl SessionStats {
                     value: format!("{cache_pct:.1}% of input tokens served from cache"),
                 });
             }
+            out.push(RenderLine::DimMsg("  /stats model  — per-model detail breakdown".to_string()));
         }
 
         out
+    }
+
+    /// Render a per-model detail table: rows = metrics, columns = models.
+    fn render_model_detail(&self) -> Vec<crate::ui::RenderLine> {
+        use crate::ui::RenderLine;
+
+        if self.per_model.is_empty() {
+            return vec![
+                RenderLine::Blank,
+                RenderLine::DimMsg("  No model usage recorded this session yet.".to_string()),
+                RenderLine::Blank,
+            ];
+        }
+
+        let fmt_tok = |n: u64| -> String {
+            if n >= 1_000_000      { format!("{:.1}M", n as f64 / 1_000_000.0) }
+            else if n >= 1_000     { format!("{:.1}K", n as f64 / 1_000.0) }
+            else                   { n.to_string() }
+        };
+
+        // Sort models by total requests descending
+        let mut models: Vec<(&String, &ModelStats)> = self.per_model.iter().collect();
+        models.sort_by(|a, b| b.1.reqs.cmp(&a.1.reqs));
+
+        // Column headers: blank label col + one col per model (strip provider prefix)
+        let mut headers = vec!["Metric".to_string()];
+        for (model, _) in &models {
+            let disp = if let Some(pos) = model.find('/') { &model[pos+1..] } else { model.as_str() };
+            headers.push(disp.to_string());
+        }
+
+        // Build rows
+        let metric_names = ["Requests", "Input", "Cache Read", "Output", "Cache %"];
+        let mut rows: Vec<Vec<String>> = metric_names.iter().map(|m| {
+            let mut row = vec![m.to_string()];
+            for (_, ms) in &models {
+                let val = match *m {
+                    "Requests"   => ms.reqs.to_string(),
+                    "Input"      => fmt_tok(ms.input_tokens),
+                    "Cache Read" => fmt_tok(ms.cache_read_tokens),
+                    "Output"     => fmt_tok(ms.output_tokens),
+                    "Cache %"    => {
+                        let total = ms.input_tokens + ms.cache_read_tokens;
+                        if total > 0 {
+                            format!("{:.1}%", 100.0 * ms.cache_read_tokens as f64 / total as f64)
+                        } else {
+                            "—".to_string()
+                        }
+                    }
+                    _ => "—".to_string(),
+                };
+                row.push(val);
+            }
+            row
+        }).collect();
+
+        // Totals row
+        let total_reqs:  u32 = models.iter().map(|(_, m)| m.reqs).sum();
+        let total_in:    u64 = models.iter().map(|(_, m)| m.input_tokens).sum();
+        let total_cache: u64 = models.iter().map(|(_, m)| m.cache_read_tokens).sum();
+        let total_out:   u64 = models.iter().map(|(_, m)| m.output_tokens).sum();
+        let total_all    = total_in + total_cache;
+        let cache_pct_total = if total_all > 0 {
+            format!("{:.1}%", 100.0 * total_cache as f64 / total_all as f64)
+        } else { "—".to_string() };
+
+        let mut totals_row = vec!["Total".to_string()];
+        for (_, ms) in &models {
+            let tot_in_model = ms.input_tokens + ms.cache_read_tokens;
+            let cpct = if tot_in_model > 0 {
+                format!("{:.1}%", 100.0 * ms.cache_read_tokens as f64 / tot_in_model as f64)
+            } else { "—".to_string() };
+            totals_row.push(format!(
+                "{}r  {}i  {}c  {}o  {}",
+                ms.reqs,
+                fmt_tok(ms.input_tokens),
+                fmt_tok(ms.cache_read_tokens),
+                fmt_tok(ms.output_tokens),
+                cpct,
+            ));
+        }
+        // For multi-model: add a grand-total column if >1 model
+        if models.len() > 1 {
+            rows[0].push(total_reqs.to_string());
+            rows[1].push(fmt_tok(total_in));
+            rows[2].push(fmt_tok(total_cache));
+            rows[3].push(fmt_tok(total_out));
+            rows[4].push(cache_pct_total);
+            headers.push("Total".to_string());
+        }
+
+        vec![
+            RenderLine::Blank,
+            RenderLine::InfoHeader("  ◆ Model Usage Detail".to_string()),
+            RenderLine::Blank,
+            RenderLine::Table { headers, rows },
+            RenderLine::Blank,
+            RenderLine::DimMsg("  /stats        — full session card".to_string()),
+            RenderLine::Blank,
+        ]
     }
 }
 
@@ -730,18 +832,27 @@ impl Repl {
                             self.tui_dim("    (no usage recorded yet — requires Anthropic/OpenAI)");
                         }
                     }
-                    SlashCmd::Stats => {
-                        // Resolve auth method and session ID for the card header
-                        let auth_method = self.settings.lock()
-                            .map(|s| if s.api_key().is_some() { "API Key".to_string() } else { "OAuth / Browser".to_string() })
-                            .unwrap_or_default();
-                        let session_id = self.conversation_id()
-                            .unwrap_or_default();
-                        let card = self.session_stats.lock()
-                            .map(|s| s.render_card(&auth_method, &session_id))
-                            .unwrap_or_else(|_| vec![crate::ui::RenderLine::DimMsg("(stats unavailable)".to_string())]);
+                    SlashCmd::Stats(arg) => {
+                        let sub = arg.as_deref().unwrap_or("").trim();
+                        let lines = match sub {
+                            "model" | "models" => {
+                                self.session_stats.lock()
+                                    .map(|s| s.render_model_detail())
+                                    .unwrap_or_else(|_| vec![crate::ui::RenderLine::DimMsg("(stats unavailable)".to_string())])
+                            }
+                            _ => {
+                                // full session card (default)
+                                let auth_method = self.settings.lock()
+                                    .map(|s| if s.api_key().is_some() { "API Key".to_string() } else { "OAuth / Browser".to_string() })
+                                    .unwrap_or_default();
+                                let session_id = self.conversation_id().unwrap_or_default();
+                                self.session_stats.lock()
+                                    .map(|s| s.render_card(&auth_method, &session_id))
+                                    .unwrap_or_else(|_| vec![crate::ui::RenderLine::DimMsg("(stats unavailable)".to_string())])
+                            }
+                        };
                         self.tui_blank();
-                        for line in card {
+                        for line in lines {
                             let _ = self.app.lock().unwrap().push(line);
                         }
                         self.tui_blank();
