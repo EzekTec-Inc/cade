@@ -1000,7 +1000,7 @@ fn render_frame(
 
     // ── Question overlay (rendered last — on top of everything) ───────────────
     if let Some(aq) = active_question {
-        let popup = popup_area(area, 72, 24);
+        let popup = popup_area(area, 50, 20);
         frame.render_widget(Clear, popup);
         render_question_card(frame, aq, popup);
     }
