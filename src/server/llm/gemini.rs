@@ -101,16 +101,41 @@ impl GeminiProvider {
         let mut system_text = None;
         let mut contents = Vec::new();
 
+        // Build a call_id → function_name lookup from all assistant messages
+        // so that tool-result messages can supply the correct function name in
+        // their `functionResponse.name` field (Gemini requires it to match the
+        // original `functionCall.name`; using a hardcoded "tool" causes 400s).
+        let mut call_id_to_name: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+        for msg in &req.messages {
+            if msg.role == "assistant" {
+                if let Some(calls) = &msg.tool_calls {
+                    for tc in calls {
+                        call_id_to_name.insert(tc.id.clone(), tc.name.clone());
+                    }
+                }
+            }
+        }
+
         for msg in &req.messages {
             match msg.role.as_str() {
                 "system" => {
                     system_text = Some(msg.content.clone());
                 }
                 "tool" => {
+                    // Resolve the actual function name from the call id.
+                    // Fall back to the call_id itself (or "tool") so we never
+                    // send an empty string which Gemini also rejects.
+                    let fn_name = msg.tool_call_id
+                        .as_deref()
+                        .and_then(|id| call_id_to_name.get(id).map(String::as_str))
+                        .or(msg.tool_call_id.as_deref())
+                        .unwrap_or("tool")
+                        .to_string();
                     contents.push(json!({
                         "role": "user",
                         "parts": [{ "functionResponse": {
-                            "name": "tool",
+                            "name": fn_name,
                             "response": { "result": msg.content }
                         }}]
                     }));
@@ -122,10 +147,14 @@ impl GeminiProvider {
                     contents.push(json!({"role": "model", "parts": calls}));
                 }
                 "assistant" => {
-                    contents.push(json!({
-                        "role": "model",
-                        "parts": [{"text": msg.content}]
-                    }));
+                    // Gemini rejects empty text parts — only add the message if
+                    // it has actual content (pure tool-call turns have none).
+                    if !msg.content.is_empty() {
+                        contents.push(json!({
+                            "role": "model",
+                            "parts": [{"text": msg.content}]
+                        }));
+                    }
                 }
                 _ => {
                     contents.push(json!({
@@ -257,10 +286,11 @@ impl LlmProvider for GeminiProvider {
                         let cache_tok = usage["cachedContentTokenCount"].as_u64().unwrap_or(0) as u32;
                         if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
                             yield Ok(StreamChunk::Usage(TokenUsage {
-                                input_tokens:      in_tok,
-                                output_tokens:     out_tok,
-                                cache_read_tokens: cache_tok,
-                                model:             req_model.clone(),
+                                input_tokens:       in_tok,
+                                output_tokens:      out_tok,
+                                cache_read_tokens:  cache_tok,
+                                cache_write_tokens: 0,
+                                model:              req_model.clone(),
                             }));
                         }
                     }

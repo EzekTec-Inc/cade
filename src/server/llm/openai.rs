@@ -114,7 +114,9 @@ impl OpenAiProvider {
             match m.role.as_str() {
                 "tool" => json!({
                     "role": "tool",
-                    "tool_call_id": m.tool_call_id,
+                    // OpenAI rejects null tool_call_id — fall back to empty string
+                    // so the message is at least structurally valid.
+                    "tool_call_id": m.tool_call_id.as_deref().unwrap_or(""),
                     "content": m.content
                 }),
                 "assistant" if m.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()) => {
@@ -123,7 +125,9 @@ impl OpenAiProvider {
                         "type": "function",
                         "function": { "name": tc.name, "arguments": tc.arguments.to_string() }
                     })).collect();
-                    json!({"role": "assistant", "content": m.content, "tool_calls": tcs})
+                    // OpenAI requires `content` to be null (not "") when tool_calls present
+                    let content = if m.content.is_empty() { Value::Null } else { Value::String(m.content.clone()) };
+                    json!({"role": "assistant", "content": content, "tool_calls": tcs})
                 }
                 _ => json!({"role": m.role, "content": m.content}),
             }
@@ -238,9 +242,11 @@ impl LlmProvider for OpenAiProvider {
         let mut byte_stream = resp.bytes_stream();
         let s = stream! {
             let mut buf = String::new();
-            let mut tool_id = String::new();
-            let mut tool_name = String::new();
-            let mut tool_args = String::new();
+            // OpenAI streams tool calls with an `index` field to distinguish
+            // parallel calls.  Use a BTreeMap keyed by index so multiple
+            // tool calls in one turn are accumulated and emitted separately.
+            let mut tool_map: std::collections::BTreeMap<usize, (String, String, String)> =
+                std::collections::BTreeMap::new();
 
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(anyhow::anyhow!("{e}")); break; } };
@@ -259,16 +265,24 @@ impl LlmProvider for OpenAiProvider {
                     }
                     if let Some(tcs) = delta["tool_calls"].as_array() {
                         for tc in tcs {
-                            if let Some(id) = tc["id"].as_str() { tool_id = id.to_string(); }
-                            if let Some(n) = tc["function"]["name"].as_str() { tool_name = n.to_string(); }
-                            if let Some(a) = tc["function"]["arguments"].as_str() { tool_args.push_str(a); }
+                            // `index` distinguishes parallel tool calls in one stream
+                            let idx = tc["index"].as_u64().unwrap_or(0) as usize;
+                            let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
+                            if let Some(id) = tc["id"].as_str() { entry.0 = id.to_string(); }
+                            if let Some(n) = tc["function"]["name"].as_str() { entry.1 = n.to_string(); }
+                            if let Some(a) = tc["function"]["arguments"].as_str() { entry.2.push_str(a); }
                         }
                     }
                     if let Some("stop" | "tool_calls") = v["choices"][0]["finish_reason"].as_str() {
-                        if !tool_name.is_empty() {
-                            let args = serde_json::from_str(&tool_args).unwrap_or_default();
-                            yield Ok(StreamChunk::ToolCall(LlmToolCall { id: tool_id.clone(), name: tool_name.clone(), arguments: args }));
-                            tool_name.clear(); tool_id.clear(); tool_args.clear();
+                        // Emit every accumulated tool call in index order
+                        let calls: Vec<(String, String, String)> =
+                            tool_map.iter().map(|(_, v)| v.clone()).collect();
+                        tool_map.clear();
+                        for (id, name, args_str) in calls {
+                            if !name.is_empty() {
+                                let args = serde_json::from_str(&args_str).unwrap_or_default();
+                                yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args }));
+                            }
                         }
                         // Don't return here — OpenAI sends usage in a separate chunk
                         // before [DONE] when stream_options.include_usage=true.
@@ -281,10 +295,11 @@ impl LlmProvider for OpenAiProvider {
                         let cache_tok = usage["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32;
                         if in_tok > 0 || out_tok > 0 || cache_tok > 0 {
                             yield Ok(StreamChunk::Usage(TokenUsage {
-                                input_tokens:      in_tok,
-                                output_tokens:     out_tok,
-                                cache_read_tokens: cache_tok,
-                                model:             req_model.clone(),
+                                input_tokens:       in_tok,
+                                output_tokens:      out_tok,
+                                cache_read_tokens:  cache_tok,
+                                cache_write_tokens: 0,
+                                model:              req_model.clone(),
                             }));
                         }
                     }
@@ -292,6 +307,16 @@ impl LlmProvider for OpenAiProvider {
             }
             // Byte stream exhausted without explicit [DONE] — always send Done
             // so the SSE client doesn't fall back to the blocking endpoint.
+            // Also flush any tool calls that arrived without an explicit finish_reason
+            // (some OpenAI-compatible providers omit it).
+            let remaining: Vec<(String, String, String)> =
+                tool_map.iter().map(|(_, v)| v.clone()).collect();
+            for (id, name, args_str) in remaining {
+                if !name.is_empty() {
+                    let args = serde_json::from_str(&args_str).unwrap_or_default();
+                    yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args }));
+                }
+            }
             yield Ok(StreamChunk::Done);
         };
         Ok(Box::pin(s))
