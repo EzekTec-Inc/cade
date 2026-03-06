@@ -208,109 +208,135 @@ impl SessionStats {
         e.output_tokens += output;
     }
 
-    /// Render a nicely formatted stats card as a Vec of display strings.
-    fn render_card(&self, auth_method: &str, session_id: &str) -> Vec<String> {
+    /// Render a structured stats card as a Vec of RenderLine for the TUI.
+    fn render_card(&self, auth_method: &str, session_id: &str) -> Vec<crate::ui::RenderLine> {
+        use crate::ui::RenderLine;
+
         let wall_secs  = self.started_at.elapsed().as_secs();
         let agent_secs = self.agent_active_ms / 1000;
-        let api_secs   = self.api_time_ms  / 1000;
+        let api_secs   = self.api_time_ms / 1000;
         let tool_secs  = self.tool_time_ms / 1000;
 
         let fmt_dur = |s: u64| -> String {
-            if s >= 3600 { format!("{}h {:02}m {:02}s", s/3600, (s%3600)/60, s%60) }
-            else if s >= 60 { format!("{}m {:02}s", s/60, s%60) }
-            else { format!("{}s", s) }
+            if s >= 3600      { format!("{}h {:02}m {:02}s", s/3600, (s%3600)/60, s%60) }
+            else if s >= 60   { format!("{}m {:02}s", s/60, s%60) }
+            else              { format!("{}s", s) }
         };
         let fmt_tok = |n: u64| -> String {
             if n >= 1_000_000 { format!("{:.1}M", n as f64 / 1_000_000.0) }
             else if n >= 1_000 { format!("{:.1}K", n as f64 / 1_000.0) }
-            else { n.to_string() }
+            else               { n.to_string() }
         };
 
-        let total_ok  = self.tool_calls_ok;
-        let total_err = self.tool_calls_err;
-        let total     = self.tool_calls_total;
+        let total_ok    = self.tool_calls_ok;
+        let total_err   = self.tool_calls_err;
+        let total       = self.tool_calls_total;
         let success_pct = if total > 0 { 100.0 * total_ok as f64 / total as f64 } else { 0.0 };
         let agree_pct   = if self.reviewed > 0 { 100.0 * self.approved as f64 / self.reviewed as f64 } else { 100.0 };
 
-        let agent_pct = if agent_secs > 0 {
-            let api_p  = 100.0 * api_secs  as f64 / agent_secs as f64;
-            let tool_p = 100.0 * tool_secs as f64 / agent_secs as f64;
-            Some((api_p, tool_p))
-        } else { None };
-
-        // Compute total cache savings
         let total_input: u64 = self.per_model.values().map(|m| m.input_tokens).sum();
         let total_cache: u64 = self.per_model.values().map(|m| m.cache_read_tokens).sum();
         let cache_pct = if total_input + total_cache > 0 {
             100.0 * total_cache as f64 / (total_input + total_cache) as f64
         } else { 0.0 };
 
-        let mut lines = Vec::new();
-        let w = 54usize; // inner width
-        let bar = "─".repeat(w);
+        let mut out: Vec<RenderLine> = Vec::new();
 
-        lines.push(format!("╭─ Session Stats {bar}╮", bar = "─".repeat(w.saturating_sub(16))));
-
-        let row = |label: &str, val: &str| -> String {
-            let pad = w.saturating_sub(label.len() + val.len() + 2);
-            format!("│  {label}{}{val}  │", " ".repeat(pad))
-        };
+        // ── Header ──────────────────────────────────────────────────────────
+        out.push(RenderLine::InfoHeader("  ◆ Session Stats".to_string()));
+        out.push(RenderLine::Blank);
 
         if !session_id.is_empty() {
-            lines.push(row("Session ID:    ", &format!("{:.16}…", session_id)));
+            let id_disp = if session_id.len() > 20 {
+                format!("{}…", &session_id[..20])
+            } else {
+                session_id.to_string()
+            };
+            out.push(RenderLine::Pair { label: "Session ID".to_string(),  value: id_disp });
         }
         if !auth_method.is_empty() {
-            lines.push(row("Auth Method:   ", auth_method));
+            out.push(RenderLine::Pair { label: "Auth Method".to_string(), value: auth_method.to_string() });
         }
 
-        lines.push(format!("│  {bar}  │", bar = "─".repeat(w.saturating_sub(2))));
-        lines.push(row("Tool Calls:", &format!("{total}  ( ✓ {total_ok}  ✗ {total_err} )")));
-        lines.push(row("Success Rate:", &format!("{success_pct:.1}%")));
+        // ── Tool Calls ──────────────────────────────────────────────────────
+        out.push(RenderLine::Blank);
+        out.push(RenderLine::InfoHeader("  Tool Calls".to_string()));
+        out.push(RenderLine::Pair {
+            label: "Total".to_string(),
+            value: format!("{}  (✓ {}  ✗ {})", total, total_ok, total_err),
+        });
+        out.push(RenderLine::Pair {
+            label: "Success Rate".to_string(),
+            value: format!("{success_pct:.1}%"),
+        });
         if self.reviewed > 0 {
-            lines.push(row("User Agreement:", &format!("{agree_pct:.1}% ({} reviewed)", self.reviewed)));
+            out.push(RenderLine::Pair {
+                label: "User Approval".to_string(),
+                value: format!("{agree_pct:.1}%  ({} reviewed)", self.reviewed),
+            });
         }
         if self.lines_added != 0 || self.lines_removed != 0 {
-            lines.push(row("Code Changes:", &format!("+{} -{}", self.lines_added, self.lines_removed.abs())));
+            out.push(RenderLine::Pair {
+                label: "Code Changes".to_string(),
+                value: format!("+{}  −{}", self.lines_added, self.lines_removed.abs()),
+            });
         }
 
-        lines.push(format!("│  {bar}  │", bar = "─".repeat(w.saturating_sub(2))));
-        lines.push(row("  Performance", ""));
-        lines.push(row("Wall Time:    ", &fmt_dur(wall_secs)));
-        lines.push(row("Agent Active: ", &fmt_dur(agent_secs)));
-        if let Some((api_p, tool_p)) = agent_pct {
-            lines.push(row("  » API Time: ", &format!("{}  ({:.1}%)", fmt_dur(api_secs), api_p)));
-            lines.push(row("  » Tool Time:", &format!("{}  ({:.1}%)", fmt_dur(tool_secs), tool_p)));
+        // ── Performance ─────────────────────────────────────────────────────
+        out.push(RenderLine::Blank);
+        out.push(RenderLine::InfoHeader("  Performance".to_string()));
+        out.push(RenderLine::Pair { label: "Wall Time".to_string(),    value: fmt_dur(wall_secs) });
+        out.push(RenderLine::Pair { label: "Agent Active".to_string(), value: fmt_dur(agent_secs) });
+        if agent_secs > 0 {
+            let api_p  = 100.0 * api_secs  as f64 / agent_secs as f64;
+            let tool_p = 100.0 * tool_secs as f64 / agent_secs as f64;
+            out.push(RenderLine::Pair {
+                label: "  » API Time".to_string(),
+                value: format!("{}  ({:.1}%)", fmt_dur(api_secs), api_p),
+            });
+            out.push(RenderLine::Pair {
+                label: "  » Tool Time".to_string(),
+                value: format!("{}  ({:.1}%)", fmt_dur(tool_secs), tool_p),
+            });
         }
 
+        // ── Model Usage table ───────────────────────────────────────────────
         if !self.per_model.is_empty() {
-            lines.push(format!("│  {bar}  │", bar = "─".repeat(w.saturating_sub(2))));
-            lines.push(row("  Model Usage", ""));
-            let hdr = format!("  {:<28}  {:>4}  {:>6}  {:>6}  {:>7}", "Model", "Reqs", "In", "Cache", "Out");
-            lines.push(format!("│{hdr:<width$}│", width = w + 2));
-            let sep = format!("│  {bar}  │", bar = "─".repeat(w.saturating_sub(2)));
-            lines.push(sep);
-            // Sort by total reqs desc
+            out.push(RenderLine::Blank);
+            out.push(RenderLine::InfoHeader("  Model Usage".to_string()));
+
             let mut models: Vec<_> = self.per_model.iter().collect();
             models.sort_by(|a, b| b.1.reqs.cmp(&a.1.reqs));
-            for (model, ms) in &models {
-                // strip provider prefix for display
+
+            let headers = vec![
+                "Model".to_string(),
+                "Reqs".to_string(),
+                "Input".to_string(),
+                "Cache".to_string(),
+                "Output".to_string(),
+            ];
+            let rows: Vec<Vec<String>> = models.iter().map(|(model, ms)| {
                 let disp = if let Some(pos) = model.find('/') { &model[pos+1..] } else { model.as_str() };
-                let disp = if disp.len() > 28 { &disp[..28] } else { disp };
-                let row_s = format!("  {:<28}  {:>4}  {:>6}  {:>6}  {:>7}",
-                    disp, ms.reqs,
+                vec![
+                    disp.to_string(),
+                    ms.reqs.to_string(),
                     fmt_tok(ms.input_tokens),
                     fmt_tok(ms.cache_read_tokens),
-                    fmt_tok(ms.output_tokens));
-                lines.push(format!("│{row_s:<width$}│", width = w + 2));
-            }
+                    fmt_tok(ms.output_tokens),
+                ]
+            }).collect();
+
+            out.push(RenderLine::Table { headers, rows });
+
             if total_cache > 0 {
-                lines.push(format!("│  {bar}  │", bar = "─".repeat(w.saturating_sub(2))));
-                lines.push(row("Cache saved:", &format!("{cache_pct:.1}% of input tokens")));
+                out.push(RenderLine::Pair {
+                    label: "Cache Hit Rate".to_string(),
+                    value: format!("{cache_pct:.1}% of input tokens served from cache"),
+                });
             }
         }
 
-        lines.push(format!("╰{bar}╯", bar = "─".repeat(w + 2)));
-        lines
+        out
     }
 }
 
@@ -713,10 +739,10 @@ impl Repl {
                             .unwrap_or_default();
                         let card = self.session_stats.lock()
                             .map(|s| s.render_card(&auth_method, &session_id))
-                            .unwrap_or_else(|_| vec!["(stats unavailable)".to_string()]);
+                            .unwrap_or_else(|_| vec![crate::ui::RenderLine::DimMsg("(stats unavailable)".to_string())]);
                         self.tui_blank();
                         for line in card {
-                            self.tui_dim(line);
+                            let _ = self.app.lock().unwrap().push(line);
                         }
                         self.tui_blank();
                     }
