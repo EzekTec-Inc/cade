@@ -481,6 +481,186 @@ impl TuiApp {
         Ok(answer)
     }
 
+    /// Blocking question modal — owns its own `event::poll`/`event::read` loop.
+    ///
+    /// Safe to call from `tokio::task::spawn_blocking`.  Does NOT use a
+    /// oneshot channel and does NOT need the tick task to deliver key events.
+    /// Sets `active_question.tx = None` so the tick task's spin-wait branch
+    /// is never entered for this modal (Stage 3 guard).
+    ///
+    /// This is the canonical path for `prompt_approval` (tool-call approval).
+    pub fn ask_question_blocking(
+        &mut self,
+        question: &crate::ui::question::Question,
+    ) -> Result<Option<crate::ui::question::QuestionAnswer>> {
+        let n_real      = question.options.len();
+        let has_other   = question.allow_other;
+        let has_submit  = question.multi_select;
+        let total_items = n_real + usize::from(has_other) + usize::from(has_submit);
+        let other_idx   = if has_other  { n_real } else { usize::MAX };
+        let submit_idx  = if has_submit { n_real + usize::from(has_other) } else { usize::MAX };
+
+        let mut cursor_pos:  usize      = 0;
+        let mut custom_text: String     = String::new();
+        let mut checked:     Vec<bool>  = vec![false; n_real];
+
+        self.scroll = 0;
+
+        let answer: Option<crate::ui::question::QuestionAnswer> = 'widget: loop {
+            // Render with tx = None — tick task will not intercept events.
+            self.active_question = Some(ActiveQuestionState {
+                draw_state: ActiveQuestionDrawState {
+                    question:    question.clone(),
+                    cursor_pos,
+                    custom_text: custom_text.clone(),
+                    checked:     checked.clone(),
+                    n_real,
+                    has_other,
+                    has_submit,
+                    total_items,
+                    other_idx,
+                    submit_idx,
+                },
+                tx: None,   // ← blocking path: no channel needed
+            });
+
+            self.draw()?;
+
+            if !event::poll(std::time::Duration::from_millis(50))? {
+                continue;
+            }
+            match event::read()? {
+                Event::Key(KeyEvent { code, modifiers, .. }) => {
+                    match (code, modifiers) {
+                        (KeyCode::Esc, _)
+                        | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                            break 'widget None;
+                        }
+                        (KeyCode::Up, _) => {
+                            if cursor_pos > 0 { cursor_pos -= 1; }
+                        }
+                        (KeyCode::Down, _) => {
+                            if cursor_pos + 1 < total_items { cursor_pos += 1; }
+                        }
+                        (KeyCode::Tab, _) => {
+                            cursor_pos = (cursor_pos + 1) % total_items;
+                        }
+                        (KeyCode::BackTab, _) => {
+                            cursor_pos = if cursor_pos == 0 {
+                                total_items - 1
+                            } else {
+                                cursor_pos - 1
+                            };
+                        }
+                        (KeyCode::Char(c), KeyModifiers::NONE)
+                            if c.is_ascii_digit() && c != '0' =>
+                        {
+                            let idx = (c as usize) - ('1' as usize);
+                            if idx < total_items {
+                                if question.multi_select {
+                                    if idx < n_real {
+                                        checked[idx] = !checked[idx];
+                                        cursor_pos = idx;
+                                    }
+                                } else if idx != other_idx {
+                                    let label = question.options[idx].label.clone();
+                                    break 'widget Some(
+                                        crate::ui::question::QuestionAnswer::Single(label),
+                                    );
+                                } else {
+                                    cursor_pos = idx;
+                                }
+                            }
+                        }
+                        (KeyCode::Backspace, _) if cursor_pos == other_idx => {
+                            custom_text.pop();
+                        }
+                        (KeyCode::Enter, _) => {
+                            if question.multi_select {
+                                if cursor_pos == submit_idx {
+                                    let selected: Vec<String> = checked
+                                        .iter()
+                                        .enumerate()
+                                        .filter(|(_, c)| **c)
+                                        .map(|(i, _)| question.options[i].label.clone())
+                                        .collect();
+                                    if !selected.is_empty() {
+                                        break 'widget Some(
+                                            crate::ui::question::QuestionAnswer::Multi(selected),
+                                        );
+                                    }
+                                } else if cursor_pos == other_idx {
+                                    if !custom_text.is_empty() {
+                                        break 'widget Some(
+                                            crate::ui::question::QuestionAnswer::Multi(vec![
+                                                custom_text.clone(),
+                                            ]),
+                                        );
+                                    }
+                                } else if cursor_pos < n_real {
+                                    checked[cursor_pos] = !checked[cursor_pos];
+                                }
+                            } else if cursor_pos == other_idx {
+                                if !custom_text.is_empty() {
+                                    break 'widget Some(
+                                        crate::ui::question::QuestionAnswer::Single(
+                                            custom_text.clone(),
+                                        ),
+                                    );
+                                }
+                            } else {
+                                let label = question.options[cursor_pos].label.clone();
+                                break 'widget Some(
+                                    crate::ui::question::QuestionAnswer::Single(label),
+                                );
+                            }
+                        }
+                        (KeyCode::Char(c), m)
+                            if cursor_pos == other_idx
+                                && (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT) =>
+                        {
+                            custom_text.push(c);
+                        }
+                        _ => {}
+                    }
+                }
+                Event::Mouse(m) => match m.kind {
+                    MouseEventKind::ScrollUp => {
+                        self.scroll = self.scroll.saturating_add(3);
+                    }
+                    MouseEventKind::ScrollDown => {
+                        self.scroll = self.scroll.saturating_sub(3);
+                    }
+                    _ => {}
+                },
+                _ => {}
+            }
+        };
+
+        self.active_question = None;
+
+        if let Some(ref ans) = answer {
+            self.push(RenderLine::QuestionResult {
+                header: question.header.clone(),
+                answer: ans.as_str(),
+            })?;
+        } else {
+            self.draw()?; // clear overlay on cancel
+        }
+
+        Ok(answer)
+    }
+
+    /// Async question via oneshot channel.
+    ///
+    /// ONLY valid when an external event driver (the tick task's spin-wait
+    /// loop) is concurrently calling `handle_question_key`.  For tool-call
+    /// approval use `ask_question_blocking` via `spawn_blocking` instead.
+    #[deprecated(
+        note = "Use ask_question_blocking (via spawn_blocking) for prompt_approval. \
+                ask_question_async is only safe when the tick-task spin-wait is \
+                the sole event driver and no async lock contention can occur."
+    )]
     pub fn ask_question_async(
         &mut self,
         question: crate::ui::question::Question,

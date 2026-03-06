@@ -2206,7 +2206,19 @@ impl Repl {
                             loop {
                                 if tick_cancel.load(Ordering::SeqCst) { break; }
                                 if let Ok(mut app) = tick_app.try_lock() {
-                                    if app.active_question.is_some() {
+                                    // Stage 3 fix: only route key events through
+                                    // handle_question_key when the active question was
+                                    // opened via ask_question_async (tx.is_some()).
+                                    // When tx is None, the modal is owned by
+                                    // ask_question_blocking running on a spawn_blocking
+                                    // thread with its own event::read loop — the tick
+                                    // task must not consume the event or it will be
+                                    // lost from the blocking thread's event::read.
+                                    let has_async_question = app.active_question
+                                        .as_ref()
+                                        .map_or(false, |aq| aq.tx.is_some());
+
+                                    if has_async_question {
                                         if let Event::Key(k) = evt { app.handle_question_key(k); }
                                     } else if let Event::Key(k) = evt {
                                         match (k.code, k.modifiers) {
@@ -2878,18 +2890,40 @@ impl Repl {
             progress: None,
         };
 
-        let rx = {
-            let mut app = self.app.lock().unwrap();
-            app.ask_question_async(q)?
-        };
+        // ── Stage 1 fix: use spawn_blocking + ask_question_blocking ─────────────
+        //
+        // Previously this called ask_question_async + rx.await while holding (or
+        // re-acquiring) the app Mutex from the async runtime.  The tick task's
+        // spin-wait also competed for that same Mutex to call handle_question_key
+        // → tx.send.  Under any transient lock contention the oneshot receiver
+        // never resolved, hanging the turn indefinitely.
+        //
+        // ask_question_blocking owns its own event::poll/event::read loop and
+        // runs on a dedicated blocking thread (spawn_blocking), so:
+        //   • The async runtime is never blocked.
+        //   • The app Mutex is held only inside the blocking thread — no
+        //     contention with the async side between poll iterations.
+        //   • The tick task sees active_question.tx == None and skips its
+        //     handle_question_key branch (Stage 3 guard).
+        //   • add_session_allow is called before execute_tool proceeds, so
+        //     back-to-back tool calls of the same type are auto-approved (B3 fix).
+        let app_arc = self.app.clone();
+        let q_owned = q;   // already owned — move into closure
 
-        let qa = rx.await.unwrap_or(None);
+        let qa = tokio::task::spawn_blocking(move || {
+            let mut app = app_arc.lock().unwrap();
+            app.ask_question_blocking(&q_owned)
+        })
+        .await
+        .map_err(|e| anyhow::anyhow!("approval task panicked: {e}"))??;
 
         match qa {
             None => Ok(false), // Esc / Ctrl+C = deny
             Some(answer) => {
                 let label = answer.as_str();
                 if label.starts_with("Yes, don't") {
+                    // Store allow rule BEFORE returning so that any immediately
+                    // following tool call of the same type is auto-approved (B3).
                     self.permissions.add_session_allow(tool_name);
                     Ok(true)
                 } else if label.starts_with("Yes") {
@@ -3015,12 +3049,16 @@ impl Repl {
                 progress: if total > 1 { Some((i + 1, total)) } else { None },
             };
 
-            let rx = {
-                let mut app = self.app.lock().unwrap();
-                app.ask_question_async(q)?
-            };
-
-            let qa = rx.await.unwrap_or(None);
+            // Use spawn_blocking + ask_question_blocking (same fix as prompt_approval):
+            // avoids async/Mutex deadlock between rx.await and the tick-task spin-wait.
+            let app_arc = self.app.clone();
+            let q_owned = q;
+            let qa = tokio::task::spawn_blocking(move || {
+                let mut app = app_arc.lock().unwrap();
+                app.ask_question_blocking(&q_owned)
+            })
+            .await
+            .map_err(|e| anyhow::anyhow!("ask_user_question task panicked: {e}"))??;
 
             match qa {
                 None => {
