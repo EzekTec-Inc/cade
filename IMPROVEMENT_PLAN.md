@@ -51,7 +51,7 @@ Status legend: `[ ]` = not started · `[~]` = in progress · `[x]` = done
 ---
 
 ### H-01 · Parallel tool dispatch (concurrent tool calls)
-**Status:** `[ ]`  
+**Status:** `[x]`
 **Files:** `src/cli/headless.rs:143`, `src/cli/repl.rs` (tool call loop)  
 **Problem:** When the LLM returns multiple tool calls in one response they are executed sequentially. A response with 4 independent file-read calls takes 4× longer than necessary.  
 **Fix:**
@@ -63,7 +63,7 @@ Status legend: `[ ]` = not started · `[~]` = in progress · `[x]` = done
 ---
 
 ### H-02 · MCP server reconnect on crash
-**Status:** `[ ]`  
+**Status:** `[x]`
 **Files:** `src/mcp/mod.rs`  
 **Problem:** If an MCP server crashes mid-session, `McpManager::call_tool()` returns `Err("MCP call failed")` with no recovery. The tool silently vanishes until CADE restarts.  
 **Fix:**
@@ -76,7 +76,7 @@ Status legend: `[ ]` = not started · `[~]` = in progress · `[x]` = done
 ---
 
 ### H-03 · Headless mode global timeout
-**Status:** `[ ]`  
+**Status:** `[x]`
 **Files:** `src/cli/headless.rs`, `src/cli/args.rs`  
 **Problem:** `run_headless()` has no overall timeout. A runaway agent in CI can block a pipeline indefinitely. There is no `--timeout-secs` flag.  
 **Fix:**
@@ -88,7 +88,7 @@ Status legend: `[ ]` = not started · `[~]` = in progress · `[x]` = done
 ---
 
 ### H-04 · Configurable server port propagated to client
-**Status:** `[ ]`  
+**Status:** `[x]`
 **Files:** `src/server/config.rs:101–104`, `src/settings/manager.rs:253`, `src/main.rs`  
 **Problem:** `CADE_SERVER_PORT` is already read in `config.rs` for the server, but the client hardcodes `http://localhost:8284` as its fallback in `settings/manager.rs`. If a user sets `CADE_SERVER_PORT=9000` for the server, the client still connects to 8284.  
 **Fix:**
@@ -109,7 +109,7 @@ format!("http://localhost:{port}")
 ---
 
 ### M-01 · Subagent concurrency cap
-**Status:** `[ ]`  
+**Status:** `[x]`
 **Files:** `src/subagents/mod.rs`  
 **Problem:** No limit on how many subagents can run in parallel. A single prompt could spawn unbounded concurrent LLM calls, exhausting API rate limits or OOM.  
 **Fix:**
@@ -120,7 +120,7 @@ format!("http://localhost:{port}")
 ---
 
 ### M-02 · Live skill file watcher
-**Status:** `[ ]`  
+**Status:** `[x]`
 **Files:** `src/skills/mod.rs`, `src/cli/repl.rs` (`/skills reload` handler)  
 **Problem:** Skills are discovered once at startup via `discover_all_skills()`. Adding or editing a SKILL.MD requires restarting CADE. `/skills reload` exists in the UI but doesn't auto-trigger.  
 **Fix:**
@@ -131,7 +131,7 @@ format!("http://localhost:{port}")
 ---
 
 ### M-03 · Agent export / import
-**Status:** `[ ]`  
+**Status:** `[x]`
 **Files:** `src/cli/args.rs`, `src/cli/repl.rs`, `src/server/api/agents.rs`, `src/server/storage/sqlite.rs`  
 **Problem:** Agents exist only in `~/.cade/cade.db`. No portability — can't share an agent, move it to another machine, or back it up without copying the whole DB.  
 **Fix:**
@@ -144,7 +144,7 @@ format!("http://localhost:{port}")
 ---
 
 ### M-04 · Semantic memory / conversation search
-**Status:** `[ ]`  
+**Status:** `[x]`
 **Files:** `src/server/storage/sqlite.rs`, `src/cli/repl.rs` (`/search` handler), `src/server/api/messages.rs`  
 **Problem:** `/search` does a simple `LIKE '%query%'` SQL query on message content. No ranking, no relevance, no semantic understanding. Long-running agents lose practical access to older context.  
 **Fix (pragmatic — no external service):**
@@ -157,7 +157,7 @@ format!("http://localhost:{port}")
 ---
 
 ### M-05 · Rate limiting on API endpoints
-**Status:** `[ ]`  
+**Status:** `[x]`
 **Files:** `src/server/api/mod.rs`, `src/server/mod.rs`  
 **Problem:** No rate limiting on any REST endpoint. A buggy client or runaway script could flood the server with LLM calls.  
 **Fix:**
@@ -173,7 +173,7 @@ format!("http://localhost:{port}")
 ---
 
 ### L-01 · Replace hand-rolled regex in hook matcher
-**Status:** `[ ]`  
+**Status:** `[x]`  
 **Files:** `src/hooks/mod.rs:292–306`  
 **Problem:** `regex_match()` implements its own `|` alternation and `.*` wildcard. Can't express `Bash(git *)` or `Read(src/**/*.rs)`. Power users will hit this ceiling quickly.  
 **Fix:**
@@ -185,7 +185,7 @@ format!("http://localhost:{port}")
 ---
 
 ### L-02 · Consistent startup logging via tracing
-**Status:** `[ ]`  
+**Status:** `[x]`  
 **Files:** `src/main.rs:400,435,464`  
 **Problem:** `eprintln!("cade-server not running — starting…")`, `"cade-server ready."`, `"Connected to cade-server…"` go to raw stderr, bypassing the `tracing` subscriber. Can't be filtered or redirected by `RUST_LOG`.  
 **Fix:**
@@ -196,7 +196,7 @@ format!("http://localhost:{port}")
 ---
 
 ### L-03 · Timestamps in AgentResponse API
-**Status:** `[ ]`  
+**Status:** `[x]`  
 **Files:** `src/server/api/agents.rs:39–46`, `src/server/storage/sqlite.rs`  
 **Problem:** `AgentResponse` omits `created_at` and `updated_at`. Clients can't sort agents by recency. The fields exist in `AgentRow` but are not serialised.  
 **Fix:**
@@ -207,7 +207,7 @@ format!("http://localhost:{port}")
 ---
 
 ### L-04 · Versioning + CHANGELOG
-**Status:** `[ ]`  
+**Status:** `[x]`  
 **Files:** `Cargo.toml`, `CHANGELOG.md` (new)  
 **Problem:** `Cargo.toml` is at `0.1.0` with no version strategy. The client binary and server binary must be compatible — no mechanism to detect or enforce this.  
 **Fix:**
@@ -235,10 +235,10 @@ format!("http://localhost:{port}")
 | M-03 | Agent export / import | 🟡 Medium | `[x]` |
 | M-04 | Semantic memory / search | 🟡 Medium | `[x]` |
 | M-05 | API rate limiting | 🟡 Medium | `[x]` |
-| L-01 | Real regex in hook matcher | 🟢 Low | `[ ]` |
-| L-02 | Consistent startup logging | 🟢 Low | `[ ]` |
-| L-03 | Timestamps in AgentResponse | 🟢 Low | `[ ]` |
-| L-04 | Versioning + CHANGELOG | 🟢 Low | `[ ]` |
+| L-01 | Real regex in hook matcher | 🟢 Low | `[x]` |
+| L-02 | Consistent startup logging | 🟢 Low | `[x]` |
+| L-03 | Timestamps in AgentResponse | 🟢 Low | `[x]` |
+| L-04 | Versioning + CHANGELOG | 🟢 Low | `[x]` |
 
 ---
 

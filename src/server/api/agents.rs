@@ -43,16 +43,26 @@ pub struct AgentResponse {
     pub model: Option<String>,
     pub description: Option<String>,
     pub system_prompt: Option<String>,
+    /// ISO-8601 creation timestamp (e.g. "2026-03-06T14:22:01Z").
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
 }
 
 impl From<AgentRow> for AgentResponse {
     fn from(r: AgentRow) -> Self {
+        let created_at = r.created_at.map(|ts| {
+            use chrono::{DateTime, Utc};
+            DateTime::<Utc>::from_timestamp(ts, 0)
+                .map(|dt| dt.format("%Y-%m-%dT%H:%M:%SZ").to_string())
+                .unwrap_or_else(|| ts.to_string())
+        });
         Self {
             id: r.id,
             name: r.name,
             model: Some(r.model),
             description: r.description,
             system_prompt: r.system_prompt,
+            created_at,
         }
     }
 }
@@ -76,6 +86,7 @@ pub async fn create_agent(
         model: body.model.clone(),
         description: body.description.clone(),
         system_prompt: Some(system_prompt),
+        created_at: None,  // populated by DB via now_ts()
     };
 
     sqlite::create_agent(&state.db, &row).map_err(|e| server_err(e.to_string()))?;

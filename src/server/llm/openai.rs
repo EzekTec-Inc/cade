@@ -280,7 +280,10 @@ impl LlmProvider for OpenAiProvider {
                         tool_map.clear();
                         for (id, name, args_str) in calls {
                             if !name.is_empty() {
-                                let args = serde_json::from_str(&args_str).unwrap_or_default();
+                                let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
+                                    tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
+                                    serde_json::Value::Object(Default::default())
+                                });
                                 yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args }));
                             }
                         }

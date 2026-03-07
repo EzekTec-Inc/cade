@@ -290,19 +290,15 @@ fn matcher_matches(matcher: &Option<String>, tool_name: &str) -> bool {
 }
 
 fn regex_match(pattern: &str, text: &str) -> bool {
-    // Support "|" alternation and ".*" wildcard without pulling in regex crate
-    pattern.split('|').any(|part| {
-        let part = part.trim();
-        if part == "*" || part.is_empty() {
-            true
-        } else if part.ends_with(".*") {
-            let prefix = &part[..part.len() - 2];
-            text.starts_with(prefix)
-        } else {
-            // Case-insensitive exact match
-            part.eq_ignore_ascii_case(text)
-        }
-    })
+    // Use the regex crate for full pattern support (anchoring, character classes,
+    // groups, etc.).  Compile on each call — hooks are checked on tool events, not
+    // in hot loops, so per-call compilation is acceptable.
+    // Fall back to a plain case-insensitive substring match if the pattern is not
+    // valid regex so that simple literal matchers still work without escaping.
+    match regex::Regex::new(pattern) {
+        Ok(re) => re.is_match(text),
+        Err(_) => text.to_lowercase().contains(&pattern.to_lowercase()),
+    }
 }
 
 // ── Command runner ────────────────────────────────────────────────────────────

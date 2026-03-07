@@ -941,6 +941,9 @@ fn display_tool_name(name: &str) -> String {
         "copy_file"                                           => "Copy",
         "update_memory" | "memory"                            => "Memory",
         "load_skill"                                          => "Skill",
+        "install_skill"                                       => "Install Skill",
+        "run_skill_script"                                    => "Run Script",
+        "load_skill_ref"                                      => "Skill Ref",
         "run_subagent"                                        => "Agent",
         other => {
             // Capitalize first letter, leave rest unchanged

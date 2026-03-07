@@ -217,6 +217,13 @@ async fn build_context(
         // messages[0] is always the system prompt — remove messages[1]
         messages.remove(1);
     }
+    // Repair: trimming may have left a non-user turn as the first content message
+    // (e.g. an assistant(tool_calls) whose preceding user turn was trimmed away).
+    // All providers require the conversation to begin with a user turn; remove
+    // any leading non-user messages until one is found or only 2 messages remain.
+    while messages.len() > 2 && messages[1].role != "user" {
+        messages.remove(1);
+    }
 
     // Tool schemas — use agent-specific tools if wired, else all tools
     let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, agent_id)
@@ -611,11 +618,12 @@ pub async fn stream_message(
                 }
                 // Emit usage_statistics event for client-side display
                 emit(json!({
-                    "message_type":     "usage_statistics",
-                    "input_tokens":     u.input_tokens,
-                    "output_tokens":    u.output_tokens,
-                    "cache_read_tokens": u.cache_read_tokens,
-                    "model":            u.model,
+                    "message_type":      "usage_statistics",
+                    "input_tokens":      u.input_tokens,
+                    "output_tokens":     u.output_tokens,
+                    "cache_read_tokens":  u.cache_read_tokens,
+                    "cache_write_tokens": u.cache_write_tokens,
+                    "model":             u.model,
                 }))
             }
             Ok(StreamChunk::Done) => {

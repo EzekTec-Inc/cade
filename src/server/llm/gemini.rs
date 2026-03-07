@@ -117,34 +117,70 @@ impl GeminiProvider {
             }
         }
 
-        for msg in &req.messages {
+        // Use indexed iteration so consecutive "tool" messages can be batched
+        // into a single user turn.  Gemini requires that ALL function responses
+        // for a parallel function-call model turn appear in ONE user turn; emitting
+        // a separate user turn per tool result causes a 400 "function call turn
+        // ordering" error.
+        let mut i = 0;
+        while i < req.messages.len() {
+            let msg = &req.messages[i];
             match msg.role.as_str() {
                 "system" => {
                     system_text = Some(msg.content.clone());
+                    i += 1;
                 }
                 "tool" => {
-                    // Resolve the actual function name from the call id.
-                    // Fall back to the call_id itself (or "tool") so we never
-                    // send an empty string which Gemini also rejects.
-                    let fn_name = msg.tool_call_id
-                        .as_deref()
-                        .and_then(|id| call_id_to_name.get(id).map(String::as_str))
-                        .or(msg.tool_call_id.as_deref())
-                        .unwrap_or("tool")
-                        .to_string();
-                    contents.push(json!({
-                        "role": "user",
-                        "parts": [{ "functionResponse": {
+                    // Batch ALL consecutive tool messages into one user turn.
+                    // Resolves each function name from the pre-built lookup so the
+                    // functionResponse.name always matches its functionCall.name.
+                    let mut parts: Vec<Value> = Vec::new();
+                    while i < req.messages.len() && req.messages[i].role == "tool" {
+                        let m = &req.messages[i];
+                        let fn_name = m.tool_call_id
+                            .as_deref()
+                            .and_then(|id| call_id_to_name.get(id).map(String::as_str))
+                            .or(m.tool_call_id.as_deref())
+                            .unwrap_or("tool")
+                            .to_string();
+                        parts.push(json!({ "functionResponse": {
                             "name": fn_name,
-                            "response": { "result": msg.content }
-                        }}]
-                    }));
+                            "response": { "result": m.content }
+                        }}));
+                        i += 1;
+                    }
+                    contents.push(json!({"role": "user", "parts": parts}));
                 }
                 "assistant" if msg.tool_calls.is_some() => {
-                    let calls: Vec<Value> = msg.tool_calls.as_ref().unwrap().iter().map(|tc| json!({
-                        "functionCall": { "name": tc.name, "args": tc.arguments }
-                    })).collect();
-                    contents.push(json!({"role": "model", "parts": calls}));
+                    // Build parts: optional text first, then all functionCall parts.
+                    // Including any text prevents a separate preceding model(text) turn
+                    // from being orphaned when the message has both content and calls.
+                    let mut all_parts: Vec<Value> = Vec::new();
+                    if !msg.content.is_empty() {
+                        all_parts.push(json!({"text": msg.content}));
+                    }
+                    for tc in msg.tool_calls.as_ref().unwrap().iter() {
+                        all_parts.push(json!({
+                            "functionCall": { "name": tc.name, "args": tc.arguments }
+                        }));
+                    }
+                    // If the immediately preceding contents entry is already a model
+                    // turn (e.g., a text-only assistant message that preceded this
+                    // tool-call message after context trimming removed the user turn
+                    // between them), merge our parts into it.  Two consecutive model
+                    // turns cause Gemini 400 "function call turn ordering" errors.
+                    let merged = if let Some(last) = contents.last_mut() {
+                        if last.get("role").and_then(|v| v.as_str()) == Some("model") {
+                            if let Some(arr) = last.get_mut("parts").and_then(|v| v.as_array_mut()) {
+                                arr.extend(all_parts.drain(..));
+                                true
+                            } else { false }
+                        } else { false }
+                    } else { false };
+                    if !merged {
+                        contents.push(json!({"role": "model", "parts": all_parts}));
+                    }
+                    i += 1;
                 }
                 "assistant" => {
                     // Gemini rejects empty text parts — only add the message if
@@ -155,12 +191,14 @@ impl GeminiProvider {
                             "parts": [{"text": msg.content}]
                         }));
                     }
+                    i += 1;
                 }
                 _ => {
                     contents.push(json!({
                         "role": "user",
                         "parts": [{"text": msg.content}]
                     }));
+                    i += 1;
                 }
             }
         }
@@ -304,10 +342,20 @@ impl LlmProvider for GeminiProvider {
                                         if !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
                                     }
                                     if let Some(fc) = part.get("functionCall") {
+                                        let name = fc["name"].as_str().unwrap_or("").to_string();
+                                        let arguments = {
+                                            let raw = fc["args"].clone();
+                                            if raw.is_object() || raw.is_null() {
+                                                raw
+                                            } else {
+                                                tracing::warn!("Tool '{}' arguments are not an object: {:?}", name, raw);
+                                                serde_json::Value::Object(Default::default())
+                                            }
+                                        };
                                         yield Ok(StreamChunk::ToolCall(LlmToolCall {
-                                            id:        uuid::Uuid::new_v4().to_string(),
-                                            name:      fc["name"].as_str().unwrap_or("").to_string(),
-                                            arguments: fc["args"].clone(),
+                                            id: uuid::Uuid::new_v4().to_string(),
+                                            name,
+                                            arguments,
                                         }));
                                     }
                                 }

@@ -22,11 +22,13 @@ pub struct HeadlessStats {
 ///
 /// These tools interact with the agent's memory or skills system and cannot be
 /// safely parallelised with other calls in the same turn:
-///   - `update_memory`   — writes to the agent memory block store
-///   - `load_skill`      — reads skills and triggers a follow-up turn
-///   - `install_skill`   — installs skills (file writes + agent state)
+///   - `update_memory`     — writes to the agent memory block store
+///   - `load_skill`        — reads skills and triggers a follow-up turn
+///   - `install_skill`     — installs skills (file writes + agent state)
+///   - `run_skill_script`  — executes a skill script (side-effects)
+///   - `load_skill_ref`    — lazy-loads a reference doc
 fn is_sequential_tool(name: &str) -> bool {
-    matches!(name, "update_memory" | "load_skill" | "install_skill")
+    matches!(name, "update_memory" | "load_skill" | "install_skill" | "run_skill_script" | "load_skill_ref")
 }
 
 // ── Text mode (default) ───────────────────────────────────────────────────────
@@ -195,6 +197,81 @@ async fn run_one_tool(
             None    => (format!("Skill '{id}' not found"), true),
         };
         return (call_id, msg, err);
+    }
+
+    // Intercept: run_skill_script
+    if tool_name == "run_skill_script" {
+        let skill_id    = args["skill_id"].as_str().unwrap_or("").trim().to_string();
+        let script      = args["script"].as_str().unwrap_or("").trim().to_string();
+        let script_args: Vec<String> = args["args"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+
+        if skill_id.is_empty() || script.is_empty() {
+            return (call_id, "error: 'skill_id' and 'script' are required".to_string(), true);
+        }
+
+        let skills = crate::skills::discover_all_skills(
+            &std::env::current_dir().unwrap_or_default(), None, None
+        );
+        let skill = match skills.into_iter().find(|s| s.id == skill_id) {
+            Some(s) => s,
+            None    => return (call_id, format!("Skill '{skill_id}' not found"), true),
+        };
+        let sk = match skill.scripts.iter().find(|s| s.name == script) {
+            Some(s) => s.clone(),
+            None => {
+                let available: Vec<&str> = skill.scripts.iter().map(|s| s.name.as_str()).collect();
+                let list = if available.is_empty() { "none".to_string() } else { available.join(", ") };
+                return (call_id, format!("Script '{script}' not found in skill '{skill_id}'. Available: {list}"), true);
+            }
+        };
+
+        tracing::info!("Running skill script: {} {}", sk.path.display(), script_args.join(" "));
+        match tokio::process::Command::new(&sk.path).args(&script_args).output().await {
+            Err(e) => return (call_id, format!("Failed to run script: {e}"), true),
+            Ok(out) => {
+                let stdout   = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr   = String::from_utf8_lossy(&out.stderr).to_string();
+                let combined = if stderr.is_empty() { stdout } else { format!("{stdout}\n[stderr]\n{stderr}") };
+                let is_error = !out.status.success();
+                return (call_id, combined, is_error);
+            }
+        }
+    }
+
+    // Intercept: load_skill_ref
+    if tool_name == "load_skill_ref" {
+        let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
+        let doc      = args["doc"].as_str().unwrap_or("").trim().to_string();
+
+        if skill_id.is_empty() || doc.is_empty() {
+            return (call_id, "error: 'skill_id' and 'doc' are required".to_string(), true);
+        }
+
+        let skills = crate::skills::discover_all_skills(
+            &std::env::current_dir().unwrap_or_default(), None, None
+        );
+        let skill = match skills.into_iter().find(|s| s.id == skill_id) {
+            Some(s) => s,
+            None    => return (call_id, format!("Skill '{skill_id}' not found"), true),
+        };
+        let r = match skill.references.iter().find(|r| {
+            r.name == doc || r.path.file_name().and_then(|n| n.to_str()).unwrap_or("") == doc
+        }) {
+            Some(r) => r.clone(),
+            None => {
+                let available: Vec<&str> = skill.references.iter().map(|r| r.name.as_str()).collect();
+                let list = if available.is_empty() { "none".to_string() } else { available.join(", ") };
+                return (call_id, format!("Reference '{doc}' not found in skill '{skill_id}'. Available: {list}"), true);
+            }
+        };
+
+        match std::fs::read_to_string(&r.path) {
+            Ok(content) => return (call_id, format!("# Reference: {doc} (skill: {skill_id})\n\n{content}"), false),
+            Err(e)      => return (call_id, format!("Failed to read reference '{doc}': {e}"), true),
+        }
     }
 
     // Generic tool dispatch

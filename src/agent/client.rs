@@ -197,6 +197,25 @@ impl CadeClient {
         Ok(resp.status().is_success())
     }
 
+    /// Returns the server's version string from the `X-Cade-Version` response
+    /// header (or falls back to the JSON body `version` field).
+    /// Returns `None` if the server doesn't report a version.
+    pub async fn server_version(&self) -> Option<String> {
+        let resp = self.client
+            .get(self.url("/health"))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await
+            .ok()?;
+        // Prefer the response header (set by the version middleware).
+        if let Some(v) = resp.headers().get("x-cade-version") {
+            return v.to_str().ok().map(String::from);
+        }
+        // Fallback: parse the JSON body version field.
+        let body: serde_json::Value = resp.json().await.ok()?;
+        body["version"].as_str().map(String::from)
+    }
+
     /// Fetch the server's auto-detected provider and default model.
     /// Falls back to a local default if the endpoint is unavailable (e.g. Letta Cloud).
     // ── Provider management ───────────────────────────────────────────────────

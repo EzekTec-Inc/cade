@@ -38,9 +38,39 @@ pub struct Skill {
     pub description: String,
     pub category: Option<String>,
     pub tags: Vec<String>,
+    /// Keyword/phrase triggers — agent auto-activates this skill when input matches
+    pub triggers: Vec<String>,
+    /// RPI phase this skill is active in: Research | Plan | Implement | Verification
+    pub rpi_phase: Option<String>,
+    /// High-level capabilities this skill provides (for display + routing)
+    pub capabilities: Vec<String>,
+    /// Executable scripts in `<skill_dir>/scripts/` — name → relative path
+    pub scripts: Vec<SkillScript>,
+    /// Reference docs in `<skill_dir>/references/` — available for lazy loading
+    pub references: Vec<SkillReference>,
     pub body: String,
     pub scope: SkillScope,
     /// Absolute path to the SKILL.MD file
+    pub path: PathBuf,
+}
+
+/// An executable script bundled with a skill.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillScript {
+    /// Script name (stem of filename, e.g. "explain_error")
+    pub name: String,
+    /// Description from SKILL.MD `tools:` block, if present
+    pub description: String,
+    /// Absolute path to the script file
+    pub path: PathBuf,
+}
+
+/// A reference document bundled with a skill.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillReference {
+    /// Filename stem (e.g. "dictionary_of_pain")
+    pub name: String,
+    /// Absolute path to the reference file
     pub path: PathBuf,
 }
 
@@ -50,7 +80,10 @@ impl Skill {
         let cat = self.category.as_deref()
             .map(|c| format!(" [{c}]"))
             .unwrap_or_default();
-        format!("- {} [{}]{}: {}", self.id, self.scope, cat, self.description)
+        let phase = self.rpi_phase.as_deref()
+            .map(|p| format!(" <{p}>"))
+            .unwrap_or_default();
+        format!("- {} [{}]{}{}: {}", self.id, self.scope, cat, phase, self.description)
     }
 
     /// Full formatted block returned by `load_skill` tool.
@@ -58,10 +91,60 @@ impl Skill {
         let cat = self.category.as_deref()
             .map(|c| format!("[{c}] "))
             .unwrap_or_default();
-        format!(
-            "## Skill: {} {cat}\nID: {}\nScope: {}\nDescription: {}\n\n{}\n",
-            self.name, self.id, self.scope, self.description, self.body
-        )
+        let mut out = format!(
+            "## Skill: {} {cat}\nID: {}\nScope: {}\nDescription: {}\n",
+            self.name, self.id, self.scope, self.description
+        );
+        if !self.capabilities.is_empty() {
+            out.push_str(&format!("Capabilities: {}\n", self.capabilities.join(", ")));
+        }
+        if !self.triggers.is_empty() {
+            out.push_str(&format!("Triggers: {}\n", self.triggers.join(", ")));
+        }
+        if let Some(ref phase) = self.rpi_phase {
+            out.push_str(&format!("RPI Phase: {phase}\n"));
+        }
+        if !self.scripts.is_empty() {
+            out.push_str("\nAvailable scripts (call with run_skill_script):\n");
+            for s in &self.scripts {
+                out.push_str(&format!("  - {} : {}\n", s.name, s.description));
+            }
+        }
+        if !self.references.is_empty() {
+            out.push_str("\nReference docs (load with load_skill_ref):\n");
+            for r in &self.references {
+                out.push_str(&format!("  - {}\n", r.name));
+            }
+        }
+        out.push('\n');
+        out.push_str(&self.body);
+        out.push('\n');
+        out
+    }
+
+    /// Returns true if the given text matches any of this skill's triggers.
+    /// Single-word triggers require a whole-token match (word boundary).
+    /// Multi-word triggers (containing a space) fall back to substring match.
+    pub fn matches_trigger(&self, text: &str) -> bool {
+        if self.triggers.is_empty() {
+            return false;
+        }
+        let lower = text.to_lowercase();
+        // Tokenise input: split on anything that is not alphanumeric / _ / -
+        let words: Vec<&str> = lower
+            .split(|c: char| !c.is_alphanumeric() && c != '_' && c != '-')
+            .filter(|w| !w.is_empty())
+            .collect();
+        self.triggers.iter().any(|t| {
+            let tl = t.to_lowercase();
+            if tl.contains(' ') {
+                // Multi-word phrase: substring match is intentional
+                lower.contains(&tl)
+            } else {
+                // Single-word trigger: must match a whole token
+                words.iter().any(|w| *w == tl)
+            }
+        })
     }
 }
 
@@ -191,16 +274,90 @@ fn parse_skill(id: &str, content: &str, scope: SkillScope, path: PathBuf) -> Res
     };
 
     let fm = parse_frontmatter(fm_str);
+
+    // Discover scripts/ and references/ relative to the SKILL.MD file
+    let skill_dir = path.parent().unwrap_or(path.as_path());
+    let scripts   = discover_scripts(skill_dir, &fm.tools);
+    let references = discover_references(skill_dir);
+
     Ok(Skill {
         id: id.to_string(),
         name: fm.name.unwrap_or_else(|| id.to_string()),
         description: fm.description.unwrap_or_default(),
         category: fm.category,
         tags: fm.tags,
+        triggers: fm.triggers,
+        rpi_phase: fm.rpi_phase,
+        capabilities: fm.capabilities,
+        scripts,
+        references,
         body: body.trim().to_string(),
         scope,
         path,
     })
+}
+
+/// Scan `<skill_dir>/scripts/` for executable files.
+fn discover_scripts(skill_dir: &Path, tool_hints: &[FrontmatterTool]) -> Vec<SkillScript> {
+    let scripts_dir = skill_dir.join("scripts");
+    if !scripts_dir.exists() {
+        return vec![];
+    }
+    let mut scripts = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&scripts_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                let name = p.file_stem()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if name.is_empty() { continue; }
+                // Match description from frontmatter tools: block if present
+                let description = tool_hints.iter()
+                    .find(|t| t.entrypoint.as_deref()
+                        .map(|e| e.contains(&name))
+                        .unwrap_or(false)
+                        || t.name == name)
+                    .map(|t| t.description.clone())
+                    .unwrap_or_default();
+                scripts.push(SkillScript { name, description, path: p });
+            }
+        }
+    }
+    scripts.sort_by(|a, b| a.name.cmp(&b.name));
+    scripts
+}
+
+/// Scan `<skill_dir>/references/` for documentation files.
+fn discover_references(skill_dir: &Path) -> Vec<SkillReference> {
+    let refs_dir = skill_dir.join("references");
+    if !refs_dir.exists() {
+        return vec![];
+    }
+    let mut refs = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&refs_dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                let name = p.file_stem()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_string();
+                if name.is_empty() { continue; }
+                refs.push(SkillReference { name, path: p });
+            }
+        }
+    }
+    refs.sort_by(|a, b| a.name.cmp(&b.name));
+    refs
+}
+
+#[derive(Default)]
+struct FrontmatterTool {
+    name: String,
+    description: String,
+    entrypoint: Option<String>,
 }
 
 #[derive(Default)]
@@ -209,31 +366,111 @@ struct Frontmatter {
     description: Option<String>,
     category: Option<String>,
     tags: Vec<String>,
+    triggers: Vec<String>,
+    rpi_phase: Option<String>,
+    capabilities: Vec<String>,
+    tools: Vec<FrontmatterTool>,
 }
 
 fn parse_frontmatter(fm: &str) -> Frontmatter {
     let mut out = Frontmatter::default();
+    let mut in_tools = false;
+    let mut current_tool: Option<FrontmatterTool> = None;
+    // Tracks which top-level list field a YAML multiline block belongs to.
+    let mut current_list_field: Option<&str> = None;
+
     for line in fm.lines() {
-        let line = line.trim();
-        if let Some((key, val)) = line.split_once(':') {
+        let trimmed = line.trim();
+
+        // Detect `tools:` block start
+        if trimmed == "tools:" {
+            in_tools = true;
+            current_list_field = None;
+            continue;
+        }
+
+        // If we hit another top-level key (no leading spaces/dash), exit tools block
+        if in_tools && !line.starts_with(' ') && !line.starts_with('-') && !trimmed.is_empty() {
+            if let Some(t) = current_tool.take() { out.tools.push(t); }
+            in_tools = false;
+        }
+
+        if in_tools {
+            // New tool entry
+            if trimmed.starts_with("- name:") {
+                if let Some(t) = current_tool.take() { out.tools.push(t); }
+                let val = trimmed.trim_start_matches("- name:").trim().trim_matches('"').to_string();
+                current_tool = Some(FrontmatterTool { name: val, ..Default::default() });
+            } else if let Some(ref mut t) = current_tool {
+                if let Some((k, v)) = trimmed.split_once(':') {
+                    let v = v.trim().trim_matches('"').trim_matches('\'');
+                    match k.trim() {
+                        "description" => t.description = v.to_string(),
+                        "entrypoint"  => t.entrypoint = Some(v.to_string()),
+                        _ => {}
+                    }
+                }
+            }
+            continue;
+        }
+
+        // YAML multiline list item (e.g. `  - item`)
+        if trimmed.starts_with("- ") && (line.starts_with(' ') || line.starts_with('\t')) {
+            if let Some(field) = current_list_field {
+                let item = trimmed[2..].trim().trim_matches('"').trim_matches('\'').to_string();
+                if !item.is_empty() {
+                    match field {
+                        "tags"                     => out.tags.push(item),
+                        "trigger" | "triggers"     => out.triggers.push(item),
+                        "capabilities"             => out.capabilities.push(item),
+                        _ => {}
+                    }
+                }
+            }
+            continue;
+        }
+
+        // Any non-list, non-empty line resets the list-field context
+        if !trimmed.is_empty() {
+            current_list_field = None;
+        }
+
+        // Top-level keys
+        if let Some((key, val)) = trimmed.split_once(':') {
             let key = key.trim();
             let val = val.trim().trim_matches('"').trim_matches('\'');
             match key {
                 "name"        => out.name = Some(val.to_string()),
                 "description" => out.description = Some(val.to_string()),
                 "category"    => out.category = Some(val.to_string()),
-                "tags" => {
-                    out.tags = val
-                        .trim_matches(|c| c == '[' || c == ']')
-                        .split(',')
-                        .map(|s| s.trim().trim_matches('"').to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect()
+                "rpi_phase"   => out.rpi_phase = Some(val.to_string()),
+                "tags" | "trigger" | "triggers" | "capabilities" => {
+                    if val.is_empty() {
+                        // No inline value — items will follow as `  - item` lines
+                        current_list_field = Some(key);
+                    } else {
+                        let parsed: Vec<String> = val
+                            .trim_matches(|c| c == '[' || c == ']')
+                            .split(',')
+                            .map(|s| s.trim().trim_matches('"').trim_matches('\'').to_string())
+                            .filter(|s| !s.is_empty())
+                            .collect();
+                        match key {
+                            "tags"                     => out.tags = parsed,
+                            "trigger" | "triggers"     => out.triggers = parsed,
+                            "capabilities"             => out.capabilities = parsed,
+                            _ => {}
+                        }
+                    }
                 }
                 _ => {}
             }
         }
     }
+
+    // Flush final tool
+    if let Some(t) = current_tool.take() { out.tools.push(t); }
+
     out
 }
 
@@ -348,7 +585,7 @@ pub fn github_url_to_raw_skill(url: &str) -> Option<String> {
         Some(format!(
             "https://raw.githubusercontent.com/{user}/{repo}/{branch}/{path}/SKILL.MD"
         ))
-    } else if parts.len() >= 4 && parts[2] == "blob" {
+    } else if parts.len() >= 5 && parts[2] == "blob" {
         // Direct file URL — return as-is converted to raw
         let branch = parts[3];
         let path   = parts[4..].join("/");

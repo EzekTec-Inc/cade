@@ -146,10 +146,11 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
 /// Per-model token breakdown accumulated during the session.
 #[derive(Debug, Default, Clone)]
 struct ModelStats {
-    reqs:              u32,
-    input_tokens:      u64,
-    cache_read_tokens: u64,
-    output_tokens:     u64,
+    reqs:               u32,
+    input_tokens:       u64,
+    cache_read_tokens:  u64,
+    cache_write_tokens: u64,
+    output_tokens:      u64,
 }
 
 /// All session-level statistics accumulated by the REPL.
@@ -200,13 +201,14 @@ impl SessionStats {
     }
 
     /// Record a usage_statistics SSE event.
-    fn record_usage(&mut self, model: &str, input: u64, cache_read: u64, output: u64) {
+    fn record_usage(&mut self, model: &str, input: u64, cache_read: u64, cache_write: u64, output: u64) {
         let key = if model.is_empty() { "unknown".to_string() } else { model.to_string() };
         let e = self.per_model.entry(key).or_default();
-        e.reqs          += 1;
-        e.input_tokens  += input;
-        e.cache_read_tokens += cache_read;
-        e.output_tokens += output;
+        e.reqs               += 1;
+        e.input_tokens       += input;
+        e.cache_read_tokens  += cache_read;
+        e.cache_write_tokens += cache_write;
+        e.output_tokens      += output;
     }
 
     /// Render a structured stats card as a Vec of RenderLine for the TUI.
@@ -235,8 +237,9 @@ impl SessionStats {
         let success_pct = if total > 0 { 100.0 * total_ok as f64 / total as f64 } else { 0.0 };
         let agree_pct   = if self.reviewed > 0 { 100.0 * self.approved as f64 / self.reviewed as f64 } else { 100.0 };
 
-        let total_input: u64 = self.per_model.values().map(|m| m.input_tokens).sum();
-        let total_cache: u64 = self.per_model.values().map(|m| m.cache_read_tokens).sum();
+        let total_input: u64  = self.per_model.values().map(|m| m.input_tokens).sum();
+        let total_cache: u64  = self.per_model.values().map(|m| m.cache_read_tokens).sum();
+        let total_write: u64  = self.per_model.values().map(|m| m.cache_write_tokens).sum();
         let cache_pct = if total_input + total_cache > 0 {
             100.0 * total_cache as f64 / (total_input + total_cache) as f64
         } else { 0.0 };
@@ -313,7 +316,8 @@ impl SessionStats {
                 "Model".to_string(),
                 "Reqs".to_string(),
                 "Input".to_string(),
-                "Cache".to_string(),
+                "Cache Read".to_string(),
+                "Cache Write".to_string(),
                 "Output".to_string(),
             ];
             let rows: Vec<Vec<String>> = models.iter().map(|(model, ms)| {
@@ -323,6 +327,7 @@ impl SessionStats {
                     ms.reqs.to_string(),
                     fmt_tok(ms.input_tokens),
                     fmt_tok(ms.cache_read_tokens),
+                    fmt_tok(ms.cache_write_tokens),
                     fmt_tok(ms.output_tokens),
                 ]
             }).collect();
@@ -333,6 +338,12 @@ impl SessionStats {
                 out.push(RenderLine::Pair {
                     label: "Cache Hit Rate".to_string(),
                     value: format!("{cache_pct:.1}% of input tokens served from cache"),
+                });
+            }
+            if total_write > 0 {
+                out.push(RenderLine::Pair {
+                    label: "Cache Written".to_string(),
+                    value: format!("{} tokens written to cache (billed at 1.25× input rate)", fmt_tok(total_write)),
                 });
             }
             out.push(RenderLine::DimMsg("  /stats model  — per-model detail breakdown".to_string()));
@@ -371,16 +382,17 @@ impl SessionStats {
         }
 
         // Build rows
-        let metric_names = ["Requests", "Input", "Cache Read", "Output", "Cache %"];
+        let metric_names = ["Requests", "Input", "Cache Read", "Cache Write", "Output", "Cache %"];
         let mut rows: Vec<Vec<String>> = metric_names.iter().map(|m| {
             let mut row = vec![m.to_string()];
             for (_, ms) in &models {
                 let val = match *m {
-                    "Requests"   => ms.reqs.to_string(),
-                    "Input"      => fmt_tok(ms.input_tokens),
-                    "Cache Read" => fmt_tok(ms.cache_read_tokens),
-                    "Output"     => fmt_tok(ms.output_tokens),
-                    "Cache %"    => {
+                    "Requests"    => ms.reqs.to_string(),
+                    "Input"       => fmt_tok(ms.input_tokens),
+                    "Cache Read"  => fmt_tok(ms.cache_read_tokens),
+                    "Cache Write" => fmt_tok(ms.cache_write_tokens),
+                    "Output"      => fmt_tok(ms.output_tokens),
+                    "Cache %"     => {
                         let total = ms.input_tokens + ms.cache_read_tokens;
                         if total > 0 {
                             format!("{:.1}%", 100.0 * ms.cache_read_tokens as f64 / total as f64)
@@ -399,6 +411,7 @@ impl SessionStats {
         let total_reqs:  u32 = models.iter().map(|(_, m)| m.reqs).sum();
         let total_in:    u64 = models.iter().map(|(_, m)| m.input_tokens).sum();
         let total_cache: u64 = models.iter().map(|(_, m)| m.cache_read_tokens).sum();
+        let total_write: u64 = models.iter().map(|(_, m)| m.cache_write_tokens).sum();
         let total_out:   u64 = models.iter().map(|(_, m)| m.output_tokens).sum();
         let total_all    = total_in + total_cache;
         let cache_pct_total = if total_all > 0 {
@@ -412,10 +425,11 @@ impl SessionStats {
                 format!("{:.1}%", 100.0 * ms.cache_read_tokens as f64 / tot_in_model as f64)
             } else { "—".to_string() };
             totals_row.push(format!(
-                "{}r  {}i  {}c  {}o  {}",
+                "{}r  {}i  {}cr  {}cw  {}o  {}",
                 ms.reqs,
                 fmt_tok(ms.input_tokens),
                 fmt_tok(ms.cache_read_tokens),
+                fmt_tok(ms.cache_write_tokens),
                 fmt_tok(ms.output_tokens),
                 cpct,
             ));
@@ -425,8 +439,9 @@ impl SessionStats {
             rows[0].push(total_reqs.to_string());
             rows[1].push(fmt_tok(total_in));
             rows[2].push(fmt_tok(total_cache));
-            rows[3].push(fmt_tok(total_out));
-            rows[4].push(cache_pct_total);
+            rows[3].push(fmt_tok(total_write));
+            rows[4].push(fmt_tok(total_out));
+            rows[5].push(cache_pct_total);
             headers.push("Total".to_string());
         }
 
@@ -471,6 +486,14 @@ pub struct Repl {
     /// Set to `true` by a SIGINT handler while a turn is running.
     /// `stream_turn()` checks this flag and aborts the SSE stream early.
     cancel_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// True while a `spawn_blocking` `ask_question_blocking` call is running.
+    /// Read by the tick task WITHOUT holding the app mutex.
+    blocking_question_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Sender half of the key-event channel for the current blocking question.
+    /// Set before `spawn_blocking`, cleared after it returns.
+    blocking_question_key_tx: std::sync::Arc<std::sync::Mutex<
+        Option<std::sync::mpsc::SyncSender<crossterm::event::KeyEvent>>
+    >>,
     /// Active conversation ID — None means the default (legacy) conversation.
     conversation_id: Arc<Mutex<Option<String>>>,
     /// MCP server manager — routes tool calls with `{server}__` prefix.
@@ -535,6 +558,8 @@ impl Repl {
             hooks,
             first_turn:            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             cancel_turn:           std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            blocking_question_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            blocking_question_key_tx: std::sync::Arc::new(std::sync::Mutex::new(None)),
             conversation_id:       Arc::new(Mutex::new(conversation_id)),
             mcp,
             subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(cap)),
@@ -1578,41 +1603,90 @@ impl Repl {
                         match sub_cmd {
                             "list" | "" => {
                                 let skills = self.skills.lock().unwrap();
+                                let agent_id = self.agent_id();
                                 if skills.is_empty() {
-                                    let _ = self.app.lock().unwrap().push(RenderLine::Blank);
-                                    let _ = self.app.lock().unwrap().push(RenderLine::DimMsg("  No skills loaded.".to_string()));
-                                    let _ = self.app.lock().unwrap().push(RenderLine::DimMsg("  Create one : /skills create <name>".to_string()));
-                                    let _ = self.app.lock().unwrap().push(RenderLine::DimMsg("  Skill dirs : .skills/  ~/.cade/skills/  ~/.cade/agents/<id>/skills/".to_string()));
-                                    let _ = self.app.lock().unwrap().push(RenderLine::Blank);
+                                    let mut app = self.app.lock().unwrap();
+                                    let _ = app.push(RenderLine::Blank);
+                                    let _ = app.push(RenderLine::InfoHeader("  ◆ Skills  (none loaded)".to_string()));
+                                    let _ = app.push(RenderLine::Blank);
+                                    let _ = app.push(RenderLine::DimMsg("  No skills found in any skill directory.".to_string()));
+                                    let _ = app.push(RenderLine::Blank);
+                                    let _ = app.push(RenderLine::Pair {
+                                        label: "Project".to_string(),
+                                        value: ".skills/".to_string(),
+                                    });
+                                    let _ = app.push(RenderLine::Pair {
+                                        label: "Global".to_string(),
+                                        value: "~/.cade/skills/".to_string(),
+                                    });
+                                    let _ = app.push(RenderLine::Pair {
+                                        label: "Agent".to_string(),
+                                        value: format!("~/.cade/agents/{agent_id}/skills/"),
+                                    });
+                                    let _ = app.push(RenderLine::Blank);
+                                    let _ = app.push(RenderLine::DimMsg("  Scaffold your first skill:  /skills create <name>".to_string()));
+                                    let _ = app.push(RenderLine::Blank);
                                 } else {
-                                    // Group by category for the table
-                                    let headers = vec![
-                                        "Scope".to_string(),
-                                        "ID".to_string(),
-                                        "Description".to_string(),
-                                        "Category".to_string(),
-                                        "Tags".to_string(),
-                                    ];
-                                    let rows: Vec<Vec<String>> = skills.iter().map(|s| vec![
-                                        s.scope.to_string(),
-                                        s.id.clone(),
-                                        s.description.clone(),
-                                        s.category.as_deref().unwrap_or("general").to_string(),
-                                        if s.tags.is_empty() { "—".to_string() } else { s.tags.join(", ") },
-                                    ]).collect();
+                                    // Sort: project first, then agent, global, builtin; then category, then id
+                                    let scope_ord = |scope: &str| match scope {
+                                        "project" => 0u8, "agent" => 1, "global" => 2, _ => 3,
+                                    };
+                                    let mut sorted: Vec<_> = skills.iter().collect();
+                                    sorted.sort_by(|a, b| {
+                                        let sa = a.scope.to_string();
+                                        let sb = b.scope.to_string();
+                                        scope_ord(&sa).cmp(&scope_ord(&sb))
+                                            .then(a.category.as_deref().unwrap_or("").cmp(b.category.as_deref().unwrap_or("")))
+                                            .then(a.id.cmp(&b.id))
+                                    });
 
                                     let mut lines: Vec<RenderLine> = vec![
                                         RenderLine::Blank,
                                         RenderLine::InfoHeader(format!("  ◆ Skills  ({} loaded)", skills.len())),
-                                        RenderLine::Blank,
-                                        RenderLine::Table { headers, rows },
-                                        RenderLine::Blank,
-                                        RenderLine::DimMsg("  /skills show <id>    — view full skill body".to_string()),
-                                        RenderLine::DimMsg("  /skills create <name> — scaffold a new skill".to_string()),
-                                        RenderLine::DimMsg("  /skills reload        — rescan skill directories".to_string()),
-                                        RenderLine::DimMsg("  Agent calls load_skill(<id>) to inject on-demand.".to_string()),
-                                        RenderLine::Blank,
                                     ];
+
+                                    // Emit one table section per scope group
+                                    let scope_sections: &[(&str, &str)] = &[
+                                        ("project", "Project  (.skills/)"),
+                                        ("agent",   "Agent"),   // label built below with agent_id
+                                        ("global",  "Global  (~/.cade/skills/)"),
+                                        ("builtin", "Built-in"),
+                                    ];
+                                    for (scope_key, scope_label) in scope_sections {
+                                        let group: Vec<_> = sorted.iter()
+                                            .filter(|s| s.scope.to_string() == *scope_key)
+                                            .collect();
+                                        if group.is_empty() { continue; }
+
+                                        let header_text = if *scope_key == "agent" {
+                                            format!("  Agent  (~/.cade/agents/{agent_id}/skills/)")
+                                        } else {
+                                            format!("  {scope_label}")
+                                        };
+                                        lines.push(RenderLine::Blank);
+                                        lines.push(RenderLine::InfoHeader(header_text));
+
+                                        let headers = vec![
+                                            "ID".to_string(),
+                                            "Category".to_string(),
+                                            "Description".to_string(),
+                                            "Tags".to_string(),
+                                        ];
+                                        let rows: Vec<Vec<String>> = group.iter().map(|s| vec![
+                                            s.id.clone(),
+                                            s.category.as_deref().unwrap_or("general").to_string(),
+                                            s.description.clone(),
+                                            if s.tags.is_empty() { "—".to_string() } else { s.tags.join(", ") },
+                                        ]).collect();
+                                        lines.push(RenderLine::Table { headers, rows });
+                                    }
+
+                                    lines.push(RenderLine::DimMsg("  /skills show <id>       view full skill detail".to_string()));
+                                    lines.push(RenderLine::DimMsg("  /skills create <name>   scaffold a new skill".to_string()));
+                                    lines.push(RenderLine::DimMsg("  /skills edit <id>       open in $EDITOR".to_string()));
+                                    lines.push(RenderLine::DimMsg("  /skills delete <id>     remove a skill".to_string()));
+                                    lines.push(RenderLine::DimMsg("  /skills reload           rescan all directories".to_string()));
+                                    lines.push(RenderLine::Blank);
                                     let mut app = self.app.lock().unwrap();
                                     for line in lines.drain(..) { let _ = app.push(line); }
                                 }
@@ -1670,38 +1744,64 @@ impl Repl {
 
                             "show" => {
                                 let id = sub_arg.trim();
-                                let skills = self.skills.lock().unwrap();
-                                match skills.iter().find(|s| s.id == id) {
-                                    None => {
-                                        let _ = self.app.lock().unwrap().push(RenderLine::DimMsg(
-                                            format!("  Skill '{id}' not found. Run /skills to list.")
-                                        ));
-                                    }
-                                    Some(s) => {
-                                        let mut lines: Vec<RenderLine> = vec![
-                                            RenderLine::Blank,
-                                            RenderLine::InfoHeader(format!("  ◆ Skill: {}", s.id)),
-                                            RenderLine::Blank,
-                                            RenderLine::Pair { label: "Name".to_string(),        value: s.name.clone() },
-                                            RenderLine::Pair { label: "Description".to_string(),  value: s.description.clone() },
-                                            RenderLine::Pair { label: "Scope".to_string(),        value: s.scope.to_string() },
-                                            RenderLine::Pair { label: "Category".to_string(),     value: s.category.as_deref().unwrap_or("general").to_string() },
-                                        ];
-                                        if !s.tags.is_empty() {
-                                            lines.push(RenderLine::Pair {
-                                                label: "Tags".to_string(),
-                                                value: s.tags.join(", "),
-                                            });
+                                if id.is_empty() {
+                                    self.tui_err("  Usage: /skills show <id>");
+                                    self.tui_dim("  Run /skills to see available IDs.");
+                                } else {
+                                    let skills = self.skills.lock().unwrap();
+                                    match skills.iter().find(|s| s.id == id) {
+                                        None => {
+                                            self.tui_err(format!("  Skill '{id}' not found."));
+                                            self.tui_dim("  Run /skills to list available skills.");
                                         }
-                                        lines.push(RenderLine::Blank);
-                                        lines.push(RenderLine::InfoHeader("  Body".to_string()));
-                                        lines.push(RenderLine::Blank);
-                                        for ln in s.body.lines() {
-                                            lines.push(RenderLine::SystemMsg(format!("  {ln}")));
+                                        Some(s) => {
+                                            let word_count = s.body.split_whitespace().count();
+                                            let line_count = s.body.lines().count();
+                                            let mut lines: Vec<RenderLine> = vec![
+                                                RenderLine::Blank,
+                                                RenderLine::InfoHeader(format!("  ◆ Skill: {}  —  {}", s.id, s.name)),
+                                                RenderLine::Blank,
+                                                RenderLine::Pair { label: "Description".to_string(), value: s.description.clone() },
+                                                RenderLine::Pair { label: "Scope".to_string(),       value: s.scope.to_string() },
+                                                RenderLine::Pair { label: "Category".to_string(),    value: s.category.as_deref().unwrap_or("general").to_string() },
+                                            ];
+                                            if !s.tags.is_empty() {
+                                                lines.push(RenderLine::Pair { label: "Tags".to_string(), value: s.tags.join(", ") });
+                                            }
+                                            if !s.triggers.is_empty() {
+                                                lines.push(RenderLine::Pair { label: "Triggers".to_string(), value: s.triggers.join(", ") });
+                                            }
+                                            if !s.capabilities.is_empty() {
+                                                lines.push(RenderLine::Pair { label: "Capabilities".to_string(), value: s.capabilities.join(", ") });
+                                            }
+                                            if let Some(ref phase) = s.rpi_phase {
+                                                lines.push(RenderLine::Pair { label: "RPI Phase".to_string(), value: phase.clone() });
+                                            }
+                                            lines.push(RenderLine::Pair { label: "Body".to_string(),      value: format!("{word_count} words, {line_count} lines") });
+                                            lines.push(RenderLine::Pair { label: "Invoke as".to_string(), value: format!("/{}", s.id) });
+
+                                            // Scripts section
+                                            if !s.scripts.is_empty() {
+                                                lines.push(RenderLine::Blank);
+                                                lines.push(RenderLine::InfoHeader("  ── Scripts ──".to_string()));
+                                                for script in &s.scripts {
+                                                    let desc = if script.description.is_empty() { "—".to_string() } else { script.description.clone() };
+                                                    lines.push(RenderLine::Pair { label: script.name.clone(), value: desc });
+                                                }
+                                            }
+
+                                            // Body section — render as one block for proper markdown + no per-line blank lines
+                                            if !s.body.trim().is_empty() {
+                                                lines.push(RenderLine::Blank);
+                                                lines.push(RenderLine::InfoHeader("  ── Body ──".to_string()));
+                                                lines.push(RenderLine::AssistantText(s.body.clone()));
+                                            }
+
+                                            lines.push(RenderLine::DimMsg(format!("  Edit: /skills edit {id}  |  Delete: /skills delete {id}")));
+                                            lines.push(RenderLine::Blank);
+                                            let mut app = self.app.lock().unwrap();
+                                            for line in lines.drain(..) { let _ = app.push(line); }
                                         }
-                                        lines.push(RenderLine::Blank);
-                                        let mut app = self.app.lock().unwrap();
-                                        for line in lines.drain(..) { let _ = app.push(line); }
                                     }
                                 }
                             }
@@ -1747,9 +1847,83 @@ impl Repl {
                                 }
                             }
 
+                            "edit" => {
+                                let id = sub_arg.trim();
+                                if id.is_empty() {
+                                    self.tui_err("  Usage: /skills edit <id>");
+                                } else {
+                                    let skills = self.skills.lock().unwrap();
+                                    match skills.iter().find(|s| s.id == id) {
+                                        None => {
+                                            self.tui_err(format!("  Skill '{id}' not found."));
+                                            self.tui_dim("  Run /skills to list available skills.");
+                                        }
+                                        Some(s) => {
+                                            // Find the SKILL.MD file in the skill directory
+                                            let skill_file = self.skills_dir.join(&s.id).join("SKILL.MD");
+                                            let editor = std::env::var("EDITOR")
+                                                .or_else(|_| std::env::var("VISUAL"))
+                                                .unwrap_or_else(|_| "nano".to_string());
+                                            drop(skills);
+                                            self.tui_dim(format!("  Opening {} in {editor}…", skill_file.display()));
+                                            match std::process::Command::new(&editor)
+                                                .arg(&skill_file)
+                                                .status()
+                                            {
+                                                Ok(_) => {
+                                                    self.tui_ok(format!("  ✓ Done editing '{id}'"));
+                                                    self.tui_dim("  Run /skills reload to pick up changes.");
+                                                }
+                                                Err(e) => self.tui_err(format!("  Failed to open editor '{editor}': {e}")),
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            "delete" | "rm" => {
+                                let id = sub_arg.trim();
+                                if id.is_empty() {
+                                    self.tui_err("  Usage: /skills delete <id>");
+                                } else {
+                                    let skill_dir = self.skills_dir.join(id);
+                                    if !skill_dir.exists() {
+                                        self.tui_err(format!("  Skill directory not found: {}", skill_dir.display()));
+                                        self.tui_dim("  Run /skills to list available skills.");
+                                    } else {
+                                        self.tui_sys(format!("  Deleting skill '{id}' at: {}", skill_dir.display()));
+                                        match std::fs::remove_dir_all(&skill_dir) {
+                                            Ok(_) => {
+                                                // Remove from in-memory list
+                                                self.skills.lock().unwrap().retain(|s| s.id != id);
+                                                // Update memory
+                                                let agent_id = self.agent_id();
+                                                let skills_snap = self.skills.lock().unwrap().clone();
+                                                let listing = crate::skills::skills_listing(&skills_snap);
+                                                let _ = self.client.upsert_memory(
+                                                    &agent_id, "skills",
+                                                    listing.as_deref().unwrap_or(""), None
+                                                ).await;
+                                                let _ = self.client.delete_memory(&agent_id, &format!("skill:{id}")).await;
+                                                self.tui_ok(format!("  ✓ Deleted skill '{id}'"));
+                                            }
+                                            Err(e) => self.tui_err(format!("  Failed to delete: {e}")),
+                                        }
+                                    }
+                                }
+                            }
+
                             other => {
-                                self.tui_err(format!("Unknown /skills subcommand: '{other}'"));
-                                self.tui_dim("  Usage: /skills [list | create <name> | show <id> | reload]");
+                                self.tui_err(format!("  Unknown /skills subcommand: '{other}'"));
+                                self.tui_blank();
+                                self.tui_dim("  Usage:");
+                                self.tui_dim("    /skills                    — list all loaded skills");
+                                self.tui_dim("    /skills show <id>          — view full skill detail");
+                                self.tui_dim("    /skills edit <id>          — open skill file in $EDITOR");
+                                self.tui_dim("    /skills create <name>      — scaffold a new skill");
+                                self.tui_dim("    /skills delete <id>        — remove a skill directory");
+                                self.tui_dim("    /skills reload             — rescan all skill directories");
+                                self.tui_blank();
                             }
                         }
                     }
@@ -2133,7 +2307,7 @@ impl Repl {
         // Reset cancel flag and spawn SIGINT watcher for the duration of this turn
         self.cancel_turn.store(false, Ordering::SeqCst);
         let cancel_flag = self.cancel_turn.clone();
-        let _sigint_guard = tokio::spawn(async move {
+        let sigint_handle = tokio::spawn(async move {
             #[cfg(unix)]
             {
                 use tokio::signal::unix::{signal, SignalKind};
@@ -2149,11 +2323,34 @@ impl Repl {
             true, false, Ordering::SeqCst, Ordering::SeqCst
         ).is_ok() {
             let env = self.build_env_context();
-            // Explicitly instruct the agent not to turn the env context into a
-            // self-introduction. Without this it often opens with "I am CADE…"
             format!("{env}\n\n<system>Do not introduce yourself. Answer the user's message directly.</system>\n\n{input}")
         } else {
             input.to_string()
+        };
+
+        // ── Skill trigger auto-detection ──────────────────────────────────────
+        // If the input matches any skill trigger, silently pre-load the skill
+        // body by injecting it as a system context note before the user message.
+        let effective_input = {
+            let skills = self.skills.lock().unwrap();
+            let matched: Vec<String> = skills
+                .iter()
+                .filter(|s| s.matches_trigger(&effective_input))
+                .map(|s| {
+                    tracing::info!("Skill trigger matched: {} (skill: {})", s.triggers.iter().find(|t| effective_input.to_lowercase().contains(&t.to_lowercase())).cloned().unwrap_or_default(), s.id);
+                    s.to_context_block()
+                })
+                .collect();
+            drop(skills);
+
+            if matched.is_empty() {
+                effective_input
+            } else {
+                let injection = matched.join("\n---\n");
+                format!(
+                    "<skill_context>\n{injection}\n</skill_context>\n\n{effective_input}"
+                )
+            }
         };
 
         // ── Thinking animation ────────────────────────────────────────────────
@@ -2168,6 +2365,8 @@ impl Repl {
         let tick_base    = out_tok_before;
         let tick_start   = turn_start;
         let tick_bar     = bar_text.clone();
+        let tick_blocking_active = self.blocking_question_active.clone();
+        let tick_blocking_key_tx = self.blocking_question_key_tx.clone();
         let tick_handle  = tokio::spawn(async move {
             use crossterm::event::{EventStream, Event, KeyCode};
             use futures::StreamExt;
@@ -2200,38 +2399,70 @@ impl Repl {
                         let needs_question_key = matches!(&evt, Event::Key(_));
 
                         if needs_question_key {
-                            // Spin-wait (yielding to the runtime each attempt) so the
-                            // key is never silently dropped while the agent holds the
-                            // app lock briefly (e.g. during a push/draw after tool run).
-                            loop {
-                                if tick_cancel.load(Ordering::SeqCst) { break; }
-                                if let Ok(mut app) = tick_app.try_lock() {
-                                    // Stage 3 fix: only route key events through
-                                    // handle_question_key when the active question was
-                                    // opened via ask_question_async (tx.is_some()).
-                                    // When tx is None, the modal is owned by
-                                    // ask_question_blocking running on a spawn_blocking
-                                    // thread with its own event::read loop — the tick
-                                    // task must not consume the event or it will be
-                                    // lost from the blocking thread's event::read.
-                                    let has_async_question = app.active_question
-                                        .as_ref()
-                                        .map_or(false, |aq| aq.tx.is_some());
-
-                                    if has_async_question {
-                                        if let Event::Key(k) = evt { app.handle_question_key(k); }
-                                    } else if let Event::Key(k) = evt {
-                                        match (k.code, k.modifiers) {
-                                            (KeyCode::Char('K'), _) => { app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
-                                            (KeyCode::Char('J'), _) => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
-                                            (KeyCode::Char('o'), crossterm::event::KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
-                                            _ => {}
+                            if let Event::Key(k) = evt {
+                                // Fast path: blocking question is active — forward the
+                                // key through the dedicated channel without touching the
+                                // app mutex (which is held by the spawn_blocking thread).
+                                // Never set tick_cancel on Esc in this branch.
+                                if tick_blocking_active.load(Ordering::SeqCst) {
+                                    if let Ok(guard) = tick_blocking_key_tx.lock() {
+                                        if let Some(ref tx) = *guard {
+                                            let _ = tx.try_send(k);
                                         }
                                     }
-                                    break;
+                                    // Skip spin-wait entirely — avoids deadlock.
+                                } else {
+                                    // Normal path: spin-wait until app lock is available,
+                                    // then process the key (async question or Esc/scroll).
+                                    // Re-check blocking flag each iteration: it may have been
+                                    // set after the outer check above (race window fix).
+                                    loop {
+                                        if tick_cancel.load(Ordering::SeqCst) { break; }
+                                        // If a blocking question became active while we were
+                                        // spinning, forward the key to the channel and stop.
+                                        // Without this, ask_question_blocking would wait for
+                                        // channel keys while the tick task holds the app mutex.
+                                        if tick_blocking_active.load(Ordering::SeqCst) {
+                                            if let Ok(guard) = tick_blocking_key_tx.lock() {
+                                                if let Some(ref tx) = *guard {
+                                                    let _ = tx.try_send(k);
+                                                }
+                                            }
+                                            break;
+                                        }
+                                        if let Ok(mut app) = tick_app.try_lock() {
+                                            let has_async_question = app.active_question
+                                                .as_ref()
+                                                .map_or(false, |aq| aq.tx.is_some());
+                                            if has_async_question {
+                                                app.handle_question_key(k);
+                                            } else {
+                                                match (k.code, k.modifiers) {
+                                                    (KeyCode::Char('K'), _) => { app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
+                                                    (KeyCode::Char('J'), _) => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
+                                                    (KeyCode::Char('o'), crossterm::event::KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
+                                                    (KeyCode::Esc, _) => {
+                                                        // Ignore Esc events that arrive within
+                                                        // the first 200 ms of the turn.  The
+                                                        // terminal can buffer an Esc pressed just
+                                                        // before or just after the user hit Enter
+                                                        // to submit their message; without this
+                                                        // guard the tick task would process that
+                                                        // stale Esc and immediately cancel the
+                                                        // turn before any LLM content arrives.
+                                                        if tick_start.elapsed().as_millis() >= 200 {
+                                                            tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                                                        }
+                                                    }
+                                                    _ => {}
+                                                }
+                                            }
+                                            break;
+                                        }
+                                        // Yield to runtime and retry — never drop the event
+                                        tokio::task::yield_now().await;
+                                    }
                                 }
-                                // Yield to runtime and retry — never drop the event
-                                tokio::task::yield_now().await;
                             }
                         } else if let Ok(mut app) = tick_app.try_lock() {
                             // Mouse / resize — best-effort, fine to drop
@@ -2267,6 +2498,9 @@ impl Repl {
         // ── Stop thinking animation ───────────────────────────────────────────
         tick_handle.abort();
         let _ = tick_handle.await;
+        // Abort the per-turn SIGINT handler so tasks do not accumulate across
+        // turns.  Dropping the JoinHandle alone would leave the task running.
+        sigint_handle.abort();
         let secs = self.app.lock().unwrap().stop_thinking();
         // Accumulate agent-active time in session stats
         if let Ok(mut stats) = self.session_stats.lock() {
@@ -2407,11 +2641,12 @@ impl Repl {
                     }
                     // Update rich per-model stats
                     if let Ok(mut stats) = sess_stats.lock() {
-                        let model      = msg.data["model"].as_str().unwrap_or("").to_string();
-                        let input      = msg.data["input_tokens"].as_u64().unwrap_or(0);
-                        let cache_read = msg.data["cache_read_tokens"].as_u64().unwrap_or(0);
-                        let output     = msg.data["output_tokens"].as_u64().unwrap_or(0);
-                        stats.record_usage(&model, input, cache_read, output);
+                        let model       = msg.data["model"].as_str().unwrap_or("").to_string();
+                        let input       = msg.data["input_tokens"].as_u64().unwrap_or(0);
+                        let cache_read  = msg.data["cache_read_tokens"].as_u64().unwrap_or(0);
+                        let cache_write = msg.data["cache_write_tokens"].as_u64().unwrap_or(0);
+                        let output      = msg.data["output_tokens"].as_u64().unwrap_or(0);
+                        stats.record_usage(&model, input, cache_read, cache_write, output);
                     }
                 }
                 _ => {}
@@ -2439,13 +2674,15 @@ impl Repl {
                 Ok(m) => m,
                 Err(e) if is_cancel(&e) => {
                     let mut app = self.app.lock().unwrap();
-                    app.discard_streaming();
+                    let _ = app.commit_reasoning();
+                    let _ = app.commit_streaming();
                     let _ = app.push(RenderLine::ErrorMsg("Turn interrupted".to_string()));
                     return Ok(vec![]);
                 }
                 Err(e) => {
                     let mut app = self.app.lock().unwrap();
-                    app.discard_streaming();
+                    let _ = app.commit_reasoning();
+                    let _ = app.commit_streaming();
                     let _ = app.push(RenderLine::ErrorMsg(e.to_string()));
                     return Ok(vec![]);
                 }
@@ -2458,13 +2695,15 @@ impl Repl {
                     Ok(m) => m,
                     Err(e) if is_cancel(&e) => {
                         let mut app = self.app.lock().unwrap();
-                        app.discard_streaming();
+                        let _ = app.commit_reasoning();
+                        let _ = app.commit_streaming();
                         let _ = app.push(RenderLine::ErrorMsg("Turn interrupted".to_string()));
                         return Ok(vec![]);
                     }
                     Err(e) => {
                         let mut app = self.app.lock().unwrap();
-                        app.discard_streaming();
+                        let _ = app.commit_reasoning();
+                        let _ = app.commit_streaming();
                         let _ = app.push(RenderLine::ErrorMsg(e.to_string()));
                         return Ok(vec![]);
                     }
@@ -2533,6 +2772,8 @@ impl Repl {
                 let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
                     format!("  ⎿  Hook continuing: {reason}")
                 ));
+                // Clear any stale cancel flag before the hook-continuation stream_turn.
+                self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
                 // Feed the hook's stderr back to the agent as a new turn
                 let follow_msgs = self.stream_turn(stdout, &reason, false, "", "", None, bar_text.clone()).await?;
                 Box::pin(self.dispatch_tool_calls(stdout, follow_msgs, user_input, bar_text)).await?;
@@ -2562,6 +2803,12 @@ impl Repl {
                     stats.tool_calls_ok  += 1;
                 }
             }
+
+            // Clear any cancel flag set while the tool was executing (e.g. Esc
+            // pressed during a long bash command).  The tool has already finished
+            // and pushed its result — its follow-up LLM response must always run.
+            // The user can press Esc again to interrupt that response if needed.
+            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
 
             // Stream the tool return and process any chained tool calls
             let follow = self
@@ -2642,6 +2889,12 @@ impl Repl {
         if tool_name == "install_skill" {
             return self.handle_install_skill(call_id, args).await;
         }
+        if tool_name == "run_skill_script" {
+            return self.handle_run_skill_script(call_id, args).await;
+        }
+        if tool_name == "load_skill_ref" {
+            return self.handle_load_skill_ref(call_id, args).await;
+        }
         if tool_name == "run_subagent" {
             return self.handle_run_subagent(call_id, args).await;
         }
@@ -2653,6 +2906,10 @@ impl Repl {
         if self.permissions.is_blocked(tool_name, args) {
             let msg = self.permissions.block_reason(tool_name, args);
             let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: msg.clone() });
+            // Clear any stale cancel flag so the subsequent stream_turn is not
+            // immediately aborted if cancel_turn was left true by a prior
+            // cancelled loop iteration in dispatch_tool_calls.
+            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
             return Ok(crate::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -2670,6 +2927,9 @@ impl Repl {
                     is_error: true,
                     content: format!("Hook denied: {reason}"),
                 });
+                // Clear any stale cancel flag — a SIGINT that arrived during hook
+                // execution must not abort the subsequent stream_turn.
+                self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
                 return Ok(crate::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: tool_name.to_string(),
@@ -2686,6 +2946,11 @@ impl Repl {
                 }
                 let msg = format!("Tool '{tool_name}' denied by user");
                 let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: msg.clone() });
+                // prompt_approval clears cancel_turn in its own branches, but a SIGINT
+                // that fired between prompt_approval's clear and this return point would
+                // leave cancel_turn=true and abort the next stream_turn immediately.
+                // Clear unconditionally here to guarantee a clean state.
+                self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
                 return Ok(crate::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: tool_name.to_string(),
@@ -2693,7 +2958,14 @@ impl Repl {
                     is_error: true,
                 });
             }
-            // User reviewed and approved
+            // User reviewed and approved.
+            // Clear any stale cancel flag that may have been set by a SIGINT
+            // delivered while ask_question_blocking held the crossterm event loop
+            // (e.g. the terminal sending Ctrl+C when the user pressed Enter to
+            // confirm "Yes, don't ask again").  Without this reset the subsequent
+            // stream_turn would immediately see cancel_turn == true and abort with
+            // "Turn interrupted" even though the user explicitly approved the tool.
+            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
             if let Ok(mut stats) = self.session_stats.lock() {
                 stats.reviewed += 1;
                 stats.approved += 1;
@@ -2705,6 +2977,8 @@ impl Repl {
             self.hooks.pre_tool_use(tool_name, args).await
         {
             let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: format!("Hook blocked: {reason}") });
+            // Clear any stale cancel flag — same rationale as the denial path above.
+            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
             return Ok(crate::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -2892,35 +3166,42 @@ impl Repl {
 
         // ── Stage 1 fix: use spawn_blocking + ask_question_blocking ─────────────
         //
-        // Previously this called ask_question_async + rx.await while holding (or
-        // re-acquiring) the app Mutex from the async runtime.  The tick task's
-        // spin-wait also competed for that same Mutex to call handle_question_key
-        // → tx.send.  Under any transient lock contention the oneshot receiver
-        // never resolved, hanging the turn indefinitely.
-        //
-        // ask_question_blocking owns its own event::poll/event::read loop and
-        // runs on a dedicated blocking thread (spawn_blocking), so:
-        //   • The async runtime is never blocked.
-        //   • The app Mutex is held only inside the blocking thread — no
-        //     contention with the async side between poll iterations.
-        //   • The tick task sees active_question.tx == None and skips its
-        //     handle_question_key branch (Stage 3 guard).
-        //   • add_session_allow is called before execute_tool proceeds, so
-        //     back-to-back tool calls of the same type are auto-approved (B3 fix).
+        // Key events are forwarded from the tick task via a dedicated channel so
+        // that the blocking thread never competes with EventStream for crossterm
+        // events, and the tick task never deadlocks on the app mutex.
         let app_arc = self.app.clone();
         let q_owned = q;   // already owned — move into closure
 
+        let (key_tx, key_rx) = std::sync::mpsc::sync_channel::<crossterm::event::KeyEvent>(8);
+        self.blocking_question_active.store(true, std::sync::atomic::Ordering::SeqCst);
+        *self.blocking_question_key_tx.lock().unwrap() = Some(key_tx);
+
         let qa = tokio::task::spawn_blocking(move || {
             let mut app = app_arc.lock().unwrap();
-            app.ask_question_blocking(&q_owned)
+            app.ask_question_blocking(&q_owned, key_rx)
         })
         .await
         .map_err(|e| anyhow::anyhow!("approval task panicked: {e}"))??;
 
+        self.blocking_question_active.store(false, std::sync::atomic::Ordering::SeqCst);
+        *self.blocking_question_key_tx.lock().unwrap() = None;
+
         match qa {
-            None => Ok(false), // Esc / Ctrl+C = deny
+            None => {
+                // Esc / Ctrl+C = deny. Clear any cancel flag set while the
+                // blocking question was active — an Esc inside the modal must
+                // not abort the subsequent stream_turn.
+                self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+                return Ok(false);
+            }
             Some(answer) => {
                 let label = answer.as_str();
+                // Clear any stale SIGINT cancel flag set while the blocking
+                // event loop ran (terminal may have converted Ctrl+Enter or
+                // a buffered Esc into an OS-level interrupt during the modal).
+                // Without this reset the next stream_turn would see
+                // cancel_turn == true and immediately abort with "Turn interrupted".
+                self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
                 if label.starts_with("Yes, don't") {
                     // Store allow rule BEFORE returning so that any immediately
                     // following tool call of the same type is auto-approved (B3).
@@ -3050,18 +3331,29 @@ impl Repl {
             };
 
             // Use spawn_blocking + ask_question_blocking (same fix as prompt_approval):
-            // avoids async/Mutex deadlock between rx.await and the tick-task spin-wait.
+            // key events forwarded via channel so tick task never deadlocks on app mutex.
             let app_arc = self.app.clone();
             let q_owned = q;
+
+            let (key_tx, key_rx) = std::sync::mpsc::sync_channel::<crossterm::event::KeyEvent>(8);
+            self.blocking_question_active.store(true, std::sync::atomic::Ordering::SeqCst);
+            *self.blocking_question_key_tx.lock().unwrap() = Some(key_tx);
+
             let qa = tokio::task::spawn_blocking(move || {
                 let mut app = app_arc.lock().unwrap();
-                app.ask_question_blocking(&q_owned)
+                app.ask_question_blocking(&q_owned, key_rx)
             })
             .await
             .map_err(|e| anyhow::anyhow!("ask_user_question task panicked: {e}"))??;
 
+            self.blocking_question_active.store(false, std::sync::atomic::Ordering::SeqCst);
+            *self.blocking_question_key_tx.lock().unwrap() = None;
+
             match qa {
                 None => {
+                    // User cancelled — clear any stale cancel flag so subsequent
+                    // stream_turn calls are not aborted immediately.
+                    self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
                     let msg = "User cancelled the question prompt.".to_string();
                     let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: msg.clone() });
                     return Ok(crate::tools::ToolResult {
@@ -3087,6 +3379,10 @@ impl Repl {
                 .collect::<Vec<_>>()
                 .join("\n")
         };
+        // Clear any stale cancel flag accumulated during the question loop so
+        // the following stream_turn is not aborted prematurely.
+        self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+
         // Removed internal ToolResult push since dispatch_tool_calls pushes it unconditionally.
         {
             let mut app = self.app.lock().unwrap();
@@ -3197,6 +3493,157 @@ impl Repl {
                     output: format!("Failed to install skill: {e}"),
                     is_error: true,
                 })
+            }
+        }
+    }
+
+    /// Execute a script from a skill's `scripts/` directory — `run_skill_script` tool.
+    async fn handle_run_skill_script(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+    ) -> Result<crate::tools::ToolResult> {
+        let skill_id  = args["skill_id"].as_str().unwrap_or("").trim().to_string();
+        let script    = args["script"].as_str().unwrap_or("").trim().to_string();
+        let script_args: Vec<String> = args["args"]
+            .as_array()
+            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .unwrap_or_default();
+
+        if skill_id.is_empty() || script.is_empty() {
+            return Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "run_skill_script".to_string(),
+                output: "error: 'skill_id' and 'script' are required".to_string(),
+                is_error: true,
+            });
+        }
+
+        let skills = self.skills.lock().unwrap();
+        match skills.iter().find(|s| s.id == skill_id) {
+            None => Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "run_skill_script".to_string(),
+                output: format!("Skill '{skill_id}' not found."),
+                is_error: true,
+            }),
+            Some(skill) => {
+                match skill.scripts.iter().find(|s| s.name == script) {
+                    None => {
+                        let available: Vec<&str> = skill.scripts.iter().map(|s| s.name.as_str()).collect();
+                        Ok(crate::tools::ToolResult {
+                            tool_call_id: call_id.to_string(),
+                            tool_name: "run_skill_script".to_string(),
+                            output: format!(
+                                "Script '{script}' not found in skill '{skill_id}'. Available: {}",
+                                if available.is_empty() { "none".to_string() } else { available.join(", ") }
+                            ),
+                            is_error: true,
+                        })
+                    }
+                    Some(sk) => {
+                        let script_path = sk.path.clone();
+                        drop(skills);
+
+                        self.tui_dim(format!("  Running skill script: {} {}", script_path.display(), script_args.join(" ")));
+
+                        let output = tokio::process::Command::new(&script_path)
+                            .args(&script_args)
+                            .output()
+                            .await;
+
+                        match output {
+                            Err(e) => Ok(crate::tools::ToolResult {
+                                tool_call_id: call_id.to_string(),
+                                tool_name: "run_skill_script".to_string(),
+                                output: format!("Failed to run script: {e}"),
+                                is_error: true,
+                            }),
+                            Ok(out) => {
+                                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                                let combined = if stderr.is_empty() {
+                                    stdout
+                                } else {
+                                    format!("{stdout}\n[stderr]\n{stderr}")
+                                };
+                                let is_error = !out.status.success();
+                                Ok(crate::tools::ToolResult {
+                                    tool_call_id: call_id.to_string(),
+                                    tool_name: "run_skill_script".to_string(),
+                                    output: combined,
+                                    is_error,
+                                })
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Lazy-load a reference document from a skill's `references/` directory.
+    async fn handle_load_skill_ref(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+    ) -> Result<crate::tools::ToolResult> {
+        let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
+        let doc      = args["doc"].as_str().unwrap_or("").trim().to_string();
+
+        if skill_id.is_empty() || doc.is_empty() {
+            return Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "load_skill_ref".to_string(),
+                output: "error: 'skill_id' and 'doc' are required".to_string(),
+                is_error: true,
+            });
+        }
+
+        let skills = self.skills.lock().unwrap();
+        match skills.iter().find(|s| s.id == skill_id) {
+            None => Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "load_skill_ref".to_string(),
+                output: format!("Skill '{skill_id}' not found."),
+                is_error: true,
+            }),
+            Some(skill) => {
+                match skill.references.iter().find(|r| r.name == doc || r.path.file_name().and_then(|n| n.to_str()).unwrap_or("") == doc) {
+                    None => {
+                        let available: Vec<&str> = skill.references.iter().map(|r| r.name.as_str()).collect();
+                        Ok(crate::tools::ToolResult {
+                            tool_call_id: call_id.to_string(),
+                            tool_name: "load_skill_ref".to_string(),
+                            output: format!(
+                                "Reference '{doc}' not found in skill '{skill_id}'. Available: {}",
+                                if available.is_empty() { "none".to_string() } else { available.join(", ") }
+                            ),
+                            is_error: true,
+                        })
+                    }
+                    Some(r) => {
+                        let ref_path = r.path.clone();
+                        drop(skills);
+                        match std::fs::read_to_string(&ref_path) {
+                            Ok(content) => {
+                                tracing::info!("Agent loaded skill ref: {skill_id}/{doc}");
+                                Ok(crate::tools::ToolResult {
+                                    tool_call_id: call_id.to_string(),
+                                    tool_name: "load_skill_ref".to_string(),
+                                    output: format!("# Reference: {doc} (skill: {skill_id})\n\n{content}"),
+                                    is_error: false,
+                                })
+                            }
+                            Err(e) => Ok(crate::tools::ToolResult {
+                                tool_call_id: call_id.to_string(),
+                                tool_name: "load_skill_ref".to_string(),
+                                output: format!("Failed to read reference '{doc}': {e}"),
+                                is_error: true,
+                            }),
+                        }
+                    }
+                }
             }
         }
     }

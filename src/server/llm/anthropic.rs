@@ -101,12 +101,35 @@ impl AnthropicProvider {
             }
         }
 
-        // Build tools array in Anthropic format
-        let tools: Vec<Value> = req.tools.iter().map(|schema| json!({
+        // ── Prompt caching ────────────────────────────────────────────────────
+        // Anthropic charges ~90% less for tokens served from the prompt cache.
+        // We mark two stable, large anchors with cache_control so Anthropic
+        // pins them in its KV cache across turns:
+        //
+        //   1. System prompt  — static for the entire session; always ≥1 024 tok.
+        //   2. Last tool def  — tool schemas are fixed per session; marking the
+        //                       last entry caches the entire tools array prefix.
+        //
+        // The cache TTL is 5 minutes (refreshed on every cache hit).  For a
+        // typical coding session the system prompt + tool schemas are re-used
+        // on every turn, so hit-rate is near 100% after the first request.
+        //
+        // Requirement: prompt-caching beta header must be sent (added in the
+        // HTTP call sites below). claude-3-5+ supports it natively but the
+        // header is harmless for all models.
+
+        // Build tools array in Anthropic format, injecting cache_control on
+        // the last entry so the full tools prefix is cached.
+        let mut tools: Vec<Value> = req.tools.iter().map(|schema| json!({
             "name": schema["name"],
             "description": schema["description"],
             "input_schema": schema["parameters"]
         })).collect();
+
+        // Mark the last tool with cache_control to cache the entire tools list.
+        if let Some(last) = tools.last_mut() {
+            last["cache_control"] = json!({"type": "ephemeral"});
+        }
 
         let mut body = json!({
             "model": bare_model(&req.model),
@@ -115,8 +138,13 @@ impl AnthropicProvider {
             "stream": stream
         });
 
+        // System prompt: use structured block form so we can attach cache_control.
         if !system_text.is_empty() {
-            body["system"] = json!(system_text);
+            body["system"] = json!([{
+                "type": "text",
+                "text": system_text,
+                "cache_control": { "type": "ephemeral" }
+            }]);
         }
         if !tools.is_empty() {
             body["tools"] = json!(tools);
@@ -164,6 +192,7 @@ impl LlmProvider for AnthropicProvider {
                     .post(API_URL)
                     .header("x-api-key", &api_key)
                     .header("anthropic-version", "2023-06-01")
+                    .header("anthropic-beta", "prompt-caching-2024-07-31")
                     .header("content-type", "application/json")
                     .json(&body)
                     .send()
@@ -196,6 +225,7 @@ impl LlmProvider for AnthropicProvider {
                     .post(API_URL)
                     .header("x-api-key", &api_key)
                     .header("anthropic-version", "2023-06-01")
+                    .header("anthropic-beta", "prompt-caching-2024-07-31")
                     .header("content-type", "application/json")
                     .json(&body)
                     .send()
@@ -221,6 +251,7 @@ impl LlmProvider for AnthropicProvider {
             let mut input_tokens: u32 = 0;
             let mut output_tokens: u32 = 0;
             let mut cache_read_tokens: u32 = 0;
+            let mut cache_write_tokens: u32 = 0;
 
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = match chunk {
@@ -268,7 +299,10 @@ impl LlmProvider for AnthropicProvider {
                         "content_block_stop" => {
                             if !tool_name.is_empty() {
                                 let args: Value = serde_json::from_str(&tool_args)
-                                    .unwrap_or(Value::Object(serde_json::Map::new()));
+                                    .unwrap_or_else(|e| {
+                                        tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {:?}", tool_name, tool_args);
+                                        Value::Object(serde_json::Map::new())
+                                    });
                                 yield Ok(StreamChunk::ToolCall(LlmToolCall {
                                     id: tool_id.clone(),
                                     name: tool_name.clone(),
@@ -280,12 +314,15 @@ impl LlmProvider for AnthropicProvider {
                             }
                         }
                         "message_start" => {
-                            // e.g. {"type":"message_start","message":{"usage":{"input_tokens":N,"cache_read_input_tokens":N}}}
+                            // e.g. {"type":"message_start","message":{"usage":{"input_tokens":N,"cache_read_input_tokens":N,"cache_creation_input_tokens":N}}}
                             if let Some(n) = event["message"]["usage"]["input_tokens"].as_u64() {
                                 input_tokens += n as u32;
                             }
                             if let Some(n) = event["message"]["usage"]["cache_read_input_tokens"].as_u64() {
                                 cache_read_tokens += n as u32;
+                            }
+                            if let Some(n) = event["message"]["usage"]["cache_creation_input_tokens"].as_u64() {
+                                cache_write_tokens += n as u32;
                             }
                         }
                         "message_delta" => {
@@ -295,11 +332,12 @@ impl LlmProvider for AnthropicProvider {
                             }
                         }
                         "message_stop" => {
-                            if input_tokens > 0 || output_tokens > 0 || cache_read_tokens > 0 {
+                            if input_tokens > 0 || output_tokens > 0 || cache_read_tokens > 0 || cache_write_tokens > 0 {
                                 yield Ok(StreamChunk::Usage(TokenUsage {
                                     input_tokens,
                                     output_tokens,
                                     cache_read_tokens,
+                                    cache_write_tokens,
                                     model: req_model.clone(),
                                 }));
                             }

@@ -52,11 +52,14 @@ pub struct CompletionResponse {
 /// Token usage reported by the LLM at the end of a completion.
 #[derive(Debug, Clone, Default)]
 pub struct TokenUsage {
-    pub input_tokens:      u32,
-    pub output_tokens:     u32,
-    pub cache_read_tokens: u32,
+    pub input_tokens:       u32,
+    pub output_tokens:      u32,
+    pub cache_read_tokens:  u32,
+    /// Tokens written into the prompt cache on this request (first cache miss).
+    /// Non-zero only on Anthropic; billed at 1.25× normal input rate.
+    pub cache_write_tokens: u32,
     /// The model that produced this usage (e.g. "gemini/gemini-2.5-pro").
-    pub model:             String,
+    pub model:              String,
 }
 
 /// A chunk from a streaming response

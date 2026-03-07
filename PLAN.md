@@ -84,3 +84,131 @@
 
 ## 2026-03-04 UTC - Fix stream_tool_return_cancellable silent error discard
 - Explicitly handle `InvalidStatusCode` inside `stream_tool_return_cancellable` to mirror behavior of `stream_message_cancellable`. This correctly propagates server HTTP errors instead of falling back to a non-streaming endpoint.
+
+---
+
+## 2026-03-07 UTC — Fix: buffered Esc cancels turn immediately (root cause of persistent interruption)
+
+**Summary**: Added a 200 ms grace period to the tick task's Esc handler so that Esc key events
+buffered in the terminal from before the agent turn started cannot immediately cancel the turn.
+
+**Root cause**:
+The terminal (via crossterm) buffers key events in an OS-level queue. When the user presses Esc
+(e.g., to clear input) and then presses Enter to submit a message, the Enter is consumed by
+`read_input()`. However, if the Esc was pressed very close to or after the Enter press, it can
+remain in the terminal's input buffer and be read by the tick task's `EventStream` when the task
+first polls for events.
+
+The tick task is spawned during `agent_turn` (after `cancel_turn.store(false)` at line 2308).
+Its first `await` point is inside `tokio::select!` where it polls `reader.next()`. At that
+first poll, the runtime schedules the tick task and it immediately processes the buffered Esc.
+The Esc handler sets `cancel_turn = true`. When `stream_turn` later reaches `es.next().await`
+and receives `Event::Open`, the cancel check fires → "Turn interrupted" — before any LLM
+content has been received.
+
+This explains why the issue occurred "consistently": users who type quickly or habitually press
+Esc near the end of their typed message would consistently see "Turn interrupted" on the first
+response.
+
+**Fix** (`repl.rs`, Esc handler in tick task, line ~2444):
+Added a guard: `if tick_start.elapsed().as_millis() >= 200`. `tick_start` is already in scope
+(cloned from `turn_start`). Esc events arriving within the first 200 ms of the turn are
+silently discarded. After 200 ms, Esc works as before (interrupts the streaming turn).
+
+**Previous behaviour**: Any buffered Esc event processed by the tick task immediately set
+`cancel_turn = true`, cancelling the turn before content arrived.
+
+**New behaviour**: Esc events within the first 200 ms of the turn are ignored. Esc pressed
+200 ms+ after the turn started still interrupts streaming as expected.
+
+**Files modified**:
+- `src/cli/repl.rs` — Esc handler in tick task key-event spin-wait (line ~2444)
+
+**Rollback**: Remove the `if tick_start.elapsed().as_millis() >= 200 { }` guard; restore the
+original unconditional `tick_cancel.store(true, ...)` call.
+
+---
+
+## 2026-03-06 UTC — Fix: spurious "Turn interrupted" and blank viewport (root-cause investigation)
+
+**Summary**: Investigation confirmed two remaining gaps in the `cancel_turn` guard coverage
+in `execute_tool()`, and a resource leak in the per-turn SIGINT handler. Two targeted fixes
+applied.
+
+**Root cause (interruption)**:
+`cancel_turn` (AtomicBool) is shared between the SIGINT handler task and the SSE streaming
+client. The streaming client fires `__cancelled__` on the very first SSE event (`Event::Open`)
+if `cancel_turn == true` — before any LLM content is received. This produces "Turn interrupted"
+with zero agent content in the viewport (blank from user's perspective).
+
+Two paths in `execute_tool()` returned early without clearing `cancel_turn`:
+1. `is_blocked` permission check (line ~2885) — could carry a stale `true` from a prior
+   cancelled loop iteration in `dispatch_tool_calls`.
+2. `_sigint_guard` JoinHandle was stored as `_sigint_guard` (underscore prefix keeps the
+   variable alive until end of scope, but the SIGINT handler task is NOT aborted on drop).
+   After N agent turns, N SIGINT handler tasks accumulate. Each one shares `cancel_turn`.
+   A Ctrl+C between turns fires all N tasks, leaving `cancel_turn = true` in a window where
+   the next turn's `cancel_turn.store(false)` has not yet run.
+
+**Root cause (blank viewport)**:
+Secondary effect of the above: when `cancel_turn == true` at `stream_turn` entry, no
+streaming chunk is ever pushed (`streaming_active` stays false), `commit_streaming()` commits
+nothing, and only `RenderLine::ErrorMsg("Turn interrupted")` is pushed to `lines`.
+
+**Fix B** (`repl.rs:2310`):
+- Renamed `_sigint_guard` → `sigint_handle` so the JoinHandle is live until end of scope.
+- Added `sigint_handle.abort()` immediately after `tick_handle.abort()` at the end of
+  `agent_turn`, so the SIGINT handler task is explicitly cancelled each turn.
+- **Previous behaviour**: JoinHandle dropped (not aborted); task runs indefinitely; N tasks
+  accumulate after N turns.
+- **New behaviour**: Task aborted at end of each turn; exactly one SIGINT handler active
+  per running turn.
+
+**Fix D** (`repl.rs:2885`):
+- Added `self.cancel_turn.store(false, SeqCst)` before the early return in the `is_blocked`
+  permission check, matching the pattern of the three existing clears at lines 2907/2928/2956.
+- **Previous behaviour**: `is_blocked` returned with `cancel_turn` potentially stale `true`,
+  causing the subsequent `stream_turn` in `dispatch_tool_calls` to immediately fire
+  "Turn interrupted".
+- **New behaviour**: `cancel_turn` cleared unconditionally before returning, same as all
+  other early-return paths in `execute_tool()`.
+
+**Files modified**:
+- `src/cli/repl.rs` — lines ~2310 (rename + abort) and ~2885 (cancel_turn clear)
+
+**Rollback**:
+- Fix B: rename `sigint_handle` back to `_sigint_guard`, remove the `sigint_handle.abort()` line.
+- Fix D: remove the `self.cancel_turn.store(false, ...)` line before the `is_blocked` return.
+
+---
+
+## 2026-03-07 UTC — P-01/P-02: Add `run_skill_script` and `load_skill_ref` intercepts in headless mode
+
+**Summary**: Added intercept handlers for `run_skill_script` and `load_skill_ref` in `headless.rs:run_one_tool()`. Previously both tools fell through to `dispatch()` which returned "Unknown tool" in headless/CI mode. Now they behave identically to the REPL handlers.
+
+**Root cause**: Both tools were added to `is_sequential_tool()` (preventing parallel dispatch) but no corresponding intercept was added to `run_one_tool()`, so the headless path silently returned an error for every call.
+
+**Files modified**:
+- `src/cli/headless.rs` — two intercept blocks inserted after the `// Intercept: load_skill` block, before `// Generic tool dispatch`
+
+**Previous behaviour**: `run_skill_script` and `load_skill_ref` returned `(call_id, "Unknown tool: 'run_skill_script'", true)` in headless mode.
+
+**New behaviour**: Both tools call `discover_all_skills()` to locate the skill, then either execute the script via `tokio::process::Command` (`run_skill_script`) or read the reference file via `std::fs::read_to_string` (`load_skill_ref`), matching the REPL handler logic exactly (minus the TUI `tui_dim` call, replaced with `tracing::info!`).
+
+**Rollback**: Remove the two intercept blocks from `src/cli/headless.rs` (lines between `return (call_id, msg, err); }` for `load_skill` and `// Generic tool dispatch`).
+
+---
+
+## 2026-03-07 UTC — P-03/P-04: Bump version to 0.2.0 and date CHANGELOG
+
+**Summary**: Incremented crate version from `0.1.0` to `0.2.0` and converted the `[Unreleased]` CHANGELOG section to `[0.2.0] — 2026-03-07`.
+
+**Files modified**:
+- `Cargo.toml` — `version` field: `"0.1.0"` → `"0.2.0"`
+- `CHANGELOG.md` — `## [Unreleased]` → `## [0.2.0] — 2026-03-07`
+
+**Previous behaviour**: `cargo pkgid` reported `cade@0.1.0`; `X-Cade-Version` header emitted `0.1.0`; CHANGELOG had undated `[Unreleased]` section.
+
+**New behaviour**: Version is `0.2.0` across binary, server header, and CHANGELOG.
+
+**Rollback**: Revert `Cargo.toml` version to `"0.1.0"` and `CHANGELOG.md` heading back to `## [Unreleased]`.

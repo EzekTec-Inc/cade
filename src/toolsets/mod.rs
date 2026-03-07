@@ -98,6 +98,8 @@ impl Toolset {
             "update_memory",
             "load_skill",
             "install_skill",
+            "run_skill_script",
+            "load_skill_ref",
             "run_subagent",
         ]
     }

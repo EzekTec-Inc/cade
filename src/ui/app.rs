@@ -34,7 +34,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Clear, Padding, Paragraph, Wrap},
+    widgets::{Block, Padding, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -120,7 +120,10 @@ pub struct ActiveQuestionDrawState {
 
 pub struct ActiveQuestionState {
     pub draw_state: ActiveQuestionDrawState,
+    /// For async questions (ask_question_async).
     pub tx: Option<tokio::sync::oneshot::Sender<Option<crate::ui::question::QuestionAnswer>>>,
+    /// For blocking questions: key events forwarded from the tick task.
+    pub key_tx: Option<std::sync::mpsc::SyncSender<crossterm::event::KeyEvent>>,
 }
 
 // ── TuiApp ────────────────────────────────────────────────────────────────────
@@ -145,6 +148,9 @@ pub struct TuiApp {
     // ── Input state ────────────────────────────────────────────────────────
     pub input:      String,
     pub cursor_pos: usize,
+    /// Last known terminal width — kept in sync during draw() so that
+    /// Up/Down cursor navigation uses the real column width.
+    term_width: u16,
 
     // ── Status / thinking ──────────────────────────────────────────────────
     pub thinking:    Option<ThinkingState>,
@@ -177,6 +183,7 @@ impl TuiApp {
             reasoning_active: false,
             input: String::new(),
             cursor_pos: 0,
+            term_width: 80,
             thinking: None,
             last_status: None,
             mode,
@@ -361,6 +368,10 @@ impl TuiApp {
                 active_question.as_ref(),
             );
         })?;
+        // Keep term_width in sync so Up/Down cursor navigation is accurate.
+        if let Ok(sz) = crossterm::terminal::size() {
+            self.term_width = sz.0;
+        }
         Ok(())
     }
 
@@ -397,6 +408,7 @@ impl TuiApp {
                     submit_idx,
                 },
                 tx: None,
+                key_tx: None,
             });
 
             self.draw()?;
@@ -481,17 +493,22 @@ impl TuiApp {
         Ok(answer)
     }
 
-    /// Blocking question modal — owns its own `event::poll`/`event::read` loop.
+    /// Blocking question modal — driven by key events forwarded through `key_rx`.
     ///
-    /// Safe to call from `tokio::task::spawn_blocking`.  Does NOT use a
-    /// oneshot channel and does NOT need the tick task to deliver key events.
+    /// Safe to call from `tokio::task::spawn_blocking`.  Does NOT poll the
+    /// crossterm event queue directly; instead the tick task forwards
+    /// `KeyEvent`s via the `SyncSender` half of the channel.  This avoids the
+    /// deadlock where the tick task consumes an Esc from the EventStream while
+    /// this function is waiting on `event::read()`.
+    ///
     /// Sets `active_question.tx = None` so the tick task's spin-wait branch
-    /// is never entered for this modal (Stage 3 guard).
+    /// is never entered for this modal.
     ///
-    /// This is the canonical path for `prompt_approval` (tool-call approval).
+    /// This is the canonical path for `prompt_approval` and `handle_ask_user_question`.
     pub fn ask_question_blocking(
         &mut self,
         question: &crate::ui::question::Question,
+        key_rx: std::sync::mpsc::Receiver<crossterm::event::KeyEvent>,
     ) -> Result<Option<crate::ui::question::QuestionAnswer>> {
         let n_real      = question.options.len();
         let has_other   = question.allow_other;
@@ -522,117 +539,107 @@ impl TuiApp {
                     submit_idx,
                 },
                 tx: None,   // ← blocking path: no channel needed
+                key_tx: None,
             });
 
             self.draw()?;
 
-            if !event::poll(std::time::Duration::from_millis(50))? {
-                continue;
-            }
-            match event::read()? {
-                Event::Key(KeyEvent { code, modifiers, .. }) => {
-                    match (code, modifiers) {
-                        (KeyCode::Esc, _)
-                        | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                            break 'widget None;
-                        }
-                        (KeyCode::Up, _) => {
-                            if cursor_pos > 0 { cursor_pos -= 1; }
-                        }
-                        (KeyCode::Down, _) => {
-                            if cursor_pos + 1 < total_items { cursor_pos += 1; }
-                        }
-                        (KeyCode::Tab, _) => {
-                            cursor_pos = (cursor_pos + 1) % total_items;
-                        }
-                        (KeyCode::BackTab, _) => {
-                            cursor_pos = if cursor_pos == 0 {
-                                total_items - 1
-                            } else {
-                                cursor_pos - 1
-                            };
-                        }
-                        (KeyCode::Char(c), KeyModifiers::NONE)
-                            if c.is_ascii_digit() && c != '0' =>
-                        {
-                            let idx = (c as usize) - ('1' as usize);
-                            if idx < total_items {
-                                if question.multi_select {
-                                    if idx < n_real {
-                                        checked[idx] = !checked[idx];
-                                        cursor_pos = idx;
-                                    }
-                                } else if idx != other_idx {
-                                    let label = question.options[idx].label.clone();
-                                    break 'widget Some(
-                                        crate::ui::question::QuestionAnswer::Single(label),
-                                    );
-                                } else {
-                                    cursor_pos = idx;
-                                }
+            let key_event = match key_rx.recv_timeout(std::time::Duration::from_millis(50)) {
+                Ok(k) => k,
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break 'widget None,
+            };
+            let crossterm::event::KeyEvent { code, modifiers, .. } = key_event;
+            match (code, modifiers) {
+                (KeyCode::Esc, _)
+                | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                    break 'widget None;
+                }
+                (KeyCode::Up, _) => {
+                    if cursor_pos > 0 { cursor_pos -= 1; }
+                }
+                (KeyCode::Down, _) => {
+                    if cursor_pos + 1 < total_items { cursor_pos += 1; }
+                }
+                (KeyCode::Tab, _) => {
+                    cursor_pos = (cursor_pos + 1) % total_items;
+                }
+                (KeyCode::BackTab, _) => {
+                    cursor_pos = if cursor_pos == 0 {
+                        total_items - 1
+                    } else {
+                        cursor_pos - 1
+                    };
+                }
+                (KeyCode::Char(c), KeyModifiers::NONE)
+                    if c.is_ascii_digit() && c != '0' =>
+                {
+                    let idx = (c as usize) - ('1' as usize);
+                    if idx < total_items {
+                        if question.multi_select {
+                            if idx < n_real {
+                                checked[idx] = !checked[idx];
+                                cursor_pos = idx;
                             }
+                        } else if idx != other_idx {
+                            let label = question.options[idx].label.clone();
+                            break 'widget Some(
+                                crate::ui::question::QuestionAnswer::Single(label),
+                            );
+                        } else {
+                            cursor_pos = idx;
                         }
-                        (KeyCode::Backspace, _) if cursor_pos == other_idx => {
-                            custom_text.pop();
-                        }
-                        (KeyCode::Enter, _) => {
-                            if question.multi_select {
-                                if cursor_pos == submit_idx {
-                                    let selected: Vec<String> = checked
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(_, c)| **c)
-                                        .map(|(i, _)| question.options[i].label.clone())
-                                        .collect();
-                                    if !selected.is_empty() {
-                                        break 'widget Some(
-                                            crate::ui::question::QuestionAnswer::Multi(selected),
-                                        );
-                                    }
-                                } else if cursor_pos == other_idx {
-                                    if !custom_text.is_empty() {
-                                        break 'widget Some(
-                                            crate::ui::question::QuestionAnswer::Multi(vec![
-                                                custom_text.clone(),
-                                            ]),
-                                        );
-                                    }
-                                } else if cursor_pos < n_real {
-                                    checked[cursor_pos] = !checked[cursor_pos];
-                                }
-                            } else if cursor_pos == other_idx {
-                                if !custom_text.is_empty() {
-                                    break 'widget Some(
-                                        crate::ui::question::QuestionAnswer::Single(
-                                            custom_text.clone(),
-                                        ),
-                                    );
-                                }
-                            } else {
-                                let label = question.options[cursor_pos].label.clone();
-                                break 'widget Some(
-                                    crate::ui::question::QuestionAnswer::Single(label),
-                                );
-                            }
-                        }
-                        (KeyCode::Char(c), m)
-                            if cursor_pos == other_idx
-                                && (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT) =>
-                        {
-                            custom_text.push(c);
-                        }
-                        _ => {}
                     }
                 }
-                Event::Mouse(m) => match m.kind {
-                    MouseEventKind::ScrollUp => {
-                        self.scroll = self.scroll.saturating_add(3);
+                (KeyCode::Backspace, _) if cursor_pos == other_idx => {
+                    custom_text.pop();
+                }
+                (KeyCode::Enter, _) => {
+                    if question.multi_select {
+                        if cursor_pos == submit_idx {
+                            let selected: Vec<String> = checked
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, c)| **c)
+                                .map(|(i, _)| question.options[i].label.clone())
+                                .collect();
+                            if !selected.is_empty() {
+                                break 'widget Some(
+                                    crate::ui::question::QuestionAnswer::Multi(selected),
+                                );
+                            }
+                        } else if cursor_pos == other_idx {
+                            if !custom_text.is_empty() {
+                                break 'widget Some(
+                                    crate::ui::question::QuestionAnswer::Multi(vec![
+                                        custom_text.clone(),
+                                    ]),
+                                );
+                            }
+                        } else if cursor_pos < n_real {
+                            checked[cursor_pos] = !checked[cursor_pos];
+                        }
+                    } else if cursor_pos == other_idx {
+                        if !custom_text.is_empty() {
+                            break 'widget Some(
+                                crate::ui::question::QuestionAnswer::Single(
+                                    custom_text.clone(),
+                                ),
+                            );
+                        }
+                    } else {
+                        let label = question.options[cursor_pos].label.clone();
+                        break 'widget Some(
+                            crate::ui::question::QuestionAnswer::Single(label),
+                        );
                     }
-                    MouseEventKind::ScrollDown => {
-                        self.scroll = self.scroll.saturating_sub(3);
-                    }
-                    _ => {}
-                },
+                }
+                (KeyCode::Char(c), m)
+                    if cursor_pos == other_idx
+                        && (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT) =>
+                {
+                    custom_text.push(c);
+                }
                 _ => {}
             }
         };
@@ -696,6 +703,7 @@ impl TuiApp {
                 submit_idx,
             },
             tx: Some(tx),
+            key_tx: None,
         });
 
         self.draw()?;
@@ -836,7 +844,15 @@ impl TuiApp {
         // None              = continue reading
         match (k.code, k.modifiers) {
             // ── Submit ────────────────────────────────────────────────────
-            (KeyCode::Enter, m) if m == KeyModifiers::SHIFT => {
+            // Alt+Enter is the universal cross-terminal newline (reliably
+            // transmitted by all terminals).  Shift+Enter works only in
+            // terminals that support the kitty keyboard protocol; we accept
+            // both so users on either kind of terminal are covered.
+            (KeyCode::Enter, m)
+                if m == KeyModifiers::ALT
+                || m == KeyModifiers::SHIFT
+                || m == (KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+            {
                 self.input.insert(self.cursor_pos, '\n');
                 self.cursor_pos += 1;
             }
@@ -895,28 +911,70 @@ impl TuiApp {
                     .chars().next().map(|c| c.len_utf8()).unwrap_or(1);
             }
 
-            // ── History ───────────────────────────────────────────────────
-            (KeyCode::Up, _) if !history.is_empty() => {
-                let new_idx = match *hist_idx {
-                    None        => history.len() - 1,
-                    Some(i) if i > 0 => i - 1,
-                    Some(i)     => i,
-                };
-                *hist_idx    = Some(new_idx);
-                self.input   = history[new_idx].clone();
-                self.cursor_pos = self.input.len();
+            // ── History / cursor-up ───────────────────────────────────────
+            // When the cursor is NOT on the first visual row of the input,
+            // Up/Down move the cursor one visual row up/down within the
+            // multiline buffer.  Only when already on the first/last visual
+            // row do we switch to history navigation.
+            (KeyCode::Up, _) => {
+                let available_w = self.term_width.saturating_sub(2).max(1);
+                let text_w = (available_w.saturating_sub(2).max(1)) as usize;
+                let before  = &self.input[..self.cursor_pos];
+                let (cur_row, cur_col) = calc_visual_cursor(before, available_w);
+
+                if cur_row == 0 {
+                    // Already on the first visual row → history navigation
+                    if !history.is_empty() {
+                        let new_idx = match *hist_idx {
+                            None        => history.len() - 1,
+                            Some(i) if i > 0 => i - 1,
+                            Some(i)     => i,
+                        };
+                        *hist_idx       = Some(new_idx);
+                        self.input      = history[new_idx].clone();
+                        self.cursor_pos = self.input.len();
+                    }
+                } else {
+                    // Move cursor up one visual row: target column = cur_col
+                    // Walk backwards through the byte string to find the char
+                    // at (cur_row-1, cur_col).
+                    let target_row = cur_row - 1;
+                    // Rebuild visual-row byte-offset map
+                    let new_pos = find_cursor_at_visual_row_col(
+                        &self.input, text_w, target_row, cur_col,
+                    );
+                    self.cursor_pos = new_pos;
+                }
             }
             (KeyCode::Down, _) => {
-                if let Some(i) = *hist_idx {
-                    if i + 1 < history.len() {
-                        *hist_idx = Some(i + 1);
-                        self.input = history[i + 1].clone();
-                        self.cursor_pos = self.input.len();
-                    } else {
-                        *hist_idx = None;
-                        self.input.clear();
-                        self.cursor_pos = 0;
+                let available_w = self.term_width.saturating_sub(2).max(1);
+                let text_w = (available_w.saturating_sub(2).max(1)) as usize;
+                let total_rows = {
+                    let (tr, _) = calc_visual_cursor(&self.input, available_w);
+                    tr
+                };
+                let before = &self.input[..self.cursor_pos];
+                let (cur_row, cur_col) = calc_visual_cursor(before, available_w);
+
+                if cur_row >= total_rows {
+                    // Already on the last visual row → history navigation
+                    if let Some(i) = *hist_idx {
+                        if i + 1 < history.len() {
+                            *hist_idx = Some(i + 1);
+                            self.input = history[i + 1].clone();
+                            self.cursor_pos = self.input.len();
+                        } else {
+                            *hist_idx = None;
+                            self.input.clear();
+                            self.cursor_pos = 0;
+                        }
                     }
+                } else {
+                    let target_row = cur_row + 1;
+                    let new_pos = find_cursor_at_visual_row_col(
+                        &self.input, text_w, target_row, cur_col,
+                    );
+                    self.cursor_pos = new_pos;
                 }
             }
 
@@ -1037,15 +1095,40 @@ fn render_frame(
 
     let content_height = area.height - bottom_rows;
 
-    let chunks = Layout::vertical([
-        Constraint::Length(content_height),  // [0] content
-        Constraint::Length(1),               // [1] status
-        Constraint::Length(1),               // [2] top separator
-        Constraint::Length(input_rows),      // [3] input
-        Constraint::Length(1),               // [4] bottom separator
-        Constraint::Length(1),               // [5] footer
-    ])
-    .split(area);
+    // When a question is active, carve the inline panel out of the content area.
+    // Layout becomes 8 slots; without a question it stays 6 (question slots = 0).
+    let inline_h = active_question
+        .map(|aq| question_height(aq, content_height))
+        .unwrap_or(0);
+    let shrunk_content = content_height.saturating_sub(inline_h);
+
+    let chunks = if inline_h > 0 {
+        Layout::vertical([
+            Constraint::Length(shrunk_content), // [0] content  (shrunk)
+            Constraint::Length(1),              // [1] inline separator ╌╌╌
+            Constraint::Length(inline_h - 1),   // [2] question panel
+            Constraint::Length(1),              // [3] status
+            Constraint::Length(1),              // [4] top separator
+            Constraint::Length(input_rows),     // [5] input
+            Constraint::Length(1),              // [6] bottom separator
+            Constraint::Length(1),              // [7] footer
+        ])
+        .split(area)
+    } else {
+        // No question: same 6-slot layout, pad with two dummy zero-height slots
+        // so all index references below are uniform (we only use 0,3..7 in this branch).
+        Layout::vertical([
+            Constraint::Length(content_height), // [0] content
+            Constraint::Length(0),              // [1] (unused)
+            Constraint::Length(0),              // [2] (unused)
+            Constraint::Length(1),              // [3] status
+            Constraint::Length(1),              // [4] top separator
+            Constraint::Length(input_rows),     // [5] input
+            Constraint::Length(1),              // [6] bottom separator
+            Constraint::Length(1),              // [7] footer
+        ])
+        .split(area)
+    };
 
     // ── Content area ─────────────────────────────────────────────────────────
     let mut text_lines: Vec<Line<'static>> = Vec::new();
@@ -1114,7 +1197,7 @@ fn render_frame(
     };
     frame.render_widget(
         Paragraph::new(Span::styled(status_text, status_style)),
-        chunks[1],
+        chunks[3],
     );
 
     // ── Separators ────────────────────────────────────────────────────────────
@@ -1122,35 +1205,45 @@ fn render_frame(
     let sep       = "─".repeat(area.width as usize);
     frame.render_widget(
         Paragraph::new(Span::styled(sep.clone(), Style::default().fg(sep_color))),
-        chunks[2],
+        chunks[4],
     );
     frame.render_widget(
         Paragraph::new(Span::styled(sep, Style::default().fg(sep_color))),
-        chunks[4],
+        chunks[6],
     );
 
     // ── Input area ────────────────────────────────────────────────────────────
-    let input_display = if input.is_empty() {
-        Line::from(vec![
+    // Build one ratatui Line per logical line so wrapping is correct and the
+    // "> " prefix only appears on the first line.  Subsequent lines get a
+    // "  " (2-space) indent so text columns align with the first line.
+    let input_paragraph: Vec<Line<'static>> = if input.is_empty() {
+        vec![Line::from(vec![
             Span::styled("> ", Style::default().fg(RC::White)),
             Span::styled("Type a message…", Style::default().fg(RC::DarkGray)),
-        ])
+        ])]
     } else {
-        Line::from(vec![
-            Span::styled("> ", Style::default().fg(RC::White)),
-            Span::styled(input.replace('\n', "↵ "), Style::default().fg(RC::White)),
-        ])
+        input
+            .split('\n')
+            .enumerate()
+            .map(|(i, seg)| {
+                let prefix = if i == 0 { "> " } else { "  " };
+                Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(RC::Rgb(120, 120, 120))),
+                    Span::styled(seg.to_string(), Style::default().fg(RC::White)),
+                ])
+            })
+            .collect()
     };
     frame.render_widget(
-        Paragraph::new(input_display).wrap(Wrap { trim: false }),
-        chunks[3],
+        Paragraph::new(input_paragraph).wrap(Wrap { trim: false }),
+        chunks[5],
     );
 
     // Cursor position
     let before = &input[..cursor_pos.min(input.len())];
     let (vis_row, vis_col) = calc_visual_cursor(before, available_w);
-    let cx = (chunks[3].x + vis_col).min(chunks[3].x + chunks[3].width.saturating_sub(1));
-    let cy = (chunks[3].y + vis_row).min(chunks[3].y + chunks[3].height.saturating_sub(1));
+    let cx = (chunks[5].x + vis_col).min(chunks[5].x + chunks[5].width.saturating_sub(1));
+    let cy = (chunks[5].y + vis_row).min(chunks[5].y + chunks[5].height.saturating_sub(1));
     frame.set_cursor_position((cx, cy));
 
     // ── Footer ────────────────────────────────────────────────────────────────
@@ -1161,7 +1254,7 @@ fn render_frame(
     let right_len = (right_agent.chars().count() + right_model.chars().count()) as u16;
     let left_base_len: u16 = left_label.chars().count() as u16
         + if left_glyph.is_empty() { 0 } else { 1 + left_glyph.chars().count() as u16 };
-    let pad = chunks[5].width.saturating_sub(left_base_len + right_len) as usize;
+    let pad = chunks[7].width.saturating_sub(left_base_len + right_len) as usize;
 
     let mut footer: Vec<Span<'static>> = vec![
         Span::styled(left_label, Style::default().fg(left_color).add_modifier(Modifier::BOLD)),
@@ -1176,51 +1269,104 @@ fn render_frame(
     footer.push(Span::styled(right_agent, Style::default().fg(RC::Rgb(140, 140, 249))));
     footer.push(Span::styled(right_model, Style::default().fg(RC::DarkGray)));
 
-    frame.render_widget(Paragraph::new(Line::from(footer)), chunks[5]);
+    frame.render_widget(Paragraph::new(Line::from(footer)), chunks[7]);
 
-    // ── Question overlay (rendered last — on top of everything) ───────────────
+    // ── Inline question panel (anchored to bottom of content viewport) ────────
     if let Some(aq) = active_question {
-        let popup = popup_area(area, 50, 20);
-        frame.render_widget(Clear, popup);
-        render_question_card(frame, aq, popup);
+        // chunks[1] = dashed separator, chunks[2] = panel body
+        render_question_inline(frame, aq, chunks[1], chunks[2]);
     }
 }
 
 // ── Overlay helpers ───────────────────────────────────────────────────────────
 
-/// Compute a centred popup rect.
-/// `percent_w` — percentage of terminal width (0–100).
-/// `max_h`     — maximum height in rows.
-fn popup_area(area: Rect, percent_w: u16, max_h: u16) -> Rect {
-    let w = (area.width * percent_w / 100).min(area.width.saturating_sub(4)).max(20);
-    let h = max_h.min(area.height.saturating_sub(4)).max(6);
-    let x = area.x + area.width.saturating_sub(w) / 2;
-    let y = area.y + area.height.saturating_sub(h) / 2;
-    Rect { x, y, width: w, height: h }
-}
-
-/// Draw the bordered question card overlay.
-fn render_question_card(frame: &mut Frame, aq: &ActiveQuestionDrawState, area: Rect) {
+/// Calculate the number of rows needed for the inline question panel.
+///
+/// Counts: 1 header + 1 blank + wrapped-question-rows + 1 blank
+///       + per-option rows (label + optional description)
+///       + submit row (multi-select) + other row + 1 blank + 1 hint.
+/// Clamped to at most half the content viewport so content is never fully hidden.
+fn question_height(aq: &ActiveQuestionDrawState, content_height: u16) -> u16 {
     let q = &aq.question;
 
-    // ── Outer border ─────────────────────────────────────────────────────────
-    let title = Span::styled(
-        format!(" {} ", q.header),
-        Style::default().fg(RC::Yellow).add_modifier(Modifier::BOLD),
+    // Fixed rows: separator-row is accounted for by the caller (inline_h - 1 for body).
+    // Here we return the total including the separator row.
+    let mut rows: u16 = 0;
+
+    // header chip + blank
+    rows += 2;
+    // question text (treat as 1 row; long questions word-wrap but we keep it simple)
+    rows += 1;
+    // blank after question
+    rows += 1;
+
+    // progress indicator
+    if q.progress.is_some() {
+        rows += 2; // "Question N of M" + blank
+    }
+
+    // options: label row always, description row only if non-empty
+    for idx in 0..aq.total_items {
+        if idx == aq.submit_idx {
+            rows += 2; // label + blank
+        } else if idx == aq.other_idx {
+            rows += 2; // label + blank
+        } else {
+            rows += 1; // label
+            if idx < q.options.len() && !q.options[idx].description.is_empty() {
+                rows += 1; // description
+            }
+        }
+    }
+
+    // blank + hint
+    rows += 2;
+
+    // +1 for the dashed separator row itself
+    rows += 1;
+
+    rows.min(content_height / 2).max(6)
+}
+
+/// Render the inline question panel — no border box, anchored to the bottom
+/// of the content viewport via the layout split in `render_frame`.
+///
+/// `sep_area`  — the single row reserved for the dashed separator (chunks[1]).
+/// `body_area` — the panel body rows (chunks[2]).
+fn render_question_inline(
+    frame:     &mut Frame,
+    aq:        &ActiveQuestionDrawState,
+    sep_area:  Rect,
+    body_area: Rect,
+) {
+    let q = &aq.question;
+
+    // ── Dashed separator ─────────────────────────────────────────────────────
+    // Use a dimmer, shorter dash to visually distinguish from the hard ─ separators.
+    let dash_w   = sep_area.width as usize;
+    let dash_str = "╌".repeat(dash_w);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            dash_str,
+            Style::default().fg(RC::Rgb(70, 70, 100)),
+        ))),
+        sep_area,
     );
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(RC::Rgb(140, 140, 249)))
-        .title(title);
 
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-
-    // ── Card content ─────────────────────────────────────────────────────────
+    // ── Panel body ───────────────────────────────────────────────────────────
     let mut lines: Vec<Line<'static>> = Vec::new();
 
-    // Question text
+    // Header chip — left-aligned, yellow bold with a diamond glyph
+    lines.push(Line::from(vec![
+        Span::styled("◆ ", Style::default().fg(RC::Yellow)),
+        Span::styled(
+            q.header.clone(),
+            Style::default().fg(RC::Yellow).add_modifier(Modifier::BOLD),
+        ),
+    ]));
     lines.push(Line::from(""));
+
+    // Question text
     lines.push(Line::from(Span::styled(
         q.text.clone(),
         Style::default().fg(RC::White),
@@ -1290,7 +1436,11 @@ fn render_question_card(frame: &mut Frame, aq: &ActiveQuestionDrawState, area: R
         } else {
             ""
         };
-        let num_style   = if is_selected { Style::default().fg(RC::Green) } else { Style::default().fg(RC::DarkGray) };
+        let num_style   = if is_selected {
+            Style::default().fg(RC::Green)
+        } else {
+            Style::default().fg(RC::DarkGray)
+        };
         let label_style = if is_selected {
             Style::default().fg(RC::White).add_modifier(Modifier::BOLD)
         } else {
@@ -1298,7 +1448,10 @@ fn render_question_card(frame: &mut Frame, aq: &ActiveQuestionDrawState, area: R
         };
 
         lines.push(Line::from(vec![
-            Span::styled(format!(" {selector} "), Style::default().fg(RC::Green)),
+            Span::styled(
+                format!(" {selector} "),
+                Style::default().fg(RC::Green),
+            ),
             Span::styled(format!("{}. ", idx + 1), num_style),
             Span::styled(checkbox.to_string(), Style::default().fg(RC::Green)),
             Span::styled(opt.label.clone(), label_style),
@@ -1325,7 +1478,7 @@ fn render_question_card(frame: &mut Frame, aq: &ActiveQuestionDrawState, area: R
 
     frame.render_widget(
         Paragraph::new(lines).wrap(Wrap { trim: false }),
-        inner,
+        body_area,
     );
 }
 
@@ -1552,47 +1705,116 @@ fn render_assistant_lines(text: &str, _width: usize, out: &mut Vec<Line<'static>
 // ── Input helpers (ported from input.rs) ──────────────────────────────────────
 
 fn calc_input_rows(buf: &str, available_width: u16) -> u16 {
+    // available_width is the inner width of the input chunk (border already
+    // subtracted by the caller).  Each logical line is rendered as its own
+    // ratatui Line with a 2-char prefix ("> " or "  "), so every logical line
+    // has an effective text width of (available_width - 2).  We count the
+    // number of visual rows that ratatui will produce for each logical line.
     let w = available_width.max(1) as usize;
+    let text_w = w.saturating_sub(2).max(1);   // width after "  " / "> " prefix
     if buf.is_empty() { return 1; }
     let mut total: u16 = 0;
-    for (i, line) in buf.split('\n').enumerate() {
-        let chars = line.chars().count();
-        let row_w = if i == 0 { w.saturating_sub(2) } else { w }.max(1);
-        let rows  = if chars == 0 { 1 } else { ((chars + row_w - 1) / row_w) as u16 };
+    for seg in buf.split('\n') {
+        let chars = seg.chars().count();
+        let rows  = if chars == 0 { 1 } else { ((chars + text_w - 1) / text_w) as u16 };
         total += rows;
     }
     total.max(1).min(MAX_INPUT_ROWS)
 }
 
 fn calc_visual_cursor(before_cursor: &str, available_width: u16) -> (u16, u16) {
-    let w            = available_width.max(1) as usize;
-    let first_row_w  = w.saturating_sub(2).max(1);
-    let mut vis_row: u16 = 0;
-    let mut vis_col: u16 = 2;   // starts after "> "
-    let mut is_first_visual_row = true;
-    let mut chars_on_row: usize = 0;
+    // Mirror exactly how render_frame builds the Paragraph:
+    //   • Each logical line (split on '\n') is its own ratatui Line.
+    //   • Every line has a 2-char prefix (">" / "  "), so text wraps at
+    //     (available_width - 2) columns.
+    //   • The cursor column is 2 + (chars_on_current_visual_row - 1) when
+    //     still on the first visual row of a logical line, or
+    //     2 + (chars_on_wrap_row - 1) on subsequent wrap rows.
+    let w      = available_width.max(1) as usize;
+    let text_w = w.saturating_sub(2).max(1);  // text columns per visual row
 
-    for ch in before_cursor.chars() {
-        if ch == '\n' {
+    let mut vis_row: u16 = 0;
+    let mut vis_col: u16 = 2; // starts after the "  " / "> " prefix
+
+    for (li, seg) in before_cursor.split('\n').enumerate() {
+        if li > 0 {
+            // Crossed a \n: start a new logical line → new visual row, prefix col
             vis_row += 1;
-            vis_col = 0;
-            chars_on_row = 0;
-            is_first_visual_row = false;
-        } else {
+            vis_col  = 2;
+        }
+        // Walk through the segment, wrapping when we exceed text_w
+        let mut chars_on_row: usize = 0;
+        for _ch in seg.chars() {
             chars_on_row += 1;
-            let cap = if is_first_visual_row { first_row_w } else { w };
-            if chars_on_row > cap {
+            if chars_on_row > text_w {
+                // Wrap to next visual row within this logical line
                 vis_row += 1;
                 chars_on_row = 1;
-                is_first_visual_row = false;
-                vis_col = 1;
+                vis_col = 2 + 1; // prefix (2) + 1st char of new wrap row
             } else {
-                let prefix: u16 = if is_first_visual_row { 2 } else { 0 };
-                vis_col = prefix + chars_on_row as u16;
+                vis_col = 2 + chars_on_row as u16;
             }
         }
+        // After processing all chars of this segment, vis_col is already set
+        // correctly for the end of the segment.  If the segment was empty
+        // (bare \n), vis_col stays at 2 (just the prefix).
     }
+
     (vis_row, vis_col)
+}
+
+/// Given the full input `buf`, the visual text-column width `text_w`
+/// (= available_width - 2, matching `calc_visual_cursor`), and a target
+/// `(row, col)` in visual space, return the **byte offset** in `buf` of the
+/// character at that visual position.
+///
+/// Used by the Up/Down cursor-movement logic.
+fn find_cursor_at_visual_row_col(buf: &str, text_w: usize, target_row: u16, target_col: u16) -> usize {
+    let mut vis_row: u16 = 0;
+    let mut chars_on_row: usize = 0;
+    let mut byte_offset: usize = 0;
+
+    for (li, seg) in buf.split('\n').enumerate() {
+        if li > 0 {
+            vis_row += 1;
+            chars_on_row = 0;
+            byte_offset += 1; // the '\n' byte
+        }
+        if vis_row > target_row {
+            break;
+        }
+        let seg_start = byte_offset;
+        for ch in seg.chars() {
+            chars_on_row += 1;
+            if chars_on_row > text_w {
+                // visual wrap
+                vis_row += 1;
+                chars_on_row = 1;
+            }
+            if vis_row == target_row {
+                // We're on the target row — check column
+                // col is 1-based relative to content (after the 2-char prefix)
+                let content_col = target_col.saturating_sub(2) as usize;
+                if chars_on_row > content_col {
+                    return byte_offset;
+                }
+            }
+            if vis_row > target_row {
+                // Overshot — return last valid position on target row
+                return byte_offset;
+            }
+            byte_offset += ch.len_utf8();
+        }
+        // If we passed through the whole segment without overshooting, the
+        // cursor target is at the end of the segment (or beyond — clamp to end).
+        if vis_row == target_row {
+            // Return end of this segment (before the next \n or end of string)
+            return byte_offset;
+        }
+        let _ = seg_start; // suppress unused warning
+    }
+    // Clamp to end of buffer
+    buf.len()
 }
 
 fn mode_sep_color(mode: PermissionMode) -> RC {

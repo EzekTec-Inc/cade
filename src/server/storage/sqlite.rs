@@ -369,6 +369,8 @@ pub struct AgentRow {
     pub model: String,
     pub description: Option<String>,
     pub system_prompt: Option<String>,
+    /// Unix timestamp (seconds) when the agent was created.
+    pub created_at: Option<i64>,
 }
 
 pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
@@ -384,7 +386,7 @@ pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
 pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, name, model, description, system_prompt FROM agents WHERE id = ?1"
+        "SELECT id, name, model, description, system_prompt, created_at FROM agents WHERE id = ?1"
     )?;
     let mut rows = stmt.query(params![id])?;
     if let Some(row) = rows.next()? {
@@ -394,6 +396,7 @@ pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
             model:         row.get(2)?,
             description:   row.get(3)?,
             system_prompt: row.get(4)?,
+            created_at:    row.get(5)?,
         }))
     } else {
         Ok(None)
@@ -403,7 +406,7 @@ pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
 pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
     let conn = db.lock().unwrap();
     let mut stmt = conn.prepare(
-        "SELECT id, name, model, description, system_prompt FROM agents ORDER BY created_at DESC"
+        "SELECT id, name, model, description, system_prompt, created_at FROM agents ORDER BY created_at DESC"
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(AgentRow {
@@ -412,6 +415,7 @@ pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
             model:         row.get(2)?,
             description:   row.get(3)?,
             system_prompt: row.get(4)?,
+            created_at:    row.get(5)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -1351,11 +1355,11 @@ mod tests {
         // Create agents
         create_agent(&db, &AgentRow {
             id: agent1.to_string(), name: "A1".to_string(), model: "m".to_string(),
-            description: None, system_prompt: None
+            description: None, system_prompt: None, created_at: None,
         }).unwrap();
         create_agent(&db, &AgentRow {
             id: agent2.to_string(), name: "A2".to_string(), model: "m".to_string(),
-            description: None, system_prompt: None
+            description: None, system_prompt: None, created_at: None,
         }).unwrap();
 
         // 1. Agent 1 creates a block
@@ -1395,7 +1399,7 @@ mod tests {
 
         create_agent(&db, &AgentRow {
             id: agent_id.to_string(), name: "A".to_string(), model: "m".to_string(),
-            description: None, system_prompt: None
+            description: None, system_prompt: None, created_at: None,
         }).unwrap();
 
         insert_message(&db, &MessageRow {

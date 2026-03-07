@@ -5,6 +5,7 @@ use tokio::sync::RwLock;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use axum::http::{Request, HeaderValue, Method};
 
+
 use cade::server::{
     api::router,
     config::ServerConfig,
@@ -95,6 +96,7 @@ async fn main() -> Result<()> {
         );
 
     let app = router(state)
+        .layer(axum::middleware::map_response(add_version_header))
         .layer(
             // H-03: Restrict CORS to localhost origins only (not permissive/open)
             CorsLayer::new()
@@ -116,6 +118,19 @@ async fn main() -> Result<()> {
     let listener = tokio::net::TcpListener::bind(config.addr).await?;
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+// ── Version header middleware ──────────────────────────────────────────────────
+//
+// Adds `X-Cade-Version: <CARGO_PKG_VERSION>` to every response so that the
+// CLI client can detect version mismatches at startup.
+
+async fn add_version_header(mut response: axum::response::Response) -> axum::response::Response {
+    response.headers_mut().insert(
+        axum::http::HeaderName::from_static("x-cade-version"),
+        axum::http::HeaderValue::from_static(env!("CARGO_PKG_VERSION")),
+    );
+    response
 }
 
 // ── RouterAdapter: thin wrapper so Arc<RwLock<LlmRouter>> implements LlmProvider ──

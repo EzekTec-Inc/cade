@@ -193,6 +193,75 @@ async fn register_install_skill_tool(client: &CadeClient) {
     }
 }
 
+/// Register the `run_skill_script` tool — executes a script from a skill's scripts/ dir.
+async fn register_run_skill_script_tool(client: &CadeClient) {
+    let schema = serde_json::json!({
+        "name": "run_skill_script",
+        "description": "Execute a script from a skill's scripts/ directory. Use after load_skill to run deterministic tooling bundled with the skill.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "skill_id": {
+                    "type": "string",
+                    "description": "The skill ID that owns the script"
+                },
+                "script": {
+                    "type": "string",
+                    "description": "Script name (filename stem, e.g. 'explain_error')"
+                },
+                "args": {
+                    "type": "array",
+                    "items": { "type": "string" },
+                    "description": "Optional arguments to pass to the script"
+                }
+            },
+            "required": ["skill_id", "script"]
+        }
+    });
+    use agent::client::CreateToolRequest;
+    let req = CreateToolRequest {
+        source_code: String::new(),
+        source_type: "json".to_string(),
+        json_schema: Some(schema),
+        tags: vec![],
+    };
+    if let Err(e) = client.create_tool(req).await {
+        tracing::debug!("run_skill_script tool: {e}");
+    }
+}
+
+/// Register the `load_skill_ref` tool — lazy-loads a reference doc from a skill's references/ dir.
+async fn register_load_skill_ref_tool(client: &CadeClient) {
+    let schema = serde_json::json!({
+        "name": "load_skill_ref",
+        "description": "Lazy-load a reference document from a skill's references/ directory. Use only when you need deep documentation to solve a specific problem — avoids injecting tokens unnecessarily.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "skill_id": {
+                    "type": "string",
+                    "description": "The skill ID that owns the reference"
+                },
+                "doc": {
+                    "type": "string",
+                    "description": "Reference doc name (filename stem, e.g. 'dictionary_of_pain')"
+                }
+            },
+            "required": ["skill_id", "doc"]
+        }
+    });
+    use agent::client::CreateToolRequest;
+    let req = CreateToolRequest {
+        source_code: String::new(),
+        source_type: "json".to_string(),
+        json_schema: Some(schema),
+        tags: vec![],
+    };
+    if let Err(e) = client.create_tool(req).await {
+        tracing::debug!("load_skill_ref tool: {e}");
+    }
+}
+
 /// Register the `run_subagent` tool — spawns a focused subagent for a task.
 async fn register_run_subagent_tool(client: &CadeClient) {
     let schema = serde_json::json!({
@@ -298,6 +367,8 @@ pub async fn register_and_attach_filtered(
     register_update_memory_tool(client).await;
     register_load_skill_tool(client).await;
     register_install_skill_tool(client).await;
+    register_run_skill_script_tool(client).await;
+    register_load_skill_ref_tool(client).await;
     register_run_subagent_tool(client).await;
     let tools = register_cade_tools_filtered(client, toolset, tool_filter)
         .await
@@ -397,7 +468,7 @@ async fn main() -> Result<()> {
             .filter(|p| p.exists());
 
         if let Some(server_bin) = server_bin {
-            eprintln!("cade-server not running — starting…");
+            tracing::info!("cade-server not running — starting…");
             let mut cmd = std::process::Command::new(&server_bin);
             // Redirect server stdout + stderr to /tmp/cade-server.log for debugging.
             // try_clone() performs a proper OS-level dup(2) — no unsafe required.
@@ -436,11 +507,23 @@ async fn main() -> Result<()> {
                      Or start it manually: {}", server_bin.display()
                 );
             }
-            eprintln!("cade-server ready.");
+            tracing::info!("cade-server ready.");
         } else {
             bail!(
                 "Cannot connect to CADE server at {base_url}.\n\
                  Start cade-server first: ./target/release/cade-server"
+            );
+        }
+    }
+
+    // Version compatibility check: warn if client and server versions differ.
+    // Mismatched versions can cause subtle protocol or schema issues.
+    if let Some(srv_ver) = client.server_version().await {
+        let cli_ver = env!("CARGO_PKG_VERSION");
+        if srv_ver != cli_ver {
+            tracing::warn!(
+                "Version mismatch: client={cli_ver}, server={srv_ver}. \
+                 Consider restarting cade-server."
             );
         }
     }
