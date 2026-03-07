@@ -513,6 +513,18 @@ pub struct Repl {
     session_stats: std::sync::Arc<std::sync::Mutex<SessionStats>>,
     /// Fullscreen ratatui TUI — single render path for all output + input.
     app: Arc<Mutex<TuiApp>>,
+    /// I-01: steering message typed during a turn (Enter key) — cancel current
+    /// turn and run this message as the very next turn.
+    queued_steering: Arc<Mutex<Option<String>>>,
+    /// I-01: follow-up message typed during a turn (Alt+Enter) — run after
+    /// the current turn completes naturally, without interrupting it.
+    queued_followup: Arc<Mutex<Option<String>>>,
+    /// Millisecond timestamp of the last time a blocking question modal closed
+    /// (`blocking_question_active` transitioned true → false).
+    /// The I-01 Enter handler ignores Enter events within 300 ms of a modal
+    /// close to prevent the confirmation Enter from cancelling the subsequent
+    /// stream_turn — mirrors the 200 ms Esc grace period.
+    last_modal_close_ms: Arc<std::sync::atomic::AtomicU64>,
 }
 
 impl Repl {
@@ -573,6 +585,9 @@ impl Repl {
                 agent_name_clone.clone(),
                 current_model_clone.clone(),
             ))),
+            queued_steering:     Arc::new(Mutex::new(None)),
+            queued_followup:     Arc::new(Mutex::new(None)),
+            last_modal_close_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
 
@@ -680,23 +695,37 @@ impl Repl {
             // Echo user message.
             let _ = self.app.lock().unwrap().push(RenderLine::UserMessage(input.clone()));
 
-            // Direct bash: lines starting with '!'
-            if let Some(cmd) = input.strip_prefix('!') {
-                let cmd = cmd.trim();
-                if !cmd.is_empty() {
-                    let output = tokio::process::Command::new("sh")
+            // Direct bash:
+            //   !!cmd  — run silently: show output locally, do NOT send to agent.
+            //   !cmd   — run and send: show output AND forward it to the agent as context.
+            if input.starts_with('!') {
+                let (silent, cmd_str) = if let Some(rest) = input.strip_prefix("!!") {
+                    (true,  rest.trim())
+                } else {
+                    (false, input.strip_prefix('!').unwrap_or("").trim())
+                };
+                if !cmd_str.is_empty() {
+                    let run = tokio::process::Command::new("sh")
                         .arg("-c")
-                        .arg(cmd)
+                        .arg(cmd_str)
                         .output()
                         .await;
-                    match output {
+                    match run {
                         Ok(out) => {
                             let text = if out.stdout.is_empty() {
                                 String::from_utf8_lossy(&out.stderr).to_string()
                             } else {
                                 String::from_utf8_lossy(&out.stdout).to_string()
                             };
-                            let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(text));
+                            let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(text.clone()));
+                            if !silent {
+                                // Send command + output to agent
+                                let agent_msg = format!(
+                                    "Command: `{cmd_str}`\n\nOutput:\n```\n{text}\n```"
+                                );
+                                self.agent_turn(&mut stdout, &agent_msg).await?;
+                                let _ = self.app.lock().unwrap().commit_streaming();
+                            }
                         }
                         Err(e) => {
                             let _ = self.app.lock().unwrap().push(RenderLine::ErrorMsg(format!("bash: {e}")));
@@ -2215,6 +2244,17 @@ impl Repl {
             // Send to agent and handle tool loop
             self.agent_turn(&mut stdout, &input).await?;
             let _ = self.app.lock().unwrap().commit_streaming();
+
+            // I-01: drain queued messages into pending_input.
+            // Follow-up runs after the turn completes naturally.
+            // Steering runs after a cancelled turn.
+            // Follow-up takes priority — if both are set (edge case), run
+            // follow-up first; steering is re-queued on the next iteration.
+            if let Some(follow) = self.queued_followup.lock().unwrap().take() {
+                pending_input = Some(follow);
+            } else if let Some(steer) = self.queued_steering.lock().unwrap().take() {
+                pending_input = Some(steer);
+            }
         }
 
         // SessionEnd hook (non-blocking)
@@ -2359,16 +2399,20 @@ impl Repl {
         );
 
         // Redraw tick task — updates the spinner animation and assessing timer.
-        let tick_app     = self.app.clone();
-        let tick_cancel  = self.cancel_turn.clone();
-        let tick_tokens  = self.session_output_tokens.clone();
-        let tick_base    = out_tok_before;
-        let tick_start   = turn_start;
-        let tick_bar     = bar_text.clone();
-        let tick_blocking_active = self.blocking_question_active.clone();
-        let tick_blocking_key_tx = self.blocking_question_key_tx.clone();
+        let tick_app              = self.app.clone();
+        let tick_cancel           = self.cancel_turn.clone();
+        let tick_tokens           = self.session_output_tokens.clone();
+        let tick_base             = out_tok_before;
+        let tick_start            = turn_start;
+        let tick_bar              = bar_text.clone();
+        let tick_blocking_active  = self.blocking_question_active.clone();
+        let tick_blocking_key_tx  = self.blocking_question_key_tx.clone();
+        // I-01: message-queue Arcs shared with the tick task.
+        let tick_queued_steering  = self.queued_steering.clone();
+        let tick_queued_followup  = self.queued_followup.clone();
+        let tick_modal_close_ms   = self.last_modal_close_ms.clone();
         let tick_handle  = tokio::spawn(async move {
-            use crossterm::event::{EventStream, Event, KeyCode};
+            use crossterm::event::{EventStream, Event, KeyCode, KeyModifiers};
             use futures::StreamExt;
             let mut reader = EventStream::new();
             loop {
@@ -2440,7 +2484,81 @@ impl Repl {
                                                 match (k.code, k.modifiers) {
                                                     (KeyCode::Char('K'), _) => { app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
                                                     (KeyCode::Char('J'), _) => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
-                                                    (KeyCode::Char('o'), crossterm::event::KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
+                                                    (KeyCode::Char('o'), KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
+
+                                                    // ── I-01: input during agent turn ──────────
+                                                    // Steering: queue + cancel turn.
+                                                    (KeyCode::Enter, m)
+                                                        if m == KeyModifiers::NONE || m == KeyModifiers::CONTROL =>
+                                                    {
+                                                        let msg = app.input.trim().to_string();
+                                                        if !msg.is_empty() {
+                                                            // 300 ms post-modal grace period —
+                                                            // mirrors the 200 ms Esc guard.  The
+                                                            // Enter key used to confirm a blocking
+                                                            // question modal (ask_user_question /
+                                                            // prompt_approval) can linger in the
+                                                            // crossterm event queue for up to a few
+                                                            // hundred ms after the modal closes.
+                                                            // Without this guard, that Enter would
+                                                            // cancel the subsequent stream_turn and
+                                                            // produce a missing / interrupted response.
+                                                            let now_ms = std::time::SystemTime::now()
+                                                                .duration_since(std::time::UNIX_EPOCH)
+                                                                .unwrap_or_default()
+                                                                .as_millis() as u64;
+                                                            let last_close = tick_modal_close_ms
+                                                                .load(std::sync::atomic::Ordering::SeqCst);
+                                                            let post_modal = last_close > 0
+                                                                && now_ms.saturating_sub(last_close) < 300;
+                                                            if !post_modal {
+                                                                *tick_queued_steering.lock().unwrap() = Some(msg);
+                                                                app.input.clear();
+                                                                app.cursor_pos = 0;
+                                                                let _ = app.draw();
+                                                                tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                                                            }
+                                                        }
+                                                    }
+                                                    // Follow-up: queue without cancelling.
+                                                    (KeyCode::Enter, m)
+                                                        if m == KeyModifiers::ALT
+                                                        || m == KeyModifiers::SHIFT
+                                                        || m == (KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+                                                    {
+                                                        let msg = app.input.trim().to_string();
+                                                        if !msg.is_empty() {
+                                                            *tick_queued_followup.lock().unwrap() = Some(msg);
+                                                            app.input.clear();
+                                                            app.cursor_pos = 0;
+                                                            let _ = app.draw();
+                                                        }
+                                                    }
+                                                    // Regular character input.
+                                                    (KeyCode::Char(c), m)
+                                                        if m == KeyModifiers::NONE
+                                                        || m == KeyModifiers::SHIFT =>
+                                                    {
+                                                        let pos = app.cursor_pos;
+                                                        app.input.insert(pos, c);
+                                                        app.cursor_pos = pos + c.len_utf8();
+                                                        let _ = app.draw();
+                                                    }
+                                                    // Backspace — remove char before cursor.
+                                                    (KeyCode::Backspace, _) => {
+                                                        let cp = app.cursor_pos;
+                                                        if cp > 0 {
+                                                            let new_pos = app.input[..cp]
+                                                                .char_indices()
+                                                                .next_back()
+                                                                .map(|(i, _)| i)
+                                                                .unwrap_or(0);
+                                                            app.input.drain(new_pos..cp);
+                                                            app.cursor_pos = new_pos;
+                                                            let _ = app.draw();
+                                                        }
+                                                    }
+
                                                     (KeyCode::Esc, _) => {
                                                         // Ignore Esc events that arrive within
                                                         // the first 200 ms of the turn.  The
@@ -2451,7 +2569,17 @@ impl Repl {
                                                         // stale Esc and immediately cancel the
                                                         // turn before any LLM content arrives.
                                                         if tick_start.elapsed().as_millis() >= 200 {
-                                                            tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                                                            if !app.input.is_empty() {
+                                                                // Clear typed input rather than
+                                                                // cancelling — lets user discard
+                                                                // a queued message without stopping
+                                                                // the agent.
+                                                                app.input.clear();
+                                                                app.cursor_pos = 0;
+                                                                let _ = app.draw();
+                                                            } else {
+                                                                tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                                                            }
                                                         }
                                                     }
                                                     _ => {}
@@ -2647,6 +2775,16 @@ impl Repl {
                         let cache_write = msg.data["cache_write_tokens"].as_u64().unwrap_or(0);
                         let output      = msg.data["output_tokens"].as_u64().unwrap_or(0);
                         stats.record_usage(&model, input, cache_read, cache_write, output);
+
+                        // U-01: update footer context-window usage %.
+                        // input_tokens + cache_read_tokens = total tokens in context this turn.
+                        let window = crate::server::llm::catalogue::context_window_for_model(&model);
+                        if window > 0 {
+                            let used = input + cache_read;
+                            let pct = ((used as f64 / window as f64) * 100.0)
+                                .round().min(99.0) as u8;
+                            app_arc.lock().unwrap().set_context_pct(pct);
+                        }
                     }
                 }
                 _ => {}
@@ -3185,6 +3323,15 @@ impl Repl {
 
         self.blocking_question_active.store(false, std::sync::atomic::Ordering::SeqCst);
         *self.blocking_question_key_tx.lock().unwrap() = None;
+        // Record close time so the tick task's I-01 Enter handler can apply
+        // a 300 ms grace period (mirrors the 200 ms Esc grace period).
+        self.last_modal_close_ms.store(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            std::sync::atomic::Ordering::SeqCst,
+        );
 
         match qa {
             None => {
@@ -3348,6 +3495,13 @@ impl Repl {
 
             self.blocking_question_active.store(false, std::sync::atomic::Ordering::SeqCst);
             *self.blocking_question_key_tx.lock().unwrap() = None;
+            self.last_modal_close_ms.store(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                std::sync::atomic::Ordering::SeqCst,
+            );
 
             match qa {
                 None => {

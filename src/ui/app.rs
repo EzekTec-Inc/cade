@@ -93,6 +93,21 @@ pub enum RenderLine {
     QuestionResult { header: String, answer: String },
 }
 
+// ── PickerState (A-01) ────────────────────────────────────────────────────────
+
+/// State for the `@` file fuzzy picker overlay.
+#[derive(Debug, Clone)]
+pub struct PickerState {
+    /// Byte position of the `@` in `app.input` that activated the picker.
+    pub at_pos:  usize,
+    /// The query typed after `@` (grows as user types).
+    pub query:   String,
+    /// Matching file paths (relative to CWD), filtered by `query`.
+    pub matches: Vec<String>,
+    /// Index of the highlighted entry.
+    pub cursor:  usize,
+}
+
 // ── ThinkingState ─────────────────────────────────────────────────────────────
 
 /// Active thinking animation state.
@@ -157,12 +172,32 @@ pub struct TuiApp {
     pub last_status: Option<String>,
 
     // ── Footer info ────────────────────────────────────────────────────────
-    pub mode:       PermissionMode,
-    pub agent_name: String,
-    pub model:      String,
+    pub mode:        PermissionMode,
+    pub agent_name:  String,
+    pub model:       String,
+    /// Abbreviated working directory shown in the footer.
+    pub cwd:         String,
+    /// Context window usage (0–99 %) updated after each turn's usage event.
+    pub context_pct: Option<u8>,
 
     // ── Copy mode (disables mouse capture for OS text selection) ───────────
     pub copy_mode: bool,
+
+    // ── File picker (A-01) ────────────────────────────────────────────────
+    /// Active `@` file picker overlay. `None` when inactive.
+    pub picker: Option<PickerState>,
+
+    // ── Extensibility slots (A-02) ────────────────────────────────────────
+    /// Pinned header rendered as a fixed strip above the messages pane.
+    /// Populated by the caller (e.g. startup banner). Does not scroll.
+    pub header_lines: Vec<RenderLine>,
+    /// Optional extra row rendered below the footer (plugin/extension status).
+    pub footer_extra: Option<String>,
+
+    // ── Scroll indicator ──────────────────────────────────────────────────
+    /// Number of committed lines pushed while the user was scrolled up.
+    /// Reset to 0 whenever scroll returns to 0 (bottom).
+    pending_lines: usize,
 }
 
 impl TuiApp {
@@ -189,7 +224,13 @@ impl TuiApp {
             mode,
             agent_name,
             model,
+            cwd:         abbreviate_cwd(&std::env::current_dir().unwrap_or_default()),
+            context_pct: None,
             copy_mode: false,
+            picker: None,
+            header_lines: Vec::new(),
+            footer_extra: None,
+            pending_lines: 0,
         }
     }
 
@@ -199,10 +240,9 @@ impl TuiApp {
     pub fn push(&mut self, line: RenderLine) -> Result<()> {
         self.commit_streaming_inner();
         self.commit_reasoning_inner();
-        let at_bottom = self.scroll == 0;
         self.lines.push(line);
-        if at_bottom {
-            self.scroll = 0; // Only snap to bottom if we were already there
+        if self.scroll > 0 {
+            self.pending_lines += 1;
         }
         self.draw()
     }
@@ -217,8 +257,11 @@ impl TuiApp {
     /// Append a streaming chunk and redraw.
     pub fn push_streaming_chunk(&mut self, text: &str) -> Result<()> {
         self.commit_reasoning_inner();
-        if !self.streaming_active {
-            self.scroll = 0; // snap to bottom on first chunk of any new streaming session
+        // Do NOT snap to bottom here — if the user has scrolled up to read
+        // history, leave them there.  The pending_lines indicator (V-02) signals
+        // that content is arriving below.  snap only if already at bottom.
+        if !self.streaming_active && self.scroll == 0 {
+            self.scroll = 0; // already at bottom — stay there (no-op)
         }
         self.streaming_active = true;
         self.streaming_text.push_str(text);
@@ -234,7 +277,11 @@ impl TuiApp {
     /// Commit any in-progress assistant streaming to `lines`.
     pub fn commit_streaming(&mut self) -> Result<()> {
         self.commit_streaming_inner();
-        self.scroll = 0; // snap to bottom at end of every LLM response
+        // Do NOT unconditionally snap — respect user's scroll position.
+        // If the user scrolled up while the agent was streaming, leave them there.
+        if self.scroll > 0 {
+            self.pending_lines += 1; // the committed text block counts as new content
+        }
         self.draw()
     }
 
@@ -336,22 +383,30 @@ impl TuiApp {
 
     pub fn draw_impl(&mut self) -> Result<()> {
         // Snapshot all rendering data (avoids borrow conflicts).
-        let lines           = self.lines.clone();
-        let streaming       = if self.streaming_active { Some(self.streaming_text.clone()) } else { None };
-        let scroll          = self.scroll;
-        let input           = self.input.clone();
-        let cursor_pos      = self.cursor_pos;
-        let mode            = self.mode;
-        let agent_name      = self.agent_name.clone();
-        let model           = self.model.clone();
-        let last_status     = self.last_status.clone();
-        let thinking_text   = self.thinking.as_ref().map(|ts| ts.text.lock().unwrap().clone());
+        let lines            = self.lines.clone();
+        let streaming        = if self.streaming_active { Some(self.streaming_text.clone()) } else { None };
+        let scroll           = self.scroll;
+        let input            = self.input.clone();
+        let cursor_pos       = self.cursor_pos;
+        let mode             = self.mode;
+        let agent_name       = self.agent_name.clone();
+        let model            = self.model.clone();
+        let last_status      = self.last_status.clone();
+        let thinking_text    = self.thinking.as_ref().map(|ts| ts.text.lock().unwrap().clone());
         let thinking_elapsed = self.thinking.as_ref().map(|ts| ts.started.elapsed());
-        let expand_all      = self.expand_all;
-        let active_question = self.active_question.as_ref().map(|s| s.draw_state.clone());
+        let expand_all       = self.expand_all;
+        let active_question  = self.active_question.as_ref().map(|s| s.draw_state.clone());
+        let pending_lines    = self.pending_lines;
+        let cwd              = self.cwd.clone();
+        let context_pct      = self.context_pct;
+        let picker           = self.picker.clone();
+        let header_lines     = self.header_lines.clone();
+        let footer_extra     = self.footer_extra.clone();
 
-        self.terminal.draw(move |frame| {
-            render_frame(
+        // V-04: capture max_skip returned by render_frame to clamp self.scroll.
+        let mut max_skip: u16 = 0;
+        self.terminal.draw(|frame| {
+            max_skip = render_frame(
                 frame,
                 &lines,
                 streaming.as_deref(),
@@ -366,8 +421,18 @@ impl TuiApp {
                 thinking_text.as_deref(),
                 thinking_elapsed,
                 active_question.as_ref(),
+                pending_lines,
+                &cwd,
+                context_pct,
+                picker.as_ref(),
+                &header_lines,
+                footer_extra.as_deref(),
             );
         })?;
+        // V-04: clamp self.scroll so stale over-scroll doesn't trap the user.
+        if self.scroll > max_skip as usize {
+            self.scroll = max_skip as usize;
+        }
         // Keep term_width in sync so Up/Down cursor navigation is accurate.
         if let Ok(sz) = crossterm::terminal::size() {
             self.term_width = sz.0;
@@ -824,7 +889,12 @@ impl TuiApp {
                 Event::Mouse(m) => {
                     match m.kind {
                         MouseEventKind::ScrollUp   => { self.scroll = self.scroll.saturating_add(3); }
-                        MouseEventKind::ScrollDown => { self.scroll = self.scroll.saturating_sub(3); }
+                        MouseEventKind::ScrollDown => {
+                            self.scroll = self.scroll.saturating_sub(3);
+                            if self.scroll == 0 {
+                                self.pending_lines = 0;
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -842,6 +912,79 @@ impl TuiApp {
         // Some(None)        = Ctrl+D (exit)
         // Some(Some(s))     = line submitted
         // None              = continue reading
+
+        // ── A-01: file picker routing ──────────────────────────────────────
+        if self.picker.is_some() {
+            match (k.code, k.modifiers) {
+                (KeyCode::Esc, _) => {
+                    self.picker = None;
+                }
+                (KeyCode::Up, _) => {
+                    if let Some(ref mut pk) = self.picker {
+                        if pk.cursor > 0 { pk.cursor -= 1; }
+                    }
+                }
+                (KeyCode::Down, _) => {
+                    if let Some(ref mut pk) = self.picker {
+                        if !pk.matches.is_empty() && pk.cursor + 1 < pk.matches.len() {
+                            pk.cursor += 1;
+                        }
+                    }
+                }
+                (KeyCode::Enter, m) if m == KeyModifiers::NONE => {
+                    if let Some(pk) = self.picker.take() {
+                        if let Some(selected) = pk.matches.get(pk.cursor).cloned() {
+                            let query_end = pk.at_pos + 1 + pk.query.len();
+                            self.input.drain(pk.at_pos..query_end.min(self.input.len()));
+                            self.input.insert_str(pk.at_pos, &selected);
+                            self.cursor_pos = pk.at_pos + selected.len();
+                        }
+                        // dismiss whether or not a match was selected
+                    }
+                }
+                (KeyCode::Backspace, _) => {
+                    if let Some(ref mut pk) = self.picker {
+                        if pk.query.is_empty() {
+                            // Delete the @ and dismiss
+                            if pk.at_pos < self.input.len() {
+                                self.input.remove(pk.at_pos);
+                                self.cursor_pos = pk.at_pos;
+                            }
+                            self.picker = None;
+                        } else {
+                            // Remove last query char from both query and input
+                            let query_end = pk.at_pos + 1 + pk.query.len();
+                            let remove_at = query_end.saturating_sub(1);
+                            if remove_at < self.input.len() {
+                                self.input.remove(remove_at);
+                            }
+                            pk.query.pop();
+                            pk.cursor = 0;
+                            let root = std::env::current_dir().unwrap_or_default();
+                            pk.matches = collect_files(&root, &pk.query);
+                        }
+                    }
+                }
+                (KeyCode::Char(c), m)
+                    if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
+                {
+                    // Append char to both input and picker query
+                    if let Some(ref mut pk) = self.picker {
+                        let query_end = pk.at_pos + 1 + pk.query.len();
+                        self.input.insert(query_end, c);
+                        self.cursor_pos = query_end + c.len_utf8();
+                        pk.query.push(c);
+                        pk.cursor = 0;
+                        let root = std::env::current_dir().unwrap_or_default();
+                        pk.matches = collect_files(&root, &pk.query);
+                    }
+                }
+                _ => {}
+            }
+            let _ = self.draw();
+            return Ok(None);
+        }
+
         match (k.code, k.modifiers) {
             // ── Submit ────────────────────────────────────────────────────
             // Alt+Enter is the universal cross-terminal newline (reliably
@@ -860,7 +1003,8 @@ impl TuiApp {
                 let line = self.input.clone();
                 self.input.clear();   // clear input immediately so it's empty during agent turn
                 self.cursor_pos = 0;
-                self.scroll = 0; // snap to bottom on submit
+                self.scroll = 0;        // snap to bottom on submit
+                self.pending_lines = 0; // user is following the conversation
                 return Ok(Some(Some(line)));
             }
 
@@ -985,13 +1129,22 @@ impl TuiApp {
             }
             (KeyCode::Char('J'), _) => {
                 self.scroll = self.scroll.saturating_sub(10);
+                if self.scroll == 0 {
+                    self.pending_lines = 0;
+                }
             }
 
-            // ── Mode cycle ────────────────────────────────────────────────
+            // ── Mode cycle / path completion ──────────────────────────────
             (KeyCode::Tab, _) => {
-                // Return a sentinel; repl.rs handles the actual mode change.
-                self.scroll = 0;
-                return Ok(Some(Some("__TAB__".to_string())));
+                // I-02: if cursor is on a path token, complete it; otherwise
+                // fall through to the mode-cycle sentinel.
+                if let Some((new_input, new_cursor)) = complete_path(&self.input, self.cursor_pos) {
+                    self.input      = new_input;
+                    self.cursor_pos = new_cursor;
+                } else {
+                    self.scroll = 0;
+                    return Ok(Some(Some("__TAB__".to_string())));
+                }
             }
             (KeyCode::BackTab, _) => {
                 self.scroll = 0;
@@ -1016,8 +1169,20 @@ impl TuiApp {
             (KeyCode::Char(c), m)
                 if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
             {
-                self.input.insert(self.cursor_pos, c);
-                self.cursor_pos += c.len_utf8();
+                let pos = self.cursor_pos;
+                self.input.insert(pos, c);
+                self.cursor_pos = pos + c.len_utf8();
+                // A-01: activate file picker when '@' is typed.
+                if c == '@' && self.picker.is_none() {
+                    let root = std::env::current_dir().unwrap_or_default();
+                    let matches = collect_files(&root, "");
+                    self.picker = Some(PickerState {
+                        at_pos:  pos,
+                        query:   String::new(),
+                        matches,
+                        cursor:  0,
+                    });
+                }
             }
             _ => {}
         }
@@ -1044,6 +1209,17 @@ fn count_wrapped_rows(line: &Line<'_>, content_w: u16) -> u16 {
     if content_w == 0 { return 1; }
     // Concatenate all spans into a single string for word counting.
     let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+    if text.is_empty() { return 1; }
+    // V-03: split on \n first — each newline forces a new visual row regardless
+    // of wrapping, matching ratatui's behaviour for embedded newlines in spans.
+    text.split('\n')
+        .map(|segment| count_wrapped_segment(segment, content_w))
+        .sum::<u16>()
+        .max(1)
+}
+
+/// Count wrapped rows for a single line segment (no embedded newlines).
+fn count_wrapped_segment(text: &str, content_w: u16) -> u16 {
     if text.is_empty() { return 1; }
     let width = content_w as usize;
     let mut rows: u16 = 1;
@@ -1079,18 +1255,26 @@ fn render_frame(
     last_status:      &Option<String>,
     thinking_text:    Option<&str>,
     thinking_elapsed: Option<std::time::Duration>,
-    active_question: Option<&ActiveQuestionDrawState>,
-) {
+    active_question:  Option<&ActiveQuestionDrawState>,
+    pending_lines:    usize,
+    cwd:              &str,
+    context_pct:      Option<u8>,
+    picker:           Option<&PickerState>,
+    header_lines:     &[RenderLine],
+    footer_extra:     Option<&str>,
+) -> u16 {   // returns max_skip for V-04 scroll clamping
     let area = frame.area();
     let w    = area.width as usize;
 
-    let available_w  = area.width.saturating_sub(2).max(1);
-    let input_rows   = calc_input_rows(input, available_w).clamp(1, MAX_INPUT_ROWS);
-    let bottom_rows  = FIXED_ROWS + input_rows;
+    let available_w      = area.width.saturating_sub(2).max(1);
+    let input_rows       = calc_input_rows(input, available_w).clamp(1, MAX_INPUT_ROWS);
+    // A-02: footer_extra adds one row below the normal footer when present.
+    let footer_extra_h: u16 = if footer_extra.is_some() { 1 } else { 0 };
+    let bottom_rows      = FIXED_ROWS + input_rows + footer_extra_h;
 
     if area.height <= bottom_rows + 1 {
         frame.render_widget(Paragraph::new("Terminal too small"), area);
-        return;
+        return 0;
     }
 
     let content_height = area.height - bottom_rows;
@@ -1130,6 +1314,35 @@ fn render_frame(
         .split(area)
     };
 
+    // ── A-02: Header strip — pinned above the scrollable messages pane ───────
+    let content_w = area.width.saturating_sub(0).max(1);
+    let (header_area_opt, messages_area) = {
+        let mut header_text: Vec<Line<'static>> = Vec::new();
+        for rl in header_lines {
+            render_line_to_text(rl, w, false, &mut header_text);
+        }
+        if header_text.is_empty() {
+            (None, chunks[0])
+        } else {
+            let hh: u16 = header_text.iter()
+                .map(|l| count_wrapped_rows(l, content_w))
+                .sum::<u16>()
+                .min(chunks[0].height / 3)
+                .max(1);
+            let split = Layout::vertical([
+                Constraint::Length(hh),
+                Constraint::Min(0),
+            ]).split(chunks[0]);
+            // Render the pinned header now (before message rendering).
+            frame.render_widget(
+                Paragraph::new(header_text).wrap(Wrap { trim: false }),
+                split[0],
+            );
+            (Some(split[0]), split[1])
+        }
+    };
+    let _ = header_area_opt; // used above for rendering
+
     // ── Content area ─────────────────────────────────────────────────────────
     let mut text_lines: Vec<Line<'static>> = Vec::new();
     for rl in lines {
@@ -1140,27 +1353,37 @@ fn render_frame(
     }
 
     // Count visual rows (word-wrap at content width, matching ratatui's WordWrapper).
-    let content_w = area.width.saturating_sub(0).max(1);
     let total_visual: u16 = text_lines.iter()
         .map(|l| count_wrapped_rows(l, content_w))
         .sum();
 
-    let visible = content_height.saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT);
-    let para_scroll = if total_visual > visible {
-        let max_skip     = total_visual - visible;
-        let effective_up = (scroll as u16).min(max_skip);
-        max_skip - effective_up
-    } else {
-        0
-    };
+    // V-04 / A-02: use messages_area height (excludes pinned header).
+    let messages_h = messages_area.height;
+    let visible  = messages_h.saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT);
+    let max_skip = if total_visual > visible { total_visual - visible } else { 0 };
+    let effective_up = (scroll as u16).min(max_skip);
+    let para_scroll  = max_skip - effective_up;
 
     frame.render_widget(
         Paragraph::new(text_lines)
             .block(Block::new().padding(Padding::vertical(1)))
             .wrap(Wrap { trim: false })
             .scroll((para_scroll, 0)),
-        chunks[0],
+        messages_area,
     );
+
+    // ── A-01: File picker overlay ─────────────────────────────────────────────
+    if let Some(pk) = picker {
+        let n = pk.matches.len().min(6);
+        let picker_h = ((2 + n) as u16).clamp(2, messages_area.height.saturating_sub(1));
+        let picker_rect = ratatui::layout::Rect {
+            x:      messages_area.x,
+            y:      messages_area.y + messages_area.height.saturating_sub(picker_h),
+            width:  messages_area.width,
+            height: picker_h,
+        };
+        render_picker(frame, pk, picker_rect);
+    }
 
     // ── Status row ────────────────────────────────────────────────────────────
     let (status_text, status_style) = if let Some(elapsed) = thinking_elapsed {
@@ -1195,20 +1418,55 @@ fn render_frame(
     } else {
         (String::new(), Style::default())
     };
+
+    // V-02: Append scroll indicator when user is scrolled up and content is arriving.
+    let status_text = if scroll > 0 {
+        let hint = if streaming.is_some() {
+            "  ↓ streaming…  (Shift+J to follow)".to_string()
+        } else if pending_lines > 0 {
+            format!("  ↓ {pending_lines} new  (Shift+J to follow)")
+        } else {
+            String::new()
+        };
+        if hint.is_empty() { status_text } else { format!("{status_text}{hint}") }
+    } else {
+        status_text
+    };
+
     frame.render_widget(
         Paragraph::new(Span::styled(status_text, status_style)),
         chunks[3],
     );
 
     // ── Separators ────────────────────────────────────────────────────────────
-    let sep_color = mode_sep_color(mode);
-    let sep       = "─".repeat(area.width as usize);
+    // U-02: Top separator pulses cyan when the agent is thinking or streaming,
+    // giving a peripheral activity signal without cluttering the status bar.
+    // Bottom separator always uses the mode color (stable reference point).
+    let mode_color = mode_sep_color(mode);
+    let top_sep_color = if let Some(elapsed) = thinking_elapsed {
+        // Thinking / tool-calling: animated cyan pulse matching the spinner.
+        let ms = elapsed.as_millis();
+        let palette: &[(u8, u8, u8)] = &[
+            (80,  190, 255),
+            (120, 215, 255),
+            (160, 235, 255),
+            (100, 200, 255),
+        ];
+        let (r, g, b) = palette[(ms / 400) as usize % palette.len()];
+        RC::Rgb(r, g, b)
+    } else if streaming.is_some() {
+        // Pure text streaming (thinking animation already stopped): fixed bright cyan.
+        RC::Rgb(80, 190, 255)
+    } else {
+        mode_color
+    };
+    let sep = "─".repeat(area.width as usize);
     frame.render_widget(
-        Paragraph::new(Span::styled(sep.clone(), Style::default().fg(sep_color))),
+        Paragraph::new(Span::styled(sep.clone(), Style::default().fg(top_sep_color))),
         chunks[4],
     );
     frame.render_widget(
-        Paragraph::new(Span::styled(sep, Style::default().fg(sep_color))),
+        Paragraph::new(Span::styled(sep, Style::default().fg(mode_color))),
         chunks[6],
     );
 
@@ -1249,11 +1507,17 @@ fn render_frame(
     // ── Footer ────────────────────────────────────────────────────────────────
     let (left_label, left_glyph, left_color) = mode_footer_left(mode);
     let right_agent = agent_name.to_string();
-    let right_model = format!(" [{}]", truncate_str(model, 30));
+    let right_model  = format!(" [{}]", truncate_str(model, 30));
+    let right_ctx    = context_pct.map(|p| format!(" {p}%")).unwrap_or_default();
+    // CWD segment — shown in the centre of the footer in dark gray
+    let mid_cwd      = format!("  {cwd}  ");
 
-    let right_len = (right_agent.chars().count() + right_model.chars().count()) as u16;
     let left_base_len: u16 = left_label.chars().count() as u16
         + if left_glyph.is_empty() { 0 } else { 1 + left_glyph.chars().count() as u16 };
+    let right_len: u16 = (mid_cwd.chars().count()
+        + right_agent.chars().count()
+        + right_model.chars().count()
+        + right_ctx.chars().count()) as u16;
     let pad = chunks[7].width.saturating_sub(left_base_len + right_len) as usize;
 
     let mut footer: Vec<Span<'static>> = vec![
@@ -1266,16 +1530,39 @@ fn render_frame(
         ));
     }
     footer.push(Span::raw(" ".repeat(pad)));
+    footer.push(Span::styled(mid_cwd,    Style::default().fg(RC::Rgb(90, 90, 90))));
     footer.push(Span::styled(right_agent, Style::default().fg(RC::Rgb(140, 140, 249))));
     footer.push(Span::styled(right_model, Style::default().fg(RC::DarkGray)));
+    if !right_ctx.is_empty() {
+        footer.push(Span::styled(right_ctx, Style::default().fg(RC::Rgb(90, 90, 90))));
+    }
 
     frame.render_widget(Paragraph::new(Line::from(footer)), chunks[7]);
+
+    // ── A-02: Footer extra row ────────────────────────────────────────────────
+    if let Some(extra) = footer_extra {
+        let extra_rect = ratatui::layout::Rect {
+            x:      chunks[7].x,
+            y:      chunks[7].y + 1,
+            width:  chunks[7].width,
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                extra.to_string(),
+                Style::default().fg(RC::Rgb(80, 80, 80)),
+            )),
+            extra_rect,
+        );
+    }
 
     // ── Inline question panel (anchored to bottom of content viewport) ────────
     if let Some(aq) = active_question {
         // chunks[1] = dashed separator, chunks[2] = panel body
         render_question_inline(frame, aq, chunks[1], chunks[2]);
     }
+
+    max_skip  // V-04: returned so draw_impl can clamp self.scroll
 }
 
 // ── Overlay helpers ───────────────────────────────────────────────────────────
@@ -1817,6 +2104,271 @@ fn find_cursor_at_visual_row_col(buf: &str, text_w: usize, target_row: u16, targ
     buf.len()
 }
 
+/// Update context window usage percentage (0–99).
+/// Called from repl.rs after each usage_statistics SSE event.
+impl TuiApp {
+    pub fn set_context_pct(&mut self, pct: u8) {
+        self.context_pct = Some(pct.min(99));
+    }
+}
+
+// ── File picker helpers (A-01) ────────────────────────────────────────────────
+
+/// Walk `root` up to `max_depth` levels deep, collecting files whose names
+/// contain `query` (case-insensitive).  Skips hidden paths and common noise
+/// directories (`target`, `node_modules`, `.git`).  Returns relative paths.
+fn collect_files(root: &std::path::Path, query: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    collect_files_inner(root, root, 0, 3, query, &mut out);
+    out.sort();
+    out.truncate(50);
+    out
+}
+
+fn collect_files_inner(
+    root:      &std::path::Path,
+    dir:       &std::path::Path,
+    depth:     u32,
+    max_depth: u32,
+    query:     &str,
+    out:       &mut Vec<String>,
+) {
+    if depth > max_depth { return; }
+    let Ok(entries) = std::fs::read_dir(dir) else { return; };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name.starts_with('.') { continue; }
+        if matches!(name.as_str(), "target" | "node_modules" | ".git") { continue; }
+        let path = entry.path();
+        if path.is_dir() {
+            collect_files_inner(root, &path, depth + 1, max_depth, query, out);
+        } else if query.is_empty() || name.to_lowercase().contains(&query.to_lowercase()) {
+            let rel = path.strip_prefix(root)
+                .ok()
+                .and_then(|p| p.to_str())
+                .map(|s| s.to_string())
+                .unwrap_or(name);
+            out.push(rel);
+        }
+    }
+}
+
+/// Render the `@` file picker as a floating overlay at the bottom of `area`.
+fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect) {
+    if area.height == 0 { return; }
+    let w = area.width as usize;
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Top dashed separator (matches question-panel style)
+    lines.push(Line::from(Span::styled(
+        "╌".repeat(w),
+        Style::default().fg(RC::Rgb(70, 70, 110)),
+    )));
+
+    // Header: "@ <query>" + no-match hint
+    let no_match = if pk.matches.is_empty() && !pk.query.is_empty() {
+        "  (no matches)"
+    } else {
+        ""
+    };
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!(" @ {}", pk.query),
+            Style::default().fg(RC::Rgb(140, 140, 249)).add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(no_match, Style::default().fg(RC::DarkGray)),
+    ]));
+
+    // Match entries — fill remaining rows (minus sep + header already pushed)
+    let max_entries = (area.height as usize).saturating_sub(lines.len());
+    for (i, m) in pk.matches.iter().take(max_entries).enumerate() {
+        let selected = i == pk.cursor;
+        let (glyph, style) = if selected {
+            ("❯", Style::default().fg(RC::White).add_modifier(Modifier::BOLD))
+        } else {
+            (" ", Style::default().fg(RC::Rgb(130, 130, 130)))
+        };
+        lines.push(Line::from(Span::styled(
+            format!(" {glyph} {m}"),
+            style,
+        )));
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines).style(Style::default().bg(RC::Rgb(18, 18, 32))),
+        area,
+    );
+}
+
+// ── Path completion (I-02) ────────────────────────────────────────────────────
+
+/// Try to complete a filesystem path token at `cursor` in `input`.
+/// Returns `(new_input, new_cursor)` if a completion was found, `None` otherwise.
+/// Only triggers when the token at the cursor starts with `/`, `./`, `~/`, or
+/// contains `/` (looks like a path).
+fn complete_path(input: &str, cursor: usize) -> Option<(String, usize)> {
+    let cursor = cursor.min(input.len());
+    let before = &input[..cursor];
+
+    // Find start of the current token (split on whitespace).
+    let word_start = before
+        .rfind(|c: char| c.is_whitespace())
+        .map(|i| i + 1)
+        .unwrap_or(0);
+    let partial = &before[word_start..];
+
+    // Only attempt if the token looks like a path.
+    if !partial.starts_with('/')
+        && !partial.starts_with("./")
+        && !partial.starts_with("~/")
+        && !partial.contains('/')
+    {
+        return None;
+    }
+
+    // Expand leading ~/
+    let home = dirs::home_dir();
+    let expanded: std::path::PathBuf = if partial.starts_with("~/") {
+        let h = home.as_deref()?;
+        h.join(&partial[2..])
+    } else {
+        std::path::PathBuf::from(partial)
+    };
+
+    // Split into parent directory and filename prefix to match.
+    let (parent, file_prefix, dir_suffix) = if partial.ends_with('/') {
+        (expanded.clone(), "", true)
+    } else {
+        let p = expanded.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+        let f = expanded.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        (p, f, false)
+    };
+
+    // List the parent directory.
+    let mut matches: Vec<(String, bool)> = std::fs::read_dir(&parent)
+        .ok()?
+        .filter_map(|e| e.ok())
+        .filter_map(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            if name.starts_with(file_prefix) {
+                let is_dir = e.path().is_dir();
+                Some((name, is_dir))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    if matches.is_empty() {
+        return None;
+    }
+    matches.sort_by(|a, b| a.0.cmp(&b.0));
+
+    // Common prefix of all match names.
+    let names: Vec<String> = matches.iter().map(|(n, _)| n.clone()).collect();
+    let prefix_str = common_prefix(&names);
+    // If exactly one match, add trailing / for directories.
+    let suffix = if matches.len() == 1 && matches[0].1 { "/" } else { "" };
+    let completed_name = format!("{prefix_str}{suffix}");
+
+    // Rebuild the token, preserving the original ~/ or ./ prefix style.
+    let parent_display: String = {
+        let parent_str = parent.to_string_lossy();
+        if let Some(ref h) = home {
+            if parent.starts_with(h) {
+                let rel = parent.strip_prefix(h).ok().and_then(|p| p.to_str()).unwrap_or("");
+                if rel.is_empty() {
+                    "~/".to_string()
+                } else {
+                    format!("~/{rel}/")
+                }
+            } else if dir_suffix {
+                // partial ended with /; parent is the full expanded path
+                format!("{}/", parent_str)
+            } else {
+                format!("{}/", parent_str)
+            }
+        } else if dir_suffix {
+            format!("{}/", parent_str)
+        } else {
+            format!("{}/", parent_str)
+        }
+    };
+
+    let new_token = if dir_suffix {
+        // partial was "dir/"; parent is already the dir
+        format!("{}{}", parent_display, completed_name)
+    } else if partial.ends_with('/') {
+        format!("{}{}", parent_display, completed_name)
+    } else {
+        // Restore the leading ./ or ~/ prefix from the original partial.
+        let leading: &str = if partial.starts_with("~/") {
+            "~/"
+        } else if partial.starts_with("./") {
+            "./"
+        } else if partial.starts_with('/') {
+            ""  // absolute — parent_display already has the /
+        } else {
+            ""
+        };
+        let _ = leading; // parent_display already encodes origin
+        format!("{}{}", parent_display, completed_name)
+    };
+
+    let new_cursor = word_start + new_token.len();
+    let new_input  = format!("{}{}{}", &input[..word_start], new_token, &input[cursor..]);
+    Some((new_input, new_cursor))
+}
+
+/// Longest common prefix of a non-empty slice of strings.
+fn common_prefix(words: &[String]) -> String {
+    if words.is_empty() { return String::new(); }
+    let first = &words[0];
+    let len = words.iter().skip(1).map(|w| {
+        first.chars().zip(w.chars()).take_while(|(a, b)| a == b).count()
+    }).min().unwrap_or(first.chars().count());
+    first.chars().take(len).collect()
+}
+
+/// Abbreviate a filesystem path for the footer: last 2 components, with ~/
+/// prefix when the path is under the user's home directory.
+fn abbreviate_cwd(path: &std::path::Path) -> String {
+    let home = dirs::home_dir();
+    let (prefix, rel_path) = if let Some(ref h) = home {
+        if let Ok(rel) = path.strip_prefix(h) {
+            ("~/".to_string(), rel.to_path_buf())
+        } else {
+            (String::new(), path.to_path_buf())
+        }
+    } else {
+        (String::new(), path.to_path_buf())
+    };
+
+    let parts: Vec<std::ffi::OsString> = rel_path.components()
+        .map(|c| c.as_os_str().to_owned())
+        .collect();
+
+    if parts.is_empty() {
+        return if prefix.is_empty() { "/".to_string() } else { "~".to_string() };
+    }
+
+    let display: String = if parts.len() <= 2 {
+        parts.iter()
+            .map(|p| p.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/")
+    } else {
+        let last2: String = parts[parts.len() - 2..]
+            .iter()
+            .map(|p| p.to_string_lossy())
+            .collect::<Vec<_>>()
+            .join("/");
+        format!("…/{last2}")
+    };
+
+    format!("{prefix}{display}")
+}
+
 fn mode_sep_color(mode: PermissionMode) -> RC {
     match mode {
         PermissionMode::Default           => RC::Rgb(70, 72, 74),
@@ -1874,37 +2426,6 @@ pub fn truncate_str(s: &str, max: usize) -> String {
     }
 }
 
-// ── Compatibility shims ───────────────────────────────────────────────────────
-
-/// Dummy RawModeGuard — TuiApp keeps raw mode active throughout the session.
-/// This no-op struct exists so call-sites in repl.rs don't need to change.
-pub struct RawModeGuard;
-impl RawModeGuard {
-    pub fn enable() -> anyhow::Result<Self> { Ok(Self) }
-}
-
-/// Make a path relative to the current working directory for display.
-pub fn make_relative_path(path: &str) -> String {
-    let cwd = std::env::current_dir().unwrap_or_default();
-    let p = std::path::Path::new(path);
-    if let Ok(rel) = p.strip_prefix(&cwd) {
-        format!("./{}", rel.display())
-    } else {
-        let cwd_parts: Vec<_> = cwd.components().collect();
-        let path_parts: Vec<_> = p.components().collect();
-        let common = cwd_parts.iter().zip(path_parts.iter())
-            .take_while(|(a, b)| a == b)
-            .count();
-        let ups = cwd_parts.len() - common;
-        let rest: std::path::PathBuf = path_parts[common..].iter().collect();
-        if ups == 0 {
-            format!("./{}", rest.display())
-        } else {
-            let prefix = "../".repeat(ups);
-            format!("{prefix}{}", rest.display())
-        }
-    }
-}
 
 #[cfg(test)]
 mod tests {

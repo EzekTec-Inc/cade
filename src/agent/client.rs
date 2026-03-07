@@ -119,24 +119,6 @@ impl CadeMessage {
     }
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Serialize)]
-pub struct SendMessageRequest {
-    pub input: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub conversation_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub role: Option<String>,
-}
-
-/// A tool return sent back to the agent after local execution
-#[allow(dead_code)]
-#[derive(Debug, Serialize)]
-pub struct ToolReturnRequest {
-    /// Must be "tool"
-    pub role: String,
-    pub tool_return: ToolReturn,
-}
 
 #[derive(Debug, Serialize)]
 pub struct ToolReturn {
@@ -465,7 +447,6 @@ impl CadeClient {
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn list_agents(&self) -> Result<Vec<AgentState>> {
         let resp = self.client
             .get(self.url("/agents"))
@@ -941,13 +922,22 @@ impl CadeClient {
             .map_err(|e| anyhow::anyhow!("EventSource: {e}"))?;
         let mut messages = Vec::new();
 
+        // Do NOT check cancel on Event::Open.  By the time Event::Open fires the
+        // tool-return HTTP POST has already been delivered to the server; the
+        // agent is generating its response.  Any residual cancel_turn flag left by
+        // the approval modal or I-01 Enter key would silently kill that response
+        // before a single byte of content is received.  We begin honouring cancel
+        // only on the first actual Message event so the user can still press Esc to
+        // abort mid-stream once content starts arriving.
+        let mut opened = false;
+
         while let Some(event) = es.next().await {
-            if cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::SeqCst)) {
+            if opened && cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::SeqCst)) {
                 es.close();
                 return Err(anyhow::anyhow!("__cancelled__"));
             }
             match event {
-                Ok(Event::Open) => {}
+                Ok(Event::Open) => { opened = true; }
                 Ok(Event::Message(msg)) => {
                     let data = msg.data.trim();
                     if data.is_empty() {
