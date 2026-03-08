@@ -290,12 +290,17 @@ impl TuiApp {
     /// Append a streaming chunk and redraw.
     pub fn push_streaming_chunk(&mut self, text: &str) -> Result<()> {
         self.commit_reasoning_inner();
-        // Do NOT snap to bottom here — if the user has scrolled up to read
-        // history, leave them there.  The pending_lines indicator (V-02) signals
-        // that content is arriving below.  snap only if already at bottom.
-        if !self.streaming_active && self.scroll == 0 {
-            self.scroll = 0; // already at bottom — stay there (no-op)
+        if !self.streaming_active {
+            // First chunk of a new agent response — always snap to bottom so the
+            // analysis is immediately visible.  push(ToolResult) may have scrolled
+            // up to show the ToolCall header; that view is correct while the tool
+            // was running, but as soon as the agent starts responding the viewport
+            // must follow the output.
+            self.scroll        = 0;
+            self.pending_lines = 0;
         }
+        // Subsequent chunks of the same response preserve scroll (V-01):
+        // if the user scrolled up mid-stream to read history, leave them there.
         self.streaming_active = true;
         self.streaming_text.push_str(text);
         self.draw()

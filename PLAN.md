@@ -540,3 +540,17 @@ nothing, and only `RenderLine::ErrorMsg("Turn interrupted")` is pushed to `lines
 - Empty result: `↳ success` → `⎿  (no output)` italic
 
 **Rollback**: Restore the original `⚡ ` / space-before-paren / `output hidden` / `↳` rendering in the ToolCall and ToolResult arms of `render_line_to_text`.
+
+---
+
+## 2026-03-07 UTC — fix(scroll): snap to bottom on first streaming chunk after tool run
+
+**Summary**: After a tool completes, the agent's analysis/response was invisible during streaming. `push(ToolResult)` sets `scroll = rows_from_last_tool_call()` (a positive value to show the ToolCall header). `push_streaming_chunk` previously only snapped to bottom when `scroll == 0`, so every streaming chunk arrived below the visible area. The response appeared all at once only when `commit_streaming()` finally ran — making the turn feel frozen.
+
+**Root cause**: `push_streaming_chunk`'s snap guard was `if !self.streaming_active && self.scroll == 0` — the `scroll == 0` condition blocked the snap when `push(ToolResult)` had scrolled up.
+
+**Fix** (`src/ui/app.rs`): On the FIRST chunk of a new streaming session (`!self.streaming_active`), unconditionally set `scroll = 0` and `pending_lines = 0`. Subsequent chunks of the same response still preserve scroll (V-01 — user can scroll up mid-stream to read history).
+
+**Behaviour now**: ToolResult appears with ToolCall header visible (scroll up). First streaming chunk → snaps to bottom so agent's analysis streams in live. User scrolls up mid-stream → reading preserved. Streaming commits → snap to show full response.
+
+**Rollback**: Restore the guard to `if !self.streaming_active && self.scroll == 0 { self.scroll = 0; }` (the original no-op form).
