@@ -201,6 +201,9 @@ pub struct TuiApp {
     /// Number of committed lines pushed while the user was scrolled up.
     /// Reset to 0 whenever scroll returns to 0 (bottom).
     pending_lines: usize,
+    /// Number of follow-up messages currently queued (typed during a running turn).
+    /// Shown as a badge in the status row so the user knows their input was accepted.
+    pub queued_count: usize,
 }
 
 impl TuiApp {
@@ -242,6 +245,7 @@ impl TuiApp {
             header_lines: Vec::new(),
             footer_extra: None,
             pending_lines: 0,
+            queued_count: 0,
         }
     }
 
@@ -455,6 +459,7 @@ impl TuiApp {
         let expand_all       = self.expand_all;
         let active_question  = self.active_question.as_ref().map(|s| s.draw_state.clone());
         let pending_lines    = self.pending_lines;
+        let queued_count     = self.queued_count;
         let cwd              = self.cwd.clone();
         let context_pct      = self.context_pct;
         let picker           = self.picker.clone();
@@ -480,6 +485,7 @@ impl TuiApp {
                 thinking_elapsed,
                 active_question.as_ref(),
                 pending_lines,
+                queued_count,
                 &cwd,
                 context_pct,
                 picker.as_ref(),
@@ -1326,6 +1332,7 @@ fn render_frame(
     thinking_elapsed: Option<std::time::Duration>,
     active_question:  Option<&ActiveQuestionDrawState>,
     pending_lines:    usize,
+    queued_count:     usize,
     cwd:              &str,
     context_pct:      Option<u8>,
     picker:           Option<&PickerState>,
@@ -1488,6 +1495,13 @@ fn render_frame(
         (String::new(), Style::default())
     };
 
+    // Append queued-message badge so the user knows their input was accepted.
+    let status_text = if queued_count > 0 {
+        format!("{status_text}  · {queued_count} queued")
+    } else {
+        status_text
+    };
+
     // V-02: Append scroll indicator when user is scrolled up and content is arriving.
     let status_text = if scroll > 0 {
         let hint = if streaming.is_some() {
@@ -1543,10 +1557,15 @@ fn render_frame(
     // Build one ratatui Line per logical line so wrapping is correct and the
     // "> " prefix only appears on the first line.  Subsequent lines get a
     // "  " (2-space) indent so text columns align with the first line.
+    let input_placeholder = if queued_count > 0 {
+        format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
+    } else {
+        "Type a message…".to_string()
+    };
     let input_paragraph: Vec<Line<'static>> = if input.is_empty() {
         vec![Line::from(vec![
             Span::styled("> ", Style::default().fg(RC::White)),
-            Span::styled("Type a message…", Style::default().fg(RC::DarkGray)),
+            Span::styled(input_placeholder, Style::default().fg(RC::DarkGray)),
         ])]
     } else {
         input

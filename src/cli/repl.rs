@@ -525,9 +525,10 @@ pub struct Repl {
     /// I-01: steering message typed during a turn (Enter key) — cancel current
     /// turn and run this message as the very next turn.
     queued_steering: Arc<Mutex<Option<String>>>,
-    /// I-01: follow-up message typed during a turn (Alt+Enter) — run after
-    /// the current turn completes naturally, without interrupting it.
-    queued_followup: Arc<Mutex<Option<String>>>,
+    /// I-01: follow-up messages typed during a turn (Enter / Alt+Enter) — run
+    /// in submission order after the current turn completes, without interrupting.
+    /// VecDeque allows multiple messages to be queued while the agent is busy.
+    queued_followup: Arc<Mutex<std::collections::VecDeque<String>>>,
     /// Millisecond timestamp of the last time a blocking question modal closed
     /// (`blocking_question_active` transitioned true → false).
     /// The I-01 Enter handler ignores Enter events within 300 ms of a modal
@@ -595,7 +596,7 @@ impl Repl {
                 current_model_clone.clone(),
             ))),
             queued_steering:     Arc::new(Mutex::new(None)),
-            queued_followup:     Arc::new(Mutex::new(None)),
+            queued_followup:     Arc::new(Mutex::new(std::collections::VecDeque::new())),
             last_modal_close_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
@@ -2284,7 +2285,9 @@ impl Repl {
             // Steering runs after a cancelled turn.
             // Follow-up takes priority — if both are set (edge case), run
             // follow-up first; steering is re-queued on the next iteration.
-            if let Some(follow) = self.queued_followup.lock().unwrap().take() {
+            if let Some(follow) = self.queued_followup.lock().unwrap().pop_front() {
+                self.app.lock().unwrap().queued_count =
+                    self.queued_followup.lock().unwrap().len();
                 pending_input = Some(follow);
             } else if let Some(steer) = self.queued_steering.lock().unwrap().take() {
                 pending_input = Some(steer);
@@ -2521,9 +2524,16 @@ impl Repl {
                                                     (KeyCode::Char('o'), KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
 
                                                     // ── I-01: input during agent turn ──────────
-                                                    // Steering: queue + cancel turn.
+                                                    //
+                                                    // Ctrl+Enter  → steering: cancel + redirect.
+                                                    // Plain Enter → queue as follow-up (no cancel).
+                                                    // Alt/Shift+Enter → same as plain Enter.
+                                                    //
+                                                    // Ctrl+Enter (steering): cancel current turn and
+                                                    // run this message immediately after.  Use when
+                                                    // the agent is going in the wrong direction.
                                                     (KeyCode::Enter, m)
-                                                        if m == KeyModifiers::NONE || m == KeyModifiers::CONTROL =>
+                                                        if m == KeyModifiers::CONTROL =>
                                                     {
                                                         let msg = app.input.trim().to_string();
                                                         if !msg.is_empty() {
@@ -2554,7 +2564,33 @@ impl Repl {
                                                             }
                                                         }
                                                     }
-                                                    // Follow-up: queue without cancelling.
+                                                    // Plain Enter: queue as follow-up without
+                                                    // cancelling the current turn.  Messages run in
+                                                    // submission order once the agent is free.
+                                                    (KeyCode::Enter, m)
+                                                        if m == KeyModifiers::NONE =>
+                                                    {
+                                                        let msg = app.input.trim().to_string();
+                                                        if !msg.is_empty() {
+                                                            let now_ms = std::time::SystemTime::now()
+                                                                .duration_since(std::time::UNIX_EPOCH)
+                                                                .unwrap_or_default()
+                                                                .as_millis() as u64;
+                                                            let last_close = tick_modal_close_ms
+                                                                .load(std::sync::atomic::Ordering::SeqCst);
+                                                            let post_modal = last_close > 0
+                                                                && now_ms.saturating_sub(last_close) < 300;
+                                                            if !post_modal {
+                                                                tick_queued_followup.lock().unwrap().push_back(msg);
+                                                                app.queued_count = tick_queued_followup.lock().unwrap().len();
+                                                                app.input.clear();
+                                                                app.cursor_pos = 0;
+                                                                let _ = app.draw();
+                                                            }
+                                                        }
+                                                    }
+                                                    // Alt/Shift+Enter: also queue as follow-up
+                                                    // (kept for compatibility and multi-line entry).
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::ALT
                                                         || m == KeyModifiers::SHIFT
@@ -2562,7 +2598,8 @@ impl Repl {
                                                     {
                                                         let msg = app.input.trim().to_string();
                                                         if !msg.is_empty() {
-                                                            *tick_queued_followup.lock().unwrap() = Some(msg);
+                                                            tick_queued_followup.lock().unwrap().push_back(msg);
+                                                            app.queued_count = tick_queued_followup.lock().unwrap().len();
                                                             app.input.clear();
                                                             app.cursor_pos = 0;
                                                             let _ = app.draw();

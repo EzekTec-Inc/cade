@@ -864,3 +864,33 @@ to remove the last argument.
 **New behaviour:** Ctrl+C during a running turn clears typed input and sets `cancel_turn=true` → `stream_turn()` sees `__cancelled__` error → "Turn interrupted" is shown. Same 200ms grace period as Esc prevents stale Ctrl+C from a modal confirm from cancelling the next turn. Outside a turn, Ctrl+C still clears the input buffer (unchanged behaviour via `app.rs:1083`).
 
 **Rollback:** Remove the `(KeyCode::Char('c'), KeyModifiers::CONTROL)` arm added after the Esc handler in the tick task's match block in `src/cli/repl.rs`.
+
+---
+
+## 2026-03-08 UTC — Queue multiple messages during agent turn
+
+**Summary:** Plain Enter during a running turn now queues messages as follow-ups instead of cancelling. Multiple messages can be queued (VecDeque). Visual badge shows queue depth.
+
+**Files modified:** `src/cli/repl.rs`, `src/ui/app.rs`
+
+**Previous behaviour:**
+- Plain Enter during turn: cancelled the turn + ran new message ("steering")
+- Alt/Shift+Enter: queued ONE follow-up (Option<String>)
+- Queue was single-slot; second message overwrote first
+
+**New behaviour:**
+- Plain Enter during turn: queues as follow-up (no cancel) — messages run in order
+- Ctrl+Enter: steering — cancels turn + redirects immediately
+- Alt/Shift+Enter: also queues as follow-up (same as plain Enter now)
+- Queue is VecDeque<String> — unlimited depth, FIFO
+- Status bar shows `· N queued` badge while messages are waiting
+- Input placeholder shows `N queued — type another or Ctrl+Enter to redirect`
+
+**Changes:**
+- `queued_followup` type: `Arc<Mutex<Option<String>>>` → `Arc<Mutex<VecDeque<String>>>`
+- Tick task Enter arms: 2 → 3 (Ctrl=steering, None=queue, Alt/Shift=queue)
+- Post-turn drain: `.take()` → `.pop_front()`; updates `app.queued_count`
+- `TuiApp.queued_count: usize` field; threaded through `render_frame`
+- Status badge and placeholder added to `render_frame`
+
+**Rollback:** Restore field type to `Option<String>`, restore 2-arm Enter match, restore `.take()` drain, remove `queued_count` from TuiApp + render_frame.
