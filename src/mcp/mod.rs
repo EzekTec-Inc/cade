@@ -142,6 +142,17 @@ impl McpManager {
         self.find_tool_idx(prefixed_name).await.is_some()
     }
 
+    /// Returns true when the error looks like a JSON-RPC protocol error
+    /// (server received and understood the call but rejected it).
+    /// Protocol errors mean the connection is alive — reconnecting won't help.
+    /// Only genuine transport failures (broken pipe, process crash) should
+    /// trigger reconnect attempts.
+    fn is_rpc_protocol_error(msg: &str) -> bool {
+        // rmcp formats JSON-RPC errors as "Mcp error: -32XXX: ..."
+        // Standard codes: -32700 (parse), -32600..=-32603, server-defined -32000..=-32099.
+        msg.contains("Mcp error:") || msg.contains("jsonrpc error")
+    }
+
     /// Call a prefixed MCP tool with automatic reconnect on failure.
     /// Returns `None` if no server owns the tool.
     pub async fn call_tool(
@@ -190,6 +201,13 @@ impl McpManager {
 
         // ── Slow path: call failed — attempt reconnect ────────────────────────
         let error_msg = call_err.to_string();
+
+        // Protocol errors (-32XXX) mean the server is alive but rejected the call.
+        // Reconnecting won't fix a bad argument or unknown method — return immediately.
+        if Self::is_rpc_protocol_error(&error_msg) {
+            return Some(Err(anyhow::anyhow!("{error_msg}")));
+        }
+
         warn!(
             "MCP server call failed for '{}': {error_msg} — attempting reconnect",
             prefixed_name

@@ -432,12 +432,22 @@ async fn register_cade_tools_filtered(
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Write tracing to a log file instead of stderr.  In alternate-screen TUI
+    // mode crossterm only redirects stdout to the alt buffer — stderr writes go
+    // directly to the terminal at the current cursor position (the input field),
+    // corrupting the display.  Fall back to discarding logs if the file can't
+    // be opened.
+    let log_writer: Box<dyn std::io::Write + Send + Sync> =
+        match std::fs::OpenOptions::new().create(true).append(true).open("/tmp/cade.log") {
+            Ok(f)  => Box::new(f),
+            Err(_) => Box::new(std::io::sink()),
+        };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
                 .add_directive(tracing::Level::WARN.into()),
         )
-        .with_writer(std::io::stderr)
+        .with_writer(std::sync::Mutex::new(log_writer))
         .with_ansi(false)
         .init();
 

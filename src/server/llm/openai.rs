@@ -145,11 +145,12 @@ impl OpenAiProvider {
             .unwrap_or(&vec![])
             .iter()
             .map(|tc| LlmToolCall {
-                id:   tc["id"].as_str().unwrap_or("").to_string(),
-                name: tc["function"]["name"].as_str().unwrap_or("").to_string(),
-                arguments: serde_json::from_str(
+                id:                tc["id"].as_str().unwrap_or("").to_string(),
+                name:              tc["function"]["name"].as_str().unwrap_or("").to_string(),
+                arguments:         serde_json::from_str(
                     tc["function"]["arguments"].as_str().unwrap_or("{}")
                 ).unwrap_or_default(),
+                thought_signature: None,
             })
             .collect();
         CompletionResponse { content, tool_calls, finish_reason }
@@ -284,7 +285,7 @@ impl LlmProvider for OpenAiProvider {
                                     tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
                                     serde_json::Value::Object(Default::default())
                                 });
-                                yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args }));
+                                yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
                             }
                         }
                         // Don't return here — OpenAI sends usage in a separate chunk
@@ -317,7 +318,7 @@ impl LlmProvider for OpenAiProvider {
             for (id, name, args_str) in remaining {
                 if !name.is_empty() {
                     let args = serde_json::from_str(&args_str).unwrap_or_default();
-                    yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args }));
+                    yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
                 }
             }
             yield Ok(StreamChunk::Done);

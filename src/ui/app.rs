@@ -28,7 +28,10 @@ use anyhow::Result;
 use crossterm::event::{
     self, EnableMouseCapture, DisableMouseCapture,
     Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind,
+    PushKeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
+    KeyboardEnhancementFlags,
 };
+use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
@@ -206,6 +209,14 @@ impl TuiApp {
     pub fn new(mode: PermissionMode, agent_name: String, model: String) -> Self {
         let terminal = ratatui::init();
         let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
+        if supports_keyboard_enhancement().unwrap_or(false) {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                PushKeyboardEnhancementFlags(
+                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                )
+            );
+        }
         Self {
             terminal,
             lines: Vec::new(),
@@ -256,7 +267,15 @@ impl TuiApp {
             self.scroll = 0;
         }
         self.pending_lines = 0;
-        self.draw()
+        let scroll_before = self.scroll;
+        self.draw()?;
+        // V-05: If V-04 clamped self.scroll during draw (rows_from_last_tool_call
+        // overshot max_skip in short conversations), redraw immediately so the
+        // first visible frame always uses the correct scroll value.
+        if is_tool_result && self.scroll != scroll_before {
+            return self.draw();
+        }
+        Ok(())
     }
 
     /// Count visual rows from the most recent `ToolCall` entry (inclusive) to
@@ -1239,6 +1258,9 @@ impl TuiApp {
 
 impl Drop for TuiApp {
     fn drop(&mut self) {
+        if supports_keyboard_enhancement().unwrap_or(false) {
+            let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+        }
         let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
         ratatui::restore();
     }

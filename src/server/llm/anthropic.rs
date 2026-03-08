@@ -165,9 +165,10 @@ impl AnthropicProvider {
                     }
                     "tool_use" => {
                         tool_calls.push(LlmToolCall {
-                            id:        block["id"].as_str().unwrap_or("").to_string(),
-                            name:      block["name"].as_str().unwrap_or("").to_string(),
-                            arguments: block["input"].clone(),
+                            id:                block["id"].as_str().unwrap_or("").to_string(),
+                            name:              block["name"].as_str().unwrap_or("").to_string(),
+                            arguments:         block["input"].clone(),
+                            thought_signature: None,
                         });
                     }
                     _ => {}
@@ -304,9 +305,10 @@ impl LlmProvider for AnthropicProvider {
                                         Value::Object(serde_json::Map::new())
                                     });
                                 yield Ok(StreamChunk::ToolCall(LlmToolCall {
-                                    id: tool_id.clone(),
-                                    name: tool_name.clone(),
-                                    arguments: args,
+                                    id:                tool_id.clone(),
+                                    name:              tool_name.clone(),
+                                    arguments:         args,
+                                    thought_signature: None,
                                 }));
                                 tool_name.clear();
                                 tool_id.clear();

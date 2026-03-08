@@ -32,6 +32,11 @@ pub struct LlmToolCall {
     pub id: String,
     pub name: String,
     pub arguments: Value,
+    /// Gemini-specific opaque token that must be echoed back verbatim in the
+    /// conversation history when the model used thinking/reasoning.  Absent
+    /// for all other providers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thought_signature: Option<String>,
 }
 
 #[derive(Debug, Clone)]

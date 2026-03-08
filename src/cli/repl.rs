@@ -88,6 +88,8 @@ enum SlashCmd {
     Copy,
     /// Export the current agent to a JSON file: /export [output.json]
     Export(Option<String>),
+    /// Show current context window usage.
+    Context,
 }
 
 fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
@@ -135,9 +137,10 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         "unlink" => Some(SlashCmd::Unlink),
         "logout" => Some(SlashCmd::Logout),
         "stream" => Some(SlashCmd::Stream),
-        "usage"  => Some(SlashCmd::Usage),
-        "stats"  => Some(SlashCmd::Stats(arg)),
-        "copy"   => Some(SlashCmd::Copy),
+        "usage"   => Some(SlashCmd::Usage),
+        "stats"   => Some(SlashCmd::Stats(arg)),
+        "context" => Some(SlashCmd::Context),
+        "copy"    => Some(SlashCmd::Copy),
         "export" => Some(SlashCmd::Export(arg)),
         // Skill slash commands: /commit, /review, etc.
         other if skill_ids.iter().any(|id| id == other) => {
@@ -892,6 +895,58 @@ impl Repl {
                             self.tui_dim("    (no usage recorded yet — requires Anthropic/OpenAI)");
                         }
                     }
+                    SlashCmd::Context => {
+                        let model   = self.current_model.lock().unwrap().clone();
+                        let pct_opt = self.app.lock().unwrap().context_pct;
+                        let window  = crate::server::llm::catalogue::context_window_for_model(&model);
+
+                        let fmt_tok = |n: u64| -> String {
+                            if n >= 1_000_000 { format!("{:.1}M", n as f64 / 1_000_000.0) }
+                            else if n >= 1_000 { format!("{:.1}k", n as f64 / 1_000.0) }
+                            else               { n.to_string() }
+                        };
+                        let model_disp  = if let Some(pos) = model.find('/') { model[pos+1..].to_string() } else { model.clone() };
+                        let window_disp = if window == 0 { "unknown".to_string() } else { format!("{} tokens", fmt_tok(window as u64)) };
+
+                        let mut lines: Vec<RenderLine> = vec![
+                            RenderLine::Blank,
+                            RenderLine::InfoHeader("  ◆ Context Window".to_string()),
+                            RenderLine::Blank,
+                            RenderLine::Pair { label: "Model".to_string(),          value: model_disp },
+                            RenderLine::Pair { label: "Context window".to_string(), value: window_disp },
+                        ];
+
+                        if let Some(pct) = pct_opt {
+                            if window > 0 {
+                                let used     = (pct as u64 * window as u64) / 100;
+                                let free     = window as u64 - used;
+                                let free_pct = 100u8.saturating_sub(pct);
+                                let filled   = (pct as usize * 20 / 100).clamp(0, 20);
+                                let bar      = format!("{}{}", "█".repeat(filled), "░".repeat(20 - filled));
+                                lines.push(RenderLine::Blank);
+                                lines.push(RenderLine::Pair {
+                                    label: "Used".to_string(),
+                                    value: format!("~{}  ({}%)  {}", fmt_tok(used), pct, bar),
+                                });
+                                lines.push(RenderLine::Pair {
+                                    label: "Free".to_string(),
+                                    value: format!("~{}  ({}%)", fmt_tok(free), free_pct),
+                                });
+                            } else {
+                                lines.push(RenderLine::Blank);
+                                lines.push(RenderLine::DimMsg(format!("  {}% of context window used (window size unknown for this model)", pct)));
+                            }
+                        } else {
+                            lines.push(RenderLine::Blank);
+                            lines.push(RenderLine::DimMsg("  No context data yet — available after the first agent turn.".to_string()));
+                        }
+
+                        lines.push(RenderLine::Blank);
+                        lines.push(RenderLine::DimMsg("  /stats  for session token totals  ·  /stats model  for per-model breakdown".to_string()));
+                        lines.push(RenderLine::Blank);
+
+                        for line in lines { let _ = self.app.lock().unwrap().push(line); }
+                    }
                     SlashCmd::Stats(arg) => {
                         let sub = arg.as_deref().unwrap_or("").trim();
                         let lines = match sub {
@@ -1644,25 +1699,24 @@ impl Repl {
                                     let _ = app.push(RenderLine::Blank);
                                     let _ = app.push(RenderLine::InfoHeader("  ◆ Skills  (none loaded)".to_string()));
                                     let _ = app.push(RenderLine::Blank);
-                                    let _ = app.push(RenderLine::DimMsg("  No skills found in any skill directory.".to_string()));
-                                    let _ = app.push(RenderLine::Blank);
+                                    let _ = app.push(RenderLine::DimMsg("  No skills found. Searched:".to_string()));
                                     let _ = app.push(RenderLine::Pair {
-                                        label: "Project".to_string(),
+                                        label: "project".to_string(),
                                         value: ".skills/".to_string(),
                                     });
                                     let _ = app.push(RenderLine::Pair {
-                                        label: "Global".to_string(),
+                                        label: "global".to_string(),
                                         value: "~/.cade/skills/".to_string(),
                                     });
                                     let _ = app.push(RenderLine::Pair {
-                                        label: "Agent".to_string(),
+                                        label: "agent".to_string(),
                                         value: format!("~/.cade/agents/{agent_id}/skills/"),
                                     });
                                     let _ = app.push(RenderLine::Blank);
-                                    let _ = app.push(RenderLine::DimMsg("  Scaffold your first skill:  /skills create <name>".to_string()));
+                                    let _ = app.push(RenderLine::DimMsg("  /skills create <name>  to scaffold your first skill".to_string()));
                                     let _ = app.push(RenderLine::Blank);
                                 } else {
-                                    // Sort: project first, then agent, global, builtin; then category, then id
+                                    // Sort: project first, then agent, global, builtin; then id
                                     let scope_ord = |scope: &str| match scope {
                                         "project" => 0u8, "agent" => 1, "global" => 2, _ => 3,
                                     };
@@ -1671,57 +1725,30 @@ impl Repl {
                                         let sa = a.scope.to_string();
                                         let sb = b.scope.to_string();
                                         scope_ord(&sa).cmp(&scope_ord(&sb))
-                                            .then(a.category.as_deref().unwrap_or("").cmp(b.category.as_deref().unwrap_or("")))
                                             .then(a.id.cmp(&b.id))
                                     });
 
+                                    let headers = vec![
+                                        "ID".to_string(),
+                                        "Scope".to_string(),
+                                        "Description".to_string(),
+                                        "Tags".to_string(),
+                                    ];
+                                    let rows: Vec<Vec<String>> = sorted.iter().map(|s| vec![
+                                        s.id.clone(),
+                                        s.scope.to_string(),
+                                        s.description.clone(),
+                                        if s.tags.is_empty() { "—".to_string() } else { s.tags.join(", ") },
+                                    ]).collect();
                                     let mut lines: Vec<RenderLine> = vec![
                                         RenderLine::Blank,
                                         RenderLine::InfoHeader(format!("  ◆ Skills  ({} loaded)", skills.len())),
+                                        RenderLine::Blank,
+                                        RenderLine::Table { headers, rows },
+                                        RenderLine::Blank,
+                                        RenderLine::DimMsg("  /skills show <id>  ·  /skills create <name>  ·  /skills edit <id>  ·  /skills reload".to_string()),
+                                        RenderLine::Blank,
                                     ];
-
-                                    // Emit one table section per scope group
-                                    let scope_sections: &[(&str, &str)] = &[
-                                        ("project", "Project  (.skills/)"),
-                                        ("agent",   "Agent"),   // label built below with agent_id
-                                        ("global",  "Global  (~/.cade/skills/)"),
-                                        ("builtin", "Built-in"),
-                                    ];
-                                    for (scope_key, scope_label) in scope_sections {
-                                        let group: Vec<_> = sorted.iter()
-                                            .filter(|s| s.scope.to_string() == *scope_key)
-                                            .collect();
-                                        if group.is_empty() { continue; }
-
-                                        let header_text = if *scope_key == "agent" {
-                                            format!("  Agent  (~/.cade/agents/{agent_id}/skills/)")
-                                        } else {
-                                            format!("  {scope_label}")
-                                        };
-                                        lines.push(RenderLine::Blank);
-                                        lines.push(RenderLine::InfoHeader(header_text));
-
-                                        let headers = vec![
-                                            "ID".to_string(),
-                                            "Category".to_string(),
-                                            "Description".to_string(),
-                                            "Tags".to_string(),
-                                        ];
-                                        let rows: Vec<Vec<String>> = group.iter().map(|s| vec![
-                                            s.id.clone(),
-                                            s.category.as_deref().unwrap_or("general").to_string(),
-                                            s.description.clone(),
-                                            if s.tags.is_empty() { "—".to_string() } else { s.tags.join(", ") },
-                                        ]).collect();
-                                        lines.push(RenderLine::Table { headers, rows });
-                                    }
-
-                                    lines.push(RenderLine::DimMsg("  /skills show <id>       view full skill detail".to_string()));
-                                    lines.push(RenderLine::DimMsg("  /skills create <name>   scaffold a new skill".to_string()));
-                                    lines.push(RenderLine::DimMsg("  /skills edit <id>       open in $EDITOR".to_string()));
-                                    lines.push(RenderLine::DimMsg("  /skills delete <id>     remove a skill".to_string()));
-                                    lines.push(RenderLine::DimMsg("  /skills reload           rescan all directories".to_string()));
-                                    lines.push(RenderLine::Blank);
                                     let mut app = self.app.lock().unwrap();
                                     for line in lines.drain(..) { let _ = app.push(line); }
                                 }
@@ -1766,7 +1793,7 @@ impl Repl {
                                                 match std::fs::write(&skill_file, template) {
                                                     Ok(_) => {
                                                         self.tui_ok(format!("  ✓ Created: {}", skill_file.display()));
-                                                        self.tui_dim("  Edit the file, then run /skills reload to activate it.");
+                                                        self.tui_dim(format!("  /skills edit {slug}  to open now  ·  /skills reload  to activate"));
                                                     }
                                                     Err(e) => self.tui_err(format!("Failed to write skill file: {e}")),
                                                 }
@@ -1795,7 +1822,6 @@ impl Repl {
                                             let mut lines: Vec<RenderLine> = vec![
                                                 RenderLine::Blank,
                                                 RenderLine::InfoHeader(format!("  ◆ Skill: {}  —  {}", s.id, s.name)),
-                                                RenderLine::Blank,
                                                 RenderLine::Pair { label: "Description".to_string(), value: s.description.clone() },
                                                 RenderLine::Pair { label: "Scope".to_string(),       value: s.scope.to_string() },
                                                 RenderLine::Pair { label: "Category".to_string(),    value: s.category.as_deref().unwrap_or("general").to_string() },
@@ -1817,22 +1843,24 @@ impl Repl {
 
                                             // Scripts section
                                             if !s.scripts.is_empty() {
+                                                let script_rows: Vec<Vec<String>> = s.scripts.iter().map(|sc| {
+                                                    let desc = if sc.description.is_empty() { "—".to_string() } else { sc.description.clone() };
+                                                    vec![sc.name.clone(), desc]
+                                                }).collect();
                                                 lines.push(RenderLine::Blank);
-                                                lines.push(RenderLine::InfoHeader("  ── Scripts ──".to_string()));
-                                                for script in &s.scripts {
-                                                    let desc = if script.description.is_empty() { "—".to_string() } else { script.description.clone() };
-                                                    lines.push(RenderLine::Pair { label: script.name.clone(), value: desc });
-                                                }
+                                                lines.push(RenderLine::DimMsg("  ── Scripts ──".to_string()));
+                                                lines.push(RenderLine::Table { headers: vec!["Script".to_string(), "Description".to_string()], rows: script_rows });
                                             }
 
                                             // Body section — render as one block for proper markdown + no per-line blank lines
                                             if !s.body.trim().is_empty() {
                                                 lines.push(RenderLine::Blank);
-                                                lines.push(RenderLine::InfoHeader("  ── Body ──".to_string()));
+                                                lines.push(RenderLine::DimMsg("  ── Body ──".to_string()));
                                                 lines.push(RenderLine::AssistantText(s.body.clone()));
                                             }
 
-                                            lines.push(RenderLine::DimMsg(format!("  Edit: /skills edit {id}  |  Delete: /skills delete {id}")));
+                                            lines.push(RenderLine::Blank);
+                                            lines.push(RenderLine::DimMsg(format!("  /skills edit {id}  ·  /skills delete {id}")));
                                             lines.push(RenderLine::Blank);
                                             let mut app = self.app.lock().unwrap();
                                             for line in lines.drain(..) { let _ = app.push(line); }
@@ -1868,7 +1896,7 @@ impl Repl {
 
                                         *self.skills.lock().unwrap() = new_skills;
 
-                                        self.tui_ok(format!("  ✓ Reloaded: {new_count} skills (was {prev_count})"));
+                                        self.tui_ok(format!("  ✓ Skills reloaded  ({new_count} loaded, was {prev_count})"));
 
                                         if new_count > 0 {
                                             let list = names.join(", ");
@@ -1907,7 +1935,7 @@ impl Repl {
                                             {
                                                 Ok(_) => {
                                                     self.tui_ok(format!("  ✓ Done editing '{id}'"));
-                                                    self.tui_dim("  Run /skills reload to pick up changes.");
+                                                    self.tui_dim("  /skills reload  to apply changes");
                                                 }
                                                 Err(e) => self.tui_err(format!("  Failed to open editor '{editor}': {e}")),
                                             }
@@ -1941,6 +1969,7 @@ impl Repl {
                                                 ).await;
                                                 let _ = self.client.delete_memory(&agent_id, &format!("skill:{id}")).await;
                                                 self.tui_ok(format!("  ✓ Deleted skill '{id}'"));
+                                                self.tui_dim("  /skills reload  to update agent context");
                                             }
                                             Err(e) => self.tui_err(format!("  Failed to delete: {e}")),
                                         }
@@ -1951,13 +1980,12 @@ impl Repl {
                             other => {
                                 self.tui_err(format!("  Unknown /skills subcommand: '{other}'"));
                                 self.tui_blank();
-                                self.tui_dim("  Usage:");
-                                self.tui_dim("    /skills                    — list all loaded skills");
-                                self.tui_dim("    /skills show <id>          — view full skill detail");
-                                self.tui_dim("    /skills edit <id>          — open skill file in $EDITOR");
-                                self.tui_dim("    /skills create <name>      — scaffold a new skill");
-                                self.tui_dim("    /skills delete <id>        — remove a skill directory");
-                                self.tui_dim("    /skills reload             — rescan all skill directories");
+                                self.tui_dim("  /skills                    — list all loaded skills");
+                                self.tui_dim("  /skills show <id>          — view full skill detail");
+                                self.tui_dim("  /skills edit <id>          — open skill file in $EDITOR");
+                                self.tui_dim("  /skills create <name>      — scaffold a new skill");
+                                self.tui_dim("  /skills delete <id>        — remove a skill directory");
+                                self.tui_dim("  /skills reload             — rescan all skill directories");
                                 self.tui_blank();
                             }
                         }
@@ -2624,7 +2652,7 @@ impl Repl {
 
         // Clear cancel flag after turn completes
         self.cancel_turn.store(false, Ordering::SeqCst);
-        self.dispatch_tool_calls(stdout, messages, input, Some(bar_text), false).await?;
+        self.dispatch_tool_calls(stdout, messages, input, Some(bar_text), false, false).await?;
 
         // Blank line after every agent turn for visual block separation.
         let _ = self.app.lock().unwrap().push(RenderLine::Blank);
@@ -2894,6 +2922,11 @@ impl Repl {
     ///
     /// `reprompt_done`: true when this call is itself the result of an auto-reprompt
     /// injection — prevents infinite reprompt loops if the LLM keeps returning empty.
+    ///
+    /// `turn_has_text`: true if any prior response in this agent turn already produced
+    /// visible text.  Suppresses the empty-response re-prompt when the model spoke
+    /// earlier in the turn (e.g. introduced what it was doing) and then finished
+    /// silently after a tool — the user already received a meaningful response.
     async fn dispatch_tool_calls(
         &self,
         stdout: &mut io::Stdout,
@@ -2901,6 +2934,7 @@ impl Repl {
         user_input: &str,
         bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
         reprompt_done: bool,
+        turn_has_text: bool,
     ) -> Result<()> {
         let tool_calls: Vec<(String, String, serde_json::Value)> = messages
             .iter()
@@ -2914,10 +2948,12 @@ impl Repl {
                 .collect::<Vec<_>>()
                 .join(" ");
 
-            // Auto-reprompt: if the LLM produced nothing after a tool execution,
+            // Auto-reprompt: if the LLM produced nothing at all this entire turn,
             // inject a single follow-up user message so it knows it must respond.
+            // Suppressed when the model already spoke earlier in the turn
+            // (`turn_has_text`) — a silent finish after prior text is intentional.
             // `reprompt_done` guards against infinite loops — we only inject once.
-            if assistant_msg.trim().is_empty() && !reprompt_done {
+            if assistant_msg.trim().is_empty() && !reprompt_done && !turn_has_text {
                 tracing::warn!("Empty agent response after tool return — injecting re-prompt");
                 let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
                     "  ⎿  (no response after tool — re-prompting)".to_string()
@@ -2926,7 +2962,7 @@ impl Repl {
                 let follow = self.stream_turn(
                     stdout, EMPTY_YIELD_REPROMPT, false, "", "", None, bar_text.clone()
                 ).await?;
-                Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text, true)).await?;
+                Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text, true, false)).await?;
                 return Ok(());
             }
 
@@ -2940,10 +2976,17 @@ impl Repl {
                 self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
                 // Feed the hook's stderr back to the agent as a new turn
                 let follow_msgs = self.stream_turn(stdout, &reason, false, "", "", None, bar_text.clone()).await?;
-                Box::pin(self.dispatch_tool_calls(stdout, follow_msgs, user_input, bar_text, false)).await?;
+                Box::pin(self.dispatch_tool_calls(stdout, follow_msgs, user_input, bar_text, false, turn_has_text)).await?;
             }
             return Ok(());
         }
+
+        // Check if this response contained any assistant text alongside the tool calls.
+        // Passed into each recursive dispatch so the re-prompt is suppressed when
+        // the model spoke earlier in the chain (not just in prior tool-return rounds).
+        let response_had_text = messages.iter()
+            .filter_map(|m| m.assistant_text())
+            .any(|t| !t.trim().is_empty());
 
         for (call_id, tool_name, args) in tool_calls {
             // Update bar text for this tool execution
@@ -2976,11 +3019,12 @@ impl Repl {
 
             // Stream the tool return and process any chained tool calls.
             // Reset reprompt_done — each new tool-return chain gets one reprompt budget.
+            // Carry forward whether any text has been produced so far this turn.
             let follow = self
                 .stream_turn(stdout, "", true, &call_id, &result.output, None, bar_text.clone())
                 .await?;
 
-            Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text.clone(), false)).await?;
+            Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text.clone(), false, turn_has_text || response_had_text)).await?;
         }
 
         Ok(())

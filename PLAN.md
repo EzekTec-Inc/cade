@@ -554,3 +554,176 @@ nothing, and only `RenderLine::ErrorMsg("Turn interrupted")` is pushed to `lines
 **Behaviour now**: ToolResult appears with ToolCall header visible (scroll up). First streaming chunk → snaps to bottom so agent's analysis streams in live. User scrolls up mid-stream → reading preserved. Streaming commits → snap to show full response.
 
 **Rollback**: Restore the guard to `if !self.streaming_active && self.scroll == 0 { self.scroll = 0; }` (the original no-op form).
+
+---
+
+## 2026-03-07 UTC — /skills page modern UI/UX refactor
+
+**Summary:** Refactored all `/skills` subcommand output in the TUI for improved scannability and consistency.
+
+**Files modified:** `src/cli/repl.rs`
+
+**Reason:** Reduce visual noise, improve information density, and unify hint-line formatting across all `/skills` subcommands.
+
+**Previous behaviour:**
+- `/skills list`: per-scope `InfoHeader` banners + separate `Table` per scope; `Category` column; 5 separate `DimMsg` hint lines.
+- `/skills show`: `Blank` after header; `InfoHeader` for section labels ("── Scripts ──", "── Body ──"); individual `Pair` per script; `|` hint separator.
+- `/skills create`: hint said "Edit the file, then run /skills reload to activate it."
+- `/skills edit`: hint said "Run /skills reload to pick up changes."
+- `/skills delete`: no post-delete hint line.
+- `/skills reload`: success said "✓ Reloaded: N skills (was M)".
+- `other` arm: usage hints had extra "Usage:" label and 4-space indent.
+
+**New behaviour:**
+- `/skills list`: single unified `Table` with `Scope` column (replaces per-scope sections and `Category` column); 1 condensed `DimMsg` hint line with `·` separators.
+- `/skills show`: no `Blank` after header (tighter); `DimMsg` for section labels; scripts rendered as `Table`; `·` hint separator.
+- `/skills create`: hint shows `/skills edit <slug>` and `/skills reload` as command-first actions.
+- `/skills edit`: hint is `/skills reload  to apply changes`.
+- `/skills delete`: adds `/skills reload  to update agent context` hint.
+- `/skills reload`: success is "✓ Skills reloaded  (N loaded, was M)".
+- `other` arm: removed redundant "Usage:" label; hints left-aligned at 2 spaces.
+
+**Rollback:** `git revert HEAD` — or restore the `SlashCmd::Skills` match arms in `src/cli/repl.rs` (~line 1630).
+
+---
+
+## 2026-03-07 UTC — Enable Shift+Enter newline via kitty keyboard enhancement
+
+**Summary:** Enabled crossterm keyboard enhancement protocol (DISAMBIGUATE_ESCAPE_CODES) so terminals that support it can distinguish Shift+Enter from plain Enter, allowing Shift+Enter to insert a newline and expand the input field.
+
+**Files modified:** `src/ui/app.rs`
+
+**Reason:** Without `PushKeyboardEnhancementFlags`, terminals send identical byte sequences for Enter and Shift+Enter. The key handler already handled `KeyModifiers::SHIFT | KeyCode::Enter` correctly (inserting `\n` at cursor); the terminal simply never delivered the distinction.
+
+**Previous behaviour:** Shift+Enter submitted input (indistinguishable from plain Enter in most terminals).
+
+**New behaviour:** Shift+Enter inserts a newline and expands the input box on kitty-protocol-capable terminals (kitty, WezTerm, foot, etc.). Terminals without kitty support fall back gracefully — plain Enter still submits, Alt+Enter still inserts newlines universally.
+
+**Changes:**
+- Added `PushKeyboardEnhancementFlags`, `PopKeyboardEnhancementFlags`, `KeyboardEnhancementFlags` to crossterm imports.
+- Added `use crossterm::terminal::supports_keyboard_enhancement`.
+- `TuiApp::new()`: conditionally push `DISAMBIGUATE_ESCAPE_CODES` after `EnableMouseCapture`.
+- `Drop for TuiApp`: conditionally pop enhancement flags before `DisableMouseCapture`.
+
+**Rollback:** Remove the `supports_keyboard_enhancement` blocks from `TuiApp::new()` and `Drop for TuiApp`, and remove the three new import items.
+
+---
+
+## 2026-03-07 UTC — Fix V-05: input field visual artifact on tool error
+
+**Summary:** Fixed a one-frame visual gap above the input field that appeared when any `ToolResult` (particularly `is_error: true`) was pushed in short/early conversations.
+
+**Files modified:** `src/ui/app.rs`
+
+**Reason:** V-04 clamped `self.scroll` AFTER `draw()` had already committed the overcorrected frame to the terminal. V-05 detects the clamp and immediately issues a corrective redraw so the first visible frame is always correct.
+
+**Previous behaviour:** `rows_from_last_tool_call()` could return a scroll value larger than `max_skip` when conversation content was shorter than the viewport height (early sessions). The first frame after a `ToolResult` push would render with this overcorrected scroll, showing a blank gap above the input field's top separator. V-04 would correct `self.scroll` only after that frame was already visible.
+
+**New behaviour:** After `draw()` in `push()`, if `self.scroll != scroll_before` (V-04 fired), `draw()` is called a second time immediately with the corrected value. The second draw only fires when V-04 actually fires — no overhead in the common case (long conversations where scroll is already valid).
+
+**Change:** `push()` in `src/ui/app.rs` — added `scroll_before` local, changed terminal `self.draw()` to `self.draw()?`, added V-05 guard block (4 lines total).
+
+**Rollback:** Remove `scroll_before` local and the V-05 `if` block from `push()`; change `self.draw()?` back to `self.draw()`.
+
+---
+
+## 2026-03-07 UTC — Add /context slash command
+
+**Summary:** Added `/context` slash command showing context window usage: model name, context window size, approximate tokens used/free, and a 20-character visual bar.
+
+**Files modified:** `src/cli/repl.rs`
+
+**Reason:** User requested a `/context` view mirroring Claude Code's context display for visibility into context window consumption.
+
+**Previous behaviour:** No `/context` command existed. Context usage was shown only as a bare percentage in the TUI footer (e.g., `69%`).
+
+**New behaviour:** `/context` displays:
+- Model name (provider prefix stripped)
+- Context window size (from `context_window_for_model()` catalogue)
+- Approximate used tokens and percentage with a 20-char `█░` visual bar
+- Approximate free tokens and percentage
+- Hint line pointing to `/stats` and `/stats model` for detailed breakdowns
+- "No context data yet" message if invoked before the first agent turn
+
+Token counts are derived as `pct × window / 100` (error ≤ 1% of window size); exact per-category breakdown (system/tools/messages) is not available from the API.
+
+**Rollback:** Remove `Context` from `SlashCmd` enum, remove `"context"` parse arm in `parse_slash_with_skills()`, remove `SlashCmd::Context` match arm in `src/cli/repl.rs`.
+
+---
+
+## 2026-03-07 UTC — Fix Gemini 400: preserve thought_signature on tool calls
+
+**Summary:** Fixed Gemini 400 "Function call is missing a thought_signature" error that occurred when using thinking/reasoning Gemini models with tools.
+
+**Files modified:**
+- `src/server/llm/mod.rs`
+- `src/server/llm/gemini.rs`
+- `src/server/llm/anthropic.rs`
+- `src/server/llm/openai.rs`
+
+**Reason:** When Gemini uses thinking/reasoning, each `functionCall` part in the model response includes an opaque `thought_signature` token. This must be echoed back verbatim in subsequent conversation turns. The code was silently discarding this field because `LlmToolCall` had no field to hold it, causing every second tool-using turn to 400.
+
+**Root cause chain:**
+1. `gemini.rs` parsed `functionCall` parts extracting only `name` and `args` — `thought_signature` was discarded
+2. `LlmToolCall` struct had no `thought_signature` field
+3. History reconstruction in `to_gemini_contents()` built `functionCall` JSON from `LlmToolCall` — `thought_signature` absent
+4. Gemini rejected the request with 400
+
+**Fix:**
+- Added `thought_signature: Option<String>` (with `#[serde(default, skip_serializing_if = "Option::is_none")]`) to `LlmToolCall`
+- Gemini streaming and non-streaming parsers now extract `fc["thought_signature"]` into the field
+- `to_gemini_contents()` history reconstruction now includes `thought_signature` in the `functionCall` JSON when present
+- Anthropic and OpenAI construction sites explicitly set `thought_signature: None`
+
+**Backward compatibility:** `#[serde(default)]` ensures old SQLite rows (no `thought_signature` field) deserialize correctly. Non-Gemini providers are unaffected — field is omitted from serialization when `None`.
+
+**Rollback:** Remove `thought_signature` field from `LlmToolCall`, revert the 3 Gemini code sites, remove `thought_signature: None` from Anthropic/OpenAI construction sites.
+
+---
+
+## 2026-03-07 UTC — Fix aggressive re-prompting in agent turn loop
+
+**Summary:** Reduced over-triggering of the empty-response re-prompt by tracking
+whether the model produced any text earlier in the same turn.
+
+**Files modified:** `src/cli/repl.rs`
+
+**Reason:** Re-prompting was firing after every tool in a multi-tool chain (because
+`reprompt_done` reset to `false` on each tool-return), and also when the model
+had already spoken before calling a tool and then finished silently. This caused
+unnecessary "re-prompting" system messages and extra LLM calls even when the turn
+was already complete from the user's perspective.
+
+**Previous behaviour:** `dispatch_tool_calls(..., reprompt_done)` — re-prompt fired
+whenever the LLM produced no text after a tool return, regardless of whether text
+had been produced earlier in the turn. `reprompt_done` reset to `false` on every
+new tool-return chain, so a 5-tool sequence could trigger 5 re-prompts.
+
+**New behaviour:** Added `turn_has_text: bool` parameter to `dispatch_tool_calls`.
+Re-prompt condition is now `empty && !reprompt_done && !turn_has_text`. The flag
+accumulates as `turn_has_text || response_had_text` across all tool-chain steps.
+Re-prompting only fires when the model has been completely silent throughout the
+entire agent turn (no text anywhere before or after any tool call).
+
+**Rollback:** Remove `turn_has_text` parameter from `dispatch_tool_calls`, remove
+`response_had_text` computation, revert the re-prompt condition to
+`assistant_msg.trim().is_empty() && !reprompt_done`, and update all call sites
+to remove the last argument.
+
+---
+
+## 2026-03-08 UTC — Fix MCP errors + TUI tracing corruption
+
+**Summary:** (1) Redirect tracing output to `/tmp/cade.log` to prevent WARN/ERROR log lines from appearing in the TUI input area. (2) Skip MCP reconnect for JSON-RPC protocol errors — the server is alive, reconnecting wastes 6 seconds.
+
+**Files modified:** `src/main.rs`, `src/mcp/mod.rs`
+
+**Bug 1 root cause:** `tracing_subscriber` wrote to stderr. In crossterm alternate-screen mode only stdout is redirected to the alt buffer — stderr writes go directly to the terminal at the current cursor position (the input field), corrupting the display. Confirmed by user screenshot showing raw WARN log lines appearing in the input area.
+
+**Bug 2 root cause:** `call_tool()` in `mcp/mod.rs` treated ALL `Err(e)` from the rmcp peer as connection failures and triggered 3 reconnect attempts (2s delay each = 6s total). JSON-RPC protocol errors like `-32602` (Invalid params) mean the server received and understood the call but rejected the arguments — the connection is alive, reconnecting wastes time. The user saw `MCP reconnect attempt 1/3…` for every call with bad params.
+
+**Changes:**
+- `src/main.rs`: Open `/tmp/cade.log` as an append-mode file, wrap in `Mutex<Box<dyn Write + Send + Sync>>`, pass as `with_writer(...)` to `tracing_subscriber::fmt()`. Fallback to `std::io::sink()` (discard) if file can't be opened.
+- `src/mcp/mod.rs`: Added `is_rpc_protocol_error(msg)` helper that detects "Mcp error:" prefix (rmcp's JSON-RPC error format). Added early-return guard before the reconnect loop to return the error immediately for protocol errors.
+
+**Rollback:** Revert `with_writer()` back to `std::io::stderr` in `main.rs`; remove `is_rpc_protocol_error()` and the early-return guard in `mcp/mod.rs`.

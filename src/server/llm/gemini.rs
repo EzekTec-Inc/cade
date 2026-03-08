@@ -160,9 +160,13 @@ impl GeminiProvider {
                         all_parts.push(json!({"text": msg.content}));
                     }
                     for tc in msg.tool_calls.as_ref().unwrap().iter() {
-                        all_parts.push(json!({
-                            "functionCall": { "name": tc.name, "args": tc.arguments }
-                        }));
+                        let mut fc = serde_json::Map::new();
+                        fc.insert("name".to_string(), json!(tc.name));
+                        fc.insert("args".to_string(), tc.arguments.clone());
+                        if let Some(sig) = &tc.thought_signature {
+                            fc.insert("thought_signature".to_string(), json!(sig));
+                        }
+                        all_parts.push(json!({ "functionCall": fc }));
                     }
                     // If the immediately preceding contents entry is already a model
                     // turn (e.g., a text-only assistant message that preceded this
@@ -218,9 +222,10 @@ impl GeminiProvider {
                 }
                 if let Some(fc) = part.get("functionCall") {
                     tool_calls.push(LlmToolCall {
-                        id:        uuid::Uuid::new_v4().to_string(),
-                        name:      fc["name"].as_str().unwrap_or("").to_string(),
-                        arguments: fc["args"].clone(),
+                        id:                uuid::Uuid::new_v4().to_string(),
+                        name:              fc["name"].as_str().unwrap_or("").to_string(),
+                        arguments:         fc["args"].clone(),
+                        thought_signature: fc["thought_signature"].as_str().map(String::from),
                     });
                 }
             }
@@ -352,10 +357,15 @@ impl LlmProvider for GeminiProvider {
                                                 serde_json::Value::Object(Default::default())
                                             }
                                         };
+                                        let thought_signature = part
+                                            .get("functionCall")
+                                            .and_then(|fc| fc["thought_signature"].as_str())
+                                            .map(String::from);
                                         yield Ok(StreamChunk::ToolCall(LlmToolCall {
                                             id: uuid::Uuid::new_v4().to_string(),
                                             name,
                                             arguments,
+                                            thought_signature,
                                         }));
                                     }
                                 }
