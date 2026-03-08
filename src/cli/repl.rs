@@ -2988,44 +2988,54 @@ impl Repl {
             .filter_map(|m| m.assistant_text())
             .any(|t| !t.trim().is_empty());
 
-        for (call_id, tool_name, args) in tool_calls {
-            // Update bar text for this tool execution
-            if let Some(ref bar) = bar_text {
-                let display = if let Some(pos) = tool_name.rfind("__") {
-                    &tool_name[pos + 2..]
-                } else {
-                    &tool_name
-                };
-                *bar.lock().unwrap() = format!("● {}…", display);
-            }
+        // ── Execute all tools, then send results as a batch ──────────────────
+        //
+        // Tools execute sequentially (preserves approval prompts and the
+        // &mut stdout requirement).  Results are collected first, then sent to
+        // the server one-by-one.  The server's pending_tool_results guard holds
+        // the LLM call until every expected result has arrived, so only ONE LLM
+        // round-trip is needed regardless of how many tools the LLM called.
+        // This replaces the old pattern that triggered a separate LLM call after
+        // each individual tool, wasting N-1 context round-trips per response.
 
-            let result = self.execute_tool(stdout, &call_id, &tool_name, &args).await?;
+        // Update bar text with all tool names up-front.
+        if let Some(ref bar) = bar_text {
+            let display = tool_calls.iter()
+                .map(|(_, name, _)| name.rfind("__").map_or(name.as_str(), |p| &name[p + 2..]))
+                .collect::<Vec<_>>()
+                .join(", ");
+            *bar.lock().unwrap() = format!("● {}…", display);
+        }
 
-            // ── Update session stats ─────────────────────────────────────────
+        // Phase 1: execute every tool, collect results.
+        let mut results: Vec<crate::tools::ToolResult> = Vec::with_capacity(tool_calls.len());
+        for (call_id, tool_name, args) in &tool_calls {
+            let result = self.execute_tool(stdout, call_id, tool_name, args).await?;
             if let Ok(mut stats) = self.session_stats.lock() {
                 stats.tool_calls_total += 1;
-                if result.is_error {
-                    stats.tool_calls_err += 1;
-                } else {
-                    stats.tool_calls_ok  += 1;
-                }
+                if result.is_error { stats.tool_calls_err += 1; } else { stats.tool_calls_ok += 1; }
             }
-
-            // Clear any cancel flag set while the tool was executing (e.g. Esc
-            // pressed during a long bash command).  The tool has already finished
-            // and pushed its result — its follow-up LLM response must always run.
-            // The user can press Esc again to interrupt that response if needed.
-            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
-
-            // Stream the tool return and process any chained tool calls.
-            // Reset reprompt_done — each new tool-return chain gets one reprompt budget.
-            // Carry forward whether any text has been produced so far this turn.
-            let follow = self
-                .stream_turn(stdout, "", true, &call_id, &result.output, None, bar_text.clone())
-                .await?;
-
-            Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text.clone(), false, turn_has_text || response_had_text)).await?;
+            results.push(result);
         }
+
+        // Clear any cancel flags accumulated during tool execution.
+        self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+
+        // Phase 2: deposit all results to the server.  The first N-1 sends
+        // return [] (server is still buffering); the Nth triggers the LLM and
+        // streams back the assistant response with full context of all results.
+        let mut follow = Vec::new();
+        for result in &results {
+            follow = self
+                .stream_turn(stdout, "", true, &result.tool_call_id, &result.output, None, bar_text.clone())
+                .await?;
+        }
+
+        Box::pin(self.dispatch_tool_calls(
+            stdout, follow, user_input, bar_text,
+            false,
+            turn_has_text || response_had_text,
+        )).await?;
 
         Ok(())
     }
@@ -3196,7 +3206,21 @@ impl Repl {
             });
         }
 
-        let mut result = dispatch(call_id.to_string(), tool_name, args, &self.mcp).await;
+        // Per-tool execution timeout — prevents a stalled bash command or
+        // unresponsive MCP server from hanging the turn indefinitely.
+        const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+        let mut result = match tokio::time::timeout(
+            TOOL_TIMEOUT,
+            dispatch(call_id.to_string(), tool_name, args, &self.mcp),
+        ).await {
+            Ok(r)  => r,
+            Err(_) => crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name:    tool_name.to_string(),
+                output:       format!("Tool '{}' timed out after {}s", tool_name, TOOL_TIMEOUT.as_secs()),
+                is_error:     true,
+            },
+        };
 
         // PostToolUse / PostToolUseFailure hooks
         if result.is_error {

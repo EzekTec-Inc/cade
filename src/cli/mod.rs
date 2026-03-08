@@ -6,11 +6,12 @@ pub mod repl;
 pub use args::Args;
 pub use repl::Repl;
 
-/// Truncate a string to `max` chars, appending "…" if cut.
+/// Truncate a string to `max` *characters* (not bytes), appending "…" if cut.
 pub fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    if s.chars().count() <= max {
         s.to_string()
     } else {
-        format!("{}…", &s[..max])
+        let end = s.char_indices().nth(max).map(|(i, _)| i).unwrap_or(s.len());
+        format!("{}…", &s[..end])
     }
 }

@@ -30,9 +30,11 @@ const HISTORY_LIMIT: usize = 100;
 /// Blocks are prioritised by recency (most recently updated first).
 /// Blocks whose value is empty are always skipped regardless of this budget.
 const MEMORY_CHAR_BUDGET: usize = 8_000;
-/// Cap on a single tool-result content string (chars). ~8k tokens.
+/// Cap on a single tool-result content string (chars). ~10k tokens.
 /// Prevents huge outputs (screenshots, logs) from blowing the context window.
-const TOOL_RESULT_MAX_CHARS: usize = 8_192;
+/// 32 768 chars is generous enough for large diffs and file reads while still
+/// bounding runaway outputs (raw images, massive logs).
+const TOOL_RESULT_MAX_CHARS: usize = 32_768;
 /// Chars-per-token approximation used to convert a model's token context window
 /// into a character budget. 3 chars ≈ 1 token is conservative across English,
 /// code, and mixed content; keeps a ~25% headroom below the hard token limit.

@@ -727,3 +727,66 @@ to remove the last argument.
 - `src/mcp/mod.rs`: Added `is_rpc_protocol_error(msg)` helper that detects "Mcp error:" prefix (rmcp's JSON-RPC error format). Added early-return guard before the reconnect loop to return the error immediately for protocol errors.
 
 **Rollback:** Revert `with_writer()` back to `std::io::stderr` in `main.rs`; remove `is_rpc_protocol_error()` and the early-return guard in `mcp/mod.rs`.
+
+
+---
+
+## 2026-03-08 UTC — Efficiency: truncate safety, tool result cap, timeout, parallel dispatch, auto-wire
+
+**Summary:** Five efficiency improvements across token consumption and tool execution.
+
+**Files modified:**
+- `src/cli/mod.rs`
+- `src/server/api/messages.rs`
+- `src/cli/repl.rs`
+- `src/server/api/agents.rs`
+
+---
+
+### Fix 1 — byte-unsafe `truncate()` (`src/cli/mod.rs`)
+
+**Previous behaviour:** `&s[..max]` indexed a UTF-8 string at a raw byte offset — would panic if `max` fell inside a multibyte codepoint (e.g. `─` = 3 bytes, `…` = 3 bytes).
+
+**New behaviour:** Uses `s.char_indices().nth(max)` to find the correct byte boundary before slicing. Count check also switched from `s.len()` (bytes) to `s.chars().count()` (characters).
+
+**Rollback:** Restore `if s.len() <= max` and `&s[..max]`.
+
+---
+
+### Fix 2 — `TOOL_RESULT_MAX_CHARS` 8 192 → 32 768 (`src/server/api/messages.rs`)
+
+**Previous behaviour:** Tool results were truncated at 8 192 chars (~2.7k tokens) when building LLM context. This cut off legitimate outputs — large `git diff`, file reads, search results — losing context the LLM needed.
+
+**New behaviour:** Cap raised to 32 768 chars (~10k tokens). Still bounds runaway outputs (raw images, massive logs) while giving the LLM enough content for complex tool outputs.
+
+**Rollback:** Change `TOOL_RESULT_MAX_CHARS` back to `8_192`.
+
+---
+
+### Fix 3 — per-tool execution timeout (`src/cli/repl.rs`)
+
+**Previous behaviour:** `dispatch()` had no timeout. A stalled bash command or unresponsive MCP server would block the entire turn indefinitely.
+
+**New behaviour:** `execute_tool()` wraps `dispatch()` in `tokio::time::timeout(120s)`. On expiry, returns a `ToolResult { is_error: true, output: "Tool '…' timed out after 120s" }` and the turn continues normally.
+
+**Rollback:** Remove the `tokio::time::timeout` wrapper and restore `let mut result = dispatch(...).await;`.
+
+---
+
+### Fix 4 — batch tool dispatch (`src/cli/repl.rs`)
+
+**Previous behaviour:** When the LLM returned N tool calls in one response, they executed and sent results one-by-one, each triggering a separate LLM round-trip. For N=3 tools this meant 3 LLM calls instead of 1.
+
+**New behaviour:** All tools execute sequentially (approval prompts preserved), results are collected, then sent to the server in rapid succession. The server's `pending_tool_results` guard holds the LLM call until every expected result has arrived — only the final send triggers the LLM. Result: 1 LLM call per batch of tool responses, N-1 fewer round-trips.
+
+**Rollback:** Restore the original `for (call_id, tool_name, args) in tool_calls { ... stream_turn ... dispatch_tool_calls ... }` loop.
+
+---
+
+### Fix 5 — auto-wire tools on agent creation (`src/server/api/agents.rs`)
+
+**Previous behaviour:** Agents created via the REST API with no tool attachment fell back to receiving ALL registered tools on every turn (backwards-compatible default in `messages.rs`). This sent unnecessary token-heavy schemas.
+
+**New behaviour:** `create_agent()` now auto-attaches: if `tool_ids` are supplied in the request body, those are wired; otherwise all currently registered tools are attached immediately. The backwards-compatible fallback in `messages.rs` remains as protection for legacy agents.
+
+**Rollback:** Remove the auto-wire block (the 15 lines between `sqlite::create_agent` and `// Handle memory blocks`).

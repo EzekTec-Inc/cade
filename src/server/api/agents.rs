@@ -94,6 +94,23 @@ pub async fn create_agent(
 
     sqlite::create_agent(&state.db, &row).map_err(|e| server_err(e.to_string()))?;
 
+    // Auto-wire: attach tools from the request body first; fall back to wiring
+    // all registered tools so a freshly-created agent is never "unwired" and
+    // does not fall back to receiving the full tool list on every turn.
+    let tool_ids_to_wire: Vec<String> = if !body.tool_ids.is_empty() {
+        body.tool_ids.clone()
+    } else {
+        sqlite::list_tools(&state.db)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|t| t.id)
+            .collect()
+    };
+    if !tool_ids_to_wire.is_empty() {
+        let _ = sqlite::attach_tools_to_agent(&state.db, &id, &tool_ids_to_wire);
+        tracing::info!("Auto-wired {} tools to new agent {id}", tool_ids_to_wire.len());
+    }
+
     // Handle memory blocks
     for block in &body.memory_blocks {
         let label = block["label"].as_str().unwrap_or("memory");
