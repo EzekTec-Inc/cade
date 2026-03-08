@@ -606,9 +606,13 @@ impl CadeClient {
 
     // ── Messages ──────────────────────────────────────────────────────────────
 
-    /// Send a user message and return the response messages
-    pub async fn send_message(&self, agent_id: &str, input: &str) -> Result<Vec<CadeMessage>> {
-        let req = json!({ "input": input });
+    /// Send a user message and return the response messages.
+    /// Set `ephemeral=true` for system-injected messages that should not be persisted.
+    pub async fn send_message(&self, agent_id: &str, input: &str, ephemeral: bool) -> Result<Vec<CadeMessage>> {
+        let mut req = json!({ "input": input });
+        if ephemeral {
+            req["ephemeral"] = true.into();
+        }
         self.post_messages(agent_id, &req).await
     }
 
@@ -740,7 +744,7 @@ impl CadeClient {
     where
         F: Fn(&CadeMessage),
     {
-        self.stream_message_cancellable(agent_id, input, None, on_event, None).await
+        self.stream_message_cancellable(agent_id, input, None, false, on_event, None).await
     }
 
     /// Like `stream_message` but checks an optional cancel flag before each SSE event.
@@ -749,6 +753,9 @@ impl CadeClient {
         agent_id: &str,
         input: &str,
         conversation_id: Option<&str>,
+        // When true, server skips persisting the user message — for system-injected
+        // re-prompts that should not appear in conversation history.
+        ephemeral: bool,
         on_event: F,
         cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Vec<CadeMessage>>
@@ -759,6 +766,9 @@ impl CadeClient {
         let mut body = json!({ "input": input });
         if let Some(cid) = conversation_id {
             body["conversation_id"] = cid.into();
+        }
+        if ephemeral {
+            body["ephemeral"] = true.into();
         }
 
         let request = self
@@ -840,7 +850,7 @@ impl CadeClient {
                     // server itself might still respond to regular POST.
                     tracing::debug!("SSE transport error: {e}, falling back to send_message");
                     es.close();
-                    let fallback = self.send_message(agent_id, input).await?;
+                    let fallback = self.send_message(agent_id, input, ephemeral).await?;
                     for lm in &fallback {
                         on_event(lm);
                     }

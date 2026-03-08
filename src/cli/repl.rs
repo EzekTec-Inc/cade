@@ -649,7 +649,7 @@ impl Repl {
                         "[Background subagent '{}' completed (task ID: {})]:\n{}",
                         r.subagent, r.task_id, r.result
                     );
-                    let _ = self.client.send_message(&self.agent_id(), &notify).await;
+                    let _ = self.client.send_message(&self.agent_id(), &notify, false).await;
                 }
             }
 
@@ -2659,6 +2659,7 @@ impl Repl {
 
         let messages = self.stream_turn(
             stdout, &effective_input, false, "", "",
+            false,
             None,
             Some(bar_text.clone()),
         ).await;
@@ -2708,6 +2709,10 @@ impl Repl {
         is_tool_return: bool,
         tool_call_id: &str,
         tool_output: &str,
+        // When true, user message is sent to LLM but NOT persisted to DB.
+        // Used for system-injected re-prompts (EMPTY_YIELD_REPROMPT) so they
+        // don't pollute conversation history or consume future context window.
+        ephemeral: bool,
         _spinner: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
     ) -> Result<Vec<CadeMessage>> {
@@ -2878,7 +2883,7 @@ impl Repl {
             use std::sync::atomic::Ordering;
             let streaming = self.streaming_enabled.load(Ordering::SeqCst);
             if streaming {
-                match self.client.stream_message_cancellable(&agent_id, input, conv_ref, on_event, Some(cancel)).await {
+                match self.client.stream_message_cancellable(&agent_id, input, conv_ref, ephemeral, on_event, Some(cancel)).await {
                     Ok(m) => m,
                     Err(e) if is_cancel(&e) => {
                         let mut app = self.app.lock().unwrap();
@@ -2897,7 +2902,7 @@ impl Repl {
                 }
             } else {
                 // Non-streaming path — single HTTP request, print result at end
-                match self.client.send_message(&agent_id, input).await {
+                match self.client.send_message(&agent_id, input, ephemeral).await {
                     Ok(msgs) => {
                         for msg in &msgs {
                             if let Some(text) = msg.assistant_text() {
@@ -2951,6 +2956,14 @@ impl Repl {
         reprompt_done: bool,
         turn_has_text: bool,
     ) -> Result<()> {
+        // If the user cancelled (Esc/Ctrl+C) during Phase 2 tool-result sending,
+        // stream_turn may return vec![] due to the cancellation rather than an
+        // actual empty LLM response.  Bail out immediately so the re-prompt
+        // guard doesn't fire and override the user's intent.
+        if self.cancel_turn.load(std::sync::atomic::Ordering::SeqCst) {
+            return Ok(());
+        }
+
         let tool_calls: Vec<(String, String, serde_json::Value)> = messages
             .iter()
             .filter_map(|m| m.as_tool_call())
@@ -2975,7 +2988,7 @@ impl Repl {
                 ));
                 self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
                 let follow = self.stream_turn(
-                    stdout, EMPTY_YIELD_REPROMPT, false, "", "", None, bar_text.clone()
+                    stdout, EMPTY_YIELD_REPROMPT, false, "", "", true, None, bar_text.clone()
                 ).await?;
                 Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text, true, false)).await?;
                 return Ok(());
@@ -2990,7 +3003,7 @@ impl Repl {
                 // Clear any stale cancel flag before the hook-continuation stream_turn.
                 self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
                 // Feed the hook's stderr back to the agent as a new turn
-                let follow_msgs = self.stream_turn(stdout, &reason, false, "", "", None, bar_text.clone()).await?;
+                let follow_msgs = self.stream_turn(stdout, &reason, false, "", "", false, None, bar_text.clone()).await?;
                 Box::pin(self.dispatch_tool_calls(stdout, follow_msgs, user_input, bar_text, false, turn_has_text)).await?;
             }
             return Ok(());
@@ -3042,7 +3055,7 @@ impl Repl {
         let mut follow = Vec::new();
         for result in &results {
             follow = self
-                .stream_turn(stdout, "", true, &result.tool_call_id, &result.output, None, bar_text.clone())
+                .stream_turn(stdout, "", true, &result.tool_call_id, &result.output, false, None, bar_text.clone())
                 .await?;
         }
 

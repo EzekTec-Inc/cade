@@ -382,8 +382,11 @@ pub async fn send_message(
         None => return err(StatusCode::BAD_REQUEST, "missing 'input'"),
     };
 
-    // 1. Persist user message FIRST
-    persist(&state, &agent_id, conv_id_ref, "user", json!({ "content": input }));
+    // 1. Persist user message FIRST (skip for ephemeral system injections)
+    let is_ephemeral = body["ephemeral"].as_bool().unwrap_or(false);
+    if !is_ephemeral {
+        persist(&state, &agent_id, conv_id_ref, "user", json!({ "content": input }));
+    }
 
     // 2. Build context from DB (includes the message we just persisted)
     let (model, messages, tools) = match build_context(&state, &agent_id, conv_id_ref).await {
@@ -506,11 +509,16 @@ pub async fn stream_message(
             Some(s) => s.to_string(),
             None => return err(StatusCode::BAD_REQUEST, "missing 'input'"),
         };
-        // Auto-title new conversations from the first user message
-        if let Some(cid) = conv_id_ref {
-            let _ = maybe_set_conv_title(&state, cid, &input);
+        // ephemeral=true: system-injected re-prompt — send to LLM but don't
+        // persist to the DB so it never appears in conversation history.
+        let is_ephemeral = body["ephemeral"].as_bool().unwrap_or(false);
+        if !is_ephemeral {
+            // Auto-title new conversations from the first user message
+            if let Some(cid) = conv_id_ref {
+                let _ = maybe_set_conv_title(&state, cid, &input);
+            }
+            persist(&state, &agent_id, conv_id_ref, "user", json!({ "content": input }));
         }
-        persist(&state, &agent_id, conv_id_ref, "user", json!({ "content": input }));
     }
 
     // 2. If this was a tool return, check if all results for this turn have arrived.

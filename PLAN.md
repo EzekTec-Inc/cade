@@ -816,6 +816,41 @@ to remove the last argument.
 
 ---
 
+## 2026-03-08 UTC — Fix EMPTY_YIELD_REPROMPT: DB pollution + cancel bypass
+
+**Summary:** Two fixes to the auto-reprompt mechanism in `dispatch_tool_calls()`.
+
+**Files modified:** `src/cli/repl.rs`, `src/agent/client.rs`, `src/server/api/messages.rs`
+
+### Fix 1 — Re-prompt no longer persisted as user message
+
+**Root cause:** `stream_turn(EMPTY_YIELD_REPROMPT, is_tool_return=false, ...)` sent the injection as a regular user message. The server persisted it as `role="user"` → future `build_context()` loads it from DB → synthetic "Tool execution complete..." pollutes conversation history and wastes context window on every subsequent turn.
+
+**Fix:**
+- Added `ephemeral: bool` parameter to `stream_turn()` (positioned after `tool_output`)
+- Added `ephemeral: bool` to `client.stream_message_cancellable()` and `client.send_message()`
+- Client includes `"ephemeral": true` in request body when set
+- Both server handlers (`stream_message` SSE and `send_message` blocking) check `body["ephemeral"]` and skip `persist(...)` when true
+- Re-prompt call: `stream_turn(..., EMPTY_YIELD_REPROMPT, ..., true, ...)` — ephemeral=true
+- All other `stream_turn` call sites: ephemeral=false (no behaviour change)
+
+**Rollback:** Remove `ephemeral: bool` from `stream_turn`, `stream_message_cancellable`, `send_message`; remove `if ephemeral { body["ephemeral"] = true }` from client; remove `is_ephemeral` guards from both server handlers.
+
+---
+
+### Fix 2 — Cancel during Phase 2 no longer triggers re-prompt
+
+**Root cause:** If Esc/Ctrl+C fired during Phase 2 (tool result sending), `stream_turn` returned `vec![]` (cancelled). `dispatch_tool_calls` received empty messages, evaluated the re-prompt condition as true, cleared `cancel_turn`, and sent an LLM call despite user intent to cancel.
+
+**Fix:** Added `cancel_turn` check at the very top of `dispatch_tool_calls()` before any condition evaluation. If `cancel_turn` is already set when entering, return immediately.
+
+**Previous behaviour:** Cancel during Phase 2 → re-prompt fires → LLM call sent.
+**New behaviour:** Cancel during Phase 2 → `dispatch_tool_calls` returns `Ok(())` immediately, turn ends cleanly.
+
+**Rollback:** Remove the 5-line `cancel_turn` check block at the top of `dispatch_tool_calls()`.
+
+---
+
 ## 2026-03-08 UTC — Ctrl+C cancels running agent turn
 
 **Summary:** Added `(KeyCode::Char('c'), KeyModifiers::CONTROL)` arm to the tick task's key event match in the TUI event loop so Ctrl+C unconditionally cancels an in-progress LLM turn.
