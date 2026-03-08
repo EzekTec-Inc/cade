@@ -937,7 +937,17 @@ impl CadeClient {
                 return Err(anyhow::anyhow!("__cancelled__"));
             }
             match event {
-                Ok(Event::Open) => { opened = true; }
+                Ok(Event::Open) => {
+                    opened = true;
+                    // Clear any cancel flag that accumulated before the connection
+                    // was established (stale approval-modal Enter, buffered Esc,
+                    // prior SIGINT, etc.).  The tool result was already POSTed to
+                    // the server — the agent's response MUST arrive.  Any cancel
+                    // after this point is intentional (user presses Esc mid-stream).
+                    if let Some(c) = cancel {
+                        c.store(false, std::sync::atomic::Ordering::SeqCst);
+                    }
+                }
                 Ok(Event::Message(msg)) => {
                     let data = msg.data.trim();
                     if data.is_empty() {

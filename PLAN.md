@@ -482,3 +482,19 @@ nothing, and only `RenderLine::ErrorMsg("Turn interrupted")` is pushed to `lines
 - Any system/error message → visible immediately
 
 **Rollback**: In `push()`, restore `if self.scroll > 0 { self.pending_lines += 1; }` and remove the two unconditional assignment lines. In `commit_streaming()`, restore `if self.scroll > 0 { self.pending_lines += 1; }` and remove the two unconditional assignment lines.
+
+---
+
+## 2026-03-07 UTC — fix(cancel): clear stale cancel_turn at Event::Open in stream_tool_return_cancellable
+
+**Summary**: Definitive fix for "turn always quits after ask_question modal selection." Previous fixes (`opened &&` guard, 300ms grace, scroll snaps) addressed visible symptoms but left a race window between `Event::Open` and the first `Message` event where the tick task could still set `cancel_turn = true`. That cancel fired on the first actual message chunk, producing "Turn interrupted" and ending the turn before any response appeared.
+
+**Root cause**: Any `cancel_turn = true` set between `Event::Open` arriving and the first `Message` event (e.g., tick task processing a stale Esc key or I-01 Enter with non-empty input) caused the stream to abort on the very next SSE event. The `opened &&` guard only prevented cancel at `Event::Open` itself — not afterwards.
+
+**Fix** (`src/agent/client.rs`): Inside `stream_tool_return_cancellable`, in the `Ok(Event::Open)` handler: after setting `opened = true`, unconditionally clear `cancel_turn` via the passed `cancel` reference. This eliminates ALL stale cancel flags (from modal approval, SIGINT, buffered Esc, anything) at the exact moment the HTTP connection is established and the agent's response is about to start flowing. Any cancel after this point (user presses Esc during actual streaming) is still honoured.
+
+**Previous behaviour**: Any cancel_turn=true accumulated before or during Event::Open → fired on first Message event → "Turn interrupted" → turn ends silently.
+
+**New behaviour**: cancel_turn is cleared at Event::Open. The response streams in. Intentional cancellations (Esc during streaming) still work because they set cancel_turn AFTER the clear.
+
+**Rollback**: Remove the `if let Some(c) = cancel { c.store(false, ...); }` block from inside `Ok(Event::Open)` arm; restore `Ok(Event::Open) => { opened = true; }`.
