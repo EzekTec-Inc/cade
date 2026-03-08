@@ -444,3 +444,19 @@ nothing, and only `RenderLine::ErrorMsg("Turn interrupted")` is pushed to `lines
 **New behaviour**: Added `let mut opened = false;` before the loop. The cancel check is guarded by `opened &&` so it fires only AFTER `Event::Open` sets `opened = true`. For all subsequent message events, cancellation still works normally (Esc during streaming still interrupts). The initial message stream (`stream_message_cancellable`) is unchanged — cancelling before the agent replies to a user message is a valid and expected use case.
 
 **Rollback**: Remove the `opened` boolean; change `if opened && cancel...` back to `if cancel...`; change `Ok(Event::Open) => { opened = true; }` back to `Ok(Event::Open) => {}`.
+
+---
+
+## 2026-03-07 UTC — fix(scroll): snap viewport to bottom after blocking modal approval
+
+**Summary**: True root-cause fix for the "session appears to quit after modal approval" bug. After deep investigation it was confirmed the session does NOT actually quit — the tool results and agent responses are added to `lines` and generated correctly, but they land BELOW the user's current scroll position and are therefore invisible. The user sees nothing and perceives the session as having ended.
+
+**Root cause**: `ask_question_blocking` (app.rs) sets `scroll = 0` when the modal OPENS, but NOT when it closes. While the modal is visible, the tick task continues to process mouse scroll events (`ScrollUp/Down`) which can change `scroll` to > 0. When the modal closes and tool execution + streaming follows, V-01's non-snapping design keeps the viewport at that elevated scroll position. Every push (ToolResult, AssistantText via commit_streaming) increments `pending_lines` instead of being visible. The `↓ N new (Shift+J to follow)` indicator appears in the status bar but is easy to miss.
+
+**File modified**: `src/ui/app.rs` — `ask_question_blocking()` only.
+
+**Previous behaviour**: After modal approval, `scroll` remained > 0 if the user (or any scroll event) had changed it during the modal. Subsequent content was invisible; user perceived session as having quit.
+
+**New behaviour**: Two lines added after `self.active_question = None;` — `self.scroll = 0; self.pending_lines = 0;` — snap viewport to bottom unconditionally when any blocking modal (prompt_approval or ask_user_question) closes. Both `prompt_approval` and `handle_ask_user_question` call `ask_question_blocking`, so this single change covers both.
+
+**Rollback**: Remove the two lines `self.scroll = 0;` and `self.pending_lines = 0;` from `ask_question_blocking` after `self.active_question = None;`.

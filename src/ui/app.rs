@@ -711,6 +711,14 @@ impl TuiApp {
 
         self.active_question = None;
 
+        // V-01 respects the user's scroll position during normal streaming, but
+        // after a blocking modal the user MUST see the tool result and agent
+        // response immediately — they just took an explicit action (approved /
+        // denied / answered).  Reset scroll unconditionally so subsequent pushes
+        // land in the visible viewport rather than below it.
+        self.scroll        = 0;
+        self.pending_lines = 0;
+
         if let Some(ref ans) = answer {
             self.push(RenderLine::QuestionResult {
                 header: question.header.clone(),
