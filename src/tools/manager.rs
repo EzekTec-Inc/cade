@@ -35,7 +35,16 @@ pub async fn dispatch(
             // Not a native tool — try MCP servers
             match mcp.call_tool(tool_name, arguments).await {
                 Some(Ok((out, err_flag))) => (out, err_flag),
-                Some(Err(e))             => (format!("MCP error: {e}"), true),
+                Some(Err(e))             => {
+                    let msg = e.to_string();
+                    // rmcp already formats errors as "Mcp error: -32XXX: ..." — avoid
+                    // double-prefixing as "MCP error: Mcp error: -32XXX: ...".
+                    if msg.starts_with("Mcp error:") || msg.starts_with("MCP error:") {
+                        (msg, true)
+                    } else {
+                        (format!("MCP error: {msg}"), true)
+                    }
+                },
                 None => (format!("Unknown tool: '{tool_name}'"), true),
             }
         }

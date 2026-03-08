@@ -815,7 +815,15 @@ async fn main() -> Result<()> {
         std::sync::Arc::new(mgr)
     };
 
-    // Register MCP tool schemas with cade-server + attach to agent
+    // Sync tool list every startup: detach all previously attached tools so
+    // stale MCP tools from removed/disconnected servers don't accumulate across
+    // sessions (INSERT OR IGNORE never removes old entries).  Then re-register
+    // native tools and re-attach only the current session's live MCP tools.
+    let _ = client.detach_agent_tools(&agent.id).await;
+    register_and_attach_filtered(&client, &agent.id, toolset, tool_filter.as_deref()).await;
+
+    // Register MCP tool schemas with cade-server + attach to agent.
+    // Only runs when at least one MCP server is live this session.
     if !mcp.is_empty().await {
         use agent::tools::register_mcp_tools;
         let mcp_tool_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas().await)

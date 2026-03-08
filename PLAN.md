@@ -790,3 +790,26 @@ to remove the last argument.
 **New behaviour:** `create_agent()` now auto-attaches: if `tool_ids` are supplied in the request body, those are wired; otherwise all currently registered tools are attached immediately. The backwards-compatible fallback in `messages.rs` remains as protection for legacy agents.
 
 **Rollback:** Remove the auto-wire block (the 15 lines between `sqlite::create_agent` and `// Handle memory blocks`).
+
+---
+
+## 2026-03-08 UTC — Fix MCP tool errors: stale schema sync + double-prefix message
+
+**Summary:** (1) Detach all previously attached tools at every CADE startup and re-register from scratch so stale MCP tool schemas from removed/disconnected servers never reach the LLM. (2) Fix double-prefix in MCP error messages.
+
+**Files modified:** `src/main.rs`, `src/tools/manager.rs`
+
+**Root cause (Fix 1):** `attach_agent_tools()` uses `INSERT OR IGNORE` — it only adds entries, never removes them. MCP tools from previous sessions (removed servers, changed config) accumulated in `agent_tools` indefinitely. On the next session, `build_context()` still included stale schemas → LLM called them → `find_tool_idx()` returned `None` (server not in runtime McpManager) → `"Unknown tool: '...'"`.
+
+**Root cause (Fix 2):** rmcp formats JSON-RPC errors as `"Mcp error: -32XXX: ..."`. The dispatch wrapper unconditionally prepended `"MCP error: "`, producing `"MCP error: Mcp error: -32XXX: ..."`.
+
+**Fix 1 — startup tool sync (`src/main.rs`):** Before the MCP registration block, always call `client.detach_agent_tools(&agent.id)` (removes all) then `register_and_attach_filtered(...)` (re-adds native + meta tools). The MCP block that follows re-adds only the current session's live MCP tools.
+
+**Fix 2 — clean error message (`src/tools/manager.rs`):** In `dispatch()` MCP `Err` arm, check if message already starts with `"Mcp error:"` / `"MCP error:"` before prepending the prefix.
+
+**Previous behaviour:** Stale MCP tool schemas caused `"Unknown tool: 'server__tool'"` errors; protocol errors showed double-prefix `"MCP error: Mcp error: -32602: ..."`.
+
+**New behaviour:** Every startup begins with a clean tool slate — only currently-connected MCP servers are available. Protocol errors display cleanly.
+
+**Rollback Fix 1:** Remove the two new lines (`detach_agent_tools` + `register_and_attach_filtered`) added before `if !mcp.is_empty()` in `main.rs`.
+**Rollback Fix 2:** Restore `Some(Err(e)) => (format!("MCP error: {e}"), true),` in `manager.rs`.
