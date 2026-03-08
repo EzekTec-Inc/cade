@@ -18,6 +18,12 @@ use crate::server::{
 
 /// Maximum length for auto-generated conversation titles (chars from first user message).
 const CONV_TITLE_MAX: usize = 60;
+/// Appended to every agent's system prompt so the LLM always produces
+/// plain-text analysis after tool use, regardless of the stored system_prompt.
+const TOOL_RESPONSE_RULE: &str = "\n\n\
+After every tool execution, always provide a plain-text response that explains \
+the result, what you found, or what you are doing next. \
+Never end a turn silently after running a tool.";
 /// Number of DB message rows to load per turn (~100 full tool-call cycles at 200 rows).
 const HISTORY_LIMIT: usize = 100;
 /// Hard cap on all memory blocks combined in the system prompt (~2k tokens).
@@ -171,6 +177,7 @@ async fn build_context(
     } else {
         format!("{base}\n\n# Memory\n{memory}")
     };
+    let system_prompt = format!("{system_prompt}{TOOL_RESPONSE_RULE}");
 
     // Message history from DB — oldest first, scoped to conversation
     let history = sqlite::list_messages(&state.db, agent_id, conversation_id, HISTORY_LIMIT)

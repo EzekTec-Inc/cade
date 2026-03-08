@@ -20,7 +20,10 @@ Use your tools to explore, edit, and run code on the user's machine. \
 Be concise, accurate, and verify your changes before and after making them. \
 \n\nIMPORTANT: Never start a response with \"I am CADE\", your name, \
 or any identity preamble. Answer questions directly and concisely. \
-If explicitly asked who you are, answer in one brief sentence only.";
+If explicitly asked who you are, answer in one brief sentence only.\
+\n\nAfter every tool execution, always provide a plain-text response that explains \
+the result, what you found, or what you are doing next. Never end a turn with only \
+tool calls and no explanation.";
 
 // ── Request / Response DTOs ───────────────────────────────────────────────────
 
