@@ -813,3 +813,19 @@ to remove the last argument.
 
 **Rollback Fix 1:** Remove the `{ let non_mcp_ids ... }` sync block added before `if !mcp.is_empty()` in `main.rs`.
 **Rollback Fix 2:** Restore `Some(Err(e)) => (format!("MCP error: {e}"), true),` in `manager.rs`.
+
+---
+
+## 2026-03-08 UTC — Ctrl+C cancels running agent turn
+
+**Summary:** Added `(KeyCode::Char('c'), KeyModifiers::CONTROL)` arm to the tick task's key event match in the TUI event loop so Ctrl+C unconditionally cancels an in-progress LLM turn.
+
+**Files modified:** `src/cli/repl.rs`
+
+**Root cause:** The tick task's match block during a running turn had arms for Enter (steering), Esc (conditional cancel), and character input, but no arm for Ctrl+C. The key fell through to `_ => {}` and was silently dropped. The `app.rs:1083` handler (clear input, return empty string) was never reached because the tick task intercepts events before forwarding to the app.
+
+**Previous behaviour:** Ctrl+C during a running turn was silently discarded. Only Esc (with empty input and ≥200ms elapsed) could cancel a turn.
+
+**New behaviour:** Ctrl+C during a running turn clears typed input and sets `cancel_turn=true` → `stream_turn()` sees `__cancelled__` error → "Turn interrupted" is shown. Same 200ms grace period as Esc prevents stale Ctrl+C from a modal confirm from cancelling the next turn. Outside a turn, Ctrl+C still clears the input buffer (unchanged behaviour via `app.rs:1083`).
+
+**Rollback:** Remove the `(KeyCode::Char('c'), KeyModifiers::CONTROL)` arm added after the Esc handler in the tick task's match block in `src/cli/repl.rs`.

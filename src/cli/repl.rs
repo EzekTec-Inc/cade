@@ -2616,6 +2616,21 @@ impl Repl {
                                                             }
                                                         }
                                                     }
+                                                    // Ctrl+C — always cancel the running turn.
+                                                    // Unlike Esc (which only cancels on empty
+                                                    // input), Ctrl+C is an unconditional interrupt:
+                                                    // clear any typed text and stop the turn.
+                                                    // Same 200 ms grace period as Esc to swallow
+                                                    // stale events buffered just after a modal
+                                                    // confirmation (e.g. approval prompt Enter).
+                                                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                                                        if tick_start.elapsed().as_millis() >= 200 {
+                                                            app.input.clear();
+                                                            app.cursor_pos = 0;
+                                                            let _ = app.draw();
+                                                            tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                                                        }
+                                                    }
                                                     _ => {}
                                                 }
                                             }
