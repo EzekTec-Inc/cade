@@ -498,3 +498,23 @@ nothing, and only `RenderLine::ErrorMsg("Turn interrupted")` is pushed to `lines
 **New behaviour**: cancel_turn is cleared at Event::Open. The response streams in. Intentional cancellations (Esc during streaming) still work because they set cancel_turn AFTER the clear.
 
 **Rollback**: Remove the `if let Some(c) = cancel { c.store(false, ...); }` block from inside `Ok(Event::Open)` arm; restore `Ok(Event::Open) => { opened = true; }`.
+
+---
+
+## 2026-03-07 UTC — fix(scroll): scroll ToolResult into full view from ToolCall header
+
+**Summary**: After a tool run, the ToolCall header (⚡) was scrolling off-screen when diff-preview lines sat between it and the ToolResult. `push()` was snapping to `scroll=0` (absolute bottom) for every line including each diff preview line, and `scroll=0` shows only the final rows. For a 20-line diff, the ToolCall ended up 22 rows from the bottom — outside a typical 18-row content area.
+
+**Root cause**: `push()` used `scroll=0` unconditionally for all committed lines. Diff preview lines (one per old/new code line) were each snapping to absolute bottom, pushing the ToolCall progressively off-screen. By the time ToolResult arrived, the ToolCall was completely clipped.
+
+**Fix** (`src/ui/app.rs`):
+- Added `rows_from_last_tool_call(&self) -> usize` helper: iterates `self.lines` backwards, accumulates visual row counts via `render_line_to_text` + `count_wrapped_rows` until it hits the most recent `ToolCall`. Returns that total.
+- `push()`: for `RenderLine::ToolResult`, sets `self.scroll = self.rows_from_last_tool_call()` instead of 0. This positions the viewport so the ToolCall header is at the TOP of the visible area and the ToolResult is at the bottom — the entire tool execution block scrolls into view as a unit.
+- All other pushes still use `scroll=0` (snap to absolute bottom).
+
+**Behaviour**:
+- Simple tool (no diff): ToolCall at row 1 from bottom, ToolResult at row 0 → scroll=2 or similar, both fully visible.
+- Large diff (20 lines): scroll=22, ToolCall at top, all diff lines + ToolResult below it.
+- No ToolCall found (edge case): returns 0, falls back to absolute bottom.
+
+**Rollback**: In `push()`, change `self.scroll = self.rows_from_last_tool_call()` back to `self.scroll = 0` for ToolResult; remove the `rows_from_last_tool_call` method.

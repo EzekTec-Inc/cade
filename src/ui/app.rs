@@ -240,13 +240,44 @@ impl TuiApp {
     pub fn push(&mut self, line: RenderLine) -> Result<()> {
         self.commit_streaming_inner();
         self.commit_reasoning_inner();
+        let is_tool_result = matches!(line, RenderLine::ToolResult { .. });
         self.lines.push(line);
-        // Snap to bottom on every committed push — tool calls, tool results,
-        // system messages, and responses must always be immediately visible.
-        // Only live streaming chunks (push_streaming_chunk) preserve scroll.
-        self.scroll        = 0;
+
+        if is_tool_result {
+            // Scroll to show the associated ToolCall header at the top of the
+            // visible area.  When diff-preview lines sit between the ToolCall
+            // and ToolResult (e.g. for file edits), a plain scroll=0 would
+            // show only the bottom of the diff and clip the ToolCall off-screen.
+            // rows_from_last_tool_call() counts visual rows from the most recent
+            // ToolCall to the end of lines so the whole tool group scrolls into
+            // view as a unit.
+            self.scroll = self.rows_from_last_tool_call();
+        } else {
+            self.scroll = 0;
+        }
         self.pending_lines = 0;
         self.draw()
+    }
+
+    /// Count visual rows from the most recent `ToolCall` entry (inclusive) to
+    /// the end of `self.lines`.  The result is used as the scroll offset so
+    /// that the ToolCall header appears at the top of the viewport when the
+    /// corresponding ToolResult is pushed.
+    fn rows_from_last_tool_call(&self) -> usize {
+        let w = self.term_width.max(20) as usize;
+        let cw = self.term_width.max(20);
+        let mut total: u16 = 0;
+        for rl in self.lines.iter().rev() {
+            let mut text_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
+            render_line_to_text(rl, w, self.expand_all, &mut text_lines);
+            for tl in &text_lines {
+                total = total.saturating_add(count_wrapped_rows(tl, cw));
+            }
+            if matches!(rl, RenderLine::ToolCall { .. }) {
+                return total as usize;
+            }
+        }
+        0 // no ToolCall found — stay at bottom
     }
 
     /// Push without redrawing (for bulk initialisation / banner).
