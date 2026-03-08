@@ -460,3 +460,25 @@ nothing, and only `RenderLine::ErrorMsg("Turn interrupted")` is pushed to `lines
 **New behaviour**: Two lines added after `self.active_question = None;` — `self.scroll = 0; self.pending_lines = 0;` — snap viewport to bottom unconditionally when any blocking modal (prompt_approval or ask_user_question) closes. Both `prompt_approval` and `handle_ask_user_question` call `ask_question_blocking`, so this single change covers both.
 
 **Rollback**: Remove the two lines `self.scroll = 0;` and `self.pending_lines = 0;` from `ask_question_blocking` after `self.active_question = None;`.
+
+---
+
+## 2026-03-07 UTC — fix(scroll): snap on push() and commit_streaming() — tool results always visible
+
+**Summary**: Tool results, tool calls, system messages, and completed agent responses were invisible when the user was scrolled up, because V-01's non-snapping design was applied too broadly to ALL content. The correct design is: only live streaming chunks (push_streaming_chunk) should preserve scroll; all committed content should snap to bottom.
+
+**Problem**: V-01 changed `push()` to increment `pending_lines` instead of snapping. It also removed the snap from `commit_streaming()`. This meant: after a tool ran, its ToolResult was added to `lines` but the viewport stayed at the old scroll position. Same for any final agent response committed by `commit_streaming()`. Users would see nothing new even though the agent was working normally.
+
+**Fix** (`src/ui/app.rs` only):
+- `push()`: replaced `if self.scroll > 0 { self.pending_lines += 1; }` with `self.scroll = 0; self.pending_lines = 0;` — all committed pushes (ToolCall, ToolResult, SystemMsg, ErrorMsg, AssistantText, QuestionResult, etc.) now snap to bottom unconditionally.
+- `commit_streaming()`: replaced the non-snap pending_lines increment with `self.scroll = 0; self.pending_lines = 0;` — when a streaming response completes and is committed to `lines`, the viewport shows it immediately.
+- `push_streaming_chunk()`: **unchanged** — mid-stream chunks still preserve the user's scroll position (V-01 non-snap preserved for live typing).
+
+**Net behavior**:
+- User can scroll up while agent is streaming → reading preserved (V-01 still in effect)
+- Agent finishes a streaming response → viewport snaps to show it
+- Agent calls a tool → ToolCall visible immediately
+- Tool returns a result → ToolResult visible immediately
+- Any system/error message → visible immediately
+
+**Rollback**: In `push()`, restore `if self.scroll > 0 { self.pending_lines += 1; }` and remove the two unconditional assignment lines. In `commit_streaming()`, restore `if self.scroll > 0 { self.pending_lines += 1; }` and remove the two unconditional assignment lines.

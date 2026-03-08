@@ -241,9 +241,11 @@ impl TuiApp {
         self.commit_streaming_inner();
         self.commit_reasoning_inner();
         self.lines.push(line);
-        if self.scroll > 0 {
-            self.pending_lines += 1;
-        }
+        // Snap to bottom on every committed push — tool calls, tool results,
+        // system messages, and responses must always be immediately visible.
+        // Only live streaming chunks (push_streaming_chunk) preserve scroll.
+        self.scroll        = 0;
+        self.pending_lines = 0;
         self.draw()
     }
 
@@ -277,11 +279,12 @@ impl TuiApp {
     /// Commit any in-progress assistant streaming to `lines`.
     pub fn commit_streaming(&mut self) -> Result<()> {
         self.commit_streaming_inner();
-        // Do NOT unconditionally snap — respect user's scroll position.
-        // If the user scrolled up while the agent was streaming, leave them there.
-        if self.scroll > 0 {
-            self.pending_lines += 1; // the committed text block counts as new content
-        }
+        // Snap to bottom when streaming commits — the completed response must
+        // be visible.  Only mid-stream chunks (push_streaming_chunk) preserve
+        // the user's scroll position; once the response is fully committed here
+        // we always show it.
+        self.scroll        = 0;
+        self.pending_lines = 0;
         self.draw()
     }
 
