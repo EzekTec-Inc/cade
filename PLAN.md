@@ -518,3 +518,25 @@ nothing, and only `RenderLine::ErrorMsg("Turn interrupted")` is pushed to `lines
 - No ToolCall found (edge case): returns 0, falls back to absolute bottom.
 
 **Rollback**: In `push()`, change `self.scroll = self.rows_from_last_tool_call()` back to `self.scroll = 0` for ToolResult; remove the `rows_from_last_tool_call` method.
+
+---
+
+## 2026-03-07 UTC — feat(ui): Claude Code-style tool rendering (● / ⎿ / show-N-lines)
+
+**Summary**: Refactored ToolCall and ToolResult rendering in `src/ui/app.rs` to match Claude Code's visual language as shown in the user's screenshot.
+
+**Files modified**: `src/ui/app.rs` (render_line_to_text function) only.
+
+**ToolCall changes**:
+- Symbol: `⚡` (yellow) → `●` (teal Rgb(100,207,180))
+- Format: `● Name (args)` → `● Name(args)` — no space before `(`, matching `● Bash(cmd)` style
+- Args truncation: appends `…)` when over budget rather than replacing entire args with `(…)`
+
+**ToolResult changes**:
+- Gutter symbol: `↳` → `⎿` — matches Claude Code's output indent glyph
+- Collapsed (ctrl+o off): previously showed `output hidden (N lines)` (a single dim line with no content); now shows first 3 lines of actual content then `… +N lines (ctrl+o to expand)`
+- Expanded (ctrl+o on): previously showed up to 10 lines; now shows up to 20 lines then `… +N lines`
+- Both modes share the same first-line-bold + subsequent-indented-lines format
+- Empty result: `↳ success` → `⎿  (no output)` italic
+
+**Rollback**: Restore the original `⚡ ` / space-before-paren / `output hidden` / `↳` rendering in the ToolCall and ToolResult arms of `render_line_to_text`.

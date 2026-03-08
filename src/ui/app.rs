@@ -1839,20 +1839,23 @@ fn render_line_to_text(rl: &RenderLine, width: usize, expand_all: bool, out: &mu
             out.push(Line::from(""));
             let display = display_tool_name(name);
             let name_style = Style::default().add_modifier(Modifier::BOLD).fg(RC::Rgb(140, 140, 249));
+            // Budget: width minus "● " (2) + name len + "()" (2) + a little breathing room.
             let budget = width.saturating_sub(display.len() + 6);
-            let args   = truncate_str(preview, budget);
-            let dot_color = RC::Yellow;
-            let mut spans: Vec<Span<'static>> = vec![
-                Span::styled("⚡ ", Style::default().fg(dot_color).add_modifier(Modifier::BOLD)),
-                Span::styled(display, name_style),
-            ];
-            if expand_all || args.len() < 50 {
-                if !preview.is_empty() {
-                    spans.push(Span::styled(format!(" ({args})"), Style::default().fg(RC::DarkGray)));
-                }
+            let dot_color = RC::Rgb(100, 207, 180); // teal — distinct from assistant purple
+            // Format: ● Name(args)  — matches Claude Code style (no space before paren).
+            let args_span = if preview.is_empty() {
+                Span::styled(")", Style::default().fg(RC::DarkGray))
+            } else if expand_all || preview.len() < budget {
+                Span::styled(format!("{})", preview), Style::default().fg(RC::DarkGray))
             } else {
-                spans.push(Span::styled(" (…)", Style::default().fg(RC::DarkGray)));
-            }
+                let truncated = truncate_str(preview, budget.saturating_sub(1));
+                Span::styled(format!("{truncated}…)"), Style::default().fg(RC::DarkGray))
+            };
+            let spans: Vec<Span<'static>> = vec![
+                Span::styled("● ", Style::default().fg(dot_color)),
+                Span::styled(format!("{display}("), name_style),
+                args_span,
+            ];
             out.push(Line::from(spans));
         }
         RenderLine::ToolResult { is_error, content } => {
@@ -1863,36 +1866,42 @@ fn render_line_to_text(rl: &RenderLine, width: usize, expand_all: bool, out: &mu
             };
             let inner_w  = width.saturating_sub(5);
             let lns: Vec<&str> = content.lines().collect();
+            // Collapsed: show up to 3 lines; Expanded (ctrl+o): show up to 20.
+            // Format matches Claude Code: first line prefixed with ⎿, subsequent
+            // lines indented, trailing "… +N lines (ctrl+o to expand)" hint.
             if lns.is_empty() {
                 out.push(Line::from(vec![
-                    Span::styled("  ↳ ", Style::default().fg(RC::DarkGray)),
-                    Span::styled("success", Style::default().fg(color)),
-                ]));
-            } else if !expand_all {
-                out.push(Line::from(vec![
-                    Span::styled("  ↳ ", Style::default().fg(RC::DarkGray)),
-                    Span::styled(format!("output hidden ({} lines)", lns.len()), Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC)),
+                    Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
+                    Span::styled("(no output)", Style::default().fg(color).add_modifier(Modifier::ITALIC)),
                 ]));
             } else {
+                let show_limit = if expand_all { 20 } else { 3 };
+                let show = lns.len().min(show_limit);
+
+                // First line — bold, with ⎿ gutter
                 out.push(Line::from(vec![
-                    Span::styled("  ↳ ", Style::default().fg(RC::DarkGray)),
-                    Span::styled(
-                        truncate_str(lns[0], inner_w),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
+                    Span::styled(truncate_str(lns[0], inner_w), Style::default().fg(color).add_modifier(Modifier::BOLD)),
                 ]));
-                let show = lns.len().min(10);
+                // Subsequent shown lines — indented to match the ⎿ gutter
                 for ln in &lns[1..show] {
                     out.push(Line::from(vec![
-                        Span::raw("    "),
+                        Span::raw("     "),
                         Span::styled(truncate_str(ln, inner_w), Style::default().fg(color)),
                     ]));
                 }
-                if lns.len() > 10 {
-                    out.push(Line::from(Span::styled(
-                        format!("    … ({} more lines)", lns.len() - 10),
-                        Style::default().fg(RC::DarkGray),
-                    )));
+                // Truncation hint
+                let remaining = lns.len().saturating_sub(show);
+                if remaining > 0 {
+                    let hint = if expand_all {
+                        format!("… +{remaining} lines")
+                    } else {
+                        format!("… +{remaining} lines (ctrl+o to expand)")
+                    };
+                    out.push(Line::from(vec![
+                        Span::raw("     "),
+                        Span::styled(hint, Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC)),
+                    ]));
                 }
             }
         }
