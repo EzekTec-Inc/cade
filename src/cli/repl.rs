@@ -25,6 +25,12 @@ const BANNER: &str = r#"
  Type /help for commands, /exit to quit
 "#;
 
+/// Injected as a follow-up user message when the LLM produces an empty response
+/// after a tool execution (no text, no new tool call).  Prevents silent turn ends.
+const EMPTY_YIELD_REPROMPT: &str = "Tool execution complete. \
+Please provide a text response explaining the result, what you found, \
+or what you are doing next.";
+
 // ── Slash commands ─────────────────────────────────────────────────────────────
 
 /// Result from the agent TUI picker.
@@ -2618,7 +2624,7 @@ impl Repl {
 
         // Clear cancel flag after turn completes
         self.cancel_turn.store(false, Ordering::SeqCst);
-        self.dispatch_tool_calls(stdout, messages, input, Some(bar_text)).await?;
+        self.dispatch_tool_calls(stdout, messages, input, Some(bar_text), false).await?;
 
         // Blank line after every agent turn for visual block separation.
         let _ = self.app.lock().unwrap().push(RenderLine::Blank);
@@ -2885,12 +2891,16 @@ impl Repl {
     }
 
     /// Collect tool calls from messages and execute them one by one.
+    ///
+    /// `reprompt_done`: true when this call is itself the result of an auto-reprompt
+    /// injection — prevents infinite reprompt loops if the LLM keeps returning empty.
     async fn dispatch_tool_calls(
         &self,
         stdout: &mut io::Stdout,
         messages: Vec<CadeMessage>,
         user_input: &str,
         bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
+        reprompt_done: bool,
     ) -> Result<()> {
         let tool_calls: Vec<(String, String, serde_json::Value)> = messages
             .iter()
@@ -2904,6 +2914,22 @@ impl Repl {
                 .collect::<Vec<_>>()
                 .join(" ");
 
+            // Auto-reprompt: if the LLM produced nothing after a tool execution,
+            // inject a single follow-up user message so it knows it must respond.
+            // `reprompt_done` guards against infinite loops — we only inject once.
+            if assistant_msg.trim().is_empty() && !reprompt_done {
+                tracing::warn!("Empty agent response after tool return — injecting re-prompt");
+                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
+                    "  ⎿  (no response after tool — re-prompting)".to_string()
+                ));
+                self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+                let follow = self.stream_turn(
+                    stdout, EMPTY_YIELD_REPROMPT, false, "", "", None, bar_text.clone()
+                ).await?;
+                Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text, true)).await?;
+                return Ok(());
+            }
+
             // Stop hook — exit 2 feeds stderr back to agent as a continuation
             let stop_outcome = self.hooks.stop("end_turn", user_input, &assistant_msg).await;
             if let crate::hooks::HookOutcome::Block { reason } = stop_outcome {
@@ -2914,7 +2940,7 @@ impl Repl {
                 self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
                 // Feed the hook's stderr back to the agent as a new turn
                 let follow_msgs = self.stream_turn(stdout, &reason, false, "", "", None, bar_text.clone()).await?;
-                Box::pin(self.dispatch_tool_calls(stdout, follow_msgs, user_input, bar_text)).await?;
+                Box::pin(self.dispatch_tool_calls(stdout, follow_msgs, user_input, bar_text, false)).await?;
             }
             return Ok(());
         }
@@ -2948,12 +2974,13 @@ impl Repl {
             // The user can press Esc again to interrupt that response if needed.
             self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
 
-            // Stream the tool return and process any chained tool calls
+            // Stream the tool return and process any chained tool calls.
+            // Reset reprompt_done — each new tool-return chain gets one reprompt budget.
             let follow = self
                 .stream_turn(stdout, "", true, &call_id, &result.output, None, bar_text.clone())
                 .await?;
 
-            Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text.clone())).await?;
+            Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text.clone(), false)).await?;
         }
 
         Ok(())
