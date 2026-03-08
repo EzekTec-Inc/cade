@@ -803,13 +803,13 @@ to remove the last argument.
 
 **Root cause (Fix 2):** rmcp formats JSON-RPC errors as `"Mcp error: -32XXX: ..."`. The dispatch wrapper unconditionally prepended `"MCP error: "`, producing `"MCP error: Mcp error: -32XXX: ..."`.
 
-**Fix 1 — startup tool sync (`src/main.rs`):** Before the MCP registration block, always call `client.detach_agent_tools(&agent.id)` (removes all) then `register_and_attach_filtered(...)` (re-adds native + meta tools). The MCP block that follows re-adds only the current session's live MCP tools.
+**Fix 1 — startup tool sync (`src/main.rs`):** Before the MCP registration block, snapshot current non-MCP tool IDs (those without `__` in name), detach all, re-attach non-MCP IDs immediately, then let the MCP block re-attach only the current session's live MCP tools. MCP tools always carry a `server__tool` prefix; native and meta tools never do — so the `name.contains("__")` heuristic cleanly separates them without needing a tags endpoint.
 
 **Fix 2 — clean error message (`src/tools/manager.rs`):** In `dispatch()` MCP `Err` arm, check if message already starts with `"Mcp error:"` / `"MCP error:"` before prepending the prefix.
 
 **Previous behaviour:** Stale MCP tool schemas caused `"Unknown tool: 'server__tool'"` errors; protocol errors showed double-prefix `"MCP error: Mcp error: -32602: ..."`.
 
-**New behaviour:** Every startup begins with a clean tool slate — only currently-connected MCP servers are available. Protocol errors display cleanly.
+**New behaviour:** Every startup: non-MCP tools (native + meta) are preserved, stale MCP tools are dropped, only live MCP tools are re-attached. Protocol errors display cleanly.
 
-**Rollback Fix 1:** Remove the two new lines (`detach_agent_tools` + `register_and_attach_filtered`) added before `if !mcp.is_empty()` in `main.rs`.
+**Rollback Fix 1:** Remove the `{ let non_mcp_ids ... }` sync block added before `if !mcp.is_empty()` in `main.rs`.
 **Rollback Fix 2:** Restore `Some(Err(e)) => (format!("MCP error: {e}"), true),` in `manager.rs`.
