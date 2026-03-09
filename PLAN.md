@@ -857,7 +857,35 @@ to remove the last argument.
 - Re-prompt call: `stream_turn(..., EMPTY_YIELD_REPROMPT, ..., true, ...)` — ephemeral=true
 - All other `stream_turn` call sites: ephemeral=false (no behaviour change)
 
-**Rollback:** Remove `ephemeral: bool` from `stream_turn`, `stream_message_cancellable`, `send_message`; remove `if ephemeral { body["ephemeral"] = true }` from client; remove `is_ephemeral` guards from both server handlers.
+**Rollback Fix 1:** Remove `ephemeral: bool` from `stream_turn`, `stream_message_cancellable`, `send_message`; remove `if ephemeral { body["ephemeral"] = true }` from client; remove `is_ephemeral` guards from both server handlers.
+
+---
+
+## 2026-03-08 UTC — Context system review + 4 targeted enhancements
+
+**Summary:** Full context system review identified four issues. All four fixed.
+
+**Files modified:** `src/server/api/messages.rs`, `src/ui/app.rs`, `src/cli/repl.rs`
+
+### Fix 1 — Raise MAX_CONTEXT_CHARS 600_000 → 3_000_000 (`messages.rs`)
+**Issue:** Gemini 1M window was capped at 19% usage (600K / 3.1M chars). Gemini 2M at 9%.
+**Fix:** `const MAX_CONTEXT_CHARS: usize = 3_000_000` — 3M chars ≈ 1M tokens. Claude 200K unaffected (hits 600K cap, well within new 3M cap).
+**Rollback:** Restore `const MAX_CONTEXT_CHARS: usize = 600_000;`
+
+### Fix 2 — Include tool_calls JSON in total_chars() (`messages.rs`)
+**Issue:** Context budget only counted `message.content`; `tool_calls` JSON (function names, args) not counted → underestimated context size for tool-heavy sessions → trimming fired too late.
+**Fix:** Extended `total_chars` closure to also count `serde_json::to_string(tool_calls).len()`.
+**Rollback:** Restore the single-line `msgs.iter().map(|m| m.content.chars().count()).sum()` closure.
+
+### Fix 3 — Footer context % color by severity (`app.rs`)
+**Issue:** Context % showed as flat dark gray regardless of 10% or 98%.
+**Fix:** Severity-based color in footer: gray < 80%, amber 80-89%, red ≥ 90%.
+**Rollback:** Revert `right_ctx` back to single-assignment; use `RC::Rgb(90,90,90)` for the span.
+
+### Fix 4 — Message count in /context output (`repl.rs`)
+**Issue:** `/context` showed % and token estimates but no insight into history depth.
+**Fix:** Added `get_conversation_messages()` call at display time; shows "N (max 100 per turn)".
+**Rollback:** Remove the `msg_count` block and `Messages` Pair line from SlashCmd::Context handler.
 
 ---
 

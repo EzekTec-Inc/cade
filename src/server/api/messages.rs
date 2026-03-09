@@ -41,9 +41,10 @@ const TOOL_RESULT_MAX_CHARS: usize = 32_768;
 const CHARS_PER_TOKEN: usize = 3;
 /// Minimum character budget regardless of model window (guards tiny local models).
 const MIN_CONTEXT_CHARS: usize = 8_000;
-/// Maximum character budget cap — avoids enormous payloads on multi-million
-/// token windows (e.g. Gemini 1.5 Pro at 2 M tokens).
-const MAX_CONTEXT_CHARS: usize = 600_000;
+/// Maximum character budget cap.  3_000_000 chars ≈ 1 M tokens at 3 chars/token,
+/// which matches Gemini 1 M context exactly and gives Gemini 2 M users ~50%
+/// of their window.  Claude 200 K is unaffected (200_000 × 3 = 600_000 < cap).
+const MAX_CONTEXT_CHARS: usize = 3_000_000;
 
 // ── Message history sanitizer ─────────────────────────────────────────────────
 //
@@ -219,8 +220,17 @@ async fn build_context(
         crate::server::llm::catalogue::context_window_for_model(&agent.model),
         CHARS_PER_TOKEN
     );
+    // Count both content text AND tool_calls JSON so tool-heavy sessions are
+    // trimmed accurately.  Counting only content underestimates context size
+    // when many tool-call schemas / large argument payloads are in history.
     let total_chars = |msgs: &[LlmMessage]| -> usize {
-        msgs.iter().map(|m| m.content.chars().count()).sum()
+        msgs.iter().map(|m| {
+            m.content.chars().count()
+                + m.tool_calls.as_deref()
+                    .and_then(|tcs| serde_json::to_string(tcs).ok())
+                    .map(|s| s.len())
+                    .unwrap_or(0)
+        }).sum()
     };
     while total_chars(&messages) > context_char_budget && messages.len() > 3 {
         // messages[0] is always the system prompt — remove messages[1]

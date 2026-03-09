@@ -1777,7 +1777,13 @@ fn render_frame(
     let (left_label, left_glyph, left_color) = mode_footer_left(mode);
     let right_agent = agent_name.to_string();
     let right_model  = format!(" [{}]", truncate_str(model, 30));
-    let right_ctx    = context_pct.map(|p| format!(" {p}%")).unwrap_or_default();
+    // Context % with severity color: gray < 80%, amber 80-89%, red ≥ 90%
+    let (right_ctx, right_ctx_color) = match context_pct {
+        Some(p) if p >= 90 => (format!(" {p}%"), RC::Rgb(210,  60,  60)),
+        Some(p) if p >= 80 => (format!(" {p}%"), RC::Rgb(210, 140,  40)),
+        Some(p)            => (format!(" {p}%"), RC::Rgb( 90,  90,  90)),
+        None               => (String::new(),    RC::Rgb( 90,  90,  90)),
+    };
     // CWD segment — shown in the centre of the footer in dark gray
     let mid_cwd      = format!("  {cwd}  ");
 
@@ -1803,7 +1809,7 @@ fn render_frame(
     footer.push(Span::styled(right_agent, Style::default().fg(RC::Rgb(140, 140, 249))));
     footer.push(Span::styled(right_model, Style::default().fg(RC::DarkGray)));
     if !right_ctx.is_empty() {
-        footer.push(Span::styled(right_ctx, Style::default().fg(RC::Rgb(90, 90, 90))));
+        footer.push(Span::styled(right_ctx, Style::default().fg(right_ctx_color)));
     }
 
     frame.render_widget(Paragraph::new(Line::from(footer)), chunks[7]);

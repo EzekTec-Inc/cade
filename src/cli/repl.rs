@@ -909,12 +909,27 @@ impl Repl {
                         let model_disp  = if let Some(pos) = model.find('/') { model[pos+1..].to_string() } else { model.clone() };
                         let window_disp = if window == 0 { "unknown".to_string() } else { format!("{} tokens", fmt_tok(window as u64)) };
 
+                        // Count messages in current conversation for depth display.
+                        let agent_id   = self.agent_id();
+                        let conv_id    = self.conversation_id();
+                        let msg_count  = self.client
+                            .get_conversation_messages(&agent_id, conv_id.as_deref().unwrap_or(""))
+                            .await
+                            .map(|v| v.len())
+                            .unwrap_or(0);
+                        let msg_disp   = if msg_count == 0 {
+                            "none yet".to_string()
+                        } else {
+                            format!("{msg_count}  (max 100 loaded per turn)")
+                        };
+
                         let mut lines: Vec<RenderLine> = vec![
                             RenderLine::Blank,
                             RenderLine::InfoHeader("  ◆ Context Window".to_string()),
                             RenderLine::Blank,
                             RenderLine::Pair { label: "Model".to_string(),          value: model_disp },
                             RenderLine::Pair { label: "Context window".to_string(), value: window_disp },
+                            RenderLine::Pair { label: "Messages".to_string(),       value: msg_disp },
                         ];
 
                         if let Some(pct) = pct_opt {
