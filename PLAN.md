@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-03-08 UTC — Skills TUI cards overlay
+
+**Summary**: Added a full-screen skills browser/editor overlay activated by `/skills`, `/skills show <id>`, and `/skills edit <id>`. Replaces the previous table/text dump with an interactive 3-mode UI.
+
+**New behaviour**:
+- `/skills` (non-empty) → opens full-screen overlay in List mode: bordered cards (j/k nav, Enter → Detail, e → Edit, Esc closes)
+- `/skills show <id>` → opens overlay in Detail mode for the named skill
+- `/skills edit <id>` → opens overlay in Edit mode (Tab between 6 fields, Ctrl+S saves, Esc cancels)
+- Edit mode writes back to SKILL.MD on disk via `write_skill_to_disk()`
+- Empty skills list still falls through to the existing info message path
+
+**Files modified**:
+- `src/skills/mod.rs` — added `write_skill_to_disk()` function
+- `src/ui/app.rs` — added `SkillsMode` enum, `SkillsOverlayState` struct, `skills_overlay` field on `TuiApp`, `handle_skills_key()` method, `render_skills_overlay/list/detail/hint` render functions; threaded snapshot through `draw_impl`→`render_frame`; key intercept in `read_input`; added `Borders` import
+- `src/ui/mod.rs` — re-exported `SkillsOverlayState` and `SkillsMode`
+- `src/cli/repl.rs` — replaced `list`, `show`, `edit` sub-command output with overlay activation
+
+**Previous behaviour**: `/skills` printed a table to the conversation view; `/skills show` dumped field pairs + body; `/skills edit` opened `$EDITOR` in a subprocess.
+
+**Rollback**: Revert the four files above. The `write_skill_to_disk` function is purely additive so can remain.
+
+---
+
 ## 2026-03-02 UTC — Reduce whitespace in display view
 
 **Summary**: Eliminated blank-row gaps between the banner and agent output caused by InputWidget viewport cleanup.

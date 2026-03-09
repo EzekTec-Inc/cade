@@ -598,6 +598,31 @@ pub fn github_url_to_raw_skill(url: &str) -> Option<String> {
     }
 }
 
+/// Write edited skill fields back to the SKILL.MD file on disk.
+/// fields: [name, description, category, tags_csv, triggers_csv, body]
+pub fn write_skill_to_disk(skill: &Skill, fields: &[String]) -> std::io::Result<()> {
+    let name     = &fields[0];
+    let desc     = &fields[1];
+    let cat      = &fields[2];
+    let tags_str = &fields[3];
+    let trig_str = &fields[4];
+    let body     = &fields[5];
+
+    let fmt_list = |s: &str| -> String {
+        let items: Vec<String> = s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+        if items.is_empty() { "[]".to_string() }
+        else { format!("[{}]", items.iter().map(|t| format!("\"{}\"", t)).collect::<Vec<_>>().join(", ")) }
+    };
+
+    let tags_yaml  = fmt_list(tags_str);
+    let trigs_yaml = fmt_list(trig_str);
+
+    let content = format!(
+        "---\nname: {name}\ndescription: {desc}\ncategory: {cat}\ntags: {tags_yaml}\ntriggers: {trigs_yaml}\n---\n\n{body}"
+    );
+    std::fs::write(&skill.path, content)
+}
+
 /// Download and install a skill from a URL into `target_dir/<skill-name>/SKILL.MD`.
 /// Returns the installed skill on success.
 pub async fn install_skill_from_url(

@@ -1717,41 +1717,16 @@ impl Repl {
                                     let _ = app.push(RenderLine::DimMsg("  /skills create <name>  to scaffold your first skill".to_string()));
                                     let _ = app.push(RenderLine::Blank);
                                 } else {
-                                    // Sort: project first, then agent, global, builtin; then id
-                                    let scope_ord = |scope: &str| match scope {
-                                        "project" => 0u8, "agent" => 1, "global" => 2, _ => 3,
-                                    };
-                                    let mut sorted: Vec<_> = skills.iter().collect();
+                                    let scope_ord = |s: &str| match s { "project"=>0u8,"agent"=>1,"global"=>2,_=>3 };
+                                    let mut sorted: Vec<_> = skills.iter().cloned().collect();
                                     sorted.sort_by(|a, b| {
-                                        let sa = a.scope.to_string();
-                                        let sb = b.scope.to_string();
-                                        scope_ord(&sa).cmp(&scope_ord(&sb))
-                                            .then(a.id.cmp(&b.id))
+                                        scope_ord(&a.scope.to_string()).cmp(&scope_ord(&b.scope.to_string())).then(a.id.cmp(&b.id))
                                     });
-
-                                    let headers = vec![
-                                        "ID".to_string(),
-                                        "Scope".to_string(),
-                                        "Description".to_string(),
-                                        "Tags".to_string(),
-                                    ];
-                                    let rows: Vec<Vec<String>> = sorted.iter().map(|s| vec![
-                                        s.id.clone(),
-                                        s.scope.to_string(),
-                                        s.description.clone(),
-                                        if s.tags.is_empty() { "—".to_string() } else { s.tags.join(", ") },
-                                    ]).collect();
-                                    let mut lines: Vec<RenderLine> = vec![
-                                        RenderLine::Blank,
-                                        RenderLine::InfoHeader(format!("  ◆ Skills  ({} loaded)", skills.len())),
-                                        RenderLine::Blank,
-                                        RenderLine::Table { headers, rows },
-                                        RenderLine::Blank,
-                                        RenderLine::DimMsg("  /skills show <id>  ·  /skills create <name>  ·  /skills edit <id>  ·  /skills reload".to_string()),
-                                        RenderLine::Blank,
-                                    ];
+                                    drop(skills);
                                     let mut app = self.app.lock().unwrap();
-                                    for line in lines.drain(..) { let _ = app.push(line); }
+                                    let state = crate::ui::SkillsOverlayState::new(sorted);
+                                    app.skills_overlay = Some(state);
+                                    let _ = app.draw();
                                 }
                             }
 
@@ -1817,54 +1792,14 @@ impl Repl {
                                             self.tui_err(format!("  Skill '{id}' not found."));
                                             self.tui_dim("  Run /skills to list available skills.");
                                         }
-                                        Some(s) => {
-                                            let word_count = s.body.split_whitespace().count();
-                                            let line_count = s.body.lines().count();
-                                            let mut lines: Vec<RenderLine> = vec![
-                                                RenderLine::Blank,
-                                                RenderLine::InfoHeader(format!("  ◆ Skill: {}  —  {}", s.id, s.name)),
-                                                RenderLine::Pair { label: "Description".to_string(), value: s.description.clone() },
-                                                RenderLine::Pair { label: "Scope".to_string(),       value: s.scope.to_string() },
-                                                RenderLine::Pair { label: "Category".to_string(),    value: s.category.as_deref().unwrap_or("general").to_string() },
-                                            ];
-                                            if !s.tags.is_empty() {
-                                                lines.push(RenderLine::Pair { label: "Tags".to_string(), value: s.tags.join(", ") });
-                                            }
-                                            if !s.triggers.is_empty() {
-                                                lines.push(RenderLine::Pair { label: "Triggers".to_string(), value: s.triggers.join(", ") });
-                                            }
-                                            if !s.capabilities.is_empty() {
-                                                lines.push(RenderLine::Pair { label: "Capabilities".to_string(), value: s.capabilities.join(", ") });
-                                            }
-                                            if let Some(ref phase) = s.rpi_phase {
-                                                lines.push(RenderLine::Pair { label: "RPI Phase".to_string(), value: phase.clone() });
-                                            }
-                                            lines.push(RenderLine::Pair { label: "Body".to_string(),      value: format!("{word_count} words, {line_count} lines") });
-                                            lines.push(RenderLine::Pair { label: "Invoke as".to_string(), value: format!("/{}", s.id) });
-
-                                            // Scripts section
-                                            if !s.scripts.is_empty() {
-                                                let script_rows: Vec<Vec<String>> = s.scripts.iter().map(|sc| {
-                                                    let desc = if sc.description.is_empty() { "—".to_string() } else { sc.description.clone() };
-                                                    vec![sc.name.clone(), desc]
-                                                }).collect();
-                                                lines.push(RenderLine::Blank);
-                                                lines.push(RenderLine::DimMsg("  ── Scripts ──".to_string()));
-                                                lines.push(RenderLine::Table { headers: vec!["Script".to_string(), "Description".to_string()], rows: script_rows });
-                                            }
-
-                                            // Body section — render as one block for proper markdown + no per-line blank lines
-                                            if !s.body.trim().is_empty() {
-                                                lines.push(RenderLine::Blank);
-                                                lines.push(RenderLine::DimMsg("  ── Body ──".to_string()));
-                                                lines.push(RenderLine::AssistantText(s.body.clone()));
-                                            }
-
-                                            lines.push(RenderLine::Blank);
-                                            lines.push(RenderLine::DimMsg(format!("  /skills edit {id}  ·  /skills delete {id}")));
-                                            lines.push(RenderLine::Blank);
-                                            let mut app = self.app.lock().unwrap();
-                                            for line in lines.drain(..) { let _ = app.push(line); }
+                                        Some(_s) => {
+                                            let idx = skills.iter().position(|sk| sk.id == id).unwrap_or(0);
+                                            let skills_vec: Vec<_> = skills.iter().cloned().collect();
+                                            drop(skills);
+                                            let mut state = crate::ui::SkillsOverlayState::new(skills_vec);
+                                            state.cursor = idx;
+                                            state.mode = crate::ui::SkillsMode::Detail;
+                                            self.app.lock().unwrap().skills_overlay = Some(state);
                                         }
                                     }
                                 }
@@ -1922,24 +1857,15 @@ impl Repl {
                                             self.tui_err(format!("  Skill '{id}' not found."));
                                             self.tui_dim("  Run /skills to list available skills.");
                                         }
-                                        Some(s) => {
-                                            // Find the SKILL.MD file in the skill directory
-                                            let skill_file = self.skills_dir.join(&s.id).join("SKILL.MD");
-                                            let editor = std::env::var("EDITOR")
-                                                .or_else(|_| std::env::var("VISUAL"))
-                                                .unwrap_or_else(|_| "nano".to_string());
+                                        Some(_s) => {
+                                            let idx = skills.iter().position(|sk| sk.id == id).unwrap_or(0);
+                                            let skills_vec: Vec<_> = skills.iter().cloned().collect();
                                             drop(skills);
-                                            self.tui_dim(format!("  Opening {} in {editor}…", skill_file.display()));
-                                            match std::process::Command::new(&editor)
-                                                .arg(&skill_file)
-                                                .status()
-                                            {
-                                                Ok(_) => {
-                                                    self.tui_ok(format!("  ✓ Done editing '{id}'"));
-                                                    self.tui_dim("  /skills reload  to apply changes");
-                                                }
-                                                Err(e) => self.tui_err(format!("  Failed to open editor '{editor}': {e}")),
-                                            }
+                                            let mut state = crate::ui::SkillsOverlayState::new(skills_vec);
+                                            state.cursor = idx;
+                                            state.load_edit_fields();
+                                            state.mode = crate::ui::SkillsMode::Edit;
+                                            self.app.lock().unwrap().skills_overlay = Some(state);
                                         }
                                     }
                                 }

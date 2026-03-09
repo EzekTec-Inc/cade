@@ -37,7 +37,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -55,6 +55,56 @@ const CONTENT_PAD_BOT: u16 = 1;
 /// Braille spinner frames for thinking animation.
 const BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const DOTS: &[&str] = &["⠁", "⠂", "⠄", "⠐", "⠠", "⠐", "⠄", "⠂"];
+
+// ── Skills overlay ────────────────────────────────────────────────────────────
+
+/// Three-mode state machine for the skills overlay.
+#[derive(Debug, Clone, PartialEq)]
+pub enum SkillsMode { List, Detail, Edit }
+
+/// Full-screen overlay for browsing and editing skills.
+#[derive(Debug, Clone)]
+pub struct SkillsOverlayState {
+    pub skills:        Vec<crate::skills::Skill>,
+    pub cursor:        usize,        // selected index in List
+    pub list_scroll:   usize,
+    pub detail_scroll: usize,
+    pub mode:          SkillsMode,
+    // 6 editable fields: [name, desc, category, tags_csv, triggers_csv, body]
+    pub edit_fields:   Vec<String>,
+    pub field_cursor:  usize,        // active field 0-5
+    pub field_pos:     usize,        // byte cursor in active field
+    pub dirty:         bool,
+}
+
+impl SkillsOverlayState {
+    pub fn new(skills: Vec<crate::skills::Skill>) -> Self {
+        Self {
+            skills,
+            cursor: 0, list_scroll: 0, detail_scroll: 0,
+            mode: SkillsMode::List,
+            edit_fields: vec![String::new(); 6],
+            field_cursor: 0, field_pos: 0, dirty: false,
+        }
+    }
+
+    /// Populate edit_fields from the currently selected skill.
+    pub fn load_edit_fields(&mut self) {
+        if let Some(s) = self.skills.get(self.cursor) {
+            self.edit_fields = vec![
+                s.name.clone(),
+                s.description.clone(),
+                s.category.clone().unwrap_or_default(),
+                s.tags.join(", "),
+                s.triggers.join(", "),
+                s.body.clone(),
+            ];
+            self.field_cursor = 0;
+            self.field_pos = 0;
+            self.dirty = false;
+        }
+    }
+}
 
 // ── RenderLine ────────────────────────────────────────────────────────────────
 
@@ -204,6 +254,10 @@ pub struct TuiApp {
     /// Number of follow-up messages currently queued (typed during a running turn).
     /// Shown as a badge in the status row so the user knows their input was accepted.
     pub queued_count: usize,
+
+    // ── Skills overlay ─────────────────────────────────────────────────────
+    /// Full-screen skills browser/editor overlay. `None` when inactive.
+    pub skills_overlay: Option<SkillsOverlayState>,
 }
 
 impl TuiApp {
@@ -246,6 +300,7 @@ impl TuiApp {
             footer_extra: None,
             pending_lines: 0,
             queued_count: 0,
+            skills_overlay: None,
         }
     }
 
@@ -465,6 +520,7 @@ impl TuiApp {
         let picker           = self.picker.clone();
         let header_lines     = self.header_lines.clone();
         let footer_extra     = self.footer_extra.clone();
+        let skills_overlay_snap = self.skills_overlay.clone();
 
         // V-04: capture max_skip returned by render_frame to clamp self.scroll.
         let mut max_skip: u16 = 0;
@@ -491,6 +547,7 @@ impl TuiApp {
                 picker.as_ref(),
                 &header_lines,
                 footer_extra.as_deref(),
+                skills_overlay_snap.as_ref(),
             );
         })?;
         // V-04: clamp self.scroll so stale over-scroll doesn't trap the user.
@@ -951,7 +1008,9 @@ impl TuiApp {
             }
             match event::read()? {
                 Event::Key(k) => {
-                    if self.active_question.is_some() {
+                    if self.skills_overlay.is_some() {
+                        self.handle_skills_key(k);
+                    } else if self.active_question.is_some() {
                         self.handle_question_key(k);
                     } else if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
                         return Ok(result);
@@ -1260,6 +1319,127 @@ impl TuiApp {
         }
         Ok(None)
     }
+
+    fn handle_skills_key(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let ov = match self.skills_overlay.as_mut() { Some(o) => o, None => return };
+
+        match ov.mode {
+            SkillsMode::List => match (key.code, key.modifiers) {
+                (KeyCode::Char('j'), _) | (KeyCode::Down, _) => {
+                    if ov.cursor + 1 < ov.skills.len() { ov.cursor += 1; }
+                    let visible = 8usize;
+                    if ov.cursor >= ov.list_scroll + visible { ov.list_scroll += 1; }
+                }
+                (KeyCode::Char('k'), _) | (KeyCode::Up, _) => {
+                    if ov.cursor > 0 { ov.cursor -= 1; }
+                    if ov.cursor < ov.list_scroll { ov.list_scroll = ov.list_scroll.saturating_sub(1); }
+                }
+                (KeyCode::Enter, _) => {
+                    if !ov.skills.is_empty() {
+                        ov.mode = SkillsMode::Detail;
+                        ov.detail_scroll = 0;
+                    }
+                }
+                (KeyCode::Char('e'), _) => {
+                    if !ov.skills.is_empty() {
+                        ov.load_edit_fields();
+                        ov.mode = SkillsMode::Edit;
+                    }
+                }
+                (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => {
+                    self.skills_overlay = None;
+                }
+                _ => {}
+            },
+
+            SkillsMode::Detail => match (key.code, key.modifiers) {
+                (KeyCode::Char('j'), _) | (KeyCode::Down, _) => { ov.detail_scroll += 1; }
+                (KeyCode::Char('k'), _) | (KeyCode::Up, _) => { ov.detail_scroll = ov.detail_scroll.saturating_sub(1); }
+                (KeyCode::Char('e'), _) => {
+                    ov.load_edit_fields();
+                    ov.mode = SkillsMode::Edit;
+                }
+                (KeyCode::Esc, _) => { ov.mode = SkillsMode::List; }
+                _ => {}
+            },
+
+            SkillsMode::Edit => match (key.code, key.modifiers) {
+                (KeyCode::Char('s'), KeyModifiers::CONTROL) => {
+                    let skill = match ov.skills.get(ov.cursor) { Some(s) => s.clone(), None => return };
+                    let fields = ov.edit_fields.clone();
+                    match crate::skills::write_skill_to_disk(&skill, &fields) {
+                        Ok(_) => {
+                            ov.dirty = false;
+                            ov.mode = SkillsMode::Detail;
+                        }
+                        Err(e) => {
+                            self.lines.push(crate::ui::RenderLine::ErrorMsg(format!("Failed to save: {e}")));
+                        }
+                    }
+                }
+                (KeyCode::Esc, _) => {
+                    ov.dirty = false;
+                    ov.mode = SkillsMode::Detail;
+                }
+                (KeyCode::Tab, _) => {
+                    ov.field_cursor = (ov.field_cursor + 1) % 6;
+                    ov.field_pos = ov.edit_fields.get(ov.field_cursor).map(|f| f.len()).unwrap_or(0);
+                }
+                (KeyCode::BackTab, _) => {
+                    ov.field_cursor = (ov.field_cursor + 5) % 6;
+                    ov.field_pos = ov.edit_fields.get(ov.field_cursor).map(|f| f.len()).unwrap_or(0);
+                }
+                (KeyCode::Enter, _) => {
+                    if ov.field_cursor == 5 {
+                        let pos = ov.field_pos;
+                        if let Some(f) = ov.edit_fields.get_mut(5) {
+                            let pos = pos.min(f.len());
+                            f.insert(pos, '\n');
+                            ov.field_pos = pos + 1;
+                            ov.dirty = true;
+                        }
+                    } else {
+                        ov.field_cursor = (ov.field_cursor + 1) % 6;
+                        ov.field_pos = ov.edit_fields.get(ov.field_cursor).map(|f| f.len()).unwrap_or(0);
+                    }
+                }
+                (KeyCode::Left, _) => { if ov.field_pos > 0 { ov.field_pos -= 1; } }
+                (KeyCode::Right, _) => {
+                    let max = ov.edit_fields.get(ov.field_cursor).map(|f| f.len()).unwrap_or(0);
+                    if ov.field_pos < max { ov.field_pos += 1; }
+                }
+                (KeyCode::Up, _) if ov.field_cursor == 5 => {
+                    ov.detail_scroll = ov.detail_scroll.saturating_sub(1);
+                }
+                (KeyCode::Down, _) if ov.field_cursor == 5 => {
+                    ov.detail_scroll += 1;
+                }
+                (KeyCode::Backspace, _) => {
+                    let pos = ov.field_pos;
+                    if pos > 0 {
+                        if let Some(f) = ov.edit_fields.get_mut(ov.field_cursor) {
+                            let new_pos = f[..pos].char_indices().next_back().map(|(i, _)| i).unwrap_or(0);
+                            f.drain(new_pos..pos);
+                            ov.field_pos = new_pos;
+                            ov.dirty = true;
+                        }
+                    }
+                }
+                (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+                    let pos = ov.field_pos;
+                    if let Some(f) = ov.edit_fields.get_mut(ov.field_cursor) {
+                        let pos = pos.min(f.len());
+                        f.insert(pos, c);
+                        ov.field_pos = pos + c.len_utf8();
+                        ov.dirty = true;
+                    }
+                }
+                _ => {}
+            },
+        }
+        let _ = self.draw();
+    }
 }
 
 impl Drop for TuiApp {
@@ -1338,6 +1518,7 @@ fn render_frame(
     picker:           Option<&PickerState>,
     header_lines:     &[RenderLine],
     footer_extra:     Option<&str>,
+    skills_overlay:   Option<&SkillsOverlayState>,
 ) -> u16 {   // returns max_skip for V-04 scroll clamping
     let area = frame.area();
     let w    = area.width as usize;
@@ -1648,6 +1829,11 @@ fn render_frame(
     if let Some(aq) = active_question {
         // chunks[1] = dashed separator, chunks[2] = panel body
         render_question_inline(frame, aq, chunks[1], chunks[2]);
+    }
+
+    // ── Skills overlay (full-screen, drawn last so it covers everything) ─────
+    if let Some(ov) = skills_overlay {
+        render_skills_overlay(frame, ov, area);
     }
 
     max_skip  // V-04: returned so draw_impl can clamp self.scroll
@@ -2293,6 +2479,252 @@ fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect) {
 
     frame.render_widget(
         Paragraph::new(lines).style(Style::default().bg(RC::Rgb(18, 18, 32))),
+        area,
+    );
+}
+
+// ── Skills overlay rendering ──────────────────────────────────────────────────
+
+fn render_skills_overlay(frame: &mut Frame, ov: &SkillsOverlayState, area: Rect) {
+    // Dark background covering the entire terminal
+    frame.render_widget(
+        Paragraph::new("").style(Style::default().bg(RC::Rgb(10, 10, 18))),
+        area,
+    );
+
+    let inner = Rect {
+        x: area.x + 1,
+        y: area.y + 1,
+        width: area.width.saturating_sub(2),
+        height: area.height.saturating_sub(3), // leave 2 rows for hint at bottom
+    };
+    let hint_area = Rect {
+        x: area.x + 2,
+        y: area.y + area.height.saturating_sub(2),
+        width: area.width.saturating_sub(4),
+        height: 1,
+    };
+
+    match &ov.mode {
+        SkillsMode::List => {
+            render_skills_list(frame, ov, inner, hint_area);
+        }
+        SkillsMode::Detail => {
+            render_skills_detail(frame, ov, inner, hint_area, false);
+        }
+        SkillsMode::Edit => {
+            render_skills_detail(frame, ov, inner, hint_area, true);
+        }
+    }
+}
+
+fn render_skills_list(frame: &mut Frame, ov: &SkillsOverlayState, area: Rect, hint_area: Rect) {
+    // Title bar
+    let title_area = Rect { x: area.x, y: area.y, width: area.width, height: 1 };
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled("  ◆ Skills  ", Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)),
+            Span::styled(
+                format!("({} loaded)", ov.skills.len()),
+                Style::default().fg(RC::DarkGray),
+            ),
+        ])),
+        title_area,
+    );
+
+    if ov.skills.is_empty() {
+        let msg_area = Rect { x: area.x, y: area.y + 2, width: area.width, height: 3 };
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(Span::styled("  No skills found.", Style::default().fg(RC::DarkGray))),
+                Line::from(""),
+                Line::from(Span::styled("  /skills create <name>  to scaffold your first skill", Style::default().fg(RC::DarkGray))),
+            ]),
+            msg_area,
+        );
+        render_hint(frame, "Esc close", hint_area);
+        return;
+    }
+
+    let card_h: u16 = 5;
+    let cards_area = Rect { x: area.x, y: area.y + 1, width: area.width, height: area.height.saturating_sub(1) };
+    let visible = (cards_area.height / card_h) as usize;
+    let start   = ov.list_scroll;
+    let end     = (start + visible).min(ov.skills.len());
+
+    let constraints: Vec<Constraint> = (start..end).map(|_| Constraint::Length(card_h)).collect();
+    if constraints.is_empty() {
+        render_hint(frame, "j/k navigate  ·  Enter detail  ·  Esc close", hint_area);
+        return;
+    }
+    let card_rects = Layout::vertical(constraints).split(cards_area);
+
+    for (i, sk) in ov.skills[start..end].iter().enumerate() {
+        let selected = (start + i) == ov.cursor;
+        let border_style = if selected {
+            Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(RC::Rgb(60, 60, 90))
+        };
+        let scope_str = sk.scope.to_string();
+        let title_str = format!(" {} ", sk.name);
+        let scope_tag = format!(" [{}] ", scope_str);
+
+        let block = Block::new()
+            .borders(Borders::ALL)
+            .border_style(border_style)
+            .title(Line::from(vec![
+                Span::styled(title_str, Style::default().fg(if selected { RC::White } else { RC::Rgb(180,180,180) }).add_modifier(Modifier::BOLD)),
+                Span::styled(scope_tag, Style::default().fg(RC::Rgb(100, 140, 100))),
+            ]));
+
+        let card_inner = block.inner(card_rects[i]);
+        frame.render_widget(block, card_rects[i]);
+
+        let tags_str = if sk.tags.is_empty() { "—".to_string() } else { sk.tags.join(", ") };
+        let trig_str = if sk.triggers.is_empty() { "—".to_string() } else { sk.triggers.join(", ") };
+        let w = card_inner.width as usize;
+        let trunc = |s: &str| -> String {
+            if s.len() > w.saturating_sub(2) { format!("{}…", &s[..w.saturating_sub(3).min(s.len())]) } else { s.to_string() }
+        };
+
+        let content = vec![
+            Line::from(Span::styled(trunc(&sk.description), Style::default().fg(RC::Rgb(200,200,200)))),
+            Line::from(vec![
+                Span::styled("Tags: ", Style::default().fg(RC::DarkGray)),
+                Span::styled(trunc(&tags_str), Style::default().fg(RC::Rgb(160,160,160))),
+            ]),
+            Line::from(vec![
+                Span::styled("Triggers: ", Style::default().fg(RC::DarkGray)),
+                Span::styled(trunc(&trig_str), Style::default().fg(RC::Rgb(160,160,160))),
+            ]),
+        ];
+        frame.render_widget(Paragraph::new(content), card_inner);
+    }
+
+    render_hint(frame, "j/k navigate  ·  Enter detail  ·  Esc close", hint_area);
+}
+
+fn render_skills_detail(frame: &mut Frame, ov: &SkillsOverlayState, area: Rect, hint_area: Rect, edit_mode: bool) {
+    let skill = match ov.skills.get(ov.cursor) {
+        Some(s) => s,
+        None => return,
+    };
+
+    let dirty_mark = if ov.dirty { " ● " } else { " " };
+    let title = if edit_mode {
+        format!(" Edit: {}{}", skill.id, dirty_mark)
+    } else {
+        format!(" {} ", skill.id)
+    };
+
+    let block = Block::new()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(if edit_mode { RC::Rgb(100, 100, 200) } else { RC::Rgb(60, 100, 160) }))
+        .title(Line::from(vec![
+            Span::styled(title, Style::default().fg(RC::White).add_modifier(Modifier::BOLD)),
+            Span::styled(format!(" [{}] ", skill.scope), Style::default().fg(RC::Rgb(100, 140, 100))),
+        ]));
+
+    let detail_inner = block.inner(area);
+    frame.render_widget(block, area);
+
+    const FIELD_NAMES: [&str; 6] = ["Name", "Description", "Category", "Tags", "Triggers", "Body"];
+    const LABEL_W: usize = 14;
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Render meta fields (0-4)
+    for fi in 0..5 {
+        let is_active = edit_mode && ov.field_cursor == fi;
+        let label = format!("  {:<width$} ", FIELD_NAMES[fi], width = LABEL_W);
+
+        let value_str: String = if edit_mode {
+            ov.edit_fields.get(fi).cloned().unwrap_or_default()
+        } else {
+            match fi {
+                0 => skill.name.clone(),
+                1 => skill.description.clone(),
+                2 => skill.category.clone().unwrap_or_default(),
+                3 => skill.tags.join(", "),
+                4 => skill.triggers.join(", "),
+                _ => String::new(),
+            }
+        };
+
+        let value_with_cursor: String = if is_active {
+            let pos = ov.field_pos.min(value_str.len());
+            format!("{}█{}", &value_str[..pos], &value_str[pos..])
+        } else {
+            value_str.clone()
+        };
+
+        let val_style = if is_active {
+            Style::default().fg(RC::White).bg(RC::Rgb(30, 30, 60))
+        } else {
+            Style::default().fg(RC::Rgb(200, 200, 200))
+        };
+
+        lines.push(Line::from(vec![
+            Span::styled(label, Style::default().fg(RC::DarkGray)),
+            Span::styled(value_with_cursor, val_style),
+        ]));
+    }
+
+    // Body separator
+    lines.push(Line::from(Span::styled(
+        format!("  {}──", "─".repeat(LABEL_W + 2)),
+        Style::default().fg(RC::Rgb(60, 60, 80)),
+    )));
+
+    // Body content (field 5)
+    let body_str = if edit_mode {
+        ov.edit_fields.get(5).cloned().unwrap_or_default()
+    } else {
+        skill.body.clone()
+    };
+    let is_body_active = edit_mode && ov.field_cursor == 5;
+
+    let body_lines: Vec<&str> = body_str.split('\n').collect();
+    let body_start = ov.detail_scroll;
+    let body_visible = (detail_inner.height as usize).saturating_sub(lines.len() + 1);
+
+    for (bi, bline) in body_lines.iter().enumerate().skip(body_start).take(body_visible) {
+        let line_style = if is_body_active {
+            Style::default().fg(RC::White).bg(RC::Rgb(20, 20, 50))
+        } else {
+            Style::default().fg(RC::Rgb(170, 170, 190))
+        };
+        let displayed = if is_body_active {
+            let cursor_line = body_str[..ov.field_pos.min(body_str.len())]
+                .chars().filter(|&c| c == '\n').count();
+            if bi == cursor_line {
+                let line_start: usize = body_str[..ov.field_pos.min(body_str.len())]
+                    .rfind('\n').map(|p| p + 1).unwrap_or(0);
+                let col = ov.field_pos.saturating_sub(line_start).min(bline.len());
+                format!("{}█{}", &bline[..col], &bline[col..])
+            } else { bline.to_string() }
+        } else { bline.to_string() };
+
+        lines.push(Line::from(Span::styled(format!("  {}", displayed), line_style)));
+    }
+
+    frame.render_widget(
+        Paragraph::new(lines).wrap(Wrap { trim: false }),
+        detail_inner,
+    );
+
+    let hint = if edit_mode {
+        "Tab next field  ·  Ctrl+S save  ·  Esc cancel"
+    } else {
+        "e edit  ·  j/k scroll  ·  Esc back  ·  d delete"
+    };
+    render_hint(frame, hint, hint_area);
+}
+
+fn render_hint(frame: &mut Frame, hint: &str, area: Rect) {
+    frame.render_widget(
+        Paragraph::new(Span::styled(hint.to_string(), Style::default().fg(RC::Rgb(90, 90, 110)))),
         area,
     );
 }
