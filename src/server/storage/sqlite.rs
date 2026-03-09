@@ -1334,6 +1334,56 @@ pub fn delete_provider(db: &Db, name: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
+/// Delete old messages, keeping only the last `keep_turns` user-initiated turns.
+/// A "turn" is defined as one user message plus all messages after it until the
+/// next user message.  Returns the number of rows deleted.
+pub fn prune_messages(
+    db: &Db,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+    keep_turns: usize,
+) -> Result<usize> {
+    let conn = db.lock().unwrap();
+    // Find the timestamp of the Nth most-recent user message.
+    // All messages with created_at BEFORE this timestamp will be deleted.
+    let cutoff: Option<i64> = if conversation_id.is_some() {
+        conn.query_row(
+            "SELECT MIN(created_at) FROM (
+                 SELECT created_at FROM messages
+                 WHERE agent_id=?1 AND conversation_id=?2 AND role='user'
+                 ORDER BY created_at DESC LIMIT ?3
+             )",
+            rusqlite::params![agent_id, conversation_id, keep_turns as i64],
+            |r| r.get(0),
+        ).ok().flatten()
+    } else {
+        conn.query_row(
+            "SELECT MIN(created_at) FROM (
+                 SELECT created_at FROM messages
+                 WHERE agent_id=?1 AND conversation_id IS NULL AND role='user'
+                 ORDER BY created_at DESC LIMIT ?3
+             )",
+            rusqlite::params![agent_id, rusqlite::types::Null, keep_turns as i64],
+            |r| r.get(0),
+        ).ok().flatten()
+    };
+
+    let Some(cutoff_ts) = cutoff else { return Ok(0); };
+
+    let deleted = if let Some(conv_id) = conversation_id {
+        conn.execute(
+            "DELETE FROM messages WHERE agent_id=?1 AND conversation_id=?2 AND created_at < ?3",
+            rusqlite::params![agent_id, conv_id, cutoff_ts],
+        )?
+    } else {
+        conn.execute(
+            "DELETE FROM messages WHERE agent_id=?1 AND conversation_id IS NULL AND created_at < ?3",
+            rusqlite::params![agent_id, cutoff_ts],
+        )?
+    };
+    Ok(deleted)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

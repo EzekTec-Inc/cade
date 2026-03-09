@@ -1052,4 +1052,18 @@ impl CadeClient {
         }
         Ok(resp.json::<Vec<ToolDef>>().await?)
     }
+
+    /// Delete all messages except those from the last `keep_turns` user turns.
+    pub async fn prune_messages(&self, agent_id: &str, keep_turns: usize) -> Result<usize> {
+        let resp = self.client
+            .post(self.url(&format!("/agents/{agent_id}/messages/prune?keep={keep_turns}")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            bail!("prune_messages failed {}", resp.status());
+        }
+        let body: serde_json::Value = resp.json().await?;
+        Ok(body["deleted"].as_u64().unwrap_or(0) as usize)
+    }
 }

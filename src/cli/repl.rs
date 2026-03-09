@@ -31,6 +31,19 @@ const EMPTY_YIELD_REPROMPT: &str = "Tool execution complete. \
 Please provide a text response explaining the result, what you found, \
 or what you are doing next.";
 
+/// Context window % at which auto-summarization triggers.
+const AUTO_SUMMARIZE_THRESHOLD: u8 = 95;
+
+/// Injected as a user message (ephemeral) to generate the continuation summary.
+const SUMMARIZE_PROMPT: &str = "[System: The context window is nearly full. \
+Write a compact continuation summary of our current work session so the \
+conversation can resume seamlessly after the context is cleared. Include:\n\
+1. Task/goal being worked on and current state\n\
+2. What has been completed and key decisions made\n\
+3. Files/changes made (paths and what changed)\n\
+4. Immediate next steps\n\
+Keep it concise but complete — this will be injected as context when we resume.]";
+
 // ── Slash commands ─────────────────────────────────────────────────────────────
 
 /// Result from the agent TUI picker.
@@ -88,8 +101,8 @@ enum SlashCmd {
     Copy,
     /// Export the current agent to a JSON file: /export [output.json]
     Export(Option<String>),
-    /// Show current context window usage.
-    Context,
+    /// Show current context window usage, or /context prune [N].
+    Context(Option<String>),
 }
 
 fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
@@ -139,7 +152,7 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         "stream" => Some(SlashCmd::Stream),
         "usage"   => Some(SlashCmd::Usage),
         "stats"   => Some(SlashCmd::Stats(arg)),
-        "context" => Some(SlashCmd::Context),
+        "context" => Some(SlashCmd::Context(arg)),
         "copy"    => Some(SlashCmd::Copy),
         "export" => Some(SlashCmd::Export(arg)),
         // Skill slash commands: /commit, /review, etc.
@@ -896,57 +909,93 @@ impl Repl {
                             self.tui_dim("    (no usage recorded yet — requires Anthropic/OpenAI)");
                         }
                     }
-                    SlashCmd::Context => {
-                        let model   = self.current_model.lock().unwrap().clone();
-                        let pct_opt = self.app.lock().unwrap().context_pct;
-                        let window  = crate::server::llm::catalogue::context_window_for_model(&model);
-
-                        let fmt_tok = |n: u64| -> String {
-                            if n >= 1_000_000 { format!("{:.1}M", n as f64 / 1_000_000.0) }
-                            else if n >= 1_000 { format!("{:.1}k", n as f64 / 1_000.0) }
-                            else               { n.to_string() }
-                        };
-                        let model_disp  = if let Some(pos) = model.find('/') { model[pos+1..].to_string() } else { model.clone() };
-                        let window_disp = if window == 0 { "unknown".to_string() } else { format!("{} tokens", fmt_tok(window as u64)) };
-
-                        let mut lines: Vec<RenderLine> = vec![
-                            RenderLine::Blank,
-                            RenderLine::InfoHeader("  ◆ Context Window".to_string()),
-                            RenderLine::Blank,
-                            RenderLine::Pair { label: "Model".to_string(),          value: model_disp },
-                            RenderLine::Pair { label: "Context window".to_string(), value: window_disp },
-                        ];
-
-                        if let Some(pct) = pct_opt {
-                            if window > 0 {
-                                let used     = (pct as u64 * window as u64) / 100;
-                                let free     = window as u64 - used;
-                                let free_pct = 100u8.saturating_sub(pct);
-                                let filled   = (pct as usize * 20 / 100).clamp(0, 20);
-                                let bar      = format!("{}{}", "█".repeat(filled), "░".repeat(20 - filled));
-                                lines.push(RenderLine::Blank);
-                                lines.push(RenderLine::Pair {
-                                    label: "Used".to_string(),
-                                    value: format!("~{}  ({}%)  {}", fmt_tok(used), pct, bar),
-                                });
-                                lines.push(RenderLine::Pair {
-                                    label: "Free".to_string(),
-                                    value: format!("~{}  ({}%)", fmt_tok(free), free_pct),
-                                });
-                            } else {
-                                lines.push(RenderLine::Blank);
-                                lines.push(RenderLine::DimMsg(format!("  {}% of context window used (window size unknown for this model)", pct)));
+                    SlashCmd::Context(arg) => {
+                        let sub = arg.as_deref().unwrap_or("").trim().to_string();
+                        let parts: Vec<&str> = sub.splitn(2, ' ').collect();
+                        match parts.as_slice() {
+                            ["prune"] => {
+                                // /context prune — keep last 10 turns
+                                let agent_id = self.agent_id();
+                                let keep = 10usize;
+                                match self.client.prune_messages(&agent_id, keep).await {
+                                    Ok(deleted) => {
+                                        self.tui_ok(format!(
+                                            "  ✓ Pruned  ({deleted} messages removed, kept last {keep} turns)"
+                                        ));
+                                        self.tui_dim("  /context  to see updated usage");
+                                    }
+                                    Err(e) => self.tui_err(format!("  Prune failed: {e}")),
+                                }
                             }
-                        } else {
-                            lines.push(RenderLine::Blank);
-                            lines.push(RenderLine::DimMsg("  No context data yet — available after the first agent turn.".to_string()));
+                            ["prune", n_str] => {
+                                match n_str.parse::<usize>() {
+                                    Ok(n) if n > 0 => {
+                                        let agent_id = self.agent_id();
+                                        match self.client.prune_messages(&agent_id, n).await {
+                                            Ok(deleted) => self.tui_ok(format!(
+                                                "  ✓ Pruned  ({deleted} messages removed, kept last {n} turns)"
+                                            )),
+                                            Err(e) => self.tui_err(format!("  Prune failed: {e}")),
+                                        }
+                                    }
+                                    _ => self.tui_err("  Usage: /context prune [N]  (default N=10)"),
+                                }
+                            }
+                            _ => {
+                                // Default: show context window stats
+                                let model   = self.current_model.lock().unwrap().clone();
+                                let pct_opt = self.app.lock().unwrap().context_pct;
+                                let window  = crate::server::llm::catalogue::context_window_for_model(&model);
+
+                                let fmt_tok = |n: u64| -> String {
+                                    if n >= 1_000_000 { format!("{:.1}M", n as f64 / 1_000_000.0) }
+                                    else if n >= 1_000 { format!("{:.1}k", n as f64 / 1_000.0) }
+                                    else               { n.to_string() }
+                                };
+                                let model_disp  = if let Some(pos) = model.find('/') { model[pos+1..].to_string() } else { model.clone() };
+                                let window_disp = if window == 0 { "unknown".to_string() } else { format!("{} tokens", fmt_tok(window as u64)) };
+
+                                let mut lines: Vec<RenderLine> = vec![
+                                    RenderLine::Blank,
+                                    RenderLine::InfoHeader("  ◆ Context Window".to_string()),
+                                    RenderLine::Blank,
+                                    RenderLine::Pair { label: "Model".to_string(),          value: model_disp },
+                                    RenderLine::Pair { label: "Context window".to_string(), value: window_disp },
+                                ];
+
+                                if let Some(pct) = pct_opt {
+                                    if window > 0 {
+                                        let used     = (pct as u64 * window as u64) / 100;
+                                        let free     = window as u64 - used;
+                                        let free_pct = 100u8.saturating_sub(pct);
+                                        let filled   = (pct as usize * 20 / 100).clamp(0, 20);
+                                        let bar      = format!("{}{}", "█".repeat(filled), "░".repeat(20 - filled));
+                                        lines.push(RenderLine::Blank);
+                                        lines.push(RenderLine::Pair {
+                                            label: "Used".to_string(),
+                                            value: format!("~{}  ({}%)  {}", fmt_tok(used), pct, bar),
+                                        });
+                                        lines.push(RenderLine::Pair {
+                                            label: "Free".to_string(),
+                                            value: format!("~{}  ({}%)", fmt_tok(free), free_pct),
+                                        });
+                                    } else {
+                                        lines.push(RenderLine::Blank);
+                                        lines.push(RenderLine::DimMsg(format!("  {}% of context window used (window size unknown for this model)", pct)));
+                                    }
+                                } else {
+                                    lines.push(RenderLine::Blank);
+                                    lines.push(RenderLine::DimMsg("  No context data yet — available after the first agent turn.".to_string()));
+                                }
+
+                                lines.push(RenderLine::Blank);
+                                lines.push(RenderLine::DimMsg("  /stats  for session token totals  ·  /stats model  for per-model breakdown".to_string()));
+                                lines.push(RenderLine::DimMsg("  /context prune [N]  to remove old messages (keep last N turns, default 10)".to_string()));
+                                lines.push(RenderLine::Blank);
+
+                                for line in lines { let _ = self.app.lock().unwrap().push(line); }
+                            }
                         }
-
-                        lines.push(RenderLine::Blank);
-                        lines.push(RenderLine::DimMsg("  /stats  for session token totals  ·  /stats model  for per-model breakdown".to_string()));
-                        lines.push(RenderLine::Blank);
-
-                        for line in lines { let _ = self.app.lock().unwrap().push(line); }
                     }
                     SlashCmd::Stats(arg) => {
                         let sub = arg.as_deref().unwrap_or("").trim();
@@ -2205,6 +2254,12 @@ impl Repl {
             // Send to agent and handle tool loop
             self.agent_turn(&mut stdout, &input).await?;
             let _ = self.app.lock().unwrap().commit_streaming();
+
+            // Auto-summarize if context is near full
+            let ctx_pct = self.app.lock().unwrap().context_pct;
+            if ctx_pct.map(|p| p >= AUTO_SUMMARIZE_THRESHOLD).unwrap_or(false) {
+                self.auto_summarize_context(&mut stdout).await?;
+            }
 
             // I-01: drain queued messages into pending_input.
             // Follow-up runs after the turn completes naturally.
@@ -4753,6 +4808,69 @@ impl Repl {
     #[allow(dead_code)]
     fn print_error(&self, _stdout: &mut io::Stdout, msg: &str) -> Result<()> {
         self.tui_err(format!("Error: {msg}"));
+        Ok(())
+    }
+
+    /// Called after any agent_turn() when context_pct >= AUTO_SUMMARIZE_THRESHOLD.
+    /// Generates a work summary, saves to memory block "context_summary", clears messages.
+    async fn auto_summarize_context(&mut self, _stdout: &mut io::Stdout) -> Result<()> {
+        let agent_id = self.agent_id();
+        self.tui_sys("  ⏳ Context at 95% — auto-summarizing before clearing…");
+
+        // Ask the LLM to produce a continuation summary. ephemeral=true so the
+        // question itself is not added to the conversation history.
+        let msgs = match self.client.send_message(&agent_id, SUMMARIZE_PROMPT, true).await {
+            Ok(m) => m,
+            Err(e) => {
+                self.tui_err(format!("  Auto-summarize failed: {e}"));
+                return Ok(());
+            }
+        };
+
+        // Render the summary in the TUI so the user can see it
+        for msg in &msgs {
+            if let Some(text) = msg.assistant_text() {
+                if !text.is_empty() {
+                    let _ = self.app.lock().unwrap().push(
+                        crate::ui::RenderLine::AssistantText(text.to_string())
+                    );
+                }
+            }
+        }
+        let _ = self.app.lock().unwrap().commit_streaming();
+
+        let summary: String = msgs.iter()
+            .filter_map(|m| m.assistant_text())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        if !summary.is_empty() {
+            // Persist to memory block "context_summary" — build_context() injects this
+            // automatically into every subsequent turn via the # Memory section.
+            if let Err(e) = self.client.upsert_memory(
+                &agent_id,
+                "context_summary",
+                &summary,
+                Some("Auto-saved continuation context (context window was cleared)"),
+            ).await {
+                self.tui_err(format!("  Failed to save summary: {e}"));
+            }
+        }
+
+        // Clear all conversation messages and reset the context gauge
+        match self.client.clear_messages(&agent_id).await {
+            Ok(n) => {
+                let _ = self.app.lock().unwrap().clear_content();
+                self.app.lock().unwrap().context_pct = None;
+                self.tui_ok(format!(
+                    "✓ Context summarized and cleared ({n} messages removed). \
+                     Continuing from where we left off…"
+                ));
+            }
+            Err(e) => {
+                self.tui_err(format!("  Failed to clear context: {e}"));
+            }
+        }
         Ok(())
     }
 

@@ -473,6 +473,20 @@ pub async fn detach_tools(
     Ok(Json(json!({ "detached": n })))
 }
 
+/// POST /v1/agents/:id/messages/prune?keep=10[&conversation_id=<id>]
+/// Delete all but the last `keep` user-initiated turns.
+pub async fn prune_messages_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let keep    = params.get("keep").and_then(|v| v.parse::<usize>().ok()).unwrap_or(10);
+    let conv_id = params.get("conversation_id").map(String::as_str);
+    let deleted = sqlite::prune_messages(&state.db, &agent_id, conv_id, keep)
+        .map_err(|e| server_err(e.to_string()))?;
+    Ok(Json(json!({ "deleted": deleted, "kept_turns": keep })))
+}
+
 fn server_err(msg: String) -> (StatusCode, Json<Value>) {
     tracing::error!("500 Internal Server Error: {msg}");
     (
