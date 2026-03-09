@@ -90,6 +90,8 @@ enum SlashCmd {
     Export(Option<String>),
     /// Show current context window usage.
     Context,
+    /// Show session cost breakdown (tokens × pricing).
+    Cost,
 }
 
 fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
@@ -139,6 +141,7 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         "stream" => Some(SlashCmd::Stream),
         "usage"   => Some(SlashCmd::Usage),
         "stats"   => Some(SlashCmd::Stats(arg)),
+        "cost"    => Some(SlashCmd::Cost),
         "context" => Some(SlashCmd::Context),
         "copy"    => Some(SlashCmd::Copy),
         "export" => Some(SlashCmd::Export(arg)),
@@ -218,6 +221,23 @@ impl SessionStats {
         e.cache_read_tokens  += cache_read;
         e.cache_write_tokens += cache_write;
         e.output_tokens      += output;
+    }
+
+    /// Compute total USD cost and per-model breakdown, sorted by cost descending.
+    fn compute_cost(&self) -> (f64, Vec<(String, f64)>) {
+        let mut total = 0.0f64;
+        let mut by_model: Vec<(String, f64)> = Vec::new();
+        for (model, ms) in &self.per_model {
+            let p = crate::server::llm::catalogue::pricing_for_model(model);
+            let cost = (ms.input_tokens       as f64 * p.input)       / 1_000_000.0
+                     + (ms.output_tokens      as f64 * p.output)      / 1_000_000.0
+                     + (ms.cache_read_tokens  as f64 * p.cache_read)  / 1_000_000.0
+                     + (ms.cache_write_tokens as f64 * p.cache_write) / 1_000_000.0;
+            total += cost;
+            by_model.push((model.clone(), cost));
+        }
+        by_model.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        (total, by_model)
     }
 
     /// Render a structured stats card as a Vec of RenderLine for the TUI.
@@ -1247,6 +1267,90 @@ impl Repl {
                             Ok(n)  => self.tui_ok(format!("✓ Context window cleared ({n} messages deleted)")),
                             Err(e) => self.tui_sys(format!("⚠ Screen cleared (context clear failed: {e})")),
                         }
+                    }
+
+                    SlashCmd::Cost => {
+                        let (total_cost, by_model) = {
+                            let stats = self.session_stats.lock().unwrap();
+                            stats.compute_cost()
+                        };
+                        let (wall_ms, api_ms, lines_added, lines_removed) = {
+                            let stats = self.session_stats.lock().unwrap();
+                            (
+                                stats.started_at.elapsed().as_millis() as u64,
+                                stats.agent_active_ms,
+                                stats.lines_added,
+                                stats.lines_removed,
+                            )
+                        };
+                        let per_model_snap: Vec<(String, ModelStats)> = {
+                            let stats = self.session_stats.lock().unwrap();
+                            stats.per_model.iter().map(|(k, v)| (k.clone(), v.clone())).collect()
+                        };
+
+                        let fmt_dur = |ms: u64| -> String {
+                            let s = ms / 1000;
+                            if s >= 3600 { format!("{}h {}m {}s", s/3600, (s%3600)/60, s%60) }
+                            else if s >= 60 { format!("{}m {}s", s/60, s%60) }
+                            else { format!("{}s", s) }
+                        };
+                        let fmt_tok = |n: u64| -> String {
+                            if n >= 1_000_000 { format!("{:.1}M", n as f64/1_000_000.0) }
+                            else if n >= 1_000 { format!("{:.1}k", n as f64/1_000.0) }
+                            else { n.to_string() }
+                        };
+
+                        let mut lines: Vec<crate::ui::RenderLine> = vec![
+                            crate::ui::RenderLine::Blank,
+                            crate::ui::RenderLine::InfoHeader("  ◆ Session Cost".to_string()),
+                            crate::ui::RenderLine::Blank,
+                            crate::ui::RenderLine::Pair {
+                                label: "Total cost".to_string(),
+                                value: format!("${:.2}", total_cost),
+                            },
+                            crate::ui::RenderLine::Pair {
+                                label: "Total duration (API)".to_string(),
+                                value: fmt_dur(api_ms),
+                            },
+                            crate::ui::RenderLine::Pair {
+                                label: "Total duration (wall)".to_string(),
+                                value: fmt_dur(wall_ms),
+                            },
+                        ];
+                        if lines_added != 0 || lines_removed != 0 {
+                            lines.push(crate::ui::RenderLine::Pair {
+                                label: "Total code changes".to_string(),
+                                value: format!("{} lines added, {} lines removed",
+                                    lines_added, lines_removed.abs()),
+                            });
+                        }
+                        if !by_model.is_empty() {
+                            lines.push(crate::ui::RenderLine::Blank);
+                            lines.push(crate::ui::RenderLine::DimMsg(
+                                "  Usage by model:".to_string()
+                            ));
+                            for (model, cost) in &by_model {
+                                if let Some(ms) = per_model_snap.iter().find(|(k,_)| k == model).map(|(_,v)| v) {
+                                    let model_short = model.rsplit('/').next().unwrap_or(model.as_str());
+                                    lines.push(crate::ui::RenderLine::DimMsg(format!(
+                                        "     {}:  {} input, {} output, {} cache read, {} cache write   (${:.2})",
+                                        model_short,
+                                        fmt_tok(ms.input_tokens),
+                                        fmt_tok(ms.output_tokens),
+                                        fmt_tok(ms.cache_read_tokens),
+                                        fmt_tok(ms.cache_write_tokens),
+                                        cost,
+                                    )));
+                                }
+                            }
+                        }
+                        lines.push(crate::ui::RenderLine::Blank);
+                        lines.push(crate::ui::RenderLine::DimMsg(
+                            "  Pricing estimates — check provider docs for current rates.".to_string()
+                        ));
+                        lines.push(crate::ui::RenderLine::Blank);
+                        let mut app = self.app.lock().unwrap();
+                        for line in lines { let _ = app.push(line); }
                     }
 
                     SlashCmd::Copy => {

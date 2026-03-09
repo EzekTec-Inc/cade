@@ -751,6 +751,28 @@ to remove the last argument.
 
 **Rollback:** Revert `with_writer()` back to `std::io::stderr` in `main.rs`; remove `is_rpc_protocol_error()` and the early-return guard in `mcp/mod.rs`.
 
+---
+
+## 2026-03-08 UTC — /cost slash command + model pricing table
+
+**Summary:** Added `/cost` command showing session cost in USD, API/wall durations, and per-model token breakdown. Added `ModelPricing` struct and `pricing_for_model()` to the model catalogue.
+
+**Files modified:** `src/server/llm/catalogue.rs`, `src/cli/repl.rs`
+
+**Previous behaviour:** No cost visibility. `/stats` showed token counts only; no USD amounts.
+
+**New behaviour:** `/cost` shows:
+- Total cost (sum across all models using per-token rates)
+- Total duration (API = agent_active_ms, wall = elapsed since session start)
+- Total code changes (when lines_added/removed are non-zero)
+- Per-model: input/output/cache_read/cache_write tokens + cost
+
+**Changes:**
+- `catalogue.rs`: `ModelPricing { input, output, cache_read, cache_write }` struct + `pricing_for_model(model_id)` using pattern matching on model IDs with provider-prefix fallbacks
+- `repl.rs`: `SlashCmd::Cost` variant, `"cost"` parser entry, `compute_cost()` on `SessionStats`, handler building the display
+
+**Rollback:** Remove `ModelPricing` and `pricing_for_model` from catalogue.rs; remove `SlashCmd::Cost` variant, parser entry, `compute_cost()`, and handler from repl.rs.
+
 
 ---
 

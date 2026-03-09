@@ -106,3 +106,55 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
     // Conservative fallback for anything else (Ollama local models, unknown)
     32_000
 }
+
+// ── Pricing ───────────────────────────────────────────────────────────────────
+
+/// Per-1M-token USD rates (approximate — check provider docs for current prices).
+pub struct ModelPricing {
+    pub input:       f64,  // $/1M input tokens
+    pub output:      f64,  // $/1M output tokens
+    pub cache_read:  f64,  // $/1M cache-read tokens
+    pub cache_write: f64,  // $/1M cache-write tokens
+}
+
+/// Returns approximate per-token pricing for a model.
+/// Uses pattern matching on model ID; unknown models get zero rates.
+pub fn pricing_for_model(model_id: &str) -> ModelPricing {
+    match model_id {
+        // ── Anthropic ─────────────────────────────────────────────────────────
+        m if m.contains("claude-sonnet-4") || m.contains("claude-3-7-sonnet")
+            || m.contains("claude-sonnet-4-6") =>
+            ModelPricing { input:  3.00, output: 15.00, cache_read: 0.30,  cache_write:  3.75 },
+        m if m.contains("claude-haiku-4") || m.contains("claude-3-5-haiku") =>
+            ModelPricing { input:  0.80, output:  4.00, cache_read: 0.08,  cache_write:  1.00 },
+        m if m.contains("claude-opus-4") || m.contains("claude-3-opus") =>
+            ModelPricing { input: 15.00, output: 75.00, cache_read: 1.50,  cache_write: 18.75 },
+        // ── OpenAI ────────────────────────────────────────────────────────────
+        m if m.contains("gpt-4.1") && !m.contains("mini") =>
+            ModelPricing { input:  2.00, output:  8.00, cache_read: 0.50,  cache_write:  0.0 },
+        m if m.contains("gpt-4o-mini") =>
+            ModelPricing { input:  0.15, output:  0.60, cache_read: 0.075, cache_write:  0.0 },
+        m if m.contains("gpt-4o") =>
+            ModelPricing { input:  2.50, output: 10.00, cache_read: 1.25,  cache_write:  0.0 },
+        m if m.contains("o4-mini") || m.contains("o3-mini") =>
+            ModelPricing { input:  1.10, output:  4.40, cache_read: 0.275, cache_write:  0.0 },
+        m if m.contains("/o3") && !m.contains("mini") =>
+            ModelPricing { input: 10.00, output: 40.00, cache_read: 2.50,  cache_write:  0.0 },
+        // ── Google Gemini ─────────────────────────────────────────────────────
+        m if m.contains("gemini-2.5-pro") =>
+            ModelPricing { input:  1.25, output: 10.00, cache_read: 0.31,  cache_write:  0.0 },
+        m if m.contains("gemini-2.0-flash") || m.contains("gemini-1.5-flash") =>
+            ModelPricing { input:  0.10, output:  0.40, cache_read: 0.025, cache_write:  0.0 },
+        m if m.contains("gemini-1.5-pro") =>
+            ModelPricing { input:  1.25, output:  5.00, cache_read: 0.31,  cache_write:  0.0 },
+        // ── Provider-prefix fallbacks ─────────────────────────────────────────
+        m if m.starts_with("anthropic/") =>
+            ModelPricing { input:  3.00, output: 15.00, cache_read: 0.30,  cache_write:  3.75 },
+        m if m.starts_with("openai/") =>
+            ModelPricing { input:  2.50, output: 10.00, cache_read: 1.25,  cache_write:  0.0 },
+        m if m.starts_with("gemini/") =>
+            ModelPricing { input:  1.25, output:  5.00, cache_read: 0.31,  cache_write:  0.0 },
+        _ =>
+            ModelPricing { input:  0.0,  output:  0.0,  cache_read: 0.0,   cache_write:  0.0 },
+    }
+}
