@@ -2,43 +2,6 @@
 
 ---
 
-## 2026-03-08 UTC — Auto-summarize at 95% context + /context prune
-
-**Summary**: Two context management features. (1) After every agent turn, if
-`context_pct >= 95`, an ephemeral summarization prompt is sent to the LLM, the
-response is saved to the `context_summary` memory block, and all messages are
-cleared so the session continues seamlessly. (2) New `/context prune [N]`
-subcommand deletes all messages except the last N user-initiated turns
-(default 10).
-
-**Files changed**:
-- `src/cli/repl.rs` — added `AUTO_SUMMARIZE_THRESHOLD`, `SUMMARIZE_PROMPT`
-  constants; changed `SlashCmd::Context` from unit to `Context(Option<String>)`;
-  updated parse site; replaced match arm with subcommand dispatch (`prune` /
-  `prune N` / default display); added post-turn auto-summarize check;
-  added `auto_summarize_context()` async method.
-- `src/server/storage/sqlite.rs` — added `prune_messages()` function.
-- `src/server/api/agents.rs` — added `prune_messages_handler()`.
-- `src/server/api/mod.rs` — registered
-  `POST /v1/agents/:id/messages/prune` route (inside rate-limited inference block).
-- `src/agent/client.rs` — added `prune_messages()` method.
-
-**Previous behaviour**:
-- `/context` only showed usage stats; no pruning.
-- No automatic action when context neared 100%.
-
-**New behaviour**:
-- `/context` (no args) shows stats + hint about `/context prune [N]`.
-- `/context prune` removes all but the last 10 turns.
-- `/context prune N` removes all but the last N turns.
-- After each agent turn, if context ≥ 95%, the LLM generates a continuation
-  summary, it is saved to memory, messages are cleared, and the gauge resets.
-
-**Rollback**: revert the five files listed above; the route registration in
-`mod.rs` is the only server-side change needed to disable the endpoint.
-
----
-
 ## 2026-03-08 UTC — Skills TUI cards overlay
 
 **Summary**: Added a full-screen skills browser/editor overlay activated by `/skills`, `/skills show <id>`, and `/skills edit <id>`. Replaces the previous table/text dump with an interactive 3-mode UI.

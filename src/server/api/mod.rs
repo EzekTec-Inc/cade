@@ -24,7 +24,6 @@ pub fn router(state: AppState) -> Router {
                post(messages::send_message)
                .delete(agents::clear_messages_handler)
                .get(agents::search_messages_handler))
-        .route("/v1/agents/:id/messages/prune", post(agents::prune_messages_handler))
         .route("/v1/agents/:id/messages/stream", post(messages::stream_message))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit_middleware));
 
