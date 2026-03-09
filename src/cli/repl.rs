@@ -2525,28 +2525,19 @@ impl Repl {
 
                                                     // ── I-01: input during agent turn ──────────
                                                     //
-                                                    // Ctrl+Enter  → steering: cancel + redirect.
+                                                    // Ctrl+C      → steering: cancel + redirect
+                                                    //               (or plain cancel if input empty).
                                                     // Plain Enter → queue as follow-up (no cancel).
+                                                    // Ctrl+Enter  → also queue as follow-up.
                                                     // Alt/Shift+Enter → same as plain Enter.
                                                     //
-                                                    // Ctrl+Enter (steering): cancel current turn and
-                                                    // run this message immediately after.  Use when
-                                                    // the agent is going in the wrong direction.
+                                                    // Ctrl+Enter: queue as follow-up (like plain Enter).
+                                                    // Steering is handled by Ctrl+C below.
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::CONTROL =>
                                                     {
                                                         let msg = app.input.trim().to_string();
                                                         if !msg.is_empty() {
-                                                            // 300 ms post-modal grace period —
-                                                            // mirrors the 200 ms Esc guard.  The
-                                                            // Enter key used to confirm a blocking
-                                                            // question modal (ask_user_question /
-                                                            // prompt_approval) can linger in the
-                                                            // crossterm event queue for up to a few
-                                                            // hundred ms after the modal closes.
-                                                            // Without this guard, that Enter would
-                                                            // cancel the subsequent stream_turn and
-                                                            // produce a missing / interrupted response.
                                                             let now_ms = std::time::SystemTime::now()
                                                                 .duration_since(std::time::UNIX_EPOCH)
                                                                 .unwrap_or_default()
@@ -2556,11 +2547,11 @@ impl Repl {
                                                             let post_modal = last_close > 0
                                                                 && now_ms.saturating_sub(last_close) < 300;
                                                             if !post_modal {
-                                                                *tick_queued_steering.lock().unwrap() = Some(msg);
+                                                                tick_queued_followup.lock().unwrap().push_back(msg);
+                                                                app.queued_count = tick_queued_followup.lock().unwrap().len();
                                                                 app.input.clear();
                                                                 app.cursor_pos = 0;
                                                                 let _ = app.draw();
-                                                                tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                                                             }
                                                         }
                                                     }
@@ -2663,17 +2654,26 @@ impl Repl {
                                                         }
                                                     }
                                                     // Ctrl+C — always cancel the running turn.
-                                                    // Unlike Esc (which only cancels on empty
-                                                    // input), Ctrl+C is an unconditional interrupt:
-                                                    // clear any typed text and stop the turn.
+                                                    // Ctrl+C: if input is non-empty → steering
+                                                    // (cancel + redirect with typed text).
+                                                    // If input is empty → plain cancel.
                                                     // Same 200 ms grace period as Esc to swallow
-                                                    // stale events buffered just after a modal
-                                                    // confirmation (e.g. approval prompt Enter).
+                                                    // stale events buffered just after a modal.
                                                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                                                         if tick_start.elapsed().as_millis() >= 200 {
-                                                            app.input.clear();
-                                                            app.cursor_pos = 0;
-                                                            let _ = app.draw();
+                                                            let msg = app.input.trim().to_string();
+                                                            if !msg.is_empty() {
+                                                                // Steering: cancel current turn and
+                                                                // run this message immediately after.
+                                                                *tick_queued_steering.lock().unwrap() = Some(msg);
+                                                                app.input.clear();
+                                                                app.cursor_pos = 0;
+                                                                let _ = app.draw();
+                                                            } else {
+                                                                app.input.clear();
+                                                                app.cursor_pos = 0;
+                                                                let _ = app.draw();
+                                                            }
                                                             tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                                                         }
                                                     }
