@@ -144,6 +144,11 @@ pub enum RenderLine {
     Blank,
     /// Interactive question completed result.
     QuestionResult { header: String, answer: String },
+    /// A single row of the context-window token grid (10 rows × 20 cells).
+    /// Each cell is (symbol, category_idx) where category_idx determines color.
+    /// Categories: 0=system 1=tools 2=mcp 3=memory 4=skills 5=messages 6=free 7=buffer
+    /// Right-side label is displayed inline with the grid row.
+    ContextGridRow { cells: Vec<(char, u8)>, label: String },
 }
 
 // ── PickerState (A-01) ────────────────────────────────────────────────────────
@@ -2061,6 +2066,39 @@ fn render_line_to_text(rl: &RenderLine, width: usize, expand_all: bool, out: &mu
         }
         RenderLine::Blank => {
             out.push(Line::from(""));
+        }
+        RenderLine::ContextGridRow { cells, label } => {
+            const CAT_COLORS: &[RC] = &[
+                RC::Rgb(136, 136, 136),  // 0 system   — gray
+                RC::Rgb(  8, 145, 178),  // 1 tools    — blue
+                RC::Rgb(  8, 145, 178),  // 2 mcp      — blue
+                RC::Rgb(215, 119,  87),  // 3 memory   — orange
+                RC::Rgb(255, 193,   7),  // 4 skills   — yellow
+                RC::Rgb(147,  51, 234),  // 5 messages — purple
+                RC::Rgb( 25,  25,  25),  // 6 free     — near-black
+                RC::Rgb( 70,  70,  70),  // 7 buffer   — dark gray
+            ];
+            let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+            for (i, (ch, cat)) in cells.iter().enumerate() {
+                let color = CAT_COLORS.get(*cat as usize)
+                    .copied()
+                    .unwrap_or(RC::DarkGray);
+                spans.push(Span::styled(
+                    ch.to_string(),
+                    Style::default().fg(color),
+                ));
+                if i < cells.len().saturating_sub(1) {
+                    spans.push(Span::raw(" "));
+                }
+            }
+            spans.push(Span::raw("   "));
+            if !label.is_empty() {
+                spans.push(Span::styled(
+                    label.clone(),
+                    Style::default().fg(RC::Rgb(153, 153, 153)),
+                ));
+            }
+            out.push(Line::from(spans));
         }
         RenderLine::UserMessage(text) => {
             let sep = "─".repeat(width);

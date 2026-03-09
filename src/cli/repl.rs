@@ -897,71 +897,230 @@ impl Repl {
                         }
                     }
                     SlashCmd::Context => {
-                        let model   = self.current_model.lock().unwrap().clone();
-                        let pct_opt = self.app.lock().unwrap().context_pct;
-                        let window  = crate::server::llm::catalogue::context_window_for_model(&model);
+                        let model      = self.current_model.lock().unwrap().clone();
+                        let window     = crate::server::llm::catalogue::context_window_for_model(&model) as u64;
+                        let pct_opt    = self.app.lock().unwrap().context_pct;
+                        let agent_id   = self.agent_id();
+                        let conv_id    = self.conversation_id();
+                        let total_used = pct_opt.map(|p| p as u64 * window / 100).unwrap_or(0);
 
-                        let fmt_tok = |n: u64| -> String {
+                        // ── Per-category token estimates ──────────────────────────────────────
+
+                        // 1. Memory blocks
+                        let mem_blocks = self.client.get_memory(&agent_id).await.unwrap_or_default();
+                        let mem_tok = (mem_blocks.iter()
+                            .map(|b| b.value.chars().count())
+                            .sum::<usize>() / 3) as u64;
+
+                        // 2. Skills loaded in this session
+                        let skills_tok = {
+                            let skills = self.skills.lock().unwrap();
+                            (skills.iter().map(|s| s.body.chars().count()).sum::<usize>() / 3) as u64
+                        };
+
+                        // 3. MCP tool schemas (schema JSON / 3 chars-per-token)
+                        let mcp_schemas = self.mcp.all_tool_schemas().await;
+                        let mcp_tok = (mcp_schemas.iter()
+                            .filter_map(|s| serde_json::to_string(s).ok())
+                            .map(|s| s.len())
+                            .sum::<usize>() / 3) as u64;
+
+                        // 4. Conversation messages
+                        let msgs = self.client
+                            .get_conversation_messages(&agent_id, conv_id.as_deref().unwrap_or(""))
+                            .await.unwrap_or_default();
+                        let msg_tok = (msgs.iter()
+                            .map(|m| m["content"].as_str().map(|s| s.len()).unwrap_or(0))
+                            .sum::<usize>() / 3) as u64;
+
+                        // 5. System prompt
+                        let sys_tok = self.client.get_agent(&agent_id).await.ok()
+                            .and_then(|a| a.system_prompt)
+                            .map(|s| (s.chars().count() / 3) as u64)
+                            .unwrap_or(0);
+
+                        // 6. Native tool schemas (residual = total - known categories)
+                        let known = mem_tok + skills_tok + mcp_tok + msg_tok + sys_tok;
+                        let tools_tok = total_used.saturating_sub(known);
+
+                        // 7. Buffer ≈ 3% of window (reserved for autocompact)
+                        let buffer_tok = window * 3 / 100;
+                        let free_tok   = window.saturating_sub(total_used + buffer_tok);
+
+                        // ── Grid construction (10 rows × 20 cells = 200 total) ────────────────
+                        let cells_for = |tok: u64| -> usize {
+                            if window == 0 { return 0; }
+                            ((tok as f64 / window as f64) * 200.0).round() as usize
+                        };
+
+                        let sys_c  = cells_for(sys_tok);
+                        let tool_c = cells_for(tools_tok);
+                        let mcp_c  = cells_for(mcp_tok);
+                        let mem_c  = cells_for(mem_tok);
+                        let sk_c   = cells_for(skills_tok);
+                        let msg_c  = cells_for(msg_tok);
+                        let buf_c  = cells_for(buffer_tok);
+                        let used_c = sys_c + tool_c + mcp_c + mem_c + sk_c + msg_c;
+                        let free_c = 200usize.saturating_sub(used_c + buf_c);
+
+                        let mut flat: Vec<(char, u8)> = Vec::with_capacity(200);
+                        for _ in 0..sys_c  { flat.push(('⛁', 0)); }
+                        for _ in 0..tool_c { flat.push(('⛁', 1)); }
+                        for _ in 0..mcp_c  { flat.push(('⛁', 2)); }
+                        for _ in 0..mem_c  { flat.push(('⛁', 3)); }
+                        for _ in 0..sk_c   { flat.push(('⛁', 4)); }
+                        for _ in 0..msg_c  { flat.push(('⛁', 5)); }
+                        for _ in 0..free_c { flat.push(('⛶', 6)); }
+                        for _ in 0..buf_c  { flat.push(('⛝', 7)); }
+                        while flat.len() < 200 { flat.push(('⛶', 6)); }
+                        flat.truncate(200);
+
+                        let rows: Vec<Vec<(char, u8)>> = flat.chunks(20).map(|c| c.to_vec()).collect();
+
+                        // ── Right-side labels ─────────────────────────────────────────────────
+                        let fmt = |n: u64| -> String {
                             if n >= 1_000_000 { format!("{:.1}M", n as f64 / 1_000_000.0) }
                             else if n >= 1_000 { format!("{:.1}k", n as f64 / 1_000.0) }
                             else               { n.to_string() }
                         };
-                        let model_disp  = if let Some(pos) = model.find('/') { model[pos+1..].to_string() } else { model.clone() };
-                        let window_disp = if window == 0 { "unknown".to_string() } else { format!("{} tokens", fmt_tok(window as u64)) };
-
-                        // Count messages in current conversation for depth display.
-                        let agent_id   = self.agent_id();
-                        let conv_id    = self.conversation_id();
-                        let msg_count  = self.client
-                            .get_conversation_messages(&agent_id, conv_id.as_deref().unwrap_or(""))
-                            .await
-                            .map(|v| v.len())
-                            .unwrap_or(0);
-                        let msg_disp   = if msg_count == 0 {
-                            "none yet".to_string()
-                        } else {
-                            format!("{msg_count}  (max 100 loaded per turn)")
+                        let pct_of = |n: u64| -> f64 {
+                            if window == 0 { 0.0 } else { 100.0 * n as f64 / window as f64 }
                         };
+                        let model_short = model.rsplit('/').next().unwrap_or(&model).to_string();
+                        let pct_val = pct_opt.unwrap_or(0);
 
-                        let mut lines: Vec<RenderLine> = vec![
-                            RenderLine::Blank,
-                            RenderLine::InfoHeader("  ◆ Context Window".to_string()),
-                            RenderLine::Blank,
-                            RenderLine::Pair { label: "Model".to_string(),          value: model_disp },
-                            RenderLine::Pair { label: "Context window".to_string(), value: window_disp },
-                            RenderLine::Pair { label: "Messages".to_string(),       value: msg_disp },
+                        let right_labels: Vec<String> = vec![
+                            format!("{}  ·  {}/{} tokens  ({}%)", model_short, fmt(total_used), fmt(window), pct_val),
+                            String::new(),
+                            "Estimated usage by category".to_string(),
+                            format!("⛁ System prompt:  {}  ({:.1}%)", fmt(sys_tok),    pct_of(sys_tok)),
+                            format!("⛁ Tools:          {}  ({:.1}%)", fmt(tools_tok),  pct_of(tools_tok)),
+                            format!("⛁ MCP tools:      {}  ({:.1}%)", fmt(mcp_tok),    pct_of(mcp_tok)),
+                            format!("⛁ Memory:         {}  ({:.1}%)", fmt(mem_tok),    pct_of(mem_tok)),
+                            format!("⛁ Skills:         {}  ({:.1}%)", fmt(skills_tok), pct_of(skills_tok)),
+                            format!("⛁ Messages:       {}  ({:.1}%)", fmt(msg_tok),    pct_of(msg_tok)),
+                            format!("⛶ Free:           {}  ({:.1}%)", fmt(free_tok),   pct_of(free_tok)),
                         ];
 
-                        if let Some(pct) = pct_opt {
-                            if window > 0 {
-                                let used     = (pct as u64 * window as u64) / 100;
-                                let free     = window as u64 - used;
-                                let free_pct = 100u8.saturating_sub(pct);
-                                let filled   = (pct as usize * 20 / 100).clamp(0, 20);
-                                let bar      = format!("{}{}", "█".repeat(filled), "░".repeat(20 - filled));
-                                lines.push(RenderLine::Blank);
-                                lines.push(RenderLine::Pair {
-                                    label: "Used".to_string(),
-                                    value: format!("~{}  ({}%)  {}", fmt_tok(used), pct, bar),
-                                });
-                                lines.push(RenderLine::Pair {
-                                    label: "Free".to_string(),
-                                    value: format!("~{}  ({}%)", fmt_tok(free), free_pct),
-                                });
-                            } else {
-                                lines.push(RenderLine::Blank);
-                                lines.push(RenderLine::DimMsg(format!("  {}% of context window used (window size unknown for this model)", pct)));
-                            }
+                        // ── Emit grid rows ─────────────────────────────────────────────────────
+                        let mut app = self.app.lock().unwrap();
+                        let _ = app.push(RenderLine::Blank);
+                        let _ = app.push(RenderLine::InfoHeader("  ◆ Context Usage".to_string()));
+                        let _ = app.push(RenderLine::Blank);
+
+                        if window == 0 {
+                            let _ = app.push(RenderLine::DimMsg(
+                                "  Context window size unknown for this model. Run a turn first.".to_string()
+                            ));
                         } else {
-                            lines.push(RenderLine::Blank);
-                            lines.push(RenderLine::DimMsg("  No context data yet — available after the first agent turn.".to_string()));
+                            for (i, row) in rows.iter().enumerate() {
+                                let label = right_labels.get(i).cloned().unwrap_or_default();
+                                let _ = app.push(RenderLine::ContextGridRow {
+                                    cells: row.clone(),
+                                    label,
+                                });
+                            }
+                            // Buffer note (below grid)
+                            if buf_c > 0 {
+                                let _ = app.push(RenderLine::DimMsg(
+                                    format!("  {}⛝ Autocompact buffer:  {}  ({:.1}%)",
+                                        " ".repeat(43), fmt(buffer_tok), pct_of(buffer_tok))
+                                ));
+                            }
                         }
 
-                        lines.push(RenderLine::Blank);
-                        lines.push(RenderLine::DimMsg("  /stats  for session token totals  ·  /stats model  for per-model breakdown".to_string()));
-                        lines.push(RenderLine::Blank);
+                        // ── MCP Tools section ──────────────────────────────────────────────────
+                        let _ = app.push(RenderLine::Blank);
+                        let _ = app.push(RenderLine::InfoHeader(
+                            format!("  MCP Tools  ·  /mcp  (~{} tokens)", fmt(mcp_tok))
+                        ));
+                        drop(app);
 
-                        for line in lines { let _ = self.app.lock().unwrap().push(line); }
+                        let mcp_statuses = self.mcp.status().await;
+                        let loaded: Vec<_> = mcp_statuses.iter().filter(|s| !s.disabled).collect();
+                        let disabled: Vec<_> = mcp_statuses.iter().filter(|s| s.disabled).collect();
+
+                        let mut app = self.app.lock().unwrap();
+                        if loaded.is_empty() {
+                            let _ = app.push(RenderLine::DimMsg("  (no MCP servers connected)".to_string()));
+                        } else {
+                            let _ = app.push(RenderLine::DimMsg(
+                                format!("  Loaded  ({} server{})", loaded.len(),
+                                    if loaded.len() == 1 { "" } else { "s" })
+                            ));
+                            for s in &loaded {
+                                // Show first few tool names, truncate if long
+                                let tool_preview: String = {
+                                    let names: Vec<&str> = s.tools.iter()
+                                        .map(|t| t.rfind("__").map(|p| &t[p+2..]).unwrap_or(t.as_str()))
+                                        .collect();
+                                    let preview = names.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+                                    if names.len() > 5 {
+                                        format!("{}  +{} more", preview, names.len() - 5)
+                                    } else {
+                                        preview
+                                    }
+                                };
+                                let _ = app.push(RenderLine::DimMsg(
+                                    format!("  └ {}:  {}", s.key, tool_preview)
+                                ));
+                            }
+                        }
+                        if !disabled.is_empty() {
+                            let _ = app.push(RenderLine::DimMsg("  Disabled".to_string()));
+                            for s in &disabled {
+                                let _ = app.push(RenderLine::DimMsg(
+                                    format!("  └ {}  (reconnect failed)", s.key)
+                                ));
+                            }
+                        }
+
+                        // ── Memory section ────────────────────────────────────────────────────
+                        let _ = app.push(RenderLine::Blank);
+                        let _ = app.push(RenderLine::InfoHeader(
+                            format!("  Memory  ·  /memory  (~{} tokens)", fmt(mem_tok))
+                        ));
+                        if mem_blocks.is_empty() {
+                            let _ = app.push(RenderLine::DimMsg("  (no memory blocks)".to_string()));
+                        } else {
+                            for b in &mem_blocks {
+                                let tok = (b.value.chars().count() / 3) as u64;
+                                let desc = b.description.as_deref().unwrap_or("");
+                                let suffix = if desc.is_empty() {
+                                    String::new()
+                                } else {
+                                    format!("  —  {}", desc)
+                                };
+                                let _ = app.push(RenderLine::DimMsg(
+                                    format!("  └ {}:  ~{} tokens{}", b.label, fmt(tok), suffix)
+                                ));
+                            }
+                        }
+
+                        // ── Skills section ────────────────────────────────────────────────────
+                        let _ = app.push(RenderLine::Blank);
+                        let _ = app.push(RenderLine::InfoHeader(
+                            format!("  Skills  ·  /skills  (~{} tokens)", fmt(skills_tok))
+                        ));
+                        {
+                            let skills = self.skills.lock().unwrap();
+                            if skills.is_empty() {
+                                let _ = app.push(RenderLine::DimMsg("  (no skills loaded)".to_string()));
+                            } else {
+                                for s in skills.iter() {
+                                    let tok = (s.body.chars().count() / 3) as u64;
+                                    let _ = app.push(RenderLine::DimMsg(
+                                        format!("  └ {}  —  {}  (~{} tokens)", s.id, s.description, fmt(tok))
+                                    ));
+                                }
+                            }
+                        }
+
+                        let _ = app.push(RenderLine::Blank);
+                        let _ = app.push(RenderLine::DimMsg(
+                            "  /stats  session totals  ·  /stats model  per-model breakdown".to_string()
+                        ));
+                        let _ = app.push(RenderLine::Blank);
                     }
                     SlashCmd::Stats(arg) => {
                         let sub = arg.as_deref().unwrap_or("").trim();

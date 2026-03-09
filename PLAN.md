@@ -945,3 +945,27 @@ to remove the last argument.
 - Status badge and placeholder added to `render_frame`
 
 **Rollback:** Restore field type to `Option<String>`, restore 2-arm Enter match, restore `.take()` drain, remove `queued_count` from TuiApp + render_frame.
+
+---
+
+## 2026-03-08 UTC — Claude Code-style rich /context display
+
+**Summary**: Replaced the minimal `/context` text dump with a Claude Code-style rich display featuring a 10×20 token grid, per-category estimates, and MCP/Memory/Skills sections.
+
+**Files changed**:
+- `src/ui/app.rs` — added `ContextGridRow { cells: Vec<(char, u8)>, label: String }` variant to `RenderLine` enum; added rendering arm in `render_line_to_text()` with 8-category color palette (gray=system, blue=tools/mcp, orange=memory, yellow=skills, purple=messages, near-black=free, dark-gray=buffer).
+- `src/cli/repl.rs` — replaced `SlashCmd::Context` arm with full rich implementation.
+
+**Previous behaviour**: `/context` showed model name, context window size, message count, and a simple `█░` fill bar with used/free percentages.
+
+**New behaviour**:
+- 10-row × 20-cell grid using `⛁` (used), `⛶` (free), `⛝` (buffer) symbols, each cell colored by category.
+- Right-side labels per row: row 0 = model + total token summary, row 2 = category heading, rows 3-9 = per-category breakdowns.
+- Per-category token estimates computed from: system prompt (chars/3), tools (residual), MCP tool schemas (JSON len/3), memory blocks (value chars/3), skills (body chars/3), conversation messages (content len/3), buffer (3% of window).
+- MCP Tools section: lists loaded/disabled servers with tool name previews.
+- Memory section: lists each block with label, token estimate, and description.
+- Skills section: lists each skill with id, description, and token estimate.
+- Footer hint: `/stats  session totals  ·  /stats model  per-model breakdown`.
+- If context window unknown (no turn yet), shows a friendly message instead of the grid.
+
+**Rollback**: Revert both files to restore the previous minimal implementation.
