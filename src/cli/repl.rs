@@ -2589,11 +2589,20 @@ impl Repl {
                                                             }
                                                         }
                                                     }
-                                                    // Alt/Shift+Enter: also queue as follow-up
-                                                    // (kept for compatibility and multi-line entry).
+                                                    // Shift+Enter: insert newline at cursor for
+                                                    // multi-line input (mirrors idle-mode behaviour).
+                                                    (KeyCode::Enter, m)
+                                                        if m == KeyModifiers::SHIFT =>
+                                                    {
+                                                        let pos = app.cursor_pos;
+                                                        app.input.insert(pos, '\n');
+                                                        app.cursor_pos = pos + 1;
+                                                        let _ = app.draw();
+                                                    }
+                                                    // Alt+Enter: queue as follow-up without
+                                                    // cancelling the current turn.
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::ALT
-                                                        || m == KeyModifiers::SHIFT
                                                         || m == (KeyModifiers::SHIFT | KeyModifiers::ALT) =>
                                                     {
                                                         let msg = app.input.trim().to_string();
