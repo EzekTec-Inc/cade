@@ -2,3 +2,8 @@
 .cade/settings.local.json
 .env
 .gemini/
+.abacusai/
+conductor/
+.letta/
+CHANGELOG.md
+CLAUDE.md
