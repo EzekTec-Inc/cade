@@ -154,7 +154,7 @@ pub async fn import_agent(client: &CadeClient, payload: &Value) -> Result<String
             let label = b["label"].as_str()?.to_string();
             let value = b["value"].as_str().unwrap_or("").to_string();
             let description = b["description"].as_str().map(String::from);
-            Some(MemoryBlock { label, value, description })
+            Some(MemoryBlock { label, value, description, tier: None })
         })
         .collect();
 

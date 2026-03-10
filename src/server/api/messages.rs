@@ -24,17 +24,33 @@ const TOOL_RESPONSE_RULE: &str = "\n\n\
 After every tool execution, always provide a plain-text response that explains \
 the result, what you found, or what you are doing next. \
 Never end a turn silently after running a tool.";
-/// Number of DB message rows to load per turn (~100 full tool-call cycles at 200 rows).
-const HISTORY_LIMIT: usize = 100;
-/// Hard cap on all memory blocks combined in the system prompt (~2k tokens).
-/// Blocks are prioritised by recency (most recently updated first).
-/// Blocks whose value is empty are always skipped regardless of this budget.
-const MEMORY_CHAR_BUDGET: usize = 8_000;
-/// Cap on a single tool-result content string (chars). ~10k tokens.
+/// Number of DB message rows to load per turn.
+const HISTORY_LIMIT: usize = 60;
+/// Number of messages from the end of history considered "recent".
+/// Tool results inside this window are kept at full fidelity.
+const RECENT_WINDOW: usize = 20;
+/// Tool results outside the recent window are trimmed to this many chars.
+/// They have already been processed; re-sending verbatim wastes tokens.
+const STALE_TOOL_RESULT_MAX_CHARS: usize = 300;
+/// Character budget for pinned memory blocks (always injected, highest priority).
+const PINNED_BUDGET: usize = 2_000;
+/// Character budget for short-term active memory blocks (full fidelity).
+const SHORT_BUDGET: usize = 4_500;
+/// Character budget for the long-term archived index (label + 80-char excerpt).
+const LONG_BUDGET: usize = 1_000;
+/// Turns of inactivity before a short-term block is promoted to long-term.
+const STALE_THRESHOLD: i64 = 20;
+/// Awareness footer appended to system prompt when any memory tier is present.
+const MEMORY_AWARENESS_FOOTER: &str = "\n\nMemory system: blocks idle for 20+ turns are \
+archived. The Archived Memory section above lists them with excerpts. Call \
+search_memory(query) when a task may need archived context — retrieved blocks \
+return to active memory automatically. Pin critical reference blocks with \
+update_memory(label, value, tier=\"pinned\").";
+/// Cap on a single tool-result content string (chars). ~2.7k tokens.
 /// Prevents huge outputs (screenshots, logs) from blowing the context window.
-/// 32 768 chars is generous enough for large diffs and file reads while still
-/// bounding runaway outputs (raw images, massive logs).
-const TOOL_RESULT_MAX_CHARS: usize = 32_768;
+/// 8 192 chars covers the vast majority of useful tool outputs (diffs, file
+/// excerpts, command output) while cutting worst-case cost by 75% vs 32 768.
+const TOOL_RESULT_MAX_CHARS: usize = 8_192;
 /// Chars-per-token approximation used to convert a model's token context window
 /// into a character budget. 3 chars ≈ 1 token is conservative across English,
 /// code, and mixed content; keeps a ~25% headroom below the hard token limit.
@@ -137,50 +153,131 @@ async fn build_context(
     state: &AppState,
     agent_id: &str,
     conversation_id: Option<&str>,
+    is_tool_return: bool,
 ) -> Result<(String, Vec<LlmMessage>, Vec<Value>), String> {
     let agent = sqlite::get_agent(&state.db, agent_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
 
-    // Memory blocks → appended to system prompt.
-    // Rules:
-    //   1. Skip empty-value blocks (nothing useful to inject).
-    //   2. Sort by updated_at DESC so most-recently-written blocks have priority.
-    //   3. Greedily include blocks until MEMORY_CHAR_BUDGET is reached; append a
-    //      notice when blocks are omitted so the agent knows to use /memory.
-    let raw_blocks = sqlite::get_memory_blocks_with_ts(&state.db, agent_id)
-        .unwrap_or_default();
-    let mut budget_remaining = MEMORY_CHAR_BUDGET;
-    let mut included_blocks: Vec<String> = Vec::new();
-    let mut omitted_count = 0usize;
-    for (label, val, _desc, _ts) in &raw_blocks {
-        if val.trim().is_empty() { continue; }  // S6: skip empty blocks
-        let entry = format!("[{label}]\n{val}");
-        let entry_chars = entry.chars().count();
-        if entry_chars <= budget_remaining {
-            budget_remaining -= entry_chars;
-            included_blocks.push(entry);
-        } else {
-            omitted_count += 1;
-        }
-    }
-    let memory = if omitted_count > 0 {
-        let mut parts = included_blocks;
-        parts.push(format!(
-            "[…{omitted_count} block(s) omitted — memory budget reached. Use /memory to manage.]"
-        ));
-        parts.join("\n\n")
+    // ── Three-tier memory injection ───────────────────────────────────────────
+    //
+    // Tiers:  pinned (always, full)  |  short (active, full)  |  long (archived, excerpt)
+    //
+    // Turn counter increments once per user message (not per tool return) so
+    // "20 turns idle" means 20 real user↔agent exchanges, not 20 tool calls.
+
+    // 1. Advance (or read) the turn counter.
+    let current_turn = if is_tool_return {
+        sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0)
     } else {
-        included_blocks.join("\n\n")
+        sqlite::increment_turn_counter(&state.db, agent_id).unwrap_or(0)
     };
 
+    // 2. Promote stale short blocks to long.
+    let _ = sqlite::promote_stale_blocks(&state.db, agent_id, current_turn, STALE_THRESHOLD);
+
+    // 3. Pinned + short-term blocks → full value, greedy-packed into budgets.
+    let active_blocks = sqlite::get_active_blocks(&state.db, agent_id).unwrap_or_default();
+    let mut pinned_parts: Vec<String> = Vec::new();
+    let mut short_parts:  Vec<String> = Vec::new();
+    let mut pinned_remaining = PINNED_BUDGET;
+    let mut short_remaining  = SHORT_BUDGET;
+    let mut active_omitted   = 0usize;
+
+    for (label, val, _desc, tier, _lt) in &active_blocks {
+        if val.trim().is_empty() { continue; }
+        if tier == "pinned" {
+            let entry = format!("📌 [{label}]\n{val}");
+            let chars = entry.chars().count();
+            if chars <= pinned_remaining {
+                pinned_remaining -= chars;
+                pinned_parts.push(entry);
+            } else { active_omitted += 1; }
+        } else {
+            let entry = format!("[{label}]\n{val}");
+            let chars = entry.chars().count();
+            if chars <= short_remaining {
+                short_remaining -= chars;
+                short_parts.push(entry);
+            } else { active_omitted += 1; }
+        }
+    }
+
+    // 4. Long-term archived blocks → label + excerpt only.
+    let long_excerpts = sqlite::get_long_term_excerpts(&state.db, agent_id, current_turn)
+        .unwrap_or_default();
+    let mut long_parts: Vec<String> = Vec::new();
+    let mut long_remaining = LONG_BUDGET;
+    let mut long_omitted   = 0usize;
+
+    for (label, excerpt, _idle) in &long_excerpts {
+        let entry = if excerpt.trim().is_empty() {
+            format!("[{label}]")
+        } else {
+            format!("[{label}]: {excerpt}")
+        };
+        let chars = entry.chars().count();
+        if chars <= long_remaining {
+            long_remaining -= chars;
+            long_parts.push(entry);
+        } else { long_omitted += 1; }
+    }
+
+    // 5. Assemble system prompt memory sections.
+    let has_any_memory = !pinned_parts.is_empty() || !short_parts.is_empty() || !long_parts.is_empty();
     let base = agent.system_prompt.clone().unwrap_or_default();
-    let system_prompt = if memory.is_empty() {
+
+    let system_core = if !has_any_memory {
         base
     } else {
-        format!("{base}\n\n# Memory\n{memory}")
+        let mut sections: Vec<String> = vec![base];
+
+        // Active memory section (pinned + short)
+        let mut active_section_parts: Vec<String> = Vec::new();
+        active_section_parts.extend(pinned_parts);
+        active_section_parts.extend(short_parts);
+        if active_omitted > 0 {
+            active_section_parts.push(format!(
+                "[…{active_omitted} block(s) omitted — memory budget reached. Use /memory to manage.]"
+            ));
+        }
+        if !active_section_parts.is_empty() {
+            sections.push(format!("# Memory\n{}", active_section_parts.join("\n\n")));
+        }
+
+        // Archived memory section (long-term excerpts)
+        if !long_parts.is_empty() {
+            let mut archived = long_parts.join("\n");
+            if long_omitted > 0 {
+                archived.push_str(&format!("\n[…{long_omitted} more archived — use /memory or search_memory]"));
+            }
+            sections.push(format!(
+                "# Archived Memory\n{archived}\nUse search_memory(query) to retrieve full archived content.\nAccessed blocks are automatically restored to active memory."
+            ));
+        }
+
+        // Append awareness footer when any memory exists
+        let mut core = sections.join("\n\n");
+        core.push_str(MEMORY_AWARENESS_FOOTER);
+        core
     };
-    let system_prompt = format!("{system_prompt}{TOOL_RESPONSE_RULE}");
+    // Memory-change detection: cache the assembled system_core per agent.
+    // If the content hash matches the last cached value the string is identical
+    // to the previous turn, so the LLM provider's implicit prompt cache
+    // (OpenAI KV cache, Gemini implicit cache) is guaranteed to hit.
+    let system_prompt = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        system_core.hash(&mut h);
+        let new_hash = h.finish();
+        let mut cache = state.memory_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = cache.entry(agent_id.to_string()).or_insert((0, String::new()));
+        if entry.0 != new_hash {
+            entry.0 = new_hash;
+            entry.1 = system_core;
+        }
+        format!("{}{TOOL_RESPONSE_RULE}", entry.1)
+    };
 
     // Message history from DB — oldest first, scoped to conversation
     let history = sqlite::list_messages(&state.db, agent_id, conversation_id, HISTORY_LIMIT)
@@ -203,6 +300,23 @@ async fn build_context(
         let system_msg = messages.remove(0);
         let sanitized = sanitize_messages(messages);
         messages = std::iter::once(system_msg).chain(sanitized).collect();
+    }
+
+    // Stale tool-result summarization: tool results outside the recent window
+    // have already been processed by the model. Re-sending them verbatim is
+    // wasteful; trim them to a short excerpt to reduce token footprint while
+    // preserving enough context for the model to understand what happened.
+    if messages.len() > 1 + RECENT_WINDOW {
+        let stale_until = messages.len() - RECENT_WINDOW;
+        for msg in &mut messages[1..stale_until] {
+            if msg.role == "tool" {
+                let char_count = msg.content.chars().count();
+                if char_count > STALE_TOOL_RESULT_MAX_CHARS {
+                    let truncated: String = msg.content.chars().take(STALE_TOOL_RESULT_MAX_CHARS).collect();
+                    msg.content = format!("{truncated}\n[…{} chars trimmed]", char_count - STALE_TOOL_RESULT_MAX_CHARS);
+                }
+            }
+        }
     }
 
     // Character-budget trimming: drop oldest non-system messages until total
@@ -256,6 +370,33 @@ async fn build_context(
             .filter(|t| agent_tool_ids.contains(&t.id))
             .filter_map(|t| t.json_schema)
             .collect()
+    };
+
+    // Lazy tool loading: on long conversations only send "extended" tools
+    // (desktop_*, search_*) if they were actually used in the recent window.
+    // Core tools (bash, file I/O, memory helpers, etc.) are always included.
+    // On short conversations every tool is sent so the model can discover
+    // what's available before deciding what to call.
+    const EXTENDED_TOOL_PREFIXES: &[&str] = &["desktop_", "search_"];
+    let tool_schemas: Vec<Value> = if messages.len() > 1 + RECENT_WINDOW {
+        // Collect tool names used in the recent window
+        let recent_start = messages.len().saturating_sub(RECENT_WINDOW);
+        let mut recently_used: std::collections::HashSet<&str> =
+            std::collections::HashSet::new();
+        for msg in &messages[recent_start..] {
+            if let Some(calls) = &msg.tool_calls {
+                for tc in calls {
+                    recently_used.insert(tc.name.as_str());
+                }
+            }
+        }
+        tool_schemas.into_iter().filter(|schema| {
+            let name = schema["name"].as_str().unwrap_or("");
+            let is_extended = EXTENDED_TOOL_PREFIXES.iter().any(|p| name.starts_with(p));
+            !is_extended || recently_used.contains(name)
+        }).collect()
+    } else {
+        tool_schemas
     };
 
     Ok((agent.model, messages, tool_schemas))
@@ -399,7 +540,7 @@ pub async fn send_message(
     }
 
     // 2. Build context from DB (includes the message we just persisted)
-    let (model, messages, tools) = match build_context(&state, &agent_id, conv_id_ref).await {
+    let (model, messages, tools) = match build_context(&state, &agent_id, conv_id_ref, false).await {
         Ok(ctx) => ctx,
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
@@ -409,9 +550,9 @@ pub async fn send_message(
     let req = CompletionRequest { model, messages, tools, max_tokens };
     match state.llm.complete(&req).await {
         Ok(resp) => {
-            let tool_calls_json: Vec<Value> = resp.tool_calls.iter().map(|tc| json!({
-                "id": tc.id, "name": tc.name, "arguments": tc.arguments
-            })).collect();
+            let tool_calls_json: Vec<Value> = resp.tool_calls.iter()
+                .filter_map(|tc| serde_json::to_value(tc).ok())
+                .collect();
             persist(&state, &agent_id, conv_id_ref, "assistant", json!({
                 "content": resp.content.clone().unwrap_or_default(),
                 "tool_calls": tool_calls_json
@@ -459,7 +600,7 @@ async fn handle_tool_return_blocking(
         _ => {}
     }
 
-    let (model, messages, tools) = match build_context(state, agent_id, conv_id).await {
+    let (model, messages, tools) = match build_context(state, agent_id, conv_id, true).await {
         Ok(ctx) => ctx,
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
@@ -468,9 +609,9 @@ async fn handle_tool_return_blocking(
     let req = CompletionRequest { model, messages, tools, max_tokens };
     match state.llm.complete(&req).await {
         Ok(resp) => {
-            let tool_calls_json: Vec<Value> = resp.tool_calls.iter().map(|tc| json!({
-                "id": tc.id, "name": tc.name, "arguments": tc.arguments
-            })).collect();
+            let tool_calls_json: Vec<Value> = resp.tool_calls.iter()
+                .filter_map(|tc| serde_json::to_value(tc).ok())
+                .collect();
             persist(state, agent_id, conv_id, "assistant", json!({
                 "content": resp.content.clone().unwrap_or_default(),
                 "tool_calls": tool_calls_json
@@ -547,7 +688,7 @@ pub async fn stream_message(
     }
 
     // 3. Build context from DB
-    let (model, messages, tools) = match build_context(&state, &agent_id, conv_id_ref).await {
+    let (model, messages, tools) = match build_context(&state, &agent_id, conv_id_ref, is_tool_return).await {
         Ok(ctx) => ctx,
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
@@ -625,13 +766,18 @@ pub async fn stream_message(
         };
 
         let event = match chunk {
+            Ok(StreamChunk::Reasoning(text)) => {
+                emit(json!({ "message_type": "reasoning_message", "reasoning": text }))
+            }
             Ok(StreamChunk::Text(text)) => {
                 if let Ok(mut g) = acc_clone.lock() { g.0.push_str(&text); }
                 emit(json!({ "message_type": "assistant_message", "content": text }))
             }
             Ok(StreamChunk::ToolCall(tc)) => {
                 if let Ok(mut g) = acc_clone.lock() {
-                    g.1.push(json!({ "id": tc.id, "name": tc.name, "arguments": tc.arguments }));
+                    if let Ok(v) = serde_json::to_value(&tc) {
+                        g.1.push(v);
+                    }
                 }
                 emit(json!({
                     "message_type": "tool_call_message",

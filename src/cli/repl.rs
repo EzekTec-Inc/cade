@@ -533,6 +533,9 @@ pub struct Repl {
     /// Receives a signal whenever a SKILL.MD file changes on disk.
     /// The REPL polls this each loop iteration and triggers a reload.
     skill_reload_rx: tokio::sync::mpsc::Receiver<()>,
+    /// Receives a signal whenever a CADE settings file changes on disk.
+    /// The REPL polls this each loop iteration and triggers an MCP reload.
+    mcp_reload_rx: tokio::sync::mpsc::Receiver<()>,
     /// Whether SSE token streaming is enabled (toggled by /stream).
     streaming_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Cumulative token usage for the session (input, output).
@@ -584,6 +587,7 @@ impl Repl {
             .unwrap_or(4);
         tracing::info!("Subagent concurrency cap: {cap} (set CADE_MAX_SUBAGENTS to override)");
         let skill_reload_rx = crate::skills::spawn_skill_watcher(&cwd);
+        let mcp_reload_rx   = crate::mcp::watcher::spawn_mcp_watcher(&cwd);
         Self {
             client,
             agent_id:   Arc::new(Mutex::new(agent_id)),
@@ -606,6 +610,7 @@ impl Repl {
             mcp,
             subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(cap)),
             skill_reload_rx,
+            mcp_reload_rx,
             streaming_enabled:     std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             session_input_tokens:  std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
@@ -625,6 +630,63 @@ impl Repl {
     fn agent_name(&self)     -> String        { self.agent_name.lock().unwrap().clone() }
     fn model(&self)          -> String        { self.current_model.lock().unwrap().clone() }
     fn conversation_id(&self) -> Option<String> { self.conversation_id.lock().unwrap().clone() }
+
+    /// Reload MCP servers from current settings and re-register tools.
+    /// Called from the tick-loop watcher poll and from `/mcp reload`.
+    async fn do_mcp_reload(&mut self) {
+        self.tui_dim("  ↺ MCP settings changed — reloading servers…".to_string());
+        let new_configs = self.settings.lock().unwrap().merged_mcp_servers();
+        let summary = self.mcp.reload(&new_configs).await;
+
+        if !summary.stopped.is_empty() {
+            self.tui_dim(format!("  stopped: {}", summary.stopped.join(", ")));
+        }
+        if !summary.failed.is_empty() {
+            self.tui_err(format!("  failed to start: {}", summary.failed.join(", ")));
+        }
+
+        let changed = !summary.started.is_empty() || !summary.stopped.is_empty();
+        if changed {
+            self.spawn_tool_reregister();
+        }
+
+        let msg = format!(
+            "  ↺ MCP reloaded — {} started, {} stopped, {} kept{}",
+            summary.started.len(),
+            summary.stopped.len(),
+            summary.kept.len(),
+            if summary.failed.is_empty() {
+                String::new()
+            } else {
+                format!(", {} failed", summary.failed.len())
+            }
+        );
+        self.tui_ok(msg);
+    }
+
+    /// Spawn a background task that re-registers all tools (native + MCP) and
+    /// re-attaches them to the agent. Called after toolset/model switches and
+    /// MCP config reloads so the agent always sees an up-to-date tool list.
+    fn spawn_tool_reregister(&self) {
+        let agent_id = self.agent_id();
+        let client   = self.client.clone();
+        let mcp_arc  = std::sync::Arc::clone(&self.mcp);
+        let toolset  = *self.current_toolset.lock().unwrap();
+        tokio::spawn(async move {
+            use crate::agent::tools::{register_cade_tools, register_mcp_tools};
+            let tools = register_cade_tools(&client, toolset).await.unwrap_or_default();
+            let ids: Vec<String> = tools.into_iter().map(|t| t.id).collect();
+            if !ids.is_empty() {
+                let _ = client.attach_agent_tools(&agent_id, &ids).await;
+            }
+            let mcp_ids: Vec<String> = register_mcp_tools(&client, mcp_arc.all_tool_schemas().await)
+                .await.unwrap_or_default()
+                .into_iter().map(|t| t.id).collect();
+            if !mcp_ids.is_empty() {
+                let _ = client.attach_agent_tools(&agent_id, &mcp_ids).await;
+            }
+        });
+    }
 
     /// Called when `--continue` is set — suppress first-turn env injection.
     pub fn mark_continued(&self) {
@@ -672,6 +734,21 @@ impl Repl {
                     );
                     let _ = self.client.send_message(&self.agent_id(), &notify, false).await;
                 }
+            }
+
+            // Check if MCP schemas changed after a reconnect — re-register if so
+            if self.mcp.schemas_dirty.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                self.tui_dim("  ↺ MCP tool schemas changed after reconnect — re-registering…".to_string());
+                self.spawn_tool_reregister();
+            }
+
+            // Check for settings file changes — reload MCP servers if signalled
+            let mut mcp_changed = false;
+            while self.mcp_reload_rx.try_recv().is_ok() {
+                mcp_changed = true;
+            }
+            if mcp_changed {
+                self.do_mcp_reload().await;
             }
 
             // Check for skill file changes (live watcher) — reload if signalled
@@ -835,6 +912,13 @@ impl Repl {
                         ));
                     }
                     SlashCmd::Mcp => {
+                        // Support "/mcp reload" subcommand
+                        let sub = input.trim().strip_prefix("/mcp").unwrap_or("").trim();
+                        if sub == "reload" {
+                            self.do_mcp_reload().await;
+                            continue;
+                        }
+
                         let statuses = self.mcp.status().await;
                         self.tui_blank();
                         self.tui_hdr("  MCP Servers");
@@ -922,7 +1006,6 @@ impl Repl {
                         let pct_opt    = self.app.lock().unwrap().context_pct;
                         let agent_id   = self.agent_id();
                         let conv_id    = self.conversation_id();
-                        let total_used = pct_opt.map(|p| p as u64 * window / 100).unwrap_or(0);
 
                         // ── Per-category token estimates ──────────────────────────────────────
 
@@ -959,9 +1042,12 @@ impl Repl {
                             .map(|s| (s.chars().count() / 3) as u64)
                             .unwrap_or(0);
 
-                        // 6. Native tool schemas (residual = total - known categories)
+                        // 6. Native tool schemas (residual = server pct - known; 0 if pct unavailable)
                         let known = mem_tok + skills_tok + mcp_tok + msg_tok + sys_tok;
-                        let tools_tok = total_used.saturating_sub(known);
+                        let tools_tok = pct_opt
+                            .map(|p| (p as u64 * window / 100).saturating_sub(known))
+                            .unwrap_or(0);
+                        let total_used = known + tools_tok;
 
                         // 7. Buffer ≈ 3% of window (reserved for autocompact)
                         let buffer_tok = window * 3 / 100;
@@ -1007,7 +1093,9 @@ impl Repl {
                             if window == 0 { 0.0 } else { 100.0 * n as f64 / window as f64 }
                         };
                         let model_short = model.rsplit('/').next().unwrap_or(&model).to_string();
-                        let pct_val = pct_opt.unwrap_or(0);
+                        let pct_val = pct_opt.unwrap_or_else(|| {
+                            if window == 0 { 0 } else { (total_used * 100 / window).min(100) as u8 }
+                        });
 
                         let right_labels: Vec<String> = vec![
                             format!("{}  ·  {}/{} tokens  ({}%)", model_short, fmt(total_used), fmt(window), pct_val),
@@ -1232,24 +1320,7 @@ impl Repl {
                                 *self.current_model.lock().unwrap() = new_model.clone();
                                 if new_toolset != old_toolset {
                                     *self.current_toolset.lock().unwrap() = new_toolset;
-                                    let agent_id = self.agent_id();
-                                    let client = self.client.clone();
-                                    let mcp_ts  = std::sync::Arc::clone(&self.mcp);
-                                    tokio::spawn(async move {
-                                        use crate::agent::tools::{register_cade_tools, register_mcp_tools};
-                                        let tools = register_cade_tools(&client, new_toolset)
-                                            .await.unwrap_or_default();
-                                        let ids: Vec<String> = tools.into_iter().map(|t| t.id).collect();
-                                        if !ids.is_empty() {
-                                            let _ = client.attach_agent_tools(&agent_id, &ids).await;
-                                        }
-                                        let mcp_ids: Vec<String> = register_mcp_tools(&client, mcp_ts.all_tool_schemas().await)
-                                            .await.unwrap_or_default()
-                                            .into_iter().map(|t| t.id).collect();
-                                        if !mcp_ids.is_empty() {
-                                            let _ = client.attach_agent_tools(&agent_id, &mcp_ids).await;
-                                        }
-                                    });
+                                    self.spawn_tool_reregister();
                                     self.tui_hdr(format!("  Toolset → {}", new_toolset.display_name()));
                                 }
                                 self.tui_ok(format!("  ✓ Model: {new_model}"));
@@ -1333,14 +1404,19 @@ impl Repl {
                                 if let Some(ms) = per_model_snap.iter().find(|(k,_)| k == model).map(|(_,v)| v) {
                                     let model_short = model.rsplit('/').next().unwrap_or(model.as_str());
                                     lines.push(crate::ui::RenderLine::DimMsg(format!(
-                                        "     {}:  {} input, {} output, {} cache read, {} cache write   (${:.2})",
-                                        model_short,
-                                        fmt_tok(ms.input_tokens),
-                                        fmt_tok(ms.output_tokens),
-                                        fmt_tok(ms.cache_read_tokens),
-                                        fmt_tok(ms.cache_write_tokens),
-                                        cost,
+                                        "     {}   (${:.2})",
+                                        model_short, cost,
                                     )));
+                                    let mut fields: Vec<String> = Vec::new();
+                                    if ms.input_tokens       > 0 { fields.push(format!("{} input",       fmt_tok(ms.input_tokens))); }
+                                    if ms.output_tokens      > 0 { fields.push(format!("{} output",      fmt_tok(ms.output_tokens))); }
+                                    if ms.cache_read_tokens  > 0 { fields.push(format!("{} cache read",  fmt_tok(ms.cache_read_tokens))); }
+                                    if ms.cache_write_tokens > 0 { fields.push(format!("{} cache write", fmt_tok(ms.cache_write_tokens))); }
+                                    if !fields.is_empty() {
+                                        lines.push(crate::ui::RenderLine::DimMsg(
+                                            format!("       {}", fields.join(" · "))
+                                        ));
+                                    }
                                 }
                             }
                         }
@@ -1734,7 +1810,7 @@ impl Repl {
                         // Parse subcommand from the raw input line
                         let raw = input.trim();
                         let mem_arg = raw.strip_prefix("/memory").unwrap_or("").trim().to_string();
-                        let parts: Vec<&str> = mem_arg.splitn(3, ' ').collect();
+                        let parts: Vec<&str> = mem_arg.splitn(4, ' ').collect();
                         let sub = parts.first().copied().unwrap_or("");
 
                         match sub {
@@ -1870,6 +1946,42 @@ impl Repl {
                                     }
                                 }
                             }
+                            // /memory pin <label>
+                            "pin" if parts.len() >= 2 => {
+                                let label = parts[1];
+                                let id = self.agent_id();
+                                match self.client.pin_memory(&id, label).await {
+                                    Ok(_) => self.tui_ok(format!("  📌 [{label}] pinned — always injected")),
+                                    Err(e) => self.tui_err(e.to_string()),
+                                }
+                            }
+                            // /memory unpin <label>
+                            "unpin" if parts.len() >= 2 => {
+                                let label = parts[1];
+                                let id = self.agent_id();
+                                match self.client.promote_memory(&id, label).await {
+                                    Ok(_) => self.tui_ok(format!("  ● [{label}] unpinned → short-term")),
+                                    Err(e) => self.tui_err(e.to_string()),
+                                }
+                            }
+                            // /memory promote <label> — reactivate archived block
+                            "promote" if parts.len() >= 2 => {
+                                let label = parts[1];
+                                let id = self.agent_id();
+                                match self.client.promote_memory(&id, label).await {
+                                    Ok(_) => self.tui_ok(format!("  ● [{label}] promoted → short-term")),
+                                    Err(e) => self.tui_err(e.to_string()),
+                                }
+                            }
+                            // /memory demote <label> — manually archive block
+                            "demote" if parts.len() >= 2 => {
+                                let label = parts[1];
+                                let id = self.agent_id();
+                                match self.client.demote_memory(&id, label).await {
+                                    Ok(_) => self.tui_ok(format!("  ○ [{label}] demoted → long-term (archived)")),
+                                    Err(e) => self.tui_err(e.to_string()),
+                                }
+                            }
                             // /memory (list)
                             _ => {
                                 match self.client.get_memory(&self.agent_id()).await {
@@ -1880,20 +1992,31 @@ impl Repl {
                                     Ok(blocks) => {
                                         self.tui_blank();
                                         for b in &blocks {
-                                            self.tui_hdr(format!("  [{}]", b.label));
+                                            let tier = b.tier.as_deref().unwrap_or("short");
+                                            let badge = match tier {
+                                                "pinned" => "📌 [pinned]",
+                                                "long"   => "○  [long]  ",
+                                                _        => "●  [short] ",
+                                            };
+                                            self.tui_hdr(format!("  {}  {}", badge, b.label));
                                             if let Some(desc) = &b.description {
                                                 if !desc.is_empty() { self.tui_dim(format!("  {desc}")); }
                                             }
-                                            self.tui_blank();
-                                            if b.value.is_empty() {
-                                                self.tui_dim("  (empty)");
+                                            if tier == "long" {
+                                                self.tui_dim("  (archived — use /memory promote or search_memory to reactivate)");
                                             } else {
-                                                let preview: String = b.value.chars().take(300).collect();
-                                                let ellipsis = if b.value.len() > 300 { "…  (/memory view to see all)" } else { "" };
-                                                self.tui_sys(format!("  {preview}{ellipsis}"));
+                                                self.tui_blank();
+                                                if b.value.is_empty() {
+                                                    self.tui_dim("  (empty)");
+                                                } else {
+                                                    let preview: String = b.value.chars().take(300).collect();
+                                                    let ellipsis = if b.value.len() > 300 { "…  (/memory view to see all)" } else { "" };
+                                                    self.tui_sys(format!("  {preview}{ellipsis}"));
+                                                }
                                             }
                                             self.tui_blank();
                                         }
+                                        self.tui_dim("  Subcommands: pin, unpin, promote, demote, view, set, delete, edit, history, restore");
                                     }
                                     Err(e) => self.tui_err(e.to_string()),
                                 }
@@ -2458,7 +2581,8 @@ impl Repl {
                         };
                         if new_toolset != old_toolset {
                             *self.current_toolset.lock().unwrap() = new_toolset;
-                            self.tui_ok(format!("  ✓ Toolset: {new_toolset:?}"));
+                            self.spawn_tool_reregister();
+                            self.tui_ok(format!("  ✓ Toolset → {}", new_toolset.display_name()));
                         } else {
                             self.tui_dim(format!("  Toolset already: {new_toolset:?}"));
                         }
@@ -2843,7 +2967,24 @@ impl Repl {
                                                         // guard the tick task would process that
                                                         // stale Esc and immediately cancel the
                                                         // turn before any LLM content arrives.
-                                                        if tick_start.elapsed().as_millis() >= 200 {
+                                                        //
+                                                        // Also ignore Esc events that arrive within
+                                                        // 500 ms of a modal closing.  Terminals
+                                                        // often emit residual escape sequences when
+                                                        // the alternate screen is restored; without
+                                                        // this guard a stale Esc fires during the
+                                                        // HTTP wait of Phase-2 tool-result sending
+                                                        // and aborts the turn right after the user
+                                                        // confirmed "Yes" in a question modal.
+                                                        let esc_now_ms = std::time::SystemTime::now()
+                                                            .duration_since(std::time::UNIX_EPOCH)
+                                                            .unwrap_or_default()
+                                                            .as_millis() as u64;
+                                                        let esc_last_close = tick_modal_close_ms
+                                                            .load(std::sync::atomic::Ordering::SeqCst);
+                                                        let esc_post_modal = esc_last_close > 0
+                                                            && esc_now_ms.saturating_sub(esc_last_close) < 500;
+                                                        if !esc_post_modal && tick_start.elapsed().as_millis() >= 200 {
                                                             if !app.input.is_empty() {
                                                                 // Clear typed input rather than
                                                                 // cancelling — lets user discard
@@ -2863,8 +3004,18 @@ impl Repl {
                                                     // If input is empty → plain cancel.
                                                     // Same 200 ms grace period as Esc to swallow
                                                     // stale events buffered just after a modal.
+                                                    // Also suppressed for 500 ms post-modal close
+                                                    // (same reason as Esc above).
                                                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                                                        if tick_start.elapsed().as_millis() >= 200 {
+                                                        let cc_now_ms = std::time::SystemTime::now()
+                                                            .duration_since(std::time::UNIX_EPOCH)
+                                                            .unwrap_or_default()
+                                                            .as_millis() as u64;
+                                                        let cc_last_close = tick_modal_close_ms
+                                                            .load(std::sync::atomic::Ordering::SeqCst);
+                                                        let cc_post_modal = cc_last_close > 0
+                                                            && cc_now_ms.saturating_sub(cc_last_close) < 500;
+                                                        if !cc_post_modal && tick_start.elapsed().as_millis() >= 200 {
                                                             let msg = app.input.trim().to_string();
                                                             if !msg.is_empty() {
                                                                 // Steering: cancel current turn and

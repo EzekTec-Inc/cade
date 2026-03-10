@@ -250,12 +250,31 @@ pub async fn get_memory(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let blocks =
-        sqlite::get_memory_blocks(&state.db, &agent_id).map_err(|e| server_err(e.to_string()))?;
+    let blocks = sqlite::get_memory_blocks_full(&state.db, &agent_id)
+        .map_err(|e| server_err(e.to_string()))?;
     let arr: Vec<Value> = blocks.into_iter()
-        .map(|(label, value, description)| json!({ "label": label, "value": value, "description": description }))
+        .map(|(label, value, description, tier)| json!({
+            "label": label, "value": value, "description": description, "tier": tier
+        }))
         .collect();
     Ok(Json(json!({ "blocks": arr })))
+}
+
+/// PUT /v1/agents/:id/memory/:label/tier — set tier ('short'|'long'|'pinned')
+pub async fn set_memory_tier_handler(
+    State(state): State<AppState>,
+    Path((agent_id, label)): Path<(String, String)>,
+    Json(body): Json<Value>,
+) -> Result<StatusCode, (StatusCode, Json<Value>)> {
+    let tier = body["tier"].as_str().unwrap_or("short");
+    if !matches!(tier, "short" | "long" | "pinned") {
+        return Err((StatusCode::BAD_REQUEST, Json(json!({ "detail": "tier must be 'short', 'long', or 'pinned'" }))));
+    }
+    let reset_turn = tier != "long"; // reactivation resets last_turn; demotion does not
+    let found = sqlite::set_memory_tier(&state.db, &agent_id, &label, tier, reset_turn)
+        .map_err(|e| server_err(e.to_string()))?;
+    if found { Ok(StatusCode::NO_CONTENT) }
+    else { Err((StatusCode::NOT_FOUND, Json(json!({ "detail": format!("Block '{label}' not found") })))) }
 }
 
 /// DELETE /v1/agents/:id/memory/:label
@@ -490,17 +509,29 @@ pub async fn search_memory_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let query = params.get("q").map(String::as_str).unwrap_or("");
     if query.is_empty() {
-        // No ?q= → delegate to plain get_memory (list all)
-        let blocks = sqlite::get_memory_blocks(&state.db, &agent_id)
+        // No ?q= → delegate to get_memory_full (list all with tier)
+        let blocks = sqlite::get_memory_blocks_full(&state.db, &agent_id)
             .map_err(|e| server_err(e.to_string()))?;
-        let out: Vec<Value> = blocks.iter().map(|(l, v, d)| json!({
-            "label": l, "value": v, "description": d
+        let out: Vec<Value> = blocks.iter().map(|(l, v, d, t)| json!({
+            "label": l, "value": v, "description": d, "tier": t
         })).collect();
         return Ok(Json(json!({ "blocks": out })));
     }
 
     let rows = sqlite::search_memory(&state.db, &agent_id, query)
         .map_err(|e| server_err(e.to_string()))?;
+
+    // Auto-reactivate any long-term blocks returned by search — they're clearly
+    // relevant to the current task, so promote back to short-term for 20 turns.
+    let full = sqlite::get_memory_blocks_full(&state.db, &agent_id).unwrap_or_default();
+    for (label, _value, _snippet) in &rows {
+        if let Some((_, _, _, tier)) = full.iter().find(|(l, _, _, _)| l == label) {
+            if tier == "long" {
+                let _ = sqlite::set_memory_tier(&state.db, &agent_id, label, "short", true);
+            }
+        }
+    }
+
     let blocks: Vec<Value> = rows.iter().map(|(label, value, snippet)| json!({
         "label":   label,
         "value":   value,

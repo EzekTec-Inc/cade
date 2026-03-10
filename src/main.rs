@@ -640,6 +640,7 @@ async fn main() -> Result<()> {
                 label: "skills".to_string(),
                 value: ctx.clone(),
                 description: None,
+                tier: None,
             }]
         } else {
             vec![]

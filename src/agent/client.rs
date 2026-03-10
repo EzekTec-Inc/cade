@@ -44,6 +44,9 @@ pub struct MemoryBlock {
     pub value: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// "short" | "long" | "pinned" — present in responses from the server.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
 }
 
 // ── Messages ──────────────────────────────────────────────────────────────────
@@ -573,6 +576,36 @@ impl CadeClient {
             bail!("restore_memory failed {}", resp.status());
         }
         Ok(())
+    }
+
+    // ── Memory tier management ────────────────────────────────────────────────
+
+    /// Set the tier of a memory block ('short' | 'long' | 'pinned').
+    pub async fn set_memory_tier(&self, agent_id: &str, label: &str, tier: &str) -> Result<()> {
+        let resp = self.client
+            .put(self.url(&format!("/agents/{agent_id}/memory/{label}/tier")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&serde_json::json!({ "tier": tier }))
+            .send().await?;
+        if !resp.status().is_success() {
+            bail!("set_memory_tier failed {}", resp.status());
+        }
+        Ok(())
+    }
+
+    /// Pin a memory block (always injected, never aged out).
+    pub async fn pin_memory(&self, agent_id: &str, label: &str) -> Result<()> {
+        self.set_memory_tier(agent_id, label, "pinned").await
+    }
+
+    /// Demote a memory block to long-term (archived, index-only injection).
+    pub async fn demote_memory(&self, agent_id: &str, label: &str) -> Result<()> {
+        self.set_memory_tier(agent_id, label, "long").await
+    }
+
+    /// Promote an archived long-term block back to short-term (reactivate).
+    pub async fn promote_memory(&self, agent_id: &str, label: &str) -> Result<()> {
+        self.set_memory_tier(agent_id, label, "short").await
     }
 
     // ── Context management ────────────────────────────────────────────────────

@@ -175,6 +175,21 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         tracing::info!("Migration complete: Shared Memory schema implemented");
     }
 
+    // Migration 7: Three-tier memory (pinned / short / long) + per-agent turn counter
+    // Uses silent ALTER TABLE — errors are ignored on existing columns.
+    let _ = conn.execute(
+        "ALTER TABLE agents ADD COLUMN memory_turn_counter INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE shared_memory_blocks ADD COLUMN last_turn INTEGER NOT NULL DEFAULT 0",
+        [],
+    );
+    let _ = conn.execute(
+        "ALTER TABLE shared_memory_blocks ADD COLUMN tier TEXT NOT NULL DEFAULT 'short'",
+        [],
+    );
+
     // Migration 6: Archival Memory (FTS5)
     let has_fts: bool = conn.query_row(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts'",
@@ -824,6 +839,12 @@ pub fn upsert_memory_block(
     };
 
     let ts = now_ts();
+    // Get the agent's current turn counter so we can stamp last_turn on the block.
+    let current_turn: i64 = conn.query_row(
+        "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
+        params![agent_id],
+        |r| r.get(0),
+    ).unwrap_or(0);
 
     if let Some((block_id, old_value, _)) = existing {
         // Snapshot old value into history (skip if unchanged)
@@ -846,25 +867,30 @@ pub fn upsert_memory_block(
 
         if let Some(desc) = description {
             conn.execute(
-                "UPDATE shared_memory_blocks SET value = ?1, description = ?2, max_chars = ?3, updated_at = ?4
-                 WHERE id = ?5",
-                params![final_value, desc, max_chars.map(|n| n as i64), ts, block_id],
+                "UPDATE shared_memory_blocks
+                 SET value = ?1, description = ?2, max_chars = ?3, updated_at = ?4,
+                     last_turn = ?5,
+                     tier = CASE WHEN tier = 'pinned' THEN 'pinned' ELSE 'short' END
+                 WHERE id = ?6",
+                params![final_value, desc, max_chars.map(|n| n as i64), ts, current_turn, block_id],
             )?;
         } else {
             conn.execute(
-                "UPDATE shared_memory_blocks SET value = ?1, updated_at = ?2
-                 WHERE id = ?3",
-                params![final_value, ts, block_id],
+                "UPDATE shared_memory_blocks
+                 SET value = ?1, updated_at = ?2, last_turn = ?3,
+                     tier = CASE WHEN tier = 'pinned' THEN 'pinned' ELSE 'short' END
+                 WHERE id = ?4",
+                params![final_value, ts, current_turn, block_id],
             )?;
         }
     } else {
         // Create a new shared block and link it to the agent
         let id = uuid::Uuid::new_v4().to_string();
         conn.execute(
-            "INSERT INTO shared_memory_blocks (id, label, value, description, max_chars, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT INTO shared_memory_blocks (id, label, value, description, max_chars, updated_at, tier, last_turn)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'short', ?7)",
             params![id, label, final_value, description.unwrap_or(""),
-                    max_chars.map(|n| n as i64), ts],
+                    max_chars.map(|n| n as i64), ts, current_turn],
         )?;
         conn.execute(
             "INSERT INTO agent_memory_blocks (agent_id, block_id) VALUES (?1, ?2)",
@@ -930,6 +956,148 @@ pub fn get_memory_blocks_with_ts(db: &Db, agent_id: &str) -> Result<Vec<(String,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2).unwrap_or_default(),
             row.get::<_, i64>(3).unwrap_or(0),
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+// ── Three-tier memory functions ───────────────────────────────────────────────
+
+/// Increment the agent's user-message turn counter and return the new value.
+/// Call once per non-tool-return message (never for tool result turns).
+pub fn increment_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
+    let conn = db.lock().unwrap();
+    conn.execute(
+        "UPDATE agents SET memory_turn_counter = memory_turn_counter + 1 WHERE id = ?1",
+        params![agent_id],
+    )?;
+    let n: i64 = conn.query_row(
+        "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
+        params![agent_id],
+        |r| r.get(0),
+    ).unwrap_or(0);
+    Ok(n)
+}
+
+/// Read the current turn counter without incrementing.
+pub fn get_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
+    let conn = db.lock().unwrap();
+    let n: i64 = conn.query_row(
+        "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
+        params![agent_id],
+        |r| r.get(0),
+    ).unwrap_or(0);
+    Ok(n)
+}
+
+/// Promote 'short' blocks idle for >= threshold turns to 'long'.
+/// 'pinned' blocks are never promoted. Returns number of blocks promoted.
+pub fn promote_stale_blocks(db: &Db, agent_id: &str, current_turn: i64, threshold: i64) -> Result<u64> {
+    let conn = db.lock().unwrap();
+    let n = conn.execute(
+        "UPDATE shared_memory_blocks SET tier = 'long'
+         WHERE tier = 'short'
+           AND (? - last_turn) >= ?
+           AND id IN (
+               SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?
+           )",
+        params![current_turn, threshold, agent_id],
+    )?;
+    Ok(n as u64)
+}
+
+/// Fetch pinned + short-term blocks, pinned first then short by last_turn DESC.
+/// Returns (label, value, description, tier, last_turn).
+pub fn get_active_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String, String, i64)>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT b.label, b.value, b.description, b.tier, b.last_turn
+         FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.tier IN ('pinned', 'short')
+         ORDER BY CASE b.tier WHEN 'pinned' THEN 0 ELSE 1 END ASC, b.last_turn DESC"
+    )?;
+    let rows = stmt.query_map(params![agent_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2).unwrap_or_default(),
+            row.get::<_, String>(3).unwrap_or_else(|_| "short".to_string()),
+            row.get::<_, i64>(4).unwrap_or(0),
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Fetch long-term blocks: label + first 80 chars of value, ordered by last_turn DESC.
+/// Returns (label, excerpt, turns_idle) where turns_idle = current_turn - last_turn.
+pub fn get_long_term_excerpts(db: &Db, agent_id: &str, current_turn: i64) -> Result<Vec<(String, String, i64)>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT b.label, b.value, b.last_turn
+         FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.tier = 'long'
+         ORDER BY b.last_turn DESC"
+    )?;
+    let rows = stmt.query_map(params![agent_id], |row| {
+        let label: String = row.get(0)?;
+        let value: String = row.get(1).unwrap_or_default();
+        let last_turn: i64 = row.get(2).unwrap_or(0);
+        // Take first 80 chars as excerpt
+        let excerpt: String = value.chars().take(80).collect();
+        let excerpt = if value.chars().count() > 80 { format!("{excerpt}…") } else { excerpt };
+        Ok((label, excerpt, last_turn))
+    })?;
+    let rows: Vec<(String, String, i64)> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows.into_iter().map(|(l, e, lt)| (l, e, current_turn - lt)).collect())
+}
+
+/// Explicitly set a block's tier and optionally reset last_turn to current_turn.
+pub fn set_memory_tier(db: &Db, agent_id: &str, label: &str, tier: &str, reset_turn: bool) -> Result<bool> {
+    let conn = db.lock().unwrap();
+    let current_turn: i64 = conn.query_row(
+        "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
+        params![agent_id],
+        |r| r.get(0),
+    ).unwrap_or(0);
+    let n = if reset_turn {
+        conn.execute(
+            "UPDATE shared_memory_blocks SET tier = ?1, last_turn = ?2
+             WHERE label = ?3 AND id IN (
+                 SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?4
+             )",
+            params![tier, current_turn, label, agent_id],
+        )?
+    } else {
+        conn.execute(
+            "UPDATE shared_memory_blocks SET tier = ?1
+             WHERE label = ?2 AND id IN (
+                 SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?3
+             )",
+            params![tier, label, agent_id],
+        )?
+    };
+    Ok(n > 0)
+}
+
+/// Returns (label, value, description, tier) for all blocks, ordered by tier priority then label.
+/// Used by the API get_memory endpoint to expose tier information.
+pub fn get_memory_blocks_full(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String, String)>> {
+    let conn = db.lock().unwrap();
+    let mut stmt = conn.prepare(
+        "SELECT b.label, b.value, b.description, b.tier
+         FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1
+         ORDER BY CASE b.tier WHEN 'pinned' THEN 0 WHEN 'short' THEN 1 ELSE 2 END, b.last_turn DESC"
+    )?;
+    let rows = stmt.query_map(params![agent_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2).unwrap_or_default(),
+            row.get::<_, String>(3).unwrap_or_else(|_| "short".to_string()),
         ))
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

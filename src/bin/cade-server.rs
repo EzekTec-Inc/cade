@@ -85,6 +85,7 @@ async fn main() -> Result<()> {
         llm_router,
         config: Arc::new(config.clone()),
         rate_limiter: RateLimiter::from_env(),
+        memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
     };
 
     let trace_layer = TraceLayer::new_for_http()

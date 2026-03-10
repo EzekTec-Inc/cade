@@ -43,6 +43,7 @@ pub fn router(state: AppState) -> Router {
         // Agent memory
         .route("/v1/agents/:id/memory",                             get(agents::search_memory_handler))
         .route("/v1/agents/:id/memory/:label",                      put(agents::upsert_memory).delete(agents::delete_memory))
+        .route("/v1/agents/:id/memory/:label/tier",                 put(agents::set_memory_tier_handler))
         .route("/v1/agents/:id/memory/:label/history",              get(agents::get_memory_history))
         .route("/v1/agents/:id/memory/:label/restore/:rev_id",      put(agents::restore_memory_revision))
         // Conversations
