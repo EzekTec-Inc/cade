@@ -152,8 +152,8 @@ pub fn pricing_for_model(model_id: &str) -> ModelPricing {
             ModelPricing { input:  3.00, output: 15.00, cache_read: 0.30,  cache_write:  3.75 },
         m if m.starts_with("openai/") =>
             ModelPricing { input:  2.50, output: 10.00, cache_read: 1.25,  cache_write:  0.0 },
-        m if m.starts_with("gemini/") =>
-            ModelPricing { input:  1.25, output:  5.00, cache_read: 0.31,  cache_write:  0.0 },
+        m if m.starts_with("gemini/") || m.starts_with("gemini-") =>
+            ModelPricing { input:  1.25, output: 10.00, cache_read: 0.31,  cache_write:  0.0 },
         _ =>
             ModelPricing { input:  0.0,  output:  0.0,  cache_read: 0.0,   cache_write:  0.0 },
     }

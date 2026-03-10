@@ -4,7 +4,9 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::pin::Pin;
+use std::sync::{Arc, Mutex};
 use tokio_stream::Stream;
 
 use super::{bare_model, provider_error, retry_with_backoff, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
@@ -80,14 +82,161 @@ pub async fn fetch_gemini_models(api_key: &str) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+/// An in-process record of a Gemini `cachedContent` object.
+struct GeminiCacheEntry {
+    /// The cache resource name returned by the API, e.g. `cachedContents/abc123`.
+    name: String,
+    /// Wall-clock expiry — we use a 55-minute TTL (5-min buffer before the 1-hour server TTL).
+    expires_at: std::time::Instant,
+}
+
 pub struct GeminiProvider {
     client: Client,
     api_key: String,
+    /// Per-content-hash cache of Gemini `cachedContent` names.
+    /// Key   = hash(bare_model + system_text + tool_names)
+    /// Value = (cache_resource_name, expiry)
+    /// Allows every turn to reuse the same system+tools cache rather than
+    /// re-sending them as raw tokens, cutting ~90% of the system/tools cost.
+    content_cache: Arc<Mutex<HashMap<u64, GeminiCacheEntry>>>,
 }
 
 impl GeminiProvider {
     pub fn new(api_key: String) -> Self {
-        Self { client: Client::new(), api_key }
+        Self {
+            client: Client::new(),
+            api_key,
+            content_cache: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    // ── Content-cache helpers ─────────────────────────────────────────────────
+
+    /// Stable 64-bit hash of the cacheable parts of a request.
+    fn content_hash(model: &str, system_text: &Option<String>, tools: &[Value]) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        model.hash(&mut h);
+        system_text.as_deref().unwrap_or("").hash(&mut h);
+        tools.len().hash(&mut h);
+        for t in tools {
+            t["name"].as_str().unwrap_or("").hash(&mut h);
+        }
+        h.finish()
+    }
+
+    /// Check the in-process cache and return the resource name if still valid.
+    fn cached_name(&self, hash: u64) -> Option<String> {
+        let cache = self.content_cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.get(&hash).and_then(|e| {
+            if e.expires_at > std::time::Instant::now() {
+                Some(e.name.clone())
+            } else {
+                None
+            }
+        })
+    }
+
+    /// POST to Gemini's `cachedContents` endpoint and return the resource name.
+    /// Returns `None` on any error (e.g. payload below the minimum token threshold)
+    /// so callers can transparently fall back to sending system+tools inline.
+    async fn create_cache(
+        &self,
+        model: &str,
+        system_text: &Option<String>,
+        tools: &[Value],
+    ) -> Option<String> {
+        let url = format!(
+            "https://generativelanguage.googleapis.com/v1beta/cachedContents?key={}",
+            self.api_key
+        );
+        let mut body = json!({
+            "model": format!("models/{model}"),
+            "ttl": "3600s"
+        });
+        if let Some(sys) = system_text {
+            if !sys.is_empty() {
+                body["systemInstruction"] = json!({"parts": [{"text": sys}]});
+            }
+        }
+        if !tools.is_empty() {
+            body["tools"] = json!([{"functionDeclarations": tools}]);
+        }
+
+        let resp = match self.client.post(&url).json(&body).send().await {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::debug!("Gemini cache POST failed: {e}");
+                return None;
+            }
+        };
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            // Log at debug — this is expected when payload is below the min-token threshold
+            tracing::debug!("Gemini cache creation {status}: {}", &text[..text.len().min(300)]);
+            return None;
+        }
+        let json: Value = resp.json().await.ok()?;
+        json["name"].as_str().map(String::from)
+    }
+
+    /// Return a valid cache resource name for the given request, creating one if needed.
+    /// Falls back to `None` (= send system+tools inline) if caching is unavailable.
+    async fn get_or_create_cache(
+        &self,
+        model: &str,
+        system_text: &Option<String>,
+        tools: &[Value],
+    ) -> Option<String> {
+        // Nothing to cache
+        if system_text.as_ref().map_or(true, |s| s.is_empty()) && tools.is_empty() {
+            return None;
+        }
+        let hash = Self::content_hash(model, system_text, tools);
+
+        // Fast path: valid cache entry already in memory
+        if let Some(name) = self.cached_name(hash) {
+            tracing::debug!("Gemini cache hit: {name}");
+            return Some(name);
+        }
+
+        // Slow path: create a new cache entry
+        let name = self.create_cache(model, system_text, tools).await?;
+        tracing::debug!("Gemini cache created: {name}");
+
+        // Store with 55-min TTL (5-min buffer before the 1-hour server TTL)
+        let expires_at = std::time::Instant::now() + std::time::Duration::from_secs(3300);
+        let mut cache = self.content_cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.insert(hash, GeminiCacheEntry { name: name.clone(), expires_at });
+
+        Some(name)
+    }
+
+    /// Build the `body["tools"]` / `body["systemInstruction"]` sections,
+    /// OR inject a `cachedContent` reference if a valid cache exists.
+    /// Returns the (possibly modified) body.
+    async fn apply_system_and_tools(
+        &self,
+        model: &str,
+        mut body: Value,
+        system_text: &Option<String>,
+        tools: &[Value],
+    ) -> Value {
+        let cache_name = self.get_or_create_cache(model, system_text, tools).await;
+        if let Some(name) = cache_name {
+            // Gemini requires that cachedContent be set AND systemInstruction/tools be absent
+            body["cachedContent"] = json!(name);
+        } else {
+            // Inline fallback
+            if let Some(sys) = system_text {
+                body["systemInstruction"] = json!({"parts": [{"text": sys}]});
+            }
+            if !tools.is_empty() {
+                body["tools"] = json!([{"functionDeclarations": tools}]);
+            }
+        }
+        body
     }
 
     fn url(&self, model: &str, stream: bool) -> String {
@@ -163,10 +312,12 @@ impl GeminiProvider {
                         let mut fc = serde_json::Map::new();
                         fc.insert("name".to_string(), json!(tc.name));
                         fc.insert("args".to_string(), tc.arguments.clone());
+                        let mut part = serde_json::Map::new();
+                        part.insert("functionCall".to_string(), Value::Object(fc));
                         if let Some(sig) = &tc.thought_signature {
-                            fc.insert("thought_signature".to_string(), json!(sig));
+                            part.insert("thought_signature".to_string(), json!(sig));
                         }
-                        all_parts.push(json!({ "functionCall": fc }));
+                        all_parts.push(Value::Object(part));
                     }
                     // If the immediately preceding contents entry is already a model
                     // turn (e.g., a text-only assistant message that preceded this
@@ -221,11 +372,12 @@ impl GeminiProvider {
                     content = Some(text.to_string());
                 }
                 if let Some(fc) = part.get("functionCall") {
+                    let thought_signature = part["thought_signature"].as_str().map(String::from);
                     tool_calls.push(LlmToolCall {
                         id:                uuid::Uuid::new_v4().to_string(),
                         name:              fc["name"].as_str().unwrap_or("").to_string(),
                         arguments:         fc["args"].clone(),
-                        thought_signature: fc["thought_signature"].as_str().map(String::from),
+                        thought_signature,
                     });
                 }
             }
@@ -248,13 +400,10 @@ impl LlmProvider for GeminiProvider {
             })
         }).collect();
 
-        let mut body = json!({ "contents": contents });
-        if let Some(sys) = &system_text {
-            body["systemInstruction"] = json!({"parts": [{"text": sys}]});
-        }
-        if !tools.is_empty() {
-            body["tools"] = json!([{"functionDeclarations": tools}]);
-        }
+        let base_body = json!({ "contents": contents });
+        let body = self.apply_system_and_tools(
+            bare_model(&req.model), base_body, &system_text, &tools
+        ).await;
 
         let url = self.url(&req.model, false);
         retry_with_backoff("Gemini::complete", 3, std::time::Duration::from_secs(1), |_| {
@@ -285,13 +434,10 @@ impl LlmProvider for GeminiProvider {
             json!({"name": s["name"], "description": s["description"], "parameters": params})
         }).collect();
 
-        let mut body = json!({ "contents": contents });
-        if let Some(sys) = &system_text {
-            body["systemInstruction"] = json!({"parts": [{"text": sys}]});
-        }
-        if !tools.is_empty() {
-            body["tools"] = json!([{"functionDeclarations": tools}]);
-        }
+        let base_body = json!({ "contents": contents });
+        let body = self.apply_system_and_tools(
+            bare_model(&req_model), base_body, &system_text, &tools
+        ).await;
 
         let url = self.url(&req_model, true);
         let resp = retry_with_backoff("Gemini::stream", 3, std::time::Duration::from_secs(1), |_| {
@@ -344,7 +490,13 @@ impl LlmProvider for GeminiProvider {
                             if let Some(parts) = candidate["content"]["parts"].as_array() {
                                 for part in parts {
                                     if let Some(text) = part["text"].as_str() {
-                                        if !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
+                                        if !text.is_empty() {
+                                            if part["thought"].as_bool() == Some(true) {
+                                                yield Ok(StreamChunk::Reasoning(text.to_string()));
+                                            } else {
+                                                yield Ok(StreamChunk::Text(text.to_string()));
+                                            }
+                                        }
                                     }
                                     if let Some(fc) = part.get("functionCall") {
                                         let name = fc["name"].as_str().unwrap_or("").to_string();
@@ -357,10 +509,7 @@ impl LlmProvider for GeminiProvider {
                                                 serde_json::Value::Object(Default::default())
                                             }
                                         };
-                                        let thought_signature = part
-                                            .get("functionCall")
-                                            .and_then(|fc| fc["thought_signature"].as_str())
-                                            .map(String::from);
+                                        let thought_signature = part["thought_signature"].as_str().map(String::from);
                                         yield Ok(StreamChunk::ToolCall(LlmToolCall {
                                             id: uuid::Uuid::new_v4().to_string(),
                                             name,
