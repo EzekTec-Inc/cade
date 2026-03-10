@@ -165,6 +165,10 @@ pub struct LocalSettings {
     pub pinned_agents: Vec<PinnedAgent>,
     #[serde(default)]
     pub hooks: HooksConfig,
+    /// Local MCP server overrides — gitignored, highest priority.
+    /// Overrides project and global settings; use for machine-local servers.
+    #[serde(default, rename = "mcpServers")]
+    pub mcp_servers: std::collections::HashMap<String, McpServerConfig>,
 }
 
 pub struct SettingsManager {
@@ -190,12 +194,16 @@ impl SettingsManager {
         Ok(Self { global_path, project_path, local_path, global, project, local })
     }
 
-    /// Merged MCP servers: project overrides global (same key = project wins).
+    /// Merged MCP servers: local > project > global (same key = higher priority wins).
     /// Disabled servers are excluded.
     pub fn merged_mcp_servers(&self) -> std::collections::HashMap<String, McpServerConfig> {
         let mut merged = self.global.mcp_servers.clone();
         // Project overrides global
         for (k, v) in &self.project.mcp_servers {
+            merged.insert(k.clone(), v.clone());
+        }
+        // Local overrides project (highest priority — gitignored)
+        for (k, v) in &self.local.mcp_servers {
             merged.insert(k.clone(), v.clone());
         }
         // Remove disabled entries

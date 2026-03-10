@@ -18,6 +18,8 @@
 //! explaining the situation. A `tracing::warn!` is emitted for each
 //! reconnect attempt and a `tracing::error!` when a server is disabled.
 
+pub mod watcher;
+
 use anyhow::{Context, Result};
 use rmcp::{
     RoleClient, ServiceExt,
@@ -86,6 +88,18 @@ struct McpServer {
 pub struct McpManager {
     /// Interior-mutable server list so `call_tool(&self)` can reconnect.
     servers: RwLock<Vec<McpServer>>,
+    /// Set to `true` when tool schemas change after a successful reconnect.
+    /// The REPL polls this flag each tick and re-registers tools when set.
+    pub schemas_dirty: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Summary returned by `McpManager::reload()` for display in the REPL.
+#[derive(Debug, Default)]
+pub struct ReloadSummary {
+    pub started: Vec<String>,
+    pub stopped: Vec<String>,
+    pub kept:    Vec<String>,
+    pub failed:  Vec<String>,
 }
 
 impl McpManager {
@@ -114,12 +128,87 @@ impl McpManager {
             }
         }
 
-        McpManager { servers: RwLock::new(servers) }
+        McpManager {
+            servers: RwLock::new(servers),
+            schemas_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
     }
 
     /// No-op (empty) manager — used when no servers are configured.
     pub fn empty() -> Self {
-        McpManager { servers: RwLock::new(vec![]) }
+        McpManager {
+            servers: RwLock::new(vec![]),
+            schemas_dirty: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+
+    /// Reload MCP servers from a new config map.
+    ///
+    /// - Servers whose key **and** command are unchanged are kept as-is.
+    /// - Servers no longer in `new_configs` are dropped (killing the child process).
+    /// - New or changed servers are (re-)started.
+    ///
+    /// Returns a `ReloadSummary` suitable for display in the REPL.
+    pub async fn reload(
+        &self,
+        new_configs: &HashMap<String, McpServerConfig>,
+    ) -> ReloadSummary {
+        let mut summary = ReloadSummary::default();
+
+        // Sort new configs for deterministic startup order
+        let mut entries: Vec<(&String, &McpServerConfig)> = new_configs.iter().collect();
+        entries.sort_by_key(|(k, _)| k.as_str());
+
+        // Drain the current server list — we'll rebuild it
+        let mut old_servers: Vec<McpServer> = {
+            let mut servers = self.servers.write().await;
+            std::mem::take(&mut *servers)
+        };
+
+        // Index old servers by key for O(1) lookup
+        let mut old_by_key: HashMap<String, McpServer> = old_servers
+            .drain(..)
+            .map(|s| (s.key.clone(), s))
+            .collect();
+
+        let mut new_servers: Vec<McpServer> = Vec::new();
+
+        for (key, config) in &entries {
+            // Keep existing connection if the command is unchanged and server is healthy
+            if let Some(existing) = old_by_key.remove(*key) {
+                if existing.command == config.command && !existing.disabled {
+                    summary.kept.push(key.to_string());
+                    new_servers.push(existing);
+                    continue;
+                }
+                // Command changed or server was disabled — drop and restart
+            }
+
+            // Start a new connection
+            match Self::connect_server(key, config).await {
+                Ok(server) => {
+                    info!("MCP reload: started server '{key}' — {} tool(s)", server.tools.len());
+                    summary.started.push(key.to_string());
+                    new_servers.push(server);
+                }
+                Err(e) => {
+                    warn!("MCP reload: server '{key}' failed to start: {e}");
+                    summary.failed.push(key.to_string());
+                }
+            }
+        }
+
+        // Servers remaining in old_by_key were not in new_configs — they are stopped
+        for key in old_by_key.keys() {
+            info!("MCP reload: stopping server '{key}'");
+            summary.stopped.push(key.clone());
+        }
+        // Dropping old_by_key drops the McpServer values, killing child processes
+
+        // Install rebuilt server list
+        *self.servers.write().await = new_servers;
+
+        summary
     }
 
     /// Returns true if any servers are configured.
@@ -219,6 +308,14 @@ impl McpManager {
             );
             tokio::time::sleep(tokio::time::Duration::from_secs(RECONNECT_DELAY_SECS)).await;
 
+            // Capture old tool names before reconnect (for schema diff after replacement)
+            let old_tool_names: std::collections::HashSet<String> = {
+                let s = self.servers.read().await;
+                s.get(server_idx)
+                    .map(|srv| srv.tools.iter().map(|t| t.prefixed_name.clone()).collect())
+                    .unwrap_or_default()
+            };
+
             // Re-read config for reconnect
             let (key, config) = {
                 let servers = self.servers.read().await;
@@ -249,6 +346,8 @@ impl McpManager {
                         // Tool disappeared after reconnect — server API changed
                         let mut servers = self.servers.write().await;
                         servers[server_idx] = new_server;
+                        // Schema definitely changed (tool vanished) — signal REPL
+                        self.schemas_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
                         return Some(Err(anyhow::anyhow!(
                             "Tool '{prefixed_name}' not found after MCP server reconnect"
                         )));
@@ -258,6 +357,16 @@ impl McpManager {
                     {
                         let mut servers = self.servers.write().await;
                         servers[server_idx] = new_server;
+                        // Check if tool schemas changed — signal REPL to re-register
+                        let new_tool_names: std::collections::HashSet<String> = servers[server_idx]
+                            .tools.iter().map(|t| t.prefixed_name.clone()).collect();
+                        if old_tool_names != new_tool_names {
+                            warn!(
+                                "MCP server '{}' tool schemas changed after reconnect — scheduling re-registration",
+                                key
+                            );
+                            self.schemas_dirty.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
                     }
 
                     return Some(match call_result {
