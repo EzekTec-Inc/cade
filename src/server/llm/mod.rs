@@ -71,6 +71,8 @@ pub struct TokenUsage {
 #[derive(Debug, Clone)]
 pub enum StreamChunk {
     Text(String),
+    /// Reasoning/thinking content emitted before the assistant response.
+    Reasoning(String),
     ToolCall(LlmToolCall),
     /// Token usage reported at end of stream (before Done).
     Usage(TokenUsage),

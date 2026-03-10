@@ -2230,7 +2230,7 @@ fn render_line_to_text(rl: &RenderLine, width: usize, expand_all: bool, out: &mu
         }
         RenderLine::Pair { label, value } => {
             out.push(Line::from(vec![
-                Span::styled(format!("  {label:<20}"), Style::default().fg(RC::DarkGray)),
+                Span::styled(format!("  {label:<24}"), Style::default().fg(RC::DarkGray)),
                 Span::styled(value.clone(), Style::default().fg(RC::White)),
             ]));
         }

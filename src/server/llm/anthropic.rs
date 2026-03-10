@@ -248,6 +248,8 @@ impl LlmProvider for AnthropicProvider {
             let mut tool_id = String::new();
             let mut tool_name = String::new();
             let mut tool_args = String::new();
+            let mut thinking_text = String::new();
+            let mut in_thinking = false;
             // Accumulate token usage across message_start + message_delta
             let mut input_tokens: u32 = 0;
             let mut output_tokens: u32 = 0;
@@ -287,17 +289,35 @@ impl LlmProvider for AnthropicProvider {
                                         tool_args.push_str(partial);
                                     }
                                 }
+                                "thinking_delta" => {
+                                    if let Some(t) = event["delta"]["thinking"].as_str() {
+                                        thinking_text.push_str(t);
+                                    }
+                                }
                                 _ => {}
                             }
                         }
                         "content_block_start" => {
-                            if event["content_block"]["type"].as_str() == Some("tool_use") {
-                                tool_id   = event["content_block"]["id"].as_str().unwrap_or("").to_string();
-                                tool_name = event["content_block"]["name"].as_str().unwrap_or("").to_string();
-                                tool_args.clear();
+                            match event["content_block"]["type"].as_str().unwrap_or("") {
+                                "tool_use" => {
+                                    tool_id   = event["content_block"]["id"].as_str().unwrap_or("").to_string();
+                                    tool_name = event["content_block"]["name"].as_str().unwrap_or("").to_string();
+                                    tool_args.clear();
+                                }
+                                "thinking" => {
+                                    in_thinking = true;
+                                    thinking_text.clear();
+                                }
+                                _ => {}
                             }
                         }
                         "content_block_stop" => {
+                            if in_thinking {
+                                if !thinking_text.is_empty() {
+                                    yield Ok(StreamChunk::Reasoning(std::mem::take(&mut thinking_text)));
+                                }
+                                in_thinking = false;
+                            }
                             if !tool_name.is_empty() {
                                 let args: Value = serde_json::from_str(&tool_args)
                                     .unwrap_or_else(|e| {
