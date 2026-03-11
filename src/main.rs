@@ -603,10 +603,7 @@ async fn main() -> Result<()> {
         .as_ref()
         .map(PathBuf::from)
         .unwrap_or_else(|| cwd.join(SKILLS_DIR));
-    let loaded_skills = discover_all_skills(&cwd, None, None);
-    if !loaded_skills.is_empty() {
-        println!("Loaded {} skill(s)", loaded_skills.len());
-    }
+    let initial_loaded_skills = discover_all_skills(&cwd, None, None);
 
     // Default model: CLI flag > CADE_DEFAULT_MODEL env > server's detected model
     let default_model = args
@@ -629,7 +626,7 @@ async fn main() -> Result<()> {
 
     // Skills listing — compact (names + descriptions only), not full bodies.
     // The agent uses load_skill(id) to pull full content on-demand.
-    let skills_block = skills_listing(&loaded_skills);
+    let skills_block = skills_listing(&initial_loaded_skills);
 
     // Agent resolution — helper closure avoids repeating the create logic
     let make_req = |model: String, desc: &str| {
@@ -727,6 +724,20 @@ async fn main() -> Result<()> {
         settings.set_last_agent(&a.id)?;
         a
     };
+
+    let loaded_skills = discover_all_skills(&cwd, Some(&agent.id), None);
+    if !loaded_skills.is_empty() {
+        println!("Loaded {} skill(s)", loaded_skills.len());
+    }
+    let updated_skills_block = skills_listing(&loaded_skills);
+    let _ = client
+        .upsert_memory(
+            &agent.id,
+            "skills",
+            updated_skills_block.as_deref().unwrap_or(""),
+            None,
+        )
+        .await;
 
     // ── Conversation resolution ───────────────────────────────────────────────
     //
