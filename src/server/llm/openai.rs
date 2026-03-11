@@ -10,6 +10,47 @@ use tokio_stream::Stream;
 use super::{bare_model, provider_error, retry_with_backoff, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
+const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
+
+/// Recursively fix JSON Schema fields that OpenAI rejects.
+/// OpenAI requires every object-type node to have a `properties` field.
+/// Missing `properties` on an object causes a 400 "object schema missing properties".
+fn clean_openai_schema(v: &mut Value) {
+    match v {
+        Value::Object(map) => {
+            if map.get("type").and_then(|t| t.as_str()) == Some("object")
+                && !map.contains_key("properties")
+            {
+                map.insert("properties".to_string(), json!({}));
+            }
+            for val in map.values_mut() {
+                clean_openai_schema(val);
+            }
+        }
+        Value::Array(arr) => {
+            for val in arr.iter_mut() {
+                clean_openai_schema(val);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn needs_max_completion_tokens(model: &str) -> bool {
+    let bare = model.to_lowercase();
+    bare.starts_with("gpt-5")
+        || bare.starts_with("o1")
+        || bare.starts_with("o3")
+        || bare.starts_with("o4")
+}
+
+fn needs_responses_api(model: &str) -> bool {
+    let bare = model.to_lowercase();
+    bare.starts_with("gpt-5")
+        || bare == "o1-pro"
+        || bare.starts_with("o3-pro")
+        || bare.starts_with("computer-use-preview")
+}
 
 /// Fetch model IDs from an OpenAI-compatible `/v1/models` endpoint.
 ///
@@ -157,26 +198,140 @@ impl OpenAiProvider {
     }
 
     fn build_tools(req: &CompletionRequest) -> Value {
-        let tools: Vec<Value> = req.tools.iter().map(|s| json!({
-            "type": "function",
-            "function": {
-                "name": s["name"],
-                "description": s["description"],
-                "parameters": s["parameters"]
-            }
-        })).collect();
+        let tools: Vec<Value> = req.tools.iter().map(|s| {
+            let mut params = s["parameters"].clone();
+            clean_openai_schema(&mut params);
+            json!({
+                "type": "function",
+                "function": {
+                    "name": s["name"],
+                    "description": s["description"],
+                    "parameters": params
+                }
+            })
+        }).collect();
         json!(tools)
+    }
+
+    fn to_responses_input(req: &CompletionRequest) -> Value {
+        let items: Vec<Value> = req.messages.iter().map(|m| {
+            match m.role.as_str() {
+                "tool" => json!({
+                    "type": "function_call_output",
+                    "call_id": m.tool_call_id.as_deref().unwrap_or(""),
+                    "output": m.content
+                }),
+                "assistant" if m.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()) => {
+                    let mut items: Vec<Value> = Vec::new();
+                    if !m.content.is_empty() {
+                        items.push(json!({"type": "output_text", "text": m.content}));
+                    }
+                    for tc in m.tool_calls.as_ref().unwrap() {
+                        items.push(json!({
+                            "type": "function_call",
+                            "call_id": tc.id,
+                            "name": tc.name,
+                            "arguments": tc.arguments.to_string()
+                        }));
+                    }
+                    json!({"role": "assistant", "content": items})
+                }
+                _ => json!({"role": m.role, "content": m.content}),
+            }
+        }).collect();
+        json!(items)
+    }
+
+    fn parse_responses_response(body: &Value) -> CompletionResponse {
+        let output = body["output"].as_array().cloned().unwrap_or_default();
+        let mut content: Option<String> = None;
+        let mut tool_calls: Vec<LlmToolCall> = Vec::new();
+        let mut finish_reason = "stop".to_string();
+
+        for item in &output {
+            let item_type = item["type"].as_str().unwrap_or("");
+            match item_type {
+                "message" => {
+                    let parts = item["content"].as_array().cloned().unwrap_or_default();
+                    let mut text = String::new();
+                    for part in &parts {
+                        if part["type"].as_str() == Some("output_text") {
+                            if let Some(t) = part["text"].as_str() {
+                                text.push_str(t);
+                            }
+                        }
+                    }
+                    if !text.is_empty() { content = Some(text); }
+                }
+                "function_call" => {
+                    finish_reason = "tool_calls".to_string();
+                    let name = item["name"].as_str().unwrap_or("").to_string();
+                    let id = item["call_id"].as_str().unwrap_or("").to_string();
+                    let args_str = item["arguments"].as_str().unwrap_or("{}");
+                    let arguments = serde_json::from_str(args_str).unwrap_or_default();
+                    tool_calls.push(LlmToolCall { id, name, arguments, thought_signature: None });
+                }
+                _ => {}
+            }
+        }
+
+        if body["status"].as_str() == Some("incomplete") {
+            finish_reason = body["incomplete_details"]["reason"].as_str().unwrap_or("stop").to_string();
+        }
+
+        CompletionResponse { content, tool_calls, finish_reason }
     }
 }
 
 #[async_trait]
 impl LlmProvider for OpenAiProvider {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
-        let mut body = json!({
-            "model": bare_model(&req.model),
-            "messages": Self::to_openai_messages(req),
-            "max_tokens": req.max_tokens
-        });
+        let bare_model_id = bare_model(&req.model);
+        let use_responses = needs_responses_api(&bare_model_id) && self.base_url == OPENAI_URL;
+
+        if use_responses {
+            let mut body = json!({
+                "model": bare_model_id,
+                "input": Self::to_responses_input(req),
+                "max_output_tokens": req.max_tokens
+            });
+            if !req.tools.is_empty() {
+                body["tools"] = Self::build_tools(req);
+            }
+            return retry_with_backoff("OpenAI::complete", 3, std::time::Duration::from_secs(1), |_| {
+                let client  = self.client.clone();
+                let api_key = self.api_key.clone();
+                let body    = body.clone();
+                async move {
+                    let resp = client
+                        .post(OPENAI_RESPONSES_URL)
+                        .bearer_auth(&api_key)
+                        .json(&body)
+                        .send()
+                        .await?;
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(provider_error("OpenAI", status, &text));
+                    }
+                    Ok(Self::parse_responses_response(&resp.json::<Value>().await?))
+                }
+            }).await;
+        }
+
+        let mut body = if needs_max_completion_tokens(&bare_model_id) {
+            json!({
+                "model": bare_model_id,
+                "messages": Self::to_openai_messages(req),
+                "max_completion_tokens": req.max_tokens
+            })
+        } else {
+            json!({
+                "model": bare_model_id,
+                "messages": Self::to_openai_messages(req),
+                "max_tokens": req.max_tokens
+            })
+        };
         if !req.tools.is_empty() {
             body["tools"] = Self::build_tools(req);
         }
@@ -207,14 +362,150 @@ impl LlmProvider for OpenAiProvider {
         &self,
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
-        let req_model = req.model.clone();   // extracted before async_stream to avoid lifetime capture
-        let mut body = json!({
-            "model": bare_model(&req_model),
-            "messages": Self::to_openai_messages(req),
-            "max_tokens": req.max_tokens,
-            "stream": true,
-            "stream_options": { "include_usage": true }
-        });
+        let req_model = req.model.clone();
+        let bare_model_id = bare_model(&req_model);
+        let use_responses = needs_responses_api(&bare_model_id) && self.base_url == OPENAI_URL;
+
+        if use_responses {
+            let mut body = json!({
+                "model": bare_model_id,
+                "input": Self::to_responses_input(req),
+                "max_output_tokens": req.max_tokens,
+                "stream": true
+            });
+            if !req.tools.is_empty() {
+                body["tools"] = Self::build_tools(req);
+            }
+
+            let resp = retry_with_backoff("OpenAI::stream", 3, std::time::Duration::from_secs(1), |_| {
+                let client  = self.client.clone();
+                let api_key = self.api_key.clone();
+                let body    = body.clone();
+                async move {
+                    let resp = client
+                        .post(OPENAI_RESPONSES_URL)
+                        .bearer_auth(&api_key)
+                        .json(&body)
+                        .send()
+                        .await?;
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(provider_error("OpenAI", status, &text));
+                    }
+                    Ok(resp)
+                }
+            }).await?;
+
+            let mut byte_stream = resp.bytes_stream();
+            let s = stream! {
+                let mut buf = String::new();
+                let mut tool_map: std::collections::BTreeMap<usize, (String, String, String)> =
+                    std::collections::BTreeMap::new();
+
+                while let Some(chunk) = byte_stream.next().await {
+                    let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(anyhow::anyhow!("{e}")); break; } };
+                    buf.push_str(&String::from_utf8_lossy(&chunk));
+
+                    while let Some(pos) = buf.find('\n') {
+                        let line = buf[..pos].trim().to_string();
+                        buf = buf[pos + 1..].to_string();
+
+                        // Responses API uses "event: TYPE\ndata: JSON" format
+                        if let Some(event_type) = line.strip_prefix("event: ") {
+                            let event_type = event_type.trim().to_string();
+                            // Grab the next data line from buf
+                            if let Some(data_pos) = buf.find('\n') {
+                                let data_line = buf[..data_pos].trim().to_string();
+                                buf = buf[data_pos + 1..].to_string();
+                                let data = match data_line.strip_prefix("data: ") { Some(d) => d, None => continue };
+                                let v: Value = match serde_json::from_str(data) { Ok(v) => v, Err(_) => continue };
+
+                                match event_type.as_str() {
+                                    "response.output_text.delta" => {
+                                        if let Some(text) = v["delta"].as_str() {
+                                            if !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
+                                        }
+                                    }
+                                    "response.function_call_arguments.delta" => {
+                                        let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
+                                        let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
+                                        if let Some(a) = v["delta"].as_str() { entry.2.push_str(a); }
+                                    }
+                                    "response.output_item.added" => {
+                                        let item = &v["item"];
+                                        if item["type"].as_str() == Some("function_call") {
+                                            let idx = v["output_index"].as_u64().unwrap_or(0) as usize;
+                                            let entry = tool_map.entry(idx).or_insert_with(|| (String::new(), String::new(), String::new()));
+                                            if let Some(id) = item["call_id"].as_str() { entry.0 = id.to_string(); }
+                                            if let Some(n) = item["name"].as_str() { entry.1 = n.to_string(); }
+                                        }
+                                    }
+                                    "response.completed" => {
+                                        let calls: Vec<(String, String, String)> =
+                                            tool_map.iter().map(|(_, v)| v.clone()).collect();
+                                        tool_map.clear();
+                                        for (id, name, args_str) in calls {
+                                            if !name.is_empty() {
+                                                let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
+                                                    tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
+                                                    serde_json::Value::Object(Default::default())
+                                                });
+                                                yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
+                                            }
+                                        }
+                                        let usage = &v["response"]["usage"];
+                                        let in_tok  = usage["input_tokens"].as_u64().unwrap_or(0) as u32;
+                                        let out_tok = usage["output_tokens"].as_u64().unwrap_or(0) as u32;
+                                        let cache_tok = usage["input_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0) as u32;
+                                        if in_tok > 0 || out_tok > 0 {
+                                            yield Ok(StreamChunk::Usage(TokenUsage {
+                                                input_tokens:       in_tok,
+                                                output_tokens:      out_tok,
+                                                cache_read_tokens:  cache_tok,
+                                                cache_write_tokens: 0,
+                                                model:              req_model.clone(),
+                                            }));
+                                        }
+                                        yield Ok(StreamChunk::Done);
+                                        return;
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
+                let remaining: Vec<(String, String, String)> =
+                    tool_map.iter().map(|(_, v)| v.clone()).collect();
+                for (id, name, args_str) in remaining {
+                    if !name.is_empty() {
+                        let args = serde_json::from_str(&args_str).unwrap_or_default();
+                        yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
+                    }
+                }
+                yield Ok(StreamChunk::Done);
+            };
+            return Ok(Box::pin(s));
+        }
+
+        let mut body = if needs_max_completion_tokens(&bare_model_id) {
+            json!({
+                "model": bare_model_id,
+                "messages": Self::to_openai_messages(req),
+                "max_completion_tokens": req.max_tokens,
+                "stream": true,
+                "stream_options": { "include_usage": true }
+            })
+        } else {
+            json!({
+                "model": bare_model_id,
+                "messages": Self::to_openai_messages(req),
+                "max_tokens": req.max_tokens,
+                "stream": true,
+                "stream_options": { "include_usage": true }
+            })
+        };
         if !req.tools.is_empty() {
             body["tools"] = Self::build_tools(req);
         }

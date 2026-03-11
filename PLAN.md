@@ -991,3 +991,15 @@ to remove the last argument.
 - If context window unknown (no turn yet), shows a friendly message instead of the grid.
 
 **Rollback**: Revert both files to restore the previous minimal implementation.
+
+---
+
+## 2026-03-11 UTC — Support OpenAI responses API, Gemini thought_signature fix, and SQLite FTS rowid fix
+
+**Timestamp (UTC):** 2026-03-11T10:14:00Z
+**Summary:** Added support for OpenAI `/v1/responses` API, removed `thought_signature` from Gemini function calls, and fixed SQLite FTS table creation and message listing.
+**Files modified:** `src/server/llm/openai.rs`, `src/server/llm/gemini.rs`, `src/server/storage/sqlite.rs`
+**Exact reason:** New OpenAI reasoning models require the `/v1/responses` endpoint and stricter JSON schema formatting. Gemini API rejected function calls containing the `thought_signature` field. SQLite FTS tables misaligned with the base `messages` table due to using `id` instead of `rowid`, and message listing was non-deterministic for messages with identical timestamps.
+**Previous behavior:** OpenAI reasoning models failed to execute or return valid schemas. Gemini tool calls included `thought_signature`, causing API rejections. FTS index on `messages` used `content_rowid='id'` which caused mismatches, and `list_messages` had non-deterministic sorting.
+**New behavior:** OpenAI requests correctly route to `/v1/responses` for reasoning models and parse the new SSE format. JSON schemas missing `properties` are automatically fixed. Gemini tool calls omit `thought_signature`. FTS index correctly aligns with `rowid`. `list_messages` sorts deterministically by `created_at DESC, rowid DESC`.
+**Rollback instructions:** Run `git reset --hard HEAD^` after the commit, or manually revert the changes in the three modified files.

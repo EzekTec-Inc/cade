@@ -204,7 +204,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             CREATE VIRTUAL TABLE messages_fts USING fts5(
                 content,
                 content='messages',
-                content_rowid='id'
+                content_rowid='rowid'
             );
             -- Populate initial data
             INSERT INTO messages_fts(rowid, content) SELECT rowid, content FROM messages;
@@ -322,7 +322,7 @@ fn apply_schema(conn: &Connection) -> Result<()> {
         CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
             content,
             content='messages',
-            content_rowid='id'
+            content_rowid='rowid'
         );
 
         CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
@@ -748,11 +748,11 @@ pub fn list_messages(
     let sql = if conversation_id.is_some() {
         "SELECT id, agent_id, conversation_id, role, content FROM messages
          WHERE agent_id = ?1 AND conversation_id = ?2
-         ORDER BY created_at DESC LIMIT ?3"
+         ORDER BY created_at DESC, rowid DESC LIMIT ?3"
     } else {
         "SELECT id, agent_id, conversation_id, role, content FROM messages
          WHERE agent_id = ?1 AND conversation_id IS NULL
-         ORDER BY created_at DESC LIMIT ?3"
+         ORDER BY created_at DESC, rowid DESC LIMIT ?3"
     };
 
     let mut stmt = conn.prepare(sql)?;
