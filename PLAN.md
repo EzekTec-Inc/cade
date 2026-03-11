@@ -1115,3 +1115,15 @@ to remove the last argument.
 - Remove the `seed_blocks` block and `parent_agent_id` variable.
 - Restore `memory_blocks: vec![]` in the `CreateAgentRequest`.
 - Remove the two `upsert_memory` writeback blocks (sync and background paths).
+
+---
+
+## 2026-03-11 UTC — Fix OpenAI Responses API schema formatting for tool calls
+
+**Timestamp (UTC):** 2026-03-11T12:00:00Z
+**Summary:** Fixed the formatting of `function_call` objects in the `to_responses_input` logic for the OpenAI Responses API.
+**Files modified:** `src/server/llm/openai.rs`
+**Exact reason:** The previous implementation incorrectly nested `{"type": "function_call", ...}` inside an assistant message's `content` array when converting to the `/v1/responses` format. This caused OpenAI to return a `400 Bad Request` with `Invalid value: 'function_call'` because `function_call` must be a top-level input item rather than a part of a message's content array.
+**Previous behavior:** An assistant message with tool calls was serialized as a single `{"role": "assistant", "content": [{"type": "function_call", ...}]}` object.
+**New behavior:** Assistant messages with tool calls are now flattened into multiple top-level items in the `input` array: one `{"role": "assistant", "content": text}` item (if there is text), followed by individual `{"type": "function_call", ...}` items.
+**Rollback instructions:** Revert `src/server/llm/openai.rs` to the previous version of `to_responses_input` using `git checkout`.

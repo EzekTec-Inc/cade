@@ -214,17 +214,17 @@ impl OpenAiProvider {
     }
 
     fn to_responses_input(req: &CompletionRequest) -> Value {
-        let items: Vec<Value> = req.messages.iter().map(|m| {
+        let mut items: Vec<Value> = Vec::new();
+        for m in &req.messages {
             match m.role.as_str() {
-                "tool" => json!({
+                "tool" => items.push(json!({
                     "type": "function_call_output",
                     "call_id": m.tool_call_id.as_deref().unwrap_or(""),
                     "output": m.content
-                }),
+                })),
                 "assistant" if m.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()) => {
-                    let mut items: Vec<Value> = Vec::new();
                     if !m.content.is_empty() {
-                        items.push(json!({"type": "output_text", "text": m.content}));
+                        items.push(json!({"role": "assistant", "content": m.content}));
                     }
                     for tc in m.tool_calls.as_ref().unwrap() {
                         items.push(json!({
@@ -234,11 +234,10 @@ impl OpenAiProvider {
                             "arguments": tc.arguments.to_string()
                         }));
                     }
-                    json!({"role": "assistant", "content": items})
                 }
-                _ => json!({"role": m.role, "content": m.content}),
+                _ => items.push(json!({"role": m.role, "content": m.content})),
             }
-        }).collect();
+        }
         json!(items)
     }
 
