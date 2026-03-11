@@ -1003,3 +1003,27 @@ to remove the last argument.
 **Previous behavior:** OpenAI reasoning models failed to execute or return valid schemas. Gemini tool calls included `thought_signature`, causing API rejections. FTS index on `messages` used `content_rowid='id'` which caused mismatches, and `list_messages` had non-deterministic sorting.
 **New behavior:** OpenAI requests correctly route to `/v1/responses` for reasoning models and parse the new SSE format. JSON schemas missing `properties` are automatically fixed. Gemini tool calls omit `thought_signature`. FTS index correctly aligns with `rowid`. `list_messages` sorts deterministically by `created_at DESC, rowid DESC`.
 **Rollback instructions:** Run `git reset --hard HEAD^` after the commit, or manually revert the changes in the three modified files.
+
+---
+
+## 2026-03-11 UTC — Fix skills mechanism: agent-scoped skills discovery and UI edit state
+
+**Timestamp (UTC):** 2026-03-11T10:20:00Z
+**Summary:** Fixed three bugs in the `/skills` mechanism where agent-scoped skills were ignored and UI state was not updated after saving an edited skill.
+**Files modified:** `src/ui/app.rs`, `src/cli/repl.rs`, `src/main.rs`
+**Exact reason:** Agent-scoped skills were being skipped because `discover_all_skills` was incorrectly called with `None` for the agent ID both at startup and during `/skills reload`. In the TUI skills overlay, saving an edit wrote to disk but failed to update the loaded memory snapshot, causing the UI to immediately display the old values.
+**Previous behavior:** Agent-specific skills in `~/.cade/agents/{id}/skills/` never loaded automatically at startup or upon `/skills reload`. Pressing `Ctrl+S` in the `/skills edit` overlay appeared to do nothing because the displayed fields did not update to reflect the saved state.
+**New behavior:** `discover_all_skills` is correctly called with the active agent ID during `/skills reload` and immediately after agent creation/resolution at startup, ensuring agent-scoped skills are discovered. The `skills` listing memory block is kept fresh at startup. The TUI skills overlay updates its local state upon a successful `Ctrl+S` save and shows a success hint.
+**Rollback instructions:** Revert changes in the three modified files manually or use `git checkout HEAD -- src/ui/app.rs src/cli/repl.rs src/main.rs`.
+
+---
+
+## 2026-03-11 UTC — Restore Gemini thought_signature parsing for tool call history
+
+**Timestamp (UTC):** 2026-03-11T10:30:00Z
+**Summary:** Restored `thought_signature` parsing and serialization in the Gemini LLM provider.
+**Files modified:** `src/server/llm/gemini.rs`
+**Exact reason:** The previous change incorrectly removed `thought_signature` from `functionCall` objects in the Gemini provider. However, new Gemini reasoning models (like `Gemini 2.0 Flash Thinking`) emit and require the `thought_signature` field in previous tool call contexts. Removing it caused a `400 Bad Request` from the Gemini API when sending back conversation history containing tool calls.
+**Previous behavior:** `thought_signature` was discarded when parsing streaming or batch responses and omitted when formatting conversation history to send back to the API. This triggered `Gemini 400 Bad Request: Function call is missing a thought_signature in functionCall parts.`
+**New behavior:** `thought_signature` is once again parsed from the `functionCall` part and included when serializing past tool calls into Gemini's `functionCall` request format.
+**Rollback instructions:** Use `git revert HEAD` to undo the commit or manually remove the `thought_signature` serialization in `src/server/llm/gemini.rs`.
