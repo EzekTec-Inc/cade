@@ -315,7 +315,7 @@ impl GeminiProvider {
                         let mut part = serde_json::Map::new();
                         part.insert("functionCall".to_string(), Value::Object(fc));
                         if let Some(sig) = &tc.thought_signature {
-                            part.insert("thought_signature".to_string(), json!(sig));
+                            part.insert("thoughtSignature".to_string(), json!(sig));
                         }
                         all_parts.push(Value::Object(part));
                     }
@@ -372,7 +372,9 @@ impl GeminiProvider {
                     content = Some(text.to_string());
                 }
                 if let Some(fc) = part.get("functionCall") {
-                    let thought_signature = part["thought_signature"].as_str().map(String::from);
+                    let thought_signature = part["thoughtSignature"].as_str()
+                        .or(part["thought_signature"].as_str())
+                        .map(String::from);
                     tool_calls.push(LlmToolCall {
                         id:                uuid::Uuid::new_v4().to_string(),
                         name:              fc["name"].as_str().unwrap_or("").to_string(),
@@ -509,7 +511,9 @@ impl LlmProvider for GeminiProvider {
                                                 serde_json::Value::Object(Default::default())
                                             }
                                         };
-                                        let thought_signature = part["thought_signature"].as_str().map(String::from);
+                                        let thought_signature = part["thoughtSignature"].as_str()
+                                            .or(part["thought_signature"].as_str())
+                                            .map(String::from);
                                         yield Ok(StreamChunk::ToolCall(LlmToolCall {
                                             id: uuid::Uuid::new_v4().to_string(),
                                             name,

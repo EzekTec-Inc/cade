@@ -1146,3 +1146,15 @@ to remove the last argument.
 **Previous behaviour:** Single crate with 16 modules; any change rebuilds everything.
 **New behaviour:** Five workspace crates with isolated build boundaries; touching `cade-cli` does not recompile `cade-server` or `cade-agent`.
 **Rollback instructions:** `git revert HEAD` — removes `crates/` directory and restores original `Cargo.toml` and `src/lib.rs`.
+
+---
+
+## 2026-03-11 UTC — Fix Gemini thought_signature parsing for camelCase
+
+**Timestamp (UTC):** 2026-03-11T19:00:00Z
+**Summary:** Fixed Gemini `400 Bad Request` by properly parsing the `thoughtSignature` key returned by Google's `/v1beta/` API and serializing it correctly when sending back tool history.
+**Files modified:** `crates/cade-server/src/server/llm/gemini.rs`
+**Exact reason:** Google Gemini's API returns `thoughtSignature` in camelCase, but the previous parser looked for `thought_signature`. As a result, the signature was silently dropped. When CADE sent the tool history back to Google, the missing signature caused the API to reject the request with `missing a thought_signature in functionCall parts`.
+**Previous behavior:** `part["thought_signature"]` evaluated to `None` for Gemini reasoning models, causing the `thought_signature` field in `LlmToolCall` to be empty.
+**New behavior:** The parser now checks for both `thoughtSignature` and `thought_signature`. When reconstructing history, it correctly inserts `thoughtSignature` into the `functionCall` part, satisfying the Google API requirements for consecutive tool calls.
+**Rollback instructions:** Revert `crates/cade-server/src/server/llm/gemini.rs` to previous state by replacing `part["thoughtSignature"]` fallback checks with just `part["thought_signature"]`.
