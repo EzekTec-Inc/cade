@@ -1,0 +1,32 @@
+[package]
+name        = "cade-cli"
+version     = "0.2.0"
+edition     = "2021"
+
+[dependencies]
+cade-core.path    = "../cade-core"
+cade-server.path  = "../cade-server"
+cade-agent.path   = "../cade-agent"
+cade-desktop.path = "../cade-desktop"
+
+anyhow.workspace       = true
+serde.workspace        = true
+serde_json.workspace   = true
+tracing.workspace      = true
+tokio.workspace        = true
+tokio-stream.workspace = true
+futures.workspace      = true
+async-trait.workspace  = true
+uuid.workspace         = true
+chrono.workspace       = true
+crossterm.workspace    = true
+ratatui.workspace      = true
+unicode-width.workspace = true
+dirs.workspace         = true
+walkdir.workspace      = true
+ignore.workspace       = true
+notify.workspace       = true
+atty.workspace         = true
+reqwest.workspace      = true
+clap.workspace         = true
+tempfile.workspace     = true

@@ -1,11 +1,94 @@
+[workspace]
+members = [
+    "crates/cade-core",
+    "crates/cade-server",
+    "crates/cade-desktop",
+    "crates/cade-agent",
+    "crates/cade-cli",
+    ".",          # root package — owns the two binaries
+]
+resolver = "2"
+
+[workspace.dependencies]
+# Async
+tokio          = { version = "1", features = ["full"] }
+tokio-stream   = { version = "0.1", features = ["sync"] }
+futures        = "0.3"
+async-stream   = "0.3"
+async-trait    = "0.1"
+
+# HTTP
+reqwest        = { version = "0.12", features = ["json", "stream"] }
+reqwest-eventsource = "0.6"
+
+# Serialisation
+serde          = { version = "1", features = ["derive"] }
+serde_json     = "1"
+
+# Error handling
+anyhow         = "1"
+thiserror      = "2"
+
+# Logging
+tracing        = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# CLI / TUI
+clap           = { version = "4.5", features = ["derive", "env"] }
+crossterm      = { version = "0.28", features = ["event-stream"] }
+ratatui        = { version = "0.29", features = ["crossterm", "scrolling-regions"] }
+unicode-width  = "0.2"
+
+# Filesystem
+dirs           = "5"
+walkdir        = "2"
+globset        = "0.4"
+ignore         = "0.4"
+notify         = "6.1"
+
+# Misc utilities
+uuid           = { version = "1", features = ["v4"] }
+tempfile       = "3"
+chrono         = { version = "0.4", features = ["serde"] }
+regex          = "1"
+dotenvy        = "0.15"
+atty           = "0.2"
+
+# Crypto
+aes-gcm        = "0.10"
+pbkdf2         = { version = "0.12", features = ["simple"] }
+sha2           = "0.10"
+hmac           = "0.12"
+getrandom      = "0.2"
+machine-uid    = "0.3"
+
+# Desktop
+xcap           = "0.8.2"
+image          = "0.25"
+base64         = "0.22"
+notify-rust    = "4"
+ksni           = "0.2"
+
+# Server
+axum           = { version = "0.7", features = ["macros"] }
+tower-http     = { version = "0.5", features = ["cors", "trace"] }
+rusqlite       = { version = "0.31", features = ["bundled"] }
+
+# MCP
+rmcp           = { version = "0.2", features = [
+    "client",
+    "transport-child-process",
+    "transport-io",
+] }
+
 [package]
-name = "cade"
-version = "0.2.0"
-edition = "2021"
-authors = ["Engr. Stephen Ezekwem <stephen.ezekwem@gmail.com>"]
+name        = "cade"
+version     = "0.2.0"
+edition     = "2021"
+authors     = ["Engr. Stephen Ezekwem <stephen.ezekwem@gmail.com>"]
 description = "CADE — Coding AI assistant with Desktop Extensions"
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/EzekTec-Inc/CADE"
+license     = "MIT OR Apache-2.0"
+repository  = "https://github.com/EzekTec-Inc/CADE"
 
 [[bin]]
 name = "cade"
@@ -16,89 +99,40 @@ name = "cade-server"
 path = "src/bin/cade-server.rs"
 
 [dependencies]
-# CLI
-clap = { version = "4.5", features = ["derive", "env"] }
+cade-core    = { path = "crates/cade-core" }
+cade-server  = { path = "crates/cade-server" }
+cade-desktop = { path = "crates/cade-desktop" }
+cade-agent   = { path = "crates/cade-agent" }
+cade-cli     = { path = "crates/cade-cli" }
 
-# Async
-tokio = { version = "1", features = ["full"] }
-futures = "0.3"
-
-# HTTP + Letta API
-reqwest = { version = "0.12", features = ["json", "stream"] }
-reqwest-eventsource = "0.6"
-
-# Serialization
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-
-# Error handling
-anyhow = "1"
-thiserror = "2"
-
-# Terminal / REPL
-crossterm = { version = "0.28", features = ["event-stream"] }
-ratatui = { version = "0.29", features = ["crossterm", "scrolling-regions"] }
-unicode-width = "0.2"   # accurate display-width for emoji + CJK (2-wide chars)
-
-# Logging
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
-
-# Filesystem utilities
-dirs  = "5"
-atty  = "0.2"
-walkdir = "2"
-globset = "0.4"
-ignore = "0.4"
-notify = "6.1"                          # Cross-platform file system watcher (live skill reload)
-
-# Regex (Grep tool)
-regex = "1"
-
-# Env vars
-dotenvy = "0.15"
-
-# Timestamps
-chrono = { version = "0.4", features = ["serde"] }
-
-# Desktop Extensions
-xcap = "0.8.2"                          # Screen capture (cross-platform)
-image = "0.25"                          # Image resizing for screenshots
-base64 = "0.22"                         # Base64-encode screenshots
-notify-rust = "4"                       # OS desktop notifications
-ksni = "0.2"                            # System tray (Linux/DBUS)
-
-# MCP client (Model Context Protocol — for spawning + calling local MCP servers)
-rmcp = { version = "0.2", features = [
-    "client",
-    "transport-child-process",
-    "transport-io",
-] }
-
-# Utilities
-uuid = { version = "1", features = ["v4"] }
-tempfile = "3"
-aes-gcm = "0.10"
-pbkdf2 = { version = "0.12", features = ["simple"] }
-sha2 = "0.10"
-hmac = "0.12"
-getrandom = "0.2"
-machine-uid = "0.3"
-
-# Server (cade-server binary)
-axum             = { version = "0.7", features = ["macros"] }
-tower-http       = { version = "0.5", features = ["cors", "trace"] }
-rusqlite         = { version = "0.31", features = ["bundled"] }
-tokio-stream     = { version = "0.1", features = ["sync"] }
-async-stream     = "0.3"
-async-trait      = "0.1"
+anyhow.workspace       = true
+tokio.workspace        = true
+tracing.workspace      = true
+tracing-subscriber.workspace = true
+clap.workspace         = true
+serde_json.workspace   = true
+dotenvy.workspace      = true
+chrono.workspace       = true
+uuid.workspace         = true
+async-trait.workspace  = true
+tokio-stream.workspace = true
+atty.workspace         = true
+axum.workspace         = true
+tower-http.workspace   = true
 
 [dev-dependencies]
 tokio-test = "0.4"
 
+[profile.dev]
+opt-level = 0
+debug = 1
+
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
-opt-level = 3
-lto = true
-codegen-units = 1
-strip = true      # ← auto-strips on cargo build --release
-panic = "abort"   # ← removes unwinding code (~5-10% savings)
+opt-level       = 3
+lto             = true
+codegen-units   = 1
+strip           = true
+panic           = "abort"

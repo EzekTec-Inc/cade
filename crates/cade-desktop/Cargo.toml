@@ -1,0 +1,17 @@
+[package]
+name        = "cade-desktop"
+version     = "0.2.0"
+edition     = "2021"
+
+[dependencies]
+cade-core.path       = "../cade-core"
+
+anyhow.workspace     = true
+tracing.workspace    = true
+serde_json.workspace = true
+base64.workspace     = true
+image.workspace      = true
+xcap.workspace       = true
+notify-rust.workspace = true
+ksni.workspace       = true
+tokio.workspace      = true

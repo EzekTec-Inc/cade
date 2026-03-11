@@ -1127,3 +1127,22 @@ to remove the last argument.
 **Previous behavior:** An assistant message with tool calls was serialized as a single `{"role": "assistant", "content": [{"type": "function_call", ...}]}` object.
 **New behavior:** Assistant messages with tool calls are now flattened into multiple top-level items in the `input` array: one `{"role": "assistant", "content": text}` item (if there is text), followed by individual `{"type": "function_call", ...}` items.
 **Rollback instructions:** Revert `src/server/llm/openai.rs` to the previous version of `to_responses_input` using `git checkout`.
+
+---
+
+## 2026-03-11 — Cargo workspace split into independent crates
+
+**Timestamp (UTC):** 2026-03-11T18:00:00Z
+**Summary:** Converted the monolithic `cade` crate into a Cargo workspace with five independent member crates to improve incremental compile times.
+**Files modified/added:**
+- `Cargo.toml` (converted to workspace virtual manifest + root package)
+- `src/lib.rs` (re-exports all workspace crates via `pub use`)
+- `crates/cade-core/` — `permissions/`, `settings/`, `toolsets/`, `skills/`, `hooks/`
+- `crates/cade-desktop/` — `desktop/`
+- `crates/cade-server/` — `server/`
+- `crates/cade-agent/` — `agent/`, `tools/`, `subagents/`, `mcp/`
+- `crates/cade-cli/` — `cli/`, `ui/`
+**Reason:** Changing any UI file previously triggered a full recompile of Axum, SQLite, and all LLM provider code. With independent crates, only the affected crate and its dependents recompile.
+**Previous behaviour:** Single crate with 16 modules; any change rebuilds everything.
+**New behaviour:** Five workspace crates with isolated build boundaries; touching `cade-cli` does not recompile `cade-server` or `cade-agent`.
+**Rollback instructions:** `git revert HEAD` — removes `crates/` directory and restores original `Cargo.toml` and `src/lib.rs`.
