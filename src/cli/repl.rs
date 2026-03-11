@@ -2208,10 +2208,10 @@ impl Repl {
 
                             "reload" => {
                                 {
-                                        let new_skills = crate::skills::discover_all_skills(&self.cwd, None, None);
+                                        let agent_id = self.agent_id();
+                                        let new_skills = crate::skills::discover_all_skills(&self.cwd, Some(&agent_id), None);
                                         let prev_count = self.skills.lock().unwrap().len();
                                         let new_count = new_skills.len();
-                                        let agent_id = self.agent_id();
 
                                         let existing = self.client.get_memory(&agent_id).await.unwrap_or_default();
                                         for block in &existing {
@@ -5043,15 +5043,46 @@ impl Repl {
         let call_id_owned = call_id.to_string();
         let bg_results = Arc::clone(&self.background_results);
         let mcp_ref    = std::sync::Arc::clone(&self.mcp);
+        let parent_agent_id = self.agent_id();
 
         let task_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
         let task_id_c = task_id.clone();
         let prompt_preview: String = prompt.chars().take(60).collect();
 
+        // Seed memory: fetch parent agent's pinned + short-term memory blocks
+        // so the sub-agent starts with relevant context from the parent.
+        let seed_blocks: Vec<crate::agent::client::MemoryBlock> = {
+            let parent_blocks = self.client.get_memory(&parent_agent_id).await.unwrap_or_default();
+            parent_blocks.into_iter()
+                .filter(|b| {
+                    // Include pinned and short-tier blocks; skip internal bookkeeping.
+                    let dominated = b.label.starts_with("__");
+                    let tier_ok = b.tier.as_deref().map_or(true, |t| t == "pinned" || t == "short");
+                    !dominated && tier_ok && !b.value.trim().is_empty()
+                })
+                .map(|b| crate::agent::client::MemoryBlock {
+                    label: b.label,
+                    value: {
+                        // Cap each block to keep the seed compact.
+                        let max = 1500;
+                        if b.value.chars().count() > max {
+                            let end = b.value.char_indices().nth(max).map(|(i, _)| i).unwrap_or(b.value.len());
+                            format!("{}…", &b.value[..end])
+                        } else {
+                            b.value
+                        }
+                    },
+                    description: b.description,
+                    tier: None, // server defaults to short
+                })
+                .collect()
+        };
+
         let run_task = {
             let subagent_type_c = subagent_type.clone();
             let task_id_c = task_id.clone();
             let _prompt_preview_c = prompt_preview.clone();
+            let seed_blocks = seed_blocks;
             async move {
                 // Determine agent to use
                 let (sub_agent_id, ephemeral) = if let Some(existing_id) = agent_id_arg {
@@ -5071,7 +5102,7 @@ impl Repl {
                         model,
                         description: Some(format!("Ephemeral subagent: {}", subagent_type_c)),
                         system_prompt: None,
-                        memory_blocks: vec![],
+                        memory_blocks: seed_blocks,
                         tool_ids: vec![],
                     };
                     match client.create_agent(req).await {
@@ -5102,11 +5133,31 @@ impl Repl {
             let sem = std::sync::Arc::clone(&self.subagent_semaphore);
             let bg = bg_results;
             let st = subagent_type.clone();
+            let bg_client = self.client.clone();
+            let bg_parent_id = parent_agent_id.clone();
+            let bg_st_label = subagent_type.clone();
+            let bg_task_id = task_id.clone();
             tokio::spawn(async move {
                 // Permit held for the lifetime of the spawned task
                 let _permit = sem.acquire_owned().await;
                 let (result, is_error) = run_task.await;
                 drop(_permit);
+
+                // Write sub-agent result summary into parent agent's short-term memory.
+                {
+                    let label = format!("subagent:{}:{}", bg_st_label, bg_task_id);
+                    let summary_value = if result.chars().count() > 2000 {
+                        let end = result.char_indices().nth(2000).map(|(i, _)| i).unwrap_or(result.len());
+                        format!("{}…", &result[..end])
+                    } else {
+                        result.clone()
+                    };
+                    let desc = format!("Result from background subagent [{}]", bg_st_label);
+                    let _ = bg_client.upsert_memory(
+                        &bg_parent_id, &label, &summary_value, Some(&desc),
+                    ).await;
+                }
+
                 bg.lock().unwrap().push(BackgroundResult {
                     task_id: task_id.clone(),
                     subagent: st,
@@ -5136,6 +5187,22 @@ impl Repl {
 
             if !is_error {
                 self.tui_ok(format!("  ✓ Subagent [{}] complete", subagent_type));
+            }
+
+            // Write sub-agent result summary into parent agent's short-term memory.
+            // Cap at 2000 chars so it doesn't bloat the parent's memory budget.
+            {
+                let label = format!("subagent:{}:{}", subagent_type, task_id_c);
+                let summary_value = if output.chars().count() > 2000 {
+                    let end = output.char_indices().nth(2000).map(|(i, _)| i).unwrap_or(output.len());
+                    format!("{}…", &output[..end])
+                } else {
+                    output.clone()
+                };
+                let desc = format!("Result from subagent [{}]", subagent_type);
+                let _ = self.client.upsert_memory(
+                    &parent_agent_id, &label, &summary_value, Some(&desc),
+                ).await;
             }
 
             // If hook blocked, append its reason to the output so the agent sees it
