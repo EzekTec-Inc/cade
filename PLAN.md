@@ -1027,3 +1027,91 @@ to remove the last argument.
 **Previous behavior:** `thought_signature` was discarded when parsing streaming or batch responses and omitted when formatting conversation history to send back to the API. This triggered `Gemini 400 Bad Request: Function call is missing a thought_signature in functionCall parts.`
 **New behavior:** `thought_signature` is once again parsed from the `functionCall` part and included when serializing past tool calls into Gemini's `functionCall` request format.
 **Rollback instructions:** Use `git revert HEAD` to undo the commit or manually remove the `thought_signature` serialization in `src/server/llm/gemini.rs`.
+
+---
+
+## 2026-03-11 UTC — Auto-compaction: summarize old turns into memory when context ≥ 98%
+
+**Timestamp (UTC):** 2026-03-11T11:00:00Z
+**Summary:** Added server-side auto-compaction in `build_context`. When assembled message history reaches ≥ 98% of the model's context character budget, the oldest dialogue turns are summarized via a single LLM call and the summary is written into a short-term memory block that ages naturally through the existing memory tier system.
+**Files modified:** `src/server/api/messages.rs`
+**Exact reason:** Context window overflow previously caused silent loss of old turns (hard drop). The model had no way to recall earlier conversation content. This change preserves that content as a compact summary in memory.
+
+### Design
+
+**New constants:**
+- `COMPACT_THRESHOLD: f64 = 0.98` — usage ratio that triggers compaction.
+- `COMPACT_MIN_MESSAGES: usize = 10` — minimum non-system messages before compaction is considered.
+- `COMPACT_KEEP_RECENT: usize = 8` — recent messages kept at full fidelity (never summarized).
+- `COMPACT_COOLDOWN_TURNS: i64 = 5` — minimum turns between successive compactions per agent.
+
+**New function:**
+- `async fn summarize_for_compaction(state, model, chunk) -> Result<String, String>` — formats a slice of `LlmMessage`s as a transcript and asks the same model for a concise summary (≤ 800 words). Caps transcript input at 40% of the model's budget to avoid exceeding the summarizer's own window.
+
+**Integration point:** Inside `build_context`, after the `total_chars` closure is defined and before the existing hard-trim `while` loop:
+1. Compute `usage_ratio = total_chars / context_char_budget`.
+2. If ≥ 98% AND ≥ 10 non-system messages AND cooldown elapsed:
+   - Extract `messages[1..len-8]` as the compaction chunk.
+   - Call `summarize_for_compaction`.
+   - On success: write summary as `summary:compact:turn{N}` short-term memory block; update `__compact_turn` cooldown stamp.
+   - On failure: log warning, fall through to hard trim.
+3. Hard trim always runs afterward to guarantee the final array fits.
+
+**Cooldown mechanism:** Uses a reserved memory block label `__compact_turn` (value = turn number of last compaction). Read from `get_active_blocks`; updated via `upsert_memory_block`. No schema changes.
+
+**Memory lifecycle:** Summary blocks are created as tier `short`. They are injected into the system prompt's memory section on subsequent turns (subject to `SHORT_BUDGET`). After `STALE_THRESHOLD` (40) idle turns they promote to `long` (excerpt only). This matches the existing memory aging pipeline exactly.
+
+**Previous behavior:** When `total_chars > context_char_budget`, oldest non-system messages were silently dropped. No summarization. Lost context was irrecoverable within the conversation.
+**New behavior:** Before dropping, CADE attempts a single summarization LLM call. If successful, the summary is stored in short-term memory and available to the model on all subsequent turns. Hard trim still runs as a safety net.
+
+**What this does NOT change:**
+- Sub-agent context management (planned for a later slice).
+- Existing memory tier budgets, aging thresholds, or injection logic.
+- The hard-trim loop itself (still present as fallback).
+- Any public API surface.
+
+**Rollback instructions:** Remove the `COMPACT_*` constants, the `summarize_for_compaction` function, and the `// Auto-compaction` block inside `build_context`. Restore the original `while total_chars(...)` loop without the preceding block.
+
+---
+
+## 2026-03-11 UTC — Sub-agent context integration: seed memory + result writeback
+
+**Timestamp (UTC):** 2026-03-11T11:15:00Z
+**Summary:** Ephemeral sub-agents now receive seed memory from the parent agent on creation, and write their result back into the parent agent's short-term memory on completion.
+**Files modified:** `src/cli/repl.rs`
+**Exact reason:** Sub-agents previously started with empty memory (`memory_blocks: vec![]`) and their results were only returned as tool output text. The parent agent had no persistent record of sub-agent work after the tool output scrolled out of context, and sub-agents had no awareness of the parent's ongoing state.
+
+### Changes in `handle_run_subagent`
+
+**1. Seed memory (before sub-agent creation):**
+- Fetch parent agent's memory via `self.client.get_memory(&parent_agent_id)`.
+- Filter to pinned + short-tier blocks, excluding internal bookkeeping labels (prefix `__`).
+- Cap each block value at 1500 chars.
+- Pass the filtered blocks as `memory_blocks` in the `CreateAgentRequest`.
+- Existing agents (via `agent_id` arg) are unaffected — seed only applies to ephemeral creation.
+
+**2. Result writeback (after sub-agent completes):**
+- Both synchronous and background paths now call `self.client.upsert_memory` on the parent agent.
+- Label: `subagent:{type}:{task_id}` (e.g. `subagent:reviewer:a1b2c3d4`).
+- Value: the sub-agent's output, capped at 2000 chars.
+- Description: `"Result from subagent [{type}]"`.
+- The block enters the parent's short-term memory and ages normally through the existing tier pipeline.
+
+**Previous behavior:**
+- Ephemeral sub-agents started with zero memory blocks and no awareness of parent context.
+- Sub-agent results existed only as tool-call output in the parent's conversation history; once trimmed from context they were lost.
+
+**New behavior:**
+- Ephemeral sub-agents inherit the parent's pinned and active memory blocks (compact snapshot).
+- Sub-agent results persist in the parent's short-term memory, accessible via the memory system even after the conversation history is trimmed. They age into long-term/archived memory like any other block.
+
+**What this does NOT change:**
+- Existing (non-ephemeral) agents used via `agent_id` parameter — no seed injection.
+- The headless execution path itself.
+- The sub-agent's own auto-compaction behavior (it uses the same `build_context` as main agents).
+- Any public API surface or DB schema.
+
+**Rollback instructions:** In `handle_run_subagent`:
+- Remove the `seed_blocks` block and `parent_agent_id` variable.
+- Restore `memory_blocks: vec![]` in the `CreateAgentRequest`.
+- Remove the two `upsert_memory` writeback blocks (sync and background paths).

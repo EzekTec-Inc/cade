@@ -1,11 +1,11 @@
 use anyhow::Result;
+use axum::response::sse::Event;
 use axum::{
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response, Sse},
     Json,
 };
-use axum::response::sse::Event;
 
 use serde_json::{json, Value};
 use uuid::Uuid;
@@ -25,10 +25,10 @@ After every tool execution, always provide a plain-text response that explains \
 the result, what you found, or what you are doing next. \
 Never end a turn silently after running a tool.";
 /// Number of DB message rows to load per turn.
-const HISTORY_LIMIT: usize = 60;
+const HISTORY_LIMIT: usize = 80;
 /// Number of messages from the end of history considered "recent".
 /// Tool results inside this window are kept at full fidelity.
-const RECENT_WINDOW: usize = 20;
+const RECENT_WINDOW: usize = 40;
 /// Tool results outside the recent window are trimmed to this many chars.
 /// They have already been processed; re-sending verbatim wastes tokens.
 const STALE_TOOL_RESULT_MAX_CHARS: usize = 300;
@@ -39,9 +39,9 @@ const SHORT_BUDGET: usize = 4_500;
 /// Character budget for the long-term archived index (label + 80-char excerpt).
 const LONG_BUDGET: usize = 1_000;
 /// Turns of inactivity before a short-term block is promoted to long-term.
-const STALE_THRESHOLD: i64 = 20;
+const STALE_THRESHOLD: i64 = 40;
 /// Awareness footer appended to system prompt when any memory tier is present.
-const MEMORY_AWARENESS_FOOTER: &str = "\n\nMemory system: blocks idle for 20+ turns are \
+const MEMORY_AWARENESS_FOOTER: &str = "\n\nMemory system: blocks idle for 40+ turns are \
 archived. The Archived Memory section above lists them with excerpts. Call \
 search_memory(query) when a task may need archived context — retrieved blocks \
 return to active memory automatically. Pin critical reference blocks with \
@@ -61,6 +61,22 @@ const MIN_CONTEXT_CHARS: usize = 8_000;
 /// which matches Gemini 1 M context exactly and gives Gemini 2 M users ~50%
 /// of their window.  Claude 200 K is unaffected (200_000 × 3 = 600_000 < cap).
 const MAX_CONTEXT_CHARS: usize = 3_000_000;
+
+// ── Auto-compaction constants ─────────────────────────────────────────────────
+
+/// Context usage ratio at which auto-compaction (summarization) triggers.
+/// 0.98 means: when the assembled messages use ≥ 98% of the char budget.
+const COMPACT_THRESHOLD: f64 = 0.98;
+/// Minimum number of user+assistant messages that must exist before
+/// compaction is even considered (avoids summarizing trivially short sessions).
+const COMPACT_MIN_MESSAGES: usize = 10;
+/// Number of recent messages to keep at full fidelity (never summarized).
+/// Must be ≥ 4 so the model always sees the latest user+assistant exchange.
+const COMPACT_KEEP_RECENT: usize = 8;
+/// Cooldown: minimum number of turns between successive compactions for
+/// the same agent.  Prevents re-summarizing every turn once the threshold
+/// is crossed.
+const COMPACT_COOLDOWN_TURNS: i64 = 5;
 
 // ── Message history sanitizer ─────────────────────────────────────────────────
 //
@@ -83,12 +99,9 @@ fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
         let msg = messages[i].clone();
 
         match msg.role.as_str() {
-            "assistant"
-                if msg.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()) =>
-            {
+            "assistant" if msg.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()) => {
                 let tool_calls = msg.tool_calls.as_ref().unwrap();
-                let expected_ids: Vec<String> =
-                    tool_calls.iter().map(|tc| tc.id.clone()).collect();
+                let expected_ids: Vec<String> = tool_calls.iter().map(|tc| tc.id.clone()).collect();
 
                 // Consume ALL immediately-following tool rows (may be duplicated/partial)
                 let mut j = i + 1;
@@ -97,7 +110,8 @@ fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
                     std::collections::HashMap::new();
                 while j < messages.len() && messages[j].role == "tool" {
                     if let Some(id) = &messages[j].tool_call_id {
-                        found.entry(id.clone())
+                        found
+                            .entry(id.clone())
                             .or_insert_with(|| messages[j].content.clone());
                     }
                     j += 1;
@@ -125,10 +139,7 @@ fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
             "tool" => {
                 // Orphaned tool_result — no preceding assistant with a matching tool_use.
                 // Drop it; it would make Anthropic return 400.
-                tracing::warn!(
-                    "Dropping orphaned tool_result (id={:?})",
-                    msg.tool_call_id
-                );
+                tracing::warn!("Dropping orphaned tool_result (id={:?})", msg.tool_call_id);
                 i += 1;
             }
 
@@ -140,6 +151,90 @@ fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
     }
 
     result
+}
+
+// ── Auto-compaction: summarize old turns into short-term memory ────────────────
+
+/// Summarize a slice of conversation messages into a compact block.
+///
+/// Uses the same LLM provider that the agent normally talks to.
+/// Returns `Ok(summary_text)` on success, or an error (caller should
+/// log and fall back to plain trimming).
+async fn summarize_for_compaction(
+    state: &AppState,
+    model: &str,
+    chunk: &[LlmMessage],
+) -> Result<String, String> {
+    // Format the chunk as a readable transcript for the summarizer.
+    let mut transcript = String::new();
+    for msg in chunk {
+        if msg.role == "system" { continue; }
+        let role_label = match msg.role.as_str() {
+            "user"      => "User",
+            "assistant" => "Assistant",
+            "tool"      => "Tool result",
+            _           => &msg.role,
+        };
+        if !msg.content.is_empty() {
+            transcript.push_str(&format!("[{role_label}]: {}\n\n", msg.content));
+        }
+        if let Some(calls) = &msg.tool_calls {
+            for tc in calls {
+                transcript.push_str(&format!("[{role_label} called {}({})]\n\n",
+                    tc.name, serde_json::to_string(&tc.arguments).unwrap_or_default()));
+            }
+        }
+    }
+
+    if transcript.trim().is_empty() {
+        return Err("empty transcript — nothing to summarize".to_string());
+    }
+
+    // Cap the transcript we send to the summarizer to avoid exceeding its own
+    // context window.  Use at most ~40% of the model's budget for the input.
+    let model_budget = {
+        let w = crate::server::llm::catalogue::context_window_for_model(model) as usize;
+        (w * CHARS_PER_TOKEN).clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)
+    };
+    let max_input_chars = model_budget * 2 / 5;
+    if transcript.chars().count() > max_input_chars {
+        let byte_end = transcript
+            .char_indices()
+            .nth(max_input_chars)
+            .map(|(i, _)| i)
+            .unwrap_or(transcript.len());
+        transcript.truncate(byte_end);
+        transcript.push_str("\n[…transcript truncated for summarization]");
+    }
+
+    let system_msg = LlmMessage {
+        role: "system".to_string(),
+        content: "You are a precise summarizer. Produce a concise summary of the \
+conversation below. Preserve: task goals, key decisions, file paths, \
+code changes, constraints, and current state. Omit: greetings, filler, \
+verbose tool output. Output plain text, no markdown headers. \
+Keep under 800 words.".to_string(),
+        tool_call_id: None,
+        tool_calls: None,
+    };
+    let user_msg = LlmMessage {
+        role: "user".to_string(),
+        content: format!("Summarize this conversation:\n\n{transcript}"),
+        tool_call_id: None,
+        tool_calls: None,
+    };
+
+    let req = crate::server::llm::CompletionRequest {
+        model: model.to_string(),
+        messages: vec![system_msg, user_msg],
+        tools: vec![],
+        max_tokens: 2048,
+    };
+
+    let resp = state.llm.complete(&req).await.map_err(|e| e.to_string())?;
+    resp.content
+        .filter(|s| !s.trim().is_empty())
+        .ok_or_else(|| "summarizer returned empty content".to_string())
 }
 
 // ── Context builder ───────────────────────────────────────────────────────────
@@ -179,36 +274,42 @@ async fn build_context(
     // 3. Pinned + short-term blocks → full value, greedy-packed into budgets.
     let active_blocks = sqlite::get_active_blocks(&state.db, agent_id).unwrap_or_default();
     let mut pinned_parts: Vec<String> = Vec::new();
-    let mut short_parts:  Vec<String> = Vec::new();
+    let mut short_parts: Vec<String> = Vec::new();
     let mut pinned_remaining = PINNED_BUDGET;
-    let mut short_remaining  = SHORT_BUDGET;
-    let mut active_omitted   = 0usize;
+    let mut short_remaining = SHORT_BUDGET;
+    let mut active_omitted = 0usize;
 
     for (label, val, _desc, tier, _lt) in &active_blocks {
-        if val.trim().is_empty() { continue; }
+        if val.trim().is_empty() {
+            continue;
+        }
         if tier == "pinned" {
             let entry = format!("📌 [{label}]\n{val}");
             let chars = entry.chars().count();
             if chars <= pinned_remaining {
                 pinned_remaining -= chars;
                 pinned_parts.push(entry);
-            } else { active_omitted += 1; }
+            } else {
+                active_omitted += 1;
+            }
         } else {
             let entry = format!("[{label}]\n{val}");
             let chars = entry.chars().count();
             if chars <= short_remaining {
                 short_remaining -= chars;
                 short_parts.push(entry);
-            } else { active_omitted += 1; }
+            } else {
+                active_omitted += 1;
+            }
         }
     }
 
     // 4. Long-term archived blocks → label + excerpt only.
-    let long_excerpts = sqlite::get_long_term_excerpts(&state.db, agent_id, current_turn)
-        .unwrap_or_default();
+    let long_excerpts =
+        sqlite::get_long_term_excerpts(&state.db, agent_id, current_turn).unwrap_or_default();
     let mut long_parts: Vec<String> = Vec::new();
     let mut long_remaining = LONG_BUDGET;
-    let mut long_omitted   = 0usize;
+    let mut long_omitted = 0usize;
 
     for (label, excerpt, _idle) in &long_excerpts {
         let entry = if excerpt.trim().is_empty() {
@@ -220,11 +321,14 @@ async fn build_context(
         if chars <= long_remaining {
             long_remaining -= chars;
             long_parts.push(entry);
-        } else { long_omitted += 1; }
+        } else {
+            long_omitted += 1;
+        }
     }
 
     // 5. Assemble system prompt memory sections.
-    let has_any_memory = !pinned_parts.is_empty() || !short_parts.is_empty() || !long_parts.is_empty();
+    let has_any_memory =
+        !pinned_parts.is_empty() || !short_parts.is_empty() || !long_parts.is_empty();
     let base = agent.system_prompt.clone().unwrap_or_default();
 
     let system_core = if !has_any_memory {
@@ -249,7 +353,9 @@ async fn build_context(
         if !long_parts.is_empty() {
             let mut archived = long_parts.join("\n");
             if long_omitted > 0 {
-                archived.push_str(&format!("\n[…{long_omitted} more archived — use /memory or search_memory]"));
+                archived.push_str(&format!(
+                    "\n[…{long_omitted} more archived — use /memory or search_memory]"
+                ));
             }
             sections.push(format!(
                 "# Archived Memory\n{archived}\nUse search_memory(query) to retrieve full archived content.\nAccessed blocks are automatically restored to active memory."
@@ -271,7 +377,9 @@ async fn build_context(
         system_core.hash(&mut h);
         let new_hash = h.finish();
         let mut cache = state.memory_cache.lock().unwrap_or_else(|e| e.into_inner());
-        let entry = cache.entry(agent_id.to_string()).or_insert((0, String::new()));
+        let entry = cache
+            .entry(agent_id.to_string())
+            .or_insert((0, String::new()));
         if entry.0 != new_hash {
             entry.0 = new_hash;
             entry.1 = system_core;
@@ -312,8 +420,15 @@ async fn build_context(
             if msg.role == "tool" {
                 let char_count = msg.content.chars().count();
                 if char_count > STALE_TOOL_RESULT_MAX_CHARS {
-                    let truncated: String = msg.content.chars().take(STALE_TOOL_RESULT_MAX_CHARS).collect();
-                    msg.content = format!("{truncated}\n[…{} chars trimmed]", char_count - STALE_TOOL_RESULT_MAX_CHARS);
+                    let truncated: String = msg
+                        .content
+                        .chars()
+                        .take(STALE_TOOL_RESULT_MAX_CHARS)
+                        .collect();
+                    msg.content = format!(
+                        "{truncated}\n[…{} chars trimmed]",
+                        char_count - STALE_TOOL_RESULT_MAX_CHARS
+                    );
                 }
             }
         }
@@ -330,7 +445,8 @@ async fn build_context(
     };
     tracing::debug!(
         "Context budget for model '{}': {} chars ({} tokens * {})",
-        agent.model, context_char_budget,
+        agent.model,
+        context_char_budget,
         crate::server::llm::catalogue::context_window_for_model(&agent.model),
         CHARS_PER_TOKEN
     );
@@ -338,14 +454,117 @@ async fn build_context(
     // trimmed accurately.  Counting only content underestimates context size
     // when many tool-call schemas / large argument payloads are in history.
     let total_chars = |msgs: &[LlmMessage]| -> usize {
-        msgs.iter().map(|m| {
-            m.content.chars().count()
-                + m.tool_calls.as_deref()
-                    .and_then(|tcs| serde_json::to_string(tcs).ok())
-                    .map(|s| s.len())
-                    .unwrap_or(0)
-        }).sum()
+        msgs.iter()
+            .map(|m| {
+                m.content.chars().count()
+                    + m.tool_calls
+                        .as_deref()
+                        .and_then(|tcs| serde_json::to_string(tcs).ok())
+                        .map(|s| s.len())
+                        .unwrap_or(0)
+            })
+            .sum()
     };
+
+    // ── Auto-compaction: summarize old turns into memory when near capacity ───
+    //
+    // Trigger: total assembled chars ≥ 98% of budget AND enough messages exist
+    // AND cooldown has elapsed since last compaction for this agent.
+    //
+    // On trigger:
+    //   1. Extract the oldest dialogue turns (everything except the recent tail).
+    //   2. Summarize them via a single LLM call.
+    //   3. Write the summary as a short-term memory block (ages normally).
+    //   4. Log the compaction; update cooldown stamp.
+    //
+    // On failure: log a warning and fall through to the existing hard-trim loop.
+    {
+        let current_total = total_chars(&messages);
+        let usage_ratio = current_total as f64 / context_char_budget as f64;
+        let non_system_count = messages.iter().filter(|m| m.role != "system").count();
+
+        if usage_ratio >= COMPACT_THRESHOLD && non_system_count >= COMPACT_MIN_MESSAGES {
+            // Cooldown check: read last compaction turn from a reserved memory block.
+            let last_compact_turn: i64 = {
+                let blocks = sqlite::get_active_blocks(&state.db, agent_id).unwrap_or_default();
+                blocks.iter()
+                    .find(|(label, ..)| label == "__compact_turn")
+                    .and_then(|(_, val, ..)| val.trim().parse::<i64>().ok())
+                    .unwrap_or(0)
+            };
+            let cooldown_ok = (current_turn - last_compact_turn) >= COMPACT_COOLDOWN_TURNS;
+
+            if cooldown_ok {
+                // Determine the chunk to summarize: messages[1..end-COMPACT_KEEP_RECENT]
+                // (skip system prompt at [0], keep recent tail).
+                let keep_start = messages.len().saturating_sub(COMPACT_KEEP_RECENT);
+                if keep_start > 1 {
+                    let chunk = &messages[1..keep_start];
+                    // Only summarize if chunk has meaningful user/assistant content.
+                    let has_dialogue = chunk.iter().any(|m| m.role == "user" || m.role == "assistant");
+
+                    if has_dialogue {
+                        tracing::info!(
+                            "Auto-compaction triggered for agent '{}': usage {:.0}% ({}/{} chars), \
+                             summarizing {} messages",
+                            agent_id,
+                            usage_ratio * 100.0,
+                            current_total,
+                            context_char_budget,
+                            chunk.len(),
+                        );
+
+                        match summarize_for_compaction(state, &agent.model, chunk).await {
+                            Ok(summary) => {
+                                // Write summary into short-term memory.
+                                let label = format!(
+                                    "summary:compact:turn{}",
+                                    current_turn
+                                );
+                                let desc = Some("Auto-compacted conversation history");
+                                let _ = sqlite::upsert_memory_block(
+                                    &state.db,
+                                    agent_id,
+                                    &label,
+                                    &summary,
+                                    desc,
+                                    None,
+                                );
+                                // Update cooldown stamp.
+                                let _ = sqlite::upsert_memory_block(
+                                    &state.db,
+                                    agent_id,
+                                    "__compact_turn",
+                                    &current_turn.to_string(),
+                                    Some("Internal: last auto-compaction turn"),
+                                    None,
+                                );
+                                tracing::info!(
+                                    "Auto-compaction complete for agent '{}': summary={} chars, \
+                                     stored as '{}'",
+                                    agent_id,
+                                    summary.chars().count(),
+                                    label,
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Auto-compaction summarization failed for agent '{}': {}. \
+                                     Falling back to hard trim.",
+                                    agent_id,
+                                    e,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Hard trim: drop oldest non-system messages until total fits the budget.
+    // This always runs (whether or not compaction happened above) to guarantee
+    // the final message array respects the model's context window.
     while total_chars(&messages) > context_char_budget && messages.len() > 3 {
         // messages[0] is always the system prompt — remove messages[1]
         messages.remove(1);
@@ -359,14 +578,17 @@ async fn build_context(
     }
 
     // Tool schemas — use agent-specific tools if wired, else all tools
-    let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, agent_id)
-        .unwrap_or_default();
+    let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, agent_id).unwrap_or_default();
     let all_tools = sqlite::list_tools(&state.db).unwrap_or_default();
     let tool_schemas: Vec<Value> = if agent_tool_ids.is_empty() {
         // Not yet wired → provide all registered tools (backwards-compatible)
-        all_tools.into_iter().filter_map(|t| t.json_schema).collect()
+        all_tools
+            .into_iter()
+            .filter_map(|t| t.json_schema)
+            .collect()
     } else {
-        all_tools.into_iter()
+        all_tools
+            .into_iter()
             .filter(|t| agent_tool_ids.contains(&t.id))
             .filter_map(|t| t.json_schema)
             .collect()
@@ -381,8 +603,7 @@ async fn build_context(
     let tool_schemas: Vec<Value> = if messages.len() > 1 + RECENT_WINDOW {
         // Collect tool names used in the recent window
         let recent_start = messages.len().saturating_sub(RECENT_WINDOW);
-        let mut recently_used: std::collections::HashSet<&str> =
-            std::collections::HashSet::new();
+        let mut recently_used: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for msg in &messages[recent_start..] {
             if let Some(calls) = &msg.tool_calls {
                 for tc in calls {
@@ -390,11 +611,14 @@ async fn build_context(
                 }
             }
         }
-        tool_schemas.into_iter().filter(|schema| {
-            let name = schema["name"].as_str().unwrap_or("");
-            let is_extended = EXTENDED_TOOL_PREFIXES.iter().any(|p| name.starts_with(p));
-            !is_extended || recently_used.contains(name)
-        }).collect()
+        tool_schemas
+            .into_iter()
+            .filter(|schema| {
+                let name = schema["name"].as_str().unwrap_or("");
+                let is_extended = EXTENDED_TOOL_PREFIXES.iter().any(|p| name.starts_with(p));
+                !is_extended || recently_used.contains(name)
+            })
+            .collect()
     } else {
         tool_schemas
     };
@@ -443,15 +667,14 @@ fn db_row_to_llm(row: &MessageRow) -> Vec<LlmMessage> {
         "assistant" => {
             // A single DB row may have both text content and tool_calls
             let text = row.content["content"].as_str().unwrap_or("").to_string();
-            let tool_calls: Option<Vec<LlmToolCall>> =
-                row.content["tool_calls"]
-                    .as_array()
-                    .filter(|arr| !arr.is_empty())  // treat [] same as absent
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|tc| serde_json::from_value(tc.clone()).ok())
-                            .collect()
-                    });
+            let tool_calls: Option<Vec<LlmToolCall>> = row.content["tool_calls"]
+                .as_array()
+                .filter(|arr| !arr.is_empty()) // treat [] same as absent
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|tc| serde_json::from_value(tc.clone()).ok())
+                        .collect()
+                });
             vec![LlmMessage {
                 role: "assistant".to_string(),
                 content: text,
@@ -472,12 +695,18 @@ fn new_msg_id() -> String {
     format!("msg-{}", Uuid::new_v4())
 }
 
-fn persist(state: &AppState, agent_id: &str, conversation_id: Option<&str>, role: &str, content: Value) {
+fn persist(
+    state: &AppState,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+    role: &str,
+    content: Value,
+) {
     let row = MessageRow {
-        id:              new_msg_id(),
-        agent_id:        agent_id.to_string(),
+        id: new_msg_id(),
+        agent_id: agent_id.to_string(),
         conversation_id: conversation_id.map(String::from),
-        role:            role.to_string(),
+        role: role.to_string(),
         content,
     };
     let _ = sqlite::insert_message(&state.db, &row);
@@ -498,16 +727,17 @@ fn resolve_conversation<'a>(
     let conv_id = body["conversation_id"].as_str().filter(|s| !s.is_empty());
     match conv_id {
         None => Ok(None),
-        Some(id) => {
-            match sqlite::get_conversation(&state.db, id) {
-                Ok(Some(_)) => Ok(Some(id.to_string())),
-                Ok(None) => Err(err(
-                    axum::http::StatusCode::NOT_FOUND,
-                    &format!("conversation '{id}' not found for agent '{agent_id}'"),
-                )),
-                Err(e) => Err(err(axum::http::StatusCode::INTERNAL_SERVER_ERROR, &e.to_string())),
-            }
-        }
+        Some(id) => match sqlite::get_conversation(&state.db, id) {
+            Ok(Some(_)) => Ok(Some(id.to_string())),
+            Ok(None) => Err(err(
+                axum::http::StatusCode::NOT_FOUND,
+                &format!("conversation '{id}' not found for agent '{agent_id}'"),
+            )),
+            Err(e) => Err(err(
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                &e.to_string(),
+            )),
+        },
     }
 }
 
@@ -536,27 +766,47 @@ pub async fn send_message(
     // 1. Persist user message FIRST (skip for ephemeral system injections)
     let is_ephemeral = body["ephemeral"].as_bool().unwrap_or(false);
     if !is_ephemeral {
-        persist(&state, &agent_id, conv_id_ref, "user", json!({ "content": input }));
+        persist(
+            &state,
+            &agent_id,
+            conv_id_ref,
+            "user",
+            json!({ "content": input }),
+        );
     }
 
     // 2. Build context from DB (includes the message we just persisted)
-    let (model, messages, tools) = match build_context(&state, &agent_id, conv_id_ref, false).await {
+    let (model, messages, tools) = match build_context(&state, &agent_id, conv_id_ref, false).await
+    {
         Ok(ctx) => ctx,
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
 
     // 3. Call LLM
     let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
-    let req = CompletionRequest { model, messages, tools, max_tokens };
+    let req = CompletionRequest {
+        model,
+        messages,
+        tools,
+        max_tokens,
+    };
     match state.llm.complete(&req).await {
         Ok(resp) => {
-            let tool_calls_json: Vec<Value> = resp.tool_calls.iter()
+            let tool_calls_json: Vec<Value> = resp
+                .tool_calls
+                .iter()
                 .filter_map(|tc| serde_json::to_value(tc).ok())
                 .collect();
-            persist(&state, &agent_id, conv_id_ref, "assistant", json!({
-                "content": resp.content.clone().unwrap_or_default(),
-                "tool_calls": tool_calls_json
-            }));
+            persist(
+                &state,
+                &agent_id,
+                conv_id_ref,
+                "assistant",
+                json!({
+                    "content": resp.content.clone().unwrap_or_default(),
+                    "tool_calls": tool_calls_json
+                }),
+            );
 
             let mut out: Vec<Value> = vec![];
             if let Some(text) = &resp.content {
@@ -585,11 +835,17 @@ async fn handle_tool_return_blocking(
 ) -> Response {
     let tr = &body["tool_return"];
     let call_id = tr["tool_call_id"].as_str().unwrap_or("").to_string();
-    let content  = tr["content"].as_str().unwrap_or("").to_string();
+    let content = tr["content"].as_str().unwrap_or("").to_string();
 
-    persist(state, agent_id, conv_id, "tool", json!({
-        "content": content, "tool_call_id": call_id
-    }));
+    persist(
+        state,
+        agent_id,
+        conv_id,
+        "tool",
+        json!({
+            "content": content, "tool_call_id": call_id
+        }),
+    );
 
     match sqlite::pending_tool_results(&state.db, agent_id, conv_id) {
         Ok((received, expected)) if received < expected => {
@@ -606,16 +862,29 @@ async fn handle_tool_return_blocking(
     };
 
     let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
-    let req = CompletionRequest { model, messages, tools, max_tokens };
+    let req = CompletionRequest {
+        model,
+        messages,
+        tools,
+        max_tokens,
+    };
     match state.llm.complete(&req).await {
         Ok(resp) => {
-            let tool_calls_json: Vec<Value> = resp.tool_calls.iter()
+            let tool_calls_json: Vec<Value> = resp
+                .tool_calls
+                .iter()
                 .filter_map(|tc| serde_json::to_value(tc).ok())
                 .collect();
-            persist(state, agent_id, conv_id, "assistant", json!({
-                "content": resp.content.clone().unwrap_or_default(),
-                "tool_calls": tool_calls_json
-            }));
+            persist(
+                state,
+                agent_id,
+                conv_id,
+                "assistant",
+                json!({
+                    "content": resp.content.clone().unwrap_or_default(),
+                    "tool_calls": tool_calls_json
+                }),
+            );
             let mut out: Vec<Value> = vec![];
             if let Some(text) = &resp.content {
                 out.push(json!({ "message_type": "assistant_message", "content": text }));
@@ -651,10 +920,16 @@ pub async fn stream_message(
     // 1. Persist incoming message FIRST
     if is_tool_return {
         let tr = &body["tool_return"];
-        persist(&state, &agent_id, conv_id_ref, "tool", json!({
-            "content": tr["content"].as_str().unwrap_or(""),
-            "tool_call_id": tr["tool_call_id"].as_str().unwrap_or("")
-        }));
+        persist(
+            &state,
+            &agent_id,
+            conv_id_ref,
+            "tool",
+            json!({
+                "content": tr["content"].as_str().unwrap_or(""),
+                "tool_call_id": tr["tool_call_id"].as_str().unwrap_or("")
+            }),
+        );
     } else {
         let input = match body["input"].as_str().filter(|s| !s.is_empty()) {
             Some(s) => s.to_string(),
@@ -668,7 +943,13 @@ pub async fn stream_message(
             if let Some(cid) = conv_id_ref {
                 let _ = maybe_set_conv_title(&state, cid, &input);
             }
-            persist(&state, &agent_id, conv_id_ref, "user", json!({ "content": input }));
+            persist(
+                &state,
+                &agent_id,
+                conv_id_ref,
+                "user",
+                json!({ "content": input }),
+            );
         }
     }
 
@@ -688,10 +969,11 @@ pub async fn stream_message(
     }
 
     // 3. Build context from DB
-    let (model, messages, tools) = match build_context(&state, &agent_id, conv_id_ref, is_tool_return).await {
-        Ok(ctx) => ctx,
-        Err(e) => return err(StatusCode::NOT_FOUND, &e),
-    };
+    let (model, messages, tools) =
+        match build_context(&state, &agent_id, conv_id_ref, is_tool_return).await {
+            Ok(ctx) => ctx,
+            Err(e) => return err(StatusCode::NOT_FOUND, &e),
+        };
 
     let background = body["background"].as_bool().unwrap_or(false);
     // Create a run for background (and also for foreground — keeps history for reconnect)
@@ -699,12 +981,17 @@ pub async fn stream_message(
     let run_id: Option<String> = run.ok().map(|r| r.id);
 
     let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
-    let req = CompletionRequest { model, messages, tools, max_tokens };
+    let req = CompletionRequest {
+        model,
+        messages,
+        tools,
+        max_tokens,
+    };
     let state_clone = state.clone();
     let agent_id_clone = agent_id.clone();
     let conv_id_clone = conv_str.clone();
-    let run_id_clone  = run_id.clone();
-    let db_clone      = state.db.clone();
+    let run_id_clone = run_id.clone();
+    let db_clone = state.db.clone();
 
     // Open LLM stream.
     // On failure, return a well-formed SSE stream with an error event + [DONE]
@@ -721,11 +1008,9 @@ pub async fn stream_message(
             }
             let s = futures::stream::iter([
                 Ok::<Event, std::convert::Infallible>(
-                    Event::default().data(json!({ "error": err_msg }).to_string())
+                    Event::default().data(json!({ "error": err_msg }).to_string()),
                 ),
-                Ok::<Event, std::convert::Infallible>(
-                    Event::default().data("[DONE]")
-                ),
+                Ok::<Event, std::convert::Infallible>(Event::default().data("[DONE]")),
             ]);
             return Sse::new(s).into_response();
         }
@@ -756,8 +1041,8 @@ pub async fn stream_message(
                 if let Ok(seq) = sqlite::append_run_event(&db_clone, rid, &data.to_string()) {
                     let mut d = data.clone();
                     if let Some(obj) = d.as_object_mut() {
-                        obj.insert("run_id".to_string(),  serde_json::Value::String(rid.clone()));
-                        obj.insert("seq_id".to_string(),  serde_json::Value::Number(seq.into()));
+                        obj.insert("run_id".to_string(), serde_json::Value::String(rid.clone()));
+                        obj.insert("seq_id".to_string(), serde_json::Value::Number(seq.into()));
                     }
                     return Event::default().data(d.to_string());
                 }
@@ -770,7 +1055,9 @@ pub async fn stream_message(
                 emit(json!({ "message_type": "reasoning_message", "reasoning": text }))
             }
             Ok(StreamChunk::Text(text)) => {
-                if let Ok(mut g) = acc_clone.lock() { g.0.push_str(&text); }
+                if let Ok(mut g) = acc_clone.lock() {
+                    g.0.push_str(&text);
+                }
                 emit(json!({ "message_type": "assistant_message", "content": text }))
             }
             Ok(StreamChunk::ToolCall(tc)) => {
@@ -786,7 +1073,7 @@ pub async fn stream_message(
             }
             Ok(StreamChunk::Usage(u)) => {
                 if let Ok(mut acc) = usage_acc2.lock() {
-                    acc.input_tokens  += u.input_tokens;
+                    acc.input_tokens += u.input_tokens;
                     acc.output_tokens += u.output_tokens;
                 }
                 // Emit usage_statistics event for client-side display
@@ -801,10 +1088,16 @@ pub async fn stream_message(
             }
             Ok(StreamChunk::Done) => {
                 if let Ok(g) = acc_clone.lock() {
-                    persist(&state_clone, &agent_id_clone, conv_id_clone.as_deref(), "assistant", json!({
-                        "content": g.0,
-                        "tool_calls": g.1
-                    }));
+                    persist(
+                        &state_clone,
+                        &agent_id_clone,
+                        conv_id_clone.as_deref(),
+                        "assistant",
+                        json!({
+                            "content": g.0,
+                            "tool_calls": g.1
+                        }),
+                    );
                 }
                 if let Some(rid) = &run_id_clone {
                     let _ = sqlite::finish_run(&db_clone, rid, "completed");
