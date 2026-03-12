@@ -31,7 +31,9 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                 if !current_lang.is_empty() {
                     lines.push(Line::from(Span::styled(
                         format!("{INDENT}  {current_lang}"),
-                        Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                        Style::default()
+                            .fg(RC::DarkGray)
+                            .add_modifier(Modifier::DIM),
                     )));
                 }
             } else {
@@ -84,7 +86,9 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
         if let Some(rest) = trimmed_start.strip_prefix("# ") {
             lines.push(Line::from(Span::styled(
                 format!("{INDENT}{rest}"),
-                Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                Style::default()
+                    .fg(RC::Cyan)
+                    .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
             )));
             continue;
         }
@@ -100,9 +104,10 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
 
         // ── Blockquotes ───────────────────────────────────────────────────
         if let Some(rest) = trimmed_start.strip_prefix("> ") {
-            let mut spans: Vec<Span<'static>> = vec![
-                Span::styled(format!("{INDENT}▎ "), Style::default().fg(RC::DarkGray)),
-            ];
+            let mut spans: Vec<Span<'static>> = vec![Span::styled(
+                format!("{INDENT}▎ "),
+                Style::default().fg(RC::DarkGray),
+            )];
             spans.extend(parse_inline(rest));
             lines.push(Line::from(spans));
             continue;
@@ -129,7 +134,10 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
             let indent_padding = " ".repeat(leading_spaces);
             let mut spans: Vec<Span<'static>> = vec![
                 Span::raw(format!("{INDENT}  {indent_padding}")),
-                Span::styled(format!("{num}. "), Style::default().add_modifier(Modifier::BOLD)),
+                Span::styled(
+                    format!("{num}. "),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
             ];
             spans.extend(parse_inline(rest));
             lines.push(Line::from(spans));
@@ -196,14 +204,20 @@ fn render_table(rows: &[String]) -> Vec<Line<'static>> {
             continue;
         }
 
-        let mut spans = vec![Span::styled(format!("{INDENT}│ "), Style::default().fg(RC::DarkGray))];
+        let mut spans = vec![Span::styled(
+            format!("{INDENT}│ "),
+            Style::default().fg(RC::DarkGray),
+        )];
         for (i, cell) in row.into_iter().take(num_cols).enumerate() {
             let style = if row_idx == 0 {
                 Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(RC::White)
             };
-            spans.push(Span::styled(format!("{:<width$}", cell, width = col_widths[i]), style));
+            spans.push(Span::styled(
+                format!("{:<width$}", cell, width = col_widths[i]),
+                style,
+            ));
             if i < num_cols - 1 {
                 spans.push(Span::styled(" │ ", Style::default().fg(RC::DarkGray)));
             }
@@ -217,29 +231,57 @@ fn render_table(rows: &[String]) -> Vec<Line<'static>> {
 
 /// Simple keyword-based syntax highlighter.
 fn highlight_code(line: &str, lang: &str) -> Vec<Span<'static>> {
-    let style_keyword = Style::default().fg(RC::LightBlue).add_modifier(Modifier::BOLD);
-    let style_comment = Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC);
-    let style_string  = Style::default().fg(RC::LightGreen);
-    let style_type    = Style::default().fg(RC::LightCyan);
+    let style_keyword = Style::default()
+        .fg(RC::LightBlue)
+        .add_modifier(Modifier::BOLD);
+    let style_comment = Style::default()
+        .fg(RC::DarkGray)
+        .add_modifier(Modifier::ITALIC);
+    let style_string = Style::default().fg(RC::LightGreen);
+    let style_type = Style::default().fg(RC::LightCyan);
 
     let keywords = match lang {
         "rust" | "rs" => vec![
             "fn", "let", "mut", "pub", "use", "mod", "crate", "impl", "trait", "struct", "enum",
-            "match", "if", "else", "for", "while", "loop", "return", "await", "async", "type", "as",
+            "match", "if", "else", "for", "while", "loop", "return", "await", "async", "type",
+            "as",
         ],
         "python" | "py" => vec![
             "def", "class", "import", "from", "as", "if", "elif", "else", "for", "while", "try",
-            "except", "finally", "with", "return", "yield", "async", "await", "lambda", "None", "True", "False",
+            "except", "finally", "with", "return", "yield", "async", "await", "lambda", "None",
+            "True", "False",
         ],
         "javascript" | "js" | "typescript" | "ts" => vec![
-            "function", "const", "let", "var", "import", "export", "from", "class", "if", "else", "for",
-            "while", "try", "catch", "finally", "return", "await", "async", "type", "interface", "extends",
+            "function",
+            "const",
+            "let",
+            "var",
+            "import",
+            "export",
+            "from",
+            "class",
+            "if",
+            "else",
+            "for",
+            "while",
+            "try",
+            "catch",
+            "finally",
+            "return",
+            "await",
+            "async",
+            "type",
+            "interface",
+            "extends",
         ],
         _ => vec![],
     };
 
     let types = match lang {
-        "rust" | "rs" => vec!["String", "Vec", "Option", "Result", "i32", "u32", "i64", "u64", "f32", "f64", "bool", "usize"],
+        "rust" | "rs" => vec![
+            "String", "Vec", "Option", "Result", "i32", "u32", "i64", "u64", "f32", "f64", "bool",
+            "usize",
+        ],
         _ => vec![],
     };
 
