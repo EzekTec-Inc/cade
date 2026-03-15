@@ -2177,3 +2177,11 @@ and delete the `try_paste_image_file_path` method.
 - **Previous behavior**: `params` was extracted strictly via `s["parameters"]`, defaulting to `Null` if the key didn't exist.
 - **New behavior**: `params` is extracted by checking `s["parameters"]`, then falling back to `s["input_schema"]`, and defaulting to an empty JSON object (`{}`) if neither exist to prevent `Null` from being sent.
 - **Rollback instructions**: Revert `params` extraction back to `let mut params = s["parameters"].clone();` in `build_tools` and `build_responses_tools`.
+
+## 2026-03-15T09:06:05Z
+- **Summary of change**: Refactored the ask question modal to expand the custom input field across multiple lines.
+- **Files modified**: `crates/cade-cli/src/ui/question.rs`, `src/ui/question.rs`
+- **Exact reason**: When users entered long answers into the custom text input option (`allow_other`) within the `ask_user_question` modal, the text would go off-screen and disappear because it was rendered as a single `Line`. The refactor calculates the available terminal width and automatically wraps the text block by chunking the characters and rendering them as a multi-line paragraph within the widget's layout loop.
+- **Previous behavior**: The "Type something..." option rendered its text on a single line, causing clipping if the string length exceeded terminal width.
+- **New behavior**: The text is sliced into chunks based on the maximum allowed horizontal width, and rendered vertically on as many `Line`s as needed, padded appropriately so the indentation matches the selection cursor.
+- **Rollback instructions**: Revert the `if idx == other_idx` block in both `crates/cade-cli/src/ui/question.rs` and `src/ui/question.rs` to push a single `Line::from(vec![...])` containing `display`, rather than looping through `chunks`.

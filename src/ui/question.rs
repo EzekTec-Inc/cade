@@ -184,10 +184,32 @@ impl QuestionWidget {
                         let other_style = Style::default()
                             .fg(Color::DarkGray)
                             .add_modifier(Modifier::ITALIC);
-                        lines.push(Line::from(vec![
-                            Span::styled(selector.to_string(), Style::default().fg(Color::Green)),
-                            Span::styled(format!(" {}.    {display}", idx + 1), other_style),
-                        ]));
+
+                        let prefix = format!(" {}.    ", idx + 1);
+                        let max_len = (term_w as usize).saturating_sub(prefix.len() + 3).max(10);
+                        
+                        let mut chars: Vec<char> = display.chars().collect();
+                        let mut chunks = Vec::new();
+                        while !chars.is_empty() {
+                            let chunk_size = chars.len().min(max_len);
+                            let chunk: String = chars.drain(..chunk_size).collect();
+                            chunks.push(chunk);
+                        }
+
+                        for (i, chunk) in chunks.into_iter().enumerate() {
+                            if i == 0 {
+                                lines.push(Line::from(vec![
+                                    Span::styled(selector.to_string(), Style::default().fg(Color::Green)),
+                                    Span::styled(format!("{}{}", prefix, chunk), other_style),
+                                ]));
+                            } else {
+                                let padding = " ".repeat(prefix.len() + 1);
+                                lines.push(Line::from(vec![
+                                    Span::raw(padding),
+                                    Span::styled(chunk, other_style),
+                                ]));
+                            }
+                        }
                         lines.push(Line::from(""));
                         continue;
                     }
