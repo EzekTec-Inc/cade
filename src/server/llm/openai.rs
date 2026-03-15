@@ -170,7 +170,25 @@ impl OpenAiProvider {
                     let content = if m.content.is_empty() { Value::Null } else { Value::String(m.content.clone()) };
                     json!({"role": "assistant", "content": content, "tool_calls": tcs})
                 }
-                _ => json!({"role": m.role, "content": m.content}),
+                _ => {
+                    // When images are attached, build a multi-part content array.
+                    // OpenAI format: [{"type":"image_url","image_url":{"url":"data:…"}}, {"type":"text","text":"..."}]
+                    if let Some(images) = &m.images {
+                        if !images.is_empty() {
+                            let mut parts: Vec<Value> = images.iter().map(|img| json!({
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": format!("data:{};base64,{}", img.media_type, img.data)
+                                }
+                            })).collect();
+                            if !m.content.is_empty() {
+                                parts.push(json!({"type": "text", "text": m.content}));
+                            }
+                            return json!({"role": m.role, "content": parts});
+                        }
+                    }
+                    json!({"role": m.role, "content": m.content})
+                },
             }
         }).collect();
         json!(messages)
@@ -199,7 +217,7 @@ impl OpenAiProvider {
 
     fn build_tools(req: &CompletionRequest) -> Value {
         let tools: Vec<Value> = req.tools.iter().map(|s| {
-            let mut params = s["parameters"].clone();
+            let mut params = s.get("parameters").or_else(|| s.get("input_schema")).cloned().unwrap_or(json!({}));
             clean_openai_schema(&mut params);
             json!({
                 "type": "function",
@@ -208,6 +226,20 @@ impl OpenAiProvider {
                     "description": s["description"],
                     "parameters": params
                 }
+            })
+        }).collect();
+        json!(tools)
+    }
+
+    fn build_responses_tools(req: &CompletionRequest) -> Value {
+        let tools: Vec<Value> = req.tools.iter().map(|s| {
+            let mut params = s.get("parameters").or_else(|| s.get("input_schema")).cloned().unwrap_or(json!({}));
+            clean_openai_schema(&mut params);
+            json!({
+                "type": "function",
+                "name": s["name"],
+                "description": s["description"],
+                "parameters": params
             })
         }).collect();
         json!(tools)
@@ -295,7 +327,7 @@ impl LlmProvider for OpenAiProvider {
                 "max_output_tokens": req.max_tokens
             });
             if !req.tools.is_empty() {
-                body["tools"] = Self::build_tools(req);
+                body["tools"] = Self::build_responses_tools(req);
             }
             return retry_with_backoff("OpenAI::complete", 3, std::time::Duration::from_secs(1), |_| {
                 let client  = self.client.clone();
@@ -373,7 +405,7 @@ impl LlmProvider for OpenAiProvider {
                 "stream": true
             });
             if !req.tools.is_empty() {
-                body["tools"] = Self::build_tools(req);
+                body["tools"] = Self::build_responses_tools(req);
             }
 
             let resp = retry_with_backoff("OpenAI::stream", 3, std::time::Duration::from_secs(1), |_| {
