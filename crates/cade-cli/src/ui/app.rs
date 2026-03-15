@@ -20,14 +20,15 @@
 /// │  mode ✦          AgentName [model]      │  1  (footer)
 /// └─────────────────────────────────────────┘
 /// ```
+use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use anyhow::Result;
 use crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
-    KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    self, DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    Event, KeyCode, KeyEvent, KeyModifiers, KeyboardEnhancementFlags, MouseEventKind,
+    PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::{
@@ -40,6 +41,8 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use cade_core::permissions::PermissionMode;
+use crate::ui::autocomplete::FileAutocompleteProvider;
+use crate::ui::editor::{Editor, ImageEntry};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -53,6 +56,9 @@ const CONTENT_PAD_BOT: u16 = 1;
 /// Braille spinner frames for thinking animation.
 const BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const DOTS: &[&str] = &["⠁", "⠂", "⠄", "⠐", "⠠", "⠐", "⠄", "⠂"];
+/// R-01: minimum interval between consecutive draws during high-frequency
+/// updates (streaming tokens, live bash output).  ~60 FPS target.
+const DRAW_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
 // ── Skills overlay ────────────────────────────────────────────────────────────
 
@@ -150,6 +156,13 @@ pub enum RenderLine {
     Blank,
     /// Interactive question completed result.
     QuestionResult { header: String, answer: String },
+    /// Live-streaming bash output.  Lines accumulate in real-time; only the
+    /// last `max_visible` lines are shown when collapsed.  `ctrl+o` shows all.
+    LiveOutput {
+        lines: Vec<String>,
+        max_visible: usize,
+        done: bool,
+    },
     /// A single row of the context-window token grid (10 rows × 20 cells).
     /// Each cell is (symbol, category_idx) where category_idx determines color.
     /// Categories: 0=system 1=tools 2=mcp 3=memory 4=skills 5=messages 6=free 7=buffer
@@ -228,8 +241,7 @@ pub struct TuiApp {
     reasoning_active: bool,
 
     // ── Input state ────────────────────────────────────────────────────────
-    pub input: String,
-    pub cursor_pos: usize,
+    pub editor: Editor,
     /// Last known terminal width — kept in sync during draw() so that
     /// Up/Down cursor navigation uses the real column width.
     term_width: u16,
@@ -250,9 +262,16 @@ pub struct TuiApp {
     // ── Copy mode (disables mouse capture for OS text selection) ───────────
     pub copy_mode: bool,
 
-    // ── File picker (A-01) ────────────────────────────────────────────────
+    // ── Autocomplete (A-01) ──────────────────────────────────────────────
+    /// File autocomplete provider (Tab path completion + `@` fuzzy picker).
+    pub file_ac: FileAutocompleteProvider,
     /// Active `@` file picker overlay. `None` when inactive.
     pub picker: Option<PickerState>,
+
+    // ── Image paste staging ───────────────────────────────────────────────
+    /// Images drained from the editor on the last submission.
+    /// `repl.rs` reads and clears this after calling `read_input()`.
+    pub pending_submit_images: Vec<ImageEntry>,
 
     // ── Extensibility slots (A-02) ────────────────────────────────────────
     /// Pinned header rendered as a fixed strip above the messages pane.
@@ -272,6 +291,17 @@ pub struct TuiApp {
     // ── Skills overlay ─────────────────────────────────────────────────────
     /// Full-screen skills browser/editor overlay. `None` when inactive.
     pub skills_overlay: Option<SkillsOverlayState>,
+
+    // ── Render throttle (R-01) ─────────────────────────────────────────────
+    /// When true, the viewport has accumulated state changes that haven't
+    /// been flushed to the terminal yet.  The tick task checks this flag
+    /// every ~100 ms and calls `draw()` if set, ensuring trailing updates
+    /// are never lost even when `draw_throttled()` skips a frame.
+    pub draw_dirty: bool,
+    /// Timestamp of the last successful `draw()`.  `draw_throttled()` skips
+    /// the draw if less than `DRAW_MIN_INTERVAL` has elapsed, dramatically
+    /// reducing redraws during high-frequency streaming (tokens, live bash).
+    last_draw_at: Instant,
 }
 
 impl TuiApp {
@@ -279,7 +309,7 @@ impl TuiApp {
     /// (enters alternate screen + enables raw mode).
     pub fn new(mode: PermissionMode, agent_name: String, model: String) -> Self {
         let terminal = ratatui::init();
-        let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
+        let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
         if supports_keyboard_enhancement().unwrap_or(false) {
             let _ = crossterm::execute!(
                 std::io::stdout(),
@@ -296,8 +326,7 @@ impl TuiApp {
             streaming_active: false,
             reasoning_text: String::new(),
             reasoning_active: false,
-            input: String::new(),
-            cursor_pos: 0,
+            editor: Editor::new(),
             term_width: 80,
             thinking: None,
             last_status: None,
@@ -307,12 +336,16 @@ impl TuiApp {
             cwd: abbreviate_cwd(&std::env::current_dir().unwrap_or_default()),
             context_pct: None,
             copy_mode: false,
+            file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
             picker: None,
+            pending_submit_images: Vec::new(),
             header_lines: Vec::new(),
             footer_extra: None,
             pending_lines: 0,
             queued_count: 0,
             skills_overlay: None,
+            draw_dirty: false,
+            last_draw_at: Instant::now(),
         }
     }
 
@@ -377,7 +410,7 @@ impl TuiApp {
         self.lines.push(line);
     }
 
-    /// Append a streaming chunk and redraw.
+    /// Append a streaming chunk and redraw (throttled — max ~60 FPS).
     pub fn push_streaming_chunk(&mut self, text: &str) -> Result<()> {
         self.commit_reasoning_inner();
         if !self.streaming_active {
@@ -393,7 +426,7 @@ impl TuiApp {
         // if the user scrolled up mid-stream to read history, leave them there.
         self.streaming_active = true;
         self.streaming_text.push_str(text);
-        self.draw()
+        self.draw_throttled()
     }
 
     /// Append a reasoning chunk (accumulated; committed as header on done).
@@ -462,7 +495,10 @@ impl TuiApp {
         }
     }
 
-    fn commit_reasoning_inner(&mut self) {
+    /// Commit reasoning state without drawing.  Public so callers that
+    /// batch multiple mutations (e.g. commit reasoning + push streaming chunk)
+    /// can avoid redundant intermediate draws.
+    pub fn commit_reasoning_inner(&mut self) {
         if self.reasoning_active {
             let text = std::mem::take(&mut self.reasoning_text);
             let words = text.split_whitespace().count();
@@ -474,6 +510,40 @@ impl TuiApp {
             }
             self.reasoning_active = false;
         }
+    }
+
+    // ── Live output (streaming bash) ──────────────────────────────────────
+
+    /// Push an empty `LiveOutput` entry and return its index in `self.lines`.
+    /// Call this once before streaming begins; pass the returned index to
+    /// `append_live_output_line` and `finish_live_output`.
+    pub fn begin_live_output(&mut self, max_visible: usize) -> usize {
+        self.commit_streaming_inner();
+        self.commit_reasoning_inner();
+        self.lines.push(RenderLine::LiveOutput {
+            lines: Vec::new(),
+            max_visible,
+            done: false,
+        });
+        self.lines.len() - 1
+    }
+
+    /// Append one output line to the `LiveOutput` at `idx` and redraw
+    /// (throttled — max ~60 FPS).  No-op if `idx` is not a `LiveOutput`.
+    pub fn append_live_output_line(&mut self, idx: usize, line: String) -> Result<()> {
+        if let Some(RenderLine::LiveOutput { lines, .. }) = self.lines.get_mut(idx) {
+            lines.push(line);
+        }
+        self.draw_throttled()
+    }
+
+    /// Mark the `LiveOutput` at `idx` as finished (subprocess has exited).
+    /// Redraws so the final state is shown before the caller returns.
+    pub fn finish_live_output(&mut self, idx: usize) -> Result<()> {
+        if let Some(RenderLine::LiveOutput { done, .. }) = self.lines.get_mut(idx) {
+            *done = true;
+        }
+        self.draw()
     }
 
     // ── Config updates ────────────────────────────────────────────────────
@@ -525,9 +595,23 @@ impl TuiApp {
 
     // ── Rendering ─────────────────────────────────────────────────────────
 
-    /// Redraw the full screen.
+    /// Redraw the full screen (unconditional — always redraws).
     pub fn draw(&mut self) -> Result<()> {
+        self.draw_dirty = false;
+        self.last_draw_at = Instant::now();
         self.draw_impl()
+    }
+
+    /// R-01: Throttled redraw — skips the draw if less than DRAW_MIN_INTERVAL
+    /// has elapsed since the last draw.  Sets `draw_dirty = true` so the tick
+    /// task will pick up the pending update on its next cycle.  Used by
+    /// high-frequency callers (`push_streaming_chunk`, `append_live_output_line`).
+    pub fn draw_throttled(&mut self) -> Result<()> {
+        self.draw_dirty = true;
+        if self.last_draw_at.elapsed() >= DRAW_MIN_INTERVAL {
+            return self.draw();
+        }
+        Ok(())
     }
 
     pub fn draw_impl(&mut self) -> Result<()> {
@@ -539,8 +623,8 @@ impl TuiApp {
             None
         };
         let scroll = self.scroll;
-        let input = self.input.clone();
-        let cursor_pos = self.cursor_pos;
+        let input = self.editor.input.clone();
+        let cursor_pos = self.editor.cursor_pos;
         let mode = self.mode;
         let agent_name = self.agent_name.clone();
         let model = self.model.clone();
@@ -563,6 +647,15 @@ impl TuiApp {
 
         // V-04: capture max_skip returned by render_frame to clamp self.scroll.
         let mut max_skip: u16 = 0;
+
+        // CSI 2026: begin synchronized output — the terminal emulator buffers
+        // all writes until the matching end sequence, then paints the entire
+        // frame atomically.  Eliminates single-frame visual artifacts (tearing,
+        // V-05 input field jump) on terminals that support it (kitty, WezTerm,
+        // foot, ghostty, etc.).  Unsupported terminals silently ignore the
+        // sequence — no feature detection needed.
+        let _ = write!(std::io::stdout(), "\x1b[?2026h");
+
         self.terminal.draw(|frame| {
             max_skip = render_frame(
                 frame,
@@ -589,6 +682,11 @@ impl TuiApp {
                 skills_overlay_snap.as_ref(),
             );
         })?;
+
+        // CSI 2026: end synchronized output — terminal flushes the buffered
+        // frame to the screen in one atomic paint.
+        let _ = write!(std::io::stdout(), "\x1b[?2026l");
+        let _ = std::io::stdout().flush();
         // V-04: clamp self.scroll so stale over-scroll doesn't trap the user.
         if self.scroll > max_skip as usize {
             self.scroll = max_skip as usize;
@@ -1110,8 +1208,8 @@ impl TuiApp {
         history: &mut Vec<String>,
         hist_idx: &mut Option<usize>,
     ) -> Result<Option<String>> {
-        self.input.clear();
-        self.cursor_pos = 0;
+        self.editor.input.clear();
+        self.editor.cursor_pos = 0;
         *hist_idx = None;
 
         loop {
@@ -1128,6 +1226,23 @@ impl TuiApp {
                         self.handle_question_key(k);
                     } else if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
                         return Ok(result);
+                    }
+                }
+                Event::Paste(text) => {
+                    // Bracketed paste: the terminal wrapped the pasted content
+                    // in paste-start / paste-end markers so crossterm delivers
+                    // it as a single string.
+                    //
+                    // Drag-onto-terminal: many terminals (Kitty, WezTerm,
+                    // iTerm2, Windows Terminal) convert a dragged file into a
+                    // bracketed paste of its URI (`file:///path/to/file`) or
+                    // plain path.  If the pasted text looks like a single image
+                    // file path we try to load it as an image instead of text.
+                    let trimmed = text.trim();
+                    if self.try_paste_image_file_path(trimmed) {
+                        // Image file was loaded — skip normal text paste.
+                    } else {
+                        self.editor.handle_paste(&text);
                     }
                 }
                 Event::Resize(_, _) => { /* ratatui picks up resize on next draw */ }
@@ -1181,10 +1296,11 @@ impl TuiApp {
                 (KeyCode::Enter, m) if m == KeyModifiers::NONE => {
                     if let Some(pk) = self.picker.take() {
                         if let Some(selected) = pk.matches.get(pk.cursor).cloned() {
+                            self.editor.snapshot();
                             let query_end = pk.at_pos + 1 + pk.query.len();
-                            self.input.drain(pk.at_pos..query_end.min(self.input.len()));
-                            self.input.insert_str(pk.at_pos, &selected);
-                            self.cursor_pos = pk.at_pos + selected.len();
+                            self.editor.input.drain(pk.at_pos..query_end.min(self.editor.input.len()));
+                            self.editor.input.insert_str(pk.at_pos, &selected);
+                            self.editor.cursor_pos = pk.at_pos + selected.len();
                         }
                         // dismiss whether or not a match was selected
                     }
@@ -1193,22 +1309,21 @@ impl TuiApp {
                     if let Some(ref mut pk) = self.picker {
                         if pk.query.is_empty() {
                             // Delete the @ and dismiss
-                            if pk.at_pos < self.input.len() {
-                                self.input.remove(pk.at_pos);
-                                self.cursor_pos = pk.at_pos;
+                            if pk.at_pos < self.editor.input.len() {
+                                self.editor.input.remove(pk.at_pos);
+                                self.editor.cursor_pos = pk.at_pos;
                             }
                             self.picker = None;
                         } else {
                             // Remove last query char from both query and input
                             let query_end = pk.at_pos + 1 + pk.query.len();
                             let remove_at = query_end.saturating_sub(1);
-                            if remove_at < self.input.len() {
-                                self.input.remove(remove_at);
+                            if remove_at < self.editor.input.len() {
+                                self.editor.input.remove(remove_at);
                             }
                             pk.query.pop();
                             pk.cursor = 0;
-                            let root = std::env::current_dir().unwrap_or_default();
-                            pk.matches = collect_files(&root, &pk.query);
+                            pk.matches = self.file_ac.collect_files(&pk.query);
                         }
                     }
                 }
@@ -1216,12 +1331,11 @@ impl TuiApp {
                     // Append char to both input and picker query
                     if let Some(ref mut pk) = self.picker {
                         let query_end = pk.at_pos + 1 + pk.query.len();
-                        self.input.insert(query_end, c);
-                        self.cursor_pos = query_end + c.len_utf8();
+                        self.editor.input.insert(query_end, c);
+                        self.editor.cursor_pos = query_end + c.len_utf8();
                         pk.query.push(c);
                         pk.cursor = 0;
-                        let root = std::env::current_dir().unwrap_or_default();
-                        pk.matches = collect_files(&root, &pk.query);
+                        pk.matches = self.file_ac.collect_files(&pk.query);
                     }
                 }
                 _ => {}
@@ -1232,78 +1346,82 @@ impl TuiApp {
 
         match (k.code, k.modifiers) {
             // ── Submit ────────────────────────────────────────────────────
-            // Alt+Enter is the universal cross-terminal newline (reliably
-            // transmitted by all terminals).  Shift+Enter works only in
-            // terminals that support the kitty keyboard protocol; we accept
-            // both so users on either kind of terminal are covered.
+            // Alt+Enter  — universal cross-terminal newline.
+            // Shift+Enter — kitty keyboard protocol terminals (Kitty, WezTerm, Ghostty).
+            // Ctrl+Enter  — Windows Terminal (which reports this as CONTROL+Enter).
             (KeyCode::Enter, m)
                 if m == KeyModifiers::ALT
                     || m == KeyModifiers::SHIFT
-                    || m == (KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+                    || m == KeyModifiers::CONTROL
+                    || m == (KeyModifiers::SHIFT | KeyModifiers::ALT)
+                    || m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
             {
-                self.input.insert(self.cursor_pos, '\n');
-                self.cursor_pos += 1;
+                self.editor.insert_newline();
             }
             (KeyCode::Enter, _) => {
-                let line = self.input.clone();
-                self.input.clear(); // clear input immediately so it's empty during agent turn
-                self.cursor_pos = 0;
+                // Expand any collapsed paste markers back to full text,
+                // then drain any pasted images (stripping their placeholders)
+                // into pending_submit_images for repl.rs to pick up.
+                self.editor.expand_pastes();
+                self.pending_submit_images = self.editor.drain_images();
+                let line = self.editor.input.clone();
+                self.editor.clear();
                 self.scroll = 0; // snap to bottom on submit
                 self.pending_lines = 0; // user is following the conversation
                 return Ok(Some(Some(line)));
             }
 
             // ── Exit ──────────────────────────────────────────────────────
-            (KeyCode::Char('d'), KeyModifiers::CONTROL) if self.input.is_empty() => {
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) if self.editor.input.is_empty() => {
                 return Ok(Some(None));
             }
 
             // ── Cancel / clear ────────────────────────────────────────────
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                self.input.clear();
-                self.cursor_pos = 0;
+                self.editor.clear();
                 return Ok(Some(Some(String::new())));
             }
             (KeyCode::Esc, _) => {
-                self.input.clear();
-                self.cursor_pos = 0;
+                self.editor.clear();
             }
 
             // ── Edit shortcuts ────────────────────────────────────────────
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                self.input.drain(..self.cursor_pos);
-                self.cursor_pos = 0;
+                self.editor.delete_to_start();
+            }
+            (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
+                self.editor.delete_to_end();
             }
             (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
-                let end = self.cursor_pos;
-                let start = self.input[..end]
-                    .rfind(|c: char| !c.is_whitespace())
-                    .and_then(|p| self.input[..p].rfind(char::is_whitespace).map(|q| q + 1))
-                    .unwrap_or(0);
-                self.input.drain(start..end);
-                self.cursor_pos = start;
+                self.editor.delete_word_back();
+            }
+            (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
+                self.editor.undo();
+            }
+            (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
+                self.editor.redo();
             }
             (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
-                self.cursor_pos = 0;
+                self.editor.move_home();
             }
             (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
-                self.cursor_pos = self.input.len();
+                self.editor.move_end();
             }
 
             // ── Cursor movement ───────────────────────────────────────────
-            (KeyCode::Left, _) if self.cursor_pos > 0 => {
-                self.cursor_pos -= self.input[..self.cursor_pos]
-                    .chars()
-                    .last()
-                    .map(|c| c.len_utf8())
-                    .unwrap_or(1);
+            // Word navigation: Alt+Arrow or Ctrl+Arrow — must come before the
+            // plain-Left / plain-Right arms below (more specific guard wins).
+            (KeyCode::Left, m) if m.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
+                self.editor.move_word_left();
             }
-            (KeyCode::Right, _) if self.cursor_pos < self.input.len() => {
-                self.cursor_pos += self.input[self.cursor_pos..]
-                    .chars()
-                    .next()
-                    .map(|c| c.len_utf8())
-                    .unwrap_or(1);
+            (KeyCode::Right, m) if m.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
+                self.editor.move_word_right();
+            }
+            (KeyCode::Left, _) if self.editor.cursor_pos > 0 => {
+                self.editor.move_left();
+            }
+            (KeyCode::Right, _) if self.editor.cursor_pos < self.editor.input.len() => {
+                self.editor.move_right();
             }
 
             // ── History / cursor-up ───────────────────────────────────────
@@ -1314,7 +1432,7 @@ impl TuiApp {
             (KeyCode::Up, _) => {
                 let available_w = self.term_width.saturating_sub(2).max(1);
                 let text_w = (available_w.saturating_sub(2).max(1)) as usize;
-                let before = &self.input[..self.cursor_pos];
+                let before = &self.editor.input[..self.editor.cursor_pos];
                 let (cur_row, cur_col) = calc_visual_cursor(before, available_w);
 
                 if cur_row == 0 {
@@ -1326,8 +1444,8 @@ impl TuiApp {
                             Some(i) => i,
                         };
                         *hist_idx = Some(new_idx);
-                        self.input = history[new_idx].clone();
-                        self.cursor_pos = self.input.len();
+                        self.editor.input = history[new_idx].clone();
+                        self.editor.cursor_pos = self.editor.input.len();
                     }
                 } else {
                     // Move cursor up one visual row: target column = cur_col
@@ -1336,18 +1454,18 @@ impl TuiApp {
                     let target_row = cur_row - 1;
                     // Rebuild visual-row byte-offset map
                     let new_pos =
-                        find_cursor_at_visual_row_col(&self.input, text_w, target_row, cur_col);
-                    self.cursor_pos = new_pos;
+                        find_cursor_at_visual_row_col(&self.editor.input, text_w, target_row, cur_col);
+                    self.editor.cursor_pos = new_pos;
                 }
             }
             (KeyCode::Down, _) => {
                 let available_w = self.term_width.saturating_sub(2).max(1);
                 let text_w = (available_w.saturating_sub(2).max(1)) as usize;
                 let total_rows = {
-                    let (tr, _) = calc_visual_cursor(&self.input, available_w);
+                    let (tr, _) = calc_visual_cursor(&self.editor.input, available_w);
                     tr
                 };
-                let before = &self.input[..self.cursor_pos];
+                let before = &self.editor.input[..self.editor.cursor_pos];
                 let (cur_row, cur_col) = calc_visual_cursor(before, available_w);
 
                 if cur_row >= total_rows {
@@ -1355,19 +1473,19 @@ impl TuiApp {
                     if let Some(i) = *hist_idx {
                         if i + 1 < history.len() {
                             *hist_idx = Some(i + 1);
-                            self.input = history[i + 1].clone();
-                            self.cursor_pos = self.input.len();
+                            self.editor.input = history[i + 1].clone();
+                            self.editor.cursor_pos = self.editor.input.len();
                         } else {
                             *hist_idx = None;
-                            self.input.clear();
-                            self.cursor_pos = 0;
+                            self.editor.input.clear();
+                            self.editor.cursor_pos = 0;
                         }
                     }
                 } else {
                     let target_row = cur_row + 1;
                     let new_pos =
-                        find_cursor_at_visual_row_col(&self.input, text_w, target_row, cur_col);
-                    self.cursor_pos = new_pos;
+                        find_cursor_at_visual_row_col(&self.editor.input, text_w, target_row, cur_col);
+                    self.editor.cursor_pos = new_pos;
                 }
             }
 
@@ -1387,9 +1505,10 @@ impl TuiApp {
             (KeyCode::Tab, _) => {
                 // I-02: if cursor is on a path token, complete it; otherwise
                 // fall through to the mode-cycle sentinel.
-                if let Some((new_input, new_cursor)) = complete_path(&self.input, self.cursor_pos) {
-                    self.input = new_input;
-                    self.cursor_pos = new_cursor;
+                if let Some((new_input, new_cursor)) = self.file_ac.complete_path(&self.editor.input, self.editor.cursor_pos) {
+                    self.editor.snapshot();
+                    self.editor.input = new_input;
+                    self.editor.cursor_pos = new_cursor;
                 } else {
                     self.scroll = 0;
                     return Ok(Some(Some("__TAB__".to_string())));
@@ -1405,29 +1524,34 @@ impl TuiApp {
                 self.expand_all = !self.expand_all;
             }
 
-            // ── Editing ───────────────────────────────────────────────────
-            (KeyCode::Backspace, _) if self.cursor_pos > 0 => {
-                let char_len = self.input[..self.cursor_pos]
-                    .chars()
-                    .last()
-                    .map(|c| c.len_utf8())
-                    .unwrap_or(1);
-                self.cursor_pos -= char_len;
-                self.input.remove(self.cursor_pos);
+            // ── Image / clipboard paste ───────────────────────────────────
+            // Ctrl+V (universal) or Alt+V (Windows Terminal fallback):
+            // query the OS clipboard for image data; fall through silently if
+            // no image is present (text pastes arrive via Event::Paste).
+            (KeyCode::Char('v'), m)
+                if m == KeyModifiers::CONTROL || m == KeyModifiers::ALT =>
+            {
+                self.try_paste_clipboard_image();
+                // don't consume — if no image was found the keypress is silently ignored
             }
-            (KeyCode::Delete, _) if self.cursor_pos < self.input.len() => {
-                self.input.remove(self.cursor_pos);
+
+            // ── Editing ───────────────────────────────────────────────────
+            (KeyCode::Backspace, _) if self.editor.cursor_pos > 0 => {
+                self.editor.delete_back();
+            }
+            (KeyCode::Delete, _) if self.editor.cursor_pos < self.editor.input.len() => {
+                self.editor.delete_forward();
             }
             (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
-                let pos = self.cursor_pos;
-                self.input.insert(pos, c);
-                self.cursor_pos = pos + c.len_utf8();
+                // Route through insert_char() so the undo snapshot fires.
+                self.editor.insert_char(c);
                 // A-01: activate file picker when '@' is typed.
                 if c == '@' && self.picker.is_none() {
-                    let root = std::env::current_dir().unwrap_or_default();
-                    let matches = collect_files(&root, "");
+                    // cursor_pos is now just past the inserted '@'.
+                    let at_pos = self.editor.cursor_pos - c.len_utf8();
+                    let matches = self.file_ac.collect_files("");
                     self.picker = Some(PickerState {
-                        at_pos: pos,
+                        at_pos,
                         query: String::new(),
                         matches,
                         cursor: 0,
@@ -1437,6 +1561,125 @@ impl TuiApp {
             _ => {}
         }
         Ok(None)
+    }
+
+    /// Try to interpret a pasted string as an image file path (drag-and-drop).
+    ///
+    /// Accepts:
+    /// - Plain paths: `/home/user/photo.png`
+    /// - `file://` URIs: `file:///home/user/photo.png`
+    /// - Windows-style paths via WSL: `C:\Users\…\photo.jpg`
+    ///
+    /// Returns `true` if the path pointed to a valid image that was loaded and
+    /// inserted as a `[image #N: WxH]` placeholder; `false` otherwise.
+    fn try_paste_image_file_path(&mut self, text: &str) -> bool {
+        // Must be a single line — multi-line pastes are never a bare file path.
+        if text.contains('\n') {
+            return false;
+        }
+
+        // Normalise URI → filesystem path.
+        let path_str = if let Some(rest) = text.strip_prefix("file://") {
+            // `file:///home/…` → `/home/…`  or  `file://localhost/home/…` → `/home/…`
+            rest.trim_start_matches("localhost")
+                .trim_start_matches('/')
+                .to_string()
+                .replacen("", "/", 0) // keep as-is; we'll prepend '/' below
+        } else {
+            text.to_string()
+        };
+
+        // Ensure absolute path starts with '/'.
+        let path_str = if text.starts_with("file:///") {
+            // Strip scheme: file:///absolute/path
+            text.trim_start_matches("file://").to_string()
+        } else {
+            path_str
+        };
+
+        // Check extension.
+        let ext = std::path::Path::new(&path_str)
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| e.to_lowercase())
+            .unwrap_or_default();
+
+        let media_type = match ext.as_str() {
+            "png"           => "image/png",
+            "jpg" | "jpeg"  => "image/jpeg",
+            "gif"           => "image/gif",
+            "webp"          => "image/webp",
+            _               => return false,
+        };
+
+        // Read the file and get dimensions.
+        let raw = match std::fs::read(&path_str) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        let (w, h) = match image::image_dimensions(&path_str) {
+            Ok(dims) => dims,
+            Err(_) => {
+                // Fall back to decoding the bytes to get dimensions.
+                match image::load_from_memory(&raw) {
+                    Ok(img) => (img.width(), img.height()),
+                    Err(_) => return false,
+                }
+            }
+        };
+
+        use base64::Engine;
+        let b64 = base64::prelude::BASE64_STANDARD.encode(&raw);
+        self.editor.handle_image_paste(media_type, b64, w, h);
+        true
+    }
+
+    /// Try to read an image from the OS clipboard, convert it to a PNG, and
+    /// insert a `[image #N: WxH]` placeholder into the editor.
+    ///
+    /// Returns `true` if an image was found and inserted; `false` otherwise
+    /// (caller may fall back to a text paste notification or ignore the event).
+    fn try_paste_clipboard_image(&mut self) -> bool {
+        // ── Read RGBA data from the clipboard ─────────────────────────────
+        let img_data = {
+            use arboard::Clipboard;
+            let Ok(mut cb) = Clipboard::new() else { return false; };
+            match cb.get_image() {
+                Ok(img) => img,
+                Err(_)  => return false,
+            }
+        };
+
+        let (w, h) = (img_data.width as u32, img_data.height as u32);
+        if w == 0 || h == 0 { return false; }
+
+        // ── RGBA → PNG → base64 ───────────────────────────────────────────
+        let b64 = {
+            use image::{ImageBuffer, Rgba};
+            use base64::Engine;
+
+            // arboard returns raw RGBA bytes; wrap them in an image buffer.
+            let owned: Vec<u8> = img_data.bytes.into_owned();
+            let Some(rgba) = ImageBuffer::<Rgba<u8>, _>::from_raw(w, h, owned) else {
+                return false;
+            };
+
+            let mut png_buf: Vec<u8> = Vec::new();
+            {
+                use image::ImageEncoder;
+                let enc = image::codecs::png::PngEncoder::new(&mut png_buf);
+                if enc.write_image(rgba.as_raw(), w, h,
+                    image::ExtendedColorType::Rgba8).is_err()
+                {
+                    return false;
+                }
+            }
+            base64::prelude::BASE64_STANDARD.encode(&png_buf)
+        };
+
+        // ── Insert into editor ────────────────────────────────────────────
+        self.editor.handle_image_paste("image/png", b64, w, h);
+        true
     }
 
     fn handle_skills_key(&mut self, key: crossterm::event::KeyEvent) {
@@ -1634,7 +1877,7 @@ impl Drop for TuiApp {
         if supports_keyboard_enhancement().unwrap_or(false) {
             let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
         }
-        let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+        let _ = crossterm::execute!(std::io::stdout(), DisableBracketedPaste, DisableMouseCapture);
         ratatui::restore();
     }
 }
@@ -1670,6 +1913,9 @@ fn count_wrapped_segment(text: &str, content_w: u16) -> u16 {
         return 1;
     }
     let width = content_w as usize;
+    if width == 0 {
+        return 1;
+    }
     let mut rows: u16 = 1;
     let mut row_w: usize = 0;
     // split_inclusive preserves the trailing space/tab on each "word" token,
@@ -1678,7 +1924,15 @@ fn count_wrapped_segment(text: &str, content_w: u16) -> u16 {
         let word_w = UnicodeWidthStr::width(word);
         if row_w > 0 && row_w + word_w > width {
             rows += 1;
-            row_w = word_w;
+            row_w = 0;
+        }
+        
+        if word_w > width {
+            // A single word is longer than the width. Ratatui will wrap it
+            // across multiple lines.
+            let extra_rows = (word_w.saturating_sub(1)) / width;
+            rows += extra_rows as u16;
+            row_w = word_w - (extra_rows * width);
         } else {
             row_w += word_w;
         }
@@ -2420,6 +2674,54 @@ fn render_line_to_text(
                 }
             }
         }
+        RenderLine::LiveOutput { lines, max_visible, done: _ } => {
+            let inner_w = width.saturating_sub(5);
+            let color = RC::Rgb(100, 207, 100); // same green as successful ToolResult
+
+            if lines.is_empty() {
+                // Nothing arrived yet — show a placeholder so the entry is
+                // visible immediately as the command starts.
+                out.push(Line::from(vec![
+                    Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
+                    Span::styled(
+                        "(starting…)",
+                        Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC),
+                    ),
+                ]));
+            } else {
+                let visible = if expand_all { lines.len() } else { lines.len().min(*max_visible) };
+                let hidden  = lines.len().saturating_sub(visible);
+
+                // Collapsed header — shows how many earlier lines are hidden.
+                if hidden > 0 {
+                    let hint = format!("... ({hidden} earlier lines, ctrl+o to expand)");
+                    out.push(Line::from(Span::styled(
+                        hint,
+                        Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC),
+                    )));
+                }
+
+                // Tail lines — most recent `visible` lines.
+                let start = lines.len() - visible;
+                for (i, ln) in lines[start..].iter().enumerate() {
+                    if i == 0 && hidden == 0 {
+                        // First (and possibly only) line gets the ⎿ gutter.
+                        out.push(Line::from(vec![
+                            Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
+                            Span::styled(
+                                truncate_str(ln, inner_w),
+                                Style::default().fg(color).add_modifier(Modifier::BOLD),
+                            ),
+                        ]));
+                    } else {
+                        out.push(Line::from(vec![
+                            Span::raw("     "),
+                            Span::styled(truncate_str(ln, inner_w), Style::default().fg(color)),
+                        ]));
+                    }
+                }
+            }
+        }
         RenderLine::Reasoning { words: _, content } => {
             out.push(Line::from(Span::styled(
                 format!("💭 Thinking…"),
@@ -2603,13 +2905,11 @@ fn calc_input_rows(buf: &str, available_width: u16) -> u16 {
 fn calc_visual_cursor(before_cursor: &str, available_width: u16) -> (u16, u16) {
     // Mirror exactly how render_frame builds the Paragraph:
     //   • Each logical line (split on '\n') is its own ratatui Line.
-    //   • Every line has a 2-char prefix (">" / "  "), so text wraps at
-    //     (available_width - 2) columns.
-    //   • The cursor column is 2 + (chars_on_current_visual_row - 1) when
-    //     still on the first visual row of a logical line, or
-    //     2 + (chars_on_wrap_row - 1) on subsequent wrap rows.
+    //   • Every line has a 2-char prefix (">" / "  ").
+    //   • The paragraph uses Wrap { trim: false }, meaning it wraps exactly
+    //     at the available_width boundary. Wrapped lines do NOT get the prefix
+    //     so they start at column 0.
     let w = available_width.max(1) as usize;
-    let text_w = w.saturating_sub(2).max(1); // text columns per visual row
 
     let mut vis_row: u16 = 0;
     let mut vis_col: u16 = 2; // starts after the "  " / "> " prefix
@@ -2620,17 +2920,17 @@ fn calc_visual_cursor(before_cursor: &str, available_width: u16) -> (u16, u16) {
             vis_row += 1;
             vis_col = 2;
         }
-        // Walk through the segment, wrapping when we exceed text_w
-        let mut chars_on_row: usize = 0;
+        // Walk through the segment, wrapping when we exceed available width
+        let mut chars_on_row = vis_col as usize;
         for _ch in seg.chars() {
             chars_on_row += 1;
-            if chars_on_row > text_w {
+            if chars_on_row > w {
                 // Wrap to next visual row within this logical line
                 vis_row += 1;
                 chars_on_row = 1;
-                vis_col = 2 + 1; // prefix (2) + 1st char of new wrap row
+                vis_col = 1; // 0-indexed column is 0, so 1st char is length 1
             } else {
-                vis_col = 2 + chars_on_row as u16;
+                vis_col = chars_on_row as u16;
             }
         }
         // After processing all chars of this segment, vis_col is already set
@@ -2654,13 +2954,13 @@ fn find_cursor_at_visual_row_col(
     target_col: u16,
 ) -> usize {
     let mut vis_row: u16 = 0;
-    let mut chars_on_row: usize = 0;
+    let mut chars_on_row: usize = 2; // starts with a 2-char prefix
     let mut byte_offset: usize = 0;
 
     for (li, seg) in buf.split('\n').enumerate() {
         if li > 0 {
             vis_row += 1;
-            chars_on_row = 0;
+            chars_on_row = 2;
             byte_offset += 1; // the '\n' byte
         }
         if vis_row > target_row {
@@ -2676,8 +2976,8 @@ fn find_cursor_at_visual_row_col(
             }
             if vis_row == target_row {
                 // We're on the target row — check column
-                // col is 1-based relative to content (after the 2-char prefix)
-                let content_col = target_col.saturating_sub(2) as usize;
+                // target_col is raw screen column; chars_on_row matches raw length
+                let content_col = target_col as usize;
                 if chars_on_row > content_col {
                     return byte_offset;
                 }
@@ -2713,50 +3013,7 @@ impl TuiApp {
 /// Walk `root` up to `max_depth` levels deep, collecting files whose names
 /// contain `query` (case-insensitive).  Skips hidden paths and common noise
 /// directories (`target`, `node_modules`, `.git`).  Returns relative paths.
-fn collect_files(root: &std::path::Path, query: &str) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    collect_files_inner(root, root, 0, 3, query, &mut out);
-    out.sort();
-    out.truncate(50);
-    out
-}
 
-fn collect_files_inner(
-    root: &std::path::Path,
-    dir: &std::path::Path,
-    depth: u32,
-    max_depth: u32,
-    query: &str,
-    out: &mut Vec<String>,
-) {
-    if depth > max_depth {
-        return;
-    }
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.filter_map(|e| e.ok()) {
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name.starts_with('.') {
-            continue;
-        }
-        if matches!(name.as_str(), "target" | "node_modules" | ".git") {
-            continue;
-        }
-        let path = entry.path();
-        if path.is_dir() {
-            collect_files_inner(root, &path, depth + 1, max_depth, query, out);
-        } else if query.is_empty() || name.to_lowercase().contains(&query.to_lowercase()) {
-            let rel = path
-                .strip_prefix(root)
-                .ok()
-                .and_then(|p| p.to_str())
-                .map(|s| s.to_string())
-                .unwrap_or(name);
-            out.push(rel);
-        }
-    }
-}
 
 /// Render the `@` file picker as a floating overlay at the bottom of `area`.
 fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect) {
@@ -3165,151 +3422,8 @@ fn render_hint(frame: &mut Frame, hint: &str, area: Rect) {
 /// Returns `(new_input, new_cursor)` if a completion was found, `None` otherwise.
 /// Only triggers when the token at the cursor starts with `/`, `./`, `~/`, or
 /// contains `/` (looks like a path).
-fn complete_path(input: &str, cursor: usize) -> Option<(String, usize)> {
-    let cursor = cursor.min(input.len());
-    let before = &input[..cursor];
-
-    // Find start of the current token (split on whitespace).
-    let word_start = before
-        .rfind(|c: char| c.is_whitespace())
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    let partial = &before[word_start..];
-
-    // Only attempt if the token looks like a path.
-    if !partial.starts_with('/')
-        && !partial.starts_with("./")
-        && !partial.starts_with("~/")
-        && !partial.contains('/')
-    {
-        return None;
-    }
-
-    // Expand leading ~/
-    let home = dirs::home_dir();
-    let expanded: std::path::PathBuf = if partial.starts_with("~/") {
-        let h = home.as_deref()?;
-        h.join(&partial[2..])
-    } else {
-        std::path::PathBuf::from(partial)
-    };
-
-    // Split into parent directory and filename prefix to match.
-    let (parent, file_prefix, dir_suffix) = if partial.ends_with('/') {
-        (expanded.clone(), "", true)
-    } else {
-        let p = expanded
-            .parent()
-            .unwrap_or(std::path::Path::new("."))
-            .to_path_buf();
-        let f = expanded.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        (p, f, false)
-    };
-
-    // List the parent directory.
-    let mut matches: Vec<(String, bool)> = std::fs::read_dir(&parent)
-        .ok()?
-        .filter_map(|e| e.ok())
-        .filter_map(|e| {
-            let name = e.file_name().to_string_lossy().to_string();
-            if name.starts_with(file_prefix) {
-                let is_dir = e.path().is_dir();
-                Some((name, is_dir))
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    if matches.is_empty() {
-        return None;
-    }
-    matches.sort_by(|a, b| a.0.cmp(&b.0));
-
-    // Common prefix of all match names.
-    let names: Vec<String> = matches.iter().map(|(n, _)| n.clone()).collect();
-    let prefix_str = common_prefix(&names);
-    // If exactly one match, add trailing / for directories.
-    let suffix = if matches.len() == 1 && matches[0].1 {
-        "/"
-    } else {
-        ""
-    };
-    let completed_name = format!("{prefix_str}{suffix}");
-
-    // Rebuild the token, preserving the original ~/ or ./ prefix style.
-    let parent_display: String = {
-        let parent_str = parent.to_string_lossy();
-        if let Some(ref h) = home {
-            if parent.starts_with(h) {
-                let rel = parent
-                    .strip_prefix(h)
-                    .ok()
-                    .and_then(|p| p.to_str())
-                    .unwrap_or("");
-                if rel.is_empty() {
-                    "~/".to_string()
-                } else {
-                    format!("~/{rel}/")
-                }
-            } else if dir_suffix {
-                // partial ended with /; parent is the full expanded path
-                format!("{}/", parent_str)
-            } else {
-                format!("{}/", parent_str)
-            }
-        } else if dir_suffix {
-            format!("{}/", parent_str)
-        } else {
-            format!("{}/", parent_str)
-        }
-    };
-
-    let new_token = if dir_suffix {
-        // partial was "dir/"; parent is already the dir
-        format!("{}{}", parent_display, completed_name)
-    } else if partial.ends_with('/') {
-        format!("{}{}", parent_display, completed_name)
-    } else {
-        // Restore the leading ./ or ~/ prefix from the original partial.
-        let leading: &str = if partial.starts_with("~/") {
-            "~/"
-        } else if partial.starts_with("./") {
-            "./"
-        } else if partial.starts_with('/') {
-            "" // absolute — parent_display already has the /
-        } else {
-            ""
-        };
-        let _ = leading; // parent_display already encodes origin
-        format!("{}{}", parent_display, completed_name)
-    };
-
-    let new_cursor = word_start + new_token.len();
-    let new_input = format!("{}{}{}", &input[..word_start], new_token, &input[cursor..]);
-    Some((new_input, new_cursor))
-}
-
-/// Longest common prefix of a non-empty slice of strings.
-fn common_prefix(words: &[String]) -> String {
-    if words.is_empty() {
-        return String::new();
-    }
-    let first = &words[0];
-    let len = words
-        .iter()
-        .skip(1)
-        .map(|w| {
-            first
-                .chars()
-                .zip(w.chars())
-                .take_while(|(a, b)| a == b)
-                .count()
-        })
-        .min()
-        .unwrap_or(first.chars().count());
-    first.chars().take(len).collect()
-}
+// complete_path, collect_files, collect_files_inner, common_prefix
+// moved to crate::ui::autocomplete::FileAutocompleteProvider
 
 /// Abbreviate a filesystem path for the footer: last 2 components, with ~/
 /// prefix when the path is under the user's home directory.
@@ -3434,5 +3548,15 @@ mod tests {
             }
             _ => panic!("Expected QuestionResult"),
         }
+    }
+
+    #[test]
+    fn test_count_wrapped_segment() {
+        assert_eq!(count_wrapped_segment("a", 10), 1);
+        assert_eq!(count_wrapped_segment("1234567890", 10), 1);
+        assert_eq!(count_wrapped_segment("12345678901", 10), 2);
+        assert_eq!(count_wrapped_segment("123456789012345678901", 10), 3);
+        assert_eq!(count_wrapped_segment("a 12345678901", 10), 3);
+        assert_eq!(count_wrapped_segment("a 12345678901 ", 10), 3);
     }
 }

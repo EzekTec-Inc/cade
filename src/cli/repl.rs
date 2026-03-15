@@ -2864,7 +2864,7 @@ impl Repl {
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::CONTROL =>
                                                     {
-                                                        let msg = app.input.trim().to_string();
+                                                        let msg = app.editor.input.trim().to_string();
                                                         if !msg.is_empty() {
                                                             let now_ms = std::time::SystemTime::now()
                                                                 .duration_since(std::time::UNIX_EPOCH)
@@ -2877,8 +2877,8 @@ impl Repl {
                                                             if !post_modal {
                                                                 tick_queued_followup.lock().unwrap().push_back(msg);
                                                                 app.queued_count = tick_queued_followup.lock().unwrap().len();
-                                                                app.input.clear();
-                                                                app.cursor_pos = 0;
+                                                                app.editor.input.clear();
+                                                                app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
                                                             }
                                                         }
@@ -2889,7 +2889,7 @@ impl Repl {
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::NONE =>
                                                     {
-                                                        let msg = app.input.trim().to_string();
+                                                        let msg = app.editor.input.trim().to_string();
                                                         if !msg.is_empty() {
                                                             let now_ms = std::time::SystemTime::now()
                                                                 .duration_since(std::time::UNIX_EPOCH)
@@ -2902,8 +2902,8 @@ impl Repl {
                                                             if !post_modal {
                                                                 tick_queued_followup.lock().unwrap().push_back(msg);
                                                                 app.queued_count = tick_queued_followup.lock().unwrap().len();
-                                                                app.input.clear();
-                                                                app.cursor_pos = 0;
+                                                                app.editor.input.clear();
+                                                                app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
                                                             }
                                                         }
@@ -2913,9 +2913,9 @@ impl Repl {
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::SHIFT =>
                                                     {
-                                                        let pos = app.cursor_pos;
-                                                        app.input.insert(pos, '\n');
-                                                        app.cursor_pos = pos + 1;
+                                                        let pos = app.editor.cursor_pos;
+                                                        app.editor.input.insert(pos, '\n');
+                                                        app.editor.cursor_pos = pos + 1;
                                                         let _ = app.draw();
                                                     }
                                                     // Alt+Enter: queue as follow-up without
@@ -2924,12 +2924,12 @@ impl Repl {
                                                         if m == KeyModifiers::ALT
                                                         || m == (KeyModifiers::SHIFT | KeyModifiers::ALT) =>
                                                     {
-                                                        let msg = app.input.trim().to_string();
+                                                        let msg = app.editor.input.trim().to_string();
                                                         if !msg.is_empty() {
                                                             tick_queued_followup.lock().unwrap().push_back(msg);
                                                             app.queued_count = tick_queued_followup.lock().unwrap().len();
-                                                            app.input.clear();
-                                                            app.cursor_pos = 0;
+                                                            app.editor.input.clear();
+                                                            app.editor.cursor_pos = 0;
                                                             let _ = app.draw();
                                                         }
                                                     }
@@ -2938,22 +2938,22 @@ impl Repl {
                                                         if m == KeyModifiers::NONE
                                                         || m == KeyModifiers::SHIFT =>
                                                     {
-                                                        let pos = app.cursor_pos;
-                                                        app.input.insert(pos, c);
-                                                        app.cursor_pos = pos + c.len_utf8();
+                                                        let pos = app.editor.cursor_pos;
+                                                        app.editor.input.insert(pos, c);
+                                                        app.editor.cursor_pos = pos + c.len_utf8();
                                                         let _ = app.draw();
                                                     }
                                                     // Backspace — remove char before cursor.
                                                     (KeyCode::Backspace, _) => {
-                                                        let cp = app.cursor_pos;
+                                                        let cp = app.editor.cursor_pos;
                                                         if cp > 0 {
-                                                            let new_pos = app.input[..cp]
+                                                            let new_pos = app.editor.input[..cp]
                                                                 .char_indices()
                                                                 .next_back()
                                                                 .map(|(i, _)| i)
                                                                 .unwrap_or(0);
-                                                            app.input.drain(new_pos..cp);
-                                                            app.cursor_pos = new_pos;
+                                                            app.editor.input.drain(new_pos..cp);
+                                                            app.editor.cursor_pos = new_pos;
                                                             let _ = app.draw();
                                                         }
                                                     }
@@ -2985,13 +2985,13 @@ impl Repl {
                                                         let esc_post_modal = esc_last_close > 0
                                                             && esc_now_ms.saturating_sub(esc_last_close) < 500;
                                                         if !esc_post_modal && tick_start.elapsed().as_millis() >= 200 {
-                                                            if !app.input.is_empty() {
+                                                            if !app.editor.input.is_empty() {
                                                                 // Clear typed input rather than
                                                                 // cancelling — lets user discard
                                                                 // a queued message without stopping
                                                                 // the agent.
-                                                                app.input.clear();
-                                                                app.cursor_pos = 0;
+                                                                app.editor.input.clear();
+                                                                app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
                                                             } else {
                                                                 tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -3016,17 +3016,17 @@ impl Repl {
                                                         let cc_post_modal = cc_last_close > 0
                                                             && cc_now_ms.saturating_sub(cc_last_close) < 500;
                                                         if !cc_post_modal && tick_start.elapsed().as_millis() >= 200 {
-                                                            let msg = app.input.trim().to_string();
+                                                            let msg = app.editor.input.trim().to_string();
                                                             if !msg.is_empty() {
                                                                 // Steering: cancel current turn and
                                                                 // run this message immediately after.
                                                                 *tick_queued_steering.lock().unwrap() = Some(msg);
-                                                                app.input.clear();
-                                                                app.cursor_pos = 0;
+                                                                app.editor.input.clear();
+                                                                app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
                                                             } else {
-                                                                app.input.clear();
-                                                                app.cursor_pos = 0;
+                                                                app.editor.input.clear();
+                                                                app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
                                                             }
                                                             tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -3447,8 +3447,18 @@ impl Repl {
             results.push(result);
         }
 
-        // Clear any cancel flags accumulated during tool execution.
+        // Clear any cancel flags accumulated during tool execution and
+        // refresh the modal-close grace period so the tick task does not
+        // re-set cancel_turn from a stale terminal event while the HTTP
+        // connection for Phase 2 streaming is being established.
         self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.last_modal_close_ms.store(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            std::sync::atomic::Ordering::SeqCst,
+        );
 
         // Phase 2: deposit all results to the server.  The first N-1 sends
         // return [] (server is still buffering); the Nth triggers the LLM and
@@ -3618,6 +3628,27 @@ impl Repl {
                 stats.reviewed += 1;
                 stats.approved += 1;
             }
+        } else {
+            // Auto-approved (e.g. "Yes, don't ask again" was selected earlier).
+            // Clear any stale cancel flag left by a prior modal's buffered
+            // terminal events.  The manual-approval path above clears it after
+            // the modal closes, but when the modal is skipped entirely (auto-
+            // approve) that clear never runs and a residual cancel_turn = true
+            // can abort the subsequent stream_turn.
+            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+            // Refresh the modal-close timestamp so the tick task's Esc/Enter/
+            // Ctrl+C grace period covers the duration of this auto-approved
+            // tool execution.  Without this, stale terminal events from the
+            // original modal fire after the original 500 ms grace window
+            // expires during a slow auto-approved tool (e.g. MCP server call),
+            // re-setting cancel_turn = true and silently aborting the response.
+            self.last_modal_close_ms.store(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                std::sync::atomic::Ordering::SeqCst,
+            );
         }
 
         // PreToolUse hook — can block execution

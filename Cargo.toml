@@ -69,6 +69,9 @@ base64         = "0.22"
 notify-rust    = "4"
 ksni           = "0.2"
 
+# Clipboard (image paste)
+arboard        = "3"
+
 # Server
 axum           = { version = "0.7", features = ["macros"] }
 tower-http     = { version = "0.5", features = ["cors", "trace"] }
@@ -119,6 +122,9 @@ tokio-stream.workspace = true
 atty.workspace         = true
 axum.workspace         = true
 tower-http.workspace   = true
+arboard.workspace      = true
+image.workspace        = true
+base64.workspace       = true
 
 [dev-dependencies]
 tokio-test = "0.4"

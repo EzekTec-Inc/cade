@@ -1,6 +1,7 @@
 use anyhow::Result;
 use serde_json::Value;
 use std::time::Duration;
+use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
@@ -80,6 +81,117 @@ impl BashTool {
         }
 
         Ok(result)
+    }
+
+    /// Stream a bash command line-by-line, calling `on_line` for every output
+    /// line as it arrives (stdout and stderr interleaved in arrival order).
+    ///
+    /// Returns the full accumulated output string (for the LLM — identical to
+    /// what `run()` would return) and propagates any spawn or timeout error.
+    ///
+    /// The caller is responsible for showing a `LiveOutput` RenderLine and
+    /// passing a closure that appends each line to it.
+    pub async fn run_streaming<F>(args: &Value, mut on_line: F) -> Result<String>
+    where
+        F: FnMut(String) + Send,
+    {
+        let command = args["command"]
+            .as_str()
+            .ok_or_else(|| anyhow::anyhow!("bash: missing 'command' arg"))?;
+
+        let timeout_secs = args["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
+
+        if cade_core::permissions::bash_command_is_suspicious(command) {
+            tracing::warn!(
+                "bash: executing suspicious command (approved by caller): {:?}",
+                command.chars().take(120).collect::<String>()
+            );
+        }
+
+        use std::process::Stdio;
+        let mut child = tokio::time::timeout(
+            Duration::from_secs(timeout_secs),
+            async {
+                Command::new("bash")
+                    .arg("-c")
+                    .arg(command)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::piped())
+                    .spawn()
+            },
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Command timed out after {timeout_secs}s"))?
+        .map_err(|e| anyhow::anyhow!("Failed to spawn bash: {e}"))?;
+
+        let stdout = child.stdout.take().expect("stdout piped");
+        let stderr = child.stderr.take().expect("stderr piped");
+
+        // Merge stdout and stderr into one channel so lines arrive in
+        // roughly the order the process writes them.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+        let tx_out = tx.clone();
+        let out_task = tokio::spawn(async move {
+            let mut reader = BufReader::new(stdout).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                let _ = tx_out.send(line);
+            }
+        });
+
+        let tx_err = tx.clone();
+        let err_task = tokio::spawn(async move {
+            let mut reader = BufReader::new(stderr).lines();
+            while let Ok(Some(line)) = reader.next_line().await {
+                let _ = tx_err.send(line);
+            }
+        });
+        // Drop the original sender so rx closes when both tasks finish.
+        drop(tx);
+
+        let mut accumulated = String::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
+
+        loop {
+            match tokio::time::timeout_at(deadline, rx.recv()).await {
+                Ok(Some(line)) => {
+                    on_line(line.clone());
+                    accumulated.push_str(&line);
+                    accumulated.push('\n');
+                }
+                Ok(None) => break, // channel closed — both tasks done
+                Err(_) => {
+                    // Timeout: kill the child and stop reading.
+                    let _ = child.kill().await;
+                    return Err(anyhow::anyhow!("Command timed out after {timeout_secs}s"));
+                }
+            }
+        }
+
+        // Wait for the reader tasks and the child process.
+        let _ = out_task.await;
+        let _ = err_task.await;
+        let status = child.wait().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+
+        if !status.success() {
+            let code = status.code().unwrap_or(-1);
+            if accumulated.is_empty() {
+                accumulated = format!("(exit code {code})");
+            } else {
+                accumulated.push_str(&format!("\n(exit code {code})"));
+            }
+        }
+
+        // M-03: same truncation as run().
+        if accumulated.len() > MAX_OUTPUT_CHARS {
+            let truncated = &accumulated[..MAX_OUTPUT_CHARS];
+            accumulated = format!(
+                "{truncated}\n\n[...output truncated — {} chars omitted. Use head/tail/grep to narrow output.]",
+                accumulated.len() - MAX_OUTPUT_CHARS
+            );
+        }
+
+        Ok(accumulated)
     }
 
     pub fn schema() -> serde_json::Value {

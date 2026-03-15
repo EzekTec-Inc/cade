@@ -91,6 +91,11 @@ pub struct PermissionSettings {
     /// Patterns that are always denied: e.g. ["Bash(rm -rf:*)"]
     #[serde(default)]
     pub deny: Vec<String>,
+    /// SEC-B1: When true, bash / shell / run_command / execute_command are
+    /// never auto-approved regardless of allow rules or permission mode.
+    /// Every bash invocation will require explicit user confirmation.
+    #[serde(default)]
+    pub strict_bash: bool,
 }
 
 // ── MCP server configuration ──────────────────────────────────────────────────
@@ -129,7 +134,14 @@ pub struct GlobalSettings {
     /// MCP servers available globally (all projects).
     #[serde(default, rename = "mcpServers")]
     pub mcp_servers: std::collections::HashMap<String, McpServerConfig>,
+    /// SEC-B2: When false, the CLI ignores any `env.api_key` stored in this
+    /// file and relies exclusively on environment variables (`CADE_API_KEY`).
+    /// Default true preserves backward compatibility.
+    #[serde(default = "default_true")]
+    pub store_api_key: bool,
 }
+
+fn default_true() -> bool { true }
 
 /// Project settings stored in .cade/settings.json (committable — share with team)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -244,12 +256,20 @@ impl SettingsManager {
         Ok(())
     }
 
-    /// Resolve API key: CADE_API_KEY env var > global settings file
+    /// Resolve API key: CADE_API_KEY env var > global settings file.
+    /// SEC-B2: If `store_api_key` is false in settings, the file-based
+    /// fallback is skipped and only environment variables are used.
     pub fn api_key(&self) -> Option<String> {
         std::env::var("CADE_API_KEY")
             .ok()
             .or_else(|| std::env::var("LETTA_API_KEY").ok()) // backward-compat
-            .or_else(|| self.global.env.api_key.clone())
+            .or_else(|| {
+                if self.global.store_api_key {
+                    self.global.env.api_key.clone()
+                } else {
+                    None
+                }
+            })
     }
 
     /// Resolve server URL: CADE_SERVER_URL env var > global settings > localhost

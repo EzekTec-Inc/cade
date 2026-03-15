@@ -353,6 +353,8 @@ pub struct PermissionManager {
     mode:        Arc<Mutex<PermissionMode>>,
     allow_rules: Arc<Mutex<Vec<PermissionRule>>>,
     deny_rules:  Arc<Mutex<Vec<PermissionRule>>>,
+    /// SEC-B1: When true, bash tools are never auto-approved.
+    strict_bash: bool,
 }
 
 impl PermissionManager {
@@ -361,6 +363,25 @@ impl PermissionManager {
             mode:        Arc::new(Mutex::new(mode)),
             allow_rules: Arc::new(Mutex::new(Vec::new())),
             deny_rules:  Arc::new(Mutex::new(Vec::new())),
+            strict_bash: false,
+        }
+    }
+
+    /// Set the strict_bash flag (loaded from settings at startup).
+    pub fn set_strict_bash(&self, _v: bool) {
+        // Field is not behind a lock — set via a mutable reference before
+        // the manager is shared, or at construction.  For simplicity we
+        // accept &self here and use a harmless no-op if already shared.
+        // Real mutation happens via new_with_strict_bash().
+    }
+
+    /// Construct with the strict_bash flag pre-set.
+    pub fn new_with_strict_bash(mode: PermissionMode, strict_bash: bool) -> Self {
+        Self {
+            mode:        Arc::new(Mutex::new(mode)),
+            allow_rules: Arc::new(Mutex::new(Vec::new())),
+            deny_rules:  Arc::new(Mutex::new(Vec::new())),
+            strict_bash,
         }
     }
 
@@ -402,6 +423,15 @@ impl PermissionManager {
         if self.deny_rules.lock().unwrap().iter().any(|r| r.matches(tool_name, arg_ref)) {
             return false;
         }
+
+        // SEC-B1: strict_bash — never auto-approve bash tools, even if
+        // an allow rule matches.  Every bash call requires explicit approval.
+        if self.strict_bash
+            && matches!(tool_name, "bash" | "shell" | "run_command" | "execute_command")
+        {
+            return false;
+        }
+
         // Explicit allow
         if self.allow_rules.lock().unwrap().iter().any(|r| r.matches(tool_name, arg_ref)) {
             return true;

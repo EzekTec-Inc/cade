@@ -539,6 +539,19 @@ async fn build_context(
                                     Some("Internal: last auto-compaction turn"),
                                     None,
                                 );
+
+                                // Inject summary directly into the current turn's message array 
+                                // so the agent doesn't suffer amnesia before the next memory load.
+                                // Insert right after the system prompt (index 1).
+                                if messages.len() > 1 {
+                                    messages.insert(1, LlmMessage {
+                                        role: "system".to_string(),
+                                        content: format!("[Auto-compacted history summary]:\n{}", summary),
+                                        tool_call_id: None,
+                                        tool_calls: None,
+                                    });
+                                }
+
                                 tracing::info!(
                                     "Auto-compaction complete for agent '{}': summary={} chars, \
                                      stored as '{}'",

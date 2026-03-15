@@ -12,6 +12,7 @@ use cade_core::skills::Skill;
 use cade_agent::subagents::{BackgroundResult, discover_all_subagents, find_subagent};
 use cade_core::toolsets::Toolset;
 use cade_agent::tools::dispatch;
+use cade_agent::tools::bash::BashTool;
 use crate::ui::{TuiApp, RenderLine, cycle_mode, cycle_mode_back};
 
 const BANNER: &str = r#"
@@ -558,6 +559,9 @@ pub struct Repl {
     /// close to prevent the confirmation Enter from cancelling the subsequent
     /// stream_turn — mirrors the 200 ms Esc grace period.
     last_modal_close_ms: Arc<std::sync::atomic::AtomicU64>,
+    /// Images staged by `agent_turn_with_images` for the current turn.
+    /// Consumed (and cleared) by the first `send_message*` call inside `agent_turn`.
+    pending_turn_images: Vec<serde_json::Value>,
 }
 
 impl Repl {
@@ -623,6 +627,7 @@ impl Repl {
             queued_steering:     Arc::new(Mutex::new(None)),
             queued_followup:     Arc::new(Mutex::new(std::collections::VecDeque::new())),
             last_modal_close_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            pending_turn_images: Vec::new(),
         }
     }
 
@@ -795,12 +800,39 @@ impl Repl {
                 continue;
             }
 
-            if input.is_empty() { continue; }
-            history.push(input.clone());
+            // Drain any pasted images staged by the TUI on the last submission.
+            let submit_images: Vec<serde_json::Value> = {
+                let mut app = self.app.lock().unwrap();
+                std::mem::take(&mut app.pending_submit_images)
+                    .into_iter()
+                    .map(|img| serde_json::json!({
+                        "media_type": img.media_type,
+                        "data": img.data
+                    }))
+                    .collect()
+            };
+
+            if input.is_empty() && submit_images.is_empty() { continue; }
+            if !input.is_empty() {
+                history.push(input.clone());
+            }
             hist_idx = None;
 
             // Echo user message.
-            let _ = self.app.lock().unwrap().push(RenderLine::UserMessage(input.clone()));
+            let echo_text = if submit_images.is_empty() {
+                input.clone()
+            } else {
+                let count = submit_images.len();
+                let suffix = if count == 1 { "image" } else { "images" };
+                if input.is_empty() {
+                    format!("[Attached {} {}]", count, suffix)
+                } else {
+                    format!("{}
+
+[Attached {} {}]", input, count, suffix)
+                }
+            };
+            let _ = self.app.lock().unwrap().push(RenderLine::UserMessage(echo_text));
 
             // Direct bash:
             //   !!cmd  — run silently: show output locally, do NOT send to agent.
@@ -2605,7 +2637,7 @@ impl Repl {
             }
 
             // Send to agent and handle tool loop
-            self.agent_turn(&mut stdout, &input).await?;
+            self.agent_turn_with_images(&mut stdout, &input, submit_images).await?;
             let _ = self.app.lock().unwrap().commit_streaming();
 
             // I-01: drain queued messages into pending_input.
@@ -2702,6 +2734,18 @@ impl Repl {
     }
 
     /// Send a user message and drive the tool-call loop with live SSE streaming.
+    /// Thin wrapper: start a turn, optionally attaching pasted images.
+    async fn agent_turn_with_images(
+        &mut self,
+        stdout: &mut io::Stdout,
+        input: &str,
+        images: Vec<serde_json::Value>,
+    ) -> Result<()> {
+        // Store images on self so the inner agent_turn send path can pick them up.
+        self.pending_turn_images = images;
+        self.agent_turn(stdout, input).await
+    }
+
     async fn agent_turn(&mut self, stdout: &mut io::Stdout, input: &str) -> Result<()> {
         use std::sync::atomic::Ordering;
 
@@ -2794,8 +2838,14 @@ impl Repl {
                                     format!("assessing… (esc to interrupt · {secs}s · {toks}↑)");
                             }
                         }
+                        // R-01: Only draw if the app has pending state changes
+                        // (draw_dirty) or the thinking animation needs refreshing.
+                        // This avoids redundant full-screen redraws when nothing
+                        // has changed since the last frame.
                         if let Ok(mut app) = tick_app.try_lock() {
-                            let _ = app.draw();
+                            if app.draw_dirty || app.thinking.is_some() {
+                                let _ = app.draw();
+                            }
                         }
                     }
                     Some(Ok(evt)) = reader.next() => {
@@ -2864,7 +2914,7 @@ impl Repl {
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::CONTROL =>
                                                     {
-                                                        let msg = app.input.trim().to_string();
+                                                        let msg = app.editor.input.trim().to_string();
                                                         if !msg.is_empty() {
                                                             let now_ms = std::time::SystemTime::now()
                                                                 .duration_since(std::time::UNIX_EPOCH)
@@ -2877,8 +2927,8 @@ impl Repl {
                                                             if !post_modal {
                                                                 tick_queued_followup.lock().unwrap().push_back(msg);
                                                                 app.queued_count = tick_queued_followup.lock().unwrap().len();
-                                                                app.input.clear();
-                                                                app.cursor_pos = 0;
+                                                                app.editor.input.clear();
+                                                                app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
                                                             }
                                                         }
@@ -2889,7 +2939,7 @@ impl Repl {
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::NONE =>
                                                     {
-                                                        let msg = app.input.trim().to_string();
+                                                        let msg = app.editor.input.trim().to_string();
                                                         if !msg.is_empty() {
                                                             let now_ms = std::time::SystemTime::now()
                                                                 .duration_since(std::time::UNIX_EPOCH)
@@ -2902,8 +2952,8 @@ impl Repl {
                                                             if !post_modal {
                                                                 tick_queued_followup.lock().unwrap().push_back(msg);
                                                                 app.queued_count = tick_queued_followup.lock().unwrap().len();
-                                                                app.input.clear();
-                                                                app.cursor_pos = 0;
+                                                                app.editor.input.clear();
+                                                                app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
                                                             }
                                                         }
@@ -2913,9 +2963,9 @@ impl Repl {
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::SHIFT =>
                                                     {
-                                                        let pos = app.cursor_pos;
-                                                        app.input.insert(pos, '\n');
-                                                        app.cursor_pos = pos + 1;
+                                                        let pos = app.editor.cursor_pos;
+                                                        app.editor.input.insert(pos, '\n');
+                                                        app.editor.cursor_pos = pos + 1;
                                                         let _ = app.draw();
                                                     }
                                                     // Alt+Enter: queue as follow-up without
@@ -2924,12 +2974,12 @@ impl Repl {
                                                         if m == KeyModifiers::ALT
                                                         || m == (KeyModifiers::SHIFT | KeyModifiers::ALT) =>
                                                     {
-                                                        let msg = app.input.trim().to_string();
+                                                        let msg = app.editor.input.trim().to_string();
                                                         if !msg.is_empty() {
                                                             tick_queued_followup.lock().unwrap().push_back(msg);
                                                             app.queued_count = tick_queued_followup.lock().unwrap().len();
-                                                            app.input.clear();
-                                                            app.cursor_pos = 0;
+                                                            app.editor.input.clear();
+                                                            app.editor.cursor_pos = 0;
                                                             let _ = app.draw();
                                                         }
                                                     }
@@ -2938,22 +2988,22 @@ impl Repl {
                                                         if m == KeyModifiers::NONE
                                                         || m == KeyModifiers::SHIFT =>
                                                     {
-                                                        let pos = app.cursor_pos;
-                                                        app.input.insert(pos, c);
-                                                        app.cursor_pos = pos + c.len_utf8();
+                                                        let pos = app.editor.cursor_pos;
+                                                        app.editor.input.insert(pos, c);
+                                                        app.editor.cursor_pos = pos + c.len_utf8();
                                                         let _ = app.draw();
                                                     }
                                                     // Backspace — remove char before cursor.
                                                     (KeyCode::Backspace, _) => {
-                                                        let cp = app.cursor_pos;
+                                                        let cp = app.editor.cursor_pos;
                                                         if cp > 0 {
-                                                            let new_pos = app.input[..cp]
+                                                            let new_pos = app.editor.input[..cp]
                                                                 .char_indices()
                                                                 .next_back()
                                                                 .map(|(i, _)| i)
                                                                 .unwrap_or(0);
-                                                            app.input.drain(new_pos..cp);
-                                                            app.cursor_pos = new_pos;
+                                                            app.editor.input.drain(new_pos..cp);
+                                                            app.editor.cursor_pos = new_pos;
                                                             let _ = app.draw();
                                                         }
                                                     }
@@ -2985,13 +3035,13 @@ impl Repl {
                                                         let esc_post_modal = esc_last_close > 0
                                                             && esc_now_ms.saturating_sub(esc_last_close) < 500;
                                                         if !esc_post_modal && tick_start.elapsed().as_millis() >= 200 {
-                                                            if !app.input.is_empty() {
+                                                            if !app.editor.input.is_empty() {
                                                                 // Clear typed input rather than
                                                                 // cancelling — lets user discard
                                                                 // a queued message without stopping
                                                                 // the agent.
-                                                                app.input.clear();
-                                                                app.cursor_pos = 0;
+                                                                app.editor.input.clear();
+                                                                app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
                                                             } else {
                                                                 tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -3016,17 +3066,17 @@ impl Repl {
                                                         let cc_post_modal = cc_last_close > 0
                                                             && cc_now_ms.saturating_sub(cc_last_close) < 500;
                                                         if !cc_post_modal && tick_start.elapsed().as_millis() >= 200 {
-                                                            let msg = app.input.trim().to_string();
+                                                            let msg = app.editor.input.trim().to_string();
                                                             if !msg.is_empty() {
                                                                 // Steering: cancel current turn and
                                                                 // run this message immediately after.
                                                                 *tick_queued_steering.lock().unwrap() = Some(msg);
-                                                                app.input.clear();
-                                                                app.cursor_pos = 0;
+                                                                app.editor.input.clear();
+                                                                app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
                                                             } else {
-                                                                app.input.clear();
-                                                                app.cursor_pos = 0;
+                                                                app.editor.input.clear();
+                                                                app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
                                                             }
                                                             tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -3037,8 +3087,11 @@ impl Repl {
                                             }
                                             break;
                                         }
-                                        // Yield to runtime and retry — never drop the event
-                                        tokio::task::yield_now().await;
+                                        // R-02: Sleep briefly before retry.  yield_now() spun
+                                        // at full CPU speed when the lock was held by a draw();
+                                        // 1 ms is long enough to release contention pressure
+                                        // without adding visible latency for key delivery.
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
                                     }
                                 }
                             }
@@ -3104,7 +3157,7 @@ impl Repl {
     /// `bar_text`: optional shared string updated by tool_call_message events
     /// to keep the ThinkingBar status current.
     async fn stream_turn(
-        &self,
+        &mut self,
         _stdout: &mut io::Stdout,
         input: &str,
         is_tool_return: bool,
@@ -3117,33 +3170,28 @@ impl Repl {
         _spinner: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
     ) -> Result<Vec<CadeMessage>> {
-        // ── Shared render state for the on_event closure ────────────────────────
-        // OutputRenderer is on self but closures need Arcs for shared mutability.
-        // We use two Arcs mirroring in_reasoning / in_assistant state so the closure
-        // can track block transitions without touching &mut self.
-        let in_reasoning = std::sync::Arc::new(std::sync::Mutex::new(false));
-        let in_assistant = std::sync::Arc::new(std::sync::Mutex::new(false));
-        let in_reasoning2 = in_reasoning.clone();
-        let in_assistant2 = in_assistant.clone();
+        // ── R-04: Async event buffering ─────────────────────────────────────────
+        // Decouples network I/O from TUI rendering.  The SSE callback (`on_event`)
+        // performs only lightweight session/stats bookkeeping and forwards each
+        // message to an unbounded channel.  A dedicated UI consumer task reads
+        // from the channel and applies all TuiApp mutations + draws.  This means
+        // the SSE event loop is never blocked by draw() or lock contention.
 
-        // Clone Arcs before the move closure so conversation_id and run state can be saved
+        // ── Per-turn channel ────────────────────────────────────────────────────
+        let (ui_tx, ui_rx) = tokio::sync::mpsc::unbounded_channel::<CadeMessage>();
+
+        // ── Session / stats state (used by on_event — NO TuiApp access) ─────────
         let conv_arc     = self.conversation_id.clone();
         let session_arc  = self.session.clone();
-        // Session-level token accumulators
         let sess_in_tok  = self.session_input_tokens.clone();
         let sess_out_tok = self.session_output_tokens.clone();
-        // Rich session stats (per-model breakdown, timing, tool calls)
         let sess_stats   = self.session_stats.clone();
-        // Track run_id/seq_id for crash recovery / reconnect
         let run_id_cell:   std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
         let seq_id_cell:   std::sync::Arc<std::sync::Mutex<Option<i64>>>   = Default::default();
         let run_id_cell2   = run_id_cell.clone();
         let seq_id_cell2   = seq_id_cell.clone();
 
-        // Clone the Arc so the on_event closure can access TuiApp.
-        let app_arc      = self.app.clone();
-        let bar_text_arc = bar_text;
-
+        // ── on_event: SSE callback — stats only, then forward to UI channel ─────
         let on_event = move |msg: &CadeMessage| {
             match msg.msg_type() {
                 "stream_start" => {
@@ -3160,60 +3208,6 @@ impl Repl {
                         *run_id_cell2.lock().unwrap() = Some(rid.to_string());
                     }
                 }
-                "reasoning_message" => {
-                    if let Some(text) = msg.reasoning_text() {
-                        let mut flag = in_reasoning2.lock().unwrap();
-                        if !*flag { *flag = true; }
-                        // Accumulate reasoning text; committed as collapsed header on done.
-                        app_arc.lock().unwrap().push_reasoning_chunk(text);
-                    }
-                }
-                "assistant_message" => {
-                    {
-                        let mut rflag = in_reasoning2.lock().unwrap();
-                        if *rflag {
-                            let _ = app_arc.lock().unwrap().commit_reasoning();
-                            *rflag = false;
-                        }
-                    }
-                    if let Some(text) = msg.assistant_text() {
-                        if !text.is_empty() {
-                            *in_assistant2.lock().unwrap() = true;
-                            let _ = app_arc.lock().unwrap().push_streaming_chunk(text);
-                            // Update thinking bar to show generation progress.
-                            if let Some(ref bar) = bar_text_arc {
-                                let words = app_arc.lock().unwrap()
-                                    // count words in streaming_text via a snapshot
-                                    .lines.len(); // rough proxy — update bar text
-                                let cur = bar.lock().unwrap().clone();
-                                if !cur.starts_with("●") {
-                                    *bar.lock().unwrap() = format!("generating… ({words} lines)");
-                                }
-                            }
-                        }
-                    }
-                }
-                "tool_call_message" => {
-                    {
-                        let mut rflag = in_reasoning2.lock().unwrap();
-                        if *rflag {
-                            let _ = app_arc.lock().unwrap().commit_reasoning();
-                            *rflag = false;
-                        }
-                    }
-                    let _ = app_arc.lock().unwrap().commit_streaming();
-                    *in_assistant2.lock().unwrap() = false;
-                    if let Some(ref bar) = bar_text_arc {
-                        let tool_name = msg.data["tool_calls"][0]["function"]["name"]
-                            .as_str().unwrap_or("tool");
-                        let display = if let Some(pos) = tool_name.rfind("__") {
-                            &tool_name[pos + 2..]
-                        } else {
-                            tool_name
-                        };
-                        *bar.lock().unwrap() = format!("● {}…", display);
-                    }
-                }
                 "usage_statistics" => {
                     use std::sync::atomic::Ordering;
                     if let Some(n) = msg.data["input_tokens"].as_u64() {
@@ -3222,7 +3216,6 @@ impl Repl {
                     if let Some(n) = msg.data["output_tokens"].as_u64() {
                         sess_out_tok.fetch_add(n, Ordering::SeqCst);
                     }
-                    // Update rich per-model stats
                     if let Ok(mut stats) = sess_stats.lock() {
                         let model       = msg.data["model"].as_str().unwrap_or("").to_string();
                         let input       = msg.data["input_tokens"].as_u64().unwrap_or(0);
@@ -3230,16 +3223,6 @@ impl Repl {
                         let cache_write = msg.data["cache_write_tokens"].as_u64().unwrap_or(0);
                         let output      = msg.data["output_tokens"].as_u64().unwrap_or(0);
                         stats.record_usage(&model, input, cache_read, cache_write, output);
-
-                        // U-01: update footer context-window usage %.
-                        // input_tokens + cache_read_tokens = total tokens in context this turn.
-                        let window = cade_server::server::llm::catalogue::context_window_for_model(&model);
-                        if window > 0 {
-                            let used = input + cache_read;
-                            let pct = ((used as f64 / window as f64) * 100.0)
-                                .round().min(99.0) as u8;
-                            app_arc.lock().unwrap().set_context_pct(pct);
-                        }
                     }
                 }
                 _ => {}
@@ -3247,12 +3230,91 @@ impl Repl {
             if let Some(s) = msg.seq_id() {
                 *seq_id_cell2.lock().unwrap() = Some(s);
             }
+            // Forward to UI consumer (non-blocking, never stalls the SSE loop).
+            let _ = ui_tx.send(msg.clone());
         };
 
+        // ── UI consumer task — all TuiApp mutations happen here ─────────────────
+        let app_arc      = self.app.clone();
+        let bar_text_arc = bar_text;
+        let ui_task = tokio::spawn(async move {
+            let mut ui_rx = ui_rx;
+            let mut in_reasoning = false;
+            let mut in_assistant = false;
+            while let Some(msg) = ui_rx.recv().await {
+                match msg.msg_type() {
+                    "reasoning_message" => {
+                        if let Some(text) = msg.reasoning_text() {
+                            in_reasoning = true;
+                            app_arc.lock().unwrap().push_reasoning_chunk(text);
+                        }
+                    }
+                    "assistant_message" => {
+                        if let Some(text) = msg.assistant_text() {
+                            if !text.is_empty() {
+                                in_reasoning = false;
+                                in_assistant = true;
+                                let line_count = {
+                                    let mut app = app_arc.lock().unwrap();
+                                    app.commit_reasoning_inner();
+                                    let _ = app.push_streaming_chunk(text);
+                                    app.lines.len()
+                                };
+                                if let Some(ref bar) = bar_text_arc {
+                                    let cur = bar.lock().unwrap().clone();
+                                    if !cur.starts_with("●") {
+                                        *bar.lock().unwrap() = format!("generating… ({line_count} lines)");
+                                    }
+                                }
+                            }
+                        } else if in_reasoning {
+                            let _ = app_arc.lock().unwrap().commit_reasoning();
+                            in_reasoning = false;
+                        }
+                    }
+                    "tool_call_message" => {
+                        in_reasoning = false;
+                        {
+                            let mut app = app_arc.lock().unwrap();
+                            app.commit_reasoning_inner();
+                            let _ = app.commit_streaming();
+                        }
+                        in_assistant = false;
+                        if let Some(ref bar) = bar_text_arc {
+                            let tool_name = msg.data["tool_calls"][0]["function"]["name"]
+                                .as_str().unwrap_or("tool");
+                            let display = if let Some(pos) = tool_name.rfind("__") {
+                                &tool_name[pos + 2..]
+                            } else {
+                                tool_name
+                            };
+                            *bar.lock().unwrap() = format!("● {}…", display);
+                        }
+                    }
+                    "usage_statistics" => {
+                        // Stats already updated in on_event; only set UI context %.
+                        let model      = msg.data["model"].as_str().unwrap_or("");
+                        let input      = msg.data["input_tokens"].as_u64().unwrap_or(0);
+                        let cache_read = msg.data["cache_read_tokens"].as_u64().unwrap_or(0);
+                        let window = cade_server::server::llm::catalogue::context_window_for_model(model);
+                        if window > 0 {
+                            let used = input + cache_read;
+                            let pct = ((used as f64 / window as f64) * 100.0)
+                                .round().min(99.0) as u8;
+                            app_arc.lock().unwrap().set_context_pct(pct);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            // Channel closed — suppress unused-variable warnings.
+            let _ = (in_reasoning, in_assistant);
+        });
+
+        // ── Streaming call (network I/O — on_event never touches TuiApp) ────────
         let agent_id  = self.agent_id();
         let cancel    = &self.cancel_turn;
 
-        // Helper: detect a user-triggered cancellation error vs a real error
         fn is_cancel(e: &anyhow::Error) -> bool { e.to_string() == "__cancelled__" }
 
         let conv_id   = self.conversation_id();
@@ -3266,6 +3328,8 @@ impl Repl {
             {
                 Ok(m) => m,
                 Err(e) if is_cancel(&e) => {
+                    // Drop the sender so the UI task drains and exits.
+                    ui_task.abort();
                     let mut app = self.app.lock().unwrap();
                     let _ = app.commit_reasoning();
                     let _ = app.commit_streaming();
@@ -3273,6 +3337,7 @@ impl Repl {
                     return Ok(vec![]);
                 }
                 Err(e) => {
+                    ui_task.abort();
                     let mut app = self.app.lock().unwrap();
                     let _ = app.commit_reasoning();
                     let _ = app.commit_streaming();
@@ -3284,9 +3349,17 @@ impl Repl {
             use std::sync::atomic::Ordering;
             let streaming = self.streaming_enabled.load(Ordering::SeqCst);
             if streaming {
-                match self.client.stream_message_cancellable(&agent_id, input, conv_ref, ephemeral, on_event, Some(cancel)).await {
+                // Consume any pasted images on the first (non-tool-return) turn.
+                // Subsequent turns (tool returns, follow-ups) carry no images.
+                let turn_images = if !is_tool_return {
+                    std::mem::take(&mut self.pending_turn_images)
+                } else {
+                    vec![]
+                };
+                match self.client.stream_message_cancellable_with_images(&agent_id, input, conv_ref, ephemeral, turn_images, on_event, Some(cancel)).await {
                     Ok(m) => m,
                     Err(e) if is_cancel(&e) => {
+                        ui_task.abort();
                         let mut app = self.app.lock().unwrap();
                         let _ = app.commit_reasoning();
                         let _ = app.commit_streaming();
@@ -3294,6 +3367,7 @@ impl Repl {
                         return Ok(vec![]);
                     }
                     Err(e) => {
+                        ui_task.abort();
                         let mut app = self.app.lock().unwrap();
                         let _ = app.commit_reasoning();
                         let _ = app.commit_streaming();
@@ -3302,8 +3376,15 @@ impl Repl {
                     }
                 }
             } else {
-                // Non-streaming path — single HTTP request, print result at end
-                match self.client.send_message(&agent_id, input, ephemeral).await {
+                // Non-streaming path — single HTTP request, print result at end.
+                // UI task is unused; abort it immediately.
+                ui_task.abort();
+                let turn_images_ns = if !is_tool_return {
+                    std::mem::take(&mut self.pending_turn_images)
+                } else {
+                    vec![]
+                };
+                match self.client.send_message_with_images(&agent_id, input, turn_images_ns, ephemeral).await {
                     Ok(msgs) => {
                         for msg in &msgs {
                             if let Some(text) = msg.assistant_text() {
@@ -3323,9 +3404,19 @@ impl Repl {
             }
         };
 
-        // Commit any open streaming blocks after streaming ends.
-        let _ = self.app.lock().unwrap().commit_reasoning();
-        let _ = self.app.lock().unwrap().commit_streaming();
+        // ── Drain UI consumer — let it process any remaining queued messages ────
+        // on_event held the sender; the streaming call above consumed it (closure
+        // dropped when stream_message_cancellable returned).  The channel is now
+        // closed, so ui_rx.recv() will return None after draining.
+        let _ = ui_task.await;
+
+        // Safety-net commit: ensure reasoning/streaming are flushed even if the
+        // UI task missed the final messages (e.g. channel race on success path).
+        {
+            let mut app = self.app.lock().unwrap();
+            let _ = app.commit_reasoning();
+            let _ = app.commit_streaming();
+        }
 
         // Save run_id + last seq_id for crash recovery / reconnect
         let saved_run_id  = run_id_cell.lock().unwrap().clone();
@@ -3349,7 +3440,7 @@ impl Repl {
     /// earlier in the turn (e.g. introduced what it was doing) and then finished
     /// silently after a tool — the user already received a meaningful response.
     async fn dispatch_tool_calls(
-        &self,
+        &mut self,
         stdout: &mut io::Stdout,
         messages: Vec<CadeMessage>,
         user_input: &str,
@@ -3447,8 +3538,18 @@ impl Repl {
             results.push(result);
         }
 
-        // Clear any cancel flags accumulated during tool execution.
+        // Clear any cancel flags accumulated during tool execution and
+        // refresh the modal-close grace period so the tick task does not
+        // re-set cancel_turn from a stale terminal event while the HTTP
+        // connection for Phase 2 streaming is being established.
         self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.last_modal_close_ms.store(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            std::sync::atomic::Ordering::SeqCst,
+        );
 
         // Phase 2: deposit all results to the server.  The first N-1 sends
         // return [] (server is still buffering); the Nth triggers the LLM and
@@ -3618,6 +3719,27 @@ impl Repl {
                 stats.reviewed += 1;
                 stats.approved += 1;
             }
+        } else {
+            // Auto-approved (e.g. "Yes, don't ask again" was selected earlier).
+            // Clear any stale cancel flag left by a prior modal's buffered
+            // terminal events.  The manual-approval path above clears it after
+            // the modal closes, but when the modal is skipped entirely (auto-
+            // approve) that clear never runs and a residual cancel_turn = true
+            // can abort the subsequent stream_turn.
+            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+            // Refresh the modal-close timestamp so the tick task's Esc/Enter/
+            // Ctrl+C grace period covers the duration of this auto-approved
+            // tool execution.  Without this, stale terminal events from the
+            // original modal fire after the original 500 ms grace window
+            // expires during a slow auto-approved tool (e.g. MCP server call),
+            // re-setting cancel_turn = true and silently aborting the response.
+            self.last_modal_close_ms.store(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                std::sync::atomic::Ordering::SeqCst,
+            );
         }
 
         // PreToolUse hook — can block execution
@@ -3635,8 +3757,47 @@ impl Repl {
             });
         }
 
-        // Per-tool execution timeout — prevents a stalled bash command or
-        // unresponsive MCP server from hanging the turn indefinitely.
+        // ── Bash tools — live-streaming path ─────────────────────────────
+        // For bash/run_command/execute_command we stream stdout+stderr lines
+        // into a LiveOutput RenderLine so the user sees progress in real-time.
+        // All other tools use the standard dispatch() path below.
+        if matches!(tool_name, "bash" | "run_command" | "execute_command") {
+            // Begin live display — returns index of the LiveOutput entry.
+            let live_idx = self.app.lock().unwrap().begin_live_output(8);
+
+            let app_arc  = self.app.clone();
+            let run_result = BashTool::run_streaming(args, move |line| {
+                let _ = app_arc.lock().unwrap().append_live_output_line(live_idx, line);
+            }).await;
+
+            let _ = self.app.lock().unwrap().finish_live_output(live_idx);
+
+            let (output, is_error) = match run_result {
+                Ok(out) => (out, false),
+                Err(e)  => (format!("Error: {e}"), true),
+            };
+
+            let mut result = cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name:    tool_name.to_string(),
+                output,
+                is_error,
+            };
+
+            // PostToolUse / PostToolUseFailure hooks (same as standard path).
+            if result.is_error {
+                self.hooks.post_tool_use_failure(tool_name, args, &result.output).await;
+            } else {
+                if let Some(extra) = self.hooks.post_tool_use(tool_name, args, &result.output).await {
+                    result.output = format!("{}\n\n[Hook context: {extra}]", result.output);
+                }
+            }
+
+            // LiveOutput is already shown — no additional ToolResult push needed.
+            return Ok(result);
+        }
+
+        // ── All other tools — standard dispatch path ──────────────────────
         const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
         let mut result = match tokio::time::timeout(
             TOOL_TIMEOUT,
@@ -3666,9 +3827,6 @@ impl Repl {
             (true, truncate(&result.output, 200).to_string())
         } else {
             match tool_name {
-                "bash" | "run_command" | "execute_command" => {
-                    (false, result.output.clone())
-                }
                 "write_file" | "create_file" => {
                     (false, format!("written ({} chars)", result.output.len()))
                 }

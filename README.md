@@ -106,6 +106,21 @@ cade -p "..." --no-stream                  # Wait for full response before print
 
 ---
 
+## Terminal UI Features
+
+CADE features a highly responsive, custom-built terminal user interface (TUI) powered by Ratatui:
+
+*   **Flicker-Free Rendering:** Uses CSI 2026 synchronized output for atomic screen updates, eliminating tearing on supported terminals (Kitty, WezTerm, iTerm2).
+*   **Bracketed Paste:** Safely handles large text pastes. Pasting >10 lines collapses into a compact `[paste #1 +50 lines]` marker, keeping the input field usable. The full text is transparently expanded before sending to the LLM.
+*   **Pluggable Autocomplete:** Press `Tab` for intelligent path completion, or type `@` to open a fuzzy-search file picker overlay.
+*   **Multi-line Input:** Press `Shift+Enter` (or `Alt+Enter`) to insert a newline; plain `Enter` submits.
+*   **Bash Shortcuts:** Prefix a line with `!command` to run it in the shell and send the output to the LLM, or `!!command` to run it silently (local output only).
+*   **Undo / Redo:** `Ctrl+Z` / `Ctrl+Y` undo and redo edits in the input field (up to 100 levels).
+*   **Standard Editing Keys:** `Ctrl+U` (clear to start), `Ctrl+K` (clear to end of line), `Ctrl+W` (delete word), `Alt+←`/`Alt+→` (word jump). See [docs/keybindings.md](docs/keybindings.md) for the full reference.
+*   **Non-Disruptive Scrolling:** Scrolling up to read conversation history prevents the viewport from snapping to the bottom when the agent streams a response, preserving your reading context.
+
+---
+
 ## Interactive slash commands
 
 ### Navigation
@@ -258,9 +273,9 @@ Configure in `~/.cade/settings.json`:
     "git": {
       "command": "/path/to/git-mcp-server"
     },
-    "my-server": {
-      "command": "node",
-      "args": ["/path/to/server/dist/index.js"]
+    "openviking": {
+      "command": "/path/to/openviking/.venv/bin/python",
+      "args": ["/path/to/openviking/openviking_mcp.py"]
     }
   }
 }
@@ -469,6 +484,13 @@ src/
 └── bin/
     └── cade-server.rs       # cade-server entry point
 ```
+
+---
+
+## Security
+
+See [`SECURITY.md`](SECURITY.md) for CADE's security model, threat assumptions,
+configuration hardening options, and reporting guidance.
 
 ---
 

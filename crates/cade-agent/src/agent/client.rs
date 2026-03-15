@@ -649,6 +649,26 @@ impl CadeClient {
         self.post_messages(agent_id, &req).await
     }
 
+    /// Like `send_message` but also attaches base64-encoded images.
+    ///
+    /// Each element of `images` must be `{"media_type": "image/png", "data": "<b64>"}`.
+    pub async fn send_message_with_images(
+        &self,
+        agent_id: &str,
+        input: &str,
+        images: Vec<serde_json::Value>,
+        ephemeral: bool,
+    ) -> Result<Vec<CadeMessage>> {
+        let mut req = json!({ "input": input });
+        if ephemeral {
+            req["ephemeral"] = true.into();
+        }
+        if !images.is_empty() {
+            req["images"] = serde_json::Value::Array(images);
+        }
+        self.post_messages(agent_id, &req).await
+    }
+
     // ── Conversations ─────────────────────────────────────────────────────────
 
     pub async fn list_conversations(&self, agent_id: &str) -> Result<Vec<serde_json::Value>> {
@@ -795,6 +815,25 @@ impl CadeClient {
     where
         F: Fn(&CadeMessage),
     {
+        self.stream_message_cancellable_with_images(
+            agent_id, input, conversation_id, ephemeral, vec![], on_event, cancel,
+        ).await
+    }
+
+    /// Like `stream_message_cancellable` but also attaches base64-encoded images.
+    pub async fn stream_message_cancellable_with_images<F>(
+        &self,
+        agent_id: &str,
+        input: &str,
+        conversation_id: Option<&str>,
+        ephemeral: bool,
+        images: Vec<serde_json::Value>,
+        on_event: F,
+        cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
+    ) -> Result<Vec<CadeMessage>>
+    where
+        F: Fn(&CadeMessage),
+    {
         let url = self.url(&format!("/agents/{agent_id}/messages/stream"));
         let mut body = json!({ "input": input });
         if let Some(cid) = conversation_id {
@@ -802,6 +841,9 @@ impl CadeClient {
         }
         if ephemeral {
             body["ephemeral"] = true.into();
+        }
+        if !images.is_empty() {
+            body["images"] = serde_json::Value::Array(images);
         }
 
         let request = self

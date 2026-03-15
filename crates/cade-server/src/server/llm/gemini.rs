@@ -349,10 +349,49 @@ impl GeminiProvider {
                     i += 1;
                 }
                 _ => {
-                    contents.push(json!({
-                        "role": "user",
-                        "parts": [{"text": msg.content}]
-                    }));
+                    // Build the parts array for this user turn.
+                    // Gemini vision format: inline_data parts precede the text part.
+                    let mut new_parts: Vec<Value> = Vec::new();
+                    if let Some(images) = &msg.images {
+                        for img in images {
+                            new_parts.push(json!({
+                                "inline_data": {
+                                    "mime_type": img.media_type,
+                                    "data": img.data
+                                }
+                            }));
+                        }
+                    }
+                    if !msg.content.is_empty() {
+                        new_parts.push(json!({"text": msg.content}));
+                    }
+                    if new_parts.is_empty() {
+                        new_parts.push(json!({"text": ""}));
+                    }
+
+                    // Merge consecutive user turns — Gemini rejects two user
+                    // turns in a row (can happen after context trimming strips
+                    // an intervening model turn, or when an ephemeral re-prompt
+                    // follows a functionResponse user turn).
+                    let merged = if msg.images.as_ref().map_or(true, |v| v.is_empty()) {
+                        // Only merge plain-text turns; image turns always start a new entry
+                        // to avoid the Gemini API rejecting mixed inline_data in a merged part.
+                        if let Some(last) = contents.last_mut() {
+                            if last.get("role").and_then(|v| v.as_str()) == Some("user") {
+                                if let Some(arr) = last.get_mut("parts").and_then(|v| v.as_array_mut()) {
+                                    arr.extend(new_parts.drain(..));
+                                    true
+                                } else { false }
+                            } else { false }
+                        } else { false }
+                    } else { false };
+
+                    if !merged {
+                        contents.push(json!({
+                            "role": "user",
+                            "parts": new_parts
+                        }));
+                    }
                     i += 1;
                 }
             }

@@ -17,6 +17,19 @@ use crate::server::config::ServerConfig;
 
 // ── Request / Response types ──────────────────────────────────────────────────
 
+/// A base64-encoded image attached to a user message.
+///
+/// Stored as JSON in the SQLite `content` column alongside the text so that
+/// the full conversation history — including past images — is available when
+/// building LLM context for subsequent turns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageImage {
+    /// IANA media type: `"image/png"`, `"image/jpeg"`, `"image/gif"`, `"image/webp"`.
+    pub media_type: String,
+    /// Base64-encoded image bytes (standard alphabet, no line-breaks).
+    pub data: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LlmMessage {
     pub role: String,    // "system" | "user" | "assistant" | "tool"
@@ -25,6 +38,10 @@ pub struct LlmMessage {
     pub tool_call_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_calls: Option<Vec<LlmToolCall>>,
+    /// Inline images attached to this message (user messages only).
+    /// When present the provider serialises a multi-part content array.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub images: Option<Vec<MessageImage>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -7,6 +7,24 @@ use cade_agent::mcp::McpManager;
 use cade_core::permissions::PermissionManager;
 use cade_agent::tools::dispatch;
 
+/// Strip control characters that could act as ANSI/terminal escape sequences
+/// when printed in headless mode. Newlines and tabs are preserved; other
+/// bytes in the 0x00–0x1F and 0x7F range are dropped.
+fn sanitize_for_terminal(s: &str) -> String {
+    s.chars()
+        .filter(|&ch| {
+            let c = ch as u32;
+            if ch == '\n' || ch == '\t' {
+                true
+            } else if c <= 0x1F || c == 0x7F {
+                false
+            } else {
+                true
+            }
+        })
+        .collect()
+}
+
 // ── Headless run statistics ───────────────────────────────────────────────────
 
 #[derive(Debug, Default)]
@@ -52,7 +70,8 @@ pub async fn run_headless(
     let messages = client
         .stream_message(agent_id, prompt, |msg| {
             if let Some(text) = msg.assistant_text() {
-                print!("{text}");
+                let safe = sanitize_for_terminal(text);
+                print!("{safe}");
                 let _ = std::io::Write::flush(&mut std::io::stdout());
             }
         })
@@ -589,5 +608,33 @@ fn collect_assistant_text(messages: &[CadeMessage], output: &mut String) {
                 output.push('\n');
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_for_terminal;
+
+    #[test]
+    fn preserves_normal_text_and_newlines() {
+        assert_eq!(sanitize_for_terminal("hello\nworld\t!"), "hello\nworld\t!");
+    }
+
+    #[test]
+    fn strips_ansi_escape_sequences() {
+        let s = "ok\x1b[31mRED\x1b[0mnormal";
+        assert_eq!(sanitize_for_terminal(s), "ok[31mRED[0mnormal");
+    }
+
+    #[test]
+    fn strips_null_and_control_chars() {
+        let s = "a\x00b\x01c\x7fd";
+        assert_eq!(sanitize_for_terminal(s), "abcd");
+    }
+
+    #[test]
+    fn preserves_unicode() {
+        let s = "héllo wörld 日本語";
+        assert_eq!(sanitize_for_terminal(s), s);
     }
 }

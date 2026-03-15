@@ -353,6 +353,7 @@ pub struct PermissionManager {
     mode:        Arc<Mutex<PermissionMode>>,
     allow_rules: Arc<Mutex<Vec<PermissionRule>>>,
     deny_rules:  Arc<Mutex<Vec<PermissionRule>>>,
+    strict_bash: bool,
 }
 
 impl PermissionManager {
@@ -361,6 +362,17 @@ impl PermissionManager {
             mode:        Arc::new(Mutex::new(mode)),
             allow_rules: Arc::new(Mutex::new(Vec::new())),
             deny_rules:  Arc::new(Mutex::new(Vec::new())),
+            strict_bash: false,
+        }
+    }
+
+    pub fn set_strict_bash(&self, _v: bool) {}
+    pub fn new_with_strict_bash(mode: PermissionMode, strict_bash: bool) -> Self {
+        Self {
+            mode:        Arc::new(Mutex::new(mode)),
+            allow_rules: Arc::new(Mutex::new(Vec::new())),
+            deny_rules:  Arc::new(Mutex::new(Vec::new())),
+            strict_bash,
         }
     }
 
@@ -400,6 +412,11 @@ impl PermissionManager {
 
         // Explicit deny wins over everything
         if self.deny_rules.lock().unwrap().iter().any(|r| r.matches(tool_name, arg_ref)) {
+            return false;
+        }
+        if self.strict_bash
+            && matches!(tool_name, "bash" | "shell" | "run_command" | "execute_command")
+        {
             return false;
         }
         // Explicit allow

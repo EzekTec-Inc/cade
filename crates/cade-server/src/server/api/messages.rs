@@ -130,6 +130,7 @@ fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
                         content,
                         tool_call_id: Some(id.clone()),
                         tool_calls: None,
+                                        images: None,
                     });
                 }
 
@@ -216,12 +217,14 @@ verbose tool output. Output plain text, no markdown headers. \
 Keep under 800 words.".to_string(),
         tool_call_id: None,
         tool_calls: None,
+        images: None,
     };
     let user_msg = LlmMessage {
         role: "user".to_string(),
         content: format!("Summarize this conversation:\n\n{transcript}"),
         tool_call_id: None,
         tool_calls: None,
+        images: None,
     };
 
     let req = crate::server::llm::CompletionRequest {
@@ -396,6 +399,7 @@ async fn build_context(
         content: system_prompt,
         tool_call_id: None,
         tool_calls: None,
+        images: None,
     }];
 
     for row in &history {
@@ -408,6 +412,23 @@ async fn build_context(
         let system_msg = messages.remove(0);
         let sanitized = sanitize_messages(messages);
         messages = std::iter::once(system_msg).chain(sanitized).collect();
+    }
+
+    // Strip trailing empty assistant messages left by prior empty LLM responses.
+    // These produce no content for any provider and can create invalid turn
+    // ordering (e.g. consecutive user turns in Gemini after the empty model
+    // turn is skipped).
+    while messages.len() > 1 {
+        if let Some(last) = messages.last() {
+            if last.role == "assistant"
+                && last.content.is_empty()
+                && last.tool_calls.as_ref().map_or(true, |tc| tc.is_empty())
+            {
+                messages.pop();
+                continue;
+            }
+        }
+        break;
     }
 
     // Stale tool-result summarization: tool results outside the recent window
@@ -461,6 +482,10 @@ async fn build_context(
                         .as_deref()
                         .and_then(|tcs| serde_json::to_string(tcs).ok())
                         .map(|s| s.len())
+                        .unwrap_or(0)
+                    + m.images
+                        .as_ref()
+                        .map(|imgs| imgs.iter().map(|img| img.data.len() + img.media_type.len()).sum())
                         .unwrap_or(0)
             })
             .sum()
@@ -539,6 +564,20 @@ async fn build_context(
                                     Some("Internal: last auto-compaction turn"),
                                     None,
                                 );
+                                
+                                // Inject summary directly into the current turn's message array 
+                                // so the agent doesn't suffer amnesia before the next memory load.
+                                // Insert right after the system prompt (index 1).
+                                if messages.len() > 1 {
+                                    messages.insert(1, LlmMessage {
+                                        role: "system".to_string(),
+                                        content: format!("[Auto-compacted history summary]:\n{}", summary),
+                                        tool_call_id: None,
+                                        tool_calls: None,
+                                                                        images: None,
+                                    });
+                                }
+
                                 tracing::info!(
                                     "Auto-compaction complete for agent '{}': summary={} chars, \
                                      stored as '{}'",
@@ -575,6 +614,16 @@ async fn build_context(
     // any leading non-user messages until one is found or only 2 messages remain.
     while messages.len() > 2 && messages[1].role != "user" {
         messages.remove(1);
+    }
+
+    // Re-sanitize after trimming: the removal loop above can break
+    // tool_call / tool_result pairs that the first sanitize_messages() pass
+    // had already repaired.  A second pass is cheap (linear scan) and
+    // guarantees every provider sees a valid sequence.
+    if messages.len() > 1 {
+        let system_msg = messages.remove(0);
+        let sanitized = sanitize_messages(messages);
+        messages = std::iter::once(system_msg).chain(sanitized).collect();
     }
 
     // Tool schemas — use agent-specific tools if wired, else all tools
@@ -662,6 +711,7 @@ fn db_row_to_llm(row: &MessageRow) -> Vec<LlmMessage> {
                 content,
                 tool_call_id: row.content["tool_call_id"].as_str().map(String::from),
                 tool_calls: None,
+                        images: None,
             }]
         }
         "assistant" => {
@@ -680,14 +730,28 @@ fn db_row_to_llm(row: &MessageRow) -> Vec<LlmMessage> {
                 content: text,
                 tool_call_id: None,
                 tool_calls,
+                images: None,
             }]
         }
-        _ => vec![LlmMessage {
-            role: row.role.clone(),
-            content: row.content["content"].as_str().unwrap_or("").to_string(),
-            tool_call_id: None,
-            tool_calls: None,
-        }],
+        _ => {
+            let content = row.content["content"].as_str().unwrap_or("").to_string();
+            // Reconstruct inline images stored during the original persist call.
+            let images: Option<Vec<crate::server::llm::MessageImage>> = row.content["images"]
+                .as_array()
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                        .collect()
+                })
+                .filter(|v: &Vec<_>| !v.is_empty());
+            vec![LlmMessage {
+                role: row.role.clone(),
+                content,
+                tool_call_id: None,
+                tool_calls: None,
+                images,
+            }]
+        },
     }
 }
 
@@ -763,24 +827,45 @@ pub async fn send_message(
         None => return err(StatusCode::BAD_REQUEST, "missing 'input'"),
     };
 
+    // Collect optional inline images from the request body.
+    // Each element must have "media_type" and "data" (base64) fields.
+    let req_images: Option<Vec<crate::server::llm::MessageImage>> = body["images"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| serde_json::from_value(v.clone()).ok())
+                .collect()
+        })
+        .filter(|v: &Vec<_>| !v.is_empty());
+
     // 1. Persist user message FIRST (skip for ephemeral system injections)
     let is_ephemeral = body["ephemeral"].as_bool().unwrap_or(false);
     if !is_ephemeral {
-        persist(
-            &state,
-            &agent_id,
-            conv_id_ref,
-            "user",
-            json!({ "content": input }),
-        );
+        let mut user_content = json!({ "content": input });
+        if let Some(ref imgs) = req_images {
+            user_content["images"] = serde_json::to_value(imgs).unwrap_or(Value::Null);
+        }
+        persist(&state, &agent_id, conv_id_ref, "user", user_content);
     }
 
     // 2. Build context from DB (includes the message we just persisted)
-    let (model, messages, tools) = match build_context(&state, &agent_id, conv_id_ref, false).await
+    let (model, mut messages, tools) = match build_context(&state, &agent_id, conv_id_ref, false).await
     {
         Ok(ctx) => ctx,
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
+
+    // 2b. Ephemeral messages were not persisted — inject into context so the
+    // LLM actually sees them.  Without this the re-prompt text is silently lost.
+    if is_ephemeral {
+        messages.push(LlmMessage {
+            role: "user".to_string(),
+            content: input.clone(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: req_images.clone(),
+        });
+    }
 
     // 3. Call LLM
     let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
@@ -797,16 +882,22 @@ pub async fn send_message(
                 .iter()
                 .filter_map(|tc| serde_json::to_value(tc).ok())
                 .collect();
-            persist(
-                &state,
-                &agent_id,
-                conv_id_ref,
-                "assistant",
-                json!({
-                    "content": resp.content.clone().unwrap_or_default(),
-                    "tool_calls": tool_calls_json
-                }),
-            );
+            // Skip persisting empty assistant responses — they clutter the
+            // conversation and can produce invalid turn ordering on next load.
+            let has_content = resp.content.as_ref().map_or(false, |s| !s.is_empty());
+            let has_tools   = !resp.tool_calls.is_empty();
+            if has_content || has_tools {
+                persist(
+                    &state,
+                    &agent_id,
+                    conv_id_ref,
+                    "assistant",
+                    json!({
+                        "content": resp.content.clone().unwrap_or_default(),
+                        "tool_calls": tool_calls_json
+                    }),
+                );
+            }
 
             let mut out: Vec<Value> = vec![];
             if let Some(text) = &resp.content {
@@ -875,16 +966,20 @@ async fn handle_tool_return_blocking(
                 .iter()
                 .filter_map(|tc| serde_json::to_value(tc).ok())
                 .collect();
-            persist(
-                state,
-                agent_id,
-                conv_id,
-                "assistant",
-                json!({
-                    "content": resp.content.clone().unwrap_or_default(),
-                    "tool_calls": tool_calls_json
-                }),
-            );
+            let has_content = resp.content.as_ref().map_or(false, |s| !s.is_empty());
+            let has_tools   = !resp.tool_calls.is_empty();
+            if has_content || has_tools {
+                persist(
+                    state,
+                    agent_id,
+                    conv_id,
+                    "assistant",
+                    json!({
+                        "content": resp.content.clone().unwrap_or_default(),
+                        "tool_calls": tool_calls_json
+                    }),
+                );
+            }
             let mut out: Vec<Value> = vec![];
             if let Some(text) = &resp.content {
                 out.push(json!({ "message_type": "assistant_message", "content": text }));
@@ -969,11 +1064,30 @@ pub async fn stream_message(
     }
 
     // 3. Build context from DB
-    let (model, messages, tools) =
+    let (model, mut messages, tools) =
         match build_context(&state, &agent_id, conv_id_ref, is_tool_return).await {
             Ok(ctx) => ctx,
             Err(e) => return err(StatusCode::NOT_FOUND, &e),
         };
+
+    // 3b. Ephemeral messages were not persisted — inject into context so the
+    // LLM actually sees them.  Without this the re-prompt text is silently
+    // lost and the LLM is called with the same context that already produced
+    // an empty response.
+    if !is_tool_return {
+        let is_ephemeral = body["ephemeral"].as_bool().unwrap_or(false);
+        if is_ephemeral {
+            if let Some(input) = body["input"].as_str().filter(|s| !s.is_empty()) {
+                messages.push(LlmMessage {
+                    role: "user".to_string(),
+                    content: input.to_string(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                                images: None,
+                });
+            }
+        }
+    }
 
     let background = body["background"].as_bool().unwrap_or(false);
     // Create a run for background (and also for foreground — keeps history for reconnect)
@@ -1088,16 +1202,21 @@ pub async fn stream_message(
             }
             Ok(StreamChunk::Done) => {
                 if let Ok(g) = acc_clone.lock() {
-                    persist(
-                        &state_clone,
-                        &agent_id_clone,
-                        conv_id_clone.as_deref(),
-                        "assistant",
-                        json!({
-                            "content": g.0,
-                            "tool_calls": g.1
-                        }),
-                    );
+                    // Skip persisting empty assistant responses — they clutter
+                    // the conversation and produce invalid turn ordering on
+                    // next context load (e.g. Gemini consecutive-user-turn 400).
+                    if !g.0.is_empty() || !g.1.is_empty() {
+                        persist(
+                            &state_clone,
+                            &agent_id_clone,
+                            conv_id_clone.as_deref(),
+                            "assistant",
+                            json!({
+                                "content": g.0,
+                                "tool_calls": g.1
+                            }),
+                        );
+                    }
                 }
                 if let Some(rid) = &run_id_clone {
                     let _ = sqlite::finish_run(&db_clone, rid, "completed");

@@ -95,6 +95,26 @@ impl AnthropicProvider {
                     i += 1;
                 }
                 _ => {
+                    // When images are attached, build a multi-part content array.
+                    // Anthropic format: [{"type":"image","source":{...}}, {"type":"text","text":"..."}]
+                    if let Some(images) = &m.images {
+                        if !images.is_empty() {
+                            let mut blocks: Vec<Value> = images.iter().map(|img| json!({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": img.media_type,
+                                    "data": img.data
+                                }
+                            })).collect();
+                            if !m.content.is_empty() {
+                                blocks.push(json!({"type": "text", "text": m.content}));
+                            }
+                            anthropic_messages.push(json!({"role": m.role, "content": blocks}));
+                            i += 1;
+                            continue;
+                        }
+                    }
                     anthropic_messages.push(json!({"role": m.role, "content": m.content}));
                     i += 1;
                 }

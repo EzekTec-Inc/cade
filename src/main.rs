@@ -29,6 +29,24 @@ use skills::{discover_all_skills, skills_listing};
 
 const SKILLS_DIR: &str = ".skills";
 
+/// Strip control characters that could act as ANSI/terminal escape sequences
+/// when printed in headless mode. Newlines and tabs are preserved; other
+/// bytes in the 0x00–0x1F and 0x7F range are dropped.
+fn sanitize_for_terminal(s: &str) -> String {
+    s.chars()
+        .filter(|&ch| {
+            let c = ch as u32;
+            if ch == '\n' || ch == '\t' {
+                true
+            } else if c <= 0x1F || c == 0x7F {
+                false
+            } else {
+                true
+            }
+        })
+        .collect()
+}
+
 /// Base system prompt — behavioral instructions for the agent.
 /// This is separate from the `persona` memory block (which holds identity/style).
 /// The system prompt is instructions; memory blocks hold evolving state.
@@ -568,7 +586,8 @@ async fn main() -> Result<()> {
         .effective_permission_mode()
         .parse()
         .context("invalid permission mode")?;
-    let permissions = PermissionManager::new(perm_mode);
+    let strict_bash = settings.permission_settings().strict_bash;
+    let permissions = PermissionManager::new_with_strict_bash(perm_mode, strict_bash);
 
     // Load persistent rules from ~/.cade/settings.json
     for raw in &settings.permission_settings().allow.clone() {
@@ -1048,7 +1067,7 @@ async fn main() -> Result<()> {
                         "agent_id":    agent.id,
                     }));
                 } else {
-                    println!("{output}");
+                    println!("{}", sanitize_for_terminal(&output));
                 }
                 std::process::exit(0);
             }
@@ -1062,7 +1081,7 @@ async fn main() -> Result<()> {
                         "agent_id": agent.id,
                     }));
                 } else {
-                    eprintln!("Error: {e}");
+                    eprintln!("Error: {}", sanitize_for_terminal(&e.to_string()));
                 }
                 std::process::exit(1);
             }
