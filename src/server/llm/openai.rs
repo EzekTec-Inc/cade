@@ -329,6 +329,11 @@ impl LlmProvider for OpenAiProvider {
             if !req.tools.is_empty() {
                 body["tools"] = Self::build_responses_tools(req);
             }
+            if let Some(effort) = &req.reasoning_effort {
+                if ["low", "medium", "high"].contains(&effort.as_str()) {
+                    body["reasoning_effort"] = effort.clone().into();
+                }
+            }
             return retry_with_backoff("OpenAI::complete", 3, std::time::Duration::from_secs(1), |_| {
                 let client  = self.client.clone();
                 let api_key = self.api_key.clone();
@@ -365,6 +370,11 @@ impl LlmProvider for OpenAiProvider {
         };
         if !req.tools.is_empty() {
             body["tools"] = Self::build_tools(req);
+        }
+        if let Some(effort) = &req.reasoning_effort {
+            if ["low", "medium", "high"].contains(&effort.as_str()) {
+                body["reasoning_effort"] = effort.clone().into();
+            }
         }
 
         retry_with_backoff("OpenAI::complete", 3, std::time::Duration::from_secs(1), |_| {
@@ -406,6 +416,11 @@ impl LlmProvider for OpenAiProvider {
             });
             if !req.tools.is_empty() {
                 body["tools"] = Self::build_responses_tools(req);
+            }
+            if let Some(effort) = &req.reasoning_effort {
+                if ["low", "medium", "high"].contains(&effort.as_str()) {
+                    body["reasoning_effort"] = effort.clone().into();
+                }
             }
 
             let resp = retry_with_backoff("OpenAI::stream", 3, std::time::Duration::from_secs(1), |_| {
@@ -539,6 +554,11 @@ impl LlmProvider for OpenAiProvider {
         };
         if !req.tools.is_empty() {
             body["tools"] = Self::build_tools(req);
+        }
+        if let Some(effort) = &req.reasoning_effort {
+            if ["low", "medium", "high"].contains(&effort.as_str()) {
+                body["reasoning_effort"] = effort.clone().into();
+            }
         }
 
         let resp = retry_with_backoff("OpenAI::stream", 3, std::time::Duration::from_secs(1), |_| {

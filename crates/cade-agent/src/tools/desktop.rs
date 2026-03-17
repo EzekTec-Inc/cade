@@ -1,4 +1,4 @@
-//! Desktop extension tools — exposed to the Letta agent as callable functions.
+//! Desktop extension tools — exposed to the CADE agent as callable functions.
 //! Wraps src/desktop/* and provides the same dispatch interface as other tools.
 
 use anyhow::Result;

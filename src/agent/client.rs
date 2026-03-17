@@ -202,7 +202,7 @@ impl CadeClient {
     }
 
     /// Fetch the server's auto-detected provider and default model.
-    /// Falls back to a local default if the endpoint is unavailable (e.g. Letta Cloud).
+    /// Falls back to a local default if the endpoint is unavailable (e.g. CADE Cloud).
     // ── Provider management ───────────────────────────────────────────────────
 
     pub async fn list_providers(&self) -> anyhow::Result<serde_json::Value> {
@@ -777,7 +777,7 @@ impl CadeClient {
     where
         F: Fn(&CadeMessage),
     {
-        self.stream_message_cancellable(agent_id, input, None, false, on_event, None).await
+        self.stream_message_cancellable(agent_id, input, None, false, None, on_event, None).await
     }
 
     /// Like `stream_message` but checks an optional cancel flag before each SSE event.
@@ -789,6 +789,7 @@ impl CadeClient {
         // When true, server skips persisting the user message — for system-injected
         // re-prompts that should not appear in conversation history.
         ephemeral: bool,
+        reasoning_effort: Option<&str>,
         on_event: F,
         cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Vec<CadeMessage>>
@@ -802,6 +803,9 @@ impl CadeClient {
         }
         if ephemeral {
             body["ephemeral"] = true.into();
+        }
+        if let Some(effort) = reasoning_effort {
+            body["reasoning_effort"] = effort.into();
         }
 
         let request = self
@@ -926,7 +930,7 @@ impl CadeClient {
     where
         F: Fn(&CadeMessage),
     {
-        self.stream_tool_return_cancellable(agent_id, tool_call_id, output, is_error, None, on_event, None).await
+        self.stream_tool_return_cancellable(agent_id, tool_call_id, output, is_error, None, None, on_event, None).await
     }
 
     /// Like `stream_tool_return` but checks an optional cancel flag between SSE events.
@@ -937,6 +941,7 @@ impl CadeClient {
         output: &str,
         is_error: bool,
         conversation_id: Option<&str>,
+        reasoning_effort: Option<&str>,
         on_event: F,
         cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Vec<CadeMessage>>
@@ -951,6 +956,9 @@ impl CadeClient {
                 "status": if is_error { "error" } else { "success" }
             }
         });
+        if let Some(effort) = reasoning_effort {
+            body["reasoning_effort"] = effort.into();
+        }
         if let Some(cid) = conversation_id {
             body["conversation_id"] = cid.into();
         }

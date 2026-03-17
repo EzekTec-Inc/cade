@@ -72,7 +72,7 @@ pub fn toolset_for_model(model_id: &str) -> String {
 pub fn max_tokens_for_model(model_id: &str) -> u32 {
     if let Some(m) = CATALOGUE.iter().find(|(_, _, id, _, _, _)| *id == model_id) {
         m.4
-    } else if model_id.starts_with("gemini/") || model_id.starts_with("openai/") {
+    } else if model_id.starts_with("gemini/") || model_id.starts_with("google/gemini") || model_id.starts_with("openai/") {
         8192
     } else {
         4096 // Safe default for older models / unknown providers
@@ -98,7 +98,7 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
     }
     // Provider-prefix heuristics for dynamic / uncatalogued models
     if model_id.starts_with("anthropic/") { return 200_000; }
-    if model_id.starts_with("gemini/")    { return 1_048_576; }
+    if model_id.starts_with("gemini/") || model_id.starts_with("google/gemini") { return 1_048_576; }
     if model_id.starts_with("openai/")    { return 128_000; }
     // Groq models (fast inference, smaller windows)
     if model_id.contains("llama")         { return 128_000; }

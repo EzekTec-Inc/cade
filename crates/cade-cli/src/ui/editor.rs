@@ -88,10 +88,20 @@ pub struct Editor {
     undo_stack: VecDeque<(String, usize)>,
     /// States saved by `undo()` so `redo()` can reapply them.
     redo_stack: VecDeque<(String, usize)>,
+    /// Last action performed, used for undo coalescing.
+    pub last_action: EditorAction,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditorAction {
+    TypeWord,
+    Other,
 }
 
 /// Maximum number of paste lines shown verbatim before collapsing.
 const PASTE_COLLAPSE_THRESHOLD: usize = 10;
+/// Maximum number of paste characters shown verbatim before collapsing.
+const PASTE_CHAR_THRESHOLD: usize = 1000;
 /// Maximum entries kept in the undo / redo stacks.
 const UNDO_LIMIT: usize = 100;
 
@@ -106,6 +116,7 @@ impl Editor {
             paste_images: Vec::new(),
             undo_stack: VecDeque::with_capacity(UNDO_LIMIT),
             redo_stack: VecDeque::with_capacity(UNDO_LIMIT),
+            last_action: EditorAction::Other,
         }
     }
 
@@ -157,7 +168,10 @@ impl Editor {
 
     /// Insert a character at the current cursor position.
     pub fn insert_char(&mut self, c: char) {
-        self.snapshot();
+        if c.is_whitespace() || self.last_action != EditorAction::TypeWord {
+            self.snapshot();
+        }
+        self.last_action = EditorAction::TypeWord;
         let pos = self.cursor_pos;
         self.input.insert(pos, c);
         self.cursor_pos = pos + c.len_utf8();
@@ -169,6 +183,7 @@ impl Editor {
             return;
         }
         self.snapshot();
+        self.last_action = EditorAction::Other;
         self.input.insert_str(self.cursor_pos, s);
         self.cursor_pos += s.len();
     }
@@ -184,12 +199,13 @@ impl Editor {
         if self.cursor_pos == 0 {
             return false;
         }
+        self.snapshot();
+        self.last_action = EditorAction::Other;
         let char_len = self.input[..self.cursor_pos]
             .chars()
             .last()
             .map(|c| c.len_utf8())
             .unwrap_or(1);
-        self.snapshot();
         self.cursor_pos -= char_len;
         self.input.remove(self.cursor_pos);
         true
@@ -202,6 +218,7 @@ impl Editor {
             return false;
         }
         self.snapshot();
+        self.last_action = EditorAction::Other;
         self.input.remove(self.cursor_pos);
         true
     }
@@ -212,6 +229,7 @@ impl Editor {
             return;
         }
         self.snapshot();
+        self.last_action = EditorAction::Other;
         self.input.drain(..self.cursor_pos);
         self.cursor_pos = 0;
     }
@@ -228,6 +246,7 @@ impl Editor {
             return; // nothing to delete — keep redo_stack intact
         }
         self.snapshot();
+        self.last_action = EditorAction::Other;
         self.input.drain(self.cursor_pos..end);
     }
 
@@ -242,6 +261,7 @@ impl Editor {
             .and_then(|p| self.input[..p].rfind(char::is_whitespace).map(|q| q + 1))
             .unwrap_or(0);
         self.snapshot();
+        self.last_action = EditorAction::Other;
         self.input.drain(start..end);
         self.cursor_pos = start;
     }
@@ -353,7 +373,8 @@ impl Editor {
     /// `[paste #N +M lines]` is inserted instead.
     pub fn handle_paste(&mut self, text: &str) {
         let line_count = text.lines().count();
-        if line_count <= PASTE_COLLAPSE_THRESHOLD {
+        let char_count = text.chars().count();
+        if line_count <= PASTE_COLLAPSE_THRESHOLD && char_count <= PASTE_CHAR_THRESHOLD {
             // Short paste — insert verbatim (snapshot happens inside insert_str).
             self.insert_str(text);
         } else {
@@ -364,7 +385,11 @@ impl Editor {
                 id,
                 text: text.to_string(),
             });
-            let marker = format!("[paste #{id} +{line_count} lines]");
+            let marker = if line_count > PASTE_COLLAPSE_THRESHOLD {
+                format!("[paste #{id} +{line_count} lines]")
+            } else {
+                format!("[paste #{id} {char_count} chars]")
+            };
             self.insert_str(&marker); // snapshot happens inside insert_str
         }
     }

@@ -32,29 +32,15 @@ pub fn open(path: &str) -> Result<Db> {
 }
 
 /// Idempotent migrations — run after apply_schema on every startup.
-fn run_migrations(conn: &Connection) -> Result<()> {
-    // Migration 1: add UNIQUE(agent_id, label) to memory_blocks if missing.
-    // SQLite doesn't support ALTER TABLE ADD CONSTRAINT, so we rebuild the table.
-    // Detect UNIQUE(agent_id, label) specifically.
-    // Note: autoindices for PRIMARY KEY have sql=NULL — exclude them with sql IS NOT NULL.
-    // A user-defined UNIQUE constraint generates an autoindex whose sql is also NULL,
-    // so we check the index name pattern instead.
-    let has_unique: bool = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master
-         WHERE tbl_name='memory_blocks'
-         AND (
-           (type='index' AND sql IS NOT NULL
-            AND (sql LIKE '%agent_id%label%' OR sql LIKE '%label%agent_id%'))
-           OR
-           (type='table' AND sql LIKE '%UNIQUE%agent_id%label%')
-         )",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
+struct Migration {
+    version: i64,
+    sql: &'static str,
+}
 
-    if !has_unique {
-        tracing::info!("Running migration: adding UNIQUE(agent_id, label) to memory_blocks");
-        conn.execute_batch(r#"
+const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        sql: "
             BEGIN;
             CREATE TABLE IF NOT EXISTS memory_blocks_new (
                 id         TEXT PRIMARY KEY,
@@ -65,7 +51,6 @@ fn run_migrations(conn: &Connection) -> Result<()> {
                 UNIQUE (agent_id, label),
                 FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
             );
-            -- Copy keeping only the latest row per (agent_id, label)
             INSERT OR IGNORE INTO memory_blocks_new
                 SELECT id, agent_id, label, value, updated_at FROM (
                     SELECT *, ROW_NUMBER() OVER (
@@ -75,81 +60,40 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             DROP TABLE memory_blocks;
             ALTER TABLE memory_blocks_new RENAME TO memory_blocks;
             COMMIT;
-        "#)?;
-        tracing::info!("Migration complete: memory_blocks UNIQUE constraint added");
-    }
-
-    // Migration 3: add `max_chars` column to memory_blocks if missing.
-    let has_max_chars: bool = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('memory_blocks') WHERE name='max_chars'",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
-    if !has_max_chars {
-        tracing::info!("Running migration: adding max_chars column to memory_blocks");
-        conn.execute_batch(
-            "ALTER TABLE memory_blocks ADD COLUMN max_chars INTEGER;"
-        )?;
-        tracing::info!("Migration complete: memory_blocks.max_chars added");
-    }
-
-    // Migration 4: create memory_history table if it doesn't exist.
-    conn.execute_batch(r#"
-        CREATE TABLE IF NOT EXISTS memory_history (
-            id         TEXT PRIMARY KEY,
-            block_id   TEXT NOT NULL,
-            value      TEXT NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_memory_history_block_id
-            ON memory_history(block_id, updated_at DESC);
-    "#)?;
-
-    // Migration 2: add `description` column to memory_blocks if missing.
-    // SQLite supports ADD COLUMN directly (no table rebuild needed).
-    let has_description: bool = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('memory_blocks') WHERE name='description'",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
-
-    if !has_description {
-        tracing::info!("Running migration: adding description column to memory_blocks");
-        conn.execute_batch(
-            "ALTER TABLE memory_blocks ADD COLUMN description TEXT NOT NULL DEFAULT '';"
-        )?;
-        tracing::info!("Migration complete: memory_blocks.description added");
-    }
-
-    // Migration 3: add conversation_id column to messages + index.
-    let has_conv_col: bool = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='conversation_id'",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
-
-    if !has_conv_col {
-        tracing::info!("Running migration: adding conversation_id to messages");
-        conn.execute_batch(
-            "ALTER TABLE messages ADD COLUMN conversation_id TEXT;
-             CREATE INDEX IF NOT EXISTS idx_messages_conv
-               ON messages(agent_id, conversation_id);"
-        )?;
-        tracing::info!("Migration complete: messages.conversation_id added");
-    }
-
-    // Migration 5: Shared Memory Blocks
-    let has_shared_memory: bool = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='shared_memory_blocks'",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
-
-    if !has_shared_memory {
-        tracing::info!("Running migration: implement Shared Memory schema");
-        conn.execute_batch(r#"
+        ",
+    },
+    Migration {
+        version: 2,
+        sql: "ALTER TABLE memory_blocks ADD COLUMN description TEXT NOT NULL DEFAULT '';",
+    },
+    Migration {
+        version: 3,
+        sql: "ALTER TABLE memory_blocks ADD COLUMN max_chars INTEGER;",
+    },
+    Migration {
+        version: 4,
+        sql: "
+            CREATE TABLE IF NOT EXISTS memory_history (
+                id         TEXT PRIMARY KEY,
+                block_id   TEXT NOT NULL,
+                value      TEXT NOT NULL,
+                updated_at INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_memory_history_block_id ON memory_history(block_id, updated_at DESC);
+        ",
+    },
+    Migration {
+        version: 5,
+        sql: "
+            ALTER TABLE messages ADD COLUMN conversation_id TEXT;
+            CREATE INDEX IF NOT EXISTS idx_messages_conv ON messages(agent_id, conversation_id);
+        ",
+    },
+    Migration {
+        version: 6,
+        sql: "
             BEGIN;
-            CREATE TABLE shared_memory_blocks (
+            CREATE TABLE IF NOT EXISTS shared_memory_blocks (
                 id          TEXT PRIMARY KEY,
                 label       TEXT NOT NULL,
                 value       TEXT NOT NULL DEFAULT '',
@@ -157,75 +101,92 @@ fn run_migrations(conn: &Connection) -> Result<()> {
                 max_chars   INTEGER,
                 updated_at  INTEGER NOT NULL
             );
-            CREATE TABLE agent_memory_blocks (
+            CREATE TABLE IF NOT EXISTS agent_memory_blocks (
                 agent_id TEXT NOT NULL,
                 block_id TEXT NOT NULL,
                 PRIMARY KEY (agent_id, block_id),
                 FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
                 FOREIGN KEY (block_id) REFERENCES shared_memory_blocks(id) ON DELETE CASCADE
             );
-            -- Migrate existing memory_blocks to shared_memory_blocks
-            INSERT INTO shared_memory_blocks (id, label, value, description, max_chars, updated_at)
+            INSERT OR IGNORE INTO shared_memory_blocks (id, label, value, description, max_chars, updated_at)
                 SELECT id, label, value, description, max_chars, updated_at FROM memory_blocks;
-            -- Create the links
-            INSERT INTO agent_memory_blocks (agent_id, block_id)
+            INSERT OR IGNORE INTO agent_memory_blocks (agent_id, block_id)
                 SELECT agent_id, id FROM memory_blocks;
             COMMIT;
-        "#)?;
-        tracing::info!("Migration complete: Shared Memory schema implemented");
-    }
-
-    // Migration 7: Three-tier memory (pinned / short / long) + per-agent turn counter
-    // Uses silent ALTER TABLE — errors are ignored on existing columns.
-    let _ = conn.execute(
-        "ALTER TABLE agents ADD COLUMN memory_turn_counter INTEGER NOT NULL DEFAULT 0",
-        [],
-    );
-    let _ = conn.execute(
-        "ALTER TABLE shared_memory_blocks ADD COLUMN last_turn INTEGER NOT NULL DEFAULT 0",
-        [],
-    );
-    let _ = conn.execute(
-        "ALTER TABLE shared_memory_blocks ADD COLUMN tier TEXT NOT NULL DEFAULT 'short'",
-        [],
-    );
-
-    // Migration 6: Archival Memory (FTS5)
-    let has_fts: bool = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts'",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
-
-    if !has_fts {
-        tracing::info!("Running migration: implement FTS5 Archival Memory");
-        let res = conn.execute_batch(r#"
+        ",
+    },
+    Migration {
+        version: 7,
+        sql: "
+            ALTER TABLE agents ADD COLUMN memory_turn_counter INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE shared_memory_blocks ADD COLUMN last_turn INTEGER NOT NULL DEFAULT 0;
+            ALTER TABLE shared_memory_blocks ADD COLUMN tier TEXT NOT NULL DEFAULT 'short';
+        ",
+    },
+    Migration {
+        version: 8,
+        sql: "
             BEGIN;
-            CREATE VIRTUAL TABLE messages_fts USING fts5(
+            CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
                 content,
                 content='messages',
                 content_rowid='rowid'
             );
-            -- Populate initial data
-            INSERT INTO messages_fts(rowid, content) SELECT rowid, content FROM messages;
-            
-            -- Triggers to keep FTS index in sync
-            CREATE TRIGGER messages_ai AFTER INSERT ON messages BEGIN
+            INSERT OR IGNORE INTO messages_fts(rowid, content) SELECT rowid, content FROM messages;
+            CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
                 INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
             END;
-            CREATE TRIGGER messages_ad AFTER DELETE ON messages BEGIN
+            CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
                 INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
             END;
-            CREATE TRIGGER messages_au AFTER UPDATE ON messages BEGIN
+            CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
                 INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
                 INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
             END;
             COMMIT;
-        "#);
-        if let Err(e) = res {
-            tracing::error!("FTS5 migration failed: {}. SQLite may not have FTS5 extension enabled.", e);
-        } else {
-            tracing::info!("Migration complete: FTS5 Archival Memory implemented");
+        ",
+    },
+];
+
+fn detect_legacy_version(conn: &Connection) -> i64 {
+    let has_fts: bool = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+    if has_fts { return 8; }
+    let has_tier: bool = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('shared_memory_blocks') WHERE name='tier'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+    if has_tier { return 7; }
+    let has_shared: bool = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='shared_memory_blocks'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+    if has_shared { return 6; }
+    let has_conv: bool = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='conversation_id'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+    if has_conv { return 5; }
+    let has_hist: bool = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_history'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+    if has_hist { return 4; }
+    let has_max: bool = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('memory_blocks') WHERE name='max_chars'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+    if has_max { return 3; }
+    let has_desc: bool = conn.query_row("SELECT COUNT(*) FROM pragma_table_info('memory_blocks') WHERE name='description'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+    if has_desc { return 2; }
+    let has_unique: bool = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE tbl_name='memory_blocks' AND ((type='index' AND sql IS NOT NULL AND (sql LIKE '%agent_id%label%' OR sql LIKE '%label%agent_id%')) OR (type='table' AND sql LIKE '%UNIQUE%agent_id%label%'))", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+    if has_unique { return 1; }
+    0
+}
+
+fn run_migrations(conn: &Connection) -> Result<()> {
+    let mut current_version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap_or(0);
+
+    if current_version == 0 {
+        let has_agents: bool = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agents'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
+        if has_agents {
+            current_version = detect_legacy_version(conn);
+        }
+    }
+
+    for migration in MIGRATIONS {
+        if current_version < migration.version {
+            tracing::info!("Running migration version {}", migration.version);
+            if let Err(e) = conn.execute_batch(migration.sql) {
+                tracing::error!("Migration {} failed: {}", migration.version, e);
+                return Err(anyhow::anyhow!("Migration {} failed: {}", migration.version, e));
+            }
+            current_version = migration.version;
+            conn.execute(&format!("PRAGMA user_version = {}", current_version), [])?;
         }
     }
 
@@ -274,28 +235,10 @@ fn apply_schema(conn: &Connection) -> Result<()> {
         CREATE TABLE IF NOT EXISTS messages (
             id              TEXT PRIMARY KEY,
             agent_id        TEXT NOT NULL,
-            conversation_id TEXT,
             role            TEXT NOT NULL,
             content         TEXT NOT NULL,
             created_at      INTEGER NOT NULL,
             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
-        );
-
-        CREATE TABLE IF NOT EXISTS shared_memory_blocks (
-            id          TEXT PRIMARY KEY,
-            label       TEXT NOT NULL,
-            value       TEXT NOT NULL DEFAULT '',
-            description TEXT NOT NULL DEFAULT '',
-            max_chars   INTEGER,
-            updated_at  INTEGER NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS agent_memory_blocks (
-            agent_id TEXT NOT NULL,
-            block_id TEXT NOT NULL,
-            PRIMARY KEY (agent_id, block_id),
-            FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE,
-            FOREIGN KEY (block_id) REFERENCES shared_memory_blocks(id) ON DELETE CASCADE
         );
 
         CREATE TABLE IF NOT EXISTS memory_blocks (
@@ -303,38 +246,9 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             agent_id    TEXT NOT NULL,
             label       TEXT NOT NULL,
             value       TEXT NOT NULL DEFAULT '',
-            description TEXT NOT NULL DEFAULT '',
-            max_chars   INTEGER,
             updated_at  INTEGER NOT NULL,
-            UNIQUE (agent_id, label),
             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
         );
-        CREATE TABLE IF NOT EXISTS memory_history (
-            id         TEXT PRIMARY KEY,
-            block_id   TEXT NOT NULL,
-            value      TEXT NOT NULL,
-            updated_at INTEGER NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_memory_history_block_id
-            ON memory_history(block_id, updated_at DESC);
-
-        -- FTS5 Archival Memory
-        CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
-            content,
-            content='messages',
-            content_rowid='rowid'
-        );
-
-        CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
-            INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
-        END;
-        CREATE TRIGGER IF NOT EXISTS messages_ad AFTER DELETE ON messages BEGIN
-            INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-        END;
-        CREATE TRIGGER IF NOT EXISTS messages_au AFTER UPDATE ON messages BEGIN
-            INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
-            INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
-        END;
 
         CREATE TABLE IF NOT EXISTS tools (
             id          TEXT PRIMARY KEY,
@@ -389,7 +303,7 @@ pub struct AgentRow {
 }
 
 pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     conn.execute(
         "INSERT INTO agents (id, name, model, description, system_prompt, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -399,7 +313,7 @@ pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
 }
 
 pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT id, name, model, description, system_prompt, created_at FROM agents WHERE id = ?1"
     )?;
@@ -419,7 +333,7 @@ pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
 }
 
 pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT id, name, model, description, system_prompt, created_at FROM agents ORDER BY created_at DESC"
     )?;
@@ -437,14 +351,14 @@ pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
 }
 
 pub fn delete_agent(db: &Db, id: &str) -> Result<bool> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let n = conn.execute("DELETE FROM agents WHERE id = ?1", params![id])?;
     Ok(n > 0)
 }
 
 /// Update the model used by an agent. Returns false if the agent was not found.
 pub fn update_agent_model(db: &Db, id: &str, model: &str) -> Result<bool> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let n = conn.execute(
         "UPDATE agents SET model = ?1 WHERE id = ?2",
         params![model, id],
@@ -453,7 +367,7 @@ pub fn update_agent_model(db: &Db, id: &str, model: &str) -> Result<bool> {
 }
 
 pub fn update_agent_name(db: &Db, id: &str, name: &str) -> Result<bool> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let n = conn.execute(
         "UPDATE agents SET name = ?1 WHERE id = ?2",
         params![name, id],
@@ -462,7 +376,7 @@ pub fn update_agent_name(db: &Db, id: &str, name: &str) -> Result<bool> {
 }
 
 pub fn update_agent_system_prompt(db: &Db, id: &str, prompt: &str) -> Result<bool> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let n = conn.execute(
         "UPDATE agents SET system_prompt = ?1 WHERE id = ?2",
         params![prompt, id],
@@ -472,7 +386,7 @@ pub fn update_agent_system_prompt(db: &Db, id: &str, prompt: &str) -> Result<boo
 
 /// Associate a set of tool IDs with an agent (upsert).
 pub fn attach_tools_to_agent(db: &Db, agent_id: &str, tool_ids: &[String]) -> Result<()> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     for tid in tool_ids {
         conn.execute(
             "INSERT OR IGNORE INTO agent_tools (agent_id, tool_id) VALUES (?1, ?2)",
@@ -484,7 +398,7 @@ pub fn attach_tools_to_agent(db: &Db, agent_id: &str, tool_ids: &[String]) -> Re
 
 /// Return tool IDs associated with an agent (if any; falls back to all tools).
 pub fn get_agent_tool_ids(db: &Db, agent_id: &str) -> Result<Vec<String>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT tool_id FROM agent_tools WHERE agent_id = ?1"
     )?;
@@ -494,7 +408,7 @@ pub fn get_agent_tool_ids(db: &Db, agent_id: &str) -> Result<Vec<String>> {
 
 /// Return (tool_id, tool_name) pairs for all tools attached to an agent.
 pub fn get_agent_tools_with_names(db: &Db, agent_id: &str) -> Result<Vec<(String, String)>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT at.tool_id, t.name FROM agent_tools at
          JOIN tools t ON t.id = at.tool_id
@@ -509,7 +423,7 @@ pub fn get_agent_tools_with_names(db: &Db, agent_id: &str) -> Result<Vec<(String
 
 /// Detach ALL tools from an agent (clear agent_tools rows for this agent).
 pub fn detach_all_tools_from_agent(db: &Db, agent_id: &str) -> Result<usize> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let n = conn.execute(
         "DELETE FROM agent_tools WHERE agent_id = ?1",
         params![agent_id],
@@ -532,7 +446,7 @@ pub struct ConversationRow {
 pub fn create_conversation(db: &Db, agent_id: &str, title: &str) -> Result<ConversationRow> {
     let id = format!("conv-{}", uuid::Uuid::new_v4());
     let ts = now_ts();
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     conn.execute(
         "INSERT INTO conversations (id, agent_id, title, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -543,7 +457,7 @@ pub fn create_conversation(db: &Db, agent_id: &str, title: &str) -> Result<Conve
 }
 
 pub fn get_conversation(db: &Db, conv_id: &str) -> Result<Option<ConversationRow>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT c.id, c.agent_id, c.title, c.created_at, c.updated_at,
                 COUNT(m.id) as message_count
@@ -568,7 +482,7 @@ pub fn get_conversation(db: &Db, conv_id: &str) -> Result<Option<ConversationRow
 }
 
 pub fn list_conversations(db: &Db, agent_id: &str) -> Result<Vec<ConversationRow>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT c.id, c.agent_id, c.title, c.created_at, c.updated_at,
                 COUNT(m.id) as message_count
@@ -592,7 +506,7 @@ pub fn list_conversations(db: &Db, agent_id: &str) -> Result<Vec<ConversationRow
 }
 
 pub fn delete_conversation(db: &Db, conv_id: &str) -> Result<bool> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     // CASCADE deletes the messages too
     let n = conn.execute("DELETE FROM conversations WHERE id = ?1", params![conv_id])?;
     // Also clean up orphaned messages (fallback for rows without FK enforcement)
@@ -604,7 +518,7 @@ pub fn delete_conversation(db: &Db, conv_id: &str) -> Result<bool> {
 
 /// Update the conversation's title and bump updated_at.
 pub fn update_conversation_title(db: &Db, conv_id: &str, title: &str) -> Result<()> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     conn.execute(
         "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
         params![title, now_ts(), conv_id],
@@ -614,7 +528,7 @@ pub fn update_conversation_title(db: &Db, conv_id: &str, title: &str) -> Result<
 
 /// Touch updated_at (called when a new message is added to a conversation).
 pub fn touch_conversation(db: &Db, conv_id: &str) -> Result<()> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     conn.execute(
         "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
         params![now_ts(), conv_id],
@@ -637,7 +551,7 @@ pub struct RunRow {
 pub fn create_run(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<RunRow> {
     let id = format!("run-{}", uuid::Uuid::new_v4());
     let ts = now_ts();
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     conn.execute(
         "INSERT INTO runs (id, agent_id, conversation_id, status, created_at, updated_at)
          VALUES (?1, ?2, ?3, 'running', ?4, ?5)",
@@ -651,7 +565,7 @@ pub fn create_run(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Res
 }
 
 pub fn get_run(db: &Db, run_id: &str) -> Result<Option<RunRow>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT id, agent_id, conversation_id, status, created_at, updated_at
          FROM runs WHERE id = ?1"
@@ -670,7 +584,7 @@ pub fn get_run(db: &Db, run_id: &str) -> Result<Option<RunRow>> {
 }
 
 pub fn finish_run(db: &Db, run_id: &str, status: &str) -> Result<()> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     conn.execute(
         "UPDATE runs SET status = ?1, updated_at = ?2 WHERE id = ?3",
         params![status, now_ts(), run_id],
@@ -681,7 +595,7 @@ pub fn finish_run(db: &Db, run_id: &str, status: &str) -> Result<()> {
 /// Append an SSE event payload to the run's event log.
 /// Returns the assigned seq_id.
 pub fn append_run_event(db: &Db, run_id: &str, data: &str) -> Result<i64> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     // Find current max seq_id for this run
     let max_seq: i64 = conn.query_row(
         "SELECT COALESCE(MAX(seq_id), -1) FROM run_events WHERE run_id = ?1",
@@ -698,7 +612,7 @@ pub fn append_run_event(db: &Db, run_id: &str, data: &str) -> Result<i64> {
 
 /// Load run events after a given seq_id (exclusive).
 pub fn run_events_after(db: &Db, run_id: &str, after_seq: i64) -> Result<Vec<(i64, String)>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT seq_id, data FROM run_events
          WHERE run_id = ?1 AND seq_id > ?2
@@ -722,7 +636,7 @@ pub struct MessageRow {
 }
 
 pub fn insert_message(db: &Db, row: &MessageRow) -> Result<()> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     conn.execute(
         "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -743,7 +657,7 @@ pub fn list_messages(
     conversation_id: Option<&str>,
     limit: usize,
 ) -> Result<Vec<MessageRow>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     // Filter: conversation_id IS NULL for legacy messages, or matches given id.
     let sql = if conversation_id.is_some() {
         "SELECT id, agent_id, conversation_id, role, content FROM messages
@@ -802,7 +716,7 @@ pub fn upsert_memory_block(
     description: Option<&str>,
     max_chars: Option<usize>,
 ) -> Result<()> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
 
     // Fetch existing block linked to this agent with this label
     let existing: Option<(String, String, Option<usize>)> = conn.query_row(
@@ -902,7 +816,7 @@ pub fn upsert_memory_block(
 
 /// Link an existing shared memory block to an agent.
 pub fn link_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Result<()> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     conn.execute(
         "INSERT OR IGNORE INTO agent_memory_blocks (agent_id, block_id) VALUES (?1, ?2)",
         params![agent_id, block_id],
@@ -911,9 +825,9 @@ pub fn link_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Resu
 }
 
 pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     // We only remove the link, not the shared block itself (to avoid orphan issues if shared)
-    // Actually, Letta docs imply it's removed from the agent's view.
+    // Actually, CADE docs imply it's removed from the agent's view.
     let n = conn.execute(
         "DELETE FROM agent_memory_blocks WHERE agent_id = ?1 AND block_id IN (
             SELECT id FROM shared_memory_blocks WHERE label = ?2
@@ -925,7 +839,7 @@ pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool>
 
 /// Returns (label, value, description) tuples ordered by label.
 pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String)>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -944,7 +858,7 @@ pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String,
 /// Returns (label, value, description, updated_at) ordered by updated_at DESC (most recent first).
 /// Used by build_context to apply the memory budget with recency priority.
 pub fn get_memory_blocks_with_ts(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String, i64)>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.updated_at FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -966,7 +880,7 @@ pub fn get_memory_blocks_with_ts(db: &Db, agent_id: &str) -> Result<Vec<(String,
 /// Increment the agent's user-message turn counter and return the new value.
 /// Call once per non-tool-return message (never for tool result turns).
 pub fn increment_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     conn.execute(
         "UPDATE agents SET memory_turn_counter = memory_turn_counter + 1 WHERE id = ?1",
         params![agent_id],
@@ -981,7 +895,7 @@ pub fn increment_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
 
 /// Read the current turn counter without incrementing.
 pub fn get_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let n: i64 = conn.query_row(
         "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
         params![agent_id],
@@ -993,7 +907,7 @@ pub fn get_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
 /// Promote 'short' blocks idle for >= threshold turns to 'long'.
 /// 'pinned' blocks are never promoted. Returns number of blocks promoted.
 pub fn promote_stale_blocks(db: &Db, agent_id: &str, current_turn: i64, threshold: i64) -> Result<u64> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let n = conn.execute(
         "UPDATE shared_memory_blocks SET tier = 'long'
          WHERE tier = 'short'
@@ -1009,7 +923,7 @@ pub fn promote_stale_blocks(db: &Db, agent_id: &str, current_turn: i64, threshol
 /// Fetch pinned + short-term blocks, pinned first then short by last_turn DESC.
 /// Returns (label, value, description, tier, last_turn).
 pub fn get_active_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String, String, i64)>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.tier, b.last_turn
          FROM shared_memory_blocks b
@@ -1032,7 +946,7 @@ pub fn get_active_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String,
 /// Fetch long-term blocks: label + first 80 chars of value, ordered by last_turn DESC.
 /// Returns (label, excerpt, turns_idle) where turns_idle = current_turn - last_turn.
 pub fn get_long_term_excerpts(db: &Db, agent_id: &str, current_turn: i64) -> Result<Vec<(String, String, i64)>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.last_turn
          FROM shared_memory_blocks b
@@ -1055,7 +969,7 @@ pub fn get_long_term_excerpts(db: &Db, agent_id: &str, current_turn: i64) -> Res
 
 /// Explicitly set a block's tier and optionally reset last_turn to current_turn.
 pub fn set_memory_tier(db: &Db, agent_id: &str, label: &str, tier: &str, reset_turn: bool) -> Result<bool> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let current_turn: i64 = conn.query_row(
         "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
         params![agent_id],
@@ -1084,7 +998,7 @@ pub fn set_memory_tier(db: &Db, agent_id: &str, label: &str, tier: &str, reset_t
 /// Returns (label, value, description, tier) for all blocks, ordered by tier priority then label.
 /// Used by the API get_memory endpoint to expose tier information.
 pub fn get_memory_blocks_full(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String, String)>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.tier
          FROM shared_memory_blocks b
@@ -1105,7 +1019,7 @@ pub fn get_memory_blocks_full(db: &Db, agent_id: &str) -> Result<Vec<(String, St
 
 /// Returns the last N revisions of a memory block: (id, value, updated_at).
 pub fn get_memory_history(db: &Db, agent_id: &str, label: &str, limit: usize) -> Result<Vec<(String, String, i64)>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let block_id: Option<String> = conn.query_row(
         "SELECT b.id FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -1130,7 +1044,7 @@ pub fn get_memory_history(db: &Db, agent_id: &str, label: &str, limit: usize) ->
 
 /// Restore a memory block to a specific history revision.
 pub fn restore_memory_from_history(db: &Db, agent_id: &str, label: &str, hist_id: &str) -> Result<bool> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let block_id: Option<String> = conn.query_row(
         "SELECT b.id FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -1165,7 +1079,7 @@ pub struct ToolRow {
 }
 
 pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     conn.execute(
         "INSERT INTO tools (id, name, description, source_code, json_schema, tags, created_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7)
@@ -1190,7 +1104,7 @@ pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
 /// Delete all messages for an agent (or a specific conversation).
 /// If conversation_id is None, deletes all messages for the agent.
 pub fn clear_messages(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<usize> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let n = if let Some(conv_id) = conversation_id {
         conn.execute(
             "DELETE FROM messages WHERE agent_id = ?1 AND conversation_id = ?2",
@@ -1233,7 +1147,7 @@ pub fn search_messages(
     query: &str,
     conversation_id: Option<&str>,
 ) -> Result<Vec<MessageSearchResult>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
 
     // Build safe FTS5 query: wrap the whole phrase in double-quotes to handle
     // spaces and special chars; escape internal quotes.
@@ -1302,7 +1216,7 @@ pub fn search_memory(
     agent_id: &str,
     query: &str,
 ) -> Result<Vec<(String, String, String)>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value FROM shared_memory_blocks b
@@ -1389,7 +1303,7 @@ pub fn pending_tool_results(
 }
 
 pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT id, name, description, source_code, json_schema, tags FROM tools ORDER BY name"
     )?;
@@ -1419,7 +1333,7 @@ pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
 // ── Providers ─────────────────────────────────────────────────────────────────
 
 pub fn upsert_provider(db: &Db, row: &ProviderRow) -> Result<()> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     
     // SEC-02: Encrypt API key at rest
     let encrypted_key = match &row.api_key {
@@ -1448,7 +1362,7 @@ pub fn upsert_provider(db: &Db, row: &ProviderRow) -> Result<()> {
 }
 
 pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let mut stmt = conn.prepare(
         "SELECT name, kind, api_key, base_url, enabled FROM providers ORDER BY name"
     )?;
@@ -1497,7 +1411,7 @@ pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
 }
 
 pub fn delete_provider(db: &Db, name: &str) -> Result<bool> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
     let n = conn.execute("DELETE FROM providers WHERE name = ?1", params![name])?;
     Ok(n > 0)
 }
@@ -1535,7 +1449,7 @@ mod tests {
         
         // Find the block ID
         let block_id: String = {
-            let conn = db.lock().unwrap();
+            let conn = db.lock().map_err(|_| anyhow::anyhow!("Database lock poisoned"))?;
             conn.query_row(
                 "SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?1",
                 params![agent1],

@@ -104,7 +104,10 @@ pub struct GeminiProvider {
 impl GeminiProvider {
     pub fn new(api_key: String) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .tcp_keepalive(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             api_key,
             content_cache: Arc::new(Mutex::new(HashMap::new())),
         }

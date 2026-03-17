@@ -3,7 +3,7 @@ use ratatui::{
     text::{Line, Span},
 };
 
-/// Left-margin indent for markdown paragraphs (matches Letta Code style).
+/// Left-margin indent for markdown paragraphs (matches CADE Code style).
 const INDENT: &str = "";
 
 /// Convert a complete markdown text string into a `Vec<Line>` for ratatui rendering.

@@ -29,20 +29,45 @@ fn ensure_within_root(root: &Path, raw_path: &str) -> Result<()> {
     let mut parts: Vec<std::path::Component> = Vec::new();
     for c in abs.components() {
         match c {
-            std::path::Component::ParentDir => { parts.pop(); }
+            std::path::Component::ParentDir => {
+                if let Some(last) = parts.last() {
+                    match last {
+                        std::path::Component::Normal(_) => { parts.pop(); }
+                        _ => { parts.push(std::path::Component::ParentDir); }
+                    }
+                } else {
+                    parts.push(std::path::Component::ParentDir);
+                }
+            }
             std::path::Component::CurDir => {}
             other => parts.push(other),
         }
     }
     let normalized: PathBuf = parts.iter().collect();
 
-    // If the path exists, canonicalize to also resolve symlinks.
-    let resolved = std::fs::canonicalize(&normalized).unwrap_or(normalized);
+    // Now find the deepest existing ancestor of the normalized path
+    let mut current = normalized.as_path();
+    let mut non_existent = Vec::new();
+
+    while !current.exists() && current.parent().is_some() {
+        if let Some(name) = current.file_name() {
+            non_existent.push(name.to_os_string());
+        }
+        current = current.parent().unwrap();
+    }
+
+    let mut resolved = std::fs::canonicalize(current)
+        .unwrap_or_else(|_| current.to_path_buf());
+
+    // Reconstruct the full path
+    for comp in non_existent.into_iter().rev() {
+        resolved.push(comp);
+    }
 
     if !resolved.starts_with(root) {
         anyhow::bail!(
-            "path '{}' is outside the allowed filesystem root '{}'",
-            raw_path, root.display()
+            "path '{}' (resolved to '{}') is outside the allowed filesystem root '{}'",
+            raw_path, resolved.display(), root.display()
         );
     }
     Ok(())
@@ -258,22 +283,20 @@ impl ApplyPatchTool {
         validate_patch_paths(patch_str)?;
 
         // Write patch to a tempfile then apply with `patch -p1`
-        let tmp = std::env::temp_dir().join(format!("cade-patch-{}.diff",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .subsec_nanos()
-        ));
-        std::fs::write(&tmp, patch_str)
+        use std::io::Write;
+        let mut tmp_file = tempfile::NamedTempFile::new()
+            .with_context(|| "apply_patch: failed to create tempfile")?;
+        tmp_file.write_all(patch_str.as_bytes())
             .with_context(|| "apply_patch: failed to write tempfile")?;
+        tmp_file.flush()?;
 
         let output = tokio::process::Command::new("patch")
-            .args(["-p1", "--input", tmp.to_str().unwrap_or("")])
+            .args(["-p1", "--input", tmp_file.path().to_str().unwrap_or("")])
             .output()
             .await
             .with_context(|| "apply_patch: failed to run `patch` command (is it installed?)")?;
 
-        let _ = std::fs::remove_file(&tmp);
+        let _ = tmp_file.close();
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);

@@ -35,8 +35,9 @@ pub async fn auth_middleware(
         .and_then(|v| v.strip_prefix("Bearer "))
         .map(|s| s.trim().to_string());
 
+    use subtle::ConstantTimeEq;
     match provided {
-        Some(token) if token == expected => next.run(req).await,
+        Some(token) if token.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1 => next.run(req).await,
         _ => {
             tracing::warn!(
                 "Unauthorized request to {} — missing or invalid Bearer token",

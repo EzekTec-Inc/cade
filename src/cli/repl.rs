@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::io;
-use crossterm::event::KeyCode;
+use crossterm::event::{KeyCode, EventStream};
+use futures::StreamExt;
 
 use std::sync::{Arc, Mutex};
 
@@ -13,6 +14,7 @@ use crate::subagents::{BackgroundResult, discover_all_subagents, find_subagent};
 use crate::toolsets::Toolset;
 use crate::tools::dispatch;
 use crate::ui::{TuiApp, RenderLine, cycle_mode, cycle_mode_back};
+use crate::ui::stats::SessionStats;
 
 const BANNER: &str = r#"
    ___    _    ____  _____
@@ -50,6 +52,7 @@ enum SlashCmd {
     Agent,
     Info,
     Model(String),
+    Reasoning(String),
     New,          // new conversation on same agent
     NewAgent,     // create a brand-new agent
     Pin,
@@ -75,6 +78,7 @@ enum SlashCmd {
     Delete(Option<String>),
     Yolo,
     Plan,
+    Todos,
     Default,
     Mode(Option<String>),
     Mcp,
@@ -114,26 +118,28 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         "resume"                 => Some(SlashCmd::Resume),
         "delete" | "del" | "rm-agent" => Some(SlashCmd::Delete(arg)),
         "init"                   => Some(SlashCmd::Init),
-        "remember" if arg.is_some() => Some(SlashCmd::Remember(arg.unwrap())),
+        "remember"               => arg.map(SlashCmd::Remember),
         "memory"                 => Some(SlashCmd::Memory),
-        "search" if arg.is_some()   => Some(SlashCmd::Search(arg.unwrap())),
+        "search"                 => arg.map(SlashCmd::Search),
         "feedback"               => Some(SlashCmd::Feedback),
         "skills"                 => Some(SlashCmd::Skills(arg)),
         "subagents" | "agents-list" => Some(SlashCmd::Subagents),
         "providers" | "provider-list" => Some(SlashCmd::Providers),
         "connect"    => Some(SlashCmd::Connect(arg)),
-        "disconnect" => Some(SlashCmd::Disconnect(arg.unwrap_or_default())),
-        "approve-always" => Some(SlashCmd::ApproveAlways(arg.unwrap_or_default())),
-        "deny-always"    => Some(SlashCmd::DenyAlways(arg.unwrap_or_default())),
+        "disconnect" => arg.map(SlashCmd::Disconnect),
+        "approve-always" => arg.map(SlashCmd::ApproveAlways),
+        "deny-always"    => arg.map(SlashCmd::DenyAlways),
         "permissions"    => Some(SlashCmd::Permissions),
         "hooks"          => Some(SlashCmd::Hooks),
-        "rename"         => Some(SlashCmd::Rename(arg.unwrap_or_default())),
+        "rename"         => arg.map(SlashCmd::Rename),
         "toolset"        => Some(SlashCmd::Toolset(arg)),
         "yolo"                   => Some(SlashCmd::Yolo),
         "plan"                   => Some(SlashCmd::Plan),
+        "todos"                  => Some(SlashCmd::Todos),
         "default" | "normal" => Some(SlashCmd::Default),
         "mode"                   => Some(SlashCmd::Mode(arg)),
-        "model"  => Some(SlashCmd::Model(arg.unwrap_or_default())),
+        "model"  => arg.map(SlashCmd::Model),
+        "reasoning" => arg.map(SlashCmd::Reasoning),
         "mcp"    => Some(SlashCmd::Mcp),
         "link"   => Some(SlashCmd::Link),
         "unlink" => Some(SlashCmd::Unlink),
@@ -155,336 +161,7 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
 
 // ── Session Statistics ────────────────────────────────────────────────────────
 
-/// Per-model token breakdown accumulated during the session.
-#[derive(Debug, Default, Clone)]
-struct ModelStats {
-    reqs:               u32,
-    input_tokens:       u64,
-    cache_read_tokens:  u64,
-    cache_write_tokens: u64,
-    output_tokens:      u64,
-}
 
-/// All session-level statistics accumulated by the REPL.
-/// Wrapped in `Arc<Mutex<...>>` so it can be updated from stream closures.
-#[derive(Debug)]
-struct SessionStats {
-    started_at:        std::time::Instant,
-    /// Total milliseconds the agent was actively thinking / streaming.
-    agent_active_ms:   u64,
-    /// Milliseconds spent waiting for LLM API responses.
-    api_time_ms:       u64,
-    /// Milliseconds spent executing local tools.
-    tool_time_ms:      u64,
-    /// Total tool calls dispatched.
-    tool_calls_total:  u32,
-    /// Tool calls that completed without error.
-    tool_calls_ok:     u32,
-    /// Tool calls that returned an error result.
-    tool_calls_err:    u32,
-    /// Tool call results the user explicitly approved.
-    approved:          u32,
-    /// Tool call results the user was asked to review (approved OR denied).
-    reviewed:          u32,
-    /// Lines added across all file-write / patch tool calls this session.
-    lines_added:       i64,
-    /// Lines removed across all file-write / patch tool calls this session.
-    lines_removed:     i64,
-    /// Per-model breakdown (keyed by the full model string e.g. "gemini/gemini-2.5-pro").
-    per_model:         std::collections::HashMap<String, ModelStats>,
-}
-
-impl SessionStats {
-    fn new() -> Self {
-        Self {
-            started_at:       std::time::Instant::now(),
-            agent_active_ms:  0,
-            api_time_ms:      0,
-            tool_time_ms:     0,
-            tool_calls_total: 0,
-            tool_calls_ok:    0,
-            tool_calls_err:   0,
-            approved:         0,
-            reviewed:         0,
-            lines_added:      0,
-            lines_removed:    0,
-            per_model:        std::collections::HashMap::new(),
-        }
-    }
-
-    /// Record a usage_statistics SSE event.
-    fn record_usage(&mut self, model: &str, input: u64, cache_read: u64, cache_write: u64, output: u64) {
-        let key = if model.is_empty() { "unknown".to_string() } else { model.to_string() };
-        let e = self.per_model.entry(key).or_default();
-        e.reqs               += 1;
-        e.input_tokens       += input;
-        e.cache_read_tokens  += cache_read;
-        e.cache_write_tokens += cache_write;
-        e.output_tokens      += output;
-    }
-
-    /// Compute total USD cost and per-model breakdown, sorted by cost descending.
-    fn compute_cost(&self) -> (f64, Vec<(String, f64)>) {
-        let mut total = 0.0f64;
-        let mut by_model: Vec<(String, f64)> = Vec::new();
-        for (model, ms) in &self.per_model {
-            let p = crate::server::llm::catalogue::pricing_for_model(model);
-            let cost = (ms.input_tokens       as f64 * p.input)       / 1_000_000.0
-                     + (ms.output_tokens      as f64 * p.output)      / 1_000_000.0
-                     + (ms.cache_read_tokens  as f64 * p.cache_read)  / 1_000_000.0
-                     + (ms.cache_write_tokens as f64 * p.cache_write) / 1_000_000.0;
-            total += cost;
-            by_model.push((model.clone(), cost));
-        }
-        by_model.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-        (total, by_model)
-    }
-
-    /// Render a structured stats card as a Vec of RenderLine for the TUI.
-    fn render_card(&self, auth_method: &str, session_id: &str) -> Vec<crate::ui::RenderLine> {
-        use crate::ui::RenderLine;
-
-        let wall_secs  = self.started_at.elapsed().as_secs();
-        let agent_secs = self.agent_active_ms / 1000;
-        let api_secs   = self.api_time_ms / 1000;
-        let tool_secs  = self.tool_time_ms / 1000;
-
-        let fmt_dur = |s: u64| -> String {
-            if s >= 3600      { format!("{}h {:02}m {:02}s", s/3600, (s%3600)/60, s%60) }
-            else if s >= 60   { format!("{}m {:02}s", s/60, s%60) }
-            else              { format!("{}s", s) }
-        };
-        let fmt_tok = |n: u64| -> String {
-            if n >= 1_000_000 { format!("{:.1}M", n as f64 / 1_000_000.0) }
-            else if n >= 1_000 { format!("{:.1}K", n as f64 / 1_000.0) }
-            else               { n.to_string() }
-        };
-
-        let total_ok    = self.tool_calls_ok;
-        let total_err   = self.tool_calls_err;
-        let total       = self.tool_calls_total;
-        let success_pct = if total > 0 { 100.0 * total_ok as f64 / total as f64 } else { 0.0 };
-        let agree_pct   = if self.reviewed > 0 { 100.0 * self.approved as f64 / self.reviewed as f64 } else { 100.0 };
-
-        let total_input: u64  = self.per_model.values().map(|m| m.input_tokens).sum();
-        let total_cache: u64  = self.per_model.values().map(|m| m.cache_read_tokens).sum();
-        let total_write: u64  = self.per_model.values().map(|m| m.cache_write_tokens).sum();
-        let cache_pct = if total_input + total_cache > 0 {
-            100.0 * total_cache as f64 / (total_input + total_cache) as f64
-        } else { 0.0 };
-
-        let mut out: Vec<RenderLine> = Vec::new();
-
-        // ── Header ──────────────────────────────────────────────────────────
-        out.push(RenderLine::InfoHeader("  ◆ Session Stats".to_string()));
-        out.push(RenderLine::Blank);
-
-        if !session_id.is_empty() {
-            let id_disp = if session_id.len() > 20 {
-                format!("{}…", &session_id[..20])
-            } else {
-                session_id.to_string()
-            };
-            out.push(RenderLine::Pair { label: "Session ID".to_string(),  value: id_disp });
-        }
-        if !auth_method.is_empty() {
-            out.push(RenderLine::Pair { label: "Auth Method".to_string(), value: auth_method.to_string() });
-        }
-
-        // ── Tool Calls ──────────────────────────────────────────────────────
-        out.push(RenderLine::Blank);
-        out.push(RenderLine::InfoHeader("  Tool Calls".to_string()));
-        out.push(RenderLine::Pair {
-            label: "Total".to_string(),
-            value: format!("{}  (✓ {}  ✗ {})", total, total_ok, total_err),
-        });
-        out.push(RenderLine::Pair {
-            label: "Success Rate".to_string(),
-            value: format!("{success_pct:.1}%"),
-        });
-        if self.reviewed > 0 {
-            out.push(RenderLine::Pair {
-                label: "User Approval".to_string(),
-                value: format!("{agree_pct:.1}%  ({} reviewed)", self.reviewed),
-            });
-        }
-        if self.lines_added != 0 || self.lines_removed != 0 {
-            out.push(RenderLine::Pair {
-                label: "Code Changes".to_string(),
-                value: format!("+{}  −{}", self.lines_added, self.lines_removed.abs()),
-            });
-        }
-
-        // ── Performance ─────────────────────────────────────────────────────
-        out.push(RenderLine::Blank);
-        out.push(RenderLine::InfoHeader("  Performance".to_string()));
-        out.push(RenderLine::Pair { label: "Wall Time".to_string(),    value: fmt_dur(wall_secs) });
-        out.push(RenderLine::Pair { label: "Agent Active".to_string(), value: fmt_dur(agent_secs) });
-        if agent_secs > 0 {
-            let api_p  = 100.0 * api_secs  as f64 / agent_secs as f64;
-            let tool_p = 100.0 * tool_secs as f64 / agent_secs as f64;
-            out.push(RenderLine::Pair {
-                label: "  » API Time".to_string(),
-                value: format!("{}  ({:.1}%)", fmt_dur(api_secs), api_p),
-            });
-            out.push(RenderLine::Pair {
-                label: "  » Tool Time".to_string(),
-                value: format!("{}  ({:.1}%)", fmt_dur(tool_secs), tool_p),
-            });
-        }
-
-        // ── Model Usage table ───────────────────────────────────────────────
-        if !self.per_model.is_empty() {
-            out.push(RenderLine::Blank);
-            out.push(RenderLine::InfoHeader("  Model Usage".to_string()));
-
-            let mut models: Vec<_> = self.per_model.iter().collect();
-            models.sort_by(|a, b| b.1.reqs.cmp(&a.1.reqs));
-
-            let headers = vec![
-                "Model".to_string(),
-                "Reqs".to_string(),
-                "Input".to_string(),
-                "Cache Read".to_string(),
-                "Cache Write".to_string(),
-                "Output".to_string(),
-            ];
-            let rows: Vec<Vec<String>> = models.iter().map(|(model, ms)| {
-                let disp = if let Some(pos) = model.find('/') { &model[pos+1..] } else { model.as_str() };
-                vec![
-                    disp.to_string(),
-                    ms.reqs.to_string(),
-                    fmt_tok(ms.input_tokens),
-                    fmt_tok(ms.cache_read_tokens),
-                    fmt_tok(ms.cache_write_tokens),
-                    fmt_tok(ms.output_tokens),
-                ]
-            }).collect();
-
-            out.push(RenderLine::Table { headers, rows });
-
-            if total_cache > 0 {
-                out.push(RenderLine::Pair {
-                    label: "Cache Hit Rate".to_string(),
-                    value: format!("{cache_pct:.1}% of input tokens served from cache"),
-                });
-            }
-            if total_write > 0 {
-                out.push(RenderLine::Pair {
-                    label: "Cache Written".to_string(),
-                    value: format!("{} tokens written to cache (billed at 1.25× input rate)", fmt_tok(total_write)),
-                });
-            }
-            out.push(RenderLine::DimMsg("  /stats model  — per-model detail breakdown".to_string()));
-        }
-
-        out
-    }
-
-    /// Render a per-model detail table: rows = metrics, columns = models.
-    fn render_model_detail(&self) -> Vec<crate::ui::RenderLine> {
-        use crate::ui::RenderLine;
-
-        if self.per_model.is_empty() {
-            return vec![
-                RenderLine::Blank,
-                RenderLine::DimMsg("  No model usage recorded this session yet.".to_string()),
-                RenderLine::Blank,
-            ];
-        }
-
-        let fmt_tok = |n: u64| -> String {
-            if n >= 1_000_000      { format!("{:.1}M", n as f64 / 1_000_000.0) }
-            else if n >= 1_000     { format!("{:.1}K", n as f64 / 1_000.0) }
-            else                   { n.to_string() }
-        };
-
-        // Sort models by total requests descending
-        let mut models: Vec<(&String, &ModelStats)> = self.per_model.iter().collect();
-        models.sort_by(|a, b| b.1.reqs.cmp(&a.1.reqs));
-
-        // Column headers: blank label col + one col per model (strip provider prefix)
-        let mut headers = vec!["Metric".to_string()];
-        for (model, _) in &models {
-            let disp = if let Some(pos) = model.find('/') { &model[pos+1..] } else { model.as_str() };
-            headers.push(disp.to_string());
-        }
-
-        // Build rows
-        let metric_names = ["Requests", "Input", "Cache Read", "Cache Write", "Output", "Cache %"];
-        let mut rows: Vec<Vec<String>> = metric_names.iter().map(|m| {
-            let mut row = vec![m.to_string()];
-            for (_, ms) in &models {
-                let val = match *m {
-                    "Requests"    => ms.reqs.to_string(),
-                    "Input"       => fmt_tok(ms.input_tokens),
-                    "Cache Read"  => fmt_tok(ms.cache_read_tokens),
-                    "Cache Write" => fmt_tok(ms.cache_write_tokens),
-                    "Output"      => fmt_tok(ms.output_tokens),
-                    "Cache %"     => {
-                        let total = ms.input_tokens + ms.cache_read_tokens;
-                        if total > 0 {
-                            format!("{:.1}%", 100.0 * ms.cache_read_tokens as f64 / total as f64)
-                        } else {
-                            "—".to_string()
-                        }
-                    }
-                    _ => "—".to_string(),
-                };
-                row.push(val);
-            }
-            row
-        }).collect();
-
-        // Totals row
-        let total_reqs:  u32 = models.iter().map(|(_, m)| m.reqs).sum();
-        let total_in:    u64 = models.iter().map(|(_, m)| m.input_tokens).sum();
-        let total_cache: u64 = models.iter().map(|(_, m)| m.cache_read_tokens).sum();
-        let total_write: u64 = models.iter().map(|(_, m)| m.cache_write_tokens).sum();
-        let total_out:   u64 = models.iter().map(|(_, m)| m.output_tokens).sum();
-        let total_all    = total_in + total_cache;
-        let cache_pct_total = if total_all > 0 {
-            format!("{:.1}%", 100.0 * total_cache as f64 / total_all as f64)
-        } else { "—".to_string() };
-
-        let mut totals_row = vec!["Total".to_string()];
-        for (_, ms) in &models {
-            let tot_in_model = ms.input_tokens + ms.cache_read_tokens;
-            let cpct = if tot_in_model > 0 {
-                format!("{:.1}%", 100.0 * ms.cache_read_tokens as f64 / tot_in_model as f64)
-            } else { "—".to_string() };
-            totals_row.push(format!(
-                "{}r  {}i  {}cr  {}cw  {}o  {}",
-                ms.reqs,
-                fmt_tok(ms.input_tokens),
-                fmt_tok(ms.cache_read_tokens),
-                fmt_tok(ms.cache_write_tokens),
-                fmt_tok(ms.output_tokens),
-                cpct,
-            ));
-        }
-        // For multi-model: add a grand-total column if >1 model
-        if models.len() > 1 {
-            rows[0].push(total_reqs.to_string());
-            rows[1].push(fmt_tok(total_in));
-            rows[2].push(fmt_tok(total_cache));
-            rows[3].push(fmt_tok(total_write));
-            rows[4].push(fmt_tok(total_out));
-            rows[5].push(cache_pct_total);
-            headers.push("Total".to_string());
-        }
-
-        vec![
-            RenderLine::Blank,
-            RenderLine::InfoHeader("  ◆ Model Usage Detail".to_string()),
-            RenderLine::Blank,
-            RenderLine::Table { headers, rows },
-            RenderLine::Blank,
-            RenderLine::DimMsg("  /stats        — full session card".to_string()),
-            RenderLine::Blank,
-        ]
-    }
-}
 
 // ── Repl ──────────────────────────────────────────────────────────────────────
 
@@ -495,6 +172,7 @@ pub struct Repl {
     agent_name: Arc<Mutex<String>>,
     permissions: PermissionManager,
     current_model: Arc<Mutex<String>>,
+    reasoning_effort: Arc<Mutex<Option<String>>>,
     settings:   Arc<Mutex<SettingsManager>>,
     session:    Arc<Mutex<SessionStore>>,
     /// Working directory (for /init context)
@@ -552,6 +230,10 @@ pub struct Repl {
     /// in submission order after the current turn completes, without interrupting.
     /// VecDeque allows multiple messages to be queued while the agent is busy.
     queued_followup: Arc<Mutex<std::collections::VecDeque<String>>>,
+    /// Buffered reasoning text from the most recent turn (for hook payloads).
+    last_reasoning: Arc<Mutex<String>>,
+    /// Buffered assistant text from the most recent turn (for hook payloads).
+    last_assistant_text: Arc<Mutex<String>>,
     /// Millisecond timestamp of the last time a blocking question modal closed
     /// (`blocking_question_active` transitioned true → false).
     /// The I-01 Enter handler ignores Enter events within 300 ms of a modal
@@ -567,6 +249,7 @@ impl Repl {
         agent_name: String,
         permissions: PermissionManager,
         current_model: String,
+        reasoning_effort: Option<String>,
         settings: Arc<Mutex<SettingsManager>>,
         session: Arc<Mutex<SessionStore>>,
         cwd: std::path::PathBuf,
@@ -594,6 +277,7 @@ impl Repl {
             agent_name: Arc::new(Mutex::new(agent_name)),
             permissions,
             current_model: Arc::new(Mutex::new(current_model)),
+            reasoning_effort: Arc::new(Mutex::new(reasoning_effort.clone())),
             settings,
             session,
             cwd,
@@ -619,9 +303,12 @@ impl Repl {
                 perm_mode,
                 agent_name_clone.clone(),
                 current_model_clone.clone(),
+                reasoning_effort.clone(),
             ))),
             queued_steering:     Arc::new(Mutex::new(None)),
             queued_followup:     Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            last_reasoning:      Arc::new(Mutex::new(String::new())),
+            last_assistant_text: Arc::new(Mutex::new(String::new())),
             last_modal_close_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
         }
     }
@@ -718,50 +405,9 @@ impl Repl {
         let mut hist_idx: Option<usize> = None;
 
         let mut pending_input: Option<String> = None;
+        let mut reader = EventStream::new();
+
         loop {
-            // Check for completed background subagent results
-            {
-                let mut results = self.background_results.lock().unwrap();
-                for r in results.drain(..) {
-                    let msg = format!(
-                        "  ✓ Subagent '{}' finished:\n{}",
-                        r.subagent, r.result
-                    );
-                    let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(msg));
-                    let notify = format!(
-                        "[Background subagent '{}' completed (task ID: {})]:\n{}",
-                        r.subagent, r.task_id, r.result
-                    );
-                    let _ = self.client.send_message(&self.agent_id(), &notify, false).await;
-                }
-            }
-
-            // Check if MCP schemas changed after a reconnect — re-register if so
-            if self.mcp.schemas_dirty.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                self.tui_dim("  ↺ MCP tool schemas changed after reconnect — re-registering…".to_string());
-                self.spawn_tool_reregister();
-            }
-
-            // Check for settings file changes — reload MCP servers if signalled
-            let mut mcp_changed = false;
-            while self.mcp_reload_rx.try_recv().is_ok() {
-                mcp_changed = true;
-            }
-            if mcp_changed {
-                self.do_mcp_reload().await;
-            }
-
-            // Check for skill file changes (live watcher) — reload if signalled
-            while self.skill_reload_rx.try_recv().is_ok() {
-                let new_skills = crate::skills::discover_all_skills(&self.cwd, None, None);
-                let new_count  = new_skills.len();
-                *self.skills.lock().unwrap() = new_skills.clone();
-                let names: Vec<String> = new_skills.iter().map(|s| s.name.clone()).collect();
-                let list = names.join(", ");
-                self.tui_ok(format!("  ↺ Skills auto-reloaded ({new_count} skills): {list}"));
-                tracing::info!("Skills auto-reloaded: {new_count} skills");
-            }
-
             // Update app footer to reflect current mode/model before reading input.
             {
                 let mut app = self.app.lock().unwrap();
@@ -774,9 +420,63 @@ impl Repl {
             let input = if let Some(cmd) = pending_input.take() {
                 cmd
             } else {
-                match self.app.lock().unwrap().read_input(&mut history, &mut hist_idx)? {
-                    Some(s) => s,
-                    None => break,
+                self.app.lock().unwrap().reset_input(&mut hist_idx);
+                let mut completed_input = None;
+                loop {
+                    self.app.lock().unwrap().draw()?;
+
+                    tokio::select! {
+                        ev = reader.next() => {
+                            if let Some(Ok(e)) = ev {
+                                let mut app = self.app.lock().unwrap();
+                                if let Ok(Some(result)) = app.process_event(e, &mut history, &mut hist_idx) {
+                                    completed_input = Some(result);
+                                    break;
+                                }
+                            }
+                        }
+                        _ = self.mcp_reload_rx.recv() => {
+                            self.do_mcp_reload().await;
+                        }
+                        _ = self.skill_reload_rx.recv() => {
+                            let new_skills = crate::skills::discover_all_skills(&self.cwd, None, None);
+                            let new_count  = new_skills.len();
+                            *self.skills.lock().unwrap() = new_skills.clone();
+                            let names: Vec<String> = new_skills.iter().map(|s| s.name.clone()).collect();
+                            let list = names.join(", ");
+                            self.tui_ok(format!("  ↺ Skills auto-reloaded ({new_count} skills): {list}"));
+                            tracing::info!("Skills auto-reloaded: {new_count} skills");
+                        }
+                        _ = tokio::time::sleep(std::time::Duration::from_millis(50)) => {
+                            // Poll background tasks and MCP schema dirty flags
+                            let mut results = self.background_results.lock().unwrap();
+                            for r in results.drain(..) {
+                                let msg = format!(
+                                    "  ✓ Subagent '{}' finished:\n{}",
+                                    r.subagent, r.result
+                                );
+                                let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(msg));
+                                let notify = format!(
+                                    "[Background subagent '{}' completed (task ID: {})]:\n{}",
+                                    r.subagent, r.task_id, r.result
+                                );
+                                let client_clone = self.client.clone();
+                                let agent_id_clone = self.agent_id();
+                                tokio::spawn(async move {
+                                    let _ = client_clone.send_message(&agent_id_clone, &notify, false).await;
+                                });
+                            }
+
+                            if self.mcp.schemas_dirty.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                                self.tui_dim("  ↺ MCP tool schemas changed after reconnect — re-registering…".to_string());
+                                self.spawn_tool_reregister();
+                            }
+                        }
+                    }
+                }
+                match completed_input {
+                    Some(Some(s)) => s,
+                    _ => break, // None on Ctrl+D
                 }
             };
             let input = input.trim().to_string();
@@ -1264,7 +964,26 @@ impl Repl {
                     }
                     SlashCmd::Plan => {
                         self.permissions.set_mode(PermissionMode::Plan);
+                        if let Ok(mut app) = self.app.lock() {
+                            if let Some(plan) = &mut app.active_plan {
+                                plan.is_visible = true;
+                            }
+                        }
                         self.tui_hdr("📖 Permission mode: plan (read-only) — write/exec tools blocked. Use /default to resume.");
+                    }
+                    SlashCmd::Todos => {
+                        if let Ok(mut app) = self.app.lock() {
+                            let mut has_plan = false;
+                            if let Some(plan) = &mut app.active_plan {
+                                plan.is_visible = !plan.is_visible;
+                                has_plan = true;
+                            }
+                            if !has_plan {
+                                let _ = app.push(crate::ui::RenderLine::SystemMsg("No active plan. Ask the agent to create one.".to_string()));
+                            }
+                            app.draw_dirty = true;
+                            let _ = app.draw();
+                        }
                     }
                     SlashCmd::Default => {
                         self.permissions.set_mode(PermissionMode::Default);
@@ -1327,6 +1046,26 @@ impl Repl {
                                 let _ = self.app.lock().unwrap().draw();
                             }
                             Err(e) => self.tui_err(e.to_string()),
+                        }
+                    }
+
+                    SlashCmd::Reasoning(r) => {
+                        let r = if r.is_empty() {
+                            match self.interactive_reasoning_picker(Arc::clone(&self.app)).await? {
+                                Some(picked) => picked,
+                                None => { let _ = self.app.lock().unwrap().draw(); continue; }
+                            }
+                        } else {
+                            r
+                        };
+                        let valid = ["none", "low", "medium", "high", "xhigh"];
+                        if !valid.contains(&r.as_str()) {
+                            self.tui_err(format!("Invalid reasoning tier '{r}'. Valid: none, low, medium, high, xhigh"));
+                        } else {
+                            let effort = if r == "none" { None } else { Some(r.clone()) };
+                            *self.reasoning_effort.lock().unwrap() = effort.clone();
+                            self.app.lock().unwrap().reasoning_effort = effort;
+                            self.tui_ok(format!("  ✓ Reasoning effort: {r}"));
                         }
                     }
 
@@ -1793,7 +1532,7 @@ impl Repl {
 
                     SlashCmd::Remember(text) => {
                         // Route through the agent — it decides what to store and where.
-                        // This matches Letta's /remember behaviour exactly.
+                        // This matches CADE's /remember behaviour exactly.
                         let msg = if text.is_empty() {
                             "[/remember] Please review our recent conversation and update your \
                              memory blocks with anything important you've learned about me, \
@@ -3259,9 +2998,10 @@ impl Repl {
         let conv_ref  = conv_id.as_deref();
 
         let messages = if is_tool_return {
+            let reasoning_effort = self.reasoning_effort.lock().unwrap().clone();
             match self
                 .client
-                .stream_tool_return_cancellable(&agent_id, tool_call_id, tool_output, false, conv_ref, on_event, Some(cancel))
+                .stream_tool_return_cancellable(&agent_id, tool_call_id, tool_output, false, conv_ref, reasoning_effort.as_deref(), on_event, Some(cancel))
                 .await
             {
                 Ok(m) => m,
@@ -3284,7 +3024,8 @@ impl Repl {
             use std::sync::atomic::Ordering;
             let streaming = self.streaming_enabled.load(Ordering::SeqCst);
             if streaming {
-                match self.client.stream_message_cancellable(&agent_id, input, conv_ref, ephemeral, on_event, Some(cancel)).await {
+                let reasoning_effort = self.reasoning_effort.lock().unwrap().clone();
+                match self.client.stream_message_cancellable(&agent_id, input, conv_ref, ephemeral, reasoning_effort.as_deref(), on_event, Some(cancel)).await {
                     Ok(m) => m,
                     Err(e) if is_cancel(&e) => {
                         let mut app = self.app.lock().unwrap();
@@ -3396,7 +3137,11 @@ impl Repl {
             }
 
             // Stop hook — exit 2 feeds stderr back to agent as a continuation
-            let stop_outcome = self.hooks.stop("end_turn", user_input, &assistant_msg).await;
+            let last_reasoning = self.last_reasoning.lock().unwrap().clone();
+            let stop_outcome = self.hooks.stop(
+                "end_turn", user_input, &assistant_msg,
+                if last_reasoning.is_empty() { None } else { Some(&last_reasoning) },
+            ).await;
             if let crate::hooks::HookOutcome::Block { reason } = stop_outcome {
                 let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
                     format!("  ⎿  Hook continuing: {reason}")
@@ -3538,8 +3283,33 @@ impl Repl {
         });
 
         // Native tool intercepts (handled without going through generic dispatch)
+        if tool_name == "EnterPlanMode" {
+            self.permissions.set_mode(cade_core::permissions::PermissionMode::Plan);
+            let mut app = self.app.lock().unwrap();
+            app.update_mode(cade_core::permissions::PermissionMode::Plan);
+            return Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output: "Plan mode entered. File modifications are now blocked. Use ExitPlanMode to resume normal operation.".to_string(),
+                is_error: false,
+            });
+        }
+        if tool_name == "ExitPlanMode" {
+            self.permissions.set_mode(cade_core::permissions::PermissionMode::Default);
+            let mut app = self.app.lock().unwrap();
+            app.update_mode(cade_core::permissions::PermissionMode::Default);
+            return Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output: "Plan mode exited. Normal operation resumed.".to_string(),
+                is_error: false,
+            });
+        }
         if tool_name == "update_memory" {
             return self.handle_update_memory(call_id, args).await;
+        }
+        if tool_name == "memory_apply_patch" {
+            return self.handle_memory_apply_patch(call_id, args).await;
         }
         if tool_name == "load_skill" {
             return self.handle_load_skill(call_id, args).await;
@@ -3683,11 +3453,13 @@ impl Repl {
         };
 
         // PostToolUse / PostToolUseFailure hooks
+        let pr = { let s = self.last_reasoning.lock().unwrap().clone(); if s.is_empty() { None } else { Some(s) } };
+        let pa = { let s = self.last_assistant_text.lock().unwrap().clone(); if s.is_empty() { None } else { Some(s) } };
         if result.is_error {
-            self.hooks.post_tool_use_failure(tool_name, args, &result.output).await;
+            self.hooks.post_tool_use_failure(tool_name, args, &result.output, pr.as_deref(), pa.as_deref()).await;
         } else {
             // PostToolUse may inject additionalContext into the tool output
-            if let Some(extra) = self.hooks.post_tool_use(tool_name, args, &result.output).await {
+            if let Some(extra) = self.hooks.post_tool_use(tool_name, args, &result.output, pr.as_deref(), pa.as_deref()).await {
                 result.output = format!("{}\n\n[Hook context: {extra}]", result.output);
             }
         }
@@ -3975,6 +3747,109 @@ impl Repl {
             Err(e) => Ok(crate::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: "update_memory".to_string(),
+                output: format!("Failed to update '{label}': {e}"),
+                is_error: true,
+            }),
+        }
+    }
+
+    /// Handle the agent's `memory_apply_patch` tool call natively.
+    async fn handle_memory_apply_patch(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+    ) -> Result<crate::tools::ToolResult> {
+        let label = args["label"].as_str().unwrap_or("").trim().to_string();
+        let patch_str = args["patch"].as_str().unwrap_or("");
+        
+        if label.is_empty() {
+            return Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "memory_apply_patch".to_string(),
+                output: "error: 'label' is required".to_string(),
+                is_error: true,
+            });
+        }
+        
+        let agent_id = self.agent_id();
+        let existing = self.client.get_memory(&agent_id).await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|b| b.label == label)
+            .map(|b| b.value)
+            .unwrap_or_default();
+            
+        let temp_dir = std::env::temp_dir().join(format!("cade-mem-patch-{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().subsec_nanos()));
+        if let Err(e) = std::fs::create_dir_all(&temp_dir) {
+            return Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "memory_apply_patch".to_string(),
+                output: format!("Failed to create temp directory: {e}"),
+                is_error: true,
+            });
+        }
+        
+        let file_path = temp_dir.join(&label);
+        let patch_file = temp_dir.join("patch.diff");
+        
+        let _ = std::fs::write(&file_path, &existing);
+        let _ = std::fs::write(&patch_file, patch_str);
+        
+        let mut output = tokio::process::Command::new("patch")
+            .current_dir(&temp_dir)
+            .args(["-p1", "--input", "patch.diff"])
+            .output()
+            .await;
+            
+        if let Ok(ref out) = output {
+            if !out.status.success() {
+                output = tokio::process::Command::new("patch")
+                    .current_dir(&temp_dir)
+                    .args(["-p0", "--input", "patch.diff"])
+                    .output()
+                    .await;
+            }
+        }
+        
+        let final_value = match output {
+            Ok(out) if out.status.success() => std::fs::read_to_string(&file_path).unwrap_or_default(),
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Ok(crate::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "memory_apply_patch".to_string(),
+                    output: format!("patch failed:\n{stdout}{stderr}"),
+                    is_error: true,
+                });
+            }
+            Err(e) => {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Ok(crate::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "memory_apply_patch".to_string(),
+                    output: format!("failed to execute patch command: {e}"),
+                    is_error: true,
+                });
+            }
+        };
+        
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let description = args["description"].as_str();
+        match self.client.upsert_memory(&agent_id, &label, &final_value, description).await {
+            Ok(_) => {
+                tracing::info!("Agent updated memory [{label}] via patch");
+                Ok(crate::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "memory_apply_patch".to_string(),
+                    output: format!("Memory block '{label}' updated via patch"),
+                    is_error: false,
+                })
+            }
+            Err(e) => Ok(crate::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "memory_apply_patch".to_string(),
                 output: format!("Failed to update '{label}': {e}"),
                 is_error: true,
             }),
@@ -5026,6 +4901,126 @@ impl Repl {
                     (KeyCode::PageUp, _) => {
                         for _ in 0..10 { list_pos = prev_pos(list_pos); }
                         do_draw_model(&app_arc, list_pos)?;
+                    }
+                    _ => {}
+                }
+            }
+        };
+
+        Ok(result)
+    }
+
+    /// Interactive reasoning tier picker — full-screen on TuiApp terminal.
+    /// Returns the selected reasoning tier string or None if cancelled.
+    async fn interactive_reasoning_picker(
+        &self,
+        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+    ) -> Result<Option<String>> {
+        use crossterm::event::{self, Event, KeyCode};
+        use ratatui::{
+            widgets::{List, ListItem, ListState, Block, Borders},
+            layout::{Constraint, Layout, Direction},
+            style::{Style, Color as RC, Modifier},
+            text::{Line, Span},
+        };
+
+        let current_effort = self.reasoning_effort.lock().unwrap().clone().unwrap_or_else(|| "none".to_string());
+        
+        let tiers = vec![
+            ("none", "No explicit reasoning budget (default)"),
+            ("low", "Low reasoning effort"),
+            ("medium", "Medium reasoning effort"),
+            ("high", "High reasoning effort"),
+            ("xhigh", "Maximum reasoning effort"),
+        ];
+
+        let mut list_pos = tiers.iter().position(|&(t, _)| t == current_effort).unwrap_or(0);
+
+        let do_draw_tier = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+                            list_pos: usize| -> Result<()> {
+            let title = format!(
+                " Reasoning Tiers  ↑↓/jk  Enter select  q cancel  [{}/{}] ",
+                list_pos + 1, tiers.len()
+            );
+            
+            let items: Vec<ListItem<'static>> = tiers.iter().enumerate().map(|(i, (tier, desc))| {
+                let is_sel = i == list_pos;
+                let is_current = *tier == current_effort;
+                let current_tag = if is_current { " ← current" } else { "" };
+                
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        if is_sel { "  ▶ " } else { "    " }.to_string(),
+                        Style::default().fg(if is_sel { RC::Green } else { RC::DarkGray }),
+                    ),
+                    Span::styled(
+                        format!("{:<10}", tier),
+                        Style::default()
+                            .fg(if is_sel { RC::White } else { RC::DarkGray })
+                            .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() })
+                    ),
+                    Span::styled(
+                        desc.to_string(),
+                        Style::default().fg(RC::DarkGray)
+                    ),
+                    Span::styled(
+                        current_tag,
+                        Style::default().fg(RC::Cyan)
+                    ),
+                ]))
+            }).collect();
+
+            let list = List::new(items)
+                .block(Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .border_style(Style::default().fg(RC::DarkGray)));
+
+            let mut app = app_arc.lock().unwrap();
+            app.terminal.draw(|f| {
+                let area = f.area();
+                let center = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Min(0),
+                        Constraint::Length(tiers.len() as u16 + 2),
+                        Constraint::Min(0),
+                    ])
+                    .split(area)[1];
+
+                let h_center = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(10),
+                        Constraint::Percentage(80),
+                        Constraint::Percentage(10),
+                    ])
+                    .split(center)[1];
+
+                let mut ls = ListState::default();
+                ls.select(Some(list_pos));
+                f.render_stateful_widget(list, h_center, &mut ls);
+            })?;
+            Ok(())
+        };
+
+        do_draw_tier(&app_arc, list_pos)?;
+
+        let result = loop {
+            if !event::poll(std::time::Duration::from_millis(200))? { continue; }
+            if let Ok(Event::Key(key)) = event::read() {
+                match (key.code, key.modifiers) {
+                    (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
+                    (KeyCode::Enter, _) => {
+                        break Some(tiers[list_pos].0.to_string());
+                    }
+                    (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
+                        list_pos = if list_pos == 0 { tiers.len() - 1 } else { list_pos - 1 };
+                        let _ = do_draw_tier(&app_arc, list_pos);
+                    }
+                    (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
+                        list_pos = (list_pos + 1) % tiers.len();
+                        let _ = do_draw_tier(&app_arc, list_pos);
                     }
                     _ => {}
                 }

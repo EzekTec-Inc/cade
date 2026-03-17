@@ -25,7 +25,7 @@ use cade::toolsets::Toolset;
 use cli::{Args, Repl};
 use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
-use skills::{discover_all_skills, skills_listing};
+use skills::{discover_all_skills, skills_listing, Skill};
 
 const SKILLS_DIR: &str = ".skills";
 
@@ -367,6 +367,41 @@ async fn register_update_memory_tool(client: &CadeClient) {
     }
 }
 
+async fn register_memory_apply_patch_tool(client: &CadeClient) {
+    let schema = serde_json::json!({
+        "name": "memory_apply_patch",
+        "description": "Edit a persistent memory block using a unified diff patch. Use this to store important information about the user, project, or yourself that should be remembered across conversations. Call this whenever you learn something worth remembering.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string",
+                    "description": "Memory block name: 'human' (user info), 'project' (project context), 'persona' (your identity/style), or any custom label"
+                },
+                "patch": {
+                    "type": "string",
+                    "description": "A valid unified diff patch string. To create a new block or replace entirely, write a patch from an empty file."
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Short description of what this block is for (optional, shown in /memory display)"
+                }
+            },
+            "required": ["label", "patch"]
+        }
+    });
+    use agent::client::CreateToolRequest;
+    let req = CreateToolRequest {
+        source_code: String::new(),
+        source_type: "json".to_string(),
+        json_schema: Some(schema),
+        tags: vec![],
+    };
+    if let Err(e) = client.create_tool(req).await {
+        tracing::debug!("memory_apply_patch tool already registered or failed: {e}");
+    }
+}
+
 /// Register all CADE tools on the server and attach them to the given agent.
 pub async fn register_and_attach(client: &CadeClient, agent_id: &str, toolset: Toolset) {
     register_and_attach_filtered(client, agent_id, toolset, None).await;
@@ -383,6 +418,7 @@ pub async fn register_and_attach_filtered(
     tool_filter: Option<&[String]>,
 ) {
     register_update_memory_tool(client).await;
+    register_memory_apply_patch_tool(client).await;
     register_load_skill_tool(client).await;
     register_install_skill_tool(client).await;
     register_run_skill_script_tool(client).await;
@@ -448,6 +484,252 @@ async fn register_cade_tools_filtered(
     Ok(registered)
 }
 
+
+async fn resolve_agent_and_conversation(
+    client: &CadeClient,
+    args: &Args,
+    default_model: &str,
+    toolset: Toolset,
+    skills_block: &Option<String>,
+    cwd: &std::path::Path,
+    session: &mut SessionStore,
+    settings: &mut SettingsManager,
+) -> Result<(agent::client::AgentState, Vec<Skill>, Option<String>)> {
+    let make_req = |model: String, desc: &str| {
+        // Inject only the compact listing as a memory block.
+        // Full skill content is loaded on-demand by the agent via load_skill tool.
+        let memory_blocks: Vec<MemoryBlock> = if let Some(ctx) = &skills_block {
+            vec![MemoryBlock {
+                label: "skills".to_string(),
+                value: ctx.clone(),
+                description: None,
+                tier: None,
+            }]
+        } else {
+            vec![]
+        };
+        CreateAgentRequest {
+            name: Some(format!(
+                "CADE-{}",
+                chrono::Local::now().format("%Y%m%d-%H%M%S")
+            )),
+            model,
+            description: Some(desc.to_string()),
+            system_prompt: Some(BASE_SYSTEM_PROMPT.to_string()),
+            memory_blocks,
+            tool_ids: vec![],
+        }
+    };
+
+    let tool_filter: Option<Vec<String>> = args.tool_filter();
+
+    let agent = if args.new_agent {
+        let a = client
+            .create_agent(make_req(
+                default_model.to_string(),
+                "CADE coding agent with desktop extensions",
+            ))
+            .await
+            .context("create agent")?;
+        register_and_attach_filtered(&client, &a.id, toolset, tool_filter.as_deref()).await;
+        seed_default_memory(&client, &a.id).await;
+        session
+            .set_agent(a.id.clone(), Some(a.name.clone()))
+            .context("save session")?;
+        settings
+            .set_last_agent(&a.id)
+            .context("save global session")?;
+        a
+    } else if let Some(id) = &args.agent {
+        client
+            .get_agent(id)
+            .await
+            .with_context(|| format!("get agent {id}"))?
+    } else if let Some(name_query) = &args.name {
+        // --name: find agent by name (partial, case-insensitive)
+        let all = client.list_agents().await.context("list agents for --name")?;
+        let q = name_query.to_lowercase();
+        let matched: Vec<_> = all.iter().filter(|a| a.name.to_lowercase().contains(&q)).collect();
+        match matched.len() {
+            0 => anyhow::bail!("No agent matching --name '{name_query}'"),
+            1 => client.get_agent(&matched[0].id).await
+                    .with_context(|| format!("get agent {}", matched[0].id))?,
+            n => anyhow::bail!(
+                "{n} agents match '{name_query}': {}",
+                matched.iter().map(|a| format!("{} ({})", a.name, a.id)).collect::<Vec<_>>().join(", ")
+            ),
+        }
+    } else if let Some(last_id) = session.session.agent_id.clone() {
+        match client.get_agent(&last_id).await {
+            Ok(a) => a,
+            Err(_) => {
+                eprintln!("Previous agent {last_id} not found — creating new agent");
+                let a = client
+                    .create_agent(make_req(default_model.to_string(), "CADE coding agent"))
+                    .await
+                    .context("create agent")?;
+                register_and_attach_filtered(&client, &a.id, toolset, tool_filter.as_deref()).await;
+                seed_default_memory(&client, &a.id).await;
+                session.set_agent(a.id.clone(), Some(a.name.clone()))?;
+                settings.set_last_agent(&a.id)?;
+                a
+            }
+        }
+    } else {
+        println!("No previous session — creating new agent…");
+        let a = client
+            .create_agent(make_req(
+                default_model.to_string(),
+                "CADE coding agent with desktop extensions",
+            ))
+            .await
+            .context("create agent")?;
+        register_and_attach_filtered(&client, &a.id, toolset, tool_filter.as_deref()).await;
+        seed_default_memory(&client, &a.id).await;
+        session.set_agent(a.id.clone(), Some(a.name.clone()))?;
+        settings.set_last_agent(&a.id)?;
+        a
+    };
+
+    let loaded_skills = discover_all_skills(&cwd, Some(&agent.id), None);
+    if !loaded_skills.is_empty() {
+        println!("Loaded {} skill(s)", loaded_skills.len());
+    }
+    let updated_skills_block = skills_listing(&loaded_skills);
+    let _ = client
+        .upsert_memory(
+            &agent.id,
+            "skills",
+            updated_skills_block.as_deref().unwrap_or(""),
+            None,
+        )
+        .await;
+
+    // ── Conversation resolution ───────────────────────────────────────────────
+    //
+    // Precedence: --new (create new) > --resume (picker) > --continue (reuse saved) > saved session
+    let conversation_id: Option<String> = if args.new_conversation {
+        // Create a fresh conversation on the resolved agent
+        match client.create_conversation(&agent.id, "").await {
+            Ok(conv) => {
+                let cid = conv["id"].as_str().unwrap_or("").to_string();
+                session.set_conversation(Some(cid.clone())).context("save conversation")?;
+                Some(cid)
+            }
+            Err(e) => {
+                eprintln!("Warning: failed to create conversation: {e}");
+                None
+            }
+        }
+    } else if args.resume {
+        // Interactive conversation picker (show before REPL starts)
+        match client.list_conversations(&agent.id).await {
+            Ok(convs) if !convs.is_empty() => {
+                // Quick TTY picker: numbered list, pick by number
+                println!("\nConversations for {}:", agent.name);
+                for (i, c) in convs.iter().enumerate() {
+                    let title = c["title"].as_str().unwrap_or("(untitled)");
+                    let cnt   = c["message_count"].as_i64().unwrap_or(0);
+                    println!("  [{}] {}  ({} msgs)", i + 1, title, cnt);
+                }
+                println!("  [n] Start new conversation");
+                print!("\nChoice [1-{}]: ", convs.len());
+                use std::io::Write;
+                std::io::stdout().flush()?;
+                let mut buf = String::new();
+                std::io::stdin().read_line(&mut buf)?;
+                let choice = buf.trim();
+                if choice == "n" || choice == "N" {
+                    let conv = client.create_conversation(&agent.id, "").await
+                        .context("create conversation")?;
+                    let cid = conv["id"].as_str().unwrap_or("").to_string();
+                    session.set_conversation(Some(cid.clone())).context("save conversation")?;
+                    Some(cid)
+                } else if let Ok(n) = choice.parse::<usize>() {
+                    if n >= 1 && n <= convs.len() {
+                        let cid = convs[n - 1]["id"].as_str().unwrap_or("").to_string();
+                        session.set_conversation(Some(cid.clone())).context("save conversation")?;
+                        Some(cid)
+                    } else {
+                        eprintln!("Invalid choice — using default conversation");
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            Ok(_) => {
+                println!("No conversations yet — starting new one");
+                match client.create_conversation(&agent.id, "").await {
+                    Ok(conv) => {
+                        let cid = conv["id"].as_str().unwrap_or("").to_string();
+                        session.set_conversation(Some(cid.clone())).context("save conversation")?;
+                        Some(cid)
+                    }
+                    Err(e) => { eprintln!("Warning: {e}"); None }
+                }
+            }
+            Err(e) => { eprintln!("Warning: list_conversations: {e}"); None }
+        }
+    } else {
+        // Use saved conversation_id (--continue or resume from session)
+        session.session.conversation_id.clone()
+    };
+    Ok((agent, loaded_skills, conversation_id))
+}
+
+async fn auto_start_server(base_url: &str) -> Result<()> {
+    let server_bin = std::env::current_exe()
+        .ok()
+        .map(|p| p.with_file_name("cade-server"))
+        .filter(|p| p.exists());
+
+    if let Some(server_bin) = server_bin {
+        tracing::info!("cade-server not running — starting…");
+        let mut cmd = std::process::Command::new(&server_bin);
+        if let Ok(log) = std::fs::OpenOptions::new()
+            .create(true).append(true).open("/tmp/cade-server.log")
+        {
+            match log.try_clone() {
+                Ok(log_stderr) => {
+                    cmd.stdout(log);
+                    cmd.stderr(log_stderr);
+                }
+                Err(_) => {
+                    eprintln!("Warning: Failed to duplicate stderr for cade-server log. Falling back to stdout.");
+                    cmd.stdout(log);
+                }
+            }
+        } else {
+            eprintln!("Warning: Failed to create /tmp/cade-server.log. Server output will go to stderr.");
+        }
+        let _child = cmd.spawn().context("auto-start cade-server")?;
+
+        let client = CadeClient::new(base_url.to_string(), "".to_string()).unwrap();
+        let mut ready = false;
+        for _ in 0..10 {
+            tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+            if client.health().await.unwrap_or(false) {
+                ready = true;
+                break;
+            }
+        }
+        if !ready {
+            bail!(
+                "cade-server failed to start. Check /tmp/cade-server.log\n\
+                 Or start it manually: {}", server_bin.display()
+            );
+        }
+        tracing::info!("cade-server ready.");
+        Ok(())
+    } else {
+        bail!(
+            "Cannot connect to CADE server at {base_url}.\n\
+             Start cade-server first: ./target/release/cade-server"
+        );
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Write tracing to a log file instead of stderr.  In alternate-screen TUI
@@ -487,61 +769,7 @@ async fn main() -> Result<()> {
     let client = CadeClient::new(base_url.clone(), api_key).context("create CADE server")?;
 
     if !client.health().await.unwrap_or(false) {
-        // Auto-start cade-server from the same directory as the cade binary.
-        // This allows the user to run a single `./cade` command without
-        // needing a separate terminal for the server.
-        let server_bin = std::env::current_exe()
-            .ok()
-            .map(|p| p.with_file_name("cade-server"))
-            .filter(|p| p.exists());
-
-        if let Some(server_bin) = server_bin {
-            tracing::info!("cade-server not running — starting…");
-            let mut cmd = std::process::Command::new(&server_bin);
-            // Redirect server stdout + stderr to /tmp/cade-server.log for debugging.
-            // try_clone() performs a proper OS-level dup(2) — no unsafe required.
-            if let Ok(log) = std::fs::OpenOptions::new()
-                .create(true).append(true).open("/tmp/cade-server.log")
-            {
-                match log.try_clone() {
-                    Ok(log_stderr) => {
-                        cmd.stdout(log);
-                        cmd.stderr(log_stderr);
-                    }
-                    Err(_) => {
-                        // dup failed — silence both rather than leaving one unredirected
-                        cmd.stdout(std::process::Stdio::null())
-                           .stderr(std::process::Stdio::null());
-                    }
-                }
-            } else {
-                cmd.stdout(std::process::Stdio::null())
-                   .stderr(std::process::Stdio::null());
-            }
-            let _child = cmd.spawn().context("auto-start cade-server")?;
-
-            // Poll up to 5 s for the server to become ready
-            let mut ready = false;
-            for _ in 0..10 {
-                tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-                if client.health().await.unwrap_or(false) {
-                    ready = true;
-                    break;
-                }
-            }
-            if !ready {
-                bail!(
-                    "cade-server failed to start. Check /tmp/cade-server.log\n\
-                     Or start it manually: {}", server_bin.display()
-                );
-            }
-            tracing::info!("cade-server ready.");
-        } else {
-            bail!(
-                "Cannot connect to CADE server at {base_url}.\n\
-                 Start cade-server first: ./target/release/cade-server"
-            );
-        }
+        auto_start_server(&base_url).await?;
     }
 
     // Version compatibility check: warn if client and server versions differ.
@@ -648,186 +876,17 @@ async fn main() -> Result<()> {
     let skills_block = skills_listing(&initial_loaded_skills);
 
     // Agent resolution — helper closure avoids repeating the create logic
-    let make_req = |model: String, desc: &str| {
-        // Inject only the compact listing as a memory block.
-        // Full skill content is loaded on-demand by the agent via load_skill tool.
-        let memory_blocks: Vec<MemoryBlock> = if let Some(ctx) = &skills_block {
-            vec![MemoryBlock {
-                label: "skills".to_string(),
-                value: ctx.clone(),
-                description: None,
-                tier: None,
-            }]
-        } else {
-            vec![]
-        };
-        CreateAgentRequest {
-            name: Some(format!(
-                "CADE-{}",
-                chrono::Local::now().format("%Y%m%d-%H%M%S")
-            )),
-            model,
-            description: Some(desc.to_string()),
-            system_prompt: Some(BASE_SYSTEM_PROMPT.to_string()),
-            memory_blocks,
-            tool_ids: vec![],
-        }
-    };
+    let (agent, loaded_skills, conversation_id) = resolve_agent_and_conversation(
+        &client,
+        &args,
+        &default_model,
+        toolset,
+        &skills_block,
+        &cwd,
+        &mut session,
+        &mut settings,
+    ).await?;
 
-    let tool_filter: Option<Vec<String>> = args.tool_filter();
-
-    let agent = if args.new_agent {
-        let a = client
-            .create_agent(make_req(
-                default_model.clone(),
-                "CADE coding agent with desktop extensions",
-            ))
-            .await
-            .context("create agent")?;
-        register_and_attach_filtered(&client, &a.id, toolset, tool_filter.as_deref()).await;
-        seed_default_memory(&client, &a.id).await;
-        session
-            .set_agent(a.id.clone(), Some(a.name.clone()))
-            .context("save session")?;
-        settings
-            .set_last_agent(&a.id)
-            .context("save global session")?;
-        a
-    } else if let Some(id) = &args.agent {
-        client
-            .get_agent(id)
-            .await
-            .with_context(|| format!("get agent {id}"))?
-    } else if let Some(name_query) = &args.name {
-        // --name: find agent by name (partial, case-insensitive)
-        let all = client.list_agents().await.context("list agents for --name")?;
-        let q = name_query.to_lowercase();
-        let matched: Vec<_> = all.iter().filter(|a| a.name.to_lowercase().contains(&q)).collect();
-        match matched.len() {
-            0 => anyhow::bail!("No agent matching --name '{name_query}'"),
-            1 => client.get_agent(&matched[0].id).await
-                    .with_context(|| format!("get agent {}", matched[0].id))?,
-            n => anyhow::bail!(
-                "{n} agents match '{name_query}': {}",
-                matched.iter().map(|a| format!("{} ({})", a.name, a.id)).collect::<Vec<_>>().join(", ")
-            ),
-        }
-    } else if let Some(last_id) = session.session.agent_id.clone() {
-        match client.get_agent(&last_id).await {
-            Ok(a) => a,
-            Err(_) => {
-                eprintln!("Previous agent {last_id} not found — creating new agent");
-                let a = client
-                    .create_agent(make_req(default_model.clone(), "CADE coding agent"))
-                    .await
-                    .context("create agent")?;
-                register_and_attach_filtered(&client, &a.id, toolset, tool_filter.as_deref()).await;
-                seed_default_memory(&client, &a.id).await;
-                session.set_agent(a.id.clone(), Some(a.name.clone()))?;
-                settings.set_last_agent(&a.id)?;
-                a
-            }
-        }
-    } else {
-        println!("No previous session — creating new agent…");
-        let a = client
-            .create_agent(make_req(
-                default_model.clone(),
-                "CADE coding agent with desktop extensions",
-            ))
-            .await
-            .context("create agent")?;
-        register_and_attach_filtered(&client, &a.id, toolset, tool_filter.as_deref()).await;
-        seed_default_memory(&client, &a.id).await;
-        session.set_agent(a.id.clone(), Some(a.name.clone()))?;
-        settings.set_last_agent(&a.id)?;
-        a
-    };
-
-    let loaded_skills = discover_all_skills(&cwd, Some(&agent.id), None);
-    if !loaded_skills.is_empty() {
-        println!("Loaded {} skill(s)", loaded_skills.len());
-    }
-    let updated_skills_block = skills_listing(&loaded_skills);
-    let _ = client
-        .upsert_memory(
-            &agent.id,
-            "skills",
-            updated_skills_block.as_deref().unwrap_or(""),
-            None,
-        )
-        .await;
-
-    // ── Conversation resolution ───────────────────────────────────────────────
-    //
-    // Precedence: --new (create new) > --resume (picker) > --continue (reuse saved) > saved session
-    let conversation_id: Option<String> = if args.new_conversation {
-        // Create a fresh conversation on the resolved agent
-        match client.create_conversation(&agent.id, "").await {
-            Ok(conv) => {
-                let cid = conv["id"].as_str().unwrap_or("").to_string();
-                session.set_conversation(Some(cid.clone())).context("save conversation")?;
-                Some(cid)
-            }
-            Err(e) => {
-                eprintln!("Warning: failed to create conversation: {e}");
-                None
-            }
-        }
-    } else if args.resume {
-        // Interactive conversation picker (show before REPL starts)
-        match client.list_conversations(&agent.id).await {
-            Ok(convs) if !convs.is_empty() => {
-                // Quick TTY picker: numbered list, pick by number
-                println!("\nConversations for {}:", agent.name);
-                for (i, c) in convs.iter().enumerate() {
-                    let title = c["title"].as_str().unwrap_or("(untitled)");
-                    let cnt   = c["message_count"].as_i64().unwrap_or(0);
-                    println!("  [{}] {}  ({} msgs)", i + 1, title, cnt);
-                }
-                println!("  [n] Start new conversation");
-                print!("\nChoice [1-{}]: ", convs.len());
-                use std::io::Write;
-                std::io::stdout().flush()?;
-                let mut buf = String::new();
-                std::io::stdin().read_line(&mut buf)?;
-                let choice = buf.trim();
-                if choice == "n" || choice == "N" {
-                    let conv = client.create_conversation(&agent.id, "").await
-                        .context("create conversation")?;
-                    let cid = conv["id"].as_str().unwrap_or("").to_string();
-                    session.set_conversation(Some(cid.clone())).context("save conversation")?;
-                    Some(cid)
-                } else if let Ok(n) = choice.parse::<usize>() {
-                    if n >= 1 && n <= convs.len() {
-                        let cid = convs[n - 1]["id"].as_str().unwrap_or("").to_string();
-                        session.set_conversation(Some(cid.clone())).context("save conversation")?;
-                        Some(cid)
-                    } else {
-                        eprintln!("Invalid choice — using default conversation");
-                        None
-                    }
-                } else {
-                    None
-                }
-            }
-            Ok(_) => {
-                println!("No conversations yet — starting new one");
-                match client.create_conversation(&agent.id, "").await {
-                    Ok(conv) => {
-                        let cid = conv["id"].as_str().unwrap_or("").to_string();
-                        session.set_conversation(Some(cid.clone())).context("save conversation")?;
-                        Some(cid)
-                    }
-                    Err(e) => { eprintln!("Warning: {e}"); None }
-                }
-            }
-            Err(e) => { eprintln!("Warning: list_conversations: {e}"); None }
-        }
-    } else {
-        // Use saved conversation_id (--continue or resume from session)
-        session.session.conversation_id.clone()
-    };
 
     // ── MCP server startup ────────────────────────────────────────────────────
     let mcp_configs = settings.merged_mcp_servers();
@@ -1135,7 +1194,7 @@ async fn main() -> Result<()> {
     // Use the agent's actual model from DB as the initial REPL model.
     // default_model is the server-detected default for NEW agents;
     // for EXISTING agents the DB value is what the server actually uses for inference.
-    let initial_model = agent.model.clone().unwrap_or(default_model.clone());
+    let initial_model = agent.model.clone().unwrap_or(default_model.to_string());
 
     let repl = Repl::new(
         client,
@@ -1143,6 +1202,7 @@ async fn main() -> Result<()> {
         agent.name,
         permissions,
         initial_model,
+        args.reasoning.clone(),
         settings_arc,
         session_arc,
         cwd.clone(),

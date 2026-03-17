@@ -51,6 +51,7 @@ enum SlashCmd {
     Agent,
     Info,
     Model(String),
+    Reasoning(String),
     New,          // new conversation on same agent
     NewAgent,     // create a brand-new agent
     Pin,
@@ -76,6 +77,7 @@ enum SlashCmd {
     Delete(Option<String>),
     Yolo,
     Plan,
+    Todos,
     Default,
     Mode(Option<String>),
     Mcp,
@@ -132,9 +134,11 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         "toolset"        => Some(SlashCmd::Toolset(arg)),
         "yolo"                   => Some(SlashCmd::Yolo),
         "plan"                   => Some(SlashCmd::Plan),
+        "todos"                  => Some(SlashCmd::Todos),
         "default" | "normal" => Some(SlashCmd::Default),
         "mode"                   => Some(SlashCmd::Mode(arg)),
         "model"  => Some(SlashCmd::Model(arg.unwrap_or_default())),
+        "reasoning" => Some(SlashCmd::Reasoning(arg.unwrap_or_default())),
         "mcp"    => Some(SlashCmd::Mcp),
         "link"   => Some(SlashCmd::Link),
         "unlink" => Some(SlashCmd::Unlink),
@@ -487,6 +491,14 @@ impl SessionStats {
     }
 }
 
+// ── Tool preflight result ─────────────────────────────────────────────────────
+
+#[derive(Debug)]
+enum ToolPreflightResult {
+    Approved,
+    Blocked(cade_agent::tools::ToolResult),
+}
+
 // ── Repl ──────────────────────────────────────────────────────────────────────
 
 pub struct Repl {
@@ -496,6 +508,7 @@ pub struct Repl {
     agent_name: Arc<Mutex<String>>,
     permissions: PermissionManager,
     current_model: Arc<Mutex<String>>,
+    reasoning_effort: Arc<Mutex<Option<String>>>,
     settings:   Arc<Mutex<SettingsManager>>,
     session:    Arc<Mutex<SessionStore>>,
     /// Working directory (for /init context)
@@ -516,14 +529,6 @@ pub struct Repl {
     /// Set to `true` by a SIGINT handler while a turn is running.
     /// `stream_turn()` checks this flag and aborts the SSE stream early.
     cancel_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// True while a `spawn_blocking` `ask_question_blocking` call is running.
-    /// Read by the tick task WITHOUT holding the app mutex.
-    blocking_question_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Sender half of the key-event channel for the current blocking question.
-    /// Set before `spawn_blocking`, cleared after it returns.
-    blocking_question_key_tx: std::sync::Arc<std::sync::Mutex<
-        Option<std::sync::mpsc::SyncSender<crossterm::event::KeyEvent>>
-    >>,
     /// Active conversation ID — None means the default (legacy) conversation.
     conversation_id: Arc<Mutex<Option<String>>>,
     /// MCP server manager — routes tool calls with `{server}__` prefix.
@@ -553,6 +558,10 @@ pub struct Repl {
     /// in submission order after the current turn completes, without interrupting.
     /// VecDeque allows multiple messages to be queued while the agent is busy.
     queued_followup: Arc<Mutex<std::collections::VecDeque<String>>>,
+    /// Buffered reasoning text from the most recent turn (for hook payloads).
+    last_reasoning: Arc<Mutex<String>>,
+    /// Buffered assistant text from the most recent turn (for hook payloads).
+    last_assistant_text: Arc<Mutex<String>>,
     /// Millisecond timestamp of the last time a blocking question modal closed
     /// (`blocking_question_active` transitioned true → false).
     /// The I-01 Enter handler ignores Enter events within 300 ms of a modal
@@ -571,6 +580,7 @@ impl Repl {
         agent_name: String,
         permissions: PermissionManager,
         current_model: String,
+        reasoning_effort: Option<String>,
         settings: Arc<Mutex<SettingsManager>>,
         session: Arc<Mutex<SessionStore>>,
         cwd: std::path::PathBuf,
@@ -598,6 +608,7 @@ impl Repl {
             agent_name: Arc::new(Mutex::new(agent_name)),
             permissions,
             current_model: Arc::new(Mutex::new(current_model)),
+            reasoning_effort: Arc::new(Mutex::new(reasoning_effort.clone())),
             settings,
             session,
             cwd,
@@ -608,8 +619,6 @@ impl Repl {
             hooks,
             first_turn:            std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             cancel_turn:           std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            blocking_question_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            blocking_question_key_tx: std::sync::Arc::new(std::sync::Mutex::new(None)),
             conversation_id:       Arc::new(Mutex::new(conversation_id)),
             mcp,
             subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(cap)),
@@ -623,9 +632,12 @@ impl Repl {
                 perm_mode,
                 agent_name_clone.clone(),
                 current_model_clone.clone(),
+                reasoning_effort.clone(),
             ))),
             queued_steering:     Arc::new(Mutex::new(None)),
             queued_followup:     Arc::new(Mutex::new(std::collections::VecDeque::new())),
+            last_reasoning:      Arc::new(Mutex::new(String::new())),
+            last_assistant_text: Arc::new(Mutex::new(String::new())),
             last_modal_close_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             pending_turn_images: Vec::new(),
         }
@@ -1296,7 +1308,26 @@ impl Repl {
                     }
                     SlashCmd::Plan => {
                         self.permissions.set_mode(PermissionMode::Plan);
+                        if let Ok(mut app) = self.app.lock() {
+                            if let Some(plan) = &mut app.active_plan {
+                                plan.is_visible = true;
+                            }
+                        }
                         self.tui_hdr("📖 Permission mode: plan (read-only) — write/exec tools blocked. Use /default to resume.");
+                    }
+                    SlashCmd::Todos => {
+                        if let Ok(mut app) = self.app.lock() {
+                            let mut has_plan = false;
+                            if let Some(plan) = &mut app.active_plan {
+                                plan.is_visible = !plan.is_visible;
+                                has_plan = true;
+                            }
+                            if !has_plan {
+                                let _ = app.push(crate::ui::RenderLine::SystemMsg("No active plan. Ask the agent to create one.".to_string()));
+                            }
+                            app.draw_dirty = true;
+                            let _ = app.draw();
+                        }
                     }
                     SlashCmd::Default => {
                         self.permissions.set_mode(PermissionMode::Default);
@@ -1359,6 +1390,26 @@ impl Repl {
                                 let _ = self.app.lock().unwrap().draw();
                             }
                             Err(e) => self.tui_err(e.to_string()),
+                        }
+                    }
+
+                    SlashCmd::Reasoning(r) => {
+                        let r = if r.is_empty() {
+                            match self.interactive_reasoning_picker(Arc::clone(&self.app)).await? {
+                                Some(picked) => picked,
+                                None => { let _ = self.app.lock().unwrap().draw(); continue; }
+                            }
+                        } else {
+                            r
+                        };
+                        let valid = ["none", "low", "medium", "high", "xhigh"];
+                        if !valid.contains(&r.as_str()) {
+                            self.tui_err(format!("Invalid reasoning tier '{r}'. Valid: none, low, medium, high, xhigh"));
+                        } else {
+                            let effort = if r == "none" { None } else { Some(r.clone()) };
+                            *self.reasoning_effort.lock().unwrap() = effort.clone();
+                            self.app.lock().unwrap().reasoning_effort = effort;
+                            self.tui_ok(format!("  ✓ Reasoning effort: {r}"));
                         }
                     }
 
@@ -1825,7 +1876,7 @@ impl Repl {
 
                     SlashCmd::Remember(text) => {
                         // Route through the agent — it decides what to store and where.
-                        // This matches Letta's /remember behaviour exactly.
+                        // This matches CADE's /remember behaviour exactly.
                         let msg = if text.is_empty() {
                             "[/remember] Please review our recent conversation and update your \
                              memory blocks with anything important you've learned about me, \
@@ -2156,10 +2207,16 @@ impl Repl {
                                         scope_ord(&a.scope.to_string()).cmp(&scope_ord(&b.scope.to_string())).then(a.id.cmp(&b.id))
                                     });
                                     drop(skills);
-                                    let mut app = self.app.lock().unwrap();
-                                    let state = crate::ui::SkillsOverlayState::new(sorted);
-                                    app.skills_overlay = Some(state);
-                                    let _ = app.draw();
+
+                                    let chosen = {
+                                        let mut app = self.app.lock().unwrap();
+                                        crate::ui::skills::show_skills_manager(&mut app.terminal, sorted)?
+                                    };
+                                    let _ = self.app.lock().unwrap().draw();
+                                    
+                                    if let Some(crate::ui::skills::SkillsAction::Reload) = chosen {
+                                        pending_input = Some("/skills reload".to_string());
+                                    }
                                 }
                             }
 
@@ -2214,28 +2271,8 @@ impl Repl {
                             }
 
                             "show" => {
-                                let id = sub_arg.trim();
-                                if id.is_empty() {
-                                    self.tui_err("  Usage: /skills show <id>");
-                                    self.tui_dim("  Run /skills to see available IDs.");
-                                } else {
-                                    let skills = self.skills.lock().unwrap();
-                                    match skills.iter().find(|s| s.id == id) {
-                                        None => {
-                                            self.tui_err(format!("  Skill '{id}' not found."));
-                                            self.tui_dim("  Run /skills to list available skills.");
-                                        }
-                                        Some(_s) => {
-                                            let idx = skills.iter().position(|sk| sk.id == id).unwrap_or(0);
-                                            let skills_vec: Vec<_> = skills.iter().cloned().collect();
-                                            drop(skills);
-                                            let mut state = crate::ui::SkillsOverlayState::new(skills_vec);
-                                            state.cursor = idx;
-                                            state.mode = crate::ui::SkillsMode::Detail;
-                                            self.app.lock().unwrap().skills_overlay = Some(state);
-                                        }
-                                    }
-                                }
+                                self.tui_dim("  The /skills show command has been deprecated.");
+                                self.tui_dim("  Please type /skills to open the interactive skills manager.");
                             }
 
                             "reload" => {
@@ -2280,28 +2317,8 @@ impl Repl {
                             }
 
                             "edit" => {
-                                let id = sub_arg.trim();
-                                if id.is_empty() {
-                                    self.tui_err("  Usage: /skills edit <id>");
-                                } else {
-                                    let skills = self.skills.lock().unwrap();
-                                    match skills.iter().find(|s| s.id == id) {
-                                        None => {
-                                            self.tui_err(format!("  Skill '{id}' not found."));
-                                            self.tui_dim("  Run /skills to list available skills.");
-                                        }
-                                        Some(_s) => {
-                                            let idx = skills.iter().position(|sk| sk.id == id).unwrap_or(0);
-                                            let skills_vec: Vec<_> = skills.iter().cloned().collect();
-                                            drop(skills);
-                                            let mut state = crate::ui::SkillsOverlayState::new(skills_vec);
-                                            state.cursor = idx;
-                                            state.load_edit_fields();
-                                            state.mode = crate::ui::SkillsMode::Edit;
-                                            self.app.lock().unwrap().skills_overlay = Some(state);
-                                        }
-                                    }
-                                }
+                                self.tui_dim("  The /skills edit command has been deprecated.");
+                                self.tui_dim("  Please type /skills to open the interactive skills manager.");
                             }
 
                             "delete" | "rm" => {
@@ -2340,9 +2357,7 @@ impl Repl {
                             other => {
                                 self.tui_err(format!("  Unknown /skills subcommand: '{other}'"));
                                 self.tui_blank();
-                                self.tui_dim("  /skills                    — list all loaded skills");
-                                self.tui_dim("  /skills show <id>          — view full skill detail");
-                                self.tui_dim("  /skills edit <id>          — open skill file in $EDITOR");
+                                self.tui_dim("  /skills                    — open interactive skills manager");
                                 self.tui_dim("  /skills create <name>      — scaffold a new skill");
                                 self.tui_dim("  /skills delete <id>        — remove a skill directory");
                                 self.tui_dim("  /skills reload             — rescan all skill directories");
@@ -2814,8 +2829,6 @@ impl Repl {
         let tick_base             = out_tok_before;
         let tick_start            = turn_start;
         let tick_bar              = bar_text.clone();
-        let tick_blocking_active  = self.blocking_question_active.clone();
-        let tick_blocking_key_tx  = self.blocking_question_key_tx.clone();
         // I-01: message-queue Arcs shared with the tick task.
         let tick_queued_steering  = self.queued_steering.clone();
         let tick_queued_followup  = self.queued_followup.clone();
@@ -2859,44 +2872,18 @@ impl Repl {
 
                         if needs_question_key {
                             if let Event::Key(k) = evt {
-                                // Fast path: blocking question is active — forward the
-                                // key through the dedicated channel without touching the
-                                // app mutex (which is held by the spawn_blocking thread).
-                                // Never set tick_cancel on Esc in this branch.
-                                if tick_blocking_active.load(Ordering::SeqCst) {
-                                    if let Ok(guard) = tick_blocking_key_tx.lock() {
-                                        if let Some(ref tx) = *guard {
-                                            let _ = tx.try_send(k);
-                                        }
-                                    }
-                                    // Skip spin-wait entirely — avoids deadlock.
-                                } else {
-                                    // Normal path: spin-wait until app lock is available,
-                                    // then process the key (async question or Esc/scroll).
-                                    // Re-check blocking flag each iteration: it may have been
-                                    // set after the outer check above (race window fix).
-                                    loop {
-                                        if tick_cancel.load(Ordering::SeqCst) { break; }
-                                        // If a blocking question became active while we were
-                                        // spinning, forward the key to the channel and stop.
-                                        // Without this, ask_question_blocking would wait for
-                                        // channel keys while the tick task holds the app mutex.
-                                        if tick_blocking_active.load(Ordering::SeqCst) {
-                                            if let Ok(guard) = tick_blocking_key_tx.lock() {
-                                                if let Some(ref tx) = *guard {
-                                                    let _ = tx.try_send(k);
-                                                }
-                                            }
-                                            break;
-                                        }
-                                        if let Ok(mut app) = tick_app.try_lock() {
-                                            let has_async_question = app.active_question
-                                                .as_ref()
-                                                .map_or(false, |aq| aq.tx.is_some());
-                                            if has_async_question {
-                                                app.handle_question_key(k);
-                                            } else {
-                                                match (k.code, k.modifiers) {
+                                // Spin-wait until app lock is available,
+                                // then process the key (async question or Esc/scroll).
+                                loop {
+                                    if tick_cancel.load(Ordering::SeqCst) { break; }
+                                    if let Ok(mut app) = tick_app.try_lock() {
+                                        let has_async_question = app.active_question
+                                            .as_ref()
+                                            .map_or(false, |aq| aq.tx.is_some());
+                                        if has_async_question {
+                                            app.handle_question_key(k);
+                                        } else {
+                                            match (k.code, k.modifiers) {
                                                     (KeyCode::Char('K'), _) => { app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
                                                     (KeyCode::Char('J'), _) => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
                                                     (KeyCode::Char('o'), KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
@@ -3093,7 +3080,6 @@ impl Repl {
                                         // without adding visible latency for key delivery.
                                         tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
                                     }
-                                }
                             }
                         } else if let Ok(mut app) = tick_app.try_lock() {
                             // Mouse / resize — best-effort, fine to drop
@@ -3237,6 +3223,11 @@ impl Repl {
         // ── UI consumer task — all TuiApp mutations happen here ─────────────────
         let app_arc      = self.app.clone();
         let bar_text_arc = bar_text;
+        let reasoning_buf = self.last_reasoning.clone();
+        let assistant_buf = self.last_assistant_text.clone();
+        // Clear buffers at the start of each turn.
+        reasoning_buf.lock().unwrap().clear();
+        assistant_buf.lock().unwrap().clear();
         let ui_task = tokio::spawn(async move {
             let mut ui_rx = ui_rx;
             let mut in_reasoning = false;
@@ -3246,11 +3237,13 @@ impl Repl {
                     "reasoning_message" => {
                         if let Some(text) = msg.reasoning_text() {
                             in_reasoning = true;
+                            reasoning_buf.lock().unwrap().push_str(text);
                             app_arc.lock().unwrap().push_reasoning_chunk(text);
                         }
                     }
                     "assistant_message" => {
                         if let Some(text) = msg.assistant_text() {
+                            assistant_buf.lock().unwrap().push_str(text);
                             if !text.is_empty() {
                                 in_reasoning = false;
                                 in_assistant = true;
@@ -3321,9 +3314,10 @@ impl Repl {
         let conv_ref  = conv_id.as_deref();
 
         let messages = if is_tool_return {
+            let reasoning_effort = self.reasoning_effort.lock().unwrap().clone();
             match self
                 .client
-                .stream_tool_return_cancellable(&agent_id, tool_call_id, tool_output, false, conv_ref, on_event, Some(cancel))
+                .stream_tool_return_cancellable(&agent_id, tool_call_id, tool_output, false, conv_ref, reasoning_effort.as_deref(), on_event, Some(cancel))
                 .await
             {
                 Ok(m) => m,
@@ -3356,7 +3350,8 @@ impl Repl {
                 } else {
                     vec![]
                 };
-                match self.client.stream_message_cancellable_with_images(&agent_id, input, conv_ref, ephemeral, turn_images, on_event, Some(cancel)).await {
+                let reasoning_effort = self.reasoning_effort.lock().unwrap().clone();
+                match self.client.stream_message_cancellable_with_images(&agent_id, input, conv_ref, ephemeral, turn_images, reasoning_effort.as_deref(), on_event, Some(cancel)).await {
                     Ok(m) => m,
                     Err(e) if is_cancel(&e) => {
                         ui_task.abort();
@@ -3487,7 +3482,11 @@ impl Repl {
             }
 
             // Stop hook — exit 2 feeds stderr back to agent as a continuation
-            let stop_outcome = self.hooks.stop("end_turn", user_input, &assistant_msg).await;
+            let last_reasoning = self.last_reasoning.lock().unwrap().clone();
+            let stop_outcome = self.hooks.stop(
+                "end_turn", user_input, &assistant_msg,
+                if last_reasoning.is_empty() { None } else { Some(&last_reasoning) },
+            ).await;
             if let cade_core::hooks::HookOutcome::Block { reason } = stop_outcome {
                 let _ = self.app.lock().unwrap().push(RenderLine::SystemMsg(
                     format!("  ⎿  Hook continuing: {reason}")
@@ -3527,15 +3526,158 @@ impl Repl {
             *bar.lock().unwrap() = format!("● {}…", display);
         }
 
-        // Phase 1: execute every tool, collect results.
-        let mut results: Vec<cade_agent::tools::ToolResult> = Vec::with_capacity(tool_calls.len());
+        // ── Phase 1: Sequential preflight (approval, blocking, hooks) ────────
+        // Each tool is checked for permissions, plan-mode blocking, and hook
+        // denial. Tools that fail preflight get an immediate error result.
+        // Tools that pass get queued for execution.
+        let mut preflight: Vec<ToolPreflightResult> = Vec::with_capacity(tool_calls.len());
         for (call_id, tool_name, args) in &tool_calls {
-            let result = self.execute_tool(stdout, call_id, tool_name, args).await?;
+            // Native tool intercepts that require &self must run sequentially
+            // in Phase 1 because they access Repl state (client, skills, etc.).
+            let native_result = self.try_native_intercept(call_id, tool_name, args).await;
+            if let Some(result) = native_result {
+                // Show tool call header for native intercepts
+                let _ = self.app.lock().unwrap().push(RenderLine::ToolCall {
+                    name: tool_name.to_string(),
+                    preview: String::new(),
+                });
+                preflight.push(ToolPreflightResult::Blocked(result?));
+                continue;
+            }
+            // Show tool call header
+            {
+                let preview = Self::tool_preview(tool_name, args);
+                let _ = self.app.lock().unwrap().push(RenderLine::ToolCall {
+                    name: tool_name.to_string(),
+                    preview,
+                });
+            }
+            let pf = self.preflight_tool(stdout, call_id, tool_name, args).await?;
+            preflight.push(pf);
+        }
+
+        // ── Phase 2: Parallel execution of approved tools ────────────────────
+        // Read-only tools execute concurrently via tokio::spawn.
+        // Write tools execute sequentially to prevent filesystem races.
+        let mut results: Vec<cade_agent::tools::ToolResult> = Vec::with_capacity(tool_calls.len());
+
+        // Separate into read and write buckets (preserving original indices).
+        let mut read_indices: Vec<usize> = Vec::new();
+        let mut write_indices: Vec<usize> = Vec::new();
+
+        for (i, (_, tool_name, _)) in tool_calls.iter().enumerate() {
+            if matches!(&preflight[i], ToolPreflightResult::Blocked(_)) {
+                continue; // Already have a result
+            }
+            if cade_agent::tools::is_write_tool(tool_name, &self.mcp).await {
+                write_indices.push(i);
+            } else {
+                read_indices.push(i);
+            }
+        }
+
+        // Pre-allocate result slots.
+        results.resize_with(tool_calls.len(), || cade_agent::tools::ToolResult {
+            tool_call_id: String::new(),
+            tool_name: String::new(),
+            output: String::new(),
+            is_error: false,
+        });
+
+        // Fill in blocked results first.
+        for (i, pf) in preflight.iter().enumerate() {
+            if let ToolPreflightResult::Blocked(r) = pf {
+                results[i] = r.clone();
+            }
+        }
+
+        // Snapshot reasoning/assistant buffers for hook payloads.
+        let pr = {
+            let s = self.last_reasoning.lock().unwrap().clone();
+            if s.is_empty() { None } else { Some(s) }
+        };
+        let pa = {
+            let s = self.last_assistant_text.lock().unwrap().clone();
+            if s.is_empty() { None } else { Some(s) }
+        };
+
+        // Refresh the grace period before execution so stale terminal events
+        // (Esc, Ctrl+C) accumulated during the preflight approval loop do not
+        // trigger a false cancellation during slow tool execution.
+        self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+        self.last_modal_close_ms.store(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+
+        // Execute read-only tools in parallel.
+        if !read_indices.is_empty() {
+            let mut handles = Vec::new();
+            for &i in &read_indices {
+                let (call_id, tool_name, args) = &tool_calls[i];
+                let call_id = call_id.clone();
+                let tool_name = tool_name.clone();
+                let args = args.clone();
+                let app_arc = self.app.clone();
+                let mcp_arc = std::sync::Arc::clone(&self.mcp);
+                let hooks = self.hooks.clone();
+                let pr_c = pr.clone();
+                let pa_c = pa.clone();
+
+                handles.push(tokio::spawn(async move {
+                    let r = Self::run_tool_inner(
+                        &call_id, &tool_name, &args, &mcp_arc, &hooks, &app_arc,
+                        pr_c.as_deref(), pa_c.as_deref(),
+                    ).await;
+                    (i, r)
+                }));
+            }
+            let join_results = futures::future::join_all(handles).await;
+            for jr in join_results {
+                if let Ok((i, r)) = jr {
+                    results[i] = r;
+                }
+            }
+            // Refresh grace period after parallel batch completes.
+            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+            self.last_modal_close_ms.store(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
+
+        // Execute write tools sequentially.
+        for &i in &write_indices {
+            let (call_id, tool_name, args) = &tool_calls[i];
+            let r = Self::run_tool_inner(
+                call_id, tool_name, args, &self.mcp, &self.hooks, &self.app,
+                pr.as_deref(), pa.as_deref(),
+            ).await;
+            results[i] = r;
+            // Refresh grace period after each write tool so the next tool (or
+            // Phase 3 streaming) is protected from stale terminal events.
+            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+            self.last_modal_close_ms.store(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
+
+        // Update stats.
+        for r in &results {
             if let Ok(mut stats) = self.session_stats.lock() {
                 stats.tool_calls_total += 1;
-                if result.is_error { stats.tool_calls_err += 1; } else { stats.tool_calls_ok += 1; }
+                if r.is_error { stats.tool_calls_err += 1; } else { stats.tool_calls_ok += 1; }
             }
-            results.push(result);
         }
 
         // Clear any cancel flags accumulated during tool execution and
@@ -3570,7 +3712,253 @@ impl Repl {
         Ok(())
     }
 
+    /// Check if a tool is a native intercept (requires &self). If so, execute
+    /// it immediately and return the result. Returns None for generic tools.
+    async fn try_native_intercept(
+        &self,
+        call_id: &str,
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) -> Option<Result<cade_agent::tools::ToolResult>> {
+        match tool_name {
+            "EnterPlanMode" => {
+                self.permissions.set_mode(cade_core::permissions::PermissionMode::Plan);
+                let mut app = self.app.lock().unwrap();
+                app.update_mode(cade_core::permissions::PermissionMode::Plan);
+                Some(Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    output: "Plan mode entered. File modifications are now blocked.".to_string(),
+                    is_error: false,
+                }))
+            }
+            "ExitPlanMode" => {
+                self.permissions.set_mode(cade_core::permissions::PermissionMode::Default);
+                let mut app = self.app.lock().unwrap();
+                app.update_mode(cade_core::permissions::PermissionMode::Default);
+                Some(Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    output: "Plan mode exited. Normal operation resumed.".to_string(),
+                    is_error: false,
+                }))
+            }
+            "update_memory" => Some(self.handle_update_memory(call_id, args).await),
+            "memory_apply_patch" => Some(self.handle_memory_apply_patch(call_id, args).await),
+            "load_skill" => Some(self.handle_load_skill(call_id, args).await),
+            "install_skill" => Some(self.handle_install_skill(call_id, args).await),
+            "run_skill_script" => Some(self.handle_run_skill_script(call_id, args).await),
+            "load_skill_ref" => Some(self.handle_load_skill_ref(call_id, args).await),
+            "run_subagent" => Some(self.handle_run_subagent(call_id, args).await),
+            "ask_user_question" => Some(self.handle_ask_user_question(call_id, args).await),
+            _ => None,
+        }
+    }
+
+    /// Build a compact argument preview for a tool call header.
+    fn tool_preview(_tool_name: &str, args: &serde_json::Value) -> String {
+        fn short(s: &str, n: usize) -> String {
+            let s = s.trim();
+            if s.chars().count() <= n { s.to_string() }
+            else { format!("{}…", s.chars().take(n).collect::<String>()) }
+        }
+        let a = args;
+        if let Some(cmd) = a["command"].as_str() {
+            short(cmd, 80)
+        } else if let Some(fp) = a["file_path"].as_str().or(a["path"].as_str()) {
+            let extra = if let Some(old) = a["old_string"].as_str() {
+                format!("  \"{}\"", short(old, 40))
+            } else if let Some(content) = a["content"].as_str() {
+                format!("  ({} chars)", content.len())
+            } else { String::new() };
+            format!("{fp}{extra}")
+        } else if let Some(pat) = a["pattern"].as_str() {
+            let in_path = a["path"].as_str().unwrap_or("");
+            if in_path.is_empty() { format!("\"{}\"", short(pat, 60)) }
+            else { format!("\"{}\" in {in_path}", short(pat, 40)) }
+        } else if let Some(label) = a["label"].as_str() {
+            let op = a["operation"].as_str().unwrap_or("set");
+            format!("[{label}] ({op})")
+        } else if let Some(patch) = a["patch"].as_str() {
+            short(patch, 60)
+        } else {
+            a.as_object().and_then(|m| {
+                m.values().find_map(|v| v.as_str()).map(|s| short(&s, 60))
+            }).unwrap_or_default()
+        }
+    }
+
+    /// Phase 1: Sequential preflight — checks permissions, plan-mode blocking,
+    /// hooks, and prompts the user for approval if needed.
+    /// Returns `Approved` if the tool should proceed, or `Blocked(result)` if it
+    /// was denied (with a pre-built error ToolResult).
+    async fn preflight_tool(
+        &self,
+        stdout: &mut io::Stdout,
+        call_id: &str,
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) -> Result<ToolPreflightResult> {
+        // Permission check — plan mode / deny rules
+        if self.permissions.is_blocked(tool_name, args) {
+            let msg = self.permissions.block_reason(tool_name, args);
+            let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: msg.clone() });
+            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+            return Ok(ToolPreflightResult::Blocked(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output: msg,
+                is_error: true,
+            }));
+        }
+
+        if !self.permissions.auto_approve(tool_name, args) {
+            // PermissionRequest hook — can block before showing prompt
+            if let cade_core::hooks::HookOutcome::Block { reason } =
+                self.hooks.permission_request(tool_name, args).await
+            {
+                let _ = self.app.lock().unwrap().push(RenderLine::ToolResult {
+                    is_error: true,
+                    content: format!("Hook denied: {reason}"),
+                });
+                self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+                return Ok(ToolPreflightResult::Blocked(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    output: format!("Hook denied: {reason}"),
+                    is_error: true,
+                }));
+            }
+
+            // Prompt for approval
+            if !self.prompt_approval(stdout, tool_name, args).await? {
+                if let Ok(mut stats) = self.session_stats.lock() {
+                    stats.reviewed += 1;
+                }
+                let msg = format!("Tool '{tool_name}' denied by user");
+                let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: msg.clone() });
+                self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+                return Ok(ToolPreflightResult::Blocked(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    output: msg,
+                    is_error: true,
+                }));
+            }
+            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+            if let Ok(mut stats) = self.session_stats.lock() {
+                stats.reviewed += 1;
+                stats.approved += 1;
+            }
+        } else {
+            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+            self.last_modal_close_ms.store(
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis() as u64,
+                std::sync::atomic::Ordering::SeqCst,
+            );
+        }
+
+        // PreToolUse hook — can block execution
+        if let cade_core::hooks::HookOutcome::Block { reason } =
+            self.hooks.pre_tool_use(tool_name, args).await
+        {
+            let _ = self.app.lock().unwrap().push(RenderLine::ToolResult { is_error: true, content: format!("Hook blocked: {reason}") });
+            self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
+            return Ok(ToolPreflightResult::Blocked(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output: format!("Blocked by hook: {reason}"),
+                is_error: true,
+            }));
+        }
+
+        Ok(ToolPreflightResult::Approved)
+    }
+
+    /// Phase 2: Execute a single tool (no stdout, no approval — already preflighted).
+    /// This is safe to call from `tokio::spawn` for parallel execution.
+    async fn run_tool_inner(
+        call_id: &str,
+        tool_name: &str,
+        args: &serde_json::Value,
+        mcp: &std::sync::Arc<cade_agent::mcp::McpManager>,
+        hooks: &cade_core::hooks::HookEngine,
+        app: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        preceding_reasoning: Option<&str>,
+        preceding_assistant_message: Option<&str>,
+    ) -> cade_agent::tools::ToolResult {
+        use cade_agent::tools::dispatch;
+
+        // Bash tools — live-streaming path (buffered per-tool)
+        if matches!(tool_name, "bash" | "run_command" | "execute_command") {
+            let live_idx = app.lock().unwrap().begin_live_output(8);
+            let app_arc = app.clone();
+            let run_result = cade_agent::tools::bash::BashTool::run_streaming(args, move |line| {
+                let _ = app_arc.lock().unwrap().append_live_output_line(live_idx, line);
+            }).await;
+            let _ = app.lock().unwrap().finish_live_output(live_idx);
+
+            let (output, is_error) = match run_result {
+                Ok(out) => (out, false),
+                Err(e)  => (format!("Error: {e}"), true),
+            };
+
+            let mut result = cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output,
+                is_error,
+            };
+
+            if result.is_error {
+                hooks.post_tool_use_failure(tool_name, args, &result.output, preceding_reasoning, preceding_assistant_message).await;
+            } else if let Some(extra) = hooks.post_tool_use(tool_name, args, &result.output, preceding_reasoning, preceding_assistant_message).await {
+                result.output = format!("{}\n\n[Hook context: {extra}]", result.output);
+            }
+            return result;
+        }
+
+        // Standard dispatch path
+        const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+        let mut result = match tokio::time::timeout(
+            TOOL_TIMEOUT,
+            dispatch(call_id.to_string(), tool_name, args, mcp),
+        ).await {
+            Ok(r) => r,
+            Err(_) => cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output: format!("Tool '{}' timed out after {}s", tool_name, TOOL_TIMEOUT.as_secs()),
+                is_error: true,
+            },
+        };
+
+        if result.is_error {
+            hooks.post_tool_use_failure(tool_name, args, &result.output, preceding_reasoning, preceding_assistant_message).await;
+        } else if let Some(extra) = hooks.post_tool_use(tool_name, args, &result.output, preceding_reasoning, preceding_assistant_message).await {
+            result.output = format!("{}\n\n[Hook context: {extra}]", result.output);
+        }
+
+        // Show result summary
+        let (is_err, content) = if result.is_error {
+            (true, result.output.chars().take(200).collect::<String>())
+        } else {
+            match tool_name {
+                "write_file" | "create_file" => (false, format!("written ({} chars)", result.output.len())),
+                "delete_file" | "move_file" | "rename_file" => (false, "done".to_string()),
+                _ => (false, format!("{} lines", result.output.lines().count())),
+            }
+        };
+        let _ = app.lock().unwrap().push(RenderLine::ToolResult { is_error: is_err, content });
+        result
+    }
+
     /// Execute a single tool call, respecting permissions and printing status.
+    /// (Legacy sequential path — retained for compatibility with src/cli/repl.rs mirror)
+    #[allow(dead_code)]
     async fn execute_tool(
         &self,
         stdout: &mut io::Stdout,
@@ -3629,8 +4017,33 @@ impl Repl {
         });
 
         // Native tool intercepts (handled without going through generic dispatch)
+        if tool_name == "EnterPlanMode" {
+            self.permissions.set_mode(cade_core::permissions::PermissionMode::Plan);
+            let mut app = self.app.lock().unwrap();
+            app.update_mode(cade_core::permissions::PermissionMode::Plan);
+            return Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output: "Plan mode entered. File modifications are now blocked. Use ExitPlanMode to resume normal operation.".to_string(),
+                is_error: false,
+            });
+        }
+        if tool_name == "ExitPlanMode" {
+            self.permissions.set_mode(cade_core::permissions::PermissionMode::Default);
+            let mut app = self.app.lock().unwrap();
+            app.update_mode(cade_core::permissions::PermissionMode::Default);
+            return Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output: "Plan mode exited. Normal operation resumed.".to_string(),
+                is_error: false,
+            });
+        }
         if tool_name == "update_memory" {
             return self.handle_update_memory(call_id, args).await;
+        }
+        if tool_name == "memory_apply_patch" {
+            return self.handle_memory_apply_patch(call_id, args).await;
         }
         if tool_name == "load_skill" {
             return self.handle_load_skill(call_id, args).await;
@@ -3785,10 +4198,12 @@ impl Repl {
             };
 
             // PostToolUse / PostToolUseFailure hooks (same as standard path).
+            let pr = { let s = self.last_reasoning.lock().unwrap().clone(); if s.is_empty() { None } else { Some(s) } };
+            let pa = { let s = self.last_assistant_text.lock().unwrap().clone(); if s.is_empty() { None } else { Some(s) } };
             if result.is_error {
-                self.hooks.post_tool_use_failure(tool_name, args, &result.output).await;
+                self.hooks.post_tool_use_failure(tool_name, args, &result.output, pr.as_deref(), pa.as_deref()).await;
             } else {
-                if let Some(extra) = self.hooks.post_tool_use(tool_name, args, &result.output).await {
+                if let Some(extra) = self.hooks.post_tool_use(tool_name, args, &result.output, pr.as_deref(), pa.as_deref()).await {
                     result.output = format!("{}\n\n[Hook context: {extra}]", result.output);
                 }
             }
@@ -3813,11 +4228,13 @@ impl Repl {
         };
 
         // PostToolUse / PostToolUseFailure hooks
+        let pr = { let s = self.last_reasoning.lock().unwrap().clone(); if s.is_empty() { None } else { Some(s) } };
+        let pa = { let s = self.last_assistant_text.lock().unwrap().clone(); if s.is_empty() { None } else { Some(s) } };
         if result.is_error {
-            self.hooks.post_tool_use_failure(tool_name, args, &result.output).await;
+            self.hooks.post_tool_use_failure(tool_name, args, &result.output, pr.as_deref(), pa.as_deref()).await;
         } else {
             // PostToolUse may inject additionalContext into the tool output
-            if let Some(extra) = self.hooks.post_tool_use(tool_name, args, &result.output).await {
+            if let Some(extra) = self.hooks.post_tool_use(tool_name, args, &result.output, pr.as_deref(), pa.as_deref()).await {
                 result.output = format!("{}\n\n[Hook context: {extra}]", result.output);
             }
         }
@@ -3984,27 +4401,13 @@ impl Repl {
             progress: None,
         };
 
-        // ── Stage 1 fix: use spawn_blocking + ask_question_blocking ─────────────
-        //
-        // Key events are forwarded from the tick task via a dedicated channel so
-        // that the blocking thread never competes with EventStream for crossterm
-        // events, and the tick task never deadlocks on the app mutex.
-        let app_arc = self.app.clone();
-        let q_owned = q;   // already owned — move into closure
+        #[allow(deprecated)]
+        let rx = {
+            let mut app = self.app.lock().unwrap();
+            app.ask_question_async(q)?
+        };
 
-        let (key_tx, key_rx) = std::sync::mpsc::sync_channel::<crossterm::event::KeyEvent>(8);
-        self.blocking_question_active.store(true, std::sync::atomic::Ordering::SeqCst);
-        *self.blocking_question_key_tx.lock().unwrap() = Some(key_tx);
-
-        let qa = tokio::task::spawn_blocking(move || {
-            let mut app = app_arc.lock().unwrap();
-            app.ask_question_blocking(&q_owned, key_rx)
-        })
-        .await
-        .map_err(|e| anyhow::anyhow!("approval task panicked: {e}"))??;
-
-        self.blocking_question_active.store(false, std::sync::atomic::Ordering::SeqCst);
-        *self.blocking_question_key_tx.lock().unwrap() = None;
+        let qa = rx.await.map_err(|e| anyhow::anyhow!("approval channel dropped: {e}"))?;
         // Record close time so the tick task's I-01 Enter handler can apply
         // a 300 ms grace period (mirrors the 200 ms Esc grace period).
         self.last_modal_close_ms.store(
@@ -4108,6 +4511,108 @@ impl Repl {
         }
     }
 
+    /// Handle the agent's `memory_apply_patch` tool call natively.
+    async fn handle_memory_apply_patch(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+    ) -> Result<cade_agent::tools::ToolResult> {
+        let label = args["label"].as_str().unwrap_or("").trim().to_string();
+        let patch_str = args["patch"].as_str().unwrap_or("");
+        
+        if label.is_empty() {
+            return Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "memory_apply_patch".to_string(),
+                output: "error: 'label' is required".to_string(),
+                is_error: true,
+            });
+        }
+        
+        let agent_id = self.agent_id();
+        let existing = self.client.get_memory(&agent_id).await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|b| b.label == label)
+            .map(|b| b.value)
+            .unwrap_or_default();
+            
+        let temp_dir = match tempfile::tempdir() {
+            Ok(d) => d,
+            Err(e) => {
+                return Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "memory_apply_patch".to_string(),
+                    output: format!("Failed to create temp directory: {e}"),
+                    is_error: true,
+                });
+            }
+        };
+        
+        let file_path = temp_dir.path().join(&label);
+        let patch_file = temp_dir.path().join("patch.diff");
+        
+        let _ = std::fs::write(&file_path, &existing);
+        let _ = std::fs::write(&patch_file, patch_str);
+        
+        let mut output = tokio::process::Command::new("patch")
+            .current_dir(temp_dir.path())
+            .args(["-p1", "--input", "patch.diff"])
+            .output()
+            .await;
+            
+        if let Ok(ref out) = output {
+            if !out.status.success() {
+                output = tokio::process::Command::new("patch")
+                    .current_dir(temp_dir.path())
+                    .args(["-p0", "--input", "patch.diff"])
+                    .output()
+                    .await;
+            }
+        }
+        
+        let final_value = match output {
+            Ok(out) if out.status.success() => std::fs::read_to_string(&file_path).unwrap_or_default(),
+            Ok(out) => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                let stdout = String::from_utf8_lossy(&out.stdout);
+                return Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "memory_apply_patch".to_string(),
+                    output: format!("patch failed:\n{stdout}{stderr}"),
+                    is_error: true,
+                });
+            }
+            Err(e) => {
+                return Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "memory_apply_patch".to_string(),
+                    output: format!("failed to execute patch command: {e}"),
+                    is_error: true,
+                });
+            }
+        };
+        
+        let description = args["description"].as_str();
+        match self.client.upsert_memory(&agent_id, &label, &final_value, description).await {
+            Ok(_) => {
+                tracing::info!("Agent updated memory [{label}] via patch");
+                Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "memory_apply_patch".to_string(),
+                    output: format!("Memory block '{label}' updated via patch"),
+                    is_error: false,
+                })
+            }
+            Err(e) => Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "memory_apply_patch".to_string(),
+                output: format!("Failed to update '{label}': {e}"),
+                is_error: true,
+            }),
+        }
+    }
+
     /// Interactive `ask_user_question` tool intercept.
     ///
     /// Parses the LLM's structured questions, shows the `QuestionWidget` for
@@ -4159,24 +4664,16 @@ impl Repl {
                 progress: if total > 1 { Some((i + 1, total)) } else { None },
             };
 
-            // Use spawn_blocking + ask_question_blocking (same fix as prompt_approval):
-            // key events forwarded via channel so tick task never deadlocks on app mutex.
-            let app_arc = self.app.clone();
-            let q_owned = q;
+            // Use ask_question_async to avoid blocking the main event loop
+            // while awaiting user input. The app mutex is released during await.
+            #[allow(deprecated)]
+            let rx = {
+                let mut app = self.app.lock().unwrap();
+                app.ask_question_async(q)?
+            };
 
-            let (key_tx, key_rx) = std::sync::mpsc::sync_channel::<crossterm::event::KeyEvent>(8);
-            self.blocking_question_active.store(true, std::sync::atomic::Ordering::SeqCst);
-            *self.blocking_question_key_tx.lock().unwrap() = Some(key_tx);
+            let qa = rx.await.map_err(|e| anyhow::anyhow!("ask_user_question channel dropped: {e}"))?;
 
-            let qa = tokio::task::spawn_blocking(move || {
-                let mut app = app_arc.lock().unwrap();
-                app.ask_question_blocking(&q_owned, key_rx)
-            })
-            .await
-            .map_err(|e| anyhow::anyhow!("ask_user_question task panicked: {e}"))??;
-
-            self.blocking_question_active.store(false, std::sync::atomic::Ordering::SeqCst);
-            *self.blocking_question_key_tx.lock().unwrap() = None;
             self.last_modal_close_ms.store(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -5153,6 +5650,126 @@ impl Repl {
                     (KeyCode::PageUp, _) => {
                         for _ in 0..10 { list_pos = prev_pos(list_pos); }
                         do_draw_model(&app_arc, list_pos)?;
+                    }
+                    _ => {}
+                }
+            }
+        };
+
+        Ok(result)
+    }
+
+    /// Interactive reasoning tier picker — full-screen on TuiApp terminal.
+    /// Returns the selected reasoning tier string or None if cancelled.
+    async fn interactive_reasoning_picker(
+        &self,
+        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+    ) -> Result<Option<String>> {
+        use crossterm::event::{self, Event, KeyCode};
+        use ratatui::{
+            widgets::{List, ListItem, ListState, Block, Borders},
+            layout::{Constraint, Layout, Direction},
+            style::{Style, Color as RC, Modifier},
+            text::{Line, Span},
+        };
+
+        let current_effort = self.reasoning_effort.lock().unwrap().clone().unwrap_or_else(|| "none".to_string());
+        
+        let tiers = vec![
+            ("none", "No explicit reasoning budget (default)"),
+            ("low", "Low reasoning effort"),
+            ("medium", "Medium reasoning effort"),
+            ("high", "High reasoning effort"),
+            ("xhigh", "Maximum reasoning effort"),
+        ];
+
+        let mut list_pos = tiers.iter().position(|&(t, _)| t == current_effort).unwrap_or(0);
+
+        let do_draw_tier = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+                            list_pos: usize| -> Result<()> {
+            let title = format!(
+                " Reasoning Tiers  ↑↓/jk  Enter select  q cancel  [{}/{}] ",
+                list_pos + 1, tiers.len()
+            );
+            
+            let items: Vec<ListItem<'static>> = tiers.iter().enumerate().map(|(i, (tier, desc))| {
+                let is_sel = i == list_pos;
+                let is_current = *tier == current_effort;
+                let current_tag = if is_current { " ← current" } else { "" };
+                
+                ListItem::new(Line::from(vec![
+                    Span::styled(
+                        if is_sel { "  ▶ " } else { "    " }.to_string(),
+                        Style::default().fg(if is_sel { RC::Green } else { RC::DarkGray }),
+                    ),
+                    Span::styled(
+                        format!("{:<10}", tier),
+                        Style::default()
+                            .fg(if is_sel { RC::White } else { RC::DarkGray })
+                            .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() })
+                    ),
+                    Span::styled(
+                        desc.to_string(),
+                        Style::default().fg(RC::DarkGray)
+                    ),
+                    Span::styled(
+                        current_tag,
+                        Style::default().fg(RC::Cyan)
+                    ),
+                ]))
+            }).collect();
+
+            let list = List::new(items)
+                .block(Block::default()
+                    .borders(Borders::ALL)
+                    .title(title)
+                    .border_style(Style::default().fg(RC::DarkGray)));
+
+            let mut app = app_arc.lock().unwrap();
+            app.terminal.draw(|f| {
+                let area = f.area();
+                let center = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([
+                        Constraint::Min(0),
+                        Constraint::Length(tiers.len() as u16 + 2),
+                        Constraint::Min(0),
+                    ])
+                    .split(area)[1];
+
+                let h_center = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([
+                        Constraint::Percentage(10),
+                        Constraint::Percentage(80),
+                        Constraint::Percentage(10),
+                    ])
+                    .split(center)[1];
+
+                let mut ls = ListState::default();
+                ls.select(Some(list_pos));
+                f.render_stateful_widget(list, h_center, &mut ls);
+            })?;
+            Ok(())
+        };
+
+        do_draw_tier(&app_arc, list_pos)?;
+
+        let result = loop {
+            if !event::poll(std::time::Duration::from_millis(200))? { continue; }
+            if let Ok(Event::Key(key)) = event::read() {
+                match (key.code, key.modifiers) {
+                    (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
+                    (KeyCode::Enter, _) => {
+                        break Some(tiers[list_pos].0.to_string());
+                    }
+                    (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
+                        list_pos = if list_pos == 0 { tiers.len() - 1 } else { list_pos - 1 };
+                        let _ = do_draw_tier(&app_arc, list_pos);
+                    }
+                    (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
+                        list_pos = (list_pos + 1) % tiers.len();
+                        let _ = do_draw_tier(&app_arc, list_pos);
                     }
                     _ => {}
                 }

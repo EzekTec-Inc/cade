@@ -11,8 +11,9 @@ pub mod editor;
 pub mod question;
 pub mod menu;
 pub mod markdown;
+pub mod skills;
 
-pub use app::{TuiApp, RenderLine, cycle_mode, cycle_mode_back, truncate_str, SkillsOverlayState, SkillsMode};
+pub use app::{TuiApp, RenderLine, cycle_mode, cycle_mode_back, truncate_str};
 pub use autocomplete::{AutocompleteProvider, FileAutocompleteProvider, SlashCommandProvider, SlashCommandDef, Completion};
 pub use component::{Component, RenderedLine};
 pub use editor::Editor;

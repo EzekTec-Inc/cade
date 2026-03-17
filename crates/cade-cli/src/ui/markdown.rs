@@ -2,202 +2,240 @@ use ratatui::{
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
 };
+use pulldown_cmark::{Parser, Event, Tag, TagEnd, CodeBlockKind, Options, HeadingLevel};
 
-/// Left-margin indent for markdown paragraphs (matches Letta Code style).
 const INDENT: &str = "";
 
-/// Convert a complete markdown text string into a `Vec<Line>` for ratatui rendering.
-/// Handles: headings, bullets, numbered lists, code fences, horizontal rules, blockquotes, inline bold/code, and simple tables.
 pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
-    let mut lines: Vec<Line<'static>> = Vec::new();
-    let mut in_fence = false;
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    options.insert(Options::ENABLE_STRIKETHROUGH);
+    
+    let parser = Parser::new_ext(text, options);
+    
+    let mut lines = Vec::new();
+    let mut current_spans: Vec<Span<'static>> = Vec::new();
+    
+    let mut style_stack = vec![Style::default()];
+    
+    let mut in_blockquote = false;
+    let mut in_code_block = false;
     let mut current_lang = String::new();
-    let mut table_buffer: Vec<String> = Vec::new();
-
-    for raw_line in text.lines() {
-        let trimmed = raw_line.trim();
-
-        // ── Code fence toggle ────────────────────────────────────────────
-        if trimmed.starts_with("```") {
-            // Flush any pending table before entering code fence
-            if !table_buffer.is_empty() {
-                lines.extend(render_table(&table_buffer));
-                table_buffer.clear();
+    
+    let mut list_depth: usize = 0;
+    let mut list_counters: Vec<Option<u64>> = Vec::new();
+    
+    let mut table_rows: Vec<Vec<String>> = Vec::new();
+    let mut current_cell = String::new();
+    let mut in_table = false;
+    
+    let push_line = |lines: &mut Vec<Line<'static>>, spans: &mut Vec<Span<'static>>, blockquote: bool| {
+        if !spans.is_empty() {
+            let mut prefix_spans = Vec::new();
+            if blockquote {
+                prefix_spans.push(Span::styled(format!("{INDENT}▎ "), Style::default().fg(RC::DarkGray)));
             }
+            prefix_spans.extend(spans.drain(..));
+            lines.push(Line::from(prefix_spans));
+        }
+    };
 
-            in_fence = !in_fence;
-            if in_fence {
-                current_lang = trimmed.trim_start_matches('`').trim().to_lowercase();
-                if !current_lang.is_empty() {
-                    lines.push(Line::from(Span::styled(
-                        format!("{INDENT}  {current_lang}"),
-                        Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
-                    )));
+    for event in parser {
+        match event {
+            Event::Start(tag) => match tag {
+                Tag::Paragraph => {},
+                Tag::Heading { level, .. } => {
+                    let style = match level {
+                        HeadingLevel::H1 => Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+                        HeadingLevel::H2 => Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD),
+                        _ => Style::default().fg(RC::Cyan),
+                    };
+                    style_stack.push(style);
+                    
+                    let level_num = match level {
+                        HeadingLevel::H1 => 1,
+                        HeadingLevel::H2 => 2,
+                        HeadingLevel::H3 => 3,
+                        HeadingLevel::H4 => 4,
+                        HeadingLevel::H5 => 5,
+                        HeadingLevel::H6 => 6,
+                    };
+                    let prefix = "#".repeat(level_num);
+                    current_spans.push(Span::styled(format!("{INDENT}{} ", prefix), style));
                 }
-            } else {
-                current_lang.clear();
+                Tag::BlockQuote(_) => {
+                    in_blockquote = true;
+                }
+                Tag::CodeBlock(kind) => {
+                    in_code_block = true;
+                    if let CodeBlockKind::Fenced(lang) = kind {
+                        current_lang = lang.to_string();
+                        if !current_lang.is_empty() {
+                            lines.push(Line::from(Span::styled(
+                                format!("{INDENT}  {}", current_lang),
+                                Style::default().fg(RC::DarkGray).add_modifier(Modifier::DIM),
+                            )));
+                        }
+                    }
+                }
+                Tag::List(start) => {
+                    list_depth += 1;
+                    list_counters.push(start);
+                }
+                Tag::Item => {
+                    let indent_padding = "  ".repeat(list_depth.saturating_sub(1));
+                    if let Some(counters) = list_counters.last_mut() {
+                        if let Some(count) = counters {
+                            current_spans.push(Span::raw(format!("{INDENT}  {indent_padding}")));
+                            current_spans.push(Span::styled(format!("{count}. "), Style::default().add_modifier(Modifier::BOLD)));
+                            *count += 1;
+                        } else {
+                            current_spans.push(Span::raw(format!("{INDENT}  {indent_padding}")));
+                            current_spans.push(Span::styled("• ", Style::default().fg(RC::Green)));
+                        }
+                    }
+                }
+                Tag::Emphasis => {
+                    let s = style_stack.last().copied().unwrap_or_default().add_modifier(Modifier::ITALIC);
+                    style_stack.push(s);
+                }
+                Tag::Strong => {
+                    let s = style_stack.last().copied().unwrap_or_default().add_modifier(Modifier::BOLD);
+                    style_stack.push(s);
+                }
+                Tag::Strikethrough => {
+                    let s = style_stack.last().copied().unwrap_or_default().add_modifier(Modifier::CROSSED_OUT);
+                    style_stack.push(s);
+                }
+                Tag::Table(_) => {
+                    in_table = true;
+                    table_rows.clear();
+                }
+                Tag::TableHead | Tag::TableRow => {
+                    table_rows.push(Vec::new());
+                }
+                Tag::TableCell => {
+                    current_cell.clear();
+                }
+                _ => {}
+            },
+            Event::End(tag) => match tag {
+                TagEnd::Paragraph => {
+                    push_line(&mut lines, &mut current_spans, in_blockquote);
+                }
+                TagEnd::Heading(_) => {
+                    push_line(&mut lines, &mut current_spans, in_blockquote);
+                    style_stack.pop();
+                }
+                TagEnd::BlockQuote(_) => {
+                    push_line(&mut lines, &mut current_spans, in_blockquote);
+                    in_blockquote = false;
+                }
+                TagEnd::CodeBlock => {
+                    push_line(&mut lines, &mut current_spans, in_blockquote);
+                    in_code_block = false;
+                    current_lang.clear();
+                }
+                TagEnd::List(_) => {
+                    list_depth = list_depth.saturating_sub(1);
+                    list_counters.pop();
+                }
+                TagEnd::Item => {
+                    push_line(&mut lines, &mut current_spans, in_blockquote);
+                }
+                TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough => {
+                    style_stack.pop();
+                }
+                TagEnd::Table => {
+                    in_table = false;
+                    lines.extend(render_table_data(&table_rows));
+                    table_rows.clear();
+                }
+                TagEnd::TableCell => {
+                    if let Some(last_row) = table_rows.last_mut() {
+                        last_row.push(current_cell.clone());
+                    }
+                    current_cell.clear();
+                }
+                _ => {}
+            },
+            Event::Text(text) => {
+                if in_table {
+                    current_cell.push_str(&text);
+                } else if in_code_block {
+                    for (i, line) in text.lines().enumerate() {
+                        if i > 0 {
+                            push_line(&mut lines, &mut current_spans, in_blockquote);
+                        }
+                        let mut spans = vec![Span::raw(format!("{INDENT}  "))];
+                        spans.extend(highlight_code(line, &current_lang));
+                        current_spans.extend(spans);
+                    }
+                    if text.ends_with('\n') {
+                        push_line(&mut lines, &mut current_spans, in_blockquote);
+                    }
+                } else {
+                    let style = style_stack.last().copied().unwrap_or_default();
+                    current_spans.push(Span::styled(text.into_string(), style));
+                }
             }
-            continue;
+            Event::Code(text) => {
+                if in_table {
+                    current_cell.push_str(&format!("`{text}`"));
+                } else {
+                    let style = style_stack.last().copied().unwrap_or_default().fg(RC::Yellow);
+                    current_spans.push(Span::styled(text.into_string(), style));
+                }
+            }
+            Event::SoftBreak | Event::HardBreak => {
+                if in_table {
+                    current_cell.push(' ');
+                } else if in_code_block {
+                    push_line(&mut lines, &mut current_spans, in_blockquote);
+                } else {
+                    if let Event::HardBreak = event {
+                        push_line(&mut lines, &mut current_spans, in_blockquote);
+                    } else {
+                        let style = style_stack.last().copied().unwrap_or_default();
+                        current_spans.push(Span::styled(" ", style));
+                    }
+                }
+            }
+            Event::Rule => {
+                lines.push(Line::from(Span::styled(
+                    format!("{INDENT}{}", "─".repeat(40)),
+                    Style::default().fg(RC::DarkGray),
+                )));
+            }
+            _ => {}
         }
-
-        if in_fence {
-            let mut spans = vec![Span::raw(format!("{INDENT}  "))];
-            spans.extend(highlight_code(raw_line, &current_lang));
-            lines.push(Line::from(spans));
-            continue;
-        }
-
-        // ── Table Detection ───────────────────────────────────────────────
-        if trimmed.starts_with('|') && trimmed.ends_with('|') {
-            table_buffer.push(trimmed.to_string());
-            continue;
-        } else if !table_buffer.is_empty() {
-            // End of table
-            lines.extend(render_table(&table_buffer));
-            table_buffer.clear();
-        }
-
-        // ── Empty line ────────────────────────────────────────────────────
-        if trimmed.is_empty() {
-            lines.push(Line::from(""));
-            continue;
-        }
-
-        let leading_spaces = raw_line.chars().take_while(|c| c.is_whitespace()).count();
-        let trimmed_start = raw_line.trim_start();
-
-        // ── Headings ──────────────────────────────────────────────────────
-        if let Some(rest) = trimmed_start.strip_prefix("### ") {
-            lines.push(Line::from(Span::styled(
-                format!("{INDENT}{rest}"),
-                Style::default().fg(RC::Cyan),
-            )));
-            continue;
-        }
-        if let Some(rest) = trimmed_start.strip_prefix("## ") {
-            lines.push(Line::from(Span::styled(
-                format!("{INDENT}{rest}"),
-                Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD),
-            )));
-            continue;
-        }
-        if let Some(rest) = trimmed_start.strip_prefix("# ") {
-            lines.push(Line::from(Span::styled(
-                format!("{INDENT}{rest}"),
-                Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-            )));
-            continue;
-        }
-
-        // ── Horizontal rule ────────────────────────────────────────────────
-        if trimmed == "---" || trimmed == "***" || trimmed == "===" {
-            lines.push(Line::from(Span::styled(
-                format!("{INDENT}{}", "─".repeat(40)),
-                Style::default().fg(RC::DarkGray),
-            )));
-            continue;
-        }
-
-        // ── Blockquotes ───────────────────────────────────────────────────
-        if let Some(rest) = trimmed_start.strip_prefix("> ") {
-            let mut spans: Vec<Span<'static>> = vec![
-                Span::styled(format!("{INDENT}▎ "), Style::default().fg(RC::DarkGray)),
-            ];
-            spans.extend(parse_inline(rest));
-            lines.push(Line::from(spans));
-            continue;
-        }
-
-        // ── Bullet list ────────────────────────────────────────────────────
-        let bullet_rest = trimmed_start
-            .strip_prefix("- ")
-            .or_else(|| trimmed_start.strip_prefix("* "))
-            .or_else(|| trimmed_start.strip_prefix("• "));
-        if let Some(rest) = bullet_rest {
-            let indent_padding = " ".repeat(leading_spaces);
-            let mut spans: Vec<Span<'static>> = vec![
-                Span::raw(format!("{INDENT}  {indent_padding}")),
-                Span::styled("• ", Style::default().fg(RC::Green)),
-            ];
-            spans.extend(parse_inline(rest));
-            lines.push(Line::from(spans));
-            continue;
-        }
-
-        // ── Numbered list ─────────────────────────────────────────────────
-        if let Some((num, rest)) = parse_list_prefix(trimmed_start) {
-            let indent_padding = " ".repeat(leading_spaces);
-            let mut spans: Vec<Span<'static>> = vec![
-                Span::raw(format!("{INDENT}  {indent_padding}")),
-                Span::styled(format!("{num}. "), Style::default().add_modifier(Modifier::BOLD)),
-            ];
-            spans.extend(parse_inline(rest));
-            lines.push(Line::from(spans));
-            continue;
-        }
-
-        // ── Normal paragraph line with inline spans ───────────────────────
-        let mut spans: Vec<Span<'static>> = vec![Span::raw(INDENT)];
-        spans.extend(parse_inline(raw_line));
-        lines.push(Line::from(spans));
     }
 
-    // Final flush
-    if !table_buffer.is_empty() {
-        lines.extend(render_table(&table_buffer));
-    }
+    push_line(&mut lines, &mut current_spans, false);
 
     lines
 }
 
-/// Simple table renderer that aligns columns.
-fn render_table(rows: &[String]) -> Vec<Line<'static>> {
-    if rows.len() < 2 {
-        // Not a valid table, just return as plain lines
-        return rows.iter().map(|r| Line::from(r.clone())).collect();
-    }
-
-    let mut data: Vec<Vec<String>> = rows
-        .iter()
-        .map(|r| {
-            r.split('|')
-                .skip(1) // leading |
-                .map(|s| s.trim().to_string())
-                .collect::<Vec<String>>()
-        })
-        .collect();
-
-    // Remove the last empty element if line ended with |
-    for row in data.iter_mut() {
-        if row.last().map_or(false, |s| s.is_empty()) {
-            row.pop();
-        }
-    }
-
+fn render_table_data(data: &[Vec<String>]) -> Vec<Line<'static>> {
     if data.is_empty() {
         return vec![];
     }
+    let num_cols = data.iter().map(|row| row.len()).max().unwrap_or(0);
+    if num_cols == 0 {
+        return vec![];
+    }
 
-    let num_cols = data[0].len();
     let mut col_widths = vec![0; num_cols];
-
-    for row in &data {
+    for row in data {
         for (i, cell) in row.iter().enumerate() {
-            if i < num_cols {
-                col_widths[i] = col_widths[i].max(cell.len());
-            }
+            col_widths[i] = col_widths[i].max(cell.len());
         }
     }
 
     let mut lines = Vec::new();
-    for (row_idx, row) in data.into_iter().enumerate() {
-        // Skip the separator row (e.g. |---|---|) but use it to detect valid tables
-        if row_idx == 1 && row.iter().all(|s| s.chars().all(|c| c == '-' || c == ':')) {
-            continue;
-        }
-
+    for (row_idx, row) in data.iter().enumerate() {
         let mut spans = vec![Span::styled(format!("{INDENT}│ "), Style::default().fg(RC::DarkGray))];
-        for (i, cell) in row.into_iter().take(num_cols).enumerate() {
+        for (i, cell) in row.iter().take(num_cols).enumerate() {
             let style = if row_idx == 0 {
                 Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)
             } else {
@@ -211,11 +249,9 @@ fn render_table(rows: &[String]) -> Vec<Line<'static>> {
         spans.push(Span::styled(" │", Style::default().fg(RC::DarkGray)));
         lines.push(Line::from(spans));
     }
-
     lines
 }
 
-/// Simple keyword-based syntax highlighter.
 fn highlight_code(line: &str, lang: &str) -> Vec<Span<'static>> {
     let style_keyword = Style::default().fg(RC::LightBlue).add_modifier(Modifier::BOLD);
     let style_comment = Style::default().fg(RC::DarkGray).add_modifier(Modifier::ITALIC);
@@ -251,7 +287,6 @@ fn highlight_code(line: &str, lang: &str) -> Vec<Span<'static>> {
     let mut words = Vec::new();
     let mut current_word = String::new();
 
-    // Very naive tokenizer
     for c in line.chars() {
         if c.is_alphanumeric() || c == '_' {
             current_word.push(c);
@@ -299,90 +334,6 @@ fn highlight_code(line: &str, lang: &str) -> Vec<Span<'static>> {
     spans
 }
 
-/// Parse inline markdown spans within a single line of text.
-/// Handles: `**bold**`, `` `code` ``, `*italic*`.
-fn parse_inline(text: &str) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut rest = text.to_string();
-
-    while !rest.is_empty() {
-        // ── Bold: **…** ────────────────────────────────────────────────
-        if let Some(pos) = rest.find("**") {
-            let before = rest[..pos].to_string();
-            if !before.is_empty() {
-                spans.push(Span::raw(before));
-            }
-            let after_open = &rest[pos + 2..];
-            if let Some(end) = after_open.find("**") {
-                spans.push(Span::styled(
-                    after_open[..end].to_string(),
-                    Style::default().add_modifier(Modifier::BOLD),
-                ));
-                rest = after_open[end + 2..].to_string();
-                continue;
-            } else {
-                spans.push(Span::raw(format!("**{after_open}")));
-                break;
-            }
-        }
-        // ── Inline code: `…` ──────────────────────────────────────────
-        if let Some(pos) = rest.find('`') {
-            let before = rest[..pos].to_string();
-            if !before.is_empty() {
-                spans.push(Span::raw(before));
-            }
-            let after_open = &rest[pos + 1..];
-            if let Some(end) = after_open.find('`') {
-                spans.push(Span::styled(
-                    after_open[..end].to_string(),
-                    Style::default().fg(RC::Yellow),
-                ));
-                rest = after_open[end + 1..].to_string();
-                continue;
-            } else {
-                spans.push(Span::raw(format!("`{after_open}")));
-                break;
-            }
-        }
-        // ── Italic: *…* ───────────────────────────────────────────────
-        if let Some(pos) = rest.find('*') {
-            let before = rest[..pos].to_string();
-            if !before.is_empty() {
-                spans.push(Span::raw(before));
-            }
-            let after_open = &rest[pos + 1..];
-            if let Some(end) = after_open.find('*') {
-                spans.push(Span::styled(
-                    after_open[..end].to_string(),
-                    Style::default().add_modifier(Modifier::ITALIC),
-                ));
-                rest = after_open[end + 1..].to_string();
-                continue;
-            } else {
-                spans.push(Span::raw(format!("*{after_open}")));
-                break;
-            }
-        }
-        // ── Plain text ──────────────────────────────────────────────
-        spans.push(Span::raw(rest.clone()));
-        break;
-    }
-
-    if spans.is_empty() {
-        spans.push(Span::raw(String::new()));
-    }
-    spans
-}
-
-fn parse_list_prefix(s: &str) -> Option<(&str, &str)> {
-    let end = s.find(|c: char| !c.is_ascii_digit())?;
-    if end == 0 {
-        return None;
-    }
-    let rest = s[end..].strip_prefix(". ")?;
-    Some((&s[..end], rest))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,7 +349,7 @@ mod tests {
     fn test_table_parsing() {
         let md = "| Col 1 | Col 2 |\n|---|---|\n| val 1 | val 2 |";
         let lines = parse_markdown_lines(md);
-        // Header line + Data line (separator skipped)
+        // Header line + Data line
         assert_eq!(lines.len(), 2);
     }
 

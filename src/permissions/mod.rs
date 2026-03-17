@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 /// A single allow or deny rule matching a tool call.
 ///
-/// Syntax mirrors Letta Code:
+/// Syntax mirrors CADE Code:
 ///   `Bash`              — all uses of the bash tool
 ///   `Bash(cargo test)`  — bash where command == "cargo test"
 ///   `Read(src/**)`      — read_file where path starts with "src/" (glob **)

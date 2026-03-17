@@ -119,7 +119,7 @@ pub async fn register_cade_tools(client: &CadeClient, toolset: Toolset) -> Resul
 }
 
 /// Generate a Python stub function with a typed signature derived from the
-/// JSON schema properties. The function body returns a placeholder — Letta
+/// JSON schema properties. The function body returns a placeholder — CADE
 /// never executes it; CADE runs the real implementation in Rust.
 /// Exposed so main.rs can register MCP tool schemas using the same Python stub format.
 pub fn build_python_stub_from_schema(name: &str, description: &str, params: &Value) -> String {

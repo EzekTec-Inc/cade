@@ -161,7 +161,6 @@ impl CadeClient {
     pub fn new(base_url: String, api_key: String) -> Result<Self> {
         let client = Client::builder()
             .user_agent("cade/0.1.0")
-            .timeout(std::time::Duration::from_secs(300))
             .build()
             .context("build HTTP client")?;
         Ok(Self { client, base_url, api_key })
@@ -202,7 +201,7 @@ impl CadeClient {
     }
 
     /// Fetch the server's auto-detected provider and default model.
-    /// Falls back to a local default if the endpoint is unavailable (e.g. Letta Cloud).
+    /// Falls back to a local default if the endpoint is unavailable (e.g. CADE Cloud).
     // ── Provider management ───────────────────────────────────────────────────
 
     pub async fn list_providers(&self) -> anyhow::Result<serde_json::Value> {
@@ -797,7 +796,7 @@ impl CadeClient {
     where
         F: Fn(&CadeMessage),
     {
-        self.stream_message_cancellable(agent_id, input, None, false, on_event, None).await
+        self.stream_message_cancellable(agent_id, input, None, false, None, on_event, None).await
     }
 
     /// Like `stream_message` but checks an optional cancel flag before each SSE event.
@@ -809,6 +808,7 @@ impl CadeClient {
         // When true, server skips persisting the user message — for system-injected
         // re-prompts that should not appear in conversation history.
         ephemeral: bool,
+        reasoning_effort: Option<&str>,
         on_event: F,
         cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Vec<CadeMessage>>
@@ -816,7 +816,7 @@ impl CadeClient {
         F: Fn(&CadeMessage),
     {
         self.stream_message_cancellable_with_images(
-            agent_id, input, conversation_id, ephemeral, vec![], on_event, cancel,
+            agent_id, input, conversation_id, ephemeral, vec![], reasoning_effort, on_event, cancel,
         ).await
     }
 
@@ -828,6 +828,7 @@ impl CadeClient {
         conversation_id: Option<&str>,
         ephemeral: bool,
         images: Vec<serde_json::Value>,
+        reasoning_effort: Option<&str>,
         on_event: F,
         cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Vec<CadeMessage>>
@@ -844,6 +845,9 @@ impl CadeClient {
         }
         if !images.is_empty() {
             body["images"] = serde_json::Value::Array(images);
+        }
+        if let Some(effort) = reasoning_effort {
+            body["reasoning_effort"] = effort.into();
         }
 
         let request = self
@@ -968,7 +972,7 @@ impl CadeClient {
     where
         F: Fn(&CadeMessage),
     {
-        self.stream_tool_return_cancellable(agent_id, tool_call_id, output, is_error, None, on_event, None).await
+        self.stream_tool_return_cancellable(agent_id, tool_call_id, output, is_error, None, None, on_event, None).await
     }
 
     /// Like `stream_tool_return` but checks an optional cancel flag between SSE events.
@@ -979,6 +983,7 @@ impl CadeClient {
         output: &str,
         is_error: bool,
         conversation_id: Option<&str>,
+        reasoning_effort: Option<&str>,
         on_event: F,
         cancel: Option<&std::sync::Arc<std::sync::atomic::AtomicBool>>,
     ) -> Result<Vec<CadeMessage>>
@@ -993,6 +998,9 @@ impl CadeClient {
                 "status": if is_error { "error" } else { "success" }
             }
         });
+        if let Some(effort) = reasoning_effort {
+            body["reasoning_effort"] = effort.into();
+        }
         if let Some(cid) = conversation_id {
             body["conversation_id"] = cid.into();
         }

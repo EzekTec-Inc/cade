@@ -7,6 +7,7 @@ use super::{
     desktop::{DesktopCaptureTool, DesktopControlTool, DesktopListWindowsTool, DesktopNotifyTool},
     fs::{ApplyPatchTool, EditTool, ReadTool, WriteTool},
     search::{GlobTool, GrepTool},
+    plan::{EnterPlanModeTool, ExitPlanModeTool, TodoWriteTool, UpdatePlanTool, WriteTodosTool},
 };
 use crate::mcp::McpManager;
 use crate::toolsets::Toolset;
@@ -62,13 +63,16 @@ pub async fn dispatch(
 async fn run_native_tool(name: &str, args: &Value) -> Option<Result<String>> {
     Some(match name {
         // Core dev tools
-        "bash"        => BashTool::run(args).await,
-        "read_file"   => ReadTool::run(args).await,
-        "write_file"  => WriteTool::run(args).await,
-        "edit_file"   => EditTool::run(args).await,
+        "bash" | "RunShellCommand" => BashTool::run(args).await,
+        "read_file" | "ReadFileGemini" => ReadTool::run(args).await,
+        "write_file" | "WriteFileGemini" => WriteTool::run(args).await,
+        "edit_file" | "Replace" => EditTool::run(args).await,
         "apply_patch" => ApplyPatchTool::run(args).await,
-        "grep"        => GrepTool::run(args).await,
-        "glob"        => GlobTool::run(args).await,
+        "grep" | "SearchFileContent" => GrepTool::run(args).await,
+        "glob" | "GlobGemini" => GlobTool::run(args).await,
+        "EnterPlanMode" => Ok("Plan mode entered. File modifications are now blocked. Use ExitPlanMode to resume normal operation.".to_string()),
+        "ExitPlanMode" => Ok("Plan mode exited. Normal operation resumed.".to_string()),
+        "TodoWrite" | "UpdatePlan" | "WriteTodos" => TodoWriteTool::run(args).await,
         // Desktop extensions
         "desktop_screenshot"   => DesktopCaptureTool::run(args).await,
         "desktop_list_windows" => DesktopListWindowsTool::run(args).await,
@@ -76,6 +80,13 @@ async fn run_native_tool(name: &str, args: &Value) -> Option<Result<String>> {
         "desktop_notify"       => DesktopNotifyTool::run(args).await,
         _other => return None,
     })
+}
+
+fn rename_schema(mut schema: Value, new_name: &str) -> Value {
+    if let Some(obj) = schema.as_object_mut() {
+        obj.insert("name".to_string(), Value::String(new_name.to_string()));
+    }
+    schema
 }
 
 /// All tool JSON schemas for a given toolset.
@@ -93,6 +104,20 @@ pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
             ApplyPatchTool::schema(), // patch-based edit + write
             GrepTool::schema(),
             GlobTool::schema(),
+            EnterPlanModeTool::schema(),
+            ExitPlanModeTool::schema(),
+            UpdatePlanTool::schema(),
+        ],
+        Toolset::Gemini => vec![
+            rename_schema(BashTool::schema(), "RunShellCommand"),
+            rename_schema(ReadTool::schema(), "ReadFileGemini"),
+            rename_schema(WriteTool::schema(), "WriteFileGemini"),
+            rename_schema(EditTool::schema(), "Replace"),
+            rename_schema(GrepTool::schema(), "SearchFileContent"),
+            rename_schema(GlobTool::schema(), "GlobGemini"),
+            EnterPlanModeTool::schema(),
+            ExitPlanModeTool::schema(),
+            WriteTodosTool::schema(),
         ],
         _ => vec![
             BashTool::schema(),
@@ -101,6 +126,9 @@ pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
             EditTool::schema(),       // string-replace
             GrepTool::schema(),
             GlobTool::schema(),
+            EnterPlanModeTool::schema(),
+            ExitPlanModeTool::schema(),
+            TodoWriteTool::schema(),
         ],
     };
     schemas.extend(desktop);

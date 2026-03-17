@@ -57,7 +57,13 @@ async fn main() -> Result<()> {
     let mut router_inner = LlmRouter::build(&config);
 
     // Hot-load any providers persisted in the DB (DB overrides env vars)
-    let db_providers = sqlite::list_providers(&db).unwrap_or_default();
+    let db_providers = match sqlite::list_providers(&db) {
+        Ok(providers) => providers,
+        Err(e) => {
+            tracing::error!("Failed to list providers from DB (possible corruption): {}", e);
+            std::process::exit(1);
+        }
+    };
     for row in &db_providers {
         if !row.enabled { continue; }
         if let Some(p) = LlmRouter::provider_from_row(row, &config) {

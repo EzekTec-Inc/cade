@@ -211,6 +211,34 @@ pub struct ActiveQuestionState {
     pub key_tx: Option<std::sync::mpsc::SyncSender<crossterm::event::KeyEvent>>,
 }
 
+// ── PlanState ─────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone)]
+pub struct PlanStep {
+    pub id: usize,
+    pub description: String,
+    pub is_done: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct PlanState {
+    pub steps: Vec<PlanStep>,
+    pub is_visible: bool,
+}
+
+use std::sync::OnceLock;
+use regex::Regex;
+
+fn plan_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?im)^Plan:\s*\n((?:^\d+\.\s+.*(?:\n|$))+)").unwrap())
+}
+
+fn done_regex() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"(?i)\[DONE:(\d+)\]").unwrap())
+}
+
 // ── TuiApp ────────────────────────────────────────────────────────────────────
 
 pub struct TuiApp {
@@ -223,6 +251,7 @@ pub struct TuiApp {
     pub scroll: usize,
     pub expand_all: bool,
     pub active_question: Option<ActiveQuestionState>,
+    pub active_plan: Option<PlanState>,
 
     // ── Streaming state ────────────────────────────────────────────────────
     streaming_text: String,
@@ -281,7 +310,7 @@ pub struct TuiApp {
 impl TuiApp {
     /// Create the TuiApp and initialise the ratatui terminal
     /// (enters alternate screen + enables raw mode).
-    pub fn new(mode: PermissionMode, agent_name: String, model: String) -> Self {
+    pub fn new(mode: PermissionMode, agent_name: String, model: String, reasoning_effort: Option<String>) -> Self {
         let terminal = ratatui::init();
         let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste);
         if supports_keyboard_enhancement().unwrap_or(false) {
@@ -296,6 +325,7 @@ impl TuiApp {
             scroll: 0,
             expand_all: false,
             active_question: None,
+            active_plan: None,
             streaming_text: String::new(),
             streaming_active: false,
             reasoning_text: String::new(),
@@ -307,6 +337,7 @@ impl TuiApp {
             mode,
             agent_name,
             model,
+            reasoning_effort,
             cwd: abbreviate_cwd(&std::env::current_dir().unwrap_or_default()),
             context_pct: None,
             copy_mode: false,
@@ -397,7 +428,50 @@ impl TuiApp {
         // if the user scrolled up mid-stream to read history, leave them there.
         self.streaming_active = true;
         self.streaming_text.push_str(text);
+        self.update_plan_state();
         self.draw()
+    }
+
+    fn update_plan_state(&mut self) {
+        if self.active_plan.is_none() {
+            if let Some(caps) = plan_regex().captures(&self.streaming_text) {
+                if let Some(plan_block) = caps.get(1) {
+                    let mut steps = Vec::new();
+                    for line in plan_block.as_str().lines() {
+                        if let Some(pos) = line.find(". ") {
+                            if let Ok(id) = line[..pos].trim().parse::<usize>() {
+                                steps.push(PlanStep {
+                                    id,
+                                    description: line[pos + 2..].trim().to_string(),
+                                    is_done: false,
+                                });
+                            }
+                        }
+                    }
+                    if !steps.is_empty() {
+                        self.active_plan = Some(PlanState { steps, is_visible: true });
+                        self.draw_dirty = true;
+                    }
+                }
+            }
+        }
+        
+        if let Some(ref mut plan) = self.active_plan {
+            let mut changed = false;
+            for caps in done_regex().captures_iter(&self.streaming_text) {
+                if let Ok(id) = caps[1].parse::<usize>() {
+                    if let Some(step) = plan.steps.iter_mut().find(|s| s.id == id) {
+                        if !step.is_done {
+                            step.is_done = true;
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            if changed {
+                self.draw_dirty = true;
+            }
+        }
     }
 
     /// Append a reasoning chunk (accumulated; committed as header on done).
@@ -564,6 +638,8 @@ impl TuiApp {
         let header_lines = self.header_lines.clone();
         let footer_extra = self.footer_extra.clone();
         let skills_overlay_snap = self.skills_overlay.clone();
+        let reasoning_effort = self.reasoning_effort.clone();
+        let active_plan_snap = self.active_plan.clone();
 
         // V-04: capture max_skip returned by render_frame to clamp self.scroll.
         let mut max_skip: u16 = 0;
@@ -600,6 +676,8 @@ impl TuiApp {
                 &header_lines,
                 footer_extra.as_deref(),
                 skills_overlay_snap.as_ref(),
+                reasoning_effort.as_deref(),
+                active_plan_snap.as_ref(),
             );
         })?;
 
@@ -1121,57 +1199,50 @@ impl TuiApp {
 
     // ── Input loop ────────────────────────────────────────────────────────
 
-    /// Block until the user submits input or presses Ctrl+D.
-    /// Returns `None` on Ctrl+D (exit signal).
-    pub fn read_input(
+    pub fn process_event(
         &mut self,
+        ev: event::Event,
         history: &mut Vec<String>,
         hist_idx: &mut Option<usize>,
-    ) -> Result<Option<String>> {
+    ) -> Result<Option<Option<String>>> {
+        match ev {
+            event::Event::Key(k) => {
+                if self.skills_overlay.is_some() {
+                    self.handle_skills_key(k);
+                } else if self.active_question.is_some() {
+                    self.handle_question_key(k);
+                } else if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
+                    return Ok(Some(Some(result)));
+                }
+            }
+            event::Event::Resize(_, _) => { /* ratatui picks up resize on next draw */ }
+            event::Event::Paste(text) => {
+                self.editor.handle_paste(&text);
+            }
+            event::Event::Mouse(m) => match m.kind {
+                crossterm::event::MouseEventKind::ScrollUp => {
+                    self.scroll = self.scroll.saturating_add(3);
+                }
+                crossterm::event::MouseEventKind::ScrollDown => {
+                    self.scroll = self.scroll.saturating_sub(3);
+                    if self.scroll == 0 {
+                        self.pending_lines = 0;
+                    }
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+        Ok(None)
+    }
+
+    /// Prepare the input field for new input.
+    pub fn reset_input(&mut self, hist_idx: &mut Option<usize>) {
         self.editor.input.clear();
         self.editor.cursor_pos = 0;
         *hist_idx = None;
-
-        loop {
-            self.draw()?;
-            // 50 ms poll: allows animation ticks without burning CPU.
-            if !event::poll(std::time::Duration::from_millis(50))? {
-                continue;
-            }
-            match event::read()? {
-                Event::Key(k) => {
-                    if self.skills_overlay.is_some() {
-                        self.handle_skills_key(k);
-                    } else if self.active_question.is_some() {
-                        self.handle_question_key(k);
-                    } else if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
-                        return Ok(result);
-                    }
-                }
-                Event::Resize(_, _) => { /* ratatui picks up resize on next draw */ }
-                Event::Paste(text) => {
-                    // Bracketed paste: the terminal wrapped the pasted content
-                    // in paste-start / paste-end markers so crossterm delivers
-                    // it as a single string.  Delegate to the Editor which
-                    // collapses large pastes into a compact marker token.
-                    self.editor.handle_paste(&text);
-                }
-                Event::Mouse(m) => match m.kind {
-                    MouseEventKind::ScrollUp => {
-                        self.scroll = self.scroll.saturating_add(3);
-                    }
-                    MouseEventKind::ScrollDown => {
-                        self.scroll = self.scroll.saturating_sub(3);
-                        if self.scroll == 0 {
-                            self.pending_lines = 0;
-                        }
-                    }
-                    _ => {}
-                },
-                _ => {}
-            }
-        }
     }
+
 
     fn handle_key_input(
         &mut self,
@@ -1707,7 +1778,11 @@ fn count_wrapped_segment(text: &str, content_w: u16) -> u16 {
             // across multiple lines.
             let extra_rows = (word_w.saturating_sub(1)) / width;
             rows += extra_rows as u16;
-            row_w = word_w - (extra_rows * width);
+            row_w += word_w - (extra_rows * width);
+            if row_w > width {
+                rows += 1;
+                row_w -= width;
+            }
         } else {
             row_w += word_w;
         }
@@ -1741,6 +1816,8 @@ fn render_frame(
     header_lines: &[RenderLine],
     footer_extra: Option<&str>,
     skills_overlay: Option<&SkillsOverlayState>,
+    reasoning_effort: Option<&str>,
+    active_plan: Option<&PlanState>,
 ) -> u16 {
     // returns max_skip for V-04 scroll clamping
     let area = frame.area();
@@ -1750,7 +1827,20 @@ fn render_frame(
     let input_rows = calc_input_rows(input, available_w).clamp(1, MAX_INPUT_ROWS);
     // A-02: footer_extra adds one row below the normal footer when present.
     let footer_extra_h: u16 = if footer_extra.is_some() { 1 } else { 0 };
-    let bottom_rows = FIXED_ROWS + input_rows + footer_extra_h;
+
+    // When a question is active, the question panel replaces the input area
+    // (slots [4] top-sep + [5] input) so the content viewport is never shrunk.
+    // The question panel gets a dynamic height clamped to half the terminal.
+    let question_active = active_question.is_some();
+    let q_panel_rows = if let Some(aq) = active_question {
+        let max_q = (area.height / 2).saturating_sub(FIXED_ROWS + footer_extra_h);
+        question_height(aq, max_q).max(4)
+    } else {
+        0
+    };
+
+    let effective_input_rows = if question_active { q_panel_rows } else { input_rows };
+    let bottom_rows = FIXED_ROWS + effective_input_rows + footer_extra_h;
 
     if area.height <= bottom_rows + 1 {
         frame.render_widget(Paragraph::new("Terminal too small"), area);
@@ -1759,40 +1849,32 @@ fn render_frame(
 
     let content_height = area.height - bottom_rows;
 
-    // When a question is active, carve the inline panel out of the content area.
-    // Layout becomes 8 slots; without a question it stays 6 (question slots = 0).
-    let inline_h = active_question
-        .map(|aq| question_height(aq, content_height))
-        .unwrap_or(0);
-    let shrunk_content = content_height.saturating_sub(inline_h);
-
-    let chunks = if inline_h > 0 {
-        Layout::vertical([
-            Constraint::Length(shrunk_content), // [0] content  (shrunk)
-            Constraint::Length(1),              // [1] inline separator ╌╌╌
-            Constraint::Length(inline_h - 1),   // [2] question panel
-            Constraint::Length(1),              // [3] status
-            Constraint::Length(1),              // [4] top separator
-            Constraint::Length(input_rows),     // [5] input
-            Constraint::Length(1),              // [6] bottom separator
-            Constraint::Length(1),              // [7] footer
-        ])
-        .split(area)
+    let plan_h = if let Some(plan) = active_plan {
+        if plan.is_visible {
+            (plan.steps.len() as u16 + 2).min(10).max(4)
+        } else {
+            0
+        }
     } else {
-        // No question: same 6-slot layout, pad with two dummy zero-height slots
-        // so all index references below are uniform (we only use 0,3..7 in this branch).
-        Layout::vertical([
-            Constraint::Length(content_height), // [0] content
-            Constraint::Length(0),              // [1] (unused)
-            Constraint::Length(0),              // [2] (unused)
-            Constraint::Length(1),              // [3] status
-            Constraint::Length(1),              // [4] top separator
-            Constraint::Length(input_rows),     // [5] input
-            Constraint::Length(1),              // [6] bottom separator
-            Constraint::Length(1),              // [7] footer
-        ])
-        .split(area)
+        0
     };
+
+    let shrunk_content = content_height.saturating_sub(plan_h);
+
+    // Uniform 8-slot layout.  When a question is active the panel body
+    // occupies slot [5] (which normally holds the text input).
+    // When a plan is active, it occupies slot [1] and shrinks the content area.
+    let chunks = Layout::vertical([
+        Constraint::Length(shrunk_content),       // [0] content
+        Constraint::Length(plan_h),               // [1] plan panel
+        Constraint::Length(0),                    // [2] (unused)
+        Constraint::Length(1),                    // [3] status
+        Constraint::Length(1),                    // [4] top separator (or question separator)
+        Constraint::Length(effective_input_rows), // [5] input (or question panel)
+        Constraint::Length(1),                    // [6] bottom separator
+        Constraint::Length(1),                    // [7] footer
+    ])
+    .split(area);
 
     // ── A-02: Header strip — pinned above the scrollable messages pane ───────
     let content_w = area.width.saturating_sub(0).max(1);
@@ -1972,49 +2054,89 @@ fn render_frame(
         chunks[6],
     );
 
-    // ── Input area ────────────────────────────────────────────────────────────
-    // Build one ratatui Line per logical line so wrapping is correct and the
-    // "> " prefix only appears on the first line.  Subsequent lines get a
-    // "  " (2-space) indent so text columns align with the first line.
-    let input_placeholder = if queued_count > 0 {
-        format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
-    } else {
-        "Type a message…".to_string()
-    };
-    let input_paragraph: Vec<Line<'static>> = if input.is_empty() {
-        vec![Line::from(vec![
-            Span::styled("> ", Style::default().fg(RC::White)),
-            Span::styled(input_placeholder, Style::default().fg(RC::DarkGray)),
-        ])]
-    } else {
-        input
-            .split('\n')
-            .enumerate()
-            .map(|(i, seg)| {
-                let prefix = if i == 0 { "> " } else { "  " };
-                Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(RC::Rgb(120, 120, 120))),
-                    Span::styled(seg.to_string(), Style::default().fg(RC::White)),
-                ])
-            })
-            .collect()
-    };
-    frame.render_widget(
-        Paragraph::new(input_paragraph).wrap(Wrap { trim: false }),
-        chunks[5],
-    );
+    // ── Plan widget ──────────────────────────────────────────────────────────
+    if let Some(plan) = active_plan {
+        if plan.is_visible {
+            use ratatui::widgets::{List, ListItem};
+            let mut items = Vec::new();
+            for step in &plan.steps {
+                let (prefix, color) = if step.is_done {
+                    ("[✓] ", RC::DarkGray)
+                } else {
+                    ("[ ] ", RC::Green)
+                };
+                items.push(ListItem::new(Line::from(vec![
+                    Span::styled(prefix, Style::default().fg(color)),
+                    Span::styled(
+                        format!("{}. {}", step.id, step.description),
+                        Style::default().fg(if step.is_done { RC::DarkGray } else { RC::White }),
+                    ),
+                ])));
+            }
+            let list = List::new(items).block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Todos ")
+                    .border_style(Style::default().fg(RC::Cyan)),
+            );
+            frame.render_widget(list, chunks[1]);
+        }
+    }
 
-    // Cursor position
-    let before = &input[..cursor_pos.min(input.len())];
-    let (vis_row, vis_col) = calc_visual_cursor(before, available_w);
-    let cx = (chunks[5].x + vis_col).min(chunks[5].x + chunks[5].width.saturating_sub(1));
-    let cy = (chunks[5].y + vis_row).min(chunks[5].y + chunks[5].height.saturating_sub(1));
-    frame.set_cursor_position((cx, cy));
+    // ── Input area / Question panel ──────────────────────────────────────────
+    if question_active {
+        // When a question is active, render the question panel in the input
+        // slot ([4] = separator, [5] = body).  The text input and cursor are
+        // hidden — the user interacts with the question instead.
+        if let Some(aq) = active_question {
+            render_question_inline(frame, aq, chunks[4], chunks[5]);
+        }
+    } else {
+        // Normal input rendering.
+        // Build one ratatui Line per logical line so wrapping is correct and the
+        // "> " prefix only appears on the first line.  Subsequent lines get a
+        // "  " (2-space) indent so text columns align with the first line.
+        let input_placeholder = if queued_count > 0 {
+            format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
+        } else {
+            "Type a message…".to_string()
+        };
+        let input_paragraph: Vec<Line<'static>> = if input.is_empty() {
+            vec![Line::from(vec![
+                Span::styled("> ", Style::default().fg(RC::White)),
+                Span::styled(input_placeholder, Style::default().fg(RC::DarkGray)),
+            ])]
+        } else {
+            input
+                .split('\n')
+                .enumerate()
+                .map(|(i, seg)| {
+                    let prefix = if i == 0 { "> " } else { "  " };
+                    Line::from(vec![
+                        Span::styled(prefix, Style::default().fg(RC::Rgb(120, 120, 120))),
+                        Span::styled(seg.to_string(), Style::default().fg(RC::White)),
+                    ])
+                })
+                .collect()
+        };
+        frame.render_widget(
+            Paragraph::new(input_paragraph).wrap(Wrap { trim: false }),
+            chunks[5],
+        );
+
+        // Cursor position
+        let before = &input[..cursor_pos.min(input.len())];
+        let (vis_row, vis_col) = calc_visual_cursor(before, available_w);
+        let cx = (chunks[5].x + vis_col).min(chunks[5].x + chunks[5].width.saturating_sub(1));
+        let cy = (chunks[5].y + vis_row).min(chunks[5].y + chunks[5].height.saturating_sub(1));
+        frame.set_cursor_position((cx, cy));
+    }
 
     // ── Footer ────────────────────────────────────────────────────────────────
     let (left_label, left_glyph, left_color) = mode_footer_left(mode);
     let right_agent = agent_name.to_string();
     let right_model = format!(" [{}]", truncate_str(model, 30));
+    let right_reasoning = reasoning_effort.map(|r| format!(" [{r}]")).unwrap_or_default();
     // Context % with severity color: gray < 80%, amber 80-89%, red ≥ 90%
     let (right_ctx, right_ctx_color) = match context_pct {
         Some(p) if p >= 90 => (format!(" {p}%"), RC::Rgb(210, 60, 60)),
@@ -2034,6 +2156,7 @@ fn render_frame(
     let right_len: u16 = (mid_cwd.chars().count()
         + right_agent.chars().count()
         + right_model.chars().count()
+        + right_reasoning.chars().count()
         + right_ctx.chars().count()) as u16;
     let pad = chunks[7].width.saturating_sub(left_base_len + right_len) as usize;
 
@@ -2057,6 +2180,9 @@ fn render_frame(
         Style::default().fg(RC::Rgb(140, 140, 249)),
     ));
     footer.push(Span::styled(right_model, Style::default().fg(RC::DarkGray)));
+    if !right_reasoning.is_empty() {
+        footer.push(Span::styled(right_reasoning, Style::default().fg(RC::DarkGray)));
+    }
     if !right_ctx.is_empty() {
         footer.push(Span::styled(
             right_ctx,
@@ -2083,11 +2209,7 @@ fn render_frame(
         );
     }
 
-    // ── Inline question panel (anchored to bottom of content viewport) ────────
-    if let Some(aq) = active_question {
-        // chunks[1] = dashed separator, chunks[2] = panel body
-        render_question_inline(frame, aq, chunks[1], chunks[2]);
-    }
+    // (Question panel is now rendered inside the input slot above.)
 
     // ── Skills overlay (full-screen, drawn last so it covers everything) ─────
     if let Some(ov) = skills_overlay {
@@ -2099,22 +2221,21 @@ fn render_frame(
 
 // ── Overlay helpers ───────────────────────────────────────────────────────────
 
-/// Calculate the number of rows needed for the inline question panel.
+/// Calculate the number of body rows needed for the question panel.
 ///
-/// Counts: 1 header + 1 blank + wrapped-question-rows + 1 blank
+/// Counts: 1 header + 1 blank + 1 question-text + 1 blank
 ///       + per-option rows (label + optional description)
 ///       + submit row (multi-select) + other row + 1 blank + 1 hint.
-/// Clamped to at most half the content viewport so content is never fully hidden.
-fn question_height(aq: &ActiveQuestionDrawState, content_height: u16) -> u16 {
+///
+/// The separator row is handled by the layout slot `chunks[4]` and is NOT
+/// included here.  The caller clamps the result to fit the available space.
+fn question_height(aq: &ActiveQuestionDrawState, max_rows: u16) -> u16 {
     let q = &aq.question;
-
-    // Fixed rows: separator-row is accounted for by the caller (inline_h - 1 for body).
-    // Here we return the total including the separator row.
     let mut rows: u16 = 0;
 
     // header chip + blank
     rows += 2;
-    // question text (treat as 1 row; long questions word-wrap but we keep it simple)
+    // question text
     rows += 1;
     // blank after question
     rows += 1;
@@ -2141,10 +2262,7 @@ fn question_height(aq: &ActiveQuestionDrawState, content_height: u16) -> u16 {
     // blank + hint
     rows += 2;
 
-    // +1 for the dashed separator row itself
-    rows += 1;
-
-    rows.min(content_height / 2).max(6)
+    rows.min(max_rows).max(4)
 }
 
 /// Render the inline question panel — no border box, anchored to the bottom

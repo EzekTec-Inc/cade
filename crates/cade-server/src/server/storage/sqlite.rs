@@ -913,7 +913,7 @@ pub fn link_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Resu
 pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
     let conn = db.lock().unwrap();
     // We only remove the link, not the shared block itself (to avoid orphan issues if shared)
-    // Actually, Letta docs imply it's removed from the agent's view.
+    // Actually, CADE docs imply it's removed from the agent's view.
     let n = conn.execute(
         "DELETE FROM agent_memory_blocks WHERE agent_id = ?1 AND block_id IN (
             SELECT id FROM shared_memory_blocks WHERE label = ?2

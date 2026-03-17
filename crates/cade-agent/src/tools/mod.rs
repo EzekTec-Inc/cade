@@ -4,6 +4,8 @@ pub mod desktop;
 pub mod fs;
 pub mod manager;
 pub mod search;
+pub mod plan;
 
 pub use ask::AskUserQuestionTool;
+pub use plan::{EnterPlanModeTool, ExitPlanModeTool, TodoWriteTool, UpdatePlanTool, WriteTodosTool};
 pub use manager::{ToolResult, all_schemas, schemas_for_names, schemas_for_toolset, dispatch, is_write_tool, is_native_write_tool};

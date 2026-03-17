@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 /// A single allow or deny rule matching a tool call.
 ///
-/// Syntax mirrors Letta Code:
+/// Syntax mirrors CADE Code:
 ///   `Bash`              — all uses of the bash tool
 ///   `Bash(cargo test)`  — bash where command == "cargo test"
 ///   `Read(src/**)`      — read_file where path starts with "src/" (glob **)
@@ -436,6 +436,18 @@ impl PermissionManager {
         if self.allow_rules.lock().unwrap().iter().any(|r| r.matches(tool_name, arg_ref)) {
             return true;
         }
+
+        // SEC-B3: Prevent Auto-Approval of Config/Skill Edits (RCE Mitigation)
+        if matches!(tool_name, "write_file" | "edit_file" | "apply_patch" | "write" | "edit" | "patch") {
+            if let Some(path) = arg_ref {
+                if path.contains(".cade/settings.json") ||
+                   path.contains("settings.local.json") ||
+                   path.contains(".skills/") {
+                    return false;
+                }
+            }
+        }
+
         // Mode-based
         match self.mode() {
             PermissionMode::BypassPermissions => {

@@ -62,6 +62,7 @@ pub struct CompletionRequest {
     pub messages: Vec<LlmMessage>,
     pub tools: Vec<Value>, // JSON schemas
     pub max_tokens: u32,
+    pub reasoning_effort: Option<String>,
 }
 
 #[derive(Debug, Clone)]

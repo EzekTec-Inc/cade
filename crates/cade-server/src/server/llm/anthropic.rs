@@ -51,7 +51,13 @@ pub struct AnthropicProvider {
 
 impl AnthropicProvider {
     pub fn new(api_key: String) -> Self {
-        Self { client: Client::new(), api_key }
+        Self { 
+            client: Client::builder()
+                .tcp_keepalive(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| Client::new()), 
+            api_key 
+        }
     }
 
     fn build_body(&self, req: &CompletionRequest, stream: bool) -> Value {
@@ -157,6 +163,22 @@ impl AnthropicProvider {
             "messages": anthropic_messages,
             "stream": stream
         });
+
+        if let Some(effort) = &req.reasoning_effort {
+            let budget = match effort.as_str() {
+                "low" => 1024,
+                "medium" => 4096,
+                "high" => 16384,
+                "xhigh" => 32768,
+                _ => 0,
+            };
+            if budget > 0 {
+                body["thinking"] = json!({
+                    "type": "enabled",
+                    "budget_tokens": budget
+                });
+            }
+        }
 
         // System prompt: use structured block form so we can attach cache_control.
         if !system_text.is_empty() {

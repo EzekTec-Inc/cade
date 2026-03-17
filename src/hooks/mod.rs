@@ -1,6 +1,6 @@
 /// Hook engine — runs user-defined scripts at key lifecycle events.
 ///
-/// Mirrors Letta Code's hook system:
+/// Mirrors CADE Code's hook system:
 ///   - Events: PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest,
 ///             UserPromptSubmit, Stop, SubagentStop, SessionStart, SessionEnd, Notification
 ///   - Hook types: command (shell script via stdin JSON)
@@ -69,13 +69,17 @@ impl HookEngine {
         tool_name: &str,
         args: &Value,
         output: &str,
+        preceding_reasoning: Option<&str>,
+        preceding_assistant_message: Option<&str>,
     ) -> Option<String> {
         let input = json!({
-            "event_type":        "PostToolUse",
-            "working_directory": self.cwd,
-            "tool_name":         tool_name,
-            "tool_input":        args,
-            "tool_output":       output,
+            "event_type":                "PostToolUse",
+            "working_directory":         self.cwd,
+            "tool_name":                 tool_name,
+            "tool_input":                args,
+            "tool_output":               output,
+            "preceding_reasoning":       preceding_reasoning.unwrap_or(""),
+            "preceding_assistant_message": preceding_assistant_message.unwrap_or(""),
         });
         self.run_entries_context(&self.hooks.post_tool_use, tool_name, input).await
     }
@@ -86,13 +90,17 @@ impl HookEngine {
         tool_name: &str,
         args: &Value,
         error: &str,
+        preceding_reasoning: Option<&str>,
+        preceding_assistant_message: Option<&str>,
     ) {
         let input = json!({
-            "event_type":        "PostToolUseFailure",
-            "working_directory": self.cwd,
-            "tool_name":         tool_name,
-            "tool_input":        args,
-            "error":             error,
+            "event_type":                "PostToolUseFailure",
+            "working_directory":         self.cwd,
+            "tool_name":                 tool_name,
+            "tool_input":                args,
+            "error":                     error,
+            "preceding_reasoning":       preceding_reasoning.unwrap_or(""),
+            "preceding_assistant_message": preceding_assistant_message.unwrap_or(""),
         });
         self.run_entries_fire_forget(&self.hooks.post_tool_use_failure, tool_name, input).await;
     }
@@ -128,13 +136,15 @@ impl HookEngine {
         stop_reason: &str,
         user_message: &str,
         assistant_message: &str,
+        preceding_reasoning: Option<&str>,
     ) -> HookOutcome {
         let input = json!({
-            "event_type":        "Stop",
-            "working_directory": self.cwd,
-            "stop_reason":       stop_reason,
-            "user_message":      user_message,
-            "assistant_message": assistant_message,
+            "event_type":          "Stop",
+            "working_directory":   self.cwd,
+            "stop_reason":         stop_reason,
+            "user_message":        user_message,
+            "assistant_message":   assistant_message,
+            "preceding_reasoning": preceding_reasoning.unwrap_or(""),
         });
         self.run_all_blocking(&self.hooks.stop, input).await
     }

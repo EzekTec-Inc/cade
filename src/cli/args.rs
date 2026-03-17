@@ -36,6 +36,10 @@ pub struct Args {
     #[arg(short = 'm', long = "model")]
     pub model: Option<String>,
 
+    /// Reasoning tier for models that support it (none, low, medium, high, xhigh)
+    #[arg(long = "reasoning")]
+    pub reasoning: Option<String>,
+
     /// Bypass all permission prompts (use carefully)
     #[arg(long = "yolo")]
     pub yolo: bool,

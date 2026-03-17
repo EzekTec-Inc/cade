@@ -59,6 +59,7 @@ impl Toolset {
     pub fn edit_tool(&self) -> &'static str {
         match self {
             Self::Codex => "apply_patch",
+            Self::Gemini => "Replace",
             _           => "edit_file",
         }
     }
@@ -66,13 +67,25 @@ impl Toolset {
     /// Core tool names for this toolset (excludes meta-tools: memory, skills, subagents).
     pub fn core_tool_names(&self) -> &'static [&'static str] {
         match self {
-            Self::Default | Self::Gemini => &[
+            Self::Default => &[
                 "bash",
                 "read_file",
                 "write_file",
                 "edit_file",
                 "grep",
                 "glob",
+                "desktop_screenshot",
+                "desktop_list_windows",
+                "desktop_control",
+                "desktop_notify",
+            ],
+            Self::Gemini => &[
+                "RunShellCommand",
+                "ReadFileGemini",
+                "WriteFileGemini",
+                "Replace",
+                "SearchFileContent",
+                "GlobGemini",
                 "desktop_screenshot",
                 "desktop_list_windows",
                 "desktop_control",
@@ -92,22 +105,32 @@ impl Toolset {
         }
     }
 
-    /// Meta-tool names — same for every toolset.
-    pub fn meta_tool_names() -> &'static [&'static str] {
-        &[
-            "update_memory",
-            "load_skill",
-            "install_skill",
-            "run_skill_script",
-            "load_skill_ref",
-            "run_subagent",
-        ]
+    /// Meta-tool names for this toolset.
+    pub fn meta_tool_names(&self) -> &'static [&'static str] {
+        match self {
+            Self::Codex => &[
+                "memory_apply_patch",
+                "load_skill",
+                "install_skill",
+                "run_skill_script",
+                "load_skill_ref",
+                "run_subagent",
+            ],
+            _ => &[
+                "update_memory",
+                "load_skill",
+                "install_skill",
+                "run_skill_script",
+                "load_skill_ref",
+                "run_subagent",
+            ],
+        }
     }
 
     /// All tool names for this toolset (core + meta).
     pub fn all_tool_names(&self) -> Vec<&'static str> {
         let mut names: Vec<&'static str> = self.core_tool_names().to_vec();
-        names.extend_from_slice(Self::meta_tool_names());
+        names.extend_from_slice(self.meta_tool_names());
         names
     }
 }

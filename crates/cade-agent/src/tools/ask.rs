@@ -157,7 +157,7 @@ impl AskUserQuestionTool {
 
     /// Format the tool result string returned to the LLM after answers are collected.
     ///
-    /// Output (Letta Code parity):
+    /// Output (CADE Code parity):
     /// `User has answered your questions: "Q1"="A1", "Q2"="A2". You can now continue.`
     pub fn format_result(answers: &HashMap<String, String>) -> String {
         if answers.is_empty() {

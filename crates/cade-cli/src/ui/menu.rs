@@ -28,6 +28,7 @@ struct Section {
 const SECTIONS: &[Section] = &[
     Section { name: "Session", items: &[
         CmdEntry { cmd: "/info",          desc: "Agent, model, mode, cwd" },
+        CmdEntry { cmd: "/agent",         desc: "Show current agent name and ID" },
         CmdEntry { cmd: "/agents",        desc: "List + switch agents  (r rename, d delete)" },
         CmdEntry { cmd: "/new-agent",     desc: "Create a brand-new agent" },
         CmdEntry { cmd: "/rename",        desc: "Rename current agent" },
@@ -38,10 +39,13 @@ const SECTIONS: &[Section] = &[
     ]},
     Section { name: "Model & Mode", items: &[
         CmdEntry { cmd: "/model",         desc: "Interactive model picker  (or /model provider/name)" },
+        CmdEntry { cmd: "/reasoning",     desc: "Set reasoning effort (none, low, medium, high, xhigh)" },
         CmdEntry { cmd: "/toolset",       desc: "/toolset [default|codex|gemini]" },
         CmdEntry { cmd: "/mode",          desc: "Show or set permission mode" },
         CmdEntry { cmd: "/plan",          desc: "Switch to read-only plan mode" },
+        CmdEntry { cmd: "/todos",         desc: "Toggle visibility of the active plan / checklist" },
         CmdEntry { cmd: "/default",       desc: "Return to default permission mode" },
+        CmdEntry { cmd: "/yolo",          desc: "Bypass permissions (auto-approve all tools)" },
         CmdEntry { cmd: "/approve-always",desc: "/approve-always <pattern>  — add allow rule" },
         CmdEntry { cmd: "/deny-always",   desc: "/deny-always <pattern>   — add deny rule" },
         CmdEntry { cmd: "/permissions",   desc: "Show current permission mode + rules" },
@@ -73,7 +77,9 @@ const SECTIONS: &[Section] = &[
     ]},
     Section { name: "Diagnostics", items: &[
         CmdEntry { cmd: "/search",        desc: "/search <query>  — search message history" },
+        CmdEntry { cmd: "/context",       desc: "Show current context window usage" },
         CmdEntry { cmd: "/usage",         desc: "Token usage this session" },
+        CmdEntry { cmd: "/cost",          desc: "Estimate API costs for this session" },
         CmdEntry { cmd: "/stats",         desc: "Full session stats — tokens, tool calls, timing, per-model breakdown" },
         CmdEntry { cmd: "/stats model",   desc: "Per-model detail: requests, input, cache, output per model" },
         CmdEntry { cmd: "/stream",        desc: "Toggle streaming mode" },
@@ -81,6 +87,7 @@ const SECTIONS: &[Section] = &[
         CmdEntry { cmd: "/feedback",      desc: "Report issues / give feedback" },
     ]},
     Section { name: "Misc", items: &[
+        CmdEntry { cmd: "/copy",           desc: "Toggle copy mode (disables mouse scroll for text selection)" },
         CmdEntry { cmd: "/export",         desc: "/export [file.json]  — export agent to JSON" },
         CmdEntry { cmd: "/clear",          desc: "Clear screen + context window" },
         CmdEntry { cmd: "/logout",         desc: "Clear stored API key and exit" },

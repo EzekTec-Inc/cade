@@ -27,7 +27,7 @@ pub struct HookEntry {
 }
 
 /// All hooks grouped by event type.
-/// Field names match Letta's settings.json key names exactly.
+/// Field names match CADE's settings.json key names exactly.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct HooksConfig {
     #[serde(default, rename = "PreToolUse")]
@@ -219,7 +219,7 @@ impl SettingsManager {
 
     /// Merged hooks config: local first (highest priority), then project, then global.
     pub fn merged_hooks(&self) -> HooksConfig {
-        // Clone each source; local runs first per Letta spec
+        // Clone each source; local runs first per CADE spec
         let local   = self.local.hooks.clone();
         let project = self.project.hooks.clone();
         let global  = self.global.hooks.clone();
@@ -254,7 +254,7 @@ impl SettingsManager {
     pub fn api_key(&self) -> Option<String> {
         std::env::var("CADE_API_KEY")
             .ok()
-            .or_else(|| std::env::var("LETTA_API_KEY").ok())
+            .or_else(|| std::env::var("CADE_LEGACY_API_KEY").ok())
             .or_else(|| {
                 if self.global.store_api_key {
                     self.global.env.api_key.clone()
@@ -268,7 +268,7 @@ impl SettingsManager {
     pub fn base_url(&self) -> String {
         std::env::var("CADE_SERVER_URL")
             .ok()
-            .or_else(|| std::env::var("LETTA_BASE_URL").ok()) // backward-compat
+            .or_else(|| std::env::var("CADE_LEGACY_BASE_URL").ok()) // backward-compat
             .or_else(|| self.global.env.server_url.clone())
             .unwrap_or_else(|| {
                 // Respect CADE_SERVER_PORT so client and server stay in sync

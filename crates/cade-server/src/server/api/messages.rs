@@ -232,6 +232,7 @@ Keep under 800 words.".to_string(),
         messages: vec![system_msg, user_msg],
         tools: vec![],
         max_tokens: 2048,
+        reasoning_effort: None,
     };
 
     let resp = state.llm.complete(&req).await.map_err(|e| e.to_string())?;
@@ -869,11 +870,13 @@ pub async fn send_message(
 
     // 3. Call LLM
     let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
+    let reasoning_effort = body.get("reasoning_effort").and_then(|v| v.as_str()).map(String::from);
     let req = CompletionRequest {
         model,
         messages,
         tools,
         max_tokens,
+        reasoning_effort,
     };
     match state.llm.complete(&req).await {
         Ok(resp) => {
@@ -953,11 +956,13 @@ async fn handle_tool_return_blocking(
     };
 
     let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
+    let reasoning_effort = body.get("reasoning_effort").and_then(|v| v.as_str()).map(String::from);
     let req = CompletionRequest {
         model,
         messages,
         tools,
         max_tokens,
+        reasoning_effort,
     };
     match state.llm.complete(&req).await {
         Ok(resp) => {
@@ -1095,11 +1100,13 @@ pub async fn stream_message(
     let run_id: Option<String> = run.ok().map(|r| r.id);
 
     let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
+    let reasoning_effort = body.get("reasoning_effort").and_then(|v| v.as_str()).map(String::from);
     let req = CompletionRequest {
         model,
         messages,
         tools,
         max_tokens,
+        reasoning_effort,
     };
     let state_clone = state.clone();
     let agent_id_clone = agent_id.clone();

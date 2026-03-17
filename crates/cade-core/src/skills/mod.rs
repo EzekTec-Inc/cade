@@ -647,6 +647,11 @@ pub async fn install_skill_from_url(
         .to_lowercase()
         .replace(' ', "-");
 
+    // SEC-B4: Validate derived skill ID to prevent path traversal
+    if !skill_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        anyhow::bail!("Invalid skill ID derived from URL: {}", skill_id);
+    }
+
     let skill_dir = target_dir.join(&skill_id);
     let skill_file = skill_dir.join("SKILL.MD");
 

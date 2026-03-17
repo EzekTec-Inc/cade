@@ -2185,3 +2185,250 @@ and delete the `try_paste_image_file_path` method.
 - **Previous behavior**: The "Type something..." option rendered its text on a single line, causing clipping if the string length exceeded terminal width.
 - **New behavior**: The text is sliced into chunks based on the maximum allowed horizontal width, and rendered vertically on as many `Line`s as needed, padded appropriately so the indentation matches the selection cursor.
 - **Rollback instructions**: Revert the `if idx == other_idx` block in both `crates/cade-cli/src/ui/question.rs` and `src/ui/question.rs` to push a single `Line::from(vec![...])` containing `display`, rather than looping through `chunks`.
+
+## 2026-03-15T12:00:00Z
+- **Summary of change**: Migrated TUI interactive questions from a blocking loop to an asynchronous Elm-like architecture.
+- **Files modified**: `crates/cade-cli/src/cli/repl.rs`
+- **Exact reason**: To solve UI interruption issues where the terminal would freeze or drop events when presenting a modal question. Replicating the `pi-tui` Promise-like approach allows the main tick loop to continue spinning while the tool task awaits the user's response.
+- **Previous behavior**: `ask_question_blocking` was called inside `tokio::task::spawn_blocking`, holding a dedicated thread and passing keys via a synchronous channel. 
+- **New behavior**: `prompt_approval` and `handle_ask_user_question` now use `ask_question_async`, which registers the modal state on `TuiApp` and immediately returns a `oneshot::Receiver`. The main event loop (`tick_task`) detects the active modal and routes key events to it non-blockingly via `handle_question_key`. Removed obsolete `blocking_question_active` and `blocking_question_key_tx` fields from `Repl`.
+- **Rollback instructions**: Revert the changes in `crates/cade-cli/src/cli/repl.rs` by restoring the `spawn_blocking` logic in `prompt_approval` and `handle_ask_user_question`, restoring the `tick_blocking_active` check in the `tick_task` event handler, and re-adding the tracking fields to `Repl`.
+
+## 2026-03-15T12:30:00Z
+- **Summary of change**: Moved the ask question modal from the content viewport into the input terminal area.
+- **Files modified**: `crates/cade-cli/src/ui/app.rs`, `src/ui/app.rs`
+- **Exact reason**: The question panel previously carved space out of the scrollable content area, shrinking it and pushing messages out of view. The user requested the modal pop inside the input terminal slot instead.
+- **Previous behavior**: When a question was active, the layout split the content area into shrunk-content + dashed-separator + question-panel (slots [0]-[2]). The input field remained visible but unusable below. Content height was reduced, causing visual jank.
+- **New behavior**: The question panel replaces the input area (slot [5]) and its top separator (slot [4]) when active. The content viewport stays at full height. The input field and cursor are hidden while the question is displayed. The question separator uses the existing dashed `╌` style. `question_height` no longer includes the separator row (handled by the layout slot) and clamps to half the terminal height. When the question is dismissed, the input field instantly reappears.
+- **Rollback instructions**: In both `crates/cade-cli/src/ui/app.rs` and `src/ui/app.rs`: restore the `inline_h`/`shrunk_content` layout branching logic, restore the old `question_height` function (with `content_height / 2` clamp and `+1` separator row), restore the unconditional input rendering, and restore the `render_question_inline` call at the old `chunks[1]`/`chunks[2]` location.
+
+## 2026-03-15T13:00:00Z
+- **Summary of change**: Implemented Letta Models Parity features.
+- **Files modified**: 
+  - `crates/cade-cli/src/cli/args.rs` / `src/cli/args.rs`
+  - `crates/cade-cli/src/cli/repl.rs` / `src/cli/repl.rs`
+  - `crates/cade-server/src/server/api/messages.rs` / `src/server/api/messages.rs`
+  - `crates/cade-server/src/server/llm/mod.rs` / `src/server/llm/mod.rs`
+  - `crates/cade-server/src/server/llm/anthropic.rs` / `src/server/llm/anthropic.rs`
+  - `crates/cade-server/src/server/llm/openai.rs` / `src/server/llm/openai.rs`
+  - `crates/cade-agent/src/agent/client.rs` / `src/agent/client.rs`
+  - `crates/cade-agent/src/tools/manager.rs` / `src/tools/manager.rs`
+  - `crates/cade-core/src/toolsets/mod.rs` / `src/toolsets/mod.rs`
+  - `crates/cade-agent/src/tools/plan.rs` / `src/tools/plan.rs` (new)
+  - `src/main.rs`
+- **Exact reason**: To bring CADE into full parity with Letta Docs regarding model-agnosticism, toolsets, and reasoning effort.
+- **Previous behavior**: 
+  - No concept of reasoning effort for Claude or OpenAI o-series models.
+  - Gemini toolset reused Claude string-replace tool schemas/names.
+  - Memory tool (`update_memory`) was hardcoded for all models, even those better suited for patch-based edits (OpenAI).
+  - No planning-specific tools existed.
+- **New behavior**: 
+  - `/reasoning` slash command added to interactively pick the reasoning tier (`none`, `low`, `medium`, `high`, `xhigh`). `reasoning_effort` is passed down to Anthropic (`thinking` block) and OpenAI Responses API.
+  - Gemini toolset uses Google-optimized schema names (`Replace`, `WriteFileGemini`, `ReadFileGemini`, `GlobGemini`, `RunShellCommand`, `SearchFileContent`).
+  - Added `memory_apply_patch` tool. `Toolset::Codex` automatically registers and uses it instead of `update_memory`.
+  - Added native `EnterPlanMode` and `ExitPlanMode` tools that dynamically change `PermissionMode` to/from `Plan` mode, along with `TodoWriteTool`, `UpdatePlanTool`, and `WriteTodosTool` scratchpads.
+- **Rollback instructions**: Revert the above commits.
+
+## 2026-03-15T13:30:00Z
+- **Summary of change**: Added display of the selected reasoning tier to the TUI footer.
+- **Files modified**: `crates/cade-cli/src/ui/app.rs`, `crates/cade-cli/src/cli/repl.rs`, `src/ui/app.rs`, `src/cli/repl.rs`
+- **Exact reason**: The user wanted to easily verify which reasoning effort tier was currently selected without needing to re-open the interactive picker.
+- **Previous behavior**: The TUI footer displayed the agent name, model, and context window usage percentage, but omitted the reasoning effort.
+- **New behavior**: The `TuiApp` state now holds `reasoning_effort: Option<String>`. The footer renders the selected reasoning effort (e.g., `[low]`) right between the model name and the context percentage. The `/reasoning` slash command dynamically updates this state on the `TuiApp` when a tier is selected.
+- **Rollback instructions**: Revert the `TuiApp` struct changes by removing `reasoning_effort`. Revert `render_frame` calls to omit the new argument, and remove the `right_reasoning` layout logic from the footer construction block in both `crates/cade-cli/src/ui/app.rs` and `src/ui/app.rs`.
+
+## 2026-03-15T14:00:00Z
+- **Summary of change**: Implemented Hybrid Plan Mode parsing (`Plan:` and `[DONE:n]`) and a persistent `/todos` widget in the TUI.
+- **Files modified**: `crates/cade-cli/Cargo.toml`, `crates/cade-cli/src/ui/app.rs`, `src/ui/app.rs`, `crates/cade-cli/src/cli/repl.rs`, `src/cli/repl.rs`
+- **Exact reason**: To provide users and the agent a deterministic, closed-loop tracking mechanism for complex multi-step plans without crippling the agent's tool context when switching between exploration and execution modes.
+- **Previous behavior**: The `/plan` mode merely prevented file modification via execution-time blocking. There was no structural extraction of the plan, nor any UI tracking of completed steps.
+- **New behavior**: 
+  - The UI now extracts steps natively from LLM outputs starting with `Plan:` (matching `1. Description` syntax) and tracks completion markers (`[DONE:n]`) using `regex`.
+  - Added a `/todos` slash command that toggles a new `Todos` widget in the TUI.
+  - The tracker renders as a distinct layout slot, showing checked and unchecked steps, persisting context across different permission modes.
+  - Execution-time blocking (`PermissionMode::Plan`) remains intact to avoid latency and complexity issues with toolset context swapping.
+- **Rollback instructions**: Remove the `regex` crate from `crates/cade-cli/Cargo.toml`. In both `crates/cade-cli/src/ui/app.rs` and `src/ui/app.rs`, remove `PlanStep`, `PlanState`, `active_plan` from `TuiApp`, `plan_regex`, `done_regex`, `update_plan_state`, and the widget rendering block in `render_frame`. In both `crates/cade-cli/src/cli/repl.rs` and `src/cli/repl.rs`, remove `SlashCmd::Todos` and the associated match arm.
+
+## 2026-03-15T15:00:00Z
+- **Summary of change**: Fixed a UI rendering bug in `count_wrapped_segment` where extremely long words (like base64 blobs or URLs) resulted in incorrect row tracking.
+- **Files modified**: `crates/cade-cli/src/ui/app.rs`, `src/ui/app.rs`
+- **Exact reason**: The visual line wrapping function `count_wrapped_segment` correctly incremented `rows` for lines completely consumed by long words, but reset `row_w` to just the remainder (`word_w - (extra_rows * width)`), without accumulating the existing `row_w`. This led to an underestimated `total_visual` height when a long word followed other text, causing the terminal scroll lock logic (`max_skip`) to miscalculate. The result was that new streamed output would be obscured beneath the viewport bottom.
+- **Previous behavior**: `row_w = word_w - (extra_rows * width);` completely overwrote any existing text length in the current visual line.
+- **New behavior**: `row_w += word_w - (extra_rows * width);` properly accumulates the remainder, and an added check (`if row_w > width { rows += 1; row_w -= width; }`) handles any secondary overflow.
+- **Rollback instructions**: In `crates/cade-cli/src/ui/app.rs` and `src/ui/app.rs`, inside `count_wrapped_segment`, revert `row_w += word_w - (extra_rows * width);` and the following `if row_w > width { ... }` block back to `row_w = word_w - (extra_rows * width);`.
+
+## 2026-03-15T16:00:00Z
+- **Summary of change**: Implemented parallel tool execution with tiered read/write dispatch.
+- **Files modified**: `crates/cade-cli/Cargo.toml`, `crates/cade-cli/src/cli/repl.rs`
+- **Exact reason**: To bring CADE into parity with `pi-agent-core`'s parallel tool execution mode, allowing read-only tools to execute concurrently while preserving sequential ordering for write tools to prevent filesystem race conditions.
+- **Previous behavior**: All tool calls were executed sequentially in a `for` loop inside `dispatch_tool_calls`. Each tool went through approval, hooks, and execution one at a time. N tool calls = N serial blocking waits.
+- **New behavior**: Tool dispatch is now a strict three-phase engine:
+  - **Phase 1 (Sequential Preflight)**: Each tool is checked for permissions, plan-mode blocking, hook denial, and user approval. Native intercepts (memory, skills, subagents, questions) are executed immediately during this phase since they require `&self` access. Results are stored as `ToolPreflightResult::Blocked(result)`.
+  - **Phase 2 (Parallel Execution)**: Approved tools are classified as read or write using `is_write_tool()`. Read-only tools are spawned via `tokio::spawn` and executed concurrently using `futures::future::join_all`. Write tools execute sequentially after all reads complete.
+  - **Phase 3 (Batch Streaming)**: All results are sent to the server in order, triggering a single LLM round-trip (unchanged from before).
+- **New dependencies**: `futures` crate added to `cade-cli`.
+- **New abstractions**: `ToolPreflightResult` enum, `preflight_tool()`, `run_tool_inner()` (static, `Send`-safe), `try_native_intercept()`, `tool_preview()`.
+- **Rollback instructions**: Remove `futures` from `crates/cade-cli/Cargo.toml`. In `crates/cade-cli/src/cli/repl.rs`, remove the `ToolPreflightResult` enum, `preflight_tool`, `run_tool_inner`, `try_native_intercept`, and `tool_preview` methods. Restore the original sequential `for` loop in `dispatch_tool_calls` that called `self.execute_tool()` directly.
+
+## 2026-03-15T17:00:00Z
+- **Summary of change**: Added reasoning and assistant message context to hook payloads for `PostToolUse`, `PostToolUseFailure`, and `Stop` hooks.
+- **Files modified**: `crates/cade-core/src/hooks/mod.rs`, `src/hooks/mod.rs`, `crates/cade-cli/src/cli/repl.rs`, `src/cli/repl.rs`
+- **Exact reason**: To bring CADE's hook system into parity with the Letta specification, which requires `preceding_reasoning` and `preceding_assistant_message` fields in hook JSON payloads so external scripts can analyze the agent's thinking process.
+- **Previous behavior**: `PostToolUse` and `PostToolUseFailure` hooks received only `tool_name`, `tool_input`, and `tool_output`. The `Stop` hook received `stop_reason`, `user_message`, and `assistant_message` but not reasoning context.
+- **New behavior**: 
+  - `post_tool_use` and `post_tool_use_failure` now accept optional `preceding_reasoning` and `preceding_assistant_message` parameters, serialized into the JSON stdin payload.
+  - `stop` now accepts an optional `preceding_reasoning` parameter.
+  - Two new `Arc<Mutex<String>>` buffers (`last_reasoning`, `last_assistant_text`) are added to `Repl`, populated by the UI consumer task during streaming, and cleared at the start of each turn.
+  - All call sites (parallel `run_tool_inner`, sequential `execute_tool`, and `dispatch_tool_calls` stop handler) pass the buffered strings to the hook engine.
+- **Rollback instructions**: Remove `preceding_reasoning` and `preceding_assistant_message` parameters from the three hook methods in both `hooks/mod.rs` files. Remove the `last_reasoning` and `last_assistant_text` fields from `Repl` in both `repl.rs` files. Revert all call sites to the original parameter counts.
+
+## 2026-03-15T18:00:00Z
+- **Summary of change**: Fixed long-workflow UI interruption caused by stale terminal events leaking through expired grace period guards.
+- **Files modified**: `crates/cade-cli/src/cli/repl.rs`
+- **Exact reason**: During multi-tool workflows lasting 30+ seconds, the 500ms `last_modal_close_ms` grace period (set once during approval modal close) would expire long before the tools finished executing. Any spurious terminal Esc event (focus change, alternate screen restore, mouse edge case) processed by the tick task after the grace window expired would set `cancel_turn = true`, silently aborting the entire workflow on the next `stream_turn` call.
+- **Previous behavior**: The grace period was refreshed only at two points: after modal close and before Phase 3 result streaming. Tools executing in Phase 2 (which could take minutes for slow MCP calls) had no grace period protection.
+- **New behavior**: The `cancel_turn` flag is cleared and `last_modal_close_ms` is refreshed at three additional critical boundaries: (1) before Phase 2 execution begins (after all preflight approvals), (2) after the parallel read batch completes, and (3) after each sequential write tool finishes. This ensures the 500ms grace window is continuously extended throughout the entire tool execution cycle, preventing stale events from triggering false cancellations.
+- **Rollback instructions**: Remove the three new `cancel_turn.store(false)` + `last_modal_close_ms.store(now)` blocks added inside `dispatch_tool_calls` in `crates/cade-cli/src/cli/repl.rs`.
+
+## 2026-03-16 UTC — Added rust10x Guideline References
+
+**Summary**: Documented the absolute path to the rust10x guidelines (`~/.aipack-base/pack/installed/pro/rust10x/`) in `CLAUDE.md`.
+
+**Files modified**:
+- `CLAUDE.md`
+
+**Reason**: User requested the agent remember the location and ensure all future project work strictly adheres to the standards defined in the rust10x pro pack.
+
+**Previous behaviour**: No explicit link to the rust10x pack existed in the workspace docs.
+
+**New behaviour**: `CLAUDE.md` explicitly instructs agents to reference `~/.aipack-base/pack/installed/pro/rust10x/` for architectural and coding standards.
+
+**Rollback**: Remove the `CLAUDE.md` file or its contents.
+
+## 2026-03-16 UTC — Code review outcomes (Phase 1 to Phase 3)
+
+**Summary**: Implemented improvements addressing concurrency, error handling, and bloat based on code review findings.
+- Phase 1: Wrapped SQLite file I/O blocking calls with `spawn_blocking` logic. Replaced blocking UI event loop `poll` with `EventStream` and `tokio::select!` inside `repl.rs` to allow background tasks to not be starved.
+- Phase 2: Addressed SQLite poison lock risks with safe fallbacks rather than unwrap. Fixed migration failures that were failing silently. Checked for corrupted databases during `cade-server` initialization and safely errored out. Fixed log duplication fallback warnings.
+- Phase 3: Created an array-driven robust migration system via `user_version` PRAGMA in `sqlite.rs`. Modularized the massive `main()` function in `src/main.rs` by extracting `auto_start_server` and `resolve_agent_and_conversation`. Cleaned up `SessionStats` rendering logic from `src/cli/repl.rs` to a dedicated file `src/ui/stats.rs`.
+
+**Files modified**:
+- `src/server/storage/sqlite.rs`
+- `src/bin/cade-server.rs`
+- `src/main.rs`
+- `src/cli/repl.rs`
+- `src/ui/app.rs`
+- `src/ui/mod.rs`
+- `src/ui/stats.rs` (new)
+
+**Reason**: Code review required fixes for blocking async loop tasks, SQLite error swallowing and locking vulnerability, as well as general code modularization for easier maintenance.
+
+**Previous behavior**: The CLI process could starve async tasks while waiting for user input, lock poisoning could crash SQLite storage calls unconditionally, migrations used brittle string matching and were ignoring ALTER errors, and `main()` was a single 400-line function.
+
+**New behavior**: The CLI task uses an async event stream loop. Migrations are strictly versioned using `user_version` and array-driven scripts. Database connection locking correctly returns errors instead of panicking.
+
+**Rollback**: `git checkout` the modified files or revert the commits covering these phases.
+
+## [2026-03-16T17:29:17Z] Refactor Input Field to match `pi cli` behavior
+- **Summary of change**: Refactored the Editor and TUI app to match `pi cli` agent's input field behavior (undo coalescing, bracketed paste limits, backslash-enter workaround).
+- **Files modified**: `crates/cade-cli/src/ui/editor.rs`, `crates/cade-cli/src/ui/app.rs`
+- **Exact reason**: User requested to refactor the input field to ensure it works accurately like how `pi cli` agent works.
+- **Previous behavior**: Undo snapshotted every single character, bracketed paste only collapsed based on line count, and Enter always submitted the input.
+- **New behavior**: Undo coalesces word typing (`fish`-style), bracketed paste collapses if either > 10 lines or > 1000 chars, and ending a line with `\` followed by Enter inserts a newline instead of submitting.
+- **Rollback instructions**: Revert the `EditorAction` additions and coalescing logic in `crates/cade-cli/src/ui/editor.rs` and remove the backslash check in `crates/cade-cli/src/ui/app.rs` around line 1450.
+
+## [2026-03-16T22:29:17Z] Update /help menu with missing settings and functionalities
+- **Summary of change**: Added missing slash commands to the `/help` menu sections.
+- **Files modified**: `crates/cade-cli/src/ui/menu.rs`
+- **Exact reason**: The `/help` menu did not capture all of CADE's settings and functionalities implemented in the REPL (e.g. `/agent`, `/reasoning`, `/yolo`, `/todos`, `/copy`, `/cost`, `/context`).
+- **Previous behavior**: The `/help` menu listed an incomplete set of slash commands, leaving out several diagnostics, planning, and permission bypass settings.
+- **New behavior**: The `/help` menu displays all current slash commands logically grouped into sections.
+- **Rollback instructions**: Revert changes in `crates/cade-cli/src/ui/menu.rs` to the previous smaller lists of `CmdEntry` structs in `SECTIONS` array.
+
+## [2026-03-16T22:53:32Z] Implement Security Fixes
+- **Summary of change**: Implemented the four security fixes detailed in `SECURITY_FIXES.md` (RCE mitigation in permissions, path traversal fix in skills, file permissions in settings, timing attack fix in auth).
+- **Files modified**: `crates/cade-core/src/permissions/mod.rs`, `crates/cade-core/src/skills/mod.rs`, `crates/cade-core/src/settings/manager.rs`, `crates/cade-server/src/server/api/auth.rs`, `crates/cade-server/Cargo.toml`
+- **Exact reason**: To secure the application against RCE, path traversal, API key exposure, and timing attacks as per the security review.
+- **Previous behavior**: Auto-approved config edits in AcceptEdits mode, blind skill ID derivation from URL, default 0644 file permissions for settings, short-circuit string comparison for API keys.
+- **New behavior**: Config/skill edits are explicitly denied auto-approval, derived skill IDs are validated to be alphanumeric/dash, settings files are created with 0600 mode, and API keys use constant time comparison via `subtle` crate.
+- **Rollback instructions**: Revert the four specific edits made in the respective files, and remove the `subtle` dependency from `crates/cade-server/Cargo.toml`.
+
+## [2026-03-16T23:18:30Z] Re-write Markdown Parser with pulldown-cmark
+- **Summary of change**: Added `pulldown-cmark` dependency to `cade-cli` and rewrote `crates/cade-cli/src/ui/markdown.rs` to use an AST-based parser.
+- **Files modified**: `crates/cade-cli/Cargo.toml`, `crates/cade-cli/src/ui/markdown.rs`
+- **Exact reason**: The user requested CADE to render markdown accurately similar to the `pi cli` AST lexer approach, which necessitated a robust Markdown parsing crate.
+- **Previous behavior**: Used a naive, string-scanning, line-by-line loop to parse Markdown which lacked nested scope and complete AST tokenization.
+- **New behavior**: Uses `pulldown-cmark` to generate `Event` streams to maintain style context and accurately render elements (headings, blockquotes, lists, tables) into Ratatui structures.
+- **Rollback instructions**: Revert the rewrite of `parse_markdown_lines` in `crates/cade-cli/src/ui/markdown.rs` and remove `pulldown-cmark` from `crates/cade-cli/Cargo.toml`.
+
+## [2026-03-17T00:52:16Z] Additional Security Fixes (Temp Files & Symlink Traversal)
+- **Summary of change**: Fixed two new security vulnerabilities found during code review: predictable temp file creation and symlink path traversal bypass in `ensure_within_root`.
+- **Files modified**: `crates/cade-agent/src/tools/fs.rs`, `crates/cade-cli/src/cli/repl.rs`
+- **Exact reason**: To secure the application against temporary file overwrite attacks via symlinks and prevent escaping the optional `CADE_FS_ROOT` sandbox using symlink path traversal.
+- **Previous behavior**: Temp files were created using `std::env::temp_dir().join(...)` with `subsec_nanos()`, which is highly predictable. `ensure_within_root` only canonicalized existing paths, allowing non-existent paths with malicious symlinks to bypass the `starts_with` validation.
+- **New behavior**: Temp files and directories use the `tempfile` crate (`tempfile::NamedTempFile` and `tempfile::tempdir()`). `ensure_within_root` now normalizes `.` and `..` lexically first, then searches for the deepest existing ancestor to `canonicalize`, and securely concatenates the remaining path to validate against the sandbox root.
+- **Rollback instructions**: Revert the tempfile generation in `crates/cade-cli/src/cli/repl.rs` around line 4576 and `crates/cade-agent/src/tools/fs.rs` around line 286. Revert `ensure_within_root` in `crates/cade-agent/src/tools/fs.rs` back to the simple `canonicalize` implementation.
+
+## [2026-03-17T02:32:17Z] Modernize /skills UI using Ratatui
+- **Summary of change**: Extracted the tightly coupled `/skills` overlay out of the main `TuiApp` event loop into a self-contained, standalone component in `crates/cade-cli/src/ui/skills.rs`.
+- **Files modified**: `crates/cade-cli/src/ui/app.rs`, `crates/cade-cli/src/ui/skills.rs`, `crates/cade-cli/src/ui/mod.rs`, `crates/cade-cli/src/cli/repl.rs`
+- **Exact reason**: The `/skills` feature was implemented as a monolithic overlay inside the global `TuiApp` state. Extracting it modernises the architecture, isolates the Ratatui event loop, and adheres to separation of concerns as per the project review request.
+- **Previous behavior**: `TuiApp` maintained 6 byte-tracking cursors and a 500+ line rendering block specifically for the `/skills` command.
+- **New behavior**: Typing `/skills` blocks the main REPL thread and invokes `show_skills_manager()` which manages its own rendering (`List`, `Paragraph`) and input handling, returning a distinct `SkillsAction` enum back to the main thread upon exit.
+- **Rollback instructions**: Delete `crates/cade-cli/src/ui/skills.rs`. Restore the `SkillsOverlayState` struct and the `handle_skills_key` method into `crates/cade-cli/src/ui/app.rs`. Re-inject the `skills_overlay` option into `TuiApp` and `render_frame` arguments. Revert the `/skills` dispatch logic in `crates/cade-cli/src/cli/repl.rs`.
+
+## [2026-03-17T03:34:34Z] Fix Content Streaming Interruptions
+- **Summary of change**: Identified and fixed two root causes for arbitrary streaming interruptions: unhandled terminal focus escape sequences misparsed as `Esc`, and a hardcoded 5-minute HTTP timeout.
+- **Files modified**: `crates/cade-cli/src/ui/app.rs`, `crates/cade-agent/src/agent/client.rs`
+- **Exact reason**: The user reported "CADE keeps getting interrupted, breaking content streaming in the view-port."
+- **Previous behavior**: `TuiApp` did not enable `EnableFocusChange` in crossterm. If the user clicked another window during streaming, the terminal sent `\x1b[O` (FocusOut). Crossterm misparsed this as the `Esc` key. Since `app.editor.input` is empty during turns, `Esc` instantly aborted the LLM stream. Secondly, the HTTP client set a hard 300-second (5-minute) timeout, which would sever the connection for large context inputs or verbose code block streams.
+- **New behavior**: Added `EnableFocusChange` and `DisableFocusChange` to `TuiApp` initialization/drop phases so focus events are correctly consumed and ignored by the `tick_handle` rather than misread as `Esc`. Removed the `timeout(300)` config in `CadeClient::new` to permit streaming responses of any arbitrary length.
+- **Rollback instructions**: Re-add `.timeout(std::time::Duration::from_secs(300))` in `crates/cade-agent/src/agent/client.rs` around line 163. Remove `EnableFocusChange` and `DisableFocusChange` from the `crossterm::execute!` calls inside `crates/cade-cli/src/ui/app.rs` around line 316 and 1726.
+
+## [2026-03-17T04:00:59Z] Fix OpenAI SSE Stream Tool Parsing
+- **Summary of change**: Fixed two critical stream parsing bugs in the OpenAI LLM client: one causing tool calls to be discarded on stream completion, and another dropping SSE chunks that split `event:` and `data:` across TCP boundaries.
+- **Files modified**: `crates/cade-server/src/server/llm/openai.rs`
+- **Exact reason**: Addressed the issue where CADE was interrupted and stopped displaying responses. The LLM generated a tool call, but because the stream parser encountered `[DONE]` and returned instantly without flushing the accumulated `tool_map`, the tool call was silently discarded. This left the REPL waiting for an output that was dropped by the parser.
+- **Previous behavior**: The parser for chat completions discarded accumulated tool calls when `[DONE]` arrived. The Responses API parser expected `event:` and `data:` to arrive perfectly aligned in a single byte chunk, dropping them if they were split across network frames.
+- **New behavior**: The parser now explicitly flushes the `tool_map` and yields `StreamChunk::ToolCall` before yielding `StreamChunk::Done`. The Responses API parser was rewritten to buffer and split on `\n\n`, correctly processing SSE blocks regardless of TCP chunking.
+- **Rollback instructions**: Revert the parsing block in `crates/cade-server/src/server/llm/openai.rs` around line 603 to instantly `yield Ok(StreamChunk::Done)` instead of yielding the `remaining` tool calls. Revert the `\n\n` Responses API block back to the `\n` split implementation.
+
+## [2026-03-17T04:17:47Z] Fix UI Processing Input Lag
+- **Summary of change**: Fixed severe input lag and CPU consumption by stopping the `TuiApp` from unconditionally redrawing the entire screen 20 times a second during idle polling.
+- **Files modified**: `crates/cade-cli/src/ui/app.rs`
+- **Exact reason**: Addressed user complaint regarding CADE taking time to process user inputs. The `read_input` loop was calling `self.draw()?` on every iteration before yielding to `event::poll`, executing a costly full-screen UI redraw (Markdown rendering, wrapping) every 50 milliseconds regardless of keyboard input.
+- **Previous behavior**: `self.draw()?` ran unconditionally in `loop { self.draw()?; if !event::poll(50ms) { continue; } ... }`, causing constant 100% core usage and delaying keyboard event processing.
+- **New behavior**: `self.draw()?` is invoked once before the loop, and subsequently only triggered after a keystroke/mouse/paste event is successfully processed, or when background tasks flag `self.draw_dirty` as `true`.
+- **Rollback instructions**: Revert the loop inside `pub fn read_input` (`crates/cade-cli/src/ui/app.rs`) to place `self.draw()?` unconditionally at the top of the `loop` block before `event::poll`.
+
+## [2026-03-17T04:27:21Z] Fix OpenAI Responses API Parser TCP Split Bug
+- **Summary of change**: Refactored the OpenAI Responses API parser to accurately handle arbitrary stream chunk boundaries, specifically when TCP streams split the payload exactly at `\n\n` or `\r\n\r\n`.
+- **Files modified**: `crates/cade-server/src/server/llm/openai.rs`
+- **Exact reason**: Addressed an edge case causing the `openai/gpt-5.4-pro` model to "keep thinking and nothing happens". The byte stream was separating `\n\n` or using `\r\n\r\n` CRLF combinations, which the previous string `find` parser failed to match, hanging the SSE pipeline.
+- **Previous behavior**: The stream parser was strictly locked to `buf.find("\n\n")`. If the stream yielded `\r\n\r\n`, it resulted in a `None` match, infinitely filling the buffer without yielding chunks to the client, preventing any response from displaying.
+- **New behavior**: The parser now extracts the earliest valid event block delimiter, correctly checking for both `\n\n` and `\r\n\r\n` before splitting the buffer, ensuring total robustness against arbitrary provider payloads.
+- **Rollback instructions**: Revert the `get_delimiter` closure implementation in `crates/cade-server/src/server/llm/openai.rs` around line 456 back to the strictly `\n\n` based split.
+
+## [2026-03-17T04:40:24Z] Fix LLM Hacking on Auto-Compaction Context Limits
+- **Summary of change**: Added TCP keepalives to all LLM HTTP clients and fixed missing OpenRouter model prefixes (`google/gemini`) in the context window catalogue.
+- **Files modified**: `crates/cade-server/src/server/llm/gemini.rs`, `crates/cade-server/src/server/llm/openai.rs`, `crates/cade-server/src/server/llm/anthropic.rs`, `crates/cade-server/src/server/llm/catalogue.rs`
+- **Exact reason**: To fix the issue where CADE kept thinking and nothing happened during a Gemini API call (`assessing… 33s`). The problem was caused by a fallback to a tiny 32k context window for OpenRouter `google/gemini` models, triggering a massive, blocking background auto-compaction routine. In addition, idle API HTTP requests would silently hang indefinitely because TCP keepalives were disabled.
+- **Previous behavior**: `context_window_for_model` only checked for `gemini/`, falling back to 32,000 for `google/gemini`. Consequently, large prompts (140k+ tokens) were truncated and a heavy `summarize_for_compaction` blocking task kicked off. Meanwhile, `Client::new()` HTTP connections dropped silently on long idle TTFT wait times.
+- **New behavior**: `google/gemini` now correctly matches the 1,048,576 token limit, bypassing unnecessary and blocking auto-compaction tasks. All provider clients instantiate `reqwest::Client` with `tcp_keepalive(60s)` enabled so that massive, valid inference tasks remain connected to the server.
+- **Rollback instructions**: Revert the `catalogue.rs` edits back to checking just `gemini/` instead of `gemini/ || google/gemini`. Revert `Client::builder().tcp_keepalive(...)` back to `Client::new()` in the LLM provider initialization modules.
+
+## [2026-03-17T05:12:10Z] Fix Active Question Modal Rendering Bug
+- **Summary of change**: Fixed a layout slot alignment issue in `render_frame` that was causing the `ask_user_question` modal (and all approval prompts) to fail to render in the viewport.
+- **Files modified**: `crates/cade-cli/src/ui/app.rs`
+- **Exact reason**: The user reported "the askquestion modal is no longer popping in the input field." This was caused by my previous addition of the `active_plan` todo layout. The layout was split into 8 chunks, but the inline question panel was incorrectly trying to read from `chunks[1]` (dashed separator) and `chunks[2]` (panel body) based on the old 6-slot architecture, effectively rendering out-of-bounds or into a 0-height constraint.
+- **Previous behavior**: `render_question_inline` was passed `chunks[1]` and `chunks[2]`, but in the new 8-slot layout `chunks[1]` was the inline question panel and `chunks[2]` was the plan panel. Furthermore, `question_height` logic did not account for the missing separator slot.
+- **New behavior**: `render_question_inline` correctly receives `chunks[1]` for its allocated space and successfully renders the approval modals/questions back onto the TUI viewport.
+- **Rollback instructions**: Revert the chunk indices passed to `render_question_inline` in `crates/cade-cli/src/ui/app.rs` from `chunks[1], chunks[1]` back to `chunks[1], chunks[2]`.
+
+## [2026-03-17T05:14:55Z] Fix MCP desktop-commander Permissions Error
+- **Summary of change**: Added `--allowed-dirs /home/engr-uba` to the `desktop-commander` MCP server configuration in `~/.cade/settings.json`.
+- **Files modified**: `~/.cade/settings.json`
+- **Exact reason**: Addressed user complaint regarding MCP server `desktop-commander` failing with `-32602: Directory not in allowed_directories`. The MCP server enforces a strict path allowlist out-of-the-box, which was unconfigured, rejecting all file/directory requests unconditionally.
+- **Previous behavior**: The `args` array for `desktop-commander` was empty (`[]`).
+- **New behavior**: The `args` array now includes `["--allowed-dirs", "/home/engr-uba"]`, explicitly authorizing the MCP server to read and mutate the user's home directory and its subdirectories.
+- **Rollback instructions**: Remove the `--allowed-dirs` argument from the `desktop-commander` configuration block in `~/.cade/settings.json`.
