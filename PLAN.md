@@ -2432,3 +2432,10 @@ and delete the `try_paste_image_file_path` method.
 - **Previous behavior**: The `args` array for `desktop-commander` was empty (`[]`).
 - **New behavior**: The `args` array now includes `["--allowed-dirs", "/home/engr-uba"]`, explicitly authorizing the MCP server to read and mutate the user's home directory and its subdirectories.
 - **Rollback instructions**: Remove the `--allowed-dirs` argument from the `desktop-commander` configuration block in `~/.cade/settings.json`.
+
+## 2026-03-17 UTC — Fix Anthropic tool serialization (input_schema vs parameters)
+
+- **Summary of change**: Fixed Anthropic tool serialization to correctly handle both `parameters` and `input_schema` keys.
+- **Exact reason**: Native and MCP tools define their arguments using `parameters` and `input_schema` interchangeably. Previously, the Anthropic provider code only checked `s["parameters"]`, meaning tools using `input_schema` would have their arguments evaluated as `Null`, causing the Anthropic API to throw a 400 Bad Request error (`tools.0.custom.input_schema: Input does not match the expected shape`). This matches the exact issue previously fixed for OpenAI.
+- **New behavior**: `params` is extracted by checking `s["parameters"]`, then falling back to `s["input_schema"]`, and defaulting to an empty JSON object (`{}`) if neither exist to prevent `Null` from being sent.
+- **Files modified**: `crates/cade-server/src/server/llm/anthropic.rs` and `src/server/llm/anthropic.rs`.

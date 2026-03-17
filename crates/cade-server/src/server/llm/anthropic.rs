@@ -146,11 +146,14 @@ impl AnthropicProvider {
 
         // Build tools array in Anthropic format, injecting cache_control on
         // the last entry so the full tools prefix is cached.
-        let mut tools: Vec<Value> = req.tools.iter().map(|schema| json!({
-            "name": schema["name"],
-            "description": schema["description"],
-            "input_schema": schema["parameters"]
-        })).collect();
+        let mut tools: Vec<Value> = req.tools.iter().map(|schema| {
+            let params = schema.get("parameters").or_else(|| schema.get("input_schema")).cloned().unwrap_or(json!({}));
+            json!({
+                "name": schema["name"],
+                "description": schema["description"],
+                "input_schema": params
+            })
+        }).collect();
 
         // Mark the last tool with cache_control to cache the entire tools list.
         if let Some(last) = tools.last_mut() {
