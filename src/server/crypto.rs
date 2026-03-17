@@ -20,17 +20,47 @@ use sha2::Sha256;
 /// If `machine_uid::get()` fails (container, certain VMs) we return an error
 /// rather than silently falling back to a known constant.  Callers should
 /// surface this clearly to the user.
+fn get_root_secret() -> Result<String> {
+    if let Ok(k) = std::env::var("CADE_DB_KEY") { return Ok(k); }
+    if let Ok(k) = std::env::var("CADE_MACHINE_SECRET") { return Ok(k); }
+
+    let path = std::path::Path::new(".cade-db.key");
+    if path.exists() {
+        return std::fs::read_to_string(path)
+            .map(|s| s.trim().to_string())
+            .context("Failed to read .cade-db.key");
+    }
+
+    // Backwards compatibility check: if cade.db exists, fall back to machine_uid
+    if std::path::Path::new("cade.db").exists() {
+        if let Ok(uid) = machine_uid::get() {
+            tracing::warn!("Using legacy machine_uid for database encryption. Consider migrating to CADE_DB_KEY.");
+            return Ok(uid);
+        }
+    }
+
+    let mut key = [0u8; 32];
+    getrandom::getrandom(&mut key).map_err(|e| anyhow::anyhow!("getrandom failed: {e}"))?;
+    let secret = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, key);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        if let Ok(mut f) = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path) {
+            use std::io::Write;
+            let _ = f.write_all(secret.as_bytes());
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = std::fs::write(path, &secret);
+    }
+
+    Ok(secret)
+}
+
 fn derive_key(salt: &[u8]) -> Result<[u8; 32]> {
-    let uid = machine_uid::get()
-        .map_err(|e| anyhow::anyhow!(
-            "Cannot derive encryption key: machine UID unavailable ({e}). \
-             Set CADE_MACHINE_SECRET env var as a fallback."
-        ))
-        // Allow an explicit env-var override for environments where machine_uid fails
-        .or_else(|e| {
-            std::env::var("CADE_MACHINE_SECRET")
-                .map_err(|_| e)
-        })?;
+    let uid = get_root_secret()?;
 
     let mut key = [0u8; 32];
     pbkdf2::pbkdf2::<Hmac<Sha256>>(

@@ -96,6 +96,16 @@ impl RateLimiter {
     /// Try to consume one token for `agent_id`.
     pub fn check(&self, agent_id: &str) -> Result<(), u64> {
         let mut map = self.buckets.lock().unwrap();
+        
+        if map.len() > 10_000 && !map.contains_key(agent_id) {
+            let now = Instant::now();
+            map.retain(|_, b| now.duration_since(b.last_refill).as_secs() < 600);
+            
+            if map.len() > 10_000 {
+                return Err(60); // Retry after 60s to prevent OOM
+            }
+        }
+
         let bucket  = map
             .entry(agent_id.to_string())
             .or_insert_with(|| Bucket::new(self.capacity, self.rpm));

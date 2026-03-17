@@ -2439,3 +2439,20 @@ and delete the `try_paste_image_file_path` method.
 - **Exact reason**: Native and MCP tools define their arguments using `parameters` and `input_schema` interchangeably. Previously, the Anthropic provider code only checked `s["parameters"]`, meaning tools using `input_schema` would have their arguments evaluated as `Null`, causing the Anthropic API to throw a 400 Bad Request error (`tools.0.custom.input_schema: Input does not match the expected shape`). This matches the exact issue previously fixed for OpenAI.
 - **New behavior**: `params` is extracted by checking `s["parameters"]`, then falling back to `s["input_schema"]`, and defaulting to an empty JSON object (`{}`) if neither exist to prevent `Null` from being sent.
 - **Files modified**: `crates/cade-server/src/server/llm/anthropic.rs` and `src/server/llm/anthropic.rs`.
+
+## 2026-03-17 UTC — Implementation Plan for Security Vulnerabilities
+
+**1. Fix Critical DoS Vulnerability in Authentication**
+- **Files:** `crates/cade-server/src/server/api/auth.rs` and `src/server/api/auth.rs`
+- **Issue:** `subtle::ConstantTimeEq` panics when comparing slices of unequal lengths, allowing a remote attacker to crash the server by sending an incorrectly sized `Authorization` header.
+- **Action:** Update the match arm in the authentication middleware to verify that `token.len() == expected.len()` *before* executing `.ct_eq()`. 
+
+**2. Fix High-Severity Memory Leak / DoS in Rate Limiter**
+- **Files:** `crates/cade-server/src/server/rate_limit.rs` and `src/server/rate_limit.rs`
+- **Issue:** `HashMap<String, Bucket>` grows unboundedly because dynamically injected `agent_id` URLs create new buckets that are never evicted, eventually causing an Out-Of-Memory (OOM) crash.
+- **Action:** Introduce a `max_capacity` limit (e.g., 10,000 active buckets) to the rate limiter. If the map exceeds this size, run a sweep to remove stale buckets (where `last_refill` is older than `N` minutes).
+
+**3. Fix High-Severity Cryptographic Key Derivation**
+- **Files:** `crates/cade-server/src/server/crypto.rs` and `src/server/crypto.rs`
+- **Issue:** The AES-256-GCM encryption key for the SQLite database uses `machine_uid` as the root secret, which is static, highly predictable, and often globally readable by unprivileged processes.
+- **Action:** Deprecate the use of `machine_uid::get()` as the default fallback. Generate a secure random 32-byte key on first startup and persist it to a local `.cade-db.key` file with `0600` permissions.
