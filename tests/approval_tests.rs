@@ -10,7 +10,7 @@
 
 // region:    --- Tests
 
-// ── B3: session-allow timing ──────────────────────────────────────────────────
+// -- B3: session-allow timing
 
 #[cfg(test)]
 mod permission_tests {
@@ -107,7 +107,7 @@ mod permission_tests {
     }
 }
 
-// ── B3 (extended): auto_approve sees the rule before execute_tool runs ────────
+// -- B3 (extended): auto_approve sees the rule before execute_tool runs
 
 #[cfg(test)]
 mod back_to_back_tool_tests {
@@ -138,7 +138,7 @@ mod back_to_back_tool_tests {
     }
 }
 
-// ── B2: tick-task guard — tx.is_some() controls event routing ────────────────
+// -- B2: tick-task guard — tx.is_some() controls event routing
 
 #[cfg(test)]
 mod tick_task_guard_tests {
@@ -179,7 +179,7 @@ mod tick_task_guard_tests {
     }
 }
 
-// ── PermissionRule parsing and matching ───────────────────────────────────────
+// -- PermissionRule parsing and matching
 
 #[cfg(test)]
 mod rule_tests {

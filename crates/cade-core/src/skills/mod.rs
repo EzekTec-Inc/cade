@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 // endregion: --- Modules
 
-// ── Skill scope ───────────────────────────────────────────────────────────────
+// -- Skill scope
 
 /// Where a skill was loaded from. Higher priority scopes override lower ones
 /// when two skills share the same ID.
@@ -33,7 +33,7 @@ impl std::fmt::Display for SkillScope {
     }
 }
 
-// ── Skill ─────────────────────────────────────────────────────────────────────
+// -- Skill
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Skill {
@@ -152,7 +152,7 @@ impl Skill {
     }
 }
 
-// ── Discovery ─────────────────────────────────────────────────────────────────
+// -- Discovery
 
 /// Scan `dir` for SKILL.MD files, tagging each with `scope`.
 pub fn discover_skills_in(dir: &Path, scope: SkillScope) -> Vec<Skill> {
@@ -264,7 +264,7 @@ pub fn skills_context(skills: &[Skill]) -> Option<String> {
     Some(out)
 }
 
-// ── Parsing ───────────────────────────────────────────────────────────────────
+// -- Parsing
 
 fn parse_skill(id: &str, content: &str, scope: SkillScope, path: PathBuf) -> Result<Skill> {
     let content = content.trim();
@@ -478,7 +478,7 @@ fn parse_frontmatter(fm: &str) -> Frontmatter {
     out
 }
 
-// ── Live file watcher ─────────────────────────────────────────────────────────
+// -- Live file watcher
 
 /// Spawn a background thread that watches all skills directories for changes.
 /// Any Create / Modify / Remove event sends a `()` on the returned channel.
@@ -612,7 +612,7 @@ mod tests {
     use super::*;
     use std::fs;
 
-    // ── SkillScope ordering ───────────────────────────────────────────────
+    // -- SkillScope ordering
 
     #[test]
     fn scope_ordering() {
@@ -629,7 +629,7 @@ mod tests {
         assert_eq!(SkillScope::Project.to_string(), "project");
     }
 
-    // ── Frontmatter parsing ──────────────────────────────────────────────
+    // -- Frontmatter parsing
 
     #[test]
     fn parse_skill_minimal() {
@@ -687,7 +687,7 @@ mod tests {
         assert_eq!(skill.rpi_phase.as_deref(), Some("Implement"));
     }
 
-    // ── Skill::matches_trigger ───────────────────────────────────────────
+    // -- Skill::matches_trigger
 
     fn make_skill(triggers: Vec<&str>) -> Skill {
         Skill {
@@ -735,7 +735,7 @@ mod tests {
         assert!(!s.matches_trigger("anything"));
     }
 
-    // ── Skill::listing_line ──────────────────────────────────────────────
+    // -- Skill::listing_line
 
     #[test]
     fn listing_line_format() {
@@ -750,7 +750,7 @@ mod tests {
         assert!(line.contains("A useful skill"));
     }
 
-    // ── skills_listing ────────────────────────────────────────────────────
+    // -- skills_listing
 
     #[test]
     fn skills_listing_empty() {
@@ -764,7 +764,7 @@ mod tests {
         assert!(listing.contains("Available Skills"));
     }
 
-    // ── github_url_to_raw_skill ──────────────────────────────────────────
+    // -- github_url_to_raw_skill
 
     #[test]
     fn github_tree_url_conversion() {
@@ -785,7 +785,7 @@ mod tests {
         assert!(github_url_to_raw_skill("https://example.com/skills").is_none());
     }
 
-    // ── discover_skills_in (filesystem) ──────────────────────────────────
+    // -- discover_skills_in (filesystem)
 
     #[test]
     fn discover_skills_empty_dir() {
@@ -814,7 +814,7 @@ mod tests {
         assert!(skills.is_empty());
     }
 
-    // ── discover_all_skills merging ──────────────────────────────────────
+    // -- discover_all_skills merging
 
     #[test]
     fn discover_all_skills_higher_scope_wins() {

@@ -5,14 +5,14 @@ use serde_json::{Value, json};
 use std::path::Path;
 use walkdir::WalkDir;
 
-// ── Skip dirs common in Rust/JS/Python projects ───────────────────────────────
+// -- Skip dirs common in Rust/JS/Python projects
 const SKIP_DIRS: &[&str] = &["target", "node_modules", ".git", ".hg", "__pycache__", ".venv", "dist", "build"];
 
 fn should_skip(name: &str) -> bool {
     SKIP_DIRS.contains(&name)
 }
 
-// ── Grep ─────────────────────────────────────────────────────────────────────
+// -- Grep
 
 pub struct GrepTool;
 
@@ -138,7 +138,7 @@ mod tests {
     use super::*;
     use std::fs;
 
-    // ── GrepTool ──────────────────────────────────────────────────────────
+    // -- GrepTool
 
     #[tokio::test]
     async fn grep_finds_pattern_in_files() {
@@ -243,7 +243,7 @@ mod tests {
         assert!(!output.contains("target/"), "should skip target/, got: {output}");
     }
 
-    // ── GrepTool::schema ──────────────────────────────────────────────────
+    // -- GrepTool::schema
 
     #[test]
     fn grep_schema_valid() {
@@ -256,7 +256,7 @@ mod tests {
 
 // endregion: --- Tests
 
-// ── Glob ─────────────────────────────────────────────────────────────────────
+// -- Glob
 
 pub struct GlobTool;
 

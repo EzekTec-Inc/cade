@@ -45,7 +45,7 @@ use cade_core::permissions::PermissionMode;
 use crate::autocomplete::FileAutocompleteProvider;
 use crate::editor::{Editor, ImageEntry};
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// -- Constants
 
 /// Fixed non-input rows at the bottom: status + top_sep + bot_sep + footer.
 const FIXED_ROWS: u16 = 4;
@@ -61,13 +61,13 @@ const DOTS: &[&str] = &["⠁", "⠂", "⠄", "⠐", "⠠", "⠐", "⠄", "⠂"];
 /// updates (streaming tokens, live bash output).  ~60 FPS target.
 const DRAW_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
 
-// ── Skills overlay ────────────────────────────────────────────────────────────
+// -- Skills overlay
 
 
 
 
 
-// ── RenderLine ────────────────────────────────────────────────────────────────
+// -- RenderLine
 
 /// One logical unit of committed content in the conversation view.
 #[derive(Clone, Debug)]
@@ -122,7 +122,7 @@ pub enum RenderLine {
     },
 }
 
-// ── PickerState (A-01) ────────────────────────────────────────────────────────
+// -- PickerState (A-01)
 
 /// State for the `@` file fuzzy picker overlay.
 #[derive(Debug, Clone)]
@@ -137,7 +137,7 @@ pub struct PickerState {
     pub cursor: usize,
 }
 
-// ── ThinkingState ─────────────────────────────────────────────────────────────
+// -- ThinkingState
 
 /// Active thinking animation state.
 pub struct ThinkingState {
@@ -147,7 +147,7 @@ pub struct ThinkingState {
     pub started: Instant,
 }
 
-// ── ActiveQuestionState ───────────────────────────────────────────────────────
+// -- ActiveQuestionState
 #[derive(Debug, Clone)]
 pub struct ActiveQuestionDrawState {
     pub question: crate::question::Question,
@@ -196,13 +196,13 @@ fn done_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"(?i)\[DONE:(\d+)\]").unwrap())
 }
 
-// ── TuiApp ────────────────────────────────────────────────────────────────────
+// -- TuiApp
 
 pub struct TuiApp {
     /// The single ratatui terminal (alternate screen, raw mode).
     pub terminal: DefaultTerminal,
 
-    // ── Content state ──────────────────────────────────────────────────────
+    // -- Content state
     pub lines: Vec<RenderLine>,
     /// Lines scrolled up from the bottom.  0 = show latest content.
     pub scroll: usize,
@@ -210,23 +210,23 @@ pub struct TuiApp {
     pub active_question: Option<ActiveQuestionState>,
     pub active_plan: Option<PlanState>,
 
-    // ── Streaming state ────────────────────────────────────────────────────
+    // -- Streaming state
     streaming_text: String,
     streaming_active: bool,
     reasoning_text: String,
     reasoning_active: bool,
 
-    // ── Input state ────────────────────────────────────────────────────────
+    // -- Input state
     pub editor: Editor,
     /// Last known terminal width — kept in sync during draw() so that
     /// Up/Down cursor navigation uses the real column width.
     term_width: u16,
 
-    // ── Status / thinking ──────────────────────────────────────────────────
+    // -- Status / thinking
     pub thinking: Option<ThinkingState>,
     pub last_status: Option<String>,
 
-    // ── Footer info ────────────────────────────────────────────────────────
+    // -- Footer info
     pub mode: PermissionMode,
     pub agent_name: String,
     pub model: String,
@@ -236,28 +236,28 @@ pub struct TuiApp {
     /// Context window usage (0–99 %) updated after each turn's usage event.
     pub context_pct: Option<u8>,
 
-    // ── Copy mode (disables mouse capture for OS text selection) ───────────
+    // -- Copy mode (disables mouse capture for OS text selection)
     pub copy_mode: bool,
 
-    // ── Autocomplete (A-01) ──────────────────────────────────────────────
+    // -- Autocomplete (A-01)
     /// File autocomplete provider (Tab path completion + `@` fuzzy picker).
     pub file_ac: FileAutocompleteProvider,
     /// Active `@` file picker overlay. `None` when inactive.
     pub picker: Option<PickerState>,
 
-    // ── Image paste staging ───────────────────────────────────────────────
+    // -- Image paste staging
     /// Images drained from the editor on the last submission.
     /// `repl.rs` reads and clears this after calling `read_input()`.
     pub pending_submit_images: Vec<ImageEntry>,
 
-    // ── Extensibility slots (A-02) ────────────────────────────────────────
+    // -- Extensibility slots (A-02)
     /// Pinned header rendered as a fixed strip above the messages pane.
     /// Populated by the caller (e.g. startup banner). Does not scroll.
     pub header_lines: Vec<RenderLine>,
     /// Optional extra row rendered below the footer (plugin/extension status).
     pub footer_extra: Option<String>,
 
-    // ── Scroll indicator ──────────────────────────────────────────────────
+    // -- Scroll indicator
     /// Number of committed lines pushed while the user was scrolled up.
     /// Reset to 0 whenever scroll returns to 0 (bottom).
     pending_lines: usize,
@@ -265,9 +265,9 @@ pub struct TuiApp {
     /// Shown as a badge in the status row so the user knows their input was accepted.
     pub queued_count: usize,
 
-    // ── Skills overlay ─────────────────────────────────────────────────────
+    // -- Skills overlay
 
-    // ── Render throttle (R-01) ─────────────────────────────────────────────
+    // -- Render throttle (R-01)
     /// When true, the viewport has accumulated state changes that haven't
     /// been flushed to the terminal yet.  The tick task checks this flag
     /// every ~100 ms and calls `draw()` if set, ensuring trailing updates
@@ -325,7 +325,7 @@ impl TuiApp {
         }
     }
 
-    // ── Content mutation ──────────────────────────────────────────────────
+    // -- Content mutation
 
     /// Commit any in-progress streaming, push a line, and redraw.
     pub fn push(&mut self, line: RenderLine) -> Result<()> {
@@ -531,7 +531,7 @@ impl TuiApp {
         }
     }
 
-    // ── Live output (streaming bash) ──────────────────────────────────────
+    // -- Live output (streaming bash)
 
     /// Push an empty `LiveOutput` entry and return its index in `self.lines`.
     /// Call this once before streaming begins; pass the returned index to
@@ -565,7 +565,7 @@ impl TuiApp {
         self.draw()
     }
 
-    // ── Config updates ────────────────────────────────────────────────────
+    // -- Config updates
 
     pub fn update_model(&mut self, model: String) {
         self.model = model;
@@ -580,7 +580,7 @@ impl TuiApp {
         self.last_status = s;
     }
 
-    // ── Thinking animation ────────────────────────────────────────────────
+    // -- Thinking animation
 
     /// Start the thinking animation.  Returns the shared text Arc so callers
     /// can update the status text (e.g. assessing timer, tool name updates).
@@ -612,7 +612,7 @@ impl TuiApp {
         secs
     }
 
-    // ── Rendering ─────────────────────────────────────────────────────────
+    // -- Rendering
 
     /// Redraw the full screen (unconditional — always redraws).
     pub fn draw(&mut self) -> Result<()> {
@@ -719,7 +719,7 @@ impl TuiApp {
         Ok(())
     }
 
-    // ── Interactive Question ──────────────────────────────────────────────
+    // -- Interactive Question
 
     pub fn ask_question(
         &mut self,
@@ -1220,7 +1220,7 @@ impl TuiApp {
         }
     }
 
-    // ── Input loop ────────────────────────────────────────────────────────
+    // -- Input loop
 
     /// Block until the user submits input or presses Ctrl+D.
     /// Returns `None` on Ctrl+D (exit signal).
@@ -1304,7 +1304,7 @@ impl TuiApp {
         // Some(Some(s))     = line submitted
         // None              = continue reading
 
-        // ── A-01: file picker routing ──────────────────────────────────────
+        // -- A-01: file picker routing
         if self.picker.is_some() {
             match (k.code, k.modifiers) {
                 (KeyCode::Esc, _) => {
@@ -1376,7 +1376,7 @@ impl TuiApp {
         }
 
         match (k.code, k.modifiers) {
-            // ── Submit ────────────────────────────────────────────────────
+            // -- Submit
             // Alt+Enter  — universal cross-terminal newline.
             // Shift+Enter — kitty keyboard protocol terminals (Kitty, WezTerm, Ghostty).
             // Ctrl+Enter  — Windows Terminal (which reports this as CONTROL+Enter).
@@ -1402,12 +1402,12 @@ impl TuiApp {
                 return Ok(Some(Some(line)));
             }
 
-            // ── Exit ──────────────────────────────────────────────────────
+            // -- Exit
             (KeyCode::Char('d'), KeyModifiers::CONTROL) if self.editor.input.is_empty() => {
                 return Ok(Some(None));
             }
 
-            // ── Cancel / clear ────────────────────────────────────────────
+            // -- Cancel / clear
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                 self.editor.clear();
                 return Ok(Some(Some(String::new())));
@@ -1416,7 +1416,7 @@ impl TuiApp {
                 self.editor.clear();
             }
 
-            // ── Edit shortcuts ────────────────────────────────────────────
+            // -- Edit shortcuts
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
                 self.editor.delete_to_start();
             }
@@ -1439,7 +1439,7 @@ impl TuiApp {
                 self.editor.move_end();
             }
 
-            // ── Cursor movement ───────────────────────────────────────────
+            // -- Cursor movement
             // Word navigation: Alt+Arrow or Ctrl+Arrow — must come before the
             // plain-Left / plain-Right arms below (more specific guard wins).
             (KeyCode::Left, m) if m.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
@@ -1455,7 +1455,7 @@ impl TuiApp {
                 self.editor.move_right();
             }
 
-            // ── History / cursor-up ───────────────────────────────────────
+            // -- History / cursor-up
             // When the cursor is NOT on the first visual row of the input,
             // Up/Down move the cursor one visual row up/down within the
             // multiline buffer.  Only when already on the first/last visual
@@ -1520,7 +1520,7 @@ impl TuiApp {
                 }
             }
 
-            // ── Content scroll ────────────────────────────────────────────
+            // -- Content scroll
             // Shift+K = up 10 rows,  Shift+J = down 10 rows
             (KeyCode::Char('K'), _) => {
                 self.scroll = self.scroll.saturating_add(10);
@@ -1532,7 +1532,7 @@ impl TuiApp {
                 }
             }
 
-            // ── Mode cycle / path completion ──────────────────────────────
+            // -- Mode cycle / path completion
             (KeyCode::Tab, _) => {
                 // I-02: if cursor is on a path token, complete it; otherwise
                 // fall through to the mode-cycle sentinel.
@@ -1550,12 +1550,12 @@ impl TuiApp {
                 return Ok(Some(Some("__BACKTAB__".to_string())));
             }
 
-            // ── Expand/Collapse Tool Outputs ──────────────────────────────
+            // -- Expand/Collapse Tool Outputs
             (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
                 self.expand_all = !self.expand_all;
             }
 
-            // ── Image / clipboard paste ───────────────────────────────────
+            // -- Image / clipboard paste
             // Ctrl+V (universal) or Alt+V (Windows Terminal fallback):
             // query the OS clipboard for image data; fall through silently if
             // no image is present (text pastes arrive via Event::Paste).
@@ -1566,7 +1566,7 @@ impl TuiApp {
                 // don't consume — if no image was found the keypress is silently ignored
             }
 
-            // ── Editing ───────────────────────────────────────────────────
+            // -- Editing
             (KeyCode::Backspace, _) if self.editor.cursor_pos > 0 => {
                 self.editor.delete_back();
             }
@@ -1671,7 +1671,7 @@ impl TuiApp {
     /// Returns `true` if an image was found and inserted; `false` otherwise
     /// (caller may fall back to a text paste notification or ignore the event).
     fn try_paste_clipboard_image(&mut self) -> bool {
-        // ── Read RGBA data from the clipboard ─────────────────────────────
+        // -- Read RGBA data from the clipboard
         let img_data = {
             use arboard::Clipboard;
             let Ok(mut cb) = Clipboard::new() else { return false; };
@@ -1684,7 +1684,7 @@ impl TuiApp {
         let (w, h) = (img_data.width as u32, img_data.height as u32);
         if w == 0 || h == 0 { return false; }
 
-        // ── RGBA → PNG → base64 ───────────────────────────────────────────
+        // -- RGBA → PNG → base64
         let b64 = {
             use image::{ImageBuffer, Rgba};
             use base64::Engine;
@@ -1708,7 +1708,7 @@ impl TuiApp {
             base64::prelude::BASE64_STANDARD.encode(&png_buf)
         };
 
-        // ── Insert into editor ────────────────────────────────────────────
+        // -- Insert into editor
         self.editor.handle_image_paste("image/png", b64, w, h);
         true
     }
@@ -1724,7 +1724,7 @@ impl Drop for TuiApp {
     }
 }
 
-// ── Scroll helpers ────────────────────────────────────────────────────────────
+// -- Scroll helpers
 
 /// Count the number of visual (terminal) rows a single `Line` occupies when
 /// word-wrapped to `content_w` columns.  Uses unicode display-width so emoji
@@ -1782,7 +1782,7 @@ fn count_wrapped_segment(text: &str, content_w: u16) -> u16 {
     rows
 }
 
-// ── Frame renderer ────────────────────────────────────────────────────────────
+// -- Frame renderer
 
 #[allow(clippy::too_many_arguments)]
 fn render_frame(
@@ -1873,7 +1873,7 @@ fn render_frame(
         .split(area)
     };
 
-    // ── A-02: Header strip — pinned above the scrollable messages pane ───────
+    // -- A-02: Header strip — pinned above the scrollable messages pane
     let content_w = area.width.saturating_sub(0).max(1);
     let (header_area_opt, messages_area) = {
         let mut header_text: Vec<Line<'static>> = Vec::new();
@@ -1901,7 +1901,7 @@ fn render_frame(
     };
     let _ = header_area_opt; // used above for rendering
 
-    // ── Content area ─────────────────────────────────────────────────────────
+    // -- Content area
     let mut text_lines: Vec<Line<'static>> = Vec::new();
     for rl in lines {
         render_line_to_text(rl, w, expand_all, &mut text_lines);
@@ -1935,7 +1935,7 @@ fn render_frame(
         messages_area,
     );
 
-    // ── A-01: File picker overlay ─────────────────────────────────────────────
+    // -- A-01: File picker overlay
     if let Some(pk) = picker {
         let n = pk.matches.len().min(6);
         let picker_h = ((2 + n) as u16).clamp(2, messages_area.height.saturating_sub(1));
@@ -1948,7 +1948,7 @@ fn render_frame(
         render_picker(frame, pk, picker_rect);
     }
 
-    // ── Status row ────────────────────────────────────────────────────────────
+    // -- Status row
     let (status_text, status_style) = if let Some(elapsed) = thinking_elapsed {
         let text = thinking_text.unwrap_or("thinking…");
         let ms = elapsed.as_millis();
@@ -2016,7 +2016,7 @@ fn render_frame(
         chunks[3],
     );
 
-    // ── Separators ────────────────────────────────────────────────────────────
+    // -- Separators
     // U-02: Top separator pulses cyan when the agent is thinking or streaming,
     // giving a peripheral activity signal without cluttering the status bar.
     // Bottom separator always uses the mode color (stable reference point).
@@ -2051,7 +2051,7 @@ fn render_frame(
         chunks[6],
     );
 
-    // ── Input area ────────────────────────────────────────────────────────────
+    // -- Input area
     // Build one ratatui Line per logical line so wrapping is correct and the
     // "> " prefix only appears on the first line.  Subsequent lines get a
     // "  " (2-space) indent so text columns align with the first line.
@@ -2090,7 +2090,7 @@ fn render_frame(
     let cy = (chunks[5].y + vis_row).min(chunks[5].y + chunks[5].height.saturating_sub(1));
     frame.set_cursor_position((cx, cy));
 
-    // ── Footer ────────────────────────────────────────────────────────────────
+    // -- Footer
     let (left_label, left_glyph, left_color) = mode_footer_left(mode);
     let right_agent = agent_name.to_string();
     let right_model = format!(" [{}]", truncate_str(model, 30));
@@ -2153,7 +2153,7 @@ fn render_frame(
 
     frame.render_widget(Paragraph::new(Line::from(footer)), chunks[7]);
 
-    // ── A-02: Footer extra row ────────────────────────────────────────────────
+    // -- A-02: Footer extra row
     if let Some(extra) = footer_extra {
         let extra_rect = ratatui::layout::Rect {
             x: chunks[7].x,
@@ -2170,7 +2170,7 @@ fn render_frame(
         );
     }
 
-    // ── Inline question panel (anchored to bottom of content viewport) ────────
+    // -- Inline question panel (anchored to bottom of content viewport)
     if let Some(aq) = active_question {
         // chunks[1] = question panel (no separator right now)
         render_question_inline(frame, aq, chunks[1], chunks[1]);
@@ -2207,7 +2207,7 @@ fn render_frame(
     max_skip // V-04: returned so draw_impl can clamp self.scroll
 }
 
-// ── Overlay helpers ───────────────────────────────────────────────────────────
+// -- Overlay helpers
 
 /// Calculate the number of rows needed for the inline question panel.
 ///
@@ -2270,7 +2270,7 @@ fn render_question_inline(
 ) {
     let q = &aq.question;
 
-    // ── Dashed separator ─────────────────────────────────────────────────────
+    // -- Dashed separator
     // Use a dimmer, shorter dash to visually distinguish from the hard ─ separators.
     let dash_w = sep_area.width as usize;
     let dash_str = "╌".repeat(dash_w);
@@ -2282,7 +2282,7 @@ fn render_question_inline(
         sep_area,
     );
 
-    // ── Panel body ───────────────────────────────────────────────────────────
+    // -- Panel body
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Header chip — left-aligned, yellow bold with a diamond glyph
@@ -2413,7 +2413,7 @@ fn render_question_inline(
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body_area);
 }
 
-// ── Line renderers ────────────────────────────────────────────────────────────
+// -- Line renderers
 
 fn render_line_to_text(
     rl: &RenderLine,
@@ -2761,7 +2761,7 @@ fn render_assistant_lines(text: &str, _width: usize, out: &mut Vec<Line<'static>
     }
 }
 
-// ── Input helpers (ported from input.rs) ──────────────────────────────────────
+// -- Input helpers (ported from input.rs)
 
 fn calc_input_rows(buf: &str, available_width: u16) -> u16 {
     // available_width is the inner width of the input chunk (border already
@@ -2893,7 +2893,7 @@ impl TuiApp {
     }
 }
 
-// ── File picker helpers (A-01) ────────────────────────────────────────────────
+// -- File picker helpers (A-01)
 
 /// Walk `root` up to `max_depth` levels deep, collecting files whose names
 /// contain `query` (case-insensitive).  Skips hidden paths and common noise
@@ -2951,7 +2951,7 @@ fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect) {
     );
 }
 
-// ── Skills overlay rendering ──────────────────────────────────────────────────
+// -- Skills overlay rendering
 
 
 
@@ -2961,7 +2961,7 @@ fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect) {
 
 
 
-// ── Path completion (I-02) ────────────────────────────────────────────────────
+// -- Path completion (I-02)
 
 /// Try to complete a filesystem path token at `cursor` in `input`.
 /// Returns `(new_input, new_cursor)` if a completion was found, `None` otherwise.
@@ -3051,7 +3051,7 @@ pub fn cycle_mode_back(mode: PermissionMode) -> PermissionMode {
     }
 }
 
-// ── Misc helpers ──────────────────────────────────────────────────────────────
+// -- Misc helpers
 
 fn display_tool_name(name: &str) -> String {
     // Strip MCP server prefix: "developer__shell" → "shell"

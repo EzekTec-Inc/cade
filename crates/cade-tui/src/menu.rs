@@ -13,7 +13,7 @@ use ratatui::{
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
 };
 
-// ── Command catalogue ─────────────────────────────────────────────────────────
+// -- Command catalogue
 
 struct CmdEntry {
     cmd:  &'static str,
@@ -95,7 +95,7 @@ const SECTIONS: &[Section] = &[
     ]},
 ];
 
-// ── Flat item list ────────────────────────────────────────────────────────────
+// -- Flat item list
 
 #[derive(Clone)]
 enum MenuItem {
@@ -141,7 +141,7 @@ fn prev_cmd(items: &[MenuItem], pos: usize) -> usize {
     pos
 }
 
-// ── Public entry point ────────────────────────────────────────────────────────
+// -- Public entry point
 
 /// Present the full-screen command browser. Returns the selected command
 /// string (e.g. `"/agents"`) or `None` if the user cancels.

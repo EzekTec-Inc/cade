@@ -150,7 +150,7 @@ mod tests {
 
     use super::*;
 
-    // ── Toolset::for_model ────────────────────────────────────────────────
+    // -- Toolset::for_model
 
     #[test]
     fn for_model_claude() {
@@ -185,7 +185,7 @@ mod tests {
         assert_eq!(Toolset::for_model("unknown-model"), Toolset::Default);
     }
 
-    // ── Toolset::from_str ─────────────────────────────────────────────────
+    // -- Toolset::from_str
 
     #[test]
     fn from_str_valid() {
@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(Toolset::from_str(""), None);
     }
 
-    // ── Toolset names and schemas ─────────────────────────────────────────
+    // -- Toolset names and schemas
 
     #[test]
     fn edit_tool_per_toolset() {
@@ -261,7 +261,7 @@ mod tests {
         assert!(!names.contains(&"apply_patch"));
     }
 
-    // ── Display ───────────────────────────────────────────────────────────
+    // -- Display
 
     #[test]
     fn display_short_name() {
@@ -277,7 +277,7 @@ mod tests {
         assert!(Toolset::Gemini.display_name().contains("Google"));
     }
 
-    // ── Default trait ─────────────────────────────────────────────────────
+    // -- Default trait
 
     #[test]
     fn default_is_default() {

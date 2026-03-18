@@ -3,7 +3,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
 
-// ── Provider row ──────────────────────────────────────────────────────────────
+// -- Provider row
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProviderRow {
@@ -395,7 +395,7 @@ fn apply_schema(conn: &Connection) -> Result<()> {
     Ok(())
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers
 
 fn now_ts() -> i64 {
     std::time::SystemTime::now()
@@ -404,7 +404,7 @@ fn now_ts() -> i64 {
         .as_secs() as i64
 }
 
-// ── Agents ────────────────────────────────────────────────────────────────────
+// -- Agents
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AgentRow {
@@ -546,7 +546,7 @@ pub fn detach_all_tools_from_agent(db: &Db, agent_id: &str) -> Result<usize> {
     Ok(n)
 }
 
-// ── Conversations ─────────────────────────────────────────────────────────────
+// -- Conversations
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConversationRow {
@@ -651,7 +651,7 @@ pub fn touch_conversation(db: &Db, conv_id: &str) -> Result<()> {
     Ok(())
 }
 
-// ── Runs (background mode) ────────────────────────────────────────────────────
+// -- Runs (background mode)
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RunRow {
@@ -739,7 +739,7 @@ pub fn run_events_after(db: &Db, run_id: &str, after_seq: i64) -> Result<Vec<(i6
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-// ── Messages ──────────────────────────────────────────────────────────────────
+// -- Messages
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MessageRow {
@@ -812,7 +812,7 @@ pub fn list_messages(
     Ok(result)
 }
 
-// ── Memory blocks ─────────────────────────────────────────────────────────────
+// -- Memory blocks
 
 /// Upsert a memory block.
 ///
@@ -990,7 +990,7 @@ pub fn get_memory_blocks_with_ts(db: &Db, agent_id: &str) -> Result<Vec<(String,
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-// ── Three-tier memory functions ───────────────────────────────────────────────
+// -- Three-tier memory functions
 
 /// Increment the agent's user-message turn counter and return the new value.
 /// Call once per non-tool-return message (never for tool result turns).
@@ -1181,7 +1181,7 @@ pub fn restore_memory_from_history(db: &Db, agent_id: &str, label: &str, hist_id
     Ok(true)
 }
 
-// ── Tools ─────────────────────────────────────────────────────────────────────
+// -- Tools
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ToolRow {
@@ -1445,7 +1445,7 @@ pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
         .collect())
 }
 
-// ── Providers ─────────────────────────────────────────────────────────────────
+// -- Providers
 
 pub fn upsert_provider(db: &Db, row: &ProviderRow) -> Result<()> {
     let conn = db.lock().unwrap();

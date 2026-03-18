@@ -178,7 +178,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // ── schemas_for_toolset ───────────────────────────────────────────────
+    // -- schemas_for_toolset
 
     #[test]
     fn default_toolset_has_bash_and_edit_file() {
@@ -238,7 +238,7 @@ mod tests {
         }
     }
 
-    // ── all_schemas ───────────────────────────────────────────────────────
+    // -- all_schemas
 
     #[test]
     fn all_schemas_is_default_toolset() {
@@ -247,7 +247,7 @@ mod tests {
         assert_eq!(all.len(), default.len());
     }
 
-    // ── schemas_for_names ─────────────────────────────────────────────────
+    // -- schemas_for_names
 
     #[test]
     fn schemas_for_names_filters() {
@@ -275,7 +275,7 @@ mod tests {
         assert!(schemas.is_empty());
     }
 
-    // ── is_native_write_tool ──────────────────────────────────────────────
+    // -- is_native_write_tool
 
     #[test]
     fn write_tools_identified() {
@@ -294,7 +294,7 @@ mod tests {
         assert!(!is_native_write_tool("AskUserQuestion"));
     }
 
-    // ── run_native_tool ───────────────────────────────────────────────────
+    // -- run_native_tool
 
     #[tokio::test]
     async fn native_tool_unknown_returns_none() {
@@ -330,7 +330,7 @@ mod tests {
         assert!(output.contains("Cargo.toml"), "got: {output}");
     }
 
-    // ── Schema validation ─────────────────────────────────────────────────
+    // -- Schema validation
 
     #[test]
     fn all_schemas_have_name_and_description() {

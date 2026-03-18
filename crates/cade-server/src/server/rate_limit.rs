@@ -27,7 +27,7 @@ use axum::{
 
 use crate::server::state::AppState;
 
-// ── Token bucket ──────────────────────────────────────────────────────────────
+// -- Token bucket
 
 #[derive(Debug)]
 struct Bucket {
@@ -64,7 +64,7 @@ impl Bucket {
     }
 }
 
-// ── Shared limiter ────────────────────────────────────────────────────────────
+// -- Shared limiter
 
 #[derive(Clone, Debug)]
 pub struct RateLimiter {
@@ -211,7 +211,7 @@ mod tests {
 
 // endregion: --- Tests
 
-// ── Axum middleware ───────────────────────────────────────────────────────────
+// -- Axum middleware
 
 /// Rate-limit middleware. Throttles POST inference requests per agent.
 /// All other routes pass through untouched.

@@ -63,7 +63,7 @@ const MIN_CONTEXT_CHARS: usize = 8_000;
 /// of their window.  Claude 200 K is unaffected (200_000 × 3 = 600_000 < cap).
 const MAX_CONTEXT_CHARS: usize = 3_000_000;
 
-// ── Auto-compaction constants ─────────────────────────────────────────────────
+// -- Auto-compaction constants
 
 /// Context usage ratio at which auto-compaction (summarization) triggers.
 /// 0.98 means: when the assembled messages use ≥ 98% of the char budget.
@@ -79,7 +79,7 @@ const COMPACT_KEEP_RECENT: usize = 8;
 /// is crossed.
 const COMPACT_COOLDOWN_TURNS: i64 = 5;
 
-// ── Message history sanitizer ─────────────────────────────────────────────────
+// -- Message history sanitizer
 //
 // Anthropic enforces a strict schema:
 //   1. Every tool_use in an assistant message must have exactly ONE matching
@@ -155,7 +155,7 @@ fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
     result
 }
 
-// ── Auto-compaction: summarize old turns into short-term memory ────────────────
+// -- Auto-compaction: summarize old turns into short-term memory
 
 /// Summarize a slice of conversation messages into a compact block.
 ///
@@ -242,7 +242,7 @@ Keep under 800 words.".to_string(),
         .ok_or_else(|| "summarizer returned empty content".to_string())
 }
 
-// ── Context builder ───────────────────────────────────────────────────────────
+// -- Context builder
 //
 // Key design rule:
 //   Callers PERSIST a message to SQLite BEFORE calling build_context.
@@ -259,7 +259,7 @@ async fn build_context(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
 
-    // ── Three-tier memory injection ───────────────────────────────────────────
+    // -- Three-tier memory injection
     //
     // Tiers:  pinned (always, full)  |  short (active, full)  |  long (archived, excerpt)
     //
@@ -493,7 +493,7 @@ async fn build_context(
             .sum()
     };
 
-    // ── Auto-compaction: summarize old turns into memory when near capacity ───
+    // -- Auto-compaction: summarize old turns into memory when near capacity
     //
     // Trigger: total assembled chars ≥ 98% of budget AND enough messages exist
     // AND cooldown has elapsed since last compaction for this agent.
@@ -807,7 +807,7 @@ fn resolve_conversation<'a>(
     }
 }
 
-// ── POST /v1/agents/:id/messages  (blocking) ─────────────────────────────────
+// -- POST /v1/agents/:id/messages  (blocking)
 
 pub async fn send_message(
     State(state): State<AppState>,
@@ -1002,7 +1002,7 @@ async fn handle_tool_return_blocking(
     }
 }
 
-// ── POST /v1/agents/:id/messages/stream  (SSE) ───────────────────────────────
+// -- POST /v1/agents/:id/messages/stream  (SSE)
 
 pub async fn stream_message(
     State(state): State<AppState>,
@@ -1248,7 +1248,7 @@ pub async fn stream_message(
     Sse::new(futures::StreamExt::chain(meta_event, sse_stream)).into_response()
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers
 
 /// Set conversation title from first user message if title is still empty.
 fn maybe_set_conv_title(state: &AppState, conv_id: &str, text: &str) {
@@ -1263,7 +1263,7 @@ fn maybe_set_conv_title(state: &AppState, conv_id: &str, text: &str) {
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
+// -- Helpers
 
 fn err(status: StatusCode, msg: &str) -> Response {
     (status, Json(json!({ "detail": msg }))).into_response()

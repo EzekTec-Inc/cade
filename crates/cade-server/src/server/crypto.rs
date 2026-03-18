@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use hmac::Hmac;
 use sha2::Sha256;
 
-// ── Key derivation ────────────────────────────────────────────────────────────
+// -- Key derivation
 
 /// Derive a 256-bit key using PBKDF2-HMAC-SHA256.
 ///
@@ -74,7 +74,7 @@ fn derive_key(salt: &[u8]) -> Result<[u8; 32]> {
     Ok(key)
 }
 
-// ── Encryption ────────────────────────────────────────────────────────────────
+// -- Encryption
 
 /// Encrypt a plaintext string with AES-256-GCM.
 ///
@@ -115,7 +115,7 @@ pub fn encrypt(plaintext: &str) -> Result<String> {
     ))
 }
 
-// ── Decryption ────────────────────────────────────────────────────────────────
+// -- Decryption
 
 /// Decrypt a value previously produced by `encrypt()`.
 ///

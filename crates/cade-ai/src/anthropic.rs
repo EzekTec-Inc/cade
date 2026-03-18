@@ -356,7 +356,7 @@ impl AnthropicProvider {
             }
         }
 
-        // ── Prompt caching ────────────────────────────────────────────────────
+        // -- Prompt caching
         // Anthropic charges ~90% less for tokens served from the prompt cache.
         // We mark two stable, large anchors with cache_control so Anthropic
         // pins them in its KV cache across turns:

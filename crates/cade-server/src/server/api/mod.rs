@@ -22,7 +22,7 @@ use crate::server::{
 // endregion: --- Modules
 
 pub fn router(state: AppState) -> Router {
-    // ── Inference routes (rate-limited) ───────────────────────────────────────
+    // -- Inference routes (rate-limited)
     let inference = Router::new()
         .route("/v1/agents/:id/messages",
                post(messages::send_message)
@@ -31,7 +31,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/agents/:id/messages/stream", post(messages::stream_message))
         .layer(middleware::from_fn_with_state(state.clone(), rate_limit_middleware));
 
-    // ── All other routes (no rate limit) ─────────────────────────────────────
+    // -- All other routes (no rate limit)
     let rest = Router::new()
         // Health + server config
         .route("/v1/health", get(health::get_health))

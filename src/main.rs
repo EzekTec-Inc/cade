@@ -610,7 +610,7 @@ async fn resolve_agent_and_conversation(
         )
         .await;
 
-    // ── Conversation resolution ───────────────────────────────────────────────
+    // -- Conversation resolution
     //
     // Precedence: --new (create new) > --resume (picker) > --continue (reuse saved) > saved session
     let conversation_id: Option<String> = if args.new_conversation {
@@ -894,7 +894,7 @@ async fn main() -> Result<()> {
     ).await?;
 
 
-    // ── MCP server startup ────────────────────────────────────────────────────
+    // -- MCP server startup
     let mcp_configs = settings.merged_mcp_servers();
     let mcp: std::sync::Arc<McpManager> = if mcp_configs.is_empty() {
         std::sync::Arc::new(McpManager::empty())

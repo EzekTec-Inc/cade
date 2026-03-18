@@ -39,12 +39,12 @@ use cade_core::settings::McpServerConfig;
 
 // endregion: --- Modules
 
-// ── Reconnect constants ───────────────────────────────────────────────────────
+// -- Reconnect constants
 
 const MAX_RECONNECT_ATTEMPTS: u32 = 3;
 const RECONNECT_DELAY_SECS:   u64 = 2;
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// -- Types
 
 /// Public summary of a running MCP server (for `/mcp` command display).
 #[derive(Debug, Clone)]
@@ -66,7 +66,7 @@ pub struct McpToolSchema {
     pub is_write:      bool,
 }
 
-// ── McpServer ─────────────────────────────────────────────────────────────────
+// -- McpServer
 
 struct McpServer {
     key:     String,
@@ -83,7 +83,7 @@ struct McpServer {
     peer:     rmcp::Peer<RoleClient>,
 }
 
-// ── McpManager ────────────────────────────────────────────────────────────────
+// -- McpManager
 
 /// Manages all active MCP server connections.
 ///
@@ -255,7 +255,7 @@ impl McpManager {
     ) -> Option<Result<(String, bool)>> {
         let server_idx = self.find_tool_idx(prefixed_name).await?.0;
 
-        // ── Fast path: try the call directly ─────────────────────────────────
+        // -- Fast path: try the call directly
         // Extract what we need under the read lock, then drop it before .await
         let (is_disabled, server_key, original_name, peer) = {
             let servers = self.servers.read().await;
@@ -292,7 +292,7 @@ impl McpManager {
             Err(e) => e,
         };
 
-        // ── Slow path: call failed — attempt reconnect ────────────────────────
+        // -- Slow path: call failed — attempt reconnect
         let error_msg = call_err.to_string();
 
         // Protocol errors (-32XXX) mean the server is alive but rejected the call.
@@ -433,7 +433,7 @@ impl McpManager {
             .collect()
     }
 
-    // ── Internal helpers ──────────────────────────────────────────────────────
+    // -- Internal helpers
 
     async fn connect_server(key: &str, config: &McpServerConfig) -> Result<McpServer> {
         let mut cmd = Command::new(&config.command);
@@ -549,7 +549,7 @@ impl McpManager {
     }
 }
 
-// ── Content extraction ────────────────────────────────────────────────────────
+// -- Content extraction
 
 fn extract_content_text(content: &[rmcp::model::Content]) -> String {
     // Some MCP servers emit two content items per result:

@@ -4,7 +4,7 @@
 ///   toolset_label: "default" | "codex" | "gemini"  (maps to Toolset::from_str)
 ///   context_window_tokens: model's input context length in tokens
 pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
-    // ── Anthropic ─────────────────────────────────────────────────────────────────────────────────────
+    // -- Anthropic
     // All Claude 3+ models: 200 K token context window
     ("anthropic", "Claude Opus 4.5",   "anthropic/claude-opus-4-5",            "default", 8192,  200_000),
     ("anthropic", "Claude Sonnet 4.5", "anthropic/claude-sonnet-4-5-20250929", "default", 8192,  200_000),
@@ -13,7 +13,7 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
     ("anthropic", "Claude Haiku 3.5",  "anthropic/claude-3-5-haiku-20241022",  "default", 8192,  200_000),
     ("anthropic", "Claude Opus 3",     "anthropic/claude-3-opus-20240229",     "default", 4096,  200_000),
 
-    // ── OpenAI ────────────────────────────────────────────────────────────────────────────────────────
+    // -- OpenAI
     ("openai",    "GPT-4.1",           "openai/gpt-4.1",                       "codex",  16384, 1_047_576),
     ("openai",    "GPT-4o",            "openai/gpt-4o",                        "codex",  16384,   128_000),
     ("openai",    "GPT-4o Mini",       "openai/gpt-4o-mini",                   "codex",  16384,   128_000),
@@ -21,7 +21,7 @@ pub const CATALOGUE: &[(&str, &str, &str, &str, u32, u32)] = &[
     ("openai",    "o3",                "openai/o3",                            "codex",  16384,   200_000),
     ("openai",    "o3 Mini",           "openai/o3-mini",                       "codex",  16384,   200_000),
 
-    // ── Google Gemini ─────────────────────────────────────────────────────────────────────────────────
+    // -- Google Gemini
     ("gemini",    "Gemini 2.5 Pro",    "gemini/gemini-2.5-pro",                "gemini",  8192, 1_048_576),
     ("gemini",    "Gemini 2.0 Flash",  "gemini/gemini-2.0-flash",              "gemini",  8192, 1_048_576),
     ("gemini",    "Gemini 1.5 Pro",    "gemini/gemini-1.5-pro",                "gemini",  8192, 2_097_152),
@@ -107,7 +107,7 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
     32_000
 }
 
-// ── Pricing ───────────────────────────────────────────────────────────────────
+// -- Pricing
 
 /// Per-1M-token USD rates (approximate — check provider docs for current prices).
 pub struct ModelPricing {
@@ -126,7 +126,7 @@ mod tests {
 
     use super::*;
 
-    // ── CATALOGUE ─────────────────────────────────────────────────────────
+    // -- CATALOGUE
 
     #[test]
     fn catalogue_non_empty() {
@@ -158,7 +158,7 @@ mod tests {
         }
     }
 
-    // ── ModelEntry::from_catalogue ────────────────────────────────────────
+    // -- ModelEntry::from_catalogue
 
     #[test]
     fn model_entry_from_catalogue() {
@@ -173,7 +173,7 @@ mod tests {
         assert!(!me.dynamic);
     }
 
-    // ── toolset_for_model ─────────────────────────────────────────────────
+    // -- toolset_for_model
 
     #[test]
     fn toolset_known_models() {
@@ -192,7 +192,7 @@ mod tests {
         assert_eq!(toolset_for_model("groq/llama-3-70b"), "default");
     }
 
-    // ── max_tokens_for_model ──────────────────────────────────────────────
+    // -- max_tokens_for_model
 
     #[test]
     fn max_tokens_known_models() {
@@ -215,7 +215,7 @@ mod tests {
         assert_eq!(max_tokens_for_model("random/model"), 4096);
     }
 
-    // ── context_window_for_model ──────────────────────────────────────────
+    // -- context_window_for_model
 
     #[test]
     fn context_window_known_models() {
@@ -241,7 +241,7 @@ mod tests {
         assert_eq!(context_window_for_model("random/model-xyz"), 32_000);
     }
 
-    // ── pricing_for_model ─────────────────────────────────────────────────
+    // -- pricing_for_model
 
     #[test]
     fn pricing_claude_sonnet() {
@@ -289,7 +289,7 @@ mod tests {
 /// Uses pattern matching on model ID; unknown models get zero rates.
 pub fn pricing_for_model(model_id: &str) -> ModelPricing {
     match model_id {
-        // ── Anthropic ─────────────────────────────────────────────────────────
+        // -- Anthropic
         m if m.contains("claude-sonnet-4") || m.contains("claude-3-7-sonnet")
             || m.contains("claude-sonnet-4-6") =>
             ModelPricing { input:  3.00, output: 15.00, cache_read: 0.30,  cache_write:  3.75 },
@@ -297,7 +297,7 @@ pub fn pricing_for_model(model_id: &str) -> ModelPricing {
             ModelPricing { input:  0.80, output:  4.00, cache_read: 0.08,  cache_write:  1.00 },
         m if m.contains("claude-opus-4") || m.contains("claude-3-opus") =>
             ModelPricing { input: 15.00, output: 75.00, cache_read: 1.50,  cache_write: 18.75 },
-        // ── OpenAI ────────────────────────────────────────────────────────────
+        // -- OpenAI
         m if m.contains("gpt-4.1") && !m.contains("mini") =>
             ModelPricing { input:  2.00, output:  8.00, cache_read: 0.50,  cache_write:  0.0 },
         m if m.contains("gpt-4o-mini") =>
@@ -308,14 +308,14 @@ pub fn pricing_for_model(model_id: &str) -> ModelPricing {
             ModelPricing { input:  1.10, output:  4.40, cache_read: 0.275, cache_write:  0.0 },
         m if m.contains("/o3") && !m.contains("mini") =>
             ModelPricing { input: 10.00, output: 40.00, cache_read: 2.50,  cache_write:  0.0 },
-        // ── Google Gemini ─────────────────────────────────────────────────────
+        // -- Google Gemini
         m if m.contains("gemini-2.5-pro") =>
             ModelPricing { input:  1.25, output: 10.00, cache_read: 0.31,  cache_write:  0.0 },
         m if m.contains("gemini-2.0-flash") || m.contains("gemini-1.5-flash") =>
             ModelPricing { input:  0.10, output:  0.40, cache_read: 0.025, cache_write:  0.0 },
         m if m.contains("gemini-1.5-pro") =>
             ModelPricing { input:  1.25, output:  5.00, cache_read: 0.31,  cache_write:  0.0 },
-        // ── Provider-prefix fallbacks ─────────────────────────────────────────
+        // -- Provider-prefix fallbacks
         m if m.starts_with("anthropic/") =>
             ModelPricing { input:  3.00, output: 15.00, cache_read: 0.30,  cache_write:  3.75 },
         m if m.starts_with("openai/") =>

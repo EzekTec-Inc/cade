@@ -25,7 +25,7 @@ fn sanitize_for_terminal(s: &str) -> String {
         .collect()
 }
 
-// ── Headless run statistics ───────────────────────────────────────────────────
+// -- Headless run statistics
 
 #[derive(Debug, Default)]
 pub struct HeadlessStats {
@@ -34,7 +34,7 @@ pub struct HeadlessStats {
     pub duration_ms:  u128,
 }
 
-// ── Tool classification ───────────────────────────────────────────────────────
+// -- Tool classification
 
 /// Returns true for tools that mutate shared agent state and must run sequentially.
 ///
@@ -49,7 +49,7 @@ fn is_sequential_tool(name: &str) -> bool {
     matches!(name, "update_memory" | "load_skill" | "install_skill" | "run_skill_script" | "load_skill_ref")
 }
 
-// ── Text mode (default) ───────────────────────────────────────────────────────
+// -- Text mode (default)
 
 /// Run a single headless prompt with streaming, driving the tool loop to completion.
 /// Prints streaming output to stdout. Returns the final assistant text + stats.
@@ -85,7 +85,7 @@ pub async fn run_headless(
     Ok((final_output.trim().to_string(), stats))
 }
 
-// ── stream-json mode ──────────────────────────────────────────────────────────
+// -- stream-json mode
 
 /// Run headless with JSONL (stream-json) output — one JSON object per event.
 /// Emits to stdout. Each line is a complete JSON object (JSONL format).
@@ -161,7 +161,7 @@ pub async fn run_headless_stream_json(
     }));
 }
 
-// ── Tool loop helpers ─────────────────────────────────────────────────────────
+// -- Tool loop helpers
 
 /// Execute a single tool call, respecting permissions and intercepting
 /// native tools (update_memory, load_skill).
@@ -302,7 +302,7 @@ async fn run_one_tool(
     (call_id, result.output, result.is_error)
 }
 
-// ── Text-mode tool loop ───────────────────────────────────────────────────────
+// -- Text-mode tool loop
 
 async fn process_tool_calls(
     client: &CadeClient,
@@ -328,7 +328,7 @@ async fn process_tool_calls(
     let all_sequential = tool_calls.iter().all(|(_, name, _)| is_sequential_tool(name));
 
     if all_sequential || tool_calls.len() == 1 {
-        // ── Sequential path ───────────────────────────────────────────────────
+        // -- Sequential path
         for (call_id, tool_name, args) in tool_calls {
             let (cid, out, is_err) = run_one_tool(
                 client, agent_id, call_id, tool_name, args, permissions, mcp
@@ -349,7 +349,7 @@ async fn process_tool_calls(
             Box::pin(process_tool_calls(client, agent_id, follow, permissions, output, mcp, stats)).await?;
         }
     } else {
-        // ── Parallel path ─────────────────────────────────────────────────────
+        // -- Parallel path
         // Execute all non-sequential tools concurrently, keep sequential ones
         // in their original positions but run them after the parallel batch.
         let total = tool_calls.len();
@@ -439,7 +439,7 @@ async fn process_tool_calls(
     Ok(())
 }
 
-// ── stream-json tool loop ─────────────────────────────────────────────────────
+// -- stream-json tool loop
 
 async fn process_tool_calls_stream_json(
     client: &CadeClient,
@@ -463,7 +463,7 @@ async fn process_tool_calls_stream_json(
     let all_sequential = tool_calls.iter().all(|(_, name, _)| is_sequential_tool(name));
 
     if all_sequential || tool_calls.len() == 1 {
-        // ── Sequential path ───────────────────────────────────────────────────
+        // -- Sequential path
         for (call_id, tool_name, args) in tool_calls {
             emit(json!({ "type": "tool_call", "tool": tool_name, "args": args }));
 
@@ -498,7 +498,7 @@ async fn process_tool_calls_stream_json(
             )).await?;
         }
     } else {
-        // ── Parallel path ─────────────────────────────────────────────────────
+        // -- Parallel path
         let total = tool_calls.len();
         let mut parallel_batch  = Vec::new();
         let mut sequential_remainder = Vec::new();

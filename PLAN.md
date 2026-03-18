@@ -359,3 +359,25 @@ completed items (Edition 2024 and rust10x compliance).
 **New behavior:** All 6 short-term items marked `[x]`.
 
 **Rollback:** Revert `[x]` back to `[ ]` and remove the 2 added lines.
+
+---
+
+## 2026-03-18T00:11:00Z — rust10x Tier 4: Convert em-dash section markers to // -- style
+
+**Summary:** Converted 331 `// ── Section Name ──...` section markers to
+`// -- Section Name` per rust10x audit items N11-N15.
+
+**Files modified:** 34 `.rs` files across all crates, `src/`, and `tests/`.
+
+**Reason:** rust10x uses `// --` (double hyphen) for section markers, not
+`// ──` (em dash with trailing dash fill).
+
+**Previous behavior:** Section markers used `// ── Name ─────...` em-dash style.
+
+**New behavior:** Section markers use `// -- Name` double-hyphen style.
+
+**Verification:** `cargo test --workspace` — 295 tests pass.
+
+**Rollback:** Run the inverse regex replacement:
+`s/^(\s*)(\/\/ -- (.+))$/\1\/\/ ── \3 ────.../` (would need to regenerate
+trailing dashes to original length — simpler to `git revert`).

@@ -33,7 +33,7 @@ const EMPTY_YIELD_REPROMPT: &str = "Tool execution complete. \
 Please provide a text response explaining the result, what you found, \
 or what you are doing next.";
 
-// ── Slash commands ─────────────────────────────────────────────────────────────
+// -- Slash commands
 
 /// Result from the agent TUI picker.
 enum AgentPickerResult {
@@ -159,7 +159,7 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
     }
 }
 
-// ── Session Statistics ────────────────────────────────────────────────────────
+// -- Session Statistics
 
 /// Per-model token breakdown accumulated during the session.
 #[derive(Debug, Default, Clone)]
@@ -281,7 +281,7 @@ impl SessionStats {
 
         let mut out: Vec<RenderLine> = Vec::new();
 
-        // ── Header ──────────────────────────────────────────────────────────
+        // -- Header
         out.push(RenderLine::InfoHeader("  ◆ Session Stats".to_string()));
         out.push(RenderLine::Blank);
 
@@ -297,7 +297,7 @@ impl SessionStats {
             out.push(RenderLine::Pair { label: "Auth Method".to_string(), value: auth_method.to_string() });
         }
 
-        // ── Tool Calls ──────────────────────────────────────────────────────
+        // -- Tool Calls
         out.push(RenderLine::Blank);
         out.push(RenderLine::InfoHeader("  Tool Calls".to_string()));
         out.push(RenderLine::Pair {
@@ -321,7 +321,7 @@ impl SessionStats {
             });
         }
 
-        // ── Performance ─────────────────────────────────────────────────────
+        // -- Performance
         out.push(RenderLine::Blank);
         out.push(RenderLine::InfoHeader("  Performance".to_string()));
         out.push(RenderLine::Pair { label: "Wall Time".to_string(),    value: fmt_dur(wall_secs) });
@@ -339,7 +339,7 @@ impl SessionStats {
             });
         }
 
-        // ── Model Usage table ───────────────────────────────────────────────
+        // -- Model Usage table
         if !self.per_model.is_empty() {
             out.push(RenderLine::Blank);
             out.push(RenderLine::InfoHeader("  Model Usage".to_string()));
@@ -492,7 +492,7 @@ impl SessionStats {
     }
 }
 
-// ── Tool preflight result ─────────────────────────────────────────────────────
+// -- Tool preflight result
 
 #[derive(Debug)]
 enum ToolPreflightResult {
@@ -500,7 +500,7 @@ enum ToolPreflightResult {
     Blocked(cade_agent::tools::ToolResult),
 }
 
-// ── Repl ──────────────────────────────────────────────────────────────────────
+// -- Repl
 
 pub struct Repl {
     client: CadeClient,
@@ -1054,7 +1054,7 @@ impl Repl {
                         let agent_id   = self.agent_id();
                         let conv_id    = self.conversation_id();
 
-                        // ── Per-category token estimates ──────────────────────────────────────
+                        // -- Per-category token estimates
 
                         // 1. Memory blocks
                         let mem_blocks = self.client.get_memory(&agent_id).await.unwrap_or_default();
@@ -1100,7 +1100,7 @@ impl Repl {
                         let buffer_tok = window * 3 / 100;
                         let free_tok   = window.saturating_sub(total_used + buffer_tok);
 
-                        // ── Grid construction (10 rows × 20 cells = 200 total) ────────────────
+                        // -- Grid construction (10 rows × 20 cells = 200 total)
                         let cells_for = |tok: u64| -> usize {
                             if window == 0 { return 0; }
                             ((tok as f64 / window as f64) * 200.0).round() as usize
@@ -1130,7 +1130,7 @@ impl Repl {
 
                         let rows: Vec<Vec<(char, u8)>> = flat.chunks(20).map(|c| c.to_vec()).collect();
 
-                        // ── Right-side labels ─────────────────────────────────────────────────
+                        // -- Right-side labels
                         let fmt = |n: u64| -> String {
                             if n >= 1_000_000 { format!("{:.1}M", n as f64 / 1_000_000.0) }
                             else if n >= 1_000 { format!("{:.1}k", n as f64 / 1_000.0) }
@@ -1157,7 +1157,7 @@ impl Repl {
                             format!("⛶ Free:           {}  ({:.1}%)", fmt(free_tok),   pct_of(free_tok)),
                         ];
 
-                        // ── Emit grid rows ─────────────────────────────────────────────────────
+                        // -- Emit grid rows
                         let mut app = self.app.lock().unwrap();
                         let _ = app.push(RenderLine::Blank);
                         let _ = app.push(RenderLine::InfoHeader("  ◆ Context Usage".to_string()));
@@ -1184,7 +1184,7 @@ impl Repl {
                             }
                         }
 
-                        // ── MCP Tools section ──────────────────────────────────────────────────
+                        // -- MCP Tools section
                         let _ = app.push(RenderLine::Blank);
                         let _ = app.push(RenderLine::InfoHeader(
                             format!("  MCP Tools  ·  /mcp  (~{} tokens)", fmt(mcp_tok))
@@ -1230,7 +1230,7 @@ impl Repl {
                             }
                         }
 
-                        // ── Memory section ────────────────────────────────────────────────────
+                        // -- Memory section
                         let _ = app.push(RenderLine::Blank);
                         let _ = app.push(RenderLine::InfoHeader(
                             format!("  Memory  ·  /memory  (~{} tokens)", fmt(mem_tok))
@@ -1252,7 +1252,7 @@ impl Repl {
                             }
                         }
 
-                        // ── Skills section ────────────────────────────────────────────────────
+                        // -- Skills section
                         let _ = app.push(RenderLine::Blank);
                         let _ = app.push(RenderLine::InfoHeader(
                             format!("  Skills  ·  /skills  (~{} tokens)", fmt(skills_tok))
@@ -1416,7 +1416,7 @@ impl Repl {
                         }
                     }
 
-                    // ── New commands ──────────────────────────────────────────
+                    // -- New commands
 
                     SlashCmd::Clear => {
                         let _ = self.app.lock().unwrap().clear_content();
@@ -2805,7 +2805,7 @@ impl Repl {
             input.to_string()
         };
 
-        // ── Skill trigger auto-detection ──────────────────────────────────────
+        // -- Skill trigger auto-detection
         // If the input matches any skill trigger, silently pre-load the skill
         // body by injecting it as a system context note before the user message.
         let effective_input = {
@@ -2830,7 +2830,7 @@ impl Repl {
             }
         };
 
-        // ── Thinking animation ────────────────────────────────────────────────
+        // -- Thinking animation
         let bar_text = self.app.lock().unwrap().start_thinking(
             "assessing… (esc to interrupt · 0s · 0↑)"
         );
@@ -2901,7 +2901,7 @@ impl Repl {
                                                     (KeyCode::Char('J'), _) => { app.scroll = app.scroll.saturating_sub(10); let _ = app.draw(); }
                                                     (KeyCode::Char('o'), KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
 
-                                                    // ── I-01: input during agent turn ──────────
+                                                    // -- I-01: input during agent turn
                                                     //
                                                     // Ctrl+C      → steering: cancel + redirect
                                                     //               (or plain cancel if input empty).
@@ -3126,7 +3126,7 @@ impl Repl {
         // Blank line after every agent turn for visual block separation.
         let _ = self.app.lock().unwrap().push(RenderLine::Blank);
 
-        // ── Stop thinking animation ───────────────────────────────────────────
+        // -- Stop thinking animation
         tick_handle.abort();
         let _ = tick_handle.await;
         // Abort the per-turn SIGINT handler so tasks do not accumulate across
@@ -3169,17 +3169,17 @@ impl Repl {
         _spinner: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
         bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
     ) -> Result<Vec<CadeMessage>> {
-        // ── R-04: Async event buffering ─────────────────────────────────────────
+        // -- R-04: Async event buffering
         // Decouples network I/O from TUI rendering.  The SSE callback (`on_event`)
         // performs only lightweight session/stats bookkeeping and forwards each
         // message to an unbounded channel.  A dedicated UI consumer task reads
         // from the channel and applies all TuiApp mutations + draws.  This means
         // the SSE event loop is never blocked by draw() or lock contention.
 
-        // ── Per-turn channel ────────────────────────────────────────────────────
+        // -- Per-turn channel
         let (ui_tx, ui_rx) = tokio::sync::mpsc::unbounded_channel::<CadeMessage>();
 
-        // ── Session / stats state (used by on_event — NO TuiApp access) ─────────
+        // -- Session / stats state (used by on_event — NO TuiApp access)
         let conv_arc     = self.conversation_id.clone();
         let session_arc  = self.session.clone();
         let sess_in_tok  = self.session_input_tokens.clone();
@@ -3190,7 +3190,7 @@ impl Repl {
         let run_id_cell2   = run_id_cell.clone();
         let seq_id_cell2   = seq_id_cell.clone();
 
-        // ── on_event: SSE callback — stats only, then forward to UI channel ─────
+        // -- on_event: SSE callback — stats only, then forward to UI channel
         let on_event = move |msg: &CadeMessage| {
             match msg.msg_type() {
                 "stream_start" => {
@@ -3233,7 +3233,7 @@ impl Repl {
             let _ = ui_tx.send(msg.clone());
         };
 
-        // ── UI consumer task — all TuiApp mutations happen here ─────────────────
+        // -- UI consumer task — all TuiApp mutations happen here
         let app_arc      = self.app.clone();
         let bar_text_arc = bar_text;
         let reasoning_buf = self.last_reasoning.clone();
@@ -3317,7 +3317,7 @@ impl Repl {
             let _ = (in_reasoning, in_assistant);
         });
 
-        // ── Streaming call (network I/O — on_event never touches TuiApp) ────────
+        // -- Streaming call (network I/O — on_event never touches TuiApp)
         let agent_id  = self.agent_id();
         let cancel    = &self.cancel_turn;
 
@@ -3412,7 +3412,7 @@ impl Repl {
             }
         };
 
-        // ── Drain UI consumer — let it process any remaining queued messages ────
+        // -- Drain UI consumer — let it process any remaining queued messages
         // on_event held the sender; the streaming call above consumed it (closure
         // dropped when stream_message_cancellable returned).  The channel is now
         // closed, so ui_rx.recv() will return None after draining.
@@ -3520,7 +3520,7 @@ impl Repl {
             .filter_map(|m| m.assistant_text())
             .any(|t| !t.trim().is_empty());
 
-        // ── Execute all tools, then send results as a batch ──────────────────
+        // -- Execute all tools, then send results as a batch
         //
         // Tools execute sequentially (preserves approval prompts and the
         // &mut stdout requirement).  Results are collected first, then sent to
@@ -3539,7 +3539,7 @@ impl Repl {
             *bar.lock().unwrap() = format!("● {}…", display);
         }
 
-        // ── Phase 1: Sequential preflight (approval, blocking, hooks) ────────
+        // -- Phase 1: Sequential preflight (approval, blocking, hooks)
         // Each tool is checked for permissions, plan-mode blocking, and hook
         // denial. Tools that fail preflight get an immediate error result.
         // Tools that pass get queued for execution.
@@ -3569,7 +3569,7 @@ impl Repl {
             preflight.push(pf);
         }
 
-        // ── Phase 2: Parallel execution of approved tools ────────────────────
+        // -- Phase 2: Parallel execution of approved tools
         // Read-only tools execute concurrently via tokio::spawn.
         // Write tools execute sequentially to prevent filesystem races.
         let mut results: Vec<cade_agent::tools::ToolResult> = Vec::with_capacity(tool_calls.len());
@@ -4183,7 +4183,7 @@ impl Repl {
             });
         }
 
-        // ── Bash tools — live-streaming path ─────────────────────────────
+        // -- Bash tools — live-streaming path
         // For bash/run_command/execute_command we stream stdout+stderr lines
         // into a LiveOutput RenderLine so the user sees progress in real-time.
         // All other tools use the standard dispatch() path below.
@@ -4225,7 +4225,7 @@ impl Repl {
             return Ok(result);
         }
 
-        // ── All other tools — standard dispatch path ──────────────────────
+        // -- All other tools — standard dispatch path
         const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
         let mut result = match tokio::time::timeout(
             TOOL_TIMEOUT,
@@ -5417,7 +5417,7 @@ impl Repl {
 
         let current = self.model();
 
-        // ── Fetch model list ──────────────────────────────────────────────────
+        // -- Fetch model list
         // (provider, display_name, model_id, toolset, is_dynamic)
         let mut models: Vec<(String, String, String, String, bool)> = Vec::new();
         let mut custom_providers: Vec<String> = Vec::new();
@@ -5479,7 +5479,7 @@ impl Repl {
 
         let n_models = models.len();
 
-        // ── Flat display-item list (provider headers + model rows) ────────────
+        // -- Flat display-item list (provider headers + model rows)
         #[derive(Clone)]
         enum DisplayItem { Header(String, bool), ModelRow(usize) }
 
@@ -5522,7 +5522,7 @@ impl Repl {
             if let Some(DisplayItem::ModelRow(i)) = display_items.get(p) { *i } else { 0 }
         };
 
-        // ── Build ratatui ListItems ───────────────────────────────────────────
+        // -- Build ratatui ListItems
         let build_items = |list_pos: usize, current: &str| -> Vec<ListItem<'static>> {
             display_items.iter().map(|item| match item {
                 DisplayItem::Header(provider, dynamic) => {
@@ -5584,7 +5584,7 @@ impl Repl {
             }).collect()
         };
 
-        // ── Draw helper ───────────────────────────────────────────────────────
+        // -- Draw helper
         let do_draw_model = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
                              list_pos: usize| -> Result<()> {
             let sel_model = model_at(list_pos);
@@ -5617,7 +5617,7 @@ impl Repl {
         };
         do_draw_model(&app_arc, list_pos)?;
 
-        // ── Event loop ────────────────────────────────────────────────────────
+        // -- Event loop
         let result = loop {
             if !event::poll(std::time::Duration::from_millis(200))? { continue; }
             if let Ok(Event::Key(key)) = event::read() {

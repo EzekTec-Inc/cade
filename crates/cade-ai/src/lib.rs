@@ -26,7 +26,7 @@ pub struct AiConfig {
     pub llm_provider: String,
 }
 
-// ── Request / Response types ──────────────────────────────────────────────────
+// -- Request / Response types
 
 /// A base64-encoded image attached to a user message.
 ///
@@ -108,7 +108,7 @@ pub enum StreamChunk {
     Done,
 }
 
-// ── Provider trait ────────────────────────────────────────────────────────────
+// -- Provider trait
 
 #[async_trait]
 pub trait LlmProvider: Send + Sync {
@@ -119,7 +119,7 @@ pub trait LlmProvider: Send + Sync {
     ) -> Result<std::pin::Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>>;
 }
 
-// ── Retry helper ──────────────────────────────────────────────────────────────
+// -- Retry helper
 
 /// Which HTTP status codes are worth retrying (transient / rate-limit errors).
 /// 400, 401, 403, 404 are permanent — fail fast.
@@ -224,7 +224,7 @@ pub fn bare_model(model: &str) -> &str {
     }
 }
 
-// ── LLM Router ────────────────────────────────────────────────────────────────
+// -- LLM Router
 //
 // Owns all configured providers and selects the right one at request time
 // based on the `provider/model` prefix in `CompletionRequest.model`.
@@ -312,7 +312,7 @@ impl LlmRouter {
             std::collections::HashMap::new();
         let mut default_provider = config.llm_provider.to_string();
 
-        // ── Core providers (from AiConfig) ────────────────────────────────
+        // -- Core providers (from AiConfig)
         if let Some(key) = &config.anthropic_api_key {
             providers.insert(
                 "anthropic".to_string(),
@@ -345,7 +345,7 @@ impl LlmRouter {
             Arc::new(ollama::OllamaProvider::new(config.ollama_base_url.clone())),
         );
 
-        // ── Preset providers auto-detected from env vars ───────────────────────
+        // -- Preset providers auto-detected from env vars
         for preset in PRESET_PROVIDERS {
             // Skip if already registered (avoid overwriting a core provider)
             if providers.contains_key(preset.name) { continue; }
@@ -418,7 +418,7 @@ impl LlmRouter {
             p.get(name).map(|k| k.is_empty()).unwrap_or(true)
         };
 
-        // ── Core providers ────────────────────────────────────────────────────
+        // -- Core providers
         let missing_anthropic = !self.providers.contains_key("anthropic")
             || needs_key(&self.provider_keys, "anthropic");
         if missing_anthropic {
@@ -472,7 +472,7 @@ impl LlmRouter {
             }
         }
 
-        // ── Preset providers (Groq, OpenRouter, Together, etc.) ───────────────
+        // -- Preset providers (Groq, OpenRouter, Together, etc.)
         for preset in PRESET_PROVIDERS {
             let missing = !self.providers.contains_key(preset.name)
                 || needs_key(&self.provider_keys, preset.name);
@@ -534,7 +534,7 @@ impl LlmRouter {
             let key = self.provider_keys.get(name.as_str()).cloned().unwrap_or_default();
 
             match name.as_str() {
-                // ── Local Ollama ─────────────────────────────────────────────
+                // -- Local Ollama
                 "ollama" => {
                     let url = self.ollama_base_url.clone();
                     tasks.push(Box::pin(async move {
@@ -557,7 +557,7 @@ impl LlmRouter {
                     }));
                 }
 
-                // ── Anthropic — live /v1/models, fallback to catalogue ───────
+                // -- Anthropic — live /v1/models, fallback to catalogue
                 "anthropic" => {
                     tasks.push(Box::pin(async move {
                         let live = anthropic::fetch_anthropic_models(&key).await;
@@ -610,7 +610,7 @@ impl LlmRouter {
                     }));
                 }
 
-                // ── Gemini — live models list, fallback to catalogue ─────────
+                // -- Gemini — live models list, fallback to catalogue
                 "gemini" | "google" => {
                     let n = name.clone();
                     tasks.push(Box::pin(async move {
@@ -637,7 +637,7 @@ impl LlmRouter {
                     }));
                 }
 
-                // ── Preset providers (Groq, OpenRouter, etc.) ───────────────
+                // -- Preset providers (Groq, OpenRouter, etc.)
                 _ => {
                     if let Some(preset) = PRESET_PROVIDERS.iter().find(|p| p.name == name.as_str()) {
                         if let Some(models_url) = preset.models_url {
@@ -798,7 +798,7 @@ impl LlmProvider for LlmRouter {
     }
 }
 
-// ── Factory (kept for compatibility) ──────────────────────────────────────────
+// -- Factory (kept for compatibility)
 
 pub fn make_provider(config: &AiConfig) -> Result<Arc<dyn LlmProvider>> {
     Ok(Arc::new(LlmRouter::build(config)))
@@ -814,7 +814,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // ── bare_model ────────────────────────────────────────────────────────
+    // -- bare_model
 
     #[test]
     fn bare_model_strips_provider_prefix() {
@@ -829,7 +829,7 @@ mod tests {
         assert_eq!(bare_model("gpt-4o"), "gpt-4o");
     }
 
-    // ── is_retryable_status ──────────────────────────────────────────────
+    // -- is_retryable_status
 
     #[test]
     fn retryable_statuses() {
@@ -849,7 +849,7 @@ mod tests {
         assert!(!is_retryable_status(reqwest::StatusCode::OK)); // 200
     }
 
-    // ── provider_error ───────────────────────────────────────────────────
+    // -- provider_error
 
     #[test]
     fn provider_error_extracts_json_message() {
@@ -869,7 +869,7 @@ mod tests {
         assert!(msg.contains("Something went wrong"), "got: {msg}");
     }
 
-    // ── is_retryable_error ───────────────────────────────────────────────
+    // -- is_retryable_error
 
     #[test]
     fn retryable_error_from_provider_error() {
@@ -886,7 +886,7 @@ mod tests {
         assert!(!is_retryable_error(&err));
     }
 
-    // ── infer_provider_prefix ────────────────────────────────────────────
+    // -- infer_provider_prefix
 
     #[test]
     fn infer_claude() {
@@ -921,7 +921,7 @@ mod tests {
         assert_eq!(infer_provider_prefix("some-custom-model"), None);
     }
 
-    // ── LlmRouter::build ─────────────────────────────────────────────────
+    // -- LlmRouter::build
 
     #[test]
     fn router_build_with_no_keys() {
@@ -1051,7 +1051,7 @@ mod tests {
         assert!(router.validate_model("openai/gpt-4o").is_err()); // openai not configured
     }
 
-    // ── LlmMessage serialization ─────────────────────────────────────────
+    // -- LlmMessage serialization
 
     #[test]
     fn llm_message_roundtrip() {
@@ -1082,7 +1082,7 @@ mod tests {
         assert_eq!(parsed.name, "bash");
     }
 
-    // ── TokenUsage defaults ──────────────────────────────────────────────
+    // -- TokenUsage defaults
 
     #[test]
     fn token_usage_default() {
@@ -1094,7 +1094,7 @@ mod tests {
         assert!(u.model.is_empty());
     }
 
-    // ── openai_compat_presets ────────────────────────────────────────────
+    // -- openai_compat_presets
 
     #[test]
     fn compat_presets_non_empty() {
@@ -1107,7 +1107,7 @@ mod tests {
         }
     }
 
-    // ── provider_from_row ────────────────────────────────────────────────
+    // -- provider_from_row
 
     #[test]
     fn provider_from_row_anthropic() {

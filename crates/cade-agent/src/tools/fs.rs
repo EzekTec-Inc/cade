@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-// ── SEC-A: Opt-in filesystem sandboxing ───────────────────────────────────────
+// -- SEC-A: Opt-in filesystem sandboxing
 //
 // When `CADE_FS_ROOT` is set, all file-tool paths are verified to resolve
 // within that directory.  When unset, tools operate without path confinement
@@ -73,7 +73,7 @@ fn ensure_within_root(root: &Path, raw_path: &str) -> Result<()> {
     Ok(())
 }
 
-// ── Read ─────────────────────────────────────────────────────────────────────
+// -- Read
 
 pub struct ReadTool;
 
@@ -126,7 +126,7 @@ impl ReadTool {
     }
 }
 
-// ── Write ─────────────────────────────────────────────────────────────────────
+// -- Write
 
 pub struct WriteTool;
 
@@ -169,7 +169,7 @@ impl WriteTool {
     }
 }
 
-// ── Edit (str-replace) ────────────────────────────────────────────────────────
+// -- Edit (str-replace)
 
 pub struct EditTool;
 
@@ -231,7 +231,7 @@ impl EditTool {
     }
 }
 
-// ── ApplyPatch ────────────────────────────────────────────────────────────────
+// -- ApplyPatch
 // Unified-diff based editing optimised for OpenAI (Codex/GPT) models which are
 // trained to produce patch output rather than string-replace pairs.
 
@@ -340,7 +340,7 @@ mod tests {
 
     use super::*;
 
-    // ── validate_patch_paths ──────────────────────────────────────────────
+    // -- validate_patch_paths
 
     #[test]
     fn patch_paths_normal() {
@@ -392,7 +392,7 @@ mod tests {
         assert!(validate_patch_paths(patch).is_err());
     }
 
-    // ── ensure_within_root ────────────────────────────────────────────────
+    // -- ensure_within_root
 
     #[test]
     fn within_root_relative_ok() {

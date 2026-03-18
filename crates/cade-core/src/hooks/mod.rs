@@ -17,7 +17,7 @@ use crate::settings::manager::HooksConfig;
 
 // endregion: --- Modules
 
-// ── Public outcome ────────────────────────────────────────────────────────────
+// -- Public outcome
 
 #[derive(Debug, Clone)]
 pub enum HookOutcome {
@@ -38,7 +38,7 @@ impl HookOutcome {
     }
 }
 
-// ── HookEngine ────────────────────────────────────────────────────────────────
+// -- HookEngine
 
 #[derive(Clone)]
 pub struct HookEngine {
@@ -53,7 +53,7 @@ impl HookEngine {
 
     pub fn is_empty(&self) -> bool { self.hooks.is_empty() }
 
-    // ── Tool lifecycle ────────────────────────────────────────────────────────
+    // -- Tool lifecycle
 
     /// Fire before a tool runs. Returns `Block` to prevent execution.
     pub async fn pre_tool_use(&self, tool_name: &str, args: &Value) -> HookOutcome {
@@ -121,7 +121,7 @@ impl HookEngine {
         self.run_entries_blocking(&self.hooks.permission_request, tool_name, input).await
     }
 
-    // ── Conversation lifecycle ────────────────────────────────────────────────
+    // -- Conversation lifecycle
 
     /// Fire when the user submits a prompt. Returns `Block` to suppress the turn.
     pub async fn user_prompt_submit(&self, prompt: &str) -> HookOutcome {
@@ -201,7 +201,7 @@ impl HookEngine {
     }
 }
 
-// ── Internal dispatch ─────────────────────────────────────────────────────────
+// -- Internal dispatch
 
 impl HookEngine {
     /// Run all entries that match `tool_name`. First exit-2 blocks; returns outcome.
@@ -289,7 +289,7 @@ impl HookEngine {
     }
 }
 
-// ── Matcher ───────────────────────────────────────────────────────────────────
+// -- Matcher
 
 /// Returns true if `tool_name` matches `matcher`.
 /// None / "" / "*" → match all. Otherwise treated as a regex.
@@ -315,7 +315,7 @@ fn regex_match(pattern: &str, text: &str) -> bool {
     }
 }
 
-// ── Command runner ────────────────────────────────────────────────────────────
+// -- Command runner
 
 #[derive(Debug)]
 enum HookResult {
@@ -457,7 +457,7 @@ mod tests {
     use crate::settings::manager::{HookDef, HookEntry, HooksConfig};
     use std::path::PathBuf;
 
-    // ── HookOutcome ──────────────────────────────────────────────────────
+    // -- HookOutcome
 
     #[test]
     fn hook_outcome_allow_is_not_block() {
@@ -473,7 +473,7 @@ mod tests {
         assert_eq!(outcome.reason(), Some("denied"));
     }
 
-    // ── HookEngine::is_empty ─────────────────────────────────────────────
+    // -- HookEngine::is_empty
 
     #[test]
     fn engine_empty_when_no_hooks() {
@@ -492,7 +492,7 @@ mod tests {
         assert!(!engine.is_empty());
     }
 
-    // ── matcher_matches ──────────────────────────────────────────────────
+    // -- matcher_matches
 
     #[test]
     fn matcher_none_matches_all() {
@@ -529,7 +529,7 @@ mod tests {
         assert!(matcher_matches(&Some("[".into()), "a[b"));
     }
 
-    // ── HooksConfig::merge ───────────────────────────────────────────────
+    // -- HooksConfig::merge
 
     #[test]
     fn hooks_config_merge() {
@@ -557,7 +557,7 @@ mod tests {
         assert!(HooksConfig::default().is_empty());
     }
 
-    // ── Integration: hook runs a real command ────────────────────────────
+    // -- Integration: hook runs a real command
 
     #[tokio::test]
     async fn pre_tool_use_allows_on_exit_0() {
@@ -640,7 +640,7 @@ mod tests {
 
 // endregion: --- Tests
 
-// ── Display helpers ───────────────────────────────────────────────────────────
+// -- Display helpers
 
 impl std::fmt::Display for crate::settings::manager::HookDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {

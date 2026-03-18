@@ -13,7 +13,7 @@ pub struct CadeClient {
     api_key: String,
 }
 
-// ── Agent ─────────────────────────────────────────────────────────────────────
+// -- Agent
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentState {
@@ -49,7 +49,7 @@ pub struct MemoryBlock {
     pub tier: Option<String>,
 }
 
-// ── Messages ──────────────────────────────────────────────────────────────────
+// -- Messages
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CadeMessage {
@@ -130,7 +130,7 @@ pub struct ToolReturn {
     pub status: String, // "success" | "error"
 }
 
-// ── Tools (server-registered) ─────────────────────────────────────────────────
+// -- Tools (server-registered)
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolDef {
@@ -155,7 +155,7 @@ pub struct CreateToolRequest {
     pub tags: Vec<String>,
 }
 
-// ── Client impl ───────────────────────────────────────────────────────────────
+// -- Client impl
 
 impl CadeClient {
     pub fn new(base_url: String, api_key: String) -> Result<Self> {
@@ -170,7 +170,7 @@ impl CadeClient {
         format!("{}/v1{}", self.base_url.trim_end_matches('/'), path)
     }
 
-    // ── Health + server config ────────────────────────────────────────────────
+    // -- Health + server config
 
     pub async fn health(&self) -> Result<bool> {
         let resp = self.client
@@ -202,7 +202,7 @@ impl CadeClient {
 
     /// Fetch the server's auto-detected provider and default model.
     /// Falls back to a local default if the endpoint is unavailable (e.g. CADE Cloud).
-    // ── Provider management ───────────────────────────────────────────────────
+    // -- Provider management
 
     pub async fn list_providers(&self) -> anyhow::Result<serde_json::Value> {
         let resp = self.client
@@ -309,7 +309,7 @@ impl CadeClient {
         format!("{provider}/{model}")
     }
 
-    // ── Agents ────────────────────────────────────────────────────────────────
+    // -- Agents
 
     /// Attach a list of tool IDs to an agent on the server.
     pub async fn attach_agent_tools(&self, agent_id: &str, tool_ids: &[String]) -> Result<()> {
@@ -461,7 +461,7 @@ impl CadeClient {
         Ok(resp.json::<Vec<AgentState>>().await?)
     }
 
-    // ── Memory ────────────────────────────────────────────────────────────────
+    // -- Memory
 
     /// Fetch all memory blocks for an agent.
     pub async fn get_memory(&self, agent_id: &str) -> Result<Vec<MemoryBlock>> {
@@ -577,7 +577,7 @@ impl CadeClient {
         Ok(())
     }
 
-    // ── Memory tier management ────────────────────────────────────────────────
+    // -- Memory tier management
 
     /// Set the tier of a memory block ('short' | 'long' | 'pinned').
     pub async fn set_memory_tier(&self, agent_id: &str, label: &str, tier: &str) -> Result<()> {
@@ -607,7 +607,7 @@ impl CadeClient {
         self.set_memory_tier(agent_id, label, "short").await
     }
 
-    // ── Context management ────────────────────────────────────────────────────
+    // -- Context management
 
     /// Delete all messages for an agent (clear context window).
     pub async fn clear_messages(&self, agent_id: &str) -> Result<usize> {
@@ -636,7 +636,7 @@ impl CadeClient {
         Ok(body["messages"].as_array().cloned().unwrap_or_default())
     }
 
-    // ── Messages ──────────────────────────────────────────────────────────────
+    // -- Messages
 
     /// Send a user message and return the response messages.
     /// Set `ephemeral=true` for system-injected messages that should not be persisted.
@@ -668,7 +668,7 @@ impl CadeClient {
         self.post_messages(agent_id, &req).await
     }
 
-    // ── Conversations ─────────────────────────────────────────────────────────
+    // -- Conversations
 
     pub async fn list_conversations(&self, agent_id: &str) -> Result<Vec<serde_json::Value>> {
         let resp = self.client
@@ -728,7 +728,7 @@ impl CadeClient {
         Ok(())
     }
 
-    // ── Runs (background mode) ────────────────────────────────────────────────
+    // -- Runs (background mode)
 
     pub async fn get_run(&self, run_id: &str) -> Result<serde_json::Value> {
         let resp = self.client
@@ -780,7 +780,7 @@ impl CadeClient {
         Ok(messages)
     }
 
-    // ── Messages ──────────────────────────────────────────────────────────────
+    // -- Messages
 
     /// Stream a user message using SSE. Calls `on_event` for each message as
     /// it arrives (for live rendering), and returns the full collected list.
@@ -1107,7 +1107,7 @@ impl CadeClient {
         Ok(msgs)
     }
 
-    // ── Tools ─────────────────────────────────────────────────────────────────
+    // -- Tools
 
     pub async fn create_tool(&self, req: CreateToolRequest) -> Result<ToolDef> {
         let resp = self.client

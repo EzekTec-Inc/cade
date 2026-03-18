@@ -113,7 +113,7 @@ impl GeminiProvider {
         }
     }
 
-    // ── Content-cache helpers ─────────────────────────────────────────────────
+    // -- Content-cache helpers
 
     /// Stable 64-bit hash of the cacheable parts of a request.
     fn content_hash(model: &str, system_text: &Option<String>, tools: &[Value]) -> u64 {

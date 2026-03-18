@@ -10,7 +10,7 @@
 
 use std::path::{Path, PathBuf};
 
-// ── Trait ─────────────────────────────────────────────────────────────────────
+// -- Trait
 
 /// A completion result produced by an [`AutocompleteProvider`].
 #[derive(Debug, Clone)]
@@ -30,7 +30,7 @@ pub trait AutocompleteProvider {
     fn completions(&self, input: &str, cursor: usize) -> Vec<Completion>;
 }
 
-// ── FileAutocompleteProvider ──────────────────────────────────────────────────
+// -- FileAutocompleteProvider
 
 /// Provides Tab path completion and `@` fuzzy file browsing.
 pub struct FileAutocompleteProvider {
@@ -47,7 +47,7 @@ impl FileAutocompleteProvider {
         self.root = root;
     }
 
-    // ── Tab path completion ───────────────────────────────────────────────
+    // -- Tab path completion
 
     /// Attempt Tab path completion on the token at `cursor`.
     /// Returns `Some((new_input, new_cursor))` on success, or `None` if
@@ -154,7 +154,7 @@ impl FileAutocompleteProvider {
         Some((new_input, new_cursor))
     }
 
-    // ── @ fuzzy file listing ──────────────────────────────────────────────
+    // -- @ fuzzy file listing
 
     /// Collect project files matching `query` for the `@` picker.
     /// Walks up to 3 directories deep, skips hidden / `target` / `node_modules`,
@@ -194,7 +194,7 @@ impl AutocompleteProvider for FileAutocompleteProvider {
     }
 }
 
-// ── SlashCommandProvider ──────────────────────────────────────────────────────
+// -- SlashCommandProvider
 
 /// A registered slash command.
 #[derive(Debug, Clone)]
@@ -247,7 +247,7 @@ impl AutocompleteProvider for SlashCommandProvider {
     }
 }
 
-// ── Internal helpers ──────────────────────────────────────────────────────────
+// -- Internal helpers
 
 fn collect_files_inner(
     root: &Path,

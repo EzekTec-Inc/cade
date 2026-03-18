@@ -15,7 +15,7 @@ use std::collections::VecDeque;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::component::{Component, RenderedLine};
 
-// ── Input mode ────────────────────────────────────────────────────────────────
+// -- Input mode
 
 /// Semantic mode of the current input buffer, determined by its prefix.
 ///
@@ -31,7 +31,7 @@ pub enum InputMode {
     SlashCommand,
 }
 
-// ── Paste entry ───────────────────────────────────────────────────────────────
+// -- Paste entry
 
 /// A collapsed text-paste marker stored for later expansion.
 #[derive(Debug, Clone)]
@@ -42,7 +42,7 @@ pub struct PasteEntry {
     pub text: String,
 }
 
-// ── Image entry ───────────────────────────────────────────────────────────────
+// -- Image entry
 
 /// An image pasted by the user (Ctrl+V / Alt+V).
 ///
@@ -61,7 +61,7 @@ pub struct ImageEntry {
     pub height: u32,
 }
 
-// ── Editor ────────────────────────────────────────────────────────────────────
+// -- Editor
 
 /// Standalone multi-line text editor component.
 pub struct Editor {
@@ -70,19 +70,19 @@ pub struct Editor {
     /// Byte-offset cursor position within `input`.
     pub cursor_pos: usize,
 
-    // ── Bracketed paste ───────────────────────────────────────────────────
+    // -- Bracketed paste
     /// Monotonically increasing paste counter (for `[paste #N …]` markers).
     paste_counter: usize,
     /// Stored paste buffers keyed by their marker ID.
     pub paste_buffers: Vec<PasteEntry>,
 
-    // ── Image paste ───────────────────────────────────────────────────────
+    // -- Image paste
     /// Monotonically increasing image counter (for `[image #N …]` placeholders).
     image_counter: usize,
     /// Stored image data keyed by their placeholder ID.
     pub paste_images: Vec<ImageEntry>,
 
-    // ── Undo / redo ───────────────────────────────────────────────────────
+    // -- Undo / redo
     /// Snapshots of (input, cursor_pos) taken *before* each edit (max 100).
     /// `undo()` pops the top and restores it.
     undo_stack: VecDeque<(String, usize)>,
@@ -120,7 +120,7 @@ impl Editor {
         }
     }
 
-    // ── Undo / redo ───────────────────────────────────────────────────────
+    // -- Undo / redo
 
     /// Save current `(input, cursor_pos)` to the undo stack **before** a
     /// destructive edit.  Clears the redo stack (new edit invalidates
@@ -164,7 +164,7 @@ impl Editor {
         }
     }
 
-    // ── Insert / delete ───────────────────────────────────────────────────
+    // -- Insert / delete
 
     /// Insert a character at the current cursor position.
     pub fn insert_char(&mut self, c: char) {
@@ -266,7 +266,7 @@ impl Editor {
         self.cursor_pos = start;
     }
 
-    // ── Cursor movement ───────────────────────────────────────────────────
+    // -- Cursor movement
     // Cursor movements do NOT snapshot (they don't modify text).
 
     /// Move cursor one character to the left.
@@ -345,7 +345,7 @@ impl Editor {
         self.cursor_pos = self.input.len();
     }
 
-    // ── Bulk operations ───────────────────────────────────────────────────
+    // -- Bulk operations
 
     /// Clear the entire buffer and reset cursor.
     /// Does NOT snapshot (used by submit / Ctrl+C — not undoable by design).
@@ -363,7 +363,7 @@ impl Editor {
         self.cursor_pos = self.input.len();
     }
 
-    // ── Bracketed paste ───────────────────────────────────────────────────
+    // -- Bracketed paste
 
     /// Handle a bracketed-paste event.
     ///
@@ -410,7 +410,7 @@ impl Editor {
         self.cursor_pos = self.cursor_pos.min(self.input.len());
     }
 
-    // ── Image paste ───────────────────────────────────────────────────────
+    // -- Image paste
 
     /// Record a pasted image and insert a `[image #N: WxH]` placeholder at
     /// the cursor.  The full image data is kept in `paste_images` and
@@ -447,7 +447,7 @@ impl Editor {
         std::mem::take(&mut self.paste_images)
     }
 
-    // ── Input-mode detection ──────────────────────────────────────────────
+    // -- Input-mode detection
 
     /// Detect the semantic mode of the current buffer based on its prefix.
     pub fn detect_mode(&self) -> InputMode {
@@ -464,7 +464,7 @@ impl Editor {
     }
 }
 
-// ── Component impl ────────────────────────────────────────────────────────────
+// -- Component impl
 
 impl Component for Editor {
     /// Render the editor as a single-line (or multi-line) input field.
@@ -506,7 +506,7 @@ impl Component for Editor {
     /// subset and is useful for testing and future refactoring.
     fn handle_input(&mut self, key: KeyEvent) -> bool {
         match (key.code, key.modifiers) {
-            // ── Text editing (consumed) ───────────────────────────────────
+            // -- Text editing (consumed)
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => { self.delete_to_start(); true }
             (KeyCode::Char('k'), KeyModifiers::CONTROL) => { self.delete_to_end(); true }
             (KeyCode::Char('w'), KeyModifiers::CONTROL) => { self.delete_word_back(); true }
@@ -534,7 +534,7 @@ impl Component for Editor {
                 true
             }
 
-            // ── Not consumed — bubble up to TuiApp ───────────────────────
+            // -- Not consumed — bubble up to TuiApp
             _ => false,
         }
     }

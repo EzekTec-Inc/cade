@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 // endregion: --- Modules
 
-// ── PermissionRule ─────────────────────────────────────────────────────────────
+// -- PermissionRule
 
 /// A single allow or deny rule matching a tool call.
 ///
@@ -155,7 +155,7 @@ impl std::str::FromStr for PermissionMode {
     }
 }
 
-// ── Write-tool and write-command detection ────────────────────────────────────
+// -- Write-tool and write-command detection
 
 /// Tools that are intrinsically write/mutating regardless of arguments.
 /// In plan mode these are always blocked.
@@ -360,7 +360,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    // ── PermissionRule::parse ─────────────────────────────────────────────
+    // -- PermissionRule::parse
 
     #[test]
     fn parse_empty_returns_none() -> Result<()> {
@@ -422,7 +422,7 @@ mod tests {
         assert_eq!(r.pattern, None);
     }
 
-    // ── PermissionRule::matches ───────────────────────────────────────────
+    // -- PermissionRule::matches
 
     #[test]
     fn matches_bare_tool_all_args() {
@@ -469,7 +469,7 @@ mod tests {
         assert!(!r.matches("read_file", Some("foo")));
     }
 
-    // ── PermissionRule::Display ───────────────────────────────────────────
+    // -- PermissionRule::Display
 
     #[test]
     fn display_bare() {
@@ -483,7 +483,7 @@ mod tests {
         assert_eq!(r.to_string(), "bash(cargo test)");
     }
 
-    // ── tool_first_arg ───────────────────────────────────────────────────
+    // -- tool_first_arg
 
     #[test]
     fn tool_first_arg_bash_command() {
@@ -509,7 +509,7 @@ mod tests {
         assert!(tool_first_arg("bash", &args).is_none());
     }
 
-    // ── PermissionMode ───────────────────────────────────────────────────
+    // -- PermissionMode
 
     #[test]
     fn permission_mode_default() {
@@ -529,7 +529,7 @@ mod tests {
         assert!("garbage".parse::<PermissionMode>().is_err());
     }
 
-    // ── bash_command_is_write ─────────────────────────────────────────────
+    // -- bash_command_is_write
 
     #[test]
     fn readonly_commands_not_write() {
@@ -613,7 +613,7 @@ mod tests {
         assert!(bash_command_is_write("echo test; mkdir out"));
     }
 
-    // ── bash_command_is_suspicious ────────────────────────────────────────
+    // -- bash_command_is_suspicious
 
     #[test]
     fn suspicious_nested_shell() {
@@ -647,7 +647,7 @@ mod tests {
         assert!(!bash_command_is_suspicious("git status"));
     }
 
-    // ── PermissionManager ─────────────────────────────────────────────────
+    // -- PermissionManager
 
     #[test]
     fn manager_bypass_mode_auto_approves() {
@@ -798,7 +798,7 @@ mod tests {
     }
 }
 
-// ── PermissionManager ─────────────────────────────────────────────────────────
+// -- PermissionManager
 
 #[derive(Clone, Default)]
 pub struct PermissionManager {

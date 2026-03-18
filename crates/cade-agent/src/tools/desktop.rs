@@ -10,7 +10,7 @@ use cade_desktop::desktop::{
     notify::{Urgency, send_notification},
 };
 
-// ── Screen Capture ────────────────────────────────────────────────────────────
+// -- Screen Capture
 
 pub struct DesktopCaptureTool;
 
@@ -81,7 +81,7 @@ impl DesktopCaptureTool {
     }
 }
 
-// ── List Windows ──────────────────────────────────────────────────────────────
+// -- List Windows
 
 pub struct DesktopListWindowsTool;
 
@@ -109,7 +109,7 @@ impl DesktopListWindowsTool {
     }
 }
 
-// ── Window / App Control ──────────────────────────────────────────────────────
+// -- Window / App Control
 
 pub struct DesktopControlTool;
 
@@ -189,7 +189,7 @@ impl DesktopControlTool {
     }
 }
 
-// ── Notifications ─────────────────────────────────────────────────────────────
+// -- Notifications
 
 pub struct DesktopNotifyTool;
 

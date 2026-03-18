@@ -124,7 +124,7 @@ async fn main() -> Result<()> {
     Ok(())
 }
 
-// ── Version header middleware ──────────────────────────────────────────────────
+// -- Version header middleware
 
 async fn add_version_header(mut response: axum::response::Response) -> axum::response::Response {
     response.headers_mut().insert(
@@ -134,7 +134,7 @@ async fn add_version_header(mut response: axum::response::Response) -> axum::res
     response
 }
 
-// ── RouterAdapter: thin wrapper so Arc<RwLock<LlmRouter>> implements LlmProvider ──
+// -- RouterAdapter: thin wrapper so Arc<RwLock<LlmRouter>> implements LlmProvider
 //
 // IMPORTANT: the lock is held ONLY for the brief resolve_provider() call.
 // It is dropped BEFORE any HTTP calls to Anthropic / OpenAI / Gemini.

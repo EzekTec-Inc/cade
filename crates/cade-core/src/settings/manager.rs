@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-// ── Hook configuration ────────────────────────────────────────────────────────
+// -- Hook configuration
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -98,7 +98,7 @@ pub struct PermissionSettings {
     pub strict_bash: bool,
 }
 
-// ── MCP server configuration ──────────────────────────────────────────────────
+// -- MCP server configuration
 
 /// Configuration for a single MCP server (matches Claude Desktop / VS Code format).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -193,7 +193,7 @@ mod tests {
     use super::*;
     use std::fs;
 
-    // ── HooksConfig ──────────────────────────────────────────────────────
+    // -- HooksConfig
 
     #[test]
     fn hooks_config_default_is_empty() {
@@ -212,7 +212,7 @@ mod tests {
         assert_eq!(merged.stop.len(), 1);
     }
 
-    // ── PermissionSettings ────────────────────────────────────────────────
+    // -- PermissionSettings
 
     #[test]
     fn permission_settings_default() {
@@ -222,7 +222,7 @@ mod tests {
         assert!(!p.strict_bash);
     }
 
-    // ── GlobalSettings serialization ──────────────────────────────────────
+    // -- GlobalSettings serialization
 
     #[test]
     fn global_settings_roundtrip_json() {
@@ -252,7 +252,7 @@ mod tests {
         assert!(gs.store_api_key);
     }
 
-    // ── ProjectSettings serialization ─────────────────────────────────────
+    // -- ProjectSettings serialization
 
     #[test]
     fn project_settings_with_mcp_servers() {
@@ -277,7 +277,7 @@ mod tests {
         assert!(!cfg.disabled);
     }
 
-    // ── LocalSettings ─────────────────────────────────────────────────────
+    // -- LocalSettings
 
     #[test]
     fn local_settings_pinned_agents() {
@@ -295,7 +295,7 @@ mod tests {
         assert_eq!(ls.pinned_agents[1].name, "Beta");
     }
 
-    // ── McpServerConfig ───────────────────────────────────────────────────
+    // -- McpServerConfig
 
     #[test]
     fn mcp_server_config_defaults() {
@@ -307,7 +307,7 @@ mod tests {
         assert!(!cfg.disabled);
     }
 
-    // ── HookDef serialization ─────────────────────────────────────────────
+    // -- HookDef serialization
 
     #[test]
     fn hook_def_json_roundtrip() {
@@ -331,7 +331,7 @@ mod tests {
         }
     }
 
-    // ── SettingsManager (with temp dirs) ──────────────────────────────────
+    // -- SettingsManager (with temp dirs)
 
     #[test]
     fn settings_manager_loads_defaults_for_missing_files() {

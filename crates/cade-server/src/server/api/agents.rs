@@ -28,7 +28,7 @@ Do NOT attempt to use MCP configuration tools (like set_config_value) to enforce
 the result, what you found, or what you are doing next. Never end a turn with only \
 tool calls and no explanation.";
 
-// ── Request / Response DTOs ───────────────────────────────────────────────────
+// -- Request / Response DTOs
 
 #[derive(Debug, Deserialize)]
 pub struct CreateAgentBody {
@@ -73,7 +73,7 @@ impl From<AgentRow> for AgentResponse {
     }
 }
 
-// ── Handlers ──────────────────────────────────────────────────────────────────
+// -- Handlers
 
 pub async fn create_agent(
     State(state): State<AppState>,
@@ -246,7 +246,7 @@ pub async fn patch_agent(
     })))
 }
 
-// ── Memory endpoints ──────────────────────────────────────────────────────────
+// -- Memory endpoints
 
 /// GET /v1/agents/:id/memory
 pub async fn get_memory(
@@ -343,7 +343,7 @@ pub async fn restore_memory_revision(
     }
 }
 
-// ── Messages endpoints ────────────────────────────────────────────────────────
+// -- Messages endpoints
 
 /// DELETE /v1/agents/:id/messages — clear context (default conversation)
 pub async fn clear_messages_handler(
@@ -389,7 +389,7 @@ pub async fn search_messages_handler(
     Ok(Json(json!({ "messages": messages, "query": query })))
 }
 
-// ── Conversation endpoints ────────────────────────────────────────────────────
+// -- Conversation endpoints
 
 use crate::server::storage::sqlite::ConversationRow;
 

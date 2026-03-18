@@ -21,7 +21,7 @@ use serde_json::{json, Value};
 
 use cade_agent::agent::client::{CadeClient, CreateAgentRequest, MemoryBlock};
 
-// ── Export ────────────────────────────────────────────────────────────────────
+// -- Export
 
 /// Export the agent identified by `agent_id` to a JSON value.
 /// Fetches: agent metadata, memory blocks, conversations + their messages.
@@ -107,7 +107,7 @@ pub async fn export_agent_to_file(
     Ok(())
 }
 
-// ── Import ────────────────────────────────────────────────────────────────────
+// -- Import
 
 /// Import an agent from a JSON export file.
 /// Creates a NEW agent (never overwrites an existing one).
@@ -196,7 +196,7 @@ pub async fn import_agent(client: &CadeClient, payload: &Value) -> Result<String
     Ok(new_agent.id)
 }
 
-// ── Helper: resolve agent by name-or-id ───────────────────────────────────────
+// -- Helper: resolve agent by name-or-id
 
 /// Resolve `name_or_id` to an agent ID:
 /// - if it matches an exact agent ID → use it
@@ -222,7 +222,7 @@ pub async fn resolve_agent_id(client: &CadeClient, name_or_id: &str) -> Result<S
     }
 }
 
-// ── Default output path ────────────────────────────────────────────────────────
+// -- Default output path
 
 /// Generate a default export filename from agent name + timestamp.
 pub fn default_export_path(agent_name: &str) -> String {

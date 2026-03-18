@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
-// ── Data types ────────────────────────────────────────────────────────────────
+// -- Data types
 
 /// One option inside a question.
 #[derive(Debug, Clone)]
@@ -30,7 +30,7 @@ pub struct AskQuestion {
     pub multi_select: bool,
 }
 
-// ── AskUserQuestionTool ───────────────────────────────────────────────────────
+// -- AskUserQuestionTool
 
 pub struct AskUserQuestionTool;
 

@@ -39,7 +39,7 @@ use ratatui::{
     widgets::Paragraph,
 };
 
-// ── Public types ──────────────────────────────────────────────────────────────
+// -- Public types
 
 /// One labelled option in a question.
 #[derive(Debug, Clone)]
@@ -84,7 +84,7 @@ impl QuestionAnswer {
     }
 }
 
-// ── QuestionWidget ────────────────────────────────────────────────────────────
+// -- QuestionWidget
 
 pub struct QuestionWidget;
 
@@ -98,7 +98,7 @@ impl QuestionWidget {
         terminal: &mut DefaultTerminal,
         question: &Question,
     ) -> Result<Option<QuestionAnswer>> {
-        // ── Build the effective options list ──────────────────────────────────
+        // -- Build the effective options list
         let n_real     = question.options.len();
         let has_other  = question.allow_other;
         let has_submit = question.multi_select;
@@ -107,13 +107,13 @@ impl QuestionWidget {
         let other_idx  = if has_other  { n_real } else { usize::MAX };
         let submit_idx = if has_submit { n_real + usize::from(has_other) } else { usize::MAX };
 
-        // ── State ─────────────────────────────────────────────────────────────
+        // -- State
         let mut cursor_pos: usize = 0;
         let mut custom_text = String::new();
         let mut checked: Vec<bool> = vec![false; n_real];
 
         let answer: Option<QuestionAnswer> = 'widget: loop {
-            // ── Draw ──────────────────────────────────────────────────────────
+            // -- Draw
             let (term_w, _) = crossterm::terminal::size().unwrap_or((80, 24));
             let sep = "─".repeat(term_w as usize);
 
@@ -271,7 +271,7 @@ impl QuestionWidget {
                 }
             })?;
 
-            // ── Event ──────────────────────────────────────────────────────────
+            // -- Event
             if !event::poll(std::time::Duration::from_millis(50))? {
                 continue;
             }

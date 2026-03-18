@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 // endregion: --- Modules
 
-// ── Tool access level ─────────────────────────────────────────────────────────
+// -- Tool access level
 
 #[derive(Debug, Clone)]
 pub enum SubagentTools {
@@ -39,7 +39,7 @@ impl SubagentTools {
     }
 }
 
-// ── Scope ─────────────────────────────────────────────────────────────────────
+// -- Scope
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum SubagentScope {
@@ -58,7 +58,7 @@ impl std::fmt::Display for SubagentScope {
     }
 }
 
-// ── Subagent definition ───────────────────────────────────────────────────────
+// -- Subagent definition
 
 #[derive(Debug, Clone)]
 pub struct SubagentDef {
@@ -87,7 +87,7 @@ impl SubagentDef {
     }
 }
 
-// ── Built-ins ─────────────────────────────────────────────────────────────────
+// -- Built-ins
 
 pub fn builtin_subagents() -> Vec<SubagentDef> {
     vec![
@@ -184,7 +184,7 @@ file path and line). If nothing relevant is found, say so clearly.".to_string(),
     ]
 }
 
-// ── Discovery ─────────────────────────────────────────────────────────────────
+// -- Discovery
 
 /// Scan a directory for *.md files defining custom subagents.
 fn discover_in_dir(dir: &Path, scope: SubagentScope) -> Vec<SubagentDef> {
@@ -238,7 +238,7 @@ pub fn find_subagent<'a>(name: &str, all: &'a [SubagentDef]) -> Option<&'a Subag
     all.iter().find(|d| d.name == name)
 }
 
-// ── Parsing ───────────────────────────────────────────────────────────────────
+// -- Parsing
 
 fn parse_subagent_md(id: &str, content: &str, scope: SubagentScope, path: PathBuf) -> Result<SubagentDef> {
     let content = content.trim();
@@ -279,7 +279,7 @@ fn parse_subagent_md(id: &str, content: &str, scope: SubagentScope, path: PathBu
     })
 }
 
-// ── Background result ─────────────────────────────────────────────────────────
+// -- Background result
 
 #[derive(Debug, Clone)]
 pub struct BackgroundResult {
