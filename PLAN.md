@@ -426,3 +426,58 @@ non-auto-fixable: doc comments, too-many-args, MutexGuard across await, etc.)
 
 **Rollback:** Revert the two `mcpServers` entries in `~/.cade/settings.json` to
 the original `"command": "node"` / `"command": "python3"` values.
+
+---
+
+## 2026-03-18T00:14:00Z — Add session footer metrics (tokens, cost, context, mode)
+
+**Summary:** Render a compact session metrics line below the TUI footer, showing
+session tokens, cache tokens, total cost, context usage vs model window, and
+current permission mode:
+`↑13k ↓50k R18M W248k $11.719 13.9%/1.0M (auto)`.
+
+**Files modified:**
+- `crates/cade-cli/src/cli/repl.rs`
+  - Added helpers `fmt_tok_short`, `fmt_window_tokens_short`, `short_mode_label`.
+  - Extended the per-turn UI consumer (`ui_task`) `"usage_statistics"` branch to:
+    - Read session-level input/output token counters.
+    - Aggregate cache-read/cache-write tokens and total USD cost from
+      `SessionStats` (reusing existing `compute_cost`).
+    - Compute per-turn context usage percentage using `input_tokens + cache_read_tokens`
+      over `context_window_for_model(model)`.
+    - Read the current `PermissionMode` from `TuiApp` and map to a short label
+      (`auto|edits|plan|yolo`).
+    - Build the metrics string and assign it to `app.footer_extra` for display
+      in the extra footer row.
+- `crates/cade-tui/src/app.rs` (read-only) — used existing `footer_extra` row and
+  `context_pct` display; no structural changes.
+
+**Reason:** Provide always-visible feedback in the TUI about:
+- Session token usage (↑ input, ↓ output)
+- Cache token usage (R read, W write)
+- Approximate dollar cost (per-model pricing)
+- Context usage for the latest turn vs the model's context window
+- Current permission mode ("auto" = Default)
+
+**Previous behavior:** Footer showed mode, CWD, agent name, model, reasoning
+mode, and a simple `%` context bar. No compact summary of session tokens or
+cost; `/usage`, `/stats`, and `/context` were separate commands.
+
+**New behavior:** After the first `usage_statistics` SSE event in a session, the
+TUI renders an extra row below the footer with a compact metrics string derived
+from:
+- `session_input_tokens` / `session_output_tokens` (↑ / ↓),
+- `SessionStats.per_model` totals (R/W + cost),
+- `cade_ai::catalogue::context_window_for_model` (window tokens),
+- `TuiApp.context_pct` (context usage),
+- `PermissionMode` (mapped to `(auto|edits|plan|yolo)`).
+
+**Verification:** `cargo test --workspace` — 295 tests pass.
+`cargo clippy --workspace --all-targets` — no warnings about the new helpers.
+
+**Rollback:** In `crates/cade-cli/src/cli/repl.rs`:
+1. Remove `fmt_tok_short`, `fmt_window_tokens_short`, and `short_mode_label`.
+2. Revert the added `sess_in_tok_ui`, `sess_out_tok_ui`, and `sess_stats_ui`
+   bindings in `agent_turn`.
+3. Restore the `"usage_statistics"` match arm in the UI consumer to only call
+   `set_context_pct` (as before) and remove the `footer_extra` update.

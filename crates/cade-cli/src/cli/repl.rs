@@ -492,6 +492,40 @@ impl SessionStats {
     }
 }
 
+// -- Session footer helpers
+
+fn fmt_tok_short(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        // Use whole thousands to match compact footer style (e.g. 13k, 248k)
+        format!("{:.0}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+fn fmt_window_tokens_short(n: u32) -> String {
+    if n == 0 {
+        "?".to_string()
+    } else if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.0}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+
+fn short_mode_label(mode: PermissionMode) -> &'static str {
+    match mode {
+        PermissionMode::Default           => "auto",
+        PermissionMode::AcceptEdits       => "edits",
+        PermissionMode::Plan              => "plan",
+        PermissionMode::BypassPermissions => "yolo",
+    }
+}
+
 // -- Tool preflight result
 
 #[derive(Debug)]
@@ -3230,6 +3264,10 @@ impl Repl {
         let bar_text_arc = bar_text;
         let reasoning_buf = self.last_reasoning.clone();
         let assistant_buf = self.last_assistant_text.clone();
+        // Session-level stats for footer metrics (tokens, cost, cache usage)
+        let sess_in_tok_ui  = self.session_input_tokens.clone();
+        let sess_out_tok_ui = self.session_output_tokens.clone();
+        let sess_stats_ui   = self.session_stats.clone();
         // Clear buffers at the start of each turn.
         reasoning_buf.lock().unwrap().clear();
         assistant_buf.lock().unwrap().clear();
@@ -3290,17 +3328,63 @@ impl Repl {
                         }
                     }
                     "usage_statistics" => {
-                        // Stats already updated in on_event; only set UI context %.
+                        use std::sync::atomic::Ordering;
+
+                        // Stats already updated in on_event; here we derive UI metrics:
+                        // - session tokens (↑ input, ↓ output)
+                        // - cache tokens (R read, W write)
+                        // - total cost (USD)
+                        // - context usage % and window size
+                        // - current permission mode (auto/edits/plan/yolo)
                         let model      = msg.data["model"].as_str().unwrap_or("");
                         let input      = msg.data["input_tokens"].as_u64().unwrap_or(0);
                         let cache_read = msg.data["cache_read_tokens"].as_u64().unwrap_or(0);
-                        let window = cade_ai::catalogue::context_window_for_model(model);
-                        if window > 0 {
-                            let used = input + cache_read;
-                            let pct = ((used as f64 / window as f64) * 100.0)
-                                .round().min(99.0) as u8;
-                            app_arc.lock().unwrap().set_context_pct(pct);
+                        let window     = cade_ai::catalogue::context_window_for_model(model);
+
+                        // Per-turn context usage for this model
+                        let (pct_f_opt, pct_int_opt) = if window > 0 {
+                            let used   = input + cache_read;
+                            let pct_f  = (used as f64 / window as f64) * 100.0;
+                            let pct_int = pct_f.round().min(99.0) as u8;
+                            (Some(pct_f), Some(pct_int))
+                        } else {
+                            (None, None)
+                        };
+
+                        // Session-level aggregates
+                        let in_tok  = sess_in_tok_ui.load(Ordering::SeqCst);
+                        let out_tok = sess_out_tok_ui.load(Ordering::SeqCst);
+                        let (cache_r, cache_w, total_cost) = {
+                            let stats = sess_stats_ui.lock().unwrap();
+                            let cache_r: u64 = stats.per_model.values().map(|m| m.cache_read_tokens).sum();
+                            let cache_w: u64 = stats.per_model.values().map(|m| m.cache_write_tokens).sum();
+                            let (total_cost, _) = stats.compute_cost();
+                            (cache_r, cache_w, total_cost)
+                        };
+
+                        // Update TUI context_pct and footer_extra in one lock
+                        let mut app = app_arc.lock().unwrap();
+                        if let Some(pct_int) = pct_int_opt {
+                            app.set_context_pct(pct_int);
                         }
+                        let ctx_pct_f = pct_f_opt.unwrap_or_else(|| {
+                            app.context_pct.map(|p| p as f64).unwrap_or(0.0)
+                        });
+                        let window_str = fmt_window_tokens_short(window);
+                        let mode_label = short_mode_label(app.mode);
+
+                        let metrics = format!(
+                            "↑{} ↓{} R{} W{} ${:.3} {:.1}%/{} ({})",
+                            fmt_tok_short(in_tok),
+                            fmt_tok_short(out_tok),
+                            fmt_tok_short(cache_r),
+                            fmt_tok_short(cache_w),
+                            total_cost,
+                            ctx_pct_f,
+                            window_str,
+                            mode_label,
+                        );
+                        app.footer_extra = Some(metrics);
                     }
                     _ => {}
                 }
