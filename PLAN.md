@@ -381,3 +381,25 @@ completed items (Edition 2024 and rust10x compliance).
 **Rollback:** Run the inverse regex replacement:
 `s/^(\s*)(\/\/ -- (.+))$/\1\/\/ ── \3 ────.../` (would need to regenerate
 trailing dashes to original length — simpler to `git revert`).
+
+---
+
+## 2026-03-18T00:12:00Z — Apply cargo clippy --fix auto-corrections
+
+**Summary:** Applied `cargo clippy --fix --workspace --all-targets` to auto-fix
+~100 clippy warnings. Changes include: collapsed if-statements, simplified
+map_or calls, removed unnecessary references, replaced iterating on map values,
+removed redundant closures, replaced extend with append, etc.
+
+**Files modified:** 25 `.rs` files across all crates and root package.
+
+**Reason:** Reduce clippy warning count from ~200 to ~80 (remaining are
+non-auto-fixable: doc comments, too-many-args, MutexGuard across await, etc.)
+
+**Previous behavior:** ~200 clippy warnings.
+
+**New behavior:** ~80 clippy warnings (remaining require manual review / design changes).
+
+**Verification:** `cargo test --workspace` — 295 tests pass.
+
+**Rollback:** `git revert <commit>`.

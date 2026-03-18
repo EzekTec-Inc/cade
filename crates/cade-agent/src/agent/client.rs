@@ -78,7 +78,7 @@ impl CadeMessage {
         let tc = self.data.get("tool_call")?;
         let id = tc.get("id")
             .and_then(|v| v.as_str())
-            .or_else(|| self.id.as_deref())
+            .or(self.id.as_deref())
             .unwrap_or("unknown")
             .to_string();
         let name = tc.get("name").and_then(|v| v.as_str())?.to_string();
@@ -863,7 +863,7 @@ impl CadeClient {
 
         while let Some(event) = es.next().await {
             // Check cancel flag on every event (fired ~per token while streaming)
-            if cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::SeqCst)) {
+            if cancel.is_some_and(|f| f.load(std::sync::atomic::Ordering::SeqCst)) {
                 es.close();
                 return Err(anyhow::anyhow!("__cancelled__"));
             }
@@ -885,12 +885,11 @@ impl CadeClient {
                     // The server emits {"error":"..."} as a proper SSE event so
                     // we can show the real error without falling back to /messages
                     // (which would re-persist the user message → duplicate in DB).
-                    if let Ok(v) = serde_json::from_str::<Value>(data) {
-                        if let Some(err_msg) = v["error"].as_str() {
+                    if let Ok(v) = serde_json::from_str::<Value>(data)
+                        && let Some(err_msg) = v["error"].as_str() {
                             es.close();
                             return Err(anyhow::anyhow!("{}", err_msg));
                         }
-                    }
                     match serde_json::from_str::<CadeMessage>(data) {
                         Ok(lm) => {
                             on_event(&lm);
@@ -898,8 +897,8 @@ impl CadeClient {
                         }
                         Err(_) => {
                             // Try parsing as a wrapper object with a messages array
-                            if let Ok(v) = serde_json::from_str::<Value>(data) {
-                                if let Some(arr) = v["messages"].as_array() {
+                            if let Ok(v) = serde_json::from_str::<Value>(data)
+                                && let Some(arr) = v["messages"].as_array() {
                                     for item in arr {
                                         if let Ok(lm) = serde_json::from_value::<CadeMessage>(item.clone()) {
                                             on_event(&lm);
@@ -907,7 +906,6 @@ impl CadeClient {
                                         }
                                     }
                                 }
-                            }
                         }
                     }
                 }
@@ -1025,7 +1023,7 @@ impl CadeClient {
         let mut opened = false;
 
         while let Some(event) = es.next().await {
-            if opened && cancel.map_or(false, |f| f.load(std::sync::atomic::Ordering::SeqCst)) {
+            if opened && cancel.is_some_and(|f| f.load(std::sync::atomic::Ordering::SeqCst)) {
                 es.close();
                 return Err(anyhow::anyhow!("__cancelled__"));
             }

@@ -179,14 +179,13 @@ impl McpManager {
 
         for (key, config) in &entries {
             // Keep existing connection if the command is unchanged and server is healthy
-            if let Some(existing) = old_by_key.remove(*key) {
-                if existing.command == config.command && !existing.disabled {
+            if let Some(existing) = old_by_key.remove(*key)
+                && existing.command == config.command && !existing.disabled {
                     summary.kept.push(key.to_string());
                     new_servers.push(existing);
                     continue;
                 }
                 // Command changed or server was disabled — drop and restart
-            }
 
             // Start a new connection
             match Self::connect_server(key, config).await {
@@ -479,11 +478,10 @@ impl McpManager {
                 let mut parameters = Value::Object((*tool.input_schema).clone());
 
                 // Bug 1 fix: OpenAI requires "properties" even if empty for "type": "object"
-                if let Some(obj) = parameters.as_object_mut() {
-                    if obj.get("type").and_then(|t| t.as_str()) == Some("object") && !obj.contains_key("properties") {
+                if let Some(obj) = parameters.as_object_mut()
+                    && obj.get("type").and_then(|t| t.as_str()) == Some("object") && !obj.contains_key("properties") {
                         obj.insert("properties".to_string(), json!({}));
                     }
-                }
 
                 // Infer write tool:
                 // 1. Explicit config.write_tools list (if non-empty → whitelist mode)

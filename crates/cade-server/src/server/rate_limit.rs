@@ -130,6 +130,57 @@ impl RateLimiter {
     }
 }
 
+// endregion: --- Tests
+
+// -- Axum middleware
+
+/// Rate-limit middleware. Throttles POST inference requests per agent.
+/// All other routes pass through untouched.
+pub async fn rate_limit_middleware(
+    State(state): State<AppState>,
+    req: Request<Body>,
+    next: Next,
+) -> Response {
+    let path   = req.uri().path().to_string();
+    let method = req.method().clone();
+
+    // Only throttle POST to inference endpoints
+    let is_inference = method == axum::http::Method::POST
+        && (path.ends_with("/messages") || path.ends_with("/messages/stream"));
+
+    if !is_inference {
+        return next.run(req).await;
+    }
+
+    // Extract agent_id: /v1/agents/<id>/messages[/stream]
+    let agent_id = path
+        .trim_start_matches("/v1/agents/")
+        .split('/')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+
+    match state.rate_limiter.check(&agent_id) {
+        Ok(()) => next.run(req).await,
+        Err(retry_secs) => {
+            tracing::warn!(
+                "Rate limit exceeded — agent='{agent_id}' retry_after={retry_secs}s"
+            );
+            (
+                StatusCode::TOO_MANY_REQUESTS,
+                [
+                    ("Retry-After",  retry_secs.to_string()),
+                    ("Content-Type", "application/json".to_string()),
+                ],
+                format!(
+                    r#"{{"detail":"rate limit exceeded","retry_after_secs":{retry_secs},"agent_id":"{agent_id}"}}"#
+                ),
+            )
+                .into_response()
+        }
+    }
+}
+
 // region:    --- Tests
 
 #[cfg(test)]
@@ -206,56 +257,5 @@ mod tests {
             let _ = limiter.check(&format!("agent-{i}"));
         }
         assert!(limiter.buckets.lock().unwrap().len() <= 100);
-    }
-}
-
-// endregion: --- Tests
-
-// -- Axum middleware
-
-/// Rate-limit middleware. Throttles POST inference requests per agent.
-/// All other routes pass through untouched.
-pub async fn rate_limit_middleware(
-    State(state): State<AppState>,
-    req: Request<Body>,
-    next: Next,
-) -> Response {
-    let path   = req.uri().path().to_string();
-    let method = req.method().clone();
-
-    // Only throttle POST to inference endpoints
-    let is_inference = method == axum::http::Method::POST
-        && (path.ends_with("/messages") || path.ends_with("/messages/stream"));
-
-    if !is_inference {
-        return next.run(req).await;
-    }
-
-    // Extract agent_id: /v1/agents/<id>/messages[/stream]
-    let agent_id = path
-        .trim_start_matches("/v1/agents/")
-        .split('/')
-        .next()
-        .unwrap_or("unknown")
-        .to_string();
-
-    match state.rate_limiter.check(&agent_id) {
-        Ok(()) => next.run(req).await,
-        Err(retry_secs) => {
-            tracing::warn!(
-                "Rate limit exceeded — agent='{agent_id}' retry_after={retry_secs}s"
-            );
-            (
-                StatusCode::TOO_MANY_REQUESTS,
-                [
-                    ("Retry-After",  retry_secs.to_string()),
-                    ("Content-Type", "application/json".to_string()),
-                ],
-                format!(
-                    r#"{{"detail":"rate limit exceeded","retry_after_secs":{retry_secs},"agent_id":"{agent_id}"}}"#
-                ),
-            )
-                .into_response()
-        }
     }
 }

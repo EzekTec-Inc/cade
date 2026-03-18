@@ -405,8 +405,8 @@ fn parse_frontmatter(fm: &str) -> Frontmatter {
                 if let Some(t) = current_tool.take() { out.tools.push(t); }
                 let val = trimmed.trim_start_matches("- name:").trim().trim_matches('"').to_string();
                 current_tool = Some(FrontmatterTool { name: val, ..Default::default() });
-            } else if let Some(ref mut t) = current_tool {
-                if let Some((k, v)) = trimmed.split_once(':') {
+            } else if let Some(ref mut t) = current_tool
+                && let Some((k, v)) = trimmed.split_once(':') {
                     let v = v.trim().trim_matches('"').trim_matches('\'');
                     match k.trim() {
                         "description" => t.description = v.to_string(),
@@ -414,7 +414,6 @@ fn parse_frontmatter(fm: &str) -> Frontmatter {
                         _ => {}
                     }
                 }
-            }
             continue;
         }
 
@@ -600,6 +599,89 @@ pub fn github_url_to_raw_skill(url: &str) -> Option<String> {
     } else {
         None
     }
+}
+
+// endregion: --- Tests
+
+/// Write edited skill fields back to the SKILL.MD file on disk.
+/// fields: [name, description, category, tags_csv, triggers_csv, body]
+pub fn write_skill_to_disk(skill: &Skill, fields: &[String]) -> std::io::Result<()> {
+    let name     = &fields[0];
+    let desc     = &fields[1];
+    let cat      = &fields[2];
+    let tags_str = &fields[3];
+    let trig_str = &fields[4];
+    let body     = &fields[5];
+
+    let fmt_list = |s: &str| -> String {
+        let items: Vec<String> = s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
+        if items.is_empty() { "[]".to_string() }
+        else { format!("[{}]", items.iter().map(|t| format!("\"{}\"", t)).collect::<Vec<_>>().join(", ")) }
+    };
+
+    let tags_yaml  = fmt_list(tags_str);
+    let trigs_yaml = fmt_list(trig_str);
+
+    let content = format!(
+        "---\nname: {name}\ndescription: {desc}\ncategory: {cat}\ntags: {tags_yaml}\ntriggers: {trigs_yaml}\n---\n\n{body}"
+    );
+    std::fs::write(&skill.path, content)
+}
+
+/// Download and install a skill from a URL into `target_dir/<skill-name>/SKILL.MD`.
+/// Returns the installed skill on success.
+pub async fn install_skill_from_url(
+    url: &str,
+    target_dir: &Path,
+) -> Result<Skill> {
+    // Resolve to raw content URL if needed
+    let raw_url = if url.contains("github.com") && url.contains("/tree/") {
+        github_url_to_raw_skill(url)
+            .ok_or_else(|| anyhow::anyhow!("Cannot parse GitHub URL: {url}"))?
+    } else {
+        url.to_string()
+    };
+
+    // Derive skill ID from URL path
+    let skill_id = raw_url
+        .trim_end_matches("/SKILL.MD")
+        .trim_end_matches("/SKILL.md")
+        .rsplit('/')
+        .next()
+        .unwrap_or("downloaded-skill")
+        .to_lowercase()
+        .replace(' ', "-");
+
+    // SEC-B4: Validate derived skill ID to prevent path traversal
+    if !skill_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        anyhow::bail!("Invalid skill ID derived from URL: {}", skill_id);
+    }
+
+    let skill_dir = target_dir.join(&skill_id);
+    let skill_file = skill_dir.join("SKILL.MD");
+
+    if skill_file.exists() {
+        anyhow::bail!("Skill '{}' already installed at {}", skill_id, skill_file.display());
+    }
+
+    // Fetch content
+    let client = reqwest::Client::new();
+    let content = client
+        .get(&raw_url)
+        .header("User-Agent", "CADE-agent")
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+
+    // Write
+    std::fs::create_dir_all(&skill_dir)?;
+    std::fs::write(&skill_file, &content)?;
+
+    // Parse and return
+    let scope = SkillScope::Project; // installed to project scope by default
+    parse_skill(&skill_id, &content, scope, skill_file)
 }
 
 // region:    --- Tests
@@ -836,87 +918,4 @@ mod tests {
         assert_eq!(shared.name, "Project Version"); // project scope wins
         assert_eq!(shared.scope, SkillScope::Project);
     }
-}
-
-// endregion: --- Tests
-
-/// Write edited skill fields back to the SKILL.MD file on disk.
-/// fields: [name, description, category, tags_csv, triggers_csv, body]
-pub fn write_skill_to_disk(skill: &Skill, fields: &[String]) -> std::io::Result<()> {
-    let name     = &fields[0];
-    let desc     = &fields[1];
-    let cat      = &fields[2];
-    let tags_str = &fields[3];
-    let trig_str = &fields[4];
-    let body     = &fields[5];
-
-    let fmt_list = |s: &str| -> String {
-        let items: Vec<String> = s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
-        if items.is_empty() { "[]".to_string() }
-        else { format!("[{}]", items.iter().map(|t| format!("\"{}\"", t)).collect::<Vec<_>>().join(", ")) }
-    };
-
-    let tags_yaml  = fmt_list(tags_str);
-    let trigs_yaml = fmt_list(trig_str);
-
-    let content = format!(
-        "---\nname: {name}\ndescription: {desc}\ncategory: {cat}\ntags: {tags_yaml}\ntriggers: {trigs_yaml}\n---\n\n{body}"
-    );
-    std::fs::write(&skill.path, content)
-}
-
-/// Download and install a skill from a URL into `target_dir/<skill-name>/SKILL.MD`.
-/// Returns the installed skill on success.
-pub async fn install_skill_from_url(
-    url: &str,
-    target_dir: &Path,
-) -> Result<Skill> {
-    // Resolve to raw content URL if needed
-    let raw_url = if url.contains("github.com") && url.contains("/tree/") {
-        github_url_to_raw_skill(url)
-            .ok_or_else(|| anyhow::anyhow!("Cannot parse GitHub URL: {url}"))?
-    } else {
-        url.to_string()
-    };
-
-    // Derive skill ID from URL path
-    let skill_id = raw_url
-        .trim_end_matches("/SKILL.MD")
-        .trim_end_matches("/SKILL.md")
-        .rsplit('/')
-        .next()
-        .unwrap_or("downloaded-skill")
-        .to_lowercase()
-        .replace(' ', "-");
-
-    // SEC-B4: Validate derived skill ID to prevent path traversal
-    if !skill_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        anyhow::bail!("Invalid skill ID derived from URL: {}", skill_id);
-    }
-
-    let skill_dir = target_dir.join(&skill_id);
-    let skill_file = skill_dir.join("SKILL.MD");
-
-    if skill_file.exists() {
-        anyhow::bail!("Skill '{}' already installed at {}", skill_id, skill_file.display());
-    }
-
-    // Fetch content
-    let client = reqwest::Client::new();
-    let content = client
-        .get(&raw_url)
-        .header("User-Agent", "CADE-agent")
-        .send()
-        .await?
-        .error_for_status()?
-        .text()
-        .await?;
-
-    // Write
-    std::fs::create_dir_all(&skill_dir)?;
-    std::fs::write(&skill_file, &content)?;
-
-    // Parse and return
-    let scope = SkillScope::Project; // installed to project scope by default
-    parse_skill(&skill_id, &content, scope, skill_file)
 }

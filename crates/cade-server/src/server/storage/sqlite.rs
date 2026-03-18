@@ -18,11 +18,10 @@ pub struct ProviderRow {
 pub type Db = Arc<Mutex<Connection>>;
 
 pub fn open(path: &str) -> Result<Db> {
-    if let Some(parent) = std::path::Path::new(path).parent() {
-        if !parent.as_os_str().is_empty() {
+    if let Some(parent) = std::path::Path::new(path).parent()
+        && !parent.as_os_str().is_empty() {
             std::fs::create_dir_all(parent)?;
         }
-    }
     let conn = Connection::open(path)
         .with_context(|| format!("open SQLite at {path}"))?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;

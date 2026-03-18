@@ -983,7 +983,7 @@ impl Repl {
                             let mut rows = Vec::new();
                             for s in &statuses {
                                 let tool_list = s.tools.iter()
-                                    .map(|t| t.splitn(2, "__").nth(1).unwrap_or(t))
+                                    .map(|t| t.split_once("__").map(|x| x.1).unwrap_or(t))
                                     .collect::<Vec<_>>()
                                     .join(", ");
                                 rows.push(vec![
@@ -1311,11 +1311,10 @@ impl Repl {
                     }
                     SlashCmd::Plan => {
                         self.permissions.set_mode(PermissionMode::Plan);
-                        if let Ok(mut app) = self.app.lock() {
-                            if let Some(plan) = &mut app.active_plan {
+                        if let Ok(mut app) = self.app.lock()
+                            && let Some(plan) = &mut app.active_plan {
                                 plan.is_visible = true;
                             }
-                        }
                         self.tui_hdr("📖 Permission mode: plan (read-only) — write/exec tools blocked. Use /default to resume.");
                     }
                     SlashCmd::Todos => {
@@ -1909,9 +1908,8 @@ impl Repl {
                                         if let Some(b) = blocks.iter().find(|b| b.label == label) {
                                             self.tui_blank();
                                             self.tui_hdr(format!("  [{label}]"));
-                                            if let Some(desc) = &b.description {
-                                                if !desc.is_empty() { self.tui_dim(format!("  {desc}")); }
-                                            }
+                                            if let Some(desc) = &b.description
+                                                && !desc.is_empty() { self.tui_dim(format!("  {desc}")); }
                                             self.tui_blank();
                                             if b.value.is_empty() {
                                                 self.tui_dim("  (empty)");
@@ -2085,9 +2083,8 @@ impl Repl {
                                                 _        => "●  [short] ",
                                             };
                                             self.tui_hdr(format!("  {}  {}", badge, b.label));
-                                            if let Some(desc) = &b.description {
-                                                if !desc.is_empty() { self.tui_dim(format!("  {desc}")); }
-                                            }
+                                            if let Some(desc) = &b.description
+                                                && !desc.is_empty() { self.tui_dim(format!("  {desc}")); }
                                             if tier == "long" {
                                                 self.tui_dim("  (archived — use /memory promote or search_memory to reactivate)");
                                             } else {
@@ -2868,11 +2865,10 @@ impl Repl {
                         // (draw_dirty) or the thinking animation needs refreshing.
                         // This avoids redundant full-screen redraws when nothing
                         // has changed since the last frame.
-                        if let Ok(mut app) = tick_app.try_lock() {
-                            if app.draw_dirty || app.thinking.is_some() {
+                        if let Ok(mut app) = tick_app.try_lock()
+                            && (app.draw_dirty || app.thinking.is_some()) {
                                 let _ = app.draw();
                             }
-                        }
                     }
                     Some(Ok(evt)) = reader.next() => {
                         if tick_cancel.load(Ordering::SeqCst) { break; }
@@ -2892,7 +2888,7 @@ impl Repl {
                                     if let Ok(mut app) = tick_app.try_lock() {
                                         let has_async_question = app.active_question
                                             .as_ref()
-                                            .map_or(false, |aq| aq.tx.is_some());
+                                            .is_some_and(|aq| aq.tx.is_some());
                                         if has_async_question {
                                             app.handle_question_key(k);
                                         } else {
@@ -3096,14 +3092,11 @@ impl Repl {
                             }
                         } else if let Ok(mut app) = tick_app.try_lock() {
                             // Mouse / resize — best-effort, fine to drop
-                            match evt {
-                                Event::Mouse(m) => match m.kind {
-                                    MouseEventKind::ScrollUp   => { app.scroll = app.scroll.saturating_add(3); let _ = app.draw(); }
-                                    MouseEventKind::ScrollDown => { app.scroll = app.scroll.saturating_sub(3); let _ = app.draw(); }
-                                    _ => {}
-                                },
+                            if let Event::Mouse(m) = evt { match m.kind {
+                                MouseEventKind::ScrollUp   => { app.scroll = app.scroll.saturating_add(3); let _ = app.draw(); }
+                                MouseEventKind::ScrollDown => { app.scroll = app.scroll.saturating_sub(3); let _ = app.draw(); }
                                 _ => {}
-                            }
+                            } }
                         }
                     }
                 }
@@ -3194,15 +3187,14 @@ impl Repl {
         let on_event = move |msg: &CadeMessage| {
             match msg.msg_type() {
                 "stream_start" => {
-                    if let Some(cid) = msg.data["conversation_id"].as_str() {
-                        if !cid.is_empty() && conv_arc.lock().unwrap().as_deref() != Some(cid) {
+                    if let Some(cid) = msg.data["conversation_id"].as_str()
+                        && !cid.is_empty() && conv_arc.lock().unwrap().as_deref() != Some(cid) {
                             let cid: String = cid.to_string();
                             *conv_arc.lock().unwrap() = Some(cid.clone());
                             if let Ok(mut s) = session_arc.lock() {
                                 let _ = s.set_conversation(Some(cid));
                             }
                         }
-                    }
                     if let Some(rid) = msg.run_id() {
                         *run_id_cell2.lock().unwrap() = Some(rid.to_string());
                     }
@@ -3395,11 +3387,10 @@ impl Repl {
                 match self.client.send_message_with_images(&agent_id, input, turn_images_ns, ephemeral).await {
                     Ok(msgs) => {
                         for msg in &msgs {
-                            if let Some(text) = msg.assistant_text() {
-                                if !text.is_empty() {
+                            if let Some(text) = msg.assistant_text()
+                                && !text.is_empty() {
                                     let _ = self.app.lock().unwrap().push_streaming_chunk(text);
                                 }
-                            }
                         }
                         let _ = self.app.lock().unwrap().commit_streaming();
                         msgs
@@ -3428,12 +3419,11 @@ impl Repl {
 
         // Save run_id + last seq_id for crash recovery / reconnect
         let saved_run_id  = run_id_cell.lock().unwrap().clone();
-        let saved_seq_id  = seq_id_cell.lock().unwrap().clone();
-        if saved_run_id.is_some() || saved_seq_id.is_some() {
-            if let Ok(mut s) = self.session.lock() {
+        let saved_seq_id  = *seq_id_cell.lock().unwrap();
+        if (saved_run_id.is_some() || saved_seq_id.is_some())
+            && let Ok(mut s) = self.session.lock() {
                 let _ = s.set_run(saved_run_id, saved_seq_id);
             }
-        }
 
         Ok(messages)
     }
@@ -3649,10 +3639,8 @@ impl Repl {
                 }));
             }
             let join_results = futures::future::join_all(handles).await;
-            for jr in join_results {
-                if let Ok((i, r)) = jr {
-                    results[i] = r;
-                }
+            for (i, r) in join_results.into_iter().flatten() {
+                results[i] = r;
             }
             // Refresh grace period after parallel batch completes.
             self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
@@ -3796,7 +3784,7 @@ impl Repl {
             short(patch, 60)
         } else {
             a.as_object().and_then(|m| {
-                m.values().find_map(|v| v.as_str()).map(|s| short(&s, 60))
+                m.values().find_map(|v| v.as_str()).map(|s| short(s, 60))
             }).unwrap_or_default()
         }
     }
@@ -4376,13 +4364,11 @@ impl Repl {
         let header: String = header_raw.chars().take(12).collect();
 
         let mut warning_text = String::new();
-        if tool_name == "bash" {
-            if let Some(cmd) = args["command"].as_str() {
-                if cade_core::permissions::bash_command_is_suspicious(cmd) {
+        if tool_name == "bash"
+            && let Some(cmd) = args["command"].as_str()
+                && cade_core::permissions::bash_command_is_suspicious(cmd) {
                     warning_text = "\n⚠️  WARNING: Suspicious command detected (nested shell, network, or obfuscation)".to_string();
                 }
-            }
-        }
 
         let question_text = if preview.is_empty() {
             format!("Run {tool_name}?{warning_text}")
@@ -4437,7 +4423,7 @@ impl Repl {
                 // blocking question was active — an Esc inside the modal must
                 // not abort the subsequent stream_turn.
                 self.cancel_turn.store(false, std::sync::atomic::Ordering::SeqCst);
-                return Ok(false);
+                Ok(false)
             }
             Some(answer) => {
                 let label = answer.as_str();
@@ -4576,8 +4562,8 @@ impl Repl {
             .output()
             .await;
             
-        if let Ok(ref out) = output {
-            if !out.status.success() {
+        if let Ok(ref out) = output
+            && !out.status.success() {
                 let mut retry_cmd = tokio::process::Command::new("patch");
                 cade_core::agent_env::apply_agent_env(&mut retry_cmd);
                 output = retry_cmd
@@ -4586,7 +4572,6 @@ impl Repl {
                     .output()
                     .await;
             }
-        }
         
         let final_value = match output {
             Ok(out) if out.status.success() => std::fs::read_to_string(&file_path).unwrap_or_default(),
@@ -5170,44 +5155,41 @@ impl Repl {
 
         loop {
             if !event::poll(std::time::Duration::from_millis(200))? { continue; }
-            match event::read()? {
-                Event::Key(k) => match (k.code, k.modifiers) {
-                    (KeyCode::Char('q') | KeyCode::Esc, _) => break,
-                    (KeyCode::Up   | KeyCode::Char('k'), _) => { if sel > 0 { sel -= 1; } }
-                    (KeyCode::Down | KeyCode::Char('j'), _) => {
-                        if sel + 1 < convs.len() { sel += 1; }
+            if let Event::Key(k) = event::read()? { match (k.code, k.modifiers) {
+                (KeyCode::Char('q') | KeyCode::Esc, _) => break,
+                (KeyCode::Up   | KeyCode::Char('k'), _) => { sel = sel.saturating_sub(1); }
+                (KeyCode::Down | KeyCode::Char('j'), _) => {
+                    if sel + 1 < convs.len() { sel += 1; }
+                }
+                (KeyCode::Enter, _) => {
+                    result = convs.get(sel).cloned();
+                    break;
+                }
+                (KeyCode::Char('d') | KeyCode::Delete, _) => {
+                    let conv_id = convs[sel]["id"].as_str().unwrap_or("").to_string();
+                    let title   = convs[sel]["title"].as_str().unwrap_or("(untitled)").to_string();
+                    // Use QuestionWidget for confirmation
+                    use crate::ui::question::{Question, QuestionOption};
+                    let opts = vec![
+                        QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
+                        QuestionOption { label: "No — keep".to_string(),    description: String::new() },
+                    ];
+                    let q = Question {
+                        header: "Delete?".to_string(), text: format!("Delete conversation \"{title}\"?"),
+                        options: opts.clone(), multi_select: false, allow_other: false, progress: None,
+                    };
+                    let ans = {
+                        let mut app = app_arc.lock().unwrap();
+                        app.ask_question(&q)?
+                    };
+                    if matches!(ans, Some(ref a) if a.as_str().starts_with("Yes")) {
+                        let _ = self.client.delete_conversation(agent_id, &conv_id).await;
                     }
-                    (KeyCode::Enter, _) => {
-                        result = convs.get(sel).cloned();
-                        break;
-                    }
-                    (KeyCode::Char('d') | KeyCode::Delete, _) => {
-                        let conv_id = convs[sel]["id"].as_str().unwrap_or("").to_string();
-                        let title   = convs[sel]["title"].as_str().unwrap_or("(untitled)").to_string();
-                        // Use QuestionWidget for confirmation
-                        use crate::ui::question::{Question, QuestionOption};
-                        let opts = vec![
-                            QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
-                            QuestionOption { label: "No — keep".to_string(),    description: String::new() },
-                        ];
-                        let q = Question {
-                            header: "Delete?".to_string(), text: format!("Delete conversation \"{title}\"?"),
-                            options: opts.clone(), multi_select: false, allow_other: false, progress: None,
-                        };
-                        let ans = {
-                            let mut app = app_arc.lock().unwrap();
-                            app.ask_question(&q)?
-                        };
-                        if matches!(ans, Some(ref a) if a.as_str().starts_with("Yes")) {
-                            let _ = self.client.delete_conversation(agent_id, &conv_id).await;
-                        }
-                        return Ok(None);
-                    }
-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
-                    _ => {}
-                },
+                    return Ok(None);
+                }
+                (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
                 _ => {}
-            }
+            } }
             // Redraw after state change
             let mut app = app_arc.lock().unwrap();
             let items = build_items(sel);
@@ -5694,13 +5676,11 @@ impl Repl {
 
         let current_effort = self.reasoning_effort.lock().unwrap().clone().unwrap_or_else(|| "none".to_string());
         
-        let tiers = vec![
-            ("none", "No explicit reasoning budget (default)"),
+        let tiers = [("none", "No explicit reasoning budget (default)"),
             ("low", "Low reasoning effort"),
             ("medium", "Medium reasoning effort"),
             ("high", "High reasoning effort"),
-            ("xhigh", "Maximum reasoning effort"),
-        ];
+            ("xhigh", "Maximum reasoning effort")];
 
         let mut list_pos = tiers.iter().position(|&(t, _)| t == current_effort).unwrap_or(0);
 
@@ -5851,7 +5831,7 @@ impl Repl {
                 .filter(|b| {
                     // Include pinned and short-tier blocks; skip internal bookkeeping.
                     let dominated = b.label.starts_with("__");
-                    let tier_ok = b.tier.as_deref().map_or(true, |t| t == "pinned" || t == "short");
+                    let tier_ok = b.tier.as_deref().is_none_or(|t| t == "pinned" || t == "short");
                     !dominated && tier_ok && !b.value.trim().is_empty()
                 })
                 .map(|b| cade_agent::agent::client::MemoryBlock {

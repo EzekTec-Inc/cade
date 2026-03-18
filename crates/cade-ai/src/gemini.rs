@@ -157,11 +157,10 @@ impl GeminiProvider {
             "model": format!("models/{model}"),
             "ttl": "3600s"
         });
-        if let Some(sys) = system_text {
-            if !sys.is_empty() {
+        if let Some(sys) = system_text
+            && !sys.is_empty() {
                 body["systemInstruction"] = json!({"parts": [{"text": sys}]});
             }
-        }
         if !tools.is_empty() {
             body["tools"] = json!([{"functionDeclarations": tools}]);
         }
@@ -193,7 +192,7 @@ impl GeminiProvider {
         tools: &[Value],
     ) -> Option<String> {
         // Nothing to cache
-        if system_text.as_ref().map_or(true, |s| s.is_empty()) && tools.is_empty() {
+        if system_text.as_ref().is_none_or(|s| s.is_empty()) && tools.is_empty() {
             return None;
         }
         let hash = Self::content_hash(model, system_text, tools);
@@ -260,13 +259,12 @@ impl GeminiProvider {
         let mut call_id_to_name: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         for msg in &req.messages {
-            if msg.role == "assistant" {
-                if let Some(calls) = &msg.tool_calls {
+            if msg.role == "assistant"
+                && let Some(calls) = &msg.tool_calls {
                     for tc in calls {
                         call_id_to_name.insert(tc.id.clone(), tc.name.clone());
                     }
                 }
-            }
         }
 
         // Use indexed iteration so consecutive "tool" messages can be batched
@@ -330,7 +328,7 @@ impl GeminiProvider {
                     let merged = if let Some(last) = contents.last_mut() {
                         if last.get("role").and_then(|v| v.as_str()) == Some("model") {
                             if let Some(arr) = last.get_mut("parts").and_then(|v| v.as_array_mut()) {
-                                arr.extend(all_parts.drain(..));
+                                arr.append(&mut all_parts);
                                 true
                             } else { false }
                         } else { false }
@@ -376,13 +374,13 @@ impl GeminiProvider {
                     // turns in a row (can happen after context trimming strips
                     // an intervening model turn, or when an ephemeral re-prompt
                     // follows a functionResponse user turn).
-                    let merged = if msg.images.as_ref().map_or(true, |v| v.is_empty()) {
+                    let merged = if msg.images.as_ref().is_none_or(|v| v.is_empty()) {
                         // Only merge plain-text turns; image turns always start a new entry
                         // to avoid the Gemini API rejecting mixed inline_data in a merged part.
                         if let Some(last) = contents.last_mut() {
                             if last.get("role").and_then(|v| v.as_str()) == Some("user") {
                                 if let Some(arr) = last.get_mut("parts").and_then(|v| v.as_array_mut()) {
-                                    arr.extend(new_parts.drain(..));
+                                    arr.append(&mut new_parts);
                                     true
                                 } else { false }
                             } else { false }
@@ -529,19 +527,18 @@ impl LlmProvider for GeminiProvider {
                     }
 
                     // 2. Parse candidates (content, tool calls, finishReason)
-                    if let Some(candidates) = v.get("candidates").and_then(|c| c.as_array()) {
-                        if let Some(candidate) = candidates.first() {
+                    if let Some(candidates) = v.get("candidates").and_then(|c| c.as_array())
+                        && let Some(candidate) = candidates.first() {
                             if let Some(parts) = candidate["content"]["parts"].as_array() {
                                 for part in parts {
-                                    if let Some(text) = part["text"].as_str() {
-                                        if !text.is_empty() {
+                                    if let Some(text) = part["text"].as_str()
+                                        && !text.is_empty() {
                                             if part["thought"].as_bool() == Some(true) {
                                                 yield Ok(StreamChunk::Reasoning(text.to_string()));
                                             } else {
                                                 yield Ok(StreamChunk::Text(text.to_string()));
                                             }
                                         }
-                                    }
                                     if let Some(fc) = part.get("functionCall") {
                                         let name = fc["name"].as_str().unwrap_or("").to_string();
                                         let arguments = {
@@ -570,7 +567,6 @@ impl LlmProvider for GeminiProvider {
                                 yield Ok(StreamChunk::Done); return;
                             }
                         }
-                    }
                 }
             }
             // Byte stream exhausted without an explicit finishReason chunk.

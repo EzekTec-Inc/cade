@@ -32,12 +32,11 @@ fn get_root_secret() -> Result<String> {
     }
 
     // Backwards compatibility check: if cade.db exists, fall back to machine_uid
-    if std::path::Path::new("cade.db").exists() {
-        if let Ok(uid) = machine_uid::get() {
+    if std::path::Path::new("cade.db").exists()
+        && let Ok(uid) = machine_uid::get() {
             tracing::warn!("Using legacy machine_uid for database encryption. Consider migrating to CADE_DB_KEY.");
             return Ok(uid);
         }
-    }
 
     let mut key = [0u8; 32];
     getrandom::getrandom(&mut key).map_err(|e| anyhow::anyhow!("getrandom failed: {e}"))?;
@@ -115,6 +114,57 @@ pub fn encrypt(plaintext: &str) -> Result<String> {
     ))
 }
 
+// endregion: --- Tests
+
+pub fn decrypt(encoded: &str) -> Result<String> {
+    let data = base64::Engine::decode(
+        &base64::engine::general_purpose::STANDARD,
+        encoded,
+    )
+    .context("Base64 decode failed")?;
+
+    // New format: salt(16) + nonce(12) + ciphertext = min 29 bytes
+    // Legacy format: nonce(12) + ciphertext = min 13 bytes
+    //
+    // We distinguish by trying new format first (>= 29 bytes).
+    if data.len() >= 29 {
+        // New format — extract salt, derive key, decrypt
+        let (salt, rest) = data.split_at(16);
+        if rest.len() < 12 {
+            anyhow::bail!("Invalid encrypted data: nonce too short");
+        }
+        let (nonce_bytes, ciphertext) = rest.split_at(12);
+        let key_bytes = derive_key(salt)?;
+        let cipher = Aes256Gcm::new_from_slice(&key_bytes)
+            .map_err(|e| anyhow::anyhow!("Cipher init failed: {e}"))?;
+        let nonce = Nonce::from_slice(nonce_bytes);
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| anyhow::anyhow!("Decryption failed: {e}"))?;
+        return String::from_utf8(plaintext).context("UTF-8 decode failed");
+    }
+
+    // Legacy format — use the old static salt for backwards compatibility
+    if data.len() >= 12 {
+        let legacy_salt = b"cade-crypto-salt-v1";
+        let key_bytes = derive_key(legacy_salt)?;
+        let cipher = Aes256Gcm::new_from_slice(&key_bytes)
+            .map_err(|e| anyhow::anyhow!("Cipher init (legacy) failed: {e}"))?;
+        let (nonce_bytes, ciphertext) = data.split_at(12);
+        let nonce = Nonce::from_slice(nonce_bytes);
+        let plaintext = cipher
+            .decrypt(nonce, ciphertext)
+            .map_err(|e| anyhow::anyhow!("Legacy decryption failed: {e}"))?;
+        tracing::warn!(
+            "Decrypted a legacy (static-salt) API key — \
+             re-save the provider to upgrade to the new format."
+        );
+        return String::from_utf8(plaintext).context("UTF-8 decode failed");
+    }
+
+    anyhow::bail!("Invalid encrypted data: too short ({} bytes)", data.len())
+}
+
 // -- Decryption
 
 /// Decrypt a value previously produced by `encrypt()`.
@@ -181,7 +231,7 @@ mod tests {
         setup_test_key();
         let short = base64::Engine::encode(
             &base64::engine::general_purpose::STANDARD,
-            &[0u8; 5],
+            [0u8; 5],
         );
         let result = decrypt(&short);
         assert!(result.is_err());
@@ -230,55 +280,4 @@ mod tests {
         let decrypted = decrypt(&encrypted).unwrap();
         assert_eq!(decrypted, plaintext);
     }
-}
-
-// endregion: --- Tests
-
-pub fn decrypt(encoded: &str) -> Result<String> {
-    let data = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        encoded,
-    )
-    .context("Base64 decode failed")?;
-
-    // New format: salt(16) + nonce(12) + ciphertext = min 29 bytes
-    // Legacy format: nonce(12) + ciphertext = min 13 bytes
-    //
-    // We distinguish by trying new format first (>= 29 bytes).
-    if data.len() >= 29 {
-        // New format — extract salt, derive key, decrypt
-        let (salt, rest) = data.split_at(16);
-        if rest.len() < 12 {
-            anyhow::bail!("Invalid encrypted data: nonce too short");
-        }
-        let (nonce_bytes, ciphertext) = rest.split_at(12);
-        let key_bytes = derive_key(salt)?;
-        let cipher = Aes256Gcm::new_from_slice(&key_bytes)
-            .map_err(|e| anyhow::anyhow!("Cipher init failed: {e}"))?;
-        let nonce = Nonce::from_slice(nonce_bytes);
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|e| anyhow::anyhow!("Decryption failed: {e}"))?;
-        return String::from_utf8(plaintext).context("UTF-8 decode failed");
-    }
-
-    // Legacy format — use the old static salt for backwards compatibility
-    if data.len() >= 12 {
-        let legacy_salt = b"cade-crypto-salt-v1";
-        let key_bytes = derive_key(legacy_salt)?;
-        let cipher = Aes256Gcm::new_from_slice(&key_bytes)
-            .map_err(|e| anyhow::anyhow!("Cipher init (legacy) failed: {e}"))?;
-        let (nonce_bytes, ciphertext) = data.split_at(12);
-        let nonce = Nonce::from_slice(nonce_bytes);
-        let plaintext = cipher
-            .decrypt(nonce, ciphertext)
-            .map_err(|e| anyhow::anyhow!("Legacy decryption failed: {e}"))?;
-        tracing::warn!(
-            "Decrypted a legacy (static-salt) API key — \
-             re-save the provider to upgrade to the new format."
-        );
-        return String::from_utf8(plaintext).context("UTF-8 decode failed");
-    }
-
-    anyhow::bail!("Invalid encrypted data: too short ({} bytes)", data.len())
 }

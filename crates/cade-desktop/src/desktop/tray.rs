@@ -72,8 +72,8 @@ pub fn spawn_tray() -> Result<mpsc::Sender<TrayMsg>, String> {
             for msg in rx {
                 match msg {
                     TrayMsg::SetStatus(status) => {
-                        let _ = handle.update(|t: &mut CadeTray| {
-                            t.status = status.clone();
+                        handle.update(|t: &mut CadeTray| {
+                            t.status = status;
                         });
                     }
                     TrayMsg::Quit => break,

@@ -446,6 +446,21 @@ async fn spawn_command(
     Ok((exit_code, stdout, stderr))
 }
 
+// endregion: --- Tests
+
+// -- Display helpers
+
+impl std::fmt::Display for crate::settings::manager::HookDef {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let Self::Command { command, timeout } = self;
+        if *timeout == 60_000 {
+            write!(f, "[command] {command}")
+        } else {
+            write!(f, "[command] {command}  (timeout: {timeout}ms)")
+        }
+    }
+}
+
 // region:    --- Tests
 
 #[cfg(test)]
@@ -635,20 +650,5 @@ mod tests {
         let outcome = engine.pre_tool_use("bash", &json!({})).await;
         // Timeout → treated as Continue (Allow)
         assert!(!outcome.is_block());
-    }
-}
-
-// endregion: --- Tests
-
-// -- Display helpers
-
-impl std::fmt::Display for crate::settings::manager::HookDef {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let Self::Command { command, timeout } = self;
-        if *timeout == 60_000 {
-            write!(f, "[command] {command}")
-        } else {
-            write!(f, "[command] {command}  (timeout: {timeout}ms)")
-        }
     }
 }

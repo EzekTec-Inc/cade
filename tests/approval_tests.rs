@@ -174,7 +174,7 @@ mod tick_task_guard_tests {
     fn no_active_question_does_not_route() {
         // No active question → map_or(false, ...) = false
         let active_question: Option<bool> = None; // None = no active question
-        let routes = active_question.map_or(false, |tx_some| tx_some);
+        let routes = active_question.is_some_and(|tx_some| tx_some);
         assert!(!routes, "no active question must not route to handle_question_key");
     }
 }

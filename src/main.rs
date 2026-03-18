@@ -43,11 +43,7 @@ fn sanitize_for_terminal(s: &str) -> String {
             let c = ch as u32;
             if ch == '\n' || ch == '\t' {
                 true
-            } else if c <= 0x1F || c == 0x7F {
-                false
-            } else {
-                true
-            }
+            } else { !(c <= 0x1F || c == 0x7F) }
         })
         .collect()
 }
@@ -434,11 +430,10 @@ pub async fn register_and_attach_filtered(
         .unwrap_or_default();
     let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
     tracing::info!("Registered {} tools", tools.len());
-    if !ids.is_empty() {
-        if let Err(e) = client.attach_agent_tools(agent_id, &ids).await {
+    if !ids.is_empty()
+        && let Err(e) = client.attach_agent_tools(agent_id, &ids).await {
             tracing::warn!("attach_agent_tools: {e}");
         }
-    }
 }
 
 async fn register_cade_tools_filtered(
@@ -536,8 +531,8 @@ async fn resolve_agent_and_conversation(
             ))
             .await
             .context("create agent")?;
-        register_and_attach_filtered(&client, &a.id, toolset, tool_filter.as_deref()).await;
-        seed_default_memory(&client, &a.id).await;
+        register_and_attach_filtered(client, &a.id, toolset, tool_filter.as_deref()).await;
+        seed_default_memory(client, &a.id).await;
         session
             .set_agent(a.id.clone(), Some(a.name.clone()))
             .context("save session")?;
@@ -573,8 +568,8 @@ async fn resolve_agent_and_conversation(
                     .create_agent(make_req(default_model.to_string(), "CADE coding agent"))
                     .await
                     .context("create agent")?;
-                register_and_attach_filtered(&client, &a.id, toolset, tool_filter.as_deref()).await;
-                seed_default_memory(&client, &a.id).await;
+                register_and_attach_filtered(client, &a.id, toolset, tool_filter.as_deref()).await;
+                seed_default_memory(client, &a.id).await;
                 session.set_agent(a.id.clone(), Some(a.name.clone()))?;
                 settings.set_last_agent(&a.id)?;
                 a
@@ -589,14 +584,14 @@ async fn resolve_agent_and_conversation(
             ))
             .await
             .context("create agent")?;
-        register_and_attach_filtered(&client, &a.id, toolset, tool_filter.as_deref()).await;
-        seed_default_memory(&client, &a.id).await;
+        register_and_attach_filtered(client, &a.id, toolset, tool_filter.as_deref()).await;
+        seed_default_memory(client, &a.id).await;
         session.set_agent(a.id.clone(), Some(a.name.clone()))?;
         settings.set_last_agent(&a.id)?;
         a
     };
 
-    let loaded_skills = discover_all_skills(&cwd, Some(&agent.id), None);
+    let loaded_skills = discover_all_skills(cwd, Some(&agent.id), None);
     if !loaded_skills.is_empty() {
         println!("Loaded {} skill(s)", loaded_skills.len());
     }

@@ -116,8 +116,10 @@ pub fn tool_first_arg(tool_name: &str, args: &serde_json::Value) -> Option<Strin
 
 /// Permission mode controlling how tool calls are approved
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Default)]
 pub enum PermissionMode {
     /// Prompt user for each tool call (default)
+    #[default]
     Default,
     /// Auto-allow Write/Edit file operations
     AcceptEdits,
@@ -127,9 +129,6 @@ pub enum PermissionMode {
     BypassPermissions,
 }
 
-impl Default for PermissionMode {
-    fn default() -> Self { Self::Default }
-}
 
 impl std::fmt::Display for PermissionMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -269,10 +268,10 @@ pub fn bash_command_is_suspicious(command: &str) -> bool {
 fn contains_write_redirect(cmd: &str) -> bool {
     // Crude but effective: look for > that is not part of >>
     // and not inside a quoted string
-    let mut chars = cmd.chars().peekable();
+    let chars = cmd.chars().peekable();
     let mut in_single = false;
     let mut in_double = false;
-    while let Some(c) = chars.next() {
+    for c in chars {
         match c {
             '\'' if !in_double => in_single = !in_single,
             '"'  if !in_single => in_double = !in_double,
@@ -890,15 +889,13 @@ impl PermissionManager {
         }
 
         // SEC-B3: Prevent Auto-Approval of Config/Skill Edits (RCE Mitigation)
-        if matches!(tool_name, "write_file" | "edit_file" | "apply_patch" | "write" | "edit" | "patch") {
-            if let Some(path) = arg_ref {
-                if path.contains(".cade/settings.json") ||
+        if matches!(tool_name, "write_file" | "edit_file" | "apply_patch" | "write" | "edit" | "patch")
+            && let Some(path) = arg_ref
+                && (path.contains(".cade/settings.json") ||
                    path.contains("settings.local.json") ||
-                   path.contains(".skills/") {
+                   path.contains(".skills/")) {
                     return false;
                 }
-            }
-        }
 
         // Mode-based
         match self.mode() {

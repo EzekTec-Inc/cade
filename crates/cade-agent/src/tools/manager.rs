@@ -168,6 +168,19 @@ pub fn is_native_write_tool(name: &str) -> bool {
     )
 }
 
+// endregion: --- Tests
+
+/// Returns true if the tool (native or MCP) can mutate state.
+pub async fn is_write_tool(name: &str, mcp: &McpManager) -> bool {
+    if is_native_write_tool(name) {
+        return true;
+    }
+    if mcp.owns_tool(name).await {
+        return mcp.is_write_tool(name).await;
+    }
+    false
+}
+
 // region:    --- Tests
 
 #[cfg(test)]
@@ -343,17 +356,4 @@ mod tests {
             }
         }
     }
-}
-
-// endregion: --- Tests
-
-/// Returns true if the tool (native or MCP) can mutate state.
-pub async fn is_write_tool(name: &str, mcp: &McpManager) -> bool {
-    if is_native_write_tool(name) {
-        return true;
-    }
-    if mcp.owns_tool(name).await {
-        return mcp.is_write_tool(name).await;
-    }
-    false
 }

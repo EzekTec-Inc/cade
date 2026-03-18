@@ -599,7 +599,7 @@ impl SettingsManager {
     /// Get the last used agent for this project directory
     pub fn last_agent(&self) -> Option<&str> {
         self.local.last_agent.as_deref()
-            .or_else(|| self.global.last_agent.as_deref())
+            .or(self.global.last_agent.as_deref())
     }
 
     /// Save agent ID as last used (both local + global)

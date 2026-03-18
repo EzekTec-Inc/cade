@@ -109,7 +109,7 @@ impl DesktopControl {
             }
             ControlTool::Ydotool => {
                 Self::new_command("ydotool")
-                    .args(["mousemove", &format!("--absolute"), &x.to_string(), &y.to_string()])
+                    .args(["mousemove", "--absolute", &x.to_string(), &y.to_string()])
                     .output()
                     .await
                     .context("ydotool mousemove")?;

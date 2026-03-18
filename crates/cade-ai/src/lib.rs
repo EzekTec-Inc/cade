@@ -366,11 +366,10 @@ impl LlmRouter {
         }
 
         // Ensure the configured default is actually available; fall back gracefully
-        if !providers.contains_key(&default_provider) {
-            if let Some(first) = providers.keys().next() {
+        if !providers.contains_key(&default_provider)
+            && let Some(first) = providers.keys().next() {
                 default_provider = first.clone();
             }
-        }
 
         Self {
             providers,
@@ -639,8 +638,8 @@ impl LlmRouter {
 
                 // -- Preset providers (Groq, OpenRouter, etc.)
                 _ => {
-                    if let Some(preset) = PRESET_PROVIDERS.iter().find(|p| p.name == name.as_str()) {
-                        if let Some(models_url) = preset.models_url {
+                    if let Some(preset) = PRESET_PROVIDERS.iter().find(|p| p.name == name.as_str())
+                        && let Some(models_url) = preset.models_url {
                             let n   = name.clone();
                             let url = models_url.to_string();
                             tasks.push(Box::pin(async move {
@@ -661,7 +660,6 @@ impl LlmRouter {
                                     .collect()
                             }));
                         }
-                    }
                 }
             }
         }

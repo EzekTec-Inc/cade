@@ -100,7 +100,7 @@ fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
         let msg = messages[i].clone();
 
         match msg.role.as_str() {
-            "assistant" if msg.tool_calls.as_ref().map_or(false, |tc| !tc.is_empty()) => {
+            "assistant" if msg.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()) => {
                 let tool_calls = msg.tool_calls.as_ref().unwrap();
                 let expected_ids: Vec<String> = tool_calls.iter().map(|tc| tc.id.clone()).collect();
 
@@ -421,15 +421,14 @@ async fn build_context(
     // ordering (e.g. consecutive user turns in Gemini after the empty model
     // turn is skipped).
     while messages.len() > 1 {
-        if let Some(last) = messages.last() {
-            if last.role == "assistant"
+        if let Some(last) = messages.last()
+            && last.role == "assistant"
                 && last.content.is_empty()
-                && last.tool_calls.as_ref().map_or(true, |tc| tc.is_empty())
+                && last.tool_calls.as_ref().is_none_or(|tc| tc.is_empty())
             {
                 messages.pop();
                 continue;
             }
-        }
         break;
     }
 
@@ -785,10 +784,10 @@ fn persist(
 /// Extract and validate conversation_id from request body.
 /// If present and non-empty, verifies it exists in the DB.
 /// Returns Ok(Some(id)) | Ok(None) | Err(response).
-fn resolve_conversation<'a>(
+fn resolve_conversation(
     state: &AppState,
     agent_id: &str,
-    body: &'a Value,
+    body: &Value,
 ) -> Result<Option<String>, axum::response::Response> {
     let conv_id = body["conversation_id"].as_str().filter(|s| !s.is_empty());
     match conv_id {
@@ -888,7 +887,7 @@ pub async fn send_message(
                 .collect();
             // Skip persisting empty assistant responses — they clutter the
             // conversation and can produce invalid turn ordering on next load.
-            let has_content = resp.content.as_ref().map_or(false, |s| !s.is_empty());
+            let has_content = resp.content.as_ref().is_some_and(|s| !s.is_empty());
             let has_tools   = !resp.tool_calls.is_empty();
             if has_content || has_tools {
                 persist(
@@ -972,7 +971,7 @@ async fn handle_tool_return_blocking(
                 .iter()
                 .filter_map(|tc| serde_json::to_value(tc).ok())
                 .collect();
-            let has_content = resp.content.as_ref().map_or(false, |s| !s.is_empty());
+            let has_content = resp.content.as_ref().is_some_and(|s| !s.is_empty());
             let has_tools   = !resp.tool_calls.is_empty();
             if has_content || has_tools {
                 persist(
@@ -1042,7 +1041,7 @@ pub async fn stream_message(
         if !is_ephemeral {
             // Auto-title new conversations from the first user message
             if let Some(cid) = conv_id_ref {
-                let _ = maybe_set_conv_title(&state, cid, &input);
+                maybe_set_conv_title(&state, cid, &input);
             }
             persist(
                 &state,
@@ -1082,8 +1081,8 @@ pub async fn stream_message(
     // an empty response.
     if !is_tool_return {
         let is_ephemeral = body["ephemeral"].as_bool().unwrap_or(false);
-        if is_ephemeral {
-            if let Some(input) = body["input"].as_str().filter(|s| !s.is_empty()) {
+        if is_ephemeral
+            && let Some(input) = body["input"].as_str().filter(|s| !s.is_empty()) {
                 messages.push(LlmMessage {
                     role: "user".to_string(),
                     content: input.to_string(),
@@ -1092,7 +1091,6 @@ pub async fn stream_message(
                                 images: None,
                 });
             }
-        }
     }
 
     let background = body["background"].as_bool().unwrap_or(false);
@@ -1159,8 +1157,8 @@ pub async fn stream_message(
     let sse_stream = futures::StreamExt::map(llm_stream, move |chunk: Result<StreamChunk>| {
         // Persist each event to run_events so the stream is resumable
         let emit = |data: Value| -> Event {
-            if let Some(rid) = &run_id_clone {
-                if let Ok(seq) = sqlite::append_run_event(&db_clone, rid, &data.to_string()) {
+            if let Some(rid) = &run_id_clone
+                && let Ok(seq) = sqlite::append_run_event(&db_clone, rid, &data.to_string()) {
                     let mut d = data.clone();
                     if let Some(obj) = d.as_object_mut() {
                         obj.insert("run_id".to_string(), serde_json::Value::String(rid.clone()));
@@ -1168,7 +1166,6 @@ pub async fn stream_message(
                     }
                     return Event::default().data(d.to_string());
                 }
-            }
             Event::default().data(data.to_string())
         };
 
@@ -1183,11 +1180,10 @@ pub async fn stream_message(
                 emit(json!({ "message_type": "assistant_message", "content": text }))
             }
             Ok(StreamChunk::ToolCall(tc)) => {
-                if let Ok(mut g) = acc_clone.lock() {
-                    if let Ok(v) = serde_json::to_value(&tc) {
+                if let Ok(mut g) = acc_clone.lock()
+                    && let Ok(v) = serde_json::to_value(&tc) {
                         g.1.push(v);
                     }
-                }
                 emit(json!({
                     "message_type": "tool_call_message",
                     "tool_call": { "id": tc.id, "name": tc.name, "arguments": tc.arguments }
@@ -1252,15 +1248,14 @@ pub async fn stream_message(
 
 /// Set conversation title from first user message if title is still empty.
 fn maybe_set_conv_title(state: &AppState, conv_id: &str, text: &str) {
-    if let Ok(Some(c)) = sqlite::get_conversation(&state.db, conv_id) {
-        if c.title.is_empty() {
+    if let Ok(Some(c)) = sqlite::get_conversation(&state.db, conv_id)
+        && c.title.is_empty() {
             let title: String = text.chars().take(CONV_TITLE_MAX).collect();
             let title = title.trim().to_string();
             if !title.is_empty() {
                 let _ = sqlite::update_conversation_title(&state.db, conv_id, &title);
             }
         }
-    }
 }
 
 // -- Helpers

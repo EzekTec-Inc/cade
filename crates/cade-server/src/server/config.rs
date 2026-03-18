@@ -65,14 +65,13 @@ pub fn default_model_for(provider: &LlmProviderKind) -> &'static str {
 /// Returns (provider, bare_model_name).
 pub fn detect_provider() -> (LlmProviderKind, String) {
     // User-explicit override takes highest priority
-    if let Ok(p) = std::env::var("CADE_LLM_PROVIDER") {
-        if let Ok(kind) = p.parse::<LlmProviderKind>() {
+    if let Ok(p) = std::env::var("CADE_LLM_PROVIDER")
+        && let Ok(kind) = p.parse::<LlmProviderKind>() {
             // Allow explicit model override too
             let model = std::env::var("CADE_DEFAULT_MODEL")
                 .unwrap_or_else(|_| default_model_for(&kind).to_string());
             return (kind, model);
         }
-    }
 
     // Scan for API keys in priority order
     let providers: &[(fn() -> bool, LlmProviderKind)] = &[

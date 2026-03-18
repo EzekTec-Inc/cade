@@ -528,11 +528,10 @@ pub async fn search_memory_handler(
     // relevant to the current task, so promote back to short-term for 20 turns.
     let full = sqlite::get_memory_blocks_full(&state.db, &agent_id).unwrap_or_default();
     for (label, _value, _snippet) in &rows {
-        if let Some((_, _, _, tier)) = full.iter().find(|(l, _, _, _)| l == label) {
-            if tier == "long" {
+        if let Some((_, _, _, tier)) = full.iter().find(|(l, _, _, _)| l == label)
+            && tier == "long" {
                 let _ = sqlite::set_memory_tier(&state.db, &agent_id, label, "short", true);
             }
-        }
     }
 
     let blocks: Vec<Value> = rows.iter().map(|(label, value, snippet)| json!({

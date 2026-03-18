@@ -16,11 +16,7 @@ fn sanitize_for_terminal(s: &str) -> String {
             let c = ch as u32;
             if ch == '\n' || ch == '\t' {
                 true
-            } else if c <= 0x1F || c == 0x7F {
-                false
-            } else {
-                true
-            }
+            } else { !(c <= 0x1F || c == 0x7F) }
         })
         .collect()
 }
@@ -378,7 +374,7 @@ async fn process_tool_calls(
                 let mcp       = mcp;
                 let perms     = permissions.clone();
                 async move {
-                    run_one_tool(&client, &agent_id, call_id, tool_name, args, &perms, &mcp).await
+                    run_one_tool(&client, &agent_id, call_id, tool_name, args, &perms, mcp).await
                 }
             })
             .collect();
@@ -525,7 +521,7 @@ async fn process_tool_calls_stream_json(
                 let mcp      = mcp;
                 let perms    = permissions.clone();
                 async move {
-                    let r = run_one_tool(&client, &agent_id, call_id, tool_name.clone(), args, &perms, &mcp).await;
+                    let r = run_one_tool(&client, &agent_id, call_id, tool_name.clone(), args, &perms, mcp).await;
                     (tool_name, r)
                 }
             })
@@ -604,12 +600,11 @@ async fn process_tool_calls_stream_json(
 
 fn collect_assistant_text(messages: &[CadeMessage], output: &mut String) {
     for msg in messages {
-        if let Some(text) = msg.assistant_text() {
-            if !text.is_empty() {
+        if let Some(text) = msg.assistant_text()
+            && !text.is_empty() {
                 output.push_str(text);
                 output.push('\n');
             }
-        }
     }
 }
 

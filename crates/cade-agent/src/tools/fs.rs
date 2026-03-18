@@ -140,12 +140,11 @@ impl WriteTool {
             .as_str()
             .ok_or_else(|| anyhow::anyhow!("write_file: missing 'content'"))?;
 
-        if let Some(parent) = Path::new(path).parent() {
-            if !parent.as_os_str().is_empty() {
+        if let Some(parent) = Path::new(path).parent()
+            && !parent.as_os_str().is_empty() {
                 std::fs::create_dir_all(parent)
                     .with_context(|| format!("create dirs for {path}"))?;
             }
-        }
 
         std::fs::write(path, content)
             .with_context(|| format!("write {path}"))?;
