@@ -122,8 +122,14 @@ pub fn encrypt(plaintext: &str) -> Result<String> {
 /// Handles both the new format (salt prefix) and the legacy format
 /// (no salt prefix, used hardcoded salt) for backwards compatibility
 /// with any existing DB values.
+
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
     use std::sync::Once;
 
@@ -225,6 +231,8 @@ mod tests {
         assert_eq!(decrypted, plaintext);
     }
 }
+
+// endregion: --- Tests
 
 pub fn decrypt(encoded: &str) -> Result<String> {
     let data = base64::Engine::decode(

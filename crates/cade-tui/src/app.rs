@@ -3075,8 +3075,13 @@ pub fn truncate_str(s: &str, max: usize) -> String {
     }
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
 
     #[test]
@@ -3105,3 +3110,5 @@ mod tests {
         assert_eq!(count_wrapped_segment("a 12345678901 ", 10), 3);
     }
 }
+
+// endregion: --- Tests

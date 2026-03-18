@@ -183,8 +183,13 @@ pub struct LocalSettings {
     pub mcp_servers: std::collections::HashMap<String, McpServerConfig>,
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
     use std::fs;
 
@@ -471,6 +476,8 @@ mod tests {
         assert_eq!(hooks.pre_tool_use.len(), 2);
     }
 }
+
+// endregion: --- Tests
 
 pub struct SettingsManager {
     global_path:  PathBuf,

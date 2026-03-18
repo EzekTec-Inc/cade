@@ -446,10 +446,13 @@ async fn spawn_command(
     Ok((exit_code, stdout, stderr))
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// region:    --- Tests
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
     use crate::settings::manager::{HookDef, HookEntry, HooksConfig};
     use std::path::PathBuf;
@@ -634,6 +637,8 @@ mod tests {
         assert!(!outcome.is_block());
     }
 }
+
+// endregion: --- Tests
 
 // ── Display helpers ───────────────────────────────────────────────────────────
 

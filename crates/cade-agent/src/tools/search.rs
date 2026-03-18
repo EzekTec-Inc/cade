@@ -128,8 +128,13 @@ impl GrepTool {
     }
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
     use std::fs;
 
@@ -249,6 +254,8 @@ mod tests {
     }
 }
 
+// endregion: --- Tests
+
 // ── Glob ─────────────────────────────────────────────────────────────────────
 
 pub struct GlobTool;
@@ -321,8 +328,13 @@ impl GlobTool {
     }
 }
 
+// region:    --- Tests (glob)
+
 #[cfg(test)]
 mod glob_tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
     use std::fs;
 
@@ -419,3 +431,5 @@ mod glob_tests {
         assert!(schema["parameters"]["properties"]["pattern"].is_object());
     }
 }
+
+// endregion: --- Tests (glob)

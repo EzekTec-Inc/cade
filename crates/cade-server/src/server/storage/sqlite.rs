@@ -1531,8 +1531,13 @@ pub fn delete_provider(db: &Db, name: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
 
     fn setup_mem_db() -> Db {
@@ -1669,3 +1674,5 @@ mod tests {
         assert_eq!(remaining, vec!["good", "ollama"]);
     }
 }
+
+// endregion: --- Tests

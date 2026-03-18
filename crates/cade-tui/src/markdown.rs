@@ -334,8 +334,13 @@ fn highlight_code(line: &str, lang: &str) -> Vec<Span<'static>> {
     spans
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
 
     #[test]
@@ -360,3 +365,5 @@ mod tests {
         assert_eq!(lines.len(), 2);
     }
 }
+
+// endregion: --- Tests

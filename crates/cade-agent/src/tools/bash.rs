@@ -222,8 +222,13 @@ impl BashTool {
     }
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
     use serde_json::json;
 
@@ -302,3 +307,5 @@ mod tests {
         assert!(schema["parameters"]["properties"]["command"].is_object());
     }
 }
+
+// endregion: --- Tests

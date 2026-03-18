@@ -544,8 +544,13 @@ impl Component for Editor {
     }
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
 
     #[test]
@@ -609,3 +614,5 @@ mod tests {
         assert_eq!(editor.input, "hello world\nnewline");
     }
 }
+
+// endregion: --- Tests

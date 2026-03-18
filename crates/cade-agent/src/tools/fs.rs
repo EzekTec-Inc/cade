@@ -331,8 +331,13 @@ where string-replace would be fragile.",
     }
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
 
     // ── validate_patch_paths ──────────────────────────────────────────────
@@ -414,3 +419,5 @@ mod tests {
         assert!(ensure_within_root(&root, "/etc/passwd").is_err());
     }
 }
+
+// endregion: --- Tests

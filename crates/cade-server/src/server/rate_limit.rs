@@ -129,8 +129,13 @@ impl RateLimiter {
     }
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
 
     #[test]
@@ -202,6 +207,8 @@ mod tests {
         assert!(limiter.buckets.lock().unwrap().len() <= 100);
     }
 }
+
+// endregion: --- Tests
 
 // ── Axum middleware ───────────────────────────────────────────────────────────
 

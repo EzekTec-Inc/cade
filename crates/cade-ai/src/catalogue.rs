@@ -117,8 +117,13 @@ pub struct ModelPricing {
     pub cache_write: f64,  // $/1M cache-write tokens
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
 
     // ── CATALOGUE ─────────────────────────────────────────────────────────
@@ -277,6 +282,8 @@ mod tests {
         assert!(p.input > 0.0);
     }
 }
+
+// endregion: --- Tests
 
 /// Returns approximate per-token pricing for a model.
 /// Uses pattern matching on model ID; unknown models get zero rates.

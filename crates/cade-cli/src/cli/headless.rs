@@ -613,8 +613,13 @@ fn collect_assistant_text(messages: &[CadeMessage], output: &mut String) {
     }
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::sanitize_for_terminal;
 
     #[test]
@@ -640,3 +645,5 @@ mod tests {
         assert_eq!(sanitize_for_terminal(s), s);
     }
 }
+
+// endregion: --- Tests

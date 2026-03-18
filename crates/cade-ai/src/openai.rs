@@ -134,8 +134,13 @@ pub async fn fetch_model_ids(models_url: &str, api_key: &str) -> Vec<String> {
     ids
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
 
     #[test]
@@ -317,6 +322,8 @@ mod tests {
         assert_eq!(arr[0]["function"]["name"], "bash");
     }
 }
+
+// endregion: --- Tests
 
 pub struct OpenAiProvider {
     client: Client,

@@ -44,8 +44,13 @@ pub async fn fetch_anthropic_models(api_key: &str) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
 
     #[test]
@@ -265,6 +270,8 @@ mod tests {
         assert_eq!(tool_results[1]["type"], "tool_result");
     }
 }
+
+// endregion: --- Tests
 
 pub struct AnthropicProvider {
     client: Client,

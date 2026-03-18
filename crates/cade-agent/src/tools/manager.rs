@@ -168,8 +168,13 @@ pub fn is_native_write_tool(name: &str) -> bool {
     )
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
 
     // ── schemas_for_toolset ───────────────────────────────────────────────
@@ -338,6 +343,8 @@ mod tests {
         }
     }
 }
+
+// endregion: --- Tests
 
 /// Returns true if the tool (native or MCP) can mutate state.
 pub async fn is_write_tool(name: &str, mcp: &McpManager) -> bool {

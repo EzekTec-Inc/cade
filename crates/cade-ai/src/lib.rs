@@ -804,8 +804,13 @@ pub fn make_provider(config: &AiConfig) -> Result<Arc<dyn LlmProvider>> {
     Ok(Arc::new(LlmRouter::build(config)))
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
 
     // ── bare_model ────────────────────────────────────────────────────────
@@ -1147,3 +1152,5 @@ mod tests {
         assert!(p.is_none());
     }
 }
+
+// endregion: --- Tests

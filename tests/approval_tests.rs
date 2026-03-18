@@ -8,6 +8,8 @@
 ///   B3 — session-allow timing: add_session_allow was applied too late for
 ///        back-to-back tool calls of the same type in one turn.
 
+// region:    --- Tests
+
 // ── B3: session-allow timing ──────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -229,3 +231,5 @@ mod rule_tests {
         assert!(r.matches("Bash", None));
     }
 }
+
+// endregion: --- Tests

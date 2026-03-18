@@ -227,3 +227,50 @@ best practices to identify gaps and provide actionable recommendations.
 **Rollback:** Delete `RUST10X_AUDIT_2026-03-18.md`, revert CLAUDE.md item #6 to 🟢 FUTURE.
 
 **Next steps:** User to review audit report and select fixes to implement (if any).
+
+---
+
+## 2026-03-18T00:07:00Z — rust10x Tier 3: Test region wrappers + Result alias
+
+**Summary:** Added `// region: --- Tests` / `// endregion: --- Tests` wrappers
+and `type Result<T>` alias to all 21 test modules across the workspace, per
+rust10x compliance audit items M3 and M8.
+
+**Files modified:**
+- `crates/cade-tui/src/editor.rs` — region + Result alias
+- `crates/cade-tui/src/app.rs` — region + Result alias
+- `crates/cade-tui/src/markdown.rs` — region + Result alias
+- `crates/cade-core/src/skills/mod.rs` — region + Result alias
+- `crates/cade-core/src/toolsets/mod.rs` — region + Result alias
+- `crates/cade-core/src/hooks/mod.rs` — replaced `// ── Tests` with region + Result alias
+- `crates/cade-core/src/settings/manager.rs` — region + Result alias
+- `crates/cade-core/src/permissions/mod.rs` — added `#[allow(unused)]` to existing alias
+- `crates/cade-server/src/server/rate_limit.rs` — region + Result alias
+- `crates/cade-server/src/server/crypto.rs` — region + Result alias
+- `crates/cade-server/src/server/storage/sqlite.rs` — region + Result alias
+- `crates/cade-ai/src/lib.rs` — region + Result alias
+- `crates/cade-ai/src/catalogue.rs` — region + Result alias
+- `crates/cade-ai/src/anthropic.rs` — region + Result alias
+- `crates/cade-ai/src/openai.rs` — region + Result alias
+- `crates/cade-cli/src/cli/headless.rs` — region + Result alias
+- `crates/cade-agent/src/tools/search.rs` — 2 regions (tests + glob_tests) + Result alias
+- `crates/cade-agent/src/tools/bash.rs` — region + Result alias
+- `crates/cade-agent/src/tools/fs.rs` — region + Result alias
+- `crates/cade-agent/src/tools/manager.rs` — region + Result alias
+- `tests/approval_tests.rs` — region wrapper around all 4 test modules
+
+**Reason:** rust10x audit items M3 (test region wrappers) and M8 (test Result alias).
+
+**Previous behavior:** Test modules had no region markers and no Result alias.
+
+**New behavior:** Every `#[cfg(test)] mod tests { ... }` block is wrapped in
+`// region: --- Tests` / `// endregion: --- Tests`. Each test module contains
+`#[allow(unused)] type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;`
+for future use when tests are migrated to return `Result<()>`.
+
+**Verification:** `cargo test --workspace` — 295 tests pass, 0 failures.
+`cargo clippy --workspace --all-targets` — no `type alias unused` warnings.
+
+**Rollback:** Remove all `// region: --- Tests` / `// endregion: --- Tests`
+comment lines. Remove all `#[allow(unused)]` + `type Result<T>` lines from
+test modules. Restore `// ── Tests ──...` in `hooks/mod.rs`.

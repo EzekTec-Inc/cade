@@ -602,8 +602,13 @@ pub fn github_url_to_raw_skill(url: &str) -> Option<String> {
     }
 }
 
+// region:    --- Tests
+
 #[cfg(test)]
 mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
+
     use super::*;
     use std::fs;
 
@@ -832,6 +837,8 @@ mod tests {
         assert_eq!(shared.scope, SkillScope::Project);
     }
 }
+
+// endregion: --- Tests
 
 /// Write edited skill fields back to the SKILL.MD file on disk.
 /// fields: [name, description, category, tags_csv, triggers_csv, body]

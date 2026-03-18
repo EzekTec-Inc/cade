@@ -354,7 +354,8 @@ fn segment_is_write(seg: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
 
     use super::*;
     use serde_json::json;
