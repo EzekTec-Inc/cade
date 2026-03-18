@@ -51,7 +51,13 @@ pub struct AnthropicProvider {
 
 impl AnthropicProvider {
     pub fn new(api_key: String) -> Self {
-        Self { client: Client::new(), api_key }
+        Self { 
+            client: Client::builder()
+                .tcp_keepalive(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| Client::new()), 
+            api_key 
+        }
     }
 
     fn build_body(&self, req: &CompletionRequest, stream: bool) -> Value {
@@ -96,7 +102,7 @@ impl AnthropicProvider {
                 }
                 _ => {
                     // When images are attached, build a multi-part content array.
-                    // Anthropic format: [{"type":"image","source":{...}}, {"type":"text","text":"..."}]
+                    // Anthropic format: [{"type":"image","source":{…}}, {"type":"text","text":"…"}]
                     if let Some(images) = &m.images {
                         if !images.is_empty() {
                             let mut blocks: Vec<Value> = images.iter().map(|img| json!({

@@ -144,7 +144,10 @@ pub struct OpenAiProvider {
 impl OpenAiProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .tcp_keepalive(std::time::Duration::from_secs(60))
+                .build()
+                .unwrap_or_else(|_| Client::new()),
             api_key,
             base_url: base_url.unwrap_or_else(|| OPENAI_URL.to_string()),
         }
@@ -172,7 +175,7 @@ impl OpenAiProvider {
                 }
                 _ => {
                     // When images are attached, build a multi-part content array.
-                    // OpenAI format: [{"type":"image_url","image_url":{"url":"data:…"}}, {"type":"text","text":"..."}]
+                    // OpenAI vision format: [{"type":"image_url","image_url":{"url":"data:…"}}, …]
                     if let Some(images) = &m.images {
                         if !images.is_empty() {
                             let mut parts: Vec<Value> = images.iter().map(|img| json!({
@@ -453,21 +456,40 @@ impl LlmProvider for OpenAiProvider {
                     let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(anyhow::anyhow!("{e}")); break; } };
                     buf.push_str(&String::from_utf8_lossy(&chunk));
 
-                    while let Some(pos) = buf.find('\n') {
-                        let line = buf[..pos].trim().to_string();
-                        buf = buf[pos + 1..].to_string();
+                    while let Some((pos, len)) = {
+                        let mut earliest = None;
+                        if let Some(p) = buf.find("\n\n") {
+                            earliest = Some((p, 2));
+                        }
+                        if let Some(p) = buf.find("\r\n\r\n") {
+                            if earliest.map_or(true, |(ep, _)| p < ep) {
+                                earliest = Some((p, 4));
+                            }
+                        }
+                        earliest
+                    } {
+                        let block = buf[..pos].trim().to_string();
+                        buf = buf[pos + len..].to_string();
+                        
+                        if block.is_empty() { continue; }
+                        
+                        let mut event_type = String::new();
+                        let mut data_str = String::new();
+                        
+                        for line in block.lines() {
+                            let line = line.trim();
+                            if let Some(t) = line.strip_prefix("event: ") {
+                                event_type = t.trim().to_string();
+                            } else if let Some(d) = line.strip_prefix("data: ") {
+                                data_str = d.trim().to_string();
+                            }
+                        }
+                        
+                        if data_str.is_empty() || data_str == "[DONE]" { continue; }
+                        
+                        let v: Value = match serde_json::from_str(&data_str) { Ok(v) => v, Err(_) => continue };
 
-                        // Responses API uses "event: TYPE\ndata: JSON" format
-                        if let Some(event_type) = line.strip_prefix("event: ") {
-                            let event_type = event_type.trim().to_string();
-                            // Grab the next data line from buf
-                            if let Some(data_pos) = buf.find('\n') {
-                                let data_line = buf[..data_pos].trim().to_string();
-                                buf = buf[data_pos + 1..].to_string();
-                                let data = match data_line.strip_prefix("data: ") { Some(d) => d, None => continue };
-                                let v: Value = match serde_json::from_str(data) { Ok(v) => v, Err(_) => continue };
-
-                                match event_type.as_str() {
+                        match event_type.as_str() {
                                     "response.output_text.delta" => {
                                         if let Some(text) = v["delta"].as_str() {
                                             if !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
@@ -518,8 +540,6 @@ impl LlmProvider for OpenAiProvider {
                                     }
                                     _ => {}
                                 }
-                            }
-                        }
                     }
                 }
                 let remaining: Vec<(String, String, String)> =
@@ -599,7 +619,22 @@ impl LlmProvider for OpenAiProvider {
                     let line = buf[..pos].trim().to_string();
                     buf = buf[pos + 1..].to_string();
                     let data = match line.strip_prefix("data: ") { Some(d) => d, None => continue };
-                    if data == "[DONE]" { yield Ok(StreamChunk::Done); return; }
+                    if data == "[DONE]" {
+                        let remaining: Vec<(String, String, String)> =
+                            tool_map.iter().map(|(_, v)| v.clone()).collect();
+                        tool_map.clear();
+                        for (id, name, args_str) in remaining {
+                            if !name.is_empty() {
+                                let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
+                                    tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
+                                    serde_json::Value::Object(Default::default())
+                                });
+                                yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
+                            }
+                        }
+                        yield Ok(StreamChunk::Done);
+                        return;
+                    }
                     let v: Value = match serde_json::from_str(data) { Ok(v) => v, Err(_) => continue };
                     let delta = &v["choices"][0]["delta"];
 

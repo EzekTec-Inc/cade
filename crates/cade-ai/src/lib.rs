@@ -13,7 +13,14 @@ use serde_json::Value;
 use std::sync::Arc;
 use tokio_stream::Stream;
 
-use crate::server::config::ServerConfig;
+#[derive(Debug, Clone)]
+pub struct AiConfig {
+    pub anthropic_api_key: Option<String>,
+    pub openai_api_key: Option<String>,
+    pub google_api_key: Option<String>,
+    pub ollama_base_url: String,
+    pub llm_provider: String,
+}
 
 // ── Request / Response types ──────────────────────────────────────────────────
 
@@ -21,7 +28,7 @@ use crate::server::config::ServerConfig;
 ///
 /// Stored as JSON in the SQLite `content` column alongside the text so that
 /// the full conversation history — including past images — is available when
-/// building the LLM context for subsequent turns.
+/// building LLM context for subsequent turns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessageImage {
     /// IANA media type: `"image/png"`, `"image/jpeg"`, `"image/gif"`, `"image/webp"`.
@@ -40,7 +47,7 @@ pub struct LlmMessage {
     pub tool_calls: Option<Vec<LlmToolCall>>,
     /// Inline images attached to this message (user messages only).
     /// When present the provider serialises a multi-part content array.
-    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub images: Option<Vec<MessageImage>>,
 }
 
@@ -294,14 +301,14 @@ pub struct LlmRouter {
 }
 
 impl LlmRouter {
-    pub fn build(config: &ServerConfig) -> Self {
+    pub fn build(config: &AiConfig) -> Self {
         let mut providers: std::collections::HashMap<String, Arc<dyn LlmProvider>> =
             std::collections::HashMap::new();
         let mut provider_keys: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
         let mut default_provider = config.llm_provider.to_string();
 
-        // ── Core providers (from ServerConfig) ────────────────────────────────
+        // ── Core providers (from AiConfig) ────────────────────────────────
         if let Some(key) = &config.anthropic_api_key {
             providers.insert(
                 "anthropic".to_string(),
@@ -660,32 +667,34 @@ impl LlmRouter {
         out
     }
 
-    /// Build an `Arc<dyn LlmProvider>` from a DB `ProviderRow`.
+    /// Build an `Arc<dyn LlmProvider>` from DB `ProviderRow` fields.
     pub fn provider_from_row(
-        row: &crate::server::storage::sqlite::ProviderRow,
-        config: &ServerConfig,
+        kind: &str,
+        api_key: Option<String>,
+        base_url: Option<String>,
+        config: &AiConfig,
     ) -> Option<Arc<dyn LlmProvider>> {
-        match row.kind.as_str() {
+        match kind {
             "anthropic" => {
-                let key = row.api_key.clone().or_else(|| config.anthropic_api_key.clone())?;
+                let key = api_key.clone().or_else(|| config.anthropic_api_key.clone())?;
                 Some(Arc::new(anthropic::AnthropicProvider::new(key)))
             }
             "openai" => {
-                let key = row.api_key.clone().or_else(|| config.openai_api_key.clone())?;
-                Some(Arc::new(openai::OpenAiProvider::new(key, row.base_url.clone())))
+                let key = api_key.clone().or_else(|| config.openai_api_key.clone())?;
+                Some(Arc::new(openai::OpenAiProvider::new(key, base_url.clone())))
             }
             "gemini" => {
-                let key = row.api_key.clone().or_else(|| config.google_api_key.clone())?;
+                let key = api_key.clone().or_else(|| config.google_api_key.clone())?;
                 Some(Arc::new(gemini::GeminiProvider::new(key)))
             }
             "ollama" => {
-                let base = row.base_url.clone()
+                let base = base_url.clone()
                     .unwrap_or_else(|| config.ollama_base_url.clone());
                 Some(Arc::new(ollama::OllamaProvider::new(base)))
             }
             "openai-compatible" => {
-                let key = row.api_key.clone().unwrap_or_default();
-                let url = row.base_url.clone()?;
+                let key = api_key.clone().unwrap_or_default();
+                let url = base_url.clone()?;
                 Some(Arc::new(openai::OpenAiProvider::new(key, Some(url))))
             }
             _ => None,
@@ -787,6 +796,6 @@ impl LlmProvider for LlmRouter {
 
 // ── Factory (kept for compatibility) ──────────────────────────────────────────
 
-pub fn make_provider(config: &ServerConfig) -> Result<Arc<dyn LlmProvider>> {
+pub fn make_provider(config: &AiConfig) -> Result<Arc<dyn LlmProvider>> {
     Ok(Arc::new(LlmRouter::build(config)))
 }
