@@ -206,6 +206,8 @@ pub struct TuiApp {
     pub lines: Vec<RenderLine>,
     /// Lines scrolled up from the bottom.  0 = show latest content.
     pub scroll: usize,
+    /// When true, snap to bottom on new content; disabled by manual scroll.
+    pub follow: bool,
     pub expand_all: bool,
     pub active_question: Option<ActiveQuestionState>,
     pub active_plan: Option<PlanState>,
@@ -295,6 +297,7 @@ impl TuiApp {
             terminal,
             lines: Vec::new(),
             scroll: 0,
+            follow: true,
             expand_all: false,
             active_question: None,
             active_plan: None,
@@ -346,6 +349,9 @@ impl TuiApp {
         } else {
             self.scroll = 0;
         }
+        if self.follow {
+            self.scroll = 0;
+        }
         self.pending_lines = 0;
         let scroll_before = self.scroll;
         self.draw()?;
@@ -395,8 +401,10 @@ impl TuiApp {
             // up to show the ToolCall header; that view is correct while the tool
             // was running, but as soon as the agent starts responding the viewport
             // must follow the output.
-            self.scroll = 0;
-            self.pending_lines = 0;
+            if self.follow {
+                self.scroll = 0;
+                self.pending_lines = 0;
+            }
         }
         // Subsequent chunks of the same response preserve scroll (V-01):
         // if the user scrolled up mid-stream to read history, leave them there.
@@ -461,8 +469,10 @@ impl TuiApp {
         // be visible.  Only mid-stream chunks (push_streaming_chunk) preserve
         // the user's scroll position; once the response is fully committed here
         // we always show it.
-        self.scroll = 0;
-        self.pending_lines = 0;
+        if self.follow {
+            self.scroll = 0;
+            self.pending_lines = 0;
+        }
         self.draw()
     }
 
@@ -501,6 +511,7 @@ impl TuiApp {
         self.lines.clear();
         self.discard_streaming();
         self.scroll = 0;
+        self.follow = true;
         self.draw()
     }
 
@@ -553,6 +564,9 @@ impl TuiApp {
         if let Some(RenderLine::LiveOutput { lines, .. }) = self.lines.get_mut(idx) {
             lines.push(line);
         }
+        if self.follow {
+            self.scroll = 0;
+        }
         self.draw_throttled()
     }
 
@@ -561,6 +575,9 @@ impl TuiApp {
     pub fn finish_live_output(&mut self, idx: usize) -> Result<()> {
         if let Some(RenderLine::LiveOutput { done, .. }) = self.lines.get_mut(idx) {
             *done = true;
+        }
+        if self.follow {
+            self.scroll = 0;
         }
         self.draw()
     }
@@ -641,7 +658,11 @@ impl TuiApp {
         } else {
             None
         };
-        let scroll = self.scroll;
+        let mut scroll = self.scroll;
+        if self.follow {
+            self.scroll = 0;
+            scroll = 0;
+        }
         let input = self.editor.input.clone();
         let cursor_pos = self.editor.cursor_pos;
         let mode = self.mode;
@@ -1277,12 +1298,16 @@ impl TuiApp {
                 }
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp => {
+                        self.follow = false;
                         self.scroll = self.scroll.saturating_add(3);
                         self.draw()?;
                     }
                     MouseEventKind::ScrollDown => {
-                        self.scroll = self.scroll.saturating_sub(3);
+                        if self.scroll > 0 {
+                            self.scroll = self.scroll.saturating_sub(3);
+                        }
                         if self.scroll == 0 {
+                            self.follow = true;
                             self.pending_lines = 0;
                         }
                         self.draw()?;
@@ -1523,13 +1548,13 @@ impl TuiApp {
             // -- Content scroll
             // Shift+K = up 10 rows,  Shift+J = down 10 rows
             (KeyCode::Char('K'), _) => {
+                self.follow = false;
                 self.scroll = self.scroll.saturating_add(10);
             }
             (KeyCode::Char('J'), _) => {
-                self.scroll = self.scroll.saturating_sub(10);
-                if self.scroll == 0 {
-                    self.pending_lines = 0;
-                }
+                self.scroll = 0;
+                self.follow = true;
+                self.pending_lines = 0;
             }
 
             // -- Mode cycle / path completion

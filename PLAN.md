@@ -522,3 +522,39 @@ summary is injected before trim.
    `MAX_CONTEXT_CHARS` to 3_000_000; remove the compaction failure placeholder.
 2. In `sqlite.rs`, remove `list_messages_page` and revert `list_messages` to the
    old LIMIT-only query (no OFFSET).
+
+---
+
+## 2026-03-18T00:16:00Z — Add follow mode to stop viewport hiding streamed content
+
+**Summary:** Introduced a follow mode in the TUI so Shift+J hard-snaps to bottom
+and keeps following new output. Manual scroll disables follow; auto-snap on new
+content only happens when follow is true. Prevents streamed/tool output from
+staying hidden behind the input/footer when the user wants to follow.
+
+**Files modified:**
+- `crates/cade-tui/src/app.rs`
+  - Added `follow: bool` to `TuiApp` (default true).
+  - Snap-to-bottom when `follow` is true in push/draw/streaming/live output.
+  - Shift+J now sets `scroll=0`, `follow=true`, clears pending lines.
+  - Manual scroll (mouse wheel, Shift+K) sets `follow=false`; scrolling back to
+    bottom re-enables follow.
+  - Mouse scroll down now stops at 0 and re-enables follow when at the bottom.
+  - Clear content resets follow=true.
+
+**Reason:** Previously, when scrolled up or after long tool outputs, new
+streamed content could remain off-screen; Shift+J only moved 10 rows and often
+failed to reach the bottom, leaving responses “cut off”.
+
+**Previous behavior:** Shift+J subtracted 10 from `scroll`; follow vs. non-follow
+was implicit and sticky, causing the viewport to stay anchored above the tail.
+
+**New behavior:** Shift+J hard-snaps to the bottom and enables follow; follow
+keeps you at the bottom during streaming/tool output. Manual scroll disables
+follow until you scroll back down.
+
+**Verification:** `cargo test --workspace` — 295 tests pass.
+
+**Rollback:** Revert changes in `crates/cade-tui/src/app.rs`: remove `follow`,
+restore Shift+J to `scroll.saturating_sub(10)`, and drop the follow checks in
+push/draw/streaming/live output.
