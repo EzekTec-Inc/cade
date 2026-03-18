@@ -50,10 +50,12 @@
 ## Planned
 
 ### Short Term
-- [ ] **Test coverage expansion**: Unit tests for server, storage, LLM providers, and tools
-- [ ] **CI/CD pipeline**: GitHub Actions for build, test, and release
-- [ ] **`cade-tui` extraction**: Separate Ratatui rendering into its own crate
-- [ ] **`cade-mcp` extraction**: Isolate MCP client from `cade-agent`
+- [x] **Test coverage expansion**: 295 tests across workspace (server, storage, LLM providers, tools)
+- [x] **CI/CD pipeline**: GitHub Actions for build, test, and release
+- [x] **`cade-tui` extraction**: Separate Ratatui rendering into its own crate
+- [x] **`cade-mcp` extraction**: Isolate MCP client from `cade-agent`
+- [x] **Rust Edition 2024**: Workspace upgraded to Edition 2024, resolver 3
+- [x] **rust10x compliance**: Tier 1–4 fixes (lint guards, regions, dependency sections, macro imports)
 
 ### Medium Term
 - [ ] **Plugin system**: Dynamic tool loading via shared libraries or WASM

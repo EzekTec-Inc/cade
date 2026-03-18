@@ -341,3 +341,21 @@ qualified paths.
 
 **Rollback:** Revert `use serde_json::json;` additions and replace `json!(` with
 `serde_json::json!(` in all affected files.
+
+---
+
+## 2026-03-18T00:10:00Z — Update docs/roadmap.md short-term items
+
+**Summary:** Marked 4 short-term roadmap items as complete and added 2 new
+completed items (Edition 2024 and rust10x compliance).
+
+**Files modified:**
+- `docs/roadmap.md` — checked off completed short-term items
+
+**Reason:** Roadmap was out of date — items completed but still marked `[ ]`.
+
+**Previous behavior:** Short-term items showed as incomplete.
+
+**New behavior:** All 6 short-term items marked `[x]`.
+
+**Rollback:** Revert `[x]` back to `[ ]` and remove the 2 added lines.
