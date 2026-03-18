@@ -7,13 +7,19 @@ edition     = "2024"
 doctest     = false
 
 [dependencies]
+# -- Workspace crates
 cade-core.path       = "../cade-core"
-
+# -- Error handling
 anyhow.workspace       = true
+# -- Serialisation
 serde_json.workspace   = true
+# -- Logging
 tracing.workspace      = true
+# -- Async
 tokio.workspace        = true
+# -- MCP
 rmcp.workspace         = true
+# -- Filesystem
 notify.workspace       = true
 dirs.workspace         = true
 

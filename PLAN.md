@@ -274,3 +274,36 @@ for future use when tests are migrated to return `Result<()>`.
 **Rollback:** Remove all `// region: --- Tests` / `// endregion: --- Tests`
 comment lines. Remove all `#[allow(unused)]` + `type Result<T>` lines from
 test modules. Restore `// ── Tests ──...` in `hooks/mod.rs`.
+
+---
+
+## 2026-03-18T00:08:00Z — rust10x Tier 4: Cargo.toml dependency section comments
+
+**Summary:** Added `# -- Section Name` comments to group dependencies in all 9
+Cargo.toml files (root + 8 crates), per rust10x audit item M5.
+
+**Files modified:**
+- `Cargo.toml` (root package) — reworded existing comments to `# --` style
+- `crates/cade-core/Cargo.toml`
+- `crates/cade-ai/Cargo.toml`
+- `crates/cade-server/Cargo.toml`
+- `crates/cade-agent/Cargo.toml`
+- `crates/cade-cli/Cargo.toml`
+- `crates/cade-desktop/Cargo.toml`
+- `crates/cade-tui/Cargo.toml`
+- `crates/cade-mcp/Cargo.toml`
+
+**Reason:** rust10x audit item M5 — dependency sections missing `# -- Section`
+comments for scanability.
+
+**Previous behavior:** Dependencies listed without section grouping in crate Cargo.toml files.
+
+**New behavior:** Dependencies grouped under `# -- Workspace crates`,
+`# -- Error handling`, `# -- Serialisation`, `# -- Logging`, `# -- Async`,
+`# -- HTTP`, `# -- Filesystem`, `# -- Misc utilities`, `# -- Server`,
+`# -- Crypto`, `# -- Desktop`, `# -- CLI / TUI`, `# -- MCP`,
+`# -- Clipboard / image` section comments as appropriate.
+
+**Verification:** `cargo test --workspace` — 295 tests pass.
+
+**Rollback:** Remove all `# --` comment lines from `[dependencies]` sections.

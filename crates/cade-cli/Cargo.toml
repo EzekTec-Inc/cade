@@ -7,37 +7,46 @@ edition     = "2024"
 doctest     = false
 
 [dependencies]
+# -- Workspace crates
 cade-core.path    = "../cade-core"
 cade-agent.path   = "../cade-agent"
 cade-ai.path      = "../cade-ai"
 cade-tui.path     = "../cade-tui"
-
+# -- Error handling
 anyhow.workspace       = true
+# -- Serialisation
 serde.workspace        = true
 serde_json.workspace   = true
+# -- Logging
 tracing.workspace      = true
+# -- Async
 tokio.workspace        = true
 tokio-stream.workspace = true
-futures.workspace = true
+futures.workspace      = true
 async-trait.workspace  = true
+# -- Misc utilities
 uuid.workspace         = true
 chrono.workspace       = true
+tempfile.workspace     = true
+regex.workspace        = true
+base64.workspace       = true
+atty.workspace         = true
+# -- CLI / TUI
 crossterm.workspace    = true
 ratatui.workspace      = true
 unicode-width.workspace = true
+clap.workspace         = true
+pulldown-cmark.workspace = true
+# -- Filesystem
 dirs.workspace         = true
 walkdir.workspace      = true
 ignore.workspace       = true
 notify.workspace       = true
-atty.workspace         = true
+# -- HTTP
 reqwest.workspace      = true
-clap.workspace         = true
-tempfile.workspace     = true
+# -- Clipboard / image
 arboard.workspace      = true
 image.workspace        = true
-base64.workspace       = true
-regex.workspace = true
-pulldown-cmark.workspace = true
 
 [lints.rust]
 unsafe_code = "forbid"

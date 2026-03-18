@@ -106,14 +106,14 @@ name = "cade-server"
 path = "src/bin/cade-server.rs"
 
 [dependencies]
+# -- Workspace crates
 cade-core    = { path = "crates/cade-core" }
 cade-ai      = { path = "crates/cade-ai" }
 cade-server  = { path = "crates/cade-server" }
 cade-desktop = { path = "crates/cade-desktop" }
 cade-agent   = { path = "crates/cade-agent" }
 cade-cli     = { path = "crates/cade-cli" }
-
-# Shared by both binaries
+# -- Shared by both binaries
 anyhow.workspace       = true
 tokio.workspace        = true
 tracing.workspace      = true
@@ -123,8 +123,7 @@ serde_json.workspace   = true
 dotenvy.workspace      = true
 chrono.workspace       = true
 atty.workspace         = true
-
-# Used by cade-server binary (RouterAdapter)
+# -- Used by cade-server binary (RouterAdapter)
 async-trait.workspace  = true
 tokio-stream.workspace = true
 axum.workspace         = true

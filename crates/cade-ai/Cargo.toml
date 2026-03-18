@@ -7,18 +7,24 @@ edition = "2024"
 doctest = false
 
 [dependencies]
+# -- Error handling
 anyhow.workspace       = true
 thiserror.workspace    = true
+# -- Serialisation
 serde.workspace        = true
 serde_json.workspace   = true
+# -- Logging
 tracing.workspace      = true
+# -- Async
 tokio.workspace        = true
 tokio-stream.workspace = true
 futures.workspace      = true
 async-stream.workspace = true
 async-trait.workspace  = true
+# -- HTTP
 reqwest.workspace      = true
 reqwest-eventsource.workspace = true
+# -- Misc utilities
 uuid.workspace         = true
 
 [lints.rust]

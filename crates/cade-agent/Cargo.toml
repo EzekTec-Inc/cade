@@ -7,30 +7,37 @@ edition     = "2024"
 doctest     = false
 
 [dependencies]
+# -- Workspace crates
 cade-core.path    = "../cade-core"
 cade-desktop.path = "../cade-desktop"
 cade-mcp.path     = "../cade-mcp"
-
+# -- Error handling
 anyhow.workspace       = true
 thiserror.workspace    = true
+# -- Serialisation
 serde.workspace        = true
 serde_json.workspace   = true
+# -- Logging
 tracing.workspace      = true
+# -- Async
 tokio.workspace        = true
 tokio-stream.workspace = true
 futures.workspace      = true
 async-trait.workspace  = true
+# -- HTTP
 reqwest.workspace      = true
 reqwest-eventsource.workspace = true
+# -- Misc utilities
 uuid.workspace         = true
 chrono.workspace       = true
 tempfile.workspace     = true
 regex.workspace        = true
+base64.workspace       = true
+# -- Filesystem
 globset.workspace      = true
 ignore.workspace       = true
 walkdir.workspace      = true
 dirs.workspace         = true
-base64.workspace       = true
 
 [lints.rust]
 unsafe_code = "forbid"

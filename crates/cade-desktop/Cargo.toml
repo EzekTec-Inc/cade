@@ -7,17 +7,22 @@ edition     = "2024"
 doctest     = false
 
 [dependencies]
+# -- Workspace crates
 cade-core.path       = "../cade-core"
-
+# -- Error handling
 anyhow.workspace     = true
+# -- Logging
 tracing.workspace    = true
+# -- Serialisation
 serde_json.workspace = true
-base64.workspace     = true
-image.workspace      = true
+# -- Async
+tokio.workspace      = true
+# -- Desktop
 xcap.workspace       = true
 notify-rust.workspace = true
 ksni.workspace       = true
-tokio.workspace      = true
+base64.workspace     = true
+image.workspace      = true
 
 [lints.rust]
 unsafe_code = "forbid"
