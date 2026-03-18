@@ -1463,21 +1463,21 @@ pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
         let enabled: bool = r.get::<_, i64>(4)? != 0;
 
         // SEC-02: Decrypt API key after retrieval
-        // L-02: Surface decryption errors rather than silently returning None.
+        // Decrypt API key — skip this provider on failure instead of aborting.
+        // The key may have been encrypted with a different machine key or a
+        // previous `.cade-db.key`.  The provider will be re-created from env
+        // vars if available; the user can also re-save it via /connect.
         let api_key = match encrypted_key {
             Some(k) if !k.is_empty() => {
                 match crate::server::crypto::decrypt(&k) {
                     Ok(d) => Some(d),
                     Err(e) => {
-                        tracing::error!(
-                            "Failed to decrypt API key for provider '{}': {e}. \
-                             The key may have been encrypted on a different machine. \
-                             Re-save the provider to re-encrypt with the current machine key.",
+                        tracing::warn!(
+                            "Skipping provider '{}': cannot decrypt API key ({e}). \
+                             Re-save with /connect to re-encrypt with the current key.",
                             name
                         );
-                        return Err(anyhow::anyhow!(
-                            "Decrypt failed for provider '{name}': {e}"
-                        ));
+                        continue; // skip this row, load remaining providers
                     }
                 }
             }

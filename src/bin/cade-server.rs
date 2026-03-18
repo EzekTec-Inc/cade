@@ -61,8 +61,8 @@ async fn main() -> Result<()> {
     let db_providers = match sqlite::list_providers(&db) {
         Ok(providers) => providers,
         Err(e) => {
-            tracing::error!("Failed to list providers from DB (possible corruption): {}", e);
-            std::process::exit(1);
+            tracing::warn!("Could not load providers from DB: {e}. Continuing with env-var providers only.");
+            vec![]
         }
     };
     for row in &db_providers {
