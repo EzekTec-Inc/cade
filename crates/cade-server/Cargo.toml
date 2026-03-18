@@ -5,6 +5,7 @@ edition     = "2021"
 
 [dependencies]
 cade-core.path       = "../cade-core"
+cade-ai.path         = "../cade-ai"
 
 anyhow.workspace       = true
 thiserror.workspace    = true
@@ -14,10 +15,6 @@ tracing.workspace      = true
 tokio.workspace        = true
 tokio-stream.workspace = true
 futures.workspace      = true
-async-stream.workspace = true
-async-trait.workspace  = true
-reqwest.workspace      = true
-reqwest-eventsource.workspace = true
 uuid.workspace         = true
 chrono.workspace       = true
 axum.workspace         = true

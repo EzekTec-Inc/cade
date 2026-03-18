@@ -5,9 +5,8 @@ edition     = "2021"
 
 [dependencies]
 cade-core.path    = "../cade-core"
-cade-server.path  = "../cade-server"
 cade-agent.path   = "../cade-agent"
-cade-desktop.path = "../cade-desktop"
+cade-ai.path      = "../cade-ai"
 
 anyhow.workspace       = true
 serde.workspace        = true

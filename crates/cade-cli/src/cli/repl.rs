@@ -233,7 +233,7 @@ impl SessionStats {
         let mut total = 0.0f64;
         let mut by_model: Vec<(String, f64)> = Vec::new();
         for (model, ms) in &self.per_model {
-            let p = cade_server::server::llm::catalogue::pricing_for_model(model);
+            let p = cade_ai::catalogue::pricing_for_model(model);
             let cost = (ms.input_tokens       as f64 * p.input)       / 1_000_000.0
                      + (ms.output_tokens      as f64 * p.output)      / 1_000_000.0
                      + (ms.cache_read_tokens  as f64 * p.cache_read)  / 1_000_000.0
@@ -1046,7 +1046,7 @@ impl Repl {
                     }
                     SlashCmd::Context => {
                         let model      = self.current_model.lock().unwrap().clone();
-                        let window     = cade_server::server::llm::catalogue::context_window_for_model(&model) as u64;
+                        let window     = cade_ai::catalogue::context_window_for_model(&model) as u64;
                         let pct_opt    = self.app.lock().unwrap().context_pct;
                         let agent_id   = self.agent_id();
                         let conv_id    = self.conversation_id();
@@ -3289,7 +3289,7 @@ impl Repl {
                         let model      = msg.data["model"].as_str().unwrap_or("");
                         let input      = msg.data["input_tokens"].as_u64().unwrap_or(0);
                         let cache_read = msg.data["cache_read_tokens"].as_u64().unwrap_or(0);
-                        let window = cade_server::server::llm::catalogue::context_window_for_model(model);
+                        let window = cade_ai::catalogue::context_window_for_model(model);
                         if window > 0 {
                             let used = input + cache_read;
                             let pct = ((used as f64 / window as f64) * 100.0)

@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/cade-core",
+    "crates/cade-ai",
     "crates/cade-server",
     "crates/cade-desktop",
     "crates/cade-agent",
@@ -103,6 +104,7 @@ path = "src/bin/cade-server.rs"
 
 [dependencies]
 cade-core    = { path = "crates/cade-core" }
+cade-ai      = { path = "crates/cade-ai" }
 cade-server  = { path = "crates/cade-server" }
 cade-desktop = { path = "crates/cade-desktop" }
 cade-agent   = { path = "crates/cade-agent" }

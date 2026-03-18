@@ -6,7 +6,6 @@ edition     = "2021"
 [dependencies]
 cade-core.path    = "../cade-core"
 cade-desktop.path = "../cade-desktop"
-cade-server.path  = "../cade-server"
 
 anyhow.workspace       = true
 thiserror.workspace    = true

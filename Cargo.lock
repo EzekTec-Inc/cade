@@ -664,6 +664,7 @@ dependencies = [
  "axum",
  "base64",
  "cade-agent",
+ "cade-ai",
  "cade-cli",
  "cade-core",
  "cade-desktop",
@@ -691,7 +692,6 @@ dependencies = [
  "base64",
  "cade-core",
  "cade-desktop",
- "cade-server",
  "chrono",
  "dirs",
  "futures",
@@ -714,6 +714,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "cade-ai"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-stream",
+ "async-trait",
+ "futures",
+ "reqwest",
+ "reqwest-eventsource",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.18",
+ "tokio",
+ "tokio-stream",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "cade-cli"
 version = "0.2.0"
 dependencies = [
@@ -723,9 +742,8 @@ dependencies = [
  "atty",
  "base64",
  "cade-agent",
+ "cade-ai",
  "cade-core",
- "cade-desktop",
- "cade-server",
  "chrono",
  "clap 4.5.60",
  "crossterm",
@@ -777,7 +795,6 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
- "cade-core",
  "image",
  "ksni",
  "notify-rust",
@@ -793,10 +810,9 @@ version = "0.2.0"
 dependencies = [
  "aes-gcm",
  "anyhow",
- "async-stream",
- "async-trait",
  "axum",
  "base64",
+ "cade-ai",
  "cade-core",
  "chrono",
  "dirs",
@@ -806,8 +822,6 @@ dependencies = [
  "hmac",
  "machine-uid",
  "pbkdf2",
- "reqwest",
- "reqwest-eventsource",
  "rusqlite",
  "serde",
  "serde_json",

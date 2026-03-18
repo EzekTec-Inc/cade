@@ -10,8 +10,9 @@ use axum::{
 use serde_json::{json, Value};
 use uuid::Uuid;
 
+use cade_ai::{CompletionRequest, LlmMessage, LlmToolCall, StreamChunk, TokenUsage, MessageImage};
+use cade_ai::catalogue;
 use crate::server::{
-    llm::{CompletionRequest, LlmMessage, LlmToolCall, StreamChunk, TokenUsage},
     state::AppState,
     storage::sqlite::{self, MessageRow},
 };
@@ -194,7 +195,7 @@ async fn summarize_for_compaction(
     // Cap the transcript we send to the summarizer to avoid exceeding its own
     // context window.  Use at most ~40% of the model's budget for the input.
     let model_budget = {
-        let w = crate::server::llm::catalogue::context_window_for_model(model) as usize;
+        let w = catalogue::context_window_for_model(model) as usize;
         (w * CHARS_PER_TOKEN).clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)
     };
     let max_input_chars = model_budget * 2 / 5;
@@ -227,7 +228,7 @@ Keep under 800 words.".to_string(),
         images: None,
     };
 
-    let req = crate::server::llm::CompletionRequest {
+    let req = CompletionRequest {
         model: model.to_string(),
         messages: vec![system_msg, user_msg],
         tools: vec![],
@@ -461,7 +462,7 @@ async fn build_context(
     // Always keeps the system prompt and the last user+assistant turn (≥3 msgs).
     // Count chars (codepoints), not bytes — budget is a char budget.
     let context_char_budget = {
-        let window_tokens = crate::server::llm::catalogue::context_window_for_model(&agent.model);
+        let window_tokens = catalogue::context_window_for_model(&agent.model);
         let raw = (window_tokens as usize).saturating_mul(CHARS_PER_TOKEN);
         raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)
     };
@@ -469,7 +470,7 @@ async fn build_context(
         "Context budget for model '{}': {} chars ({} tokens * {})",
         agent.model,
         context_char_budget,
-        crate::server::llm::catalogue::context_window_for_model(&agent.model),
+        catalogue::context_window_for_model(&agent.model),
         CHARS_PER_TOKEN
     );
     // Count both content text AND tool_calls JSON so tool-heavy sessions are
@@ -737,7 +738,7 @@ fn db_row_to_llm(row: &MessageRow) -> Vec<LlmMessage> {
         _ => {
             let content = row.content["content"].as_str().unwrap_or("").to_string();
             // Reconstruct inline images stored during the original persist call.
-            let images: Option<Vec<crate::server::llm::MessageImage>> = row.content["images"]
+            let images: Option<Vec<MessageImage>> = row.content["images"]
                 .as_array()
                 .map(|arr| {
                     arr.iter()
@@ -830,7 +831,7 @@ pub async fn send_message(
 
     // Collect optional inline images from the request body.
     // Each element must have "media_type" and "data" (base64) fields.
-    let req_images: Option<Vec<crate::server::llm::MessageImage>> = body["images"]
+    let req_images: Option<Vec<MessageImage>> = body["images"]
         .as_array()
         .map(|arr| {
             arr.iter()
@@ -869,7 +870,7 @@ pub async fn send_message(
     }
 
     // 3. Call LLM
-    let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
+    let max_tokens = catalogue::max_tokens_for_model(&model);
     let reasoning_effort = body.get("reasoning_effort").and_then(|v| v.as_str()).map(String::from);
     let req = CompletionRequest {
         model,
@@ -955,7 +956,7 @@ async fn handle_tool_return_blocking(
         Err(e) => return err(StatusCode::NOT_FOUND, &e),
     };
 
-    let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
+    let max_tokens = catalogue::max_tokens_for_model(&model);
     let reasoning_effort = body.get("reasoning_effort").and_then(|v| v.as_str()).map(String::from);
     let req = CompletionRequest {
         model,
@@ -1099,7 +1100,7 @@ pub async fn stream_message(
     let run = sqlite::create_run(&state.db, &agent_id, conv_id_ref);
     let run_id: Option<String> = run.ok().map(|r| r.id);
 
-    let max_tokens = crate::server::llm::catalogue::max_tokens_for_model(&model);
+    let max_tokens = catalogue::max_tokens_for_model(&model);
     let reasoning_effort = body.get("reasoning_effort").and_then(|v| v.as_str()).map(String::from);
     let req = CompletionRequest {
         model,

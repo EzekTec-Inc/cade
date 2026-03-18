@@ -5,15 +5,15 @@ use tokio::sync::RwLock;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use axum::http::{Request, HeaderValue, Method};
 
-
 use cade::server::{
     api::router,
     config::ServerConfig,
-    llm::{CompletionRequest, LlmRouter},
     rate_limit::RateLimiter,
     state::AppState,
     storage::{open as open_db, sqlite},
 };
+
+use cade_ai::{CompletionRequest, LlmProvider, LlmRouter};
 
 /// CADE server — LLM gateway and agent state store
 #[derive(Parser, Debug)]
@@ -54,7 +54,8 @@ async fn main() -> Result<()> {
     let db = open_db(&config.db_path)?;
 
     // Build router from env vars first
-    let mut router_inner = LlmRouter::build(&config);
+    let ai_config = config.to_ai_config();
+    let mut router_inner = LlmRouter::build(&ai_config);
 
     // Hot-load any providers persisted in the DB (DB overrides env vars)
     let db_providers = match sqlite::list_providers(&db) {
@@ -66,7 +67,7 @@ async fn main() -> Result<()> {
     };
     for row in &db_providers {
         if !row.enabled { continue; }
-        if let Some(p) = LlmRouter::provider_from_row(row, &config) {
+        if let Some(p) = LlmRouter::provider_from_row(&row.kind, row.api_key.clone(), row.base_url.clone(), &ai_config) {
             // Store the API key so list_dynamic_models() can fetch live model lists.
             let key = row.api_key.clone().unwrap_or_default();
             router_inner.add_provider_with_key(row.name.clone(), p, key);
@@ -78,7 +79,7 @@ async fn main() -> Result<()> {
 
     let llm_router = Arc::new(RwLock::new(router_inner));
     // llm field: thin Arc pointing to the router itself (router implements LlmProvider)
-    let llm: Arc<dyn cade::server::llm::LlmProvider> = {
+    let llm: Arc<dyn LlmProvider> = {
         // We need a stable Arc<dyn LlmProvider> for the existing llm field.
         // Since LlmRouter implements LlmProvider via the RwLock wrapper,
         // we wrap the RwLock<LlmRouter> in a thin adapter.
@@ -128,9 +129,6 @@ async fn main() -> Result<()> {
 }
 
 // ── Version header middleware ──────────────────────────────────────────────────
-//
-// Adds `X-Cade-Version: <CARGO_PKG_VERSION>` to every response so that the
-// CLI client can detect version mismatches at startup.
 
 async fn add_version_header(mut response: axum::response::Response) -> axum::response::Response {
     response.headers_mut().insert(
@@ -144,25 +142,19 @@ async fn add_version_header(mut response: axum::response::Response) -> axum::res
 //
 // IMPORTANT: the lock is held ONLY for the brief resolve_provider() call.
 // It is dropped BEFORE any HTTP calls to Anthropic / OpenAI / Gemini.
-//
-// Holding the lock across async HTTP calls (the old pattern) caused
-// Tokio's write-preferring RwLock to starve subsequent readers (e.g.
-// validate_model in PATCH /agents/:id) whenever GET /v1/models queued
-// a hot_sync write — blocking /model switches mid-stream.
 
 struct RouterAdapter(Arc<RwLock<LlmRouter>>);
 
 #[async_trait::async_trait]
-impl cade::server::llm::LlmProvider for RouterAdapter {
+impl LlmProvider for RouterAdapter {
     async fn complete(
         &self,
         req: &CompletionRequest,
-    ) -> anyhow::Result<cade::server::llm::CompletionResponse> {
-        // Acquire lock just long enough to clone the provider Arc.
+    ) -> anyhow::Result<cade_ai::CompletionResponse> {
         let (provider, bare_model) = {
             let router = self.0.read().await;
             router.resolve_provider(&req.model)?
-        }; // ← lock released here, BEFORE the HTTP call
+        };
         let routed = CompletionRequest { model: bare_model, ..req.clone() };
         provider.complete(&routed).await
     }
@@ -171,13 +163,12 @@ impl cade::server::llm::LlmProvider for RouterAdapter {
         &self,
         req: &CompletionRequest,
     ) -> anyhow::Result<std::pin::Pin<Box<dyn tokio_stream::Stream<
-        Item = anyhow::Result<cade::server::llm::StreamChunk>
+        Item = anyhow::Result<cade_ai::StreamChunk>
     > + Send>>> {
-        // Same pattern: lock only for routing, drop before streaming HTTP call.
         let (provider, bare_model) = {
             let router = self.0.read().await;
             router.resolve_provider(&req.model)?
-        }; // ← lock released here, BEFORE the streaming HTTP call
+        };
         let routed = CompletionRequest { model: bare_model, ..req.clone() };
         provider.stream(&routed).await
     }

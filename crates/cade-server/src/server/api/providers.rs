@@ -1,8 +1,8 @@
 use axum::{extract::{Path, State}, http::StatusCode, Json};
 use serde_json::{json, Value};
 
+use cade_ai::{LlmRouter, PRESET_PROVIDERS};
 use crate::server::{
-    llm::{LlmRouter, PRESET_PROVIDERS},
     state::AppState,
     storage::sqlite::{self, ProviderRow},
 };
@@ -98,7 +98,8 @@ pub async fn add_provider(
     let row = ProviderRow { name: name.clone(), kind: kind.clone(), api_key, base_url, enabled: true };
 
     // Build the live provider and add to router — store API key so live model listing works.
-    if let Some(provider) = LlmRouter::provider_from_row(&row, &state.config) {
+    let ai_config = state.config.to_ai_config();
+    if let Some(provider) = LlmRouter::provider_from_row(&row.kind, row.api_key.clone(), row.base_url.clone(), &ai_config) {
         let key = row.api_key.clone().unwrap_or_default();
         state.llm_router.write().await.add_provider_with_key(name.clone(), provider, key);
     } else {

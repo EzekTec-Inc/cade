@@ -1,4 +1,5 @@
 use std::net::SocketAddr;
+use cade_ai::AiConfig;
 
 /// Runtime configuration for cade-server, resolved from env vars.
 #[derive(Debug, Clone)]
@@ -127,5 +128,16 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "http://localhost:11434".to_string()),
             api_key: std::env::var("CADE_API_KEY").ok(),
         })
+    }
+
+    /// Convert to the provider-agnostic `AiConfig` used by `cade-ai`.
+    pub fn to_ai_config(&self) -> AiConfig {
+        AiConfig {
+            anthropic_api_key: self.anthropic_api_key.clone(),
+            openai_api_key:    self.openai_api_key.clone(),
+            google_api_key:    self.google_api_key.clone(),
+            ollama_base_url:   self.ollama_base_url.clone(),
+            llm_provider:      self.llm_provider.to_string(),
+        }
     }
 }

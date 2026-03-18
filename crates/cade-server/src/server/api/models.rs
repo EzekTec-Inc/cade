@@ -2,6 +2,7 @@ use axum::extract::State;
 use axum::Json;
 use serde_json::{json, Value};
 
+use cade_ai::PRESET_PROVIDERS;
 use crate::server::state::AppState;
 
 /// GET /v1/models
@@ -36,7 +37,7 @@ pub async fn list_models(
     // Providers with no known model listing (not in catalogue, preset, or ollama)
     const KNOWN: &[&str] = &["anthropic", "openai", "gemini", "google", "ollama"];
     let all_known: std::collections::HashSet<&str> = KNOWN.iter()
-        .chain(crate::server::llm::PRESET_PROVIDERS.iter().map(|p| &p.name))
+        .chain(PRESET_PROVIDERS.iter().map(|p| &p.name))
         .copied()
         .collect();
     let custom_providers: Vec<String> = live_names.into_iter()
