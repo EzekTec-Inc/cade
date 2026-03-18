@@ -403,3 +403,26 @@ non-auto-fixable: doc comments, too-many-args, MutexGuard across await, etc.)
 **Verification:** `cargo test --workspace` — 295 tests pass.
 
 **Rollback:** `git revert <commit>`.
+
+---
+
+## 2026-03-18T00:13:00Z — Fix MCP server settings (context7 + openviking)
+
+**Summary:** Fixed `~/.cade/settings.json` MCP server commands so both
+`context7` and `openviking` can start successfully.
+
+**Files modified:**
+- `~/.cade/settings.json` — updated `mcpServers.context7` and `mcpServers.openviking`
+
+**Reason:** Both MCP servers failed to start on `/mcp reload`:
+- `context7`: configured path `~/.gemini/extensions/context7/packages/mcp/dist/index.js`
+  did not exist (source repo never built). Changed to `npx -y @upstash/context7-mcp`.
+- `openviking`: configured `python3` (system) lacked the `mcp` pip package.
+  Changed to the venv interpreter at `.../openviking/.venv/bin/python3`.
+
+**Previous behavior:** `/mcp reload` → `✗ failed to start: context7, openviking`
+
+**New behavior:** Both servers start, complete MCP handshake, and expose tools.
+
+**Rollback:** Revert the two `mcpServers` entries in `~/.cade/settings.json` to
+the original `"command": "node"` / `"command": "python3"` values.
