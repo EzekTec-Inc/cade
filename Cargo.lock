@@ -658,11 +658,9 @@ name = "cade"
 version = "0.2.0"
 dependencies = [
  "anyhow",
- "arboard",
  "async-trait",
  "atty",
  "axum",
- "base64",
  "cade-agent",
  "cade-ai",
  "cade-cli",
@@ -672,7 +670,6 @@ dependencies = [
  "chrono",
  "clap 4.5.60",
  "dotenvy",
- "image",
  "serde_json",
  "tokio",
  "tokio-stream",
@@ -680,7 +677,6 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "tracing-subscriber",
- "uuid",
 ]
 
 [[package]]
