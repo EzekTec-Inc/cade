@@ -1,9 +1,14 @@
 [package]
 name        = "cade-desktop"
 version     = "0.2.0"
-edition     = "2021"
+edition     = "2024"
+
+[lib]
+doctest     = false
 
 [dependencies]
+cade-core.path       = "../cade-core"
+
 anyhow.workspace     = true
 tracing.workspace    = true
 serde_json.workspace = true
@@ -13,3 +18,6 @@ xcap.workspace       = true
 notify-rust.workspace = true
 ksni.workspace       = true
 tokio.workspace      = true
+
+[lints.rust]
+unsafe_code = "forbid"

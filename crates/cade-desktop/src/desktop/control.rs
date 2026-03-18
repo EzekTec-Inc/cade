@@ -23,8 +23,14 @@ impl DesktopControl {
         Self { tool }
     }
 
+    fn new_command(program: &str) -> Command {
+        let mut cmd = Command::new(program);
+        cade_core::agent_env::apply_agent_env(&mut cmd);
+        cmd
+    }
+
     async fn command_exists(cmd: &str) -> bool {
-        Command::new("which")
+        Self::new_command("which")
             .arg(cmd)
             .output()
             .await
@@ -36,7 +42,7 @@ impl DesktopControl {
     pub async fn focus_window(&self, title: &str) -> Result<()> {
         match self.tool {
             ControlTool::Xdotool => {
-                Command::new("xdotool")
+                Self::new_command("xdotool")
                     .args(["search", "--name", title, "windowactivate"])
                     .output()
                     .await
@@ -53,14 +59,14 @@ impl DesktopControl {
     pub async fn type_text(&self, text: &str) -> Result<()> {
         match self.tool {
             ControlTool::Xdotool => {
-                Command::new("xdotool")
+                Self::new_command("xdotool")
                     .args(["type", "--clearmodifiers", text])
                     .output()
                     .await
                     .context("xdotool type")?;
             }
             ControlTool::Ydotool => {
-                Command::new("ydotool")
+                Self::new_command("ydotool")
                     .args(["type", text])
                     .output()
                     .await
@@ -74,14 +80,14 @@ impl DesktopControl {
     pub async fn key_press(&self, key: &str) -> Result<()> {
         match self.tool {
             ControlTool::Xdotool => {
-                Command::new("xdotool")
+                Self::new_command("xdotool")
                     .args(["key", key])
                     .output()
                     .await
                     .context("xdotool key")?;
             }
             ControlTool::Ydotool => {
-                Command::new("ydotool")
+                Self::new_command("ydotool")
                     .args(["key", key])
                     .output()
                     .await
@@ -95,14 +101,14 @@ impl DesktopControl {
     pub async fn move_mouse(&self, x: i32, y: i32) -> Result<()> {
         match self.tool {
             ControlTool::Xdotool => {
-                Command::new("xdotool")
+                Self::new_command("xdotool")
                     .args(["mousemove", &x.to_string(), &y.to_string()])
                     .output()
                     .await
                     .context("xdotool mousemove")?;
             }
             ControlTool::Ydotool => {
-                Command::new("ydotool")
+                Self::new_command("ydotool")
                     .args(["mousemove", &format!("--absolute"), &x.to_string(), &y.to_string()])
                     .output()
                     .await
@@ -116,14 +122,14 @@ impl DesktopControl {
     pub async fn click(&self, button: u8) -> Result<()> {
         match self.tool {
             ControlTool::Xdotool => {
-                Command::new("xdotool")
+                Self::new_command("xdotool")
                     .args(["click", &button.to_string()])
                     .output()
                     .await
                     .context("xdotool click")?;
             }
             ControlTool::Ydotool => {
-                Command::new("ydotool")
+                Self::new_command("ydotool")
                     .args(["click", &button.to_string()])
                     .output()
                     .await

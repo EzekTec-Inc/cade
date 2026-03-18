@@ -122,6 +122,110 @@ pub fn encrypt(plaintext: &str) -> Result<String> {
 /// Handles both the new format (salt prefix) and the legacy format
 /// (no salt prefix, used hardcoded salt) for backwards compatibility
 /// with any existing DB values.
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Once;
+
+    /// Ensure all crypto tests use a stable key (avoids race conditions
+    /// when parallel tests race on `.cade-db.key` creation).
+    static INIT: Once = Once::new();
+    fn setup_test_key() {
+        INIT.call_once(|| {
+            let _ = std::fs::write(
+                ".cade-db.key",
+                "test-crypto-secret-for-unit-tests",
+            );
+        });
+    }
+
+    #[test]
+    fn encrypt_decrypt_roundtrip() {
+        setup_test_key();
+        let plaintext = "sk-ant-api03-very-secret-key-12345";
+        let encrypted = encrypt(plaintext).unwrap();
+        assert_ne!(encrypted, plaintext);
+        assert!(encrypted.len() > plaintext.len());
+
+        let decrypted = decrypt(&encrypted).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn encrypt_produces_different_ciphertext_each_time() {
+        setup_test_key();
+        let plaintext = "same-key-every-time";
+        let enc1 = encrypt(plaintext).unwrap();
+        let enc2 = encrypt(plaintext).unwrap();
+        assert_ne!(enc1, enc2);
+
+        assert_eq!(decrypt(&enc1).unwrap(), plaintext);
+        assert_eq!(decrypt(&enc2).unwrap(), plaintext);
+    }
+
+    #[test]
+    fn decrypt_invalid_base64_fails() {
+        setup_test_key();
+        let result = decrypt("not-valid-base64!!!");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn decrypt_too_short_fails() {
+        setup_test_key();
+        let short = base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            &[0u8; 5],
+        );
+        let result = decrypt(&short);
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("too short"), "got: {msg}");
+    }
+
+    #[test]
+    fn decrypt_corrupted_data_fails() {
+        setup_test_key();
+        let plaintext = "original-key";
+        let encrypted = encrypt(plaintext).unwrap();
+
+        let mut chars: Vec<char> = encrypted.chars().collect();
+        if chars.len() > 20 {
+            chars[20] = if chars[20] == 'A' { 'B' } else { 'A' };
+        }
+        let corrupted: String = chars.into_iter().collect();
+
+        let result = decrypt(&corrupted);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn encrypt_empty_string() {
+        setup_test_key();
+        let encrypted = encrypt("").unwrap();
+        let decrypted = decrypt(&encrypted).unwrap();
+        assert_eq!(decrypted, "");
+    }
+
+    #[test]
+    fn encrypt_unicode_content() {
+        setup_test_key();
+        let plaintext = "日本語のAPIキー🔑";
+        let encrypted = encrypt(plaintext).unwrap();
+        let decrypted = decrypt(&encrypted).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+
+    #[test]
+    fn encrypt_long_key() {
+        setup_test_key();
+        let plaintext = "a".repeat(10_000);
+        let encrypted = encrypt(&plaintext).unwrap();
+        let decrypted = decrypt(&encrypted).unwrap();
+        assert_eq!(decrypted, plaintext);
+    }
+}
+
 pub fn decrypt(encoded: &str) -> Result<String> {
     let data = base64::Engine::decode(
         &base64::engine::general_purpose::STANDARD,

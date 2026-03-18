@@ -99,9 +99,16 @@ pub fn detect_provider() -> (LlmProviderKind, String) {
 
 impl ServerConfig {
     pub fn from_env() -> anyhow::Result<Self> {
-        let port: u16 = std::env::var("CADE_SERVER_PORT")
-            .ok()
-            .and_then(|p| p.parse().ok())
+        Self::from_env_with_port(None)
+    }
+
+    pub fn from_env_with_port(port_override: Option<u16>) -> anyhow::Result<Self> {
+        let port: u16 = port_override
+            .or_else(|| {
+                std::env::var("CADE_SERVER_PORT")
+                    .ok()
+                    .and_then(|p| p.parse().ok())
+            })
             .unwrap_or(8284);
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse()?;
 

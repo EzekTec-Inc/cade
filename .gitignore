@@ -8,3 +8,5 @@ conductor/
 CHANGELOG.md
 CLAUDE.md
 test-genai.mjs
+crates/cade-server/.cade-db.key
+*.cade-db.key

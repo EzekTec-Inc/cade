@@ -688,16 +688,15 @@ dependencies = [
  "base64",
  "cade-core",
  "cade-desktop",
+ "cade-mcp",
  "chrono",
  "dirs",
  "futures",
  "globset",
  "ignore",
- "notify",
  "regex",
  "reqwest",
  "reqwest-eventsource",
- "rmcp",
  "serde",
  "serde_json",
  "tempfile",
@@ -740,6 +739,7 @@ dependencies = [
  "cade-agent",
  "cade-ai",
  "cade-core",
+ "cade-tui",
  "chrono",
  "clap 4.5.60",
  "crossterm",
@@ -778,6 +778,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -791,6 +792,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "base64",
+ "cade-core",
  "image",
  "ksni",
  "notify-rust",
@@ -798,6 +800,20 @@ dependencies = [
  "tokio",
  "tracing",
  "xcap",
+]
+
+[[package]]
+name = "cade-mcp"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "cade-core",
+ "dirs",
+ "notify",
+ "rmcp",
+ "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -829,6 +845,24 @@ dependencies = [
  "tower-http 0.5.2",
  "tracing",
  "uuid",
+]
+
+[[package]]
+name = "cade-tui"
+version = "0.2.0"
+dependencies = [
+ "anyhow",
+ "arboard",
+ "base64",
+ "cade-core",
+ "crossterm",
+ "dirs",
+ "image",
+ "pulldown-cmark",
+ "ratatui",
+ "regex",
+ "tokio",
+ "unicode-width 0.2.0",
 ]
 
 [[package]]

@@ -1,3 +1,5 @@
+// region:    --- Modules
+
 pub mod sqlite;
 pub use sqlite::{
     Db, AgentRow, MessageRow, ToolRow, open,
@@ -5,3 +7,5 @@ pub use sqlite::{
     attach_tools_to_agent, get_agent_tool_ids,
     clear_messages, search_messages,
 };
+
+// endregion: --- Modules

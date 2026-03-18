@@ -229,6 +229,35 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         }
     }
 
+    // Migration 8: Remove provider rows whose encrypted API key can no longer be
+    // decrypted (stale keys from a previous .cade-db.key or machine).
+    // These rows are already skipped at load time (list_providers logs a warning
+    // and continues), so deleting them loses no recoverable data.
+    {
+        let mut stmt = conn.prepare(
+            "SELECT name, api_key FROM providers WHERE api_key IS NOT NULL AND api_key != ''"
+        )?;
+        let stale: Vec<String> = stmt.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+        })?
+        .filter_map(|r| r.ok())
+        .filter(|(_, encrypted)| crate::server::crypto::decrypt(encrypted).is_err())
+        .map(|(name, _)| name)
+        .collect();
+
+        if !stale.is_empty() {
+            tracing::info!(
+                "Migration 8: removing {} provider(s) with undecryptable API keys: {}",
+                stale.len(),
+                stale.join(", ")
+            );
+            for name in &stale {
+                conn.execute("DELETE FROM providers WHERE name = ?1", params![name])?;
+            }
+            tracing::info!("Migration 8 complete: stale providers removed");
+        }
+    }
+
     Ok(())
 }
 
@@ -1589,5 +1618,54 @@ mod tests {
         let res2 = search_messages(&db, agent_id, "safe", None).unwrap();
         assert_eq!(res2.len(), 1);
         assert!(res2[0].content.as_str().unwrap().contains("fast"));
+    }
+
+    #[test]
+    fn test_migration_8_removes_stale_providers() {
+        // Build a DB with schema but WITHOUT running migrations yet
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
+        apply_schema(&conn).unwrap();
+
+        // Insert a provider with a valid encrypted key
+        let valid_key = crate::server::crypto::encrypt("sk-real-key").unwrap();
+        conn.execute(
+            "INSERT INTO providers (name, kind, api_key, base_url, enabled, created_at)
+             VALUES ('good', 'anthropic', ?1, NULL, 1, 0)",
+            params![valid_key],
+        ).unwrap();
+
+        // Insert a provider with garbage that cannot be decrypted
+        conn.execute(
+            "INSERT INTO providers (name, kind, api_key, base_url, enabled, created_at)
+             VALUES ('stale', 'openai', 'not-a-real-encrypted-value', NULL, 1, 0)",
+            params![],
+        ).unwrap();
+
+        // Insert a provider with NULL api_key (e.g. ollama) — should survive
+        conn.execute(
+            "INSERT INTO providers (name, kind, api_key, base_url, enabled, created_at)
+             VALUES ('ollama', 'ollama', NULL, 'http://localhost:11434', 1, 0)",
+            params![],
+        ).unwrap();
+
+        // Verify 3 rows before migration
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM providers", [], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(count, 3);
+
+        // Run migrations — migration 8 should remove 'stale'
+        run_migrations(&conn).unwrap();
+
+        // Verify: 'stale' removed, 'good' and 'ollama' survive
+        let remaining: Vec<String> = {
+            let mut stmt = conn.prepare("SELECT name FROM providers ORDER BY name").unwrap();
+            stmt.query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .filter_map(|r| r.ok())
+                .collect()
+        };
+        assert_eq!(remaining, vec!["good", "ollama"]);
     }
 }

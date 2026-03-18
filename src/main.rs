@@ -1,3 +1,5 @@
+// region:    --- Modules
+
 // Re-use modules declared in lib.rs
 use cade::agent;
 use cade::cli;
@@ -26,6 +28,8 @@ use cli::{Args, Repl};
 use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
 use skills::{discover_all_skills, skills_listing, Skill};
+
+// endregion: --- Modules
 
 const SKILLS_DIR: &str = ".skills";
 
@@ -687,6 +691,7 @@ async fn auto_start_server(base_url: &str) -> Result<()> {
     if let Some(server_bin) = server_bin {
         tracing::info!("cade-server not running — starting…");
         let mut cmd = std::process::Command::new(&server_bin);
+        cade_core::agent_env::apply_agent_env(&mut cmd);
         if let Ok(log) = std::fs::OpenOptions::new()
             .create(true).append(true).open("/tmp/cade-server.log")
         {
@@ -952,8 +957,9 @@ async fn main() -> Result<()> {
         tracing::info!("Hooks loaded from settings");
     }
 
-    // Expose AGENT_ID to all child processes (bash tool, hooks, etc.)
-    std::env::set_var("AGENT_ID", &agent.id);
+    // Expose AGENT_ID to all child processes (bash tool, hooks, etc.) without touching
+    // global process env APIs (unsafe in Rust 2024).
+    cade_core::agent_env::set_agent_id(agent.id.clone());
 
     // --unlink: detach all tools from agent, then continue
     if args.unlink {

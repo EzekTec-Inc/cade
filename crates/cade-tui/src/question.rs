@@ -323,7 +323,7 @@ impl QuestionWidget {
                             if question.multi_select {
                                 if cursor_pos == submit_idx {
                                     let selected: Vec<String> = checked.iter().enumerate()
-                                        .filter(|(_, &c)| c)
+                                        .filter(|(_, c)| **c)
                                         .map(|(i, _)| question.options[i].label.clone())
                                         .collect();
                                     if selected.is_empty() { continue; }

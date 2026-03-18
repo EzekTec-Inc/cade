@@ -1,0 +1,25 @@
+[package]
+name        = "cade-tui"
+version     = "0.2.0"
+edition     = "2024"
+
+[lib]
+doctest     = false
+
+[dependencies]
+cade-core.path       = "../cade-core"
+
+anyhow.workspace       = true
+crossterm.workspace    = true
+ratatui.workspace      = true
+unicode-width.workspace = true
+pulldown-cmark.workspace = true
+regex.workspace        = true
+tokio.workspace        = true
+dirs.workspace         = true
+image.workspace        = true
+base64.workspace       = true
+arboard.workspace      = true
+
+[lints.rust]
+unsafe_code = "forbid"

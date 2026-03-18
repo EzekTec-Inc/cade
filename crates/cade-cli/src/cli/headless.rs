@@ -248,7 +248,9 @@ async fn run_one_tool(
         };
 
         tracing::info!("Running skill script: {} {}", sk.path.display(), script_args.join(" "));
-        match tokio::process::Command::new(&sk.path).args(&script_args).output().await {
+        let mut cmd = tokio::process::Command::new(&sk.path);
+        cade_core::agent_env::apply_agent_env(&mut cmd);
+        match cmd.args(&script_args).output().await {
             Err(e) => return (call_id, format!("Failed to run script: {e}"), true),
             Ok(out) => {
                 let stdout   = String::from_utf8_lossy(&out.stdout).to_string();
@@ -533,7 +535,7 @@ async fn process_tool_calls_stream_json(
         stats.tool_count += results.len() as u32;
 
         // Emit tool results
-        for (tool_name, (_, ref out, is_err)) in &results {
+        for (tool_name, (_, out, is_err)) in &results {
             emit(json!({
                 "type": "tool_result",
                 "tool": tool_name,

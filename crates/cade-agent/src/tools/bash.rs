@@ -42,10 +42,14 @@ impl BashTool {
 
         let output = tokio::time::timeout(
             Duration::from_secs(timeout_secs),
-            Command::new("bash")
-                .arg("-c")
-                .arg(command)
-                .output(),
+            async {
+                let mut cmd = Command::new("bash");
+                cade_core::agent_env::apply_agent_env(&mut cmd);
+                cmd.arg("-c")
+                    .arg(command)
+                    .output()
+                    .await
+            },
         )
         .await
         .map_err(|_| anyhow::anyhow!("Command timed out after {timeout_secs}s"))?
@@ -112,8 +116,9 @@ impl BashTool {
         let mut child = tokio::time::timeout(
             Duration::from_secs(timeout_secs),
             async {
-                Command::new("bash")
-                    .arg("-c")
+                let mut cmd = Command::new("bash");
+                cade_core::agent_env::apply_agent_env(&mut cmd);
+                cmd.arg("-c")
                     .arg(command)
                     .stdout(Stdio::piped())
                     .stderr(Stdio::piped())
@@ -214,5 +219,86 @@ impl BashTool {
                 "required": ["command"]
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn run_simple_command() {
+        let args = json!({"command": "echo hello world"});
+        let output = BashTool::run(&args).await.unwrap();
+        assert!(output.contains("hello world"), "got: {output}");
+    }
+
+    #[tokio::test]
+    async fn run_command_with_exit_code() {
+        let args = json!({"command": "exit 42"});
+        let output = BashTool::run(&args).await.unwrap();
+        assert!(output.contains("exit code 42"), "got: {output}");
+    }
+
+    #[tokio::test]
+    async fn run_command_with_stderr() {
+        let args = json!({"command": "echo error >&2"});
+        let output = BashTool::run(&args).await.unwrap();
+        assert!(output.contains("STDERR:"), "got: {output}");
+        assert!(output.contains("error"), "got: {output}");
+    }
+
+    #[tokio::test]
+    async fn run_missing_command_arg() {
+        let args = json!({"timeout": 5});
+        let result = BashTool::run(&args).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("missing"));
+    }
+
+    #[tokio::test]
+    async fn run_command_timeout() {
+        let args = json!({"command": "sleep 60", "timeout": 1});
+        let result = BashTool::run(&args).await;
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("timed out"), "got: {msg}");
+    }
+
+    #[tokio::test]
+    async fn run_truncates_large_output() {
+        let args = json!({"command": "yes 'aaaaaaaaaa' | head -5000"});
+        let output = BashTool::run(&args).await.unwrap();
+        if output.len() > MAX_OUTPUT_CHARS + 200 {
+            panic!("output should be truncated, got {} chars", output.len());
+        }
+    }
+
+    #[tokio::test]
+    async fn streaming_simple_command() {
+        let args = json!({"command": "echo line1; echo line2"});
+        let mut lines_seen = Vec::new();
+        let output = BashTool::run_streaming(&args, |line| {
+            lines_seen.push(line);
+        }).await.unwrap();
+        assert!(output.contains("line1"), "got: {output}");
+        assert!(output.contains("line2"), "got: {output}");
+        assert!(!lines_seen.is_empty(), "should have seen lines streamed");
+    }
+
+    #[tokio::test]
+    async fn streaming_timeout() {
+        let args = json!({"command": "sleep 60", "timeout": 1});
+        let result = BashTool::run_streaming(&args, |_| {}).await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn schema_is_valid() {
+        let schema = BashTool::schema();
+        assert_eq!(schema["name"], "bash");
+        assert!(schema["description"].as_str().unwrap().len() > 10);
+        assert!(schema["parameters"]["properties"]["command"].is_object());
     }
 }

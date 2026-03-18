@@ -290,7 +290,9 @@ impl ApplyPatchTool {
             .with_context(|| "apply_patch: failed to write tempfile")?;
         tmp_file.flush()?;
 
-        let output = tokio::process::Command::new("patch")
+        let mut cmd = tokio::process::Command::new("patch");
+        cade_core::agent_env::apply_agent_env(&mut cmd);
+        let output = cmd
             .args(["-p1", "--input", tmp_file.path().to_str().unwrap_or("")])
             .output()
             .await

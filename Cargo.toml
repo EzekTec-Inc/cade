@@ -5,10 +5,12 @@ members = [
     "crates/cade-server",
     "crates/cade-desktop",
     "crates/cade-agent",
+    "crates/cade-tui",
+    "crates/cade-mcp",
     "crates/cade-cli",
     ".",          # root package — owns the two binaries
 ]
-resolver = "2"
+resolver = "3"
 
 [workspace.dependencies]
 # Async
@@ -39,6 +41,7 @@ clap           = { version = "4.5", features = ["derive", "env"] }
 crossterm      = { version = "0.28", features = ["event-stream"] }
 ratatui        = { version = "0.29", features = ["crossterm", "scrolling-regions"] }
 unicode-width  = "0.2"
+pulldown-cmark = "0.13"
 
 # Filesystem
 dirs           = "5"
@@ -88,7 +91,7 @@ rmcp           = { version = "0.2", features = [
 [package]
 name        = "cade"
 version     = "0.2.0"
-edition     = "2021"
+edition     = "2024"
 authors     = ["Engr. Stephen Ezekwem <stephen.ezekwem@gmail.com>"]
 description = "CADE — Coding AI assistant with Desktop Extensions"
 license     = "MIT OR Apache-2.0"
@@ -129,6 +132,9 @@ tower-http.workspace   = true
 
 [dev-dependencies]
 tokio-test = "0.4"
+
+[lints.rust]
+unsafe_code = "forbid"
 
 [profile.dev]
 opt-level = 0

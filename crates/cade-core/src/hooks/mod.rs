@@ -6,12 +6,16 @@
 ///   - Hook types: command (shell script via stdin JSON)
 ///   - Exit codes: 0=allow, 1=log+continue, 2=block+stderr→agent
 ///   - PostToolUse stdout with {"additionalContext":"..."} is injected into tool result
+// region:    --- Modules
+
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use serde_json::{json, Value};
 use tokio::process::Command;
 
 use crate::settings::manager::HooksConfig;
+
+// endregion: --- Modules
 
 // ── Public outcome ────────────────────────────────────────────────────────────
 
@@ -418,14 +422,17 @@ async fn spawn_command(
 ) -> anyhow::Result<(i32, String, String)> {
     use tokio::io::AsyncWriteExt;
 
-    let mut child = Command::new("sh")
-        .arg("-c")
-        .arg(command)
-        .current_dir(cwd)
-        .stdin(std::process::Stdio::piped())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()?;
+    let mut child = {
+        let mut cmd = Command::new("sh");
+        crate::agent_env::apply_agent_env(&mut cmd);
+        cmd.arg("-c")
+            .arg(command)
+            .current_dir(cwd)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()?
+    };
 
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(stdin_data.as_bytes()).await;
@@ -437,6 +444,195 @@ async fn spawn_command(
     let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
 
     Ok((exit_code, stdout, stderr))
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::manager::{HookDef, HookEntry, HooksConfig};
+    use std::path::PathBuf;
+
+    // ── HookOutcome ──────────────────────────────────────────────────────
+
+    #[test]
+    fn hook_outcome_allow_is_not_block() {
+        let outcome = HookOutcome::Allow;
+        assert!(!outcome.is_block());
+        assert!(outcome.reason().is_none());
+    }
+
+    #[test]
+    fn hook_outcome_block_with_reason() {
+        let outcome = HookOutcome::Block { reason: "denied".into() };
+        assert!(outcome.is_block());
+        assert_eq!(outcome.reason(), Some("denied"));
+    }
+
+    // ── HookEngine::is_empty ─────────────────────────────────────────────
+
+    #[test]
+    fn engine_empty_when_no_hooks() {
+        let engine = HookEngine::new(HooksConfig::default(), PathBuf::from("."));
+        assert!(engine.is_empty());
+    }
+
+    #[test]
+    fn engine_not_empty_with_hooks() {
+        let mut config = HooksConfig::default();
+        config.pre_tool_use.push(HookEntry {
+            matcher: None,
+            hooks: vec![HookDef::Command { command: "echo ok".into(), timeout: 5000 }],
+        });
+        let engine = HookEngine::new(config, PathBuf::from("."));
+        assert!(!engine.is_empty());
+    }
+
+    // ── matcher_matches ──────────────────────────────────────────────────
+
+    #[test]
+    fn matcher_none_matches_all() {
+        assert!(matcher_matches(&None, "bash"));
+        assert!(matcher_matches(&None, "anything"));
+    }
+
+    #[test]
+    fn matcher_empty_string_matches_all() {
+        assert!(matcher_matches(&Some("".into()), "bash"));
+    }
+
+    #[test]
+    fn matcher_star_matches_all() {
+        assert!(matcher_matches(&Some("*".into()), "bash"));
+    }
+
+    #[test]
+    fn matcher_exact_regex() {
+        assert!(matcher_matches(&Some("bash".into()), "bash"));
+        assert!(!matcher_matches(&Some("^bash$".into()), "bash_extended"));
+    }
+
+    #[test]
+    fn matcher_alternation() {
+        assert!(matcher_matches(&Some("bash|edit_file".into()), "bash"));
+        assert!(matcher_matches(&Some("bash|edit_file".into()), "edit_file"));
+        assert!(!matcher_matches(&Some("bash|edit_file".into()), "read_file"));
+    }
+
+    #[test]
+    fn matcher_invalid_regex_falls_back_to_substring() {
+        // "[" is invalid regex — should fall back to case-insensitive substring
+        assert!(matcher_matches(&Some("[".into()), "a[b"));
+    }
+
+    // ── HooksConfig::merge ───────────────────────────────────────────────
+
+    #[test]
+    fn hooks_config_merge() {
+        let entry_a = HookEntry {
+            matcher: Some("bash".into()),
+            hooks: vec![HookDef::Command { command: "echo a".into(), timeout: 5000 }],
+        };
+        let entry_b = HookEntry {
+            matcher: Some("edit_file".into()),
+            hooks: vec![HookDef::Command { command: "echo b".into(), timeout: 5000 }],
+        };
+
+        let mut a = HooksConfig::default();
+        a.pre_tool_use.push(entry_a);
+
+        let mut b = HooksConfig::default();
+        b.pre_tool_use.push(entry_b);
+
+        let merged = a.merge(b);
+        assert_eq!(merged.pre_tool_use.len(), 2);
+    }
+
+    #[test]
+    fn hooks_config_is_empty_default() {
+        assert!(HooksConfig::default().is_empty());
+    }
+
+    // ── Integration: hook runs a real command ────────────────────────────
+
+    #[tokio::test]
+    async fn pre_tool_use_allows_on_exit_0() {
+        let mut config = HooksConfig::default();
+        config.pre_tool_use.push(HookEntry {
+            matcher: None,
+            hooks: vec![HookDef::Command { command: "exit 0".into(), timeout: 5000 }],
+        });
+        let engine = HookEngine::new(config, PathBuf::from("."));
+        let outcome = engine.pre_tool_use("bash", &json!({})).await;
+        assert!(!outcome.is_block());
+    }
+
+    #[tokio::test]
+    async fn pre_tool_use_blocks_on_exit_2() {
+        let mut config = HooksConfig::default();
+        config.pre_tool_use.push(HookEntry {
+            matcher: None,
+            hooks: vec![HookDef::Command { command: "echo 'forbidden' >&2; exit 2".into(), timeout: 5000 }],
+        });
+        let engine = HookEngine::new(config, PathBuf::from("."));
+        let outcome = engine.pre_tool_use("bash", &json!({})).await;
+        assert!(outcome.is_block());
+        assert_eq!(outcome.reason(), Some("forbidden"));
+    }
+
+    #[tokio::test]
+    async fn pre_tool_use_continues_on_exit_1() {
+        let mut config = HooksConfig::default();
+        config.pre_tool_use.push(HookEntry {
+            matcher: None,
+            hooks: vec![HookDef::Command { command: "exit 1".into(), timeout: 5000 }],
+        });
+        let engine = HookEngine::new(config, PathBuf::from("."));
+        let outcome = engine.pre_tool_use("bash", &json!({})).await;
+        assert!(!outcome.is_block());
+    }
+
+    #[tokio::test]
+    async fn post_tool_use_extracts_additional_context() {
+        let mut config = HooksConfig::default();
+        config.post_tool_use.push(HookEntry {
+            matcher: None,
+            hooks: vec![HookDef::Command {
+                command: r#"echo '{"additionalContext":"extra info"}'"#.into(),
+                timeout: 5000,
+            }],
+        });
+        let engine = HookEngine::new(config, PathBuf::from("."));
+        let ctx = engine.post_tool_use("bash", &json!({}), "output", None, None).await;
+        assert_eq!(ctx.as_deref(), Some("extra info"));
+    }
+
+    #[tokio::test]
+    async fn matcher_filters_tool_name() {
+        let mut config = HooksConfig::default();
+        config.pre_tool_use.push(HookEntry {
+            matcher: Some("^edit_file$".into()),
+            hooks: vec![HookDef::Command { command: "exit 2".into(), timeout: 5000 }],
+        });
+        let engine = HookEngine::new(config, PathBuf::from("."));
+        // bash should not match ^edit_file$ → allow
+        let outcome = engine.pre_tool_use("bash", &json!({})).await;
+        assert!(!outcome.is_block());
+    }
+
+    #[tokio::test]
+    async fn hook_timeout() {
+        let mut config = HooksConfig::default();
+        config.pre_tool_use.push(HookEntry {
+            matcher: None,
+            hooks: vec![HookDef::Command { command: "sleep 10".into(), timeout: 100 }],
+        });
+        let engine = HookEngine::new(config, PathBuf::from("."));
+        let outcome = engine.pre_tool_use("bash", &json!({})).await;
+        // Timeout → treated as Continue (Allow)
+        assert!(!outcome.is_block());
+    }
 }
 
 // ── Display helpers ───────────────────────────────────────────────────────────

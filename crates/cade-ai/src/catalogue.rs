@@ -117,6 +117,167 @@ pub struct ModelPricing {
     pub cache_write: f64,  // $/1M cache-write tokens
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── CATALOGUE ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn catalogue_non_empty() {
+        assert!(!CATALOGUE.is_empty());
+    }
+
+    #[test]
+    fn catalogue_all_entries_have_valid_fields() {
+        for (provider, display, id, toolset, max_tok, ctx) in CATALOGUE {
+            assert!(!provider.is_empty(), "empty provider for {id}");
+            assert!(!display.is_empty(), "empty display for {id}");
+            assert!(!id.is_empty(), "empty id");
+            assert!(
+                ["default", "codex", "gemini"].contains(toolset),
+                "invalid toolset '{toolset}' for {id}"
+            );
+            assert!(*max_tok > 0, "zero max_tokens for {id}");
+            assert!(*ctx > 0, "zero context_window for {id}");
+        }
+    }
+
+    #[test]
+    fn catalogue_ids_are_prefixed_with_provider() {
+        for (provider, _, id, _, _, _) in CATALOGUE {
+            assert!(
+                id.starts_with(&format!("{provider}/")),
+                "id '{id}' should start with '{provider}/'"
+            );
+        }
+    }
+
+    // ── ModelEntry::from_catalogue ────────────────────────────────────────
+
+    #[test]
+    fn model_entry_from_catalogue() {
+        let entry = &CATALOGUE[0];
+        let me = ModelEntry::from_catalogue(entry);
+        assert_eq!(me.provider, entry.0);
+        assert_eq!(me.display_name, entry.1);
+        assert_eq!(me.id, entry.2);
+        assert_eq!(me.toolset, entry.3);
+        assert_eq!(me.max_tokens, entry.4);
+        assert_eq!(me.context_window, entry.5);
+        assert!(!me.dynamic);
+    }
+
+    // ── toolset_for_model ─────────────────────────────────────────────────
+
+    #[test]
+    fn toolset_known_models() {
+        assert_eq!(toolset_for_model("anthropic/claude-sonnet-4-5-20250929"), "default");
+        assert_eq!(toolset_for_model("openai/gpt-4o"), "codex");
+        assert_eq!(toolset_for_model("gemini/gemini-2.5-pro"), "gemini");
+    }
+
+    #[test]
+    fn toolset_unknown_gemini_prefix() {
+        assert_eq!(toolset_for_model("gemini/gemini-999"), "gemini");
+    }
+
+    #[test]
+    fn toolset_unknown_model() {
+        assert_eq!(toolset_for_model("groq/llama-3-70b"), "default");
+    }
+
+    // ── max_tokens_for_model ──────────────────────────────────────────────
+
+    #[test]
+    fn max_tokens_known_models() {
+        assert_eq!(max_tokens_for_model("anthropic/claude-sonnet-4-5-20250929"), 8192);
+        assert_eq!(max_tokens_for_model("openai/gpt-4o"), 16384);
+    }
+
+    #[test]
+    fn max_tokens_unknown_gemini() {
+        assert_eq!(max_tokens_for_model("gemini/future-model"), 8192);
+    }
+
+    #[test]
+    fn max_tokens_unknown_openai() {
+        assert_eq!(max_tokens_for_model("openai/future-model"), 8192);
+    }
+
+    #[test]
+    fn max_tokens_completely_unknown() {
+        assert_eq!(max_tokens_for_model("random/model"), 4096);
+    }
+
+    // ── context_window_for_model ──────────────────────────────────────────
+
+    #[test]
+    fn context_window_known_models() {
+        assert_eq!(context_window_for_model("anthropic/claude-sonnet-4-5-20250929"), 200_000);
+        assert_eq!(context_window_for_model("openai/gpt-4o"), 128_000);
+        assert_eq!(context_window_for_model("gemini/gemini-2.5-pro"), 1_048_576);
+    }
+
+    #[test]
+    fn context_window_provider_prefix_fallback() {
+        assert_eq!(context_window_for_model("anthropic/future-claude"), 200_000);
+        assert_eq!(context_window_for_model("gemini/future-gemini"), 1_048_576);
+        assert_eq!(context_window_for_model("openai/future-gpt"), 128_000);
+    }
+
+    #[test]
+    fn context_window_llama_model() {
+        assert_eq!(context_window_for_model("groq/llama-3-70b"), 128_000);
+    }
+
+    #[test]
+    fn context_window_completely_unknown() {
+        assert_eq!(context_window_for_model("random/model-xyz"), 32_000);
+    }
+
+    // ── pricing_for_model ─────────────────────────────────────────────────
+
+    #[test]
+    fn pricing_claude_sonnet() {
+        let p = pricing_for_model("anthropic/claude-sonnet-4-5-20250929");
+        assert!(p.input > 0.0);
+        assert!(p.output > 0.0);
+        assert!(p.cache_read > 0.0);
+        assert!(p.cache_write > 0.0);
+    }
+
+    #[test]
+    fn pricing_gpt_4o() {
+        let p = pricing_for_model("openai/gpt-4o");
+        assert!(p.input > 0.0);
+        assert!(p.output > 0.0);
+    }
+
+    #[test]
+    fn pricing_gemini_25_pro() {
+        let p = pricing_for_model("gemini/gemini-2.5-pro");
+        assert!(p.input > 0.0);
+        assert!(p.output > 0.0);
+    }
+
+    #[test]
+    fn pricing_unknown_model_zero() {
+        let p = pricing_for_model("random/model-xyz");
+        assert_eq!(p.input, 0.0);
+        assert_eq!(p.output, 0.0);
+        assert_eq!(p.cache_read, 0.0);
+        assert_eq!(p.cache_write, 0.0);
+    }
+
+    #[test]
+    fn pricing_provider_prefix_fallback() {
+        // Unknown anthropic model should get the fallback anthropic pricing
+        let p = pricing_for_model("anthropic/future-model");
+        assert!(p.input > 0.0);
+    }
+}
+
 /// Returns approximate per-token pricing for a model.
 /// Uses pattern matching on model ID; unknown models get zero rates.
 pub fn pricing_for_model(model_id: &str) -> ModelPricing {

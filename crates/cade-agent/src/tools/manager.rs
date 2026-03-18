@@ -168,6 +168,177 @@ pub fn is_native_write_tool(name: &str) -> bool {
     )
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── schemas_for_toolset ───────────────────────────────────────────────
+
+    #[test]
+    fn default_toolset_has_bash_and_edit_file() {
+        let schemas = schemas_for_toolset(Toolset::Default);
+        let names: Vec<&str> = schemas.iter()
+            .filter_map(|s| s["name"].as_str())
+            .collect();
+        assert!(names.contains(&"bash"), "missing bash in {names:?}");
+        assert!(names.contains(&"edit_file"), "missing edit_file in {names:?}");
+        assert!(names.contains(&"read_file"), "missing read_file in {names:?}");
+        assert!(names.contains(&"write_file"), "missing write_file in {names:?}");
+        assert!(names.contains(&"grep"), "missing grep in {names:?}");
+        assert!(names.contains(&"glob"), "missing glob in {names:?}");
+    }
+
+    #[test]
+    fn codex_toolset_has_apply_patch() {
+        let schemas = schemas_for_toolset(Toolset::Codex);
+        let names: Vec<&str> = schemas.iter()
+            .filter_map(|s| s["name"].as_str())
+            .collect();
+        assert!(names.contains(&"apply_patch"), "missing apply_patch in {names:?}");
+        assert!(!names.contains(&"write_file"), "should not have write_file in Codex toolset");
+    }
+
+    #[test]
+    fn gemini_toolset_has_renamed_tools() {
+        let schemas = schemas_for_toolset(Toolset::Gemini);
+        let names: Vec<&str> = schemas.iter()
+            .filter_map(|s| s["name"].as_str())
+            .collect();
+        assert!(names.contains(&"RunShellCommand"), "missing RunShellCommand in {names:?}");
+        assert!(names.contains(&"Replace"), "missing Replace (Gemini edit) in {names:?}");
+        assert!(names.contains(&"ReadFileGemini"), "missing ReadFileGemini in {names:?}");
+    }
+
+    #[test]
+    fn all_toolsets_include_ask_user_question() {
+        for ts in [Toolset::Default, Toolset::Codex, Toolset::Gemini] {
+            let schemas = schemas_for_toolset(ts);
+            let names: Vec<&str> = schemas.iter()
+                .filter_map(|s| s["name"].as_str())
+                .collect();
+            assert!(names.contains(&"ask_user_question"), "missing ask_user_question in {ts} toolset");
+        }
+    }
+
+    #[test]
+    fn all_toolsets_include_desktop_tools() {
+        for ts in [Toolset::Default, Toolset::Codex, Toolset::Gemini] {
+            let schemas = schemas_for_toolset(ts);
+            let names: Vec<&str> = schemas.iter()
+                .filter_map(|s| s["name"].as_str())
+                .collect();
+            assert!(names.contains(&"desktop_screenshot"), "missing desktop_screenshot in {ts}");
+            assert!(names.contains(&"desktop_list_windows"), "missing desktop_list_windows in {ts}");
+        }
+    }
+
+    // ── all_schemas ───────────────────────────────────────────────────────
+
+    #[test]
+    fn all_schemas_is_default_toolset() {
+        let all = all_schemas();
+        let default = schemas_for_toolset(Toolset::Default);
+        assert_eq!(all.len(), default.len());
+    }
+
+    // ── schemas_for_names ─────────────────────────────────────────────────
+
+    #[test]
+    fn schemas_for_names_filters() {
+        let names = vec!["bash".to_string(), "grep".to_string()];
+        let schemas = schemas_for_names(Toolset::Default, &names);
+        assert_eq!(schemas.len(), 2);
+        let schema_names: Vec<&str> = schemas.iter()
+            .filter_map(|s| s["name"].as_str())
+            .collect();
+        assert!(schema_names.contains(&"bash"));
+        assert!(schema_names.contains(&"grep"));
+    }
+
+    #[test]
+    fn schemas_for_names_case_insensitive() {
+        let names = vec!["BASH".to_string()];
+        let schemas = schemas_for_names(Toolset::Default, &names);
+        assert_eq!(schemas.len(), 1);
+        assert_eq!(schemas[0]["name"].as_str(), Some("bash"));
+    }
+
+    #[test]
+    fn schemas_for_names_empty() {
+        let schemas = schemas_for_names(Toolset::Default, &[]);
+        assert!(schemas.is_empty());
+    }
+
+    // ── is_native_write_tool ──────────────────────────────────────────────
+
+    #[test]
+    fn write_tools_identified() {
+        assert!(is_native_write_tool("bash"));
+        assert!(is_native_write_tool("write_file"));
+        assert!(is_native_write_tool("edit_file"));
+        assert!(is_native_write_tool("apply_patch"));
+        assert!(is_native_write_tool("desktop_control"));
+    }
+
+    #[test]
+    fn read_tools_not_write() {
+        assert!(!is_native_write_tool("read_file"));
+        assert!(!is_native_write_tool("grep"));
+        assert!(!is_native_write_tool("glob"));
+        assert!(!is_native_write_tool("AskUserQuestion"));
+    }
+
+    // ── run_native_tool ───────────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn native_tool_unknown_returns_none() {
+        let result = run_native_tool("nonexistent_tool", &serde_json::json!({})).await;
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn native_tool_bash_runs() {
+        let args = serde_json::json!({"command": "echo hello"});
+        let result = run_native_tool("bash", &args).await;
+        assert!(result.is_some());
+        let output = result.unwrap().unwrap();
+        assert!(output.contains("hello"), "got: {output}");
+    }
+
+    #[tokio::test]
+    async fn native_tool_grep_runs() {
+        let args = serde_json::json!({"pattern": "fn main", "path": ".", "include": "*.rs"});
+        let result = run_native_tool("grep", &args).await;
+        assert!(result.is_some());
+        // Should either find matches or report no matches
+        let output = result.unwrap().unwrap();
+        assert!(!output.is_empty());
+    }
+
+    #[tokio::test]
+    async fn native_tool_glob_runs() {
+        let args = serde_json::json!({"pattern": "**/*.toml"});
+        let result = run_native_tool("glob", &args).await;
+        assert!(result.is_some());
+        let output = result.unwrap().unwrap();
+        assert!(output.contains("Cargo.toml"), "got: {output}");
+    }
+
+    // ── Schema validation ─────────────────────────────────────────────────
+
+    #[test]
+    fn all_schemas_have_name_and_description() {
+        for ts in [Toolset::Default, Toolset::Codex, Toolset::Gemini] {
+            for schema in schemas_for_toolset(ts) {
+                let name = schema["name"].as_str();
+                assert!(name.is_some(), "schema missing name: {schema}");
+                let desc = schema["description"].as_str();
+                assert!(desc.is_some(), "schema '{}' missing description", name.unwrap_or("?"));
+            }
+        }
+    }
+}
+
 /// Returns true if the tool (native or MCP) can mutate state.
 pub async fn is_write_tool(name: &str, mcp: &McpManager) -> bool {
     if is_native_write_tool(name) {

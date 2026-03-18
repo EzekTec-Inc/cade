@@ -1,3 +1,5 @@
+// region:    --- Modules
+
 pub mod agents;
 pub mod auth;
 pub mod health;
@@ -16,6 +18,8 @@ use crate::server::{
     rate_limit::rate_limit_middleware,
     state::AppState,
 };
+
+// endregion: --- Modules
 
 pub fn router(state: AppState) -> Router {
     // ── Inference routes (rate-limited) ───────────────────────────────────────

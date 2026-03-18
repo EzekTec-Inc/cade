@@ -73,15 +73,16 @@ pub struct RateLimiter {
 }
 
 impl RateLimiter {
-    /// Construct from env vars (falls back to sensible defaults).
-    /// CADE_RATE_LIMIT_RPM   — requests per minute per agent (default: 60)
-    /// CADE_RATE_LIMIT_BURST — burst size in tokens            (default: 10)
-    pub fn from_env() -> Self {
-        let rpm: f64 = std::env::var("CADE_RATE_LIMIT_RPM")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(60.0);
-        let burst: f64 = std::env::var("CADE_RATE_LIMIT_BURST")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(10.0);
-        // Bucket capacity = burst tokens (minimum 1)
+    fn from_env_with_reader<F>(mut reader: F) -> Self
+    where
+        F: FnMut(&str) -> Option<String>,
+    {
+        let rpm: f64 = reader("CADE_RATE_LIMIT_RPM")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(60.0);
+        let burst: f64 = reader("CADE_RATE_LIMIT_BURST")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10.0);
         let capacity = burst.max(1.0);
         tracing::info!(
             "Rate limiter: {rpm} req/min per agent, burst={capacity} tokens"
@@ -91,6 +92,13 @@ impl RateLimiter {
             capacity,
             rpm,
         }
+    }
+
+    /// Construct from env vars (falls back to sensible defaults).
+    /// CADE_RATE_LIMIT_RPM   — requests per minute per agent (default: 60)
+    /// CADE_RATE_LIMIT_BURST — burst size in tokens            (default: 10)
+    pub fn from_env() -> Self {
+        Self::from_env_with_reader(|key| std::env::var(key).ok())
     }
 
     /// Try to consume one token for `agent_id`.
@@ -118,6 +126,80 @@ impl RateLimiter {
             "rpm_per_agent": self.rpm,
             "burst_tokens":  self.capacity,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bucket_allows_burst() {
+        let mut bucket = Bucket::new(5.0, 60.0);
+        // Should allow 5 requests (burst capacity)
+        for _ in 0..5 {
+            assert!(bucket.try_consume().is_ok());
+        }
+        // 6th should be rate limited
+        assert!(bucket.try_consume().is_err());
+    }
+
+    #[test]
+    fn bucket_returns_retry_after() {
+        let mut bucket = Bucket::new(1.0, 60.0);
+        assert!(bucket.try_consume().is_ok());
+        let result = bucket.try_consume();
+        assert!(result.is_err());
+        let retry_secs = result.unwrap_err();
+        assert!(retry_secs >= 1, "retry_secs should be >= 1, got {retry_secs}");
+    }
+
+    #[test]
+    fn rate_limiter_different_agents_independent() {
+        let limiter = RateLimiter {
+            buckets: Arc::new(Mutex::new(HashMap::new())),
+            capacity: 1.0,
+            rpm: 60.0,
+        };
+        // Agent A uses its bucket
+        assert!(limiter.check("agent-a").is_ok());
+        assert!(limiter.check("agent-a").is_err());
+        // Agent B still has its own bucket
+        assert!(limiter.check("agent-b").is_ok());
+    }
+
+    #[test]
+    fn rate_limiter_config_summary() {
+        let limiter = RateLimiter {
+            buckets: Arc::new(Mutex::new(HashMap::new())),
+            capacity: 10.0,
+            rpm: 120.0,
+        };
+        let summary = limiter.config_summary();
+        assert_eq!(summary["rpm_per_agent"], 120.0);
+        assert_eq!(summary["burst_tokens"], 10.0);
+    }
+
+    #[test]
+    fn rate_limiter_from_env_defaults() {
+        let limiter = RateLimiter::from_env_with_reader(|_| None);
+        let summary = limiter.config_summary();
+        assert_eq!(summary["rpm_per_agent"], 60.0);
+        assert_eq!(summary["burst_tokens"], 10.0);
+    }
+
+    #[test]
+    fn rate_limiter_prevents_oom() {
+        // Simulate many different agent IDs — should not panic
+        let limiter = RateLimiter {
+            buckets: Arc::new(Mutex::new(HashMap::new())),
+            capacity: 1.0,
+            rpm: 60.0,
+        };
+        for i in 0..100 {
+            let _ = limiter.check(&format!("agent-{i}"));
+        }
+        assert!(limiter.buckets.lock().unwrap().len() <= 100);
     }
 }
 

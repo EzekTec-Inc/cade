@@ -44,6 +44,228 @@ pub async fn fetch_anthropic_models(api_key: &str) -> Vec<(String, String)> {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_response_text_only() {
+        let body = json!({
+            "stop_reason": "end_turn",
+            "content": [{
+                "type": "text",
+                "text": "Hello from Claude!"
+            }]
+        });
+        let resp = AnthropicProvider::parse_response(&body);
+        assert_eq!(resp.content.as_deref(), Some("Hello from Claude!"));
+        assert!(resp.tool_calls.is_empty());
+        assert_eq!(resp.finish_reason, "end_turn");
+    }
+
+    #[test]
+    fn parse_response_with_tool_use() {
+        let body = json!({
+            "stop_reason": "tool_use",
+            "content": [
+                {"type": "text", "text": "Let me check."},
+                {
+                    "type": "tool_use",
+                    "id": "toolu_123",
+                    "name": "bash",
+                    "input": {"command": "ls -la"}
+                }
+            ]
+        });
+        let resp = AnthropicProvider::parse_response(&body);
+        assert_eq!(resp.content.as_deref(), Some("Let me check."));
+        assert_eq!(resp.tool_calls.len(), 1);
+        assert_eq!(resp.tool_calls[0].id, "toolu_123");
+        assert_eq!(resp.tool_calls[0].name, "bash");
+        assert_eq!(resp.tool_calls[0].arguments["command"], "ls -la");
+        assert_eq!(resp.finish_reason, "tool_use");
+    }
+
+    #[test]
+    fn parse_response_multiple_tool_calls() {
+        let body = json!({
+            "stop_reason": "tool_use",
+            "content": [
+                {
+                    "type": "tool_use",
+                    "id": "toolu_1",
+                    "name": "bash",
+                    "input": {"command": "pwd"}
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_2",
+                    "name": "read_file",
+                    "input": {"path": "Cargo.toml"}
+                }
+            ]
+        });
+        let resp = AnthropicProvider::parse_response(&body);
+        assert_eq!(resp.tool_calls.len(), 2);
+        assert_eq!(resp.tool_calls[0].name, "bash");
+        assert_eq!(resp.tool_calls[1].name, "read_file");
+    }
+
+    #[test]
+    fn parse_response_empty_content() {
+        let body = json!({
+            "stop_reason": "end_turn",
+            "content": []
+        });
+        let resp = AnthropicProvider::parse_response(&body);
+        assert!(resp.content.is_none());
+        assert!(resp.tool_calls.is_empty());
+    }
+
+    #[test]
+    fn build_body_includes_model_and_system() {
+        let provider = AnthropicProvider::new("sk-test".into());
+        let req = CompletionRequest {
+            model: "claude-sonnet-4-5-20250929".into(),
+            messages: vec![
+                super::super::LlmMessage {
+                    role: "system".into(),
+                    content: "You are a helpful assistant.".into(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                },
+                super::super::LlmMessage {
+                    role: "user".into(),
+                    content: "Hello".into(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                },
+            ],
+            tools: vec![],
+            max_tokens: 8192,
+            reasoning_effort: None,
+        };
+        let body = provider.build_body(&req, false);
+        assert_eq!(body["model"], "claude-sonnet-4-5-20250929");
+        assert!(!body["stream"].as_bool().unwrap());
+        // System prompt should be a structured block
+        assert!(body["system"].is_array());
+        assert_eq!(body["system"][0]["text"], "You are a helpful assistant.");
+        // Messages should only contain user (system is separated)
+        let msgs = body["messages"].as_array().unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["role"], "user");
+    }
+
+    #[test]
+    fn build_body_with_tools_adds_cache_control() {
+        let provider = AnthropicProvider::new("sk-test".into());
+        let req = CompletionRequest {
+            model: "claude-sonnet-4-5-20250929".into(),
+            messages: vec![
+                super::super::LlmMessage {
+                    role: "user".into(),
+                    content: "Hello".into(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                },
+            ],
+            tools: vec![json!({
+                "name": "bash",
+                "description": "Run command",
+                "parameters": {"type": "object"}
+            })],
+            max_tokens: 8192,
+            reasoning_effort: None,
+        };
+        let body = provider.build_body(&req, false);
+        let tools = body["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        // Last tool should have cache_control
+        assert!(tools[0]["cache_control"].is_object());
+    }
+
+    #[test]
+    fn build_body_with_reasoning_effort() {
+        let provider = AnthropicProvider::new("sk-test".into());
+        let req = CompletionRequest {
+            model: "claude-sonnet-4-5-20250929".into(),
+            messages: vec![
+                super::super::LlmMessage {
+                    role: "user".into(),
+                    content: "Think hard".into(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                },
+            ],
+            tools: vec![],
+            max_tokens: 8192,
+            reasoning_effort: Some("high".into()),
+        };
+        let body = provider.build_body(&req, false);
+        assert!(body["thinking"].is_object());
+        assert_eq!(body["thinking"]["type"], "enabled");
+        assert_eq!(body["thinking"]["budget_tokens"], 16384);
+    }
+
+    #[test]
+    fn build_body_merges_consecutive_tool_results() {
+        let provider = AnthropicProvider::new("sk-test".into());
+        let req = CompletionRequest {
+            model: "claude-sonnet-4-5-20250929".into(),
+            messages: vec![
+                super::super::LlmMessage {
+                    role: "user".into(),
+                    content: "Do two things".into(),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    images: None,
+                },
+                super::super::LlmMessage {
+                    role: "assistant".into(),
+                    content: "".into(),
+                    tool_call_id: None,
+                    tool_calls: Some(vec![
+                        super::super::LlmToolCall { id: "t1".into(), name: "bash".into(), arguments: json!({}), thought_signature: None },
+                        super::super::LlmToolCall { id: "t2".into(), name: "bash".into(), arguments: json!({}), thought_signature: None },
+                    ]),
+                    images: None,
+                },
+                super::super::LlmMessage {
+                    role: "tool".into(),
+                    content: "result 1".into(),
+                    tool_call_id: Some("t1".into()),
+                    tool_calls: None,
+                    images: None,
+                },
+                super::super::LlmMessage {
+                    role: "tool".into(),
+                    content: "result 2".into(),
+                    tool_call_id: Some("t2".into()),
+                    tool_calls: None,
+                    images: None,
+                },
+            ],
+            tools: vec![],
+            max_tokens: 8192,
+            reasoning_effort: None,
+        };
+        let body = provider.build_body(&req, false);
+        let msgs = body["messages"].as_array().unwrap();
+        // user, assistant (with tool_use), user (merged tool_results)
+        assert_eq!(msgs.len(), 3);
+        // Third message should contain both tool results in one user message
+        let tool_results = msgs[2]["content"].as_array().unwrap();
+        assert_eq!(tool_results.len(), 2);
+        assert_eq!(tool_results[0]["type"], "tool_result");
+        assert_eq!(tool_results[1]["type"], "tool_result");
+    }
+}
+
 pub struct AnthropicProvider {
     client: Client,
     api_key: String,

@@ -42,8 +42,8 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use cade_core::permissions::PermissionMode;
-use crate::ui::autocomplete::FileAutocompleteProvider;
-use crate::ui::editor::{Editor, ImageEntry};
+use crate::autocomplete::FileAutocompleteProvider;
+use crate::editor::{Editor, ImageEntry};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -150,7 +150,7 @@ pub struct ThinkingState {
 // ── ActiveQuestionState ───────────────────────────────────────────────────────
 #[derive(Debug, Clone)]
 pub struct ActiveQuestionDrawState {
-    pub question: crate::ui::question::Question,
+    pub question: crate::question::Question,
     pub cursor_pos: usize,
     pub custom_text: String,
     pub checked: Vec<bool>,
@@ -165,7 +165,7 @@ pub struct ActiveQuestionDrawState {
 pub struct ActiveQuestionState {
     pub draw_state: ActiveQuestionDrawState,
     /// For async questions (ask_question_async).
-    pub tx: Option<tokio::sync::oneshot::Sender<Option<crate::ui::question::QuestionAnswer>>>,
+    pub tx: Option<tokio::sync::oneshot::Sender<Option<crate::question::QuestionAnswer>>>,
     /// For blocking questions: key events forwarded from the tick task.
     pub key_tx: Option<std::sync::mpsc::SyncSender<crossterm::event::KeyEvent>>,
 }
@@ -723,8 +723,8 @@ impl TuiApp {
 
     pub fn ask_question(
         &mut self,
-        question: &crate::ui::question::Question,
-    ) -> Result<Option<crate::ui::question::QuestionAnswer>> {
+        question: &crate::question::Question,
+    ) -> Result<Option<crate::question::QuestionAnswer>> {
         let n_real = question.options.len();
         let has_other = question.allow_other;
         let has_submit = question.multi_select;
@@ -744,7 +744,7 @@ impl TuiApp {
         // snap to bottom when asking
         self.scroll = 0;
 
-        let answer: Option<crate::ui::question::QuestionAnswer> = 'widget: loop {
+        let answer: Option<crate::question::QuestionAnswer> = 'widget: loop {
             self.active_question = Some(ActiveQuestionState {
                 draw_state: ActiveQuestionDrawState {
                     question: question.clone(),
@@ -804,7 +804,7 @@ impl TuiApp {
                                 }
                             } else if idx != other_idx {
                                 let label = question.options[idx].label.clone();
-                                break 'widget Some(crate::ui::question::QuestionAnswer::Single(
+                                break 'widget Some(crate::question::QuestionAnswer::Single(
                                     label,
                                 ));
                             } else {
@@ -826,13 +826,13 @@ impl TuiApp {
                                     .collect();
                                 if !selected.is_empty() {
                                     break 'widget Some(
-                                        crate::ui::question::QuestionAnswer::Multi(selected),
+                                        crate::question::QuestionAnswer::Multi(selected),
                                     );
                                 }
                             } else if cursor_pos == other_idx {
                                 if !custom_text.is_empty() {
                                     break 'widget Some(
-                                        crate::ui::question::QuestionAnswer::Multi(vec![
+                                        crate::question::QuestionAnswer::Multi(vec![
                                             custom_text.clone(),
                                         ]),
                                     );
@@ -842,13 +842,13 @@ impl TuiApp {
                             }
                         } else if cursor_pos == other_idx {
                             if !custom_text.is_empty() {
-                                break 'widget Some(crate::ui::question::QuestionAnswer::Single(
+                                break 'widget Some(crate::question::QuestionAnswer::Single(
                                     custom_text.clone(),
                                 ));
                             }
                         } else {
                             let label = question.options[cursor_pos].label.clone();
-                            break 'widget Some(crate::ui::question::QuestionAnswer::Single(label));
+                            break 'widget Some(crate::question::QuestionAnswer::Single(label));
                         }
                     }
                     (KeyCode::Char(c), m)
@@ -891,9 +891,9 @@ impl TuiApp {
     /// This is the canonical path for `prompt_approval` and `handle_ask_user_question`.
     pub fn ask_question_blocking(
         &mut self,
-        question: &crate::ui::question::Question,
+        question: &crate::question::Question,
         key_rx: std::sync::mpsc::Receiver<crossterm::event::KeyEvent>,
-    ) -> Result<Option<crate::ui::question::QuestionAnswer>> {
+    ) -> Result<Option<crate::question::QuestionAnswer>> {
         let n_real = question.options.len();
         let has_other = question.allow_other;
         let has_submit = question.multi_select;
@@ -911,7 +911,7 @@ impl TuiApp {
 
         self.scroll = 0;
 
-        let answer: Option<crate::ui::question::QuestionAnswer> = 'widget: loop {
+        let answer: Option<crate::question::QuestionAnswer> = 'widget: loop {
             // Render with tx = None — tick task will not intercept events.
             self.active_question = Some(ActiveQuestionState {
                 draw_state: ActiveQuestionDrawState {
@@ -974,7 +974,7 @@ impl TuiApp {
                             }
                         } else if idx != other_idx {
                             let label = question.options[idx].label.clone();
-                            break 'widget Some(crate::ui::question::QuestionAnswer::Single(label));
+                            break 'widget Some(crate::question::QuestionAnswer::Single(label));
                         } else {
                             cursor_pos = idx;
                         }
@@ -993,13 +993,13 @@ impl TuiApp {
                                 .map(|(i, _)| question.options[i].label.clone())
                                 .collect();
                             if !selected.is_empty() {
-                                break 'widget Some(crate::ui::question::QuestionAnswer::Multi(
+                                break 'widget Some(crate::question::QuestionAnswer::Multi(
                                     selected,
                                 ));
                             }
                         } else if cursor_pos == other_idx {
                             if !custom_text.is_empty() {
-                                break 'widget Some(crate::ui::question::QuestionAnswer::Multi(
+                                break 'widget Some(crate::question::QuestionAnswer::Multi(
                                     vec![custom_text.clone()],
                                 ));
                             }
@@ -1008,13 +1008,13 @@ impl TuiApp {
                         }
                     } else if cursor_pos == other_idx {
                         if !custom_text.is_empty() {
-                            break 'widget Some(crate::ui::question::QuestionAnswer::Single(
+                            break 'widget Some(crate::question::QuestionAnswer::Single(
                                 custom_text.clone(),
                             ));
                         }
                     } else {
                         let label = question.options[cursor_pos].label.clone();
-                        break 'widget Some(crate::ui::question::QuestionAnswer::Single(label));
+                        break 'widget Some(crate::question::QuestionAnswer::Single(label));
                     }
                 }
                 (KeyCode::Char(c), m)
@@ -1061,8 +1061,8 @@ impl TuiApp {
     )]
     pub fn ask_question_async(
         &mut self,
-        question: crate::ui::question::Question,
-    ) -> Result<tokio::sync::oneshot::Receiver<Option<crate::ui::question::QuestionAnswer>>> {
+        question: crate::question::Question,
+    ) -> Result<tokio::sync::oneshot::Receiver<Option<crate::question::QuestionAnswer>>> {
         let n_real = question.options.len();
         let has_other = question.allow_other;
         let has_submit = question.multi_select;
@@ -1107,7 +1107,7 @@ impl TuiApp {
 
     pub fn handle_question_key(&mut self, k: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
-        let mut ans_opt: Option<Option<crate::ui::question::QuestionAnswer>> = None;
+        let mut ans_opt: Option<Option<crate::question::QuestionAnswer>> = None;
 
         if let Some(aq) = &mut self.active_question {
             let st = &mut aq.draw_state;
@@ -1146,7 +1146,7 @@ impl TuiApp {
                         } else if idx != st.other_idx {
                             let label = st.question.options[idx].label.clone();
                             ans_opt =
-                                Some(Some(crate::ui::question::QuestionAnswer::Single(label)));
+                                Some(Some(crate::question::QuestionAnswer::Single(label)));
                         } else {
                             st.cursor_pos = idx;
                         }
@@ -1166,14 +1166,14 @@ impl TuiApp {
                                 .map(|(i, _)| st.question.options[i].label.clone())
                                 .collect();
                             if !selected.is_empty() {
-                                ans_opt = Some(Some(crate::ui::question::QuestionAnswer::Multi(
+                                ans_opt = Some(Some(crate::question::QuestionAnswer::Multi(
                                     selected,
                                 )));
                             }
                         } else if st.cursor_pos == st.other_idx {
                             if !st.custom_text.is_empty() {
                                 ans_opt =
-                                    Some(Some(crate::ui::question::QuestionAnswer::Multi(vec![
+                                    Some(Some(crate::question::QuestionAnswer::Multi(vec![
                                         st.custom_text.clone(),
                                     ])));
                             }
@@ -1182,13 +1182,13 @@ impl TuiApp {
                         }
                     } else if st.cursor_pos == st.other_idx {
                         if !st.custom_text.is_empty() {
-                            ans_opt = Some(Some(crate::ui::question::QuestionAnswer::Single(
+                            ans_opt = Some(Some(crate::question::QuestionAnswer::Single(
                                 st.custom_text.clone(),
                             )));
                         }
                     } else {
                         let label = st.question.options[st.cursor_pos].label.clone();
-                        ans_opt = Some(Some(crate::ui::question::QuestionAnswer::Single(label)));
+                        ans_opt = Some(Some(crate::question::QuestionAnswer::Single(label)));
                     }
                 }
                 (KeyCode::Char(c), m)
@@ -2468,11 +2468,11 @@ fn render_line_to_text(
                 sep,
                 Style::default().fg(RC::DarkGray),
             )));
-            out.extend(crate::ui::markdown::parse_markdown_lines(text));
+            out.extend(crate::markdown::parse_markdown_lines(text));
         }
         RenderLine::AssistantText(text) => {
             out.push(Line::from(""));
-            out.extend(crate::ui::markdown::parse_markdown_lines(text));
+            out.extend(crate::markdown::parse_markdown_lines(text));
             out.push(Line::from(""));
         }
         RenderLine::ToolCall { name, preview } => {
@@ -2738,7 +2738,7 @@ fn render_line_to_text(
 }
 
 fn render_assistant_lines(text: &str, _width: usize, out: &mut Vec<Line<'static>>) {
-    let md_lines = crate::ui::markdown::parse_markdown_lines(text);
+    let md_lines = crate::markdown::parse_markdown_lines(text);
     if md_lines.is_empty() {
         out.push(Line::from(Span::styled(
             "● ",
@@ -2968,7 +2968,7 @@ fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect) {
 /// Only triggers when the token at the cursor starts with `/`, `./`, `~/`, or
 /// contains `/` (looks like a path).
 // complete_path, collect_files, collect_files_inner, common_prefix
-// moved to crate::ui::autocomplete::FileAutocompleteProvider
+// moved to crate::autocomplete::FileAutocompleteProvider
 
 /// Abbreviate a filesystem path for the footer: last 2 components, with ~/
 /// prefix when the path is under the user's home directory.

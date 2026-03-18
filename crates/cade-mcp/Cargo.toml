@@ -1,0 +1,21 @@
+[package]
+name        = "cade-mcp"
+version     = "0.2.0"
+edition     = "2024"
+
+[lib]
+doctest     = false
+
+[dependencies]
+cade-core.path       = "../cade-core"
+
+anyhow.workspace       = true
+serde_json.workspace   = true
+tracing.workspace      = true
+tokio.workspace        = true
+rmcp.workspace         = true
+notify.workspace       = true
+dirs.workspace         = true
+
+[lints.rust]
+unsafe_code = "forbid"

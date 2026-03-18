@@ -38,11 +38,7 @@ async fn main() -> Result<()> {
     // Parse CLI args first so --port / CADE_SERVER_PORT is available
     let args = ServerArgs::parse();
 
-    // Inject the resolved port back into the environment so ServerConfig::from_env()
-    // picks it up consistently (other code that reads CADE_SERVER_PORT also benefits).
-    std::env::set_var("CADE_SERVER_PORT", args.port.to_string());
-
-    let config = ServerConfig::from_env()?;
+    let config = ServerConfig::from_env_with_port(Some(args.port))?;
 
     tracing::info!(
         "CADE Server v{} | provider={} | db={}",

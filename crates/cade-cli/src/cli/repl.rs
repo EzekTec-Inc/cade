@@ -856,7 +856,9 @@ impl Repl {
                     (false, input.strip_prefix('!').unwrap_or("").trim())
                 };
                 if !cmd_str.is_empty() {
-                    let run = tokio::process::Command::new("sh")
+                    let mut cmd = tokio::process::Command::new("sh");
+                    cade_core::agent_env::apply_agent_env(&mut cmd);
+                    let run = cmd
                         .arg("-c")
                         .arg(cmd_str)
                         .output()
@@ -2683,7 +2685,11 @@ impl Repl {
 
         // OS / kernel
         let os_info = {
-            let uname = Command::new("uname").arg("-sr").output()
+            let uname = {
+                let mut cmd = Command::new("uname");
+                cade_core::agent_env::apply_agent_env(&mut cmd);
+                cmd.arg("-sr").output()
+            }
                 .ok()
                 .and_then(|o| String::from_utf8(o.stdout).ok())
                 .unwrap_or_default();
@@ -2706,18 +2712,24 @@ impl Repl {
 
         // Git info
         let git_info = {
-            let branch = Command::new("git")
-                .args(["-C", &cwd, "rev-parse", "--abbrev-ref", "HEAD"])
-                .output()
+            let branch = {
+                let mut cmd = Command::new("git");
+                cade_core::agent_env::apply_agent_env(&mut cmd);
+                cmd.args(["-C", &cwd, "rev-parse", "--abbrev-ref", "HEAD"])
+                    .output()
+            }
                 .ok()
                 .and_then(|o| if o.status.success() {
                     String::from_utf8(o.stdout).ok()
                 } else { None })
                 .map(|s| s.trim().to_string());
 
-            let status = Command::new("git")
-                .args(["-C", &cwd, "status", "--porcelain"])
-                .output()
+            let status = {
+                let mut cmd = Command::new("git");
+                cade_core::agent_env::apply_agent_env(&mut cmd);
+                cmd.args(["-C", &cwd, "status", "--porcelain"])
+                    .output()
+            }
                 .ok()
                 .and_then(|o| if o.status.success() {
                     String::from_utf8(o.stdout).ok()
@@ -4555,7 +4567,9 @@ impl Repl {
         let _ = std::fs::write(&file_path, &existing);
         let _ = std::fs::write(&patch_file, patch_str);
         
-        let mut output = tokio::process::Command::new("patch")
+        let mut patch_cmd = tokio::process::Command::new("patch");
+        cade_core::agent_env::apply_agent_env(&mut patch_cmd);
+        let mut output = patch_cmd
             .current_dir(temp_dir.path())
             .args(["-p1", "--input", "patch.diff"])
             .output()
@@ -4563,7 +4577,9 @@ impl Repl {
             
         if let Ok(ref out) = output {
             if !out.status.success() {
-                output = tokio::process::Command::new("patch")
+                let mut retry_cmd = tokio::process::Command::new("patch");
+                cade_core::agent_env::apply_agent_env(&mut retry_cmd);
+                output = retry_cmd
                     .current_dir(temp_dir.path())
                     .args(["-p0", "--input", "patch.diff"])
                     .output()
@@ -4880,7 +4896,9 @@ impl Repl {
 
                         self.tui_dim(format!("  Running skill script: {} {}", script_path.display(), script_args.join(" ")));
 
-                        let output = tokio::process::Command::new(&script_path)
+                        let mut script_cmd = tokio::process::Command::new(&script_path);
+                        cade_core::agent_env::apply_agent_env(&mut script_cmd);
+                        let output = script_cmd
                             .args(&script_args)
                             .output()
                             .await;

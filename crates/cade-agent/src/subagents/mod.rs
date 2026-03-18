@@ -1,5 +1,9 @@
+// region:    --- Modules
+
 use anyhow::Result;
 use std::path::{Path, PathBuf};
+
+// endregion: --- Modules
 
 // ── Tool access level ─────────────────────────────────────────────────────────
 
