@@ -481,3 +481,44 @@ from:
    bindings in `agent_turn`.
 3. Restore the `"usage_statistics"` match arm in the UI consumer to only call
    `set_context_pct` (as before) and remove the `footer_extra` update.
+
+---
+
+## 2026-03-18T00:15:00Z — Fix context wipe: page history by budget + raise max chars
+
+**Summary:** Remove the fixed 80-row history cap. History is now paged (100-row
+pages) until a soft budget (1.3× context char budget) is reached, so long
+sessions keep as much context as the model window allows. Increased
+`MAX_CONTEXT_CHARS` to 6_000_000 (≈2M tokens) so large-window models aren’t
+artificially halved. Added a placeholder summary when auto-compaction fails so
+hard trimming still preserves continuity.
+
+**Files modified:**
+- `crates/cade-server/src/server/api/messages.rs`
+  - Replaced single `HISTORY_LIMIT` fetch with paged loading using
+    `HISTORY_PAGE_SIZE=100` and a soft cap of 1.3× `context_char_budget`.
+  - Raised `MAX_CONTEXT_CHARS` from 3_000_000 → 6_000_000.
+  - On compaction failure, insert a placeholder system message before hard trim.
+- `crates/cade-server/src/server/storage/sqlite.rs`
+  - Added `list_messages_page` (limit/offset) and made `list_messages` call it.
+
+**Reason:** Older turns were dropped entirely once 80 rows were exceeded, so
+long tasks appeared “wiped”. Paging by budget keeps all history the context can
+fit; larger max chars honor 2M-token models.
+
+**Previous behavior:** Load newest 80 rows only; then trim to budget. Long
+sessions lost early context regardless of model window. Compaction failures
+fell straight to hard trim with no continuity hint.
+
+**New behavior:** Page history until near budget; no arbitrary 80-row cap. Large
+models get up to ~2M tokens of char budget. If compaction fails, a placeholder
+summary is injected before trim.
+
+**Verification:** `cargo test --workspace` — 295 tests pass.
+
+**Rollback:**
+1. In `messages.rs`, restore single `sqlite::list_messages(..., 80)` and remove
+   paging/soft-cap loop; revert `HISTORY_PAGE_SIZE` to `HISTORY_LIMIT = 80` and
+   `MAX_CONTEXT_CHARS` to 3_000_000; remove the compaction failure placeholder.
+2. In `sqlite.rs`, remove `list_messages_page` and revert `list_messages` to the
+   old LIMIT-only query (no OFFSET).

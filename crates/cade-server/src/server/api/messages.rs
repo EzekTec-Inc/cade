@@ -25,8 +25,8 @@ const TOOL_RESPONSE_RULE: &str = "\n\n\
 After every tool execution, always provide a plain-text response that explains \
 the result, what you found, or what you are doing next. \
 Never end a turn silently after running a tool.";
-/// Number of DB message rows to load per turn.
-const HISTORY_LIMIT: usize = 80;
+/// Page size for history fetch; pages accumulate until soft budget is reached.
+const HISTORY_PAGE_SIZE: usize = 100;
 /// Number of messages from the end of history considered "recent".
 /// Tool results inside this window are kept at full fidelity.
 const RECENT_WINDOW: usize = 40;
@@ -58,10 +58,10 @@ const TOOL_RESULT_MAX_CHARS: usize = 8_192;
 const CHARS_PER_TOKEN: usize = 3;
 /// Minimum character budget regardless of model window (guards tiny local models).
 const MIN_CONTEXT_CHARS: usize = 8_000;
-/// Maximum character budget cap.  3_000_000 chars ≈ 1 M tokens at 3 chars/token,
-/// which matches Gemini 1 M context exactly and gives Gemini 2 M users ~50%
-/// of their window.  Claude 200 K is unaffected (200_000 × 3 = 600_000 < cap).
-const MAX_CONTEXT_CHARS: usize = 3_000_000;
+/// Maximum character budget cap.  6_000_000 chars ≈ 2 M tokens at 3 chars/token,
+/// which fully covers Gemini 2 M and halves only above that. Claude 200 K is
+/// unaffected (200_000 × 3 = 600_000 < cap).
+const MAX_CONTEXT_CHARS: usize = 6_000_000;
 
 // -- Auto-compaction constants
 
@@ -393,9 +393,6 @@ async fn build_context(
     };
 
     // Message history from DB — oldest first, scoped to conversation
-    let history = sqlite::list_messages(&state.db, agent_id, conversation_id, HISTORY_LIMIT)
-        .unwrap_or_default();
-
     let mut messages: Vec<LlmMessage> = vec![LlmMessage {
         role: "system".to_string(),
         content: system_prompt,
@@ -404,8 +401,61 @@ async fn build_context(
         images: None,
     }];
 
-    for row in &history {
-        messages.extend(db_row_to_llm(row));
+    // Character-budget trimming is based on the model window converted to chars.
+    let context_char_budget = {
+        let window_tokens = catalogue::context_window_for_model(&agent.model);
+        let raw = (window_tokens as usize).saturating_mul(CHARS_PER_TOKEN);
+        raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)
+    };
+    tracing::debug!(
+        "Context budget for model '{}': {} chars ({} tokens * {})",
+        agent.model,
+        context_char_budget,
+        catalogue::context_window_for_model(&agent.model),
+        CHARS_PER_TOKEN
+    );
+    // Count both content text AND tool_calls JSON so tool-heavy sessions are
+    // trimmed accurately.  Counting only content underestimates context size
+    // when many tool-call schemas / large argument payloads are in history.
+    let total_chars = |msgs: &[LlmMessage]| -> usize {
+        msgs.iter()
+            .map(|m| {
+                m.content.chars().count()
+                    + m.tool_calls
+                        .as_deref()
+                        .and_then(|tcs| serde_json::to_string(tcs).ok())
+                        .map(|s| s.len())
+                        .unwrap_or(0)
+                    + m.images
+                        .as_ref()
+                        .map(|imgs| imgs.iter().map(|img| img.data.len() + img.media_type.len()).sum())
+                        .unwrap_or(0)
+            })
+            .sum()
+    };
+
+    // Page backwards through history until we hit a soft budget (1.3× char budget)
+    // or run out of rows. Keeps oldest-first ordering.
+    let soft_cap_chars = ((context_char_budget as f64) * 1.3).round() as usize;
+    let mut offset: usize = 0;
+    loop {
+        let batch = sqlite::list_messages_page(&state.db, agent_id, conversation_id, HISTORY_PAGE_SIZE, offset)
+            .unwrap_or_default();
+        if batch.is_empty() {
+            break;
+        }
+        let batch_len = batch.len();
+        // list_messages_page returns oldest-first; append to preserve global order.
+        for row in batch.into_iter() {
+            messages.extend(db_row_to_llm(&row));
+        }
+        offset = offset.saturating_add(batch_len);
+        if total_chars(&messages) >= soft_cap_chars {
+            break;
+        }
+        if batch_len < HISTORY_PAGE_SIZE {
+            break; // no more rows
+        }
     }
 
     // Sanitize history: fix orphaned tool_calls, dedup tool_results, drop
@@ -455,42 +505,6 @@ async fn build_context(
             }
         }
     }
-
-    // Character-budget trimming: drop oldest non-system messages until total
-    // content fits within the model's context window.
-    // Always keeps the system prompt and the last user+assistant turn (≥3 msgs).
-    // Count chars (codepoints), not bytes — budget is a char budget.
-    let context_char_budget = {
-        let window_tokens = catalogue::context_window_for_model(&agent.model);
-        let raw = (window_tokens as usize).saturating_mul(CHARS_PER_TOKEN);
-        raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)
-    };
-    tracing::debug!(
-        "Context budget for model '{}': {} chars ({} tokens * {})",
-        agent.model,
-        context_char_budget,
-        catalogue::context_window_for_model(&agent.model),
-        CHARS_PER_TOKEN
-    );
-    // Count both content text AND tool_calls JSON so tool-heavy sessions are
-    // trimmed accurately.  Counting only content underestimates context size
-    // when many tool-call schemas / large argument payloads are in history.
-    let total_chars = |msgs: &[LlmMessage]| -> usize {
-        msgs.iter()
-            .map(|m| {
-                m.content.chars().count()
-                    + m.tool_calls
-                        .as_deref()
-                        .and_then(|tcs| serde_json::to_string(tcs).ok())
-                        .map(|s| s.len())
-                        .unwrap_or(0)
-                    + m.images
-                        .as_ref()
-                        .map(|imgs| imgs.iter().map(|img| img.data.len() + img.media_type.len()).sum())
-                        .unwrap_or(0)
-            })
-            .sum()
-    };
 
     // -- Auto-compaction: summarize old turns into memory when near capacity
     //
@@ -594,6 +608,17 @@ async fn build_context(
                                     agent_id,
                                     e,
                                 );
+                                // Insert a placeholder summary so the model retains awareness
+                                // that earlier turns were trimmed if the hard trim runs below.
+                                if messages.len() > 1 {
+                                    messages.insert(1, LlmMessage {
+                                        role: "system".to_string(),
+                                        content: "[Auto-compaction failed; earlier turns may be truncated in this session.]".to_string(),
+                                        tool_call_id: None,
+                                        tool_calls: None,
+                                        images: None,
+                                    });
+                                }
                             }
                         }
                     }

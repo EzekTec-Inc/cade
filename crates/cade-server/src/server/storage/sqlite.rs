@@ -771,22 +771,34 @@ pub fn list_messages(
     conversation_id: Option<&str>,
     limit: usize,
 ) -> Result<Vec<MessageRow>> {
+    list_messages_page(db, agent_id, conversation_id, limit, 0)
+}
+
+/// Page through messages with limit/offset, newest-first at the SQL level,
+/// returned oldest-first for convenience.
+pub fn list_messages_page(
+    db: &Db,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+    limit: usize,
+    offset: usize,
+) -> Result<Vec<MessageRow>> {
     let conn = db.lock().unwrap();
     // Filter: conversation_id IS NULL for legacy messages, or matches given id.
     let sql = if conversation_id.is_some() {
         "SELECT id, agent_id, conversation_id, role, content FROM messages
          WHERE agent_id = ?1 AND conversation_id = ?2
-         ORDER BY created_at DESC, rowid DESC LIMIT ?3"
+         ORDER BY created_at DESC, rowid DESC LIMIT ?3 OFFSET ?4"
     } else {
         "SELECT id, agent_id, conversation_id, role, content FROM messages
          WHERE agent_id = ?1 AND conversation_id IS NULL
-         ORDER BY created_at DESC, rowid DESC LIMIT ?3"
+         ORDER BY created_at DESC, rowid DESC LIMIT ?3 OFFSET ?4"
     };
 
     let mut stmt = conn.prepare(sql)?;
     let conv_placeholder = conversation_id.unwrap_or("");
     let rows = stmt.query_map(
-        params![agent_id, conv_placeholder, limit as i64],
+        params![agent_id, conv_placeholder, limit as i64, offset as i64],
         |row| {
             Ok((
                 row.get::<_, String>(0)?,
@@ -807,7 +819,8 @@ pub fn list_messages(
             content: serde_json::from_str(&content).unwrap_or(Value::String(content)),
         })
         .collect();
-    result.reverse(); // return oldest-first
+    // list_messages historically returned oldest-first; keep that invariant here
+    result.reverse();
     Ok(result)
 }
 
