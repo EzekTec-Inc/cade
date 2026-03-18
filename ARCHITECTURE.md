@@ -1,103 +1,189 @@
 # Architecture of CADE
 
-CADE (Coding AI with Desktop Extensions) is a helpful coding AI agent that's skilled beyond just coding, but skilled in keeping the developer efficient and organized while building digital solutions.
+CADE (Coding AI assistant with Desktop Extensions) is a stateful, self-improving
+AI coding agent that runs in the user's terminal. It gives an AI agent full access
+to the local development environment — shell, filesystem, desktop — and ships its
+own server, requiring no external platform.
 
+---
 
-## Important Note about Source Trees
+## Workspace Layout
 
-The codebase uses a Cargo workspace structure.
-*   **`crates/`**: Contains the actual implementations (live code).
-*   **`src/`**: The root `src/` directory (excluding `main.rs`, `lib.rs`, `bin/cade-server.rs`) contains dead code/legacy files. `lib.rs` simply re-exports from the workspace crates. Always modify the files in `crates/`.
+CADE is a Cargo workspace with six independent crates plus a root package that
+owns the two binaries (`cade` and `cade-server`).
 
-## Core Components
+```
+CADE/
+├── Cargo.toml              # Workspace root + binary package
+├── src/
+│   ├── main.rs             # `cade` CLI entry point
+│   ├── lib.rs              # Re-exports workspace crates as `cade::*`
+│   └── bin/
+│       └── cade-server.rs  # `cade-server` entry point
+├── crates/
+│   ├── cade-core/          # Shared types (no crate deps)
+│   ├── cade-ai/            # LLM providers & model catalogue (no crate deps)
+│   ├── cade-desktop/       # Desktop extensions (no crate deps)
+│   ├── cade-server/        # HTTP API + SQLite storage
+│   ├── cade-agent/         # Client, tools, MCP, subagents
+│   └── cade-cli/           # TUI, REPL, headless mode
+└── tests/                  # Integration tests
+```
 
-*   **`src/main.rs`**: Entry point for the `cade` CLI application.
-*   **`src/bin/cade-server.rs`**: Entry point for the `cade-server` backend.
-*   **`src/lib.rs`**: Defines shared modules.
+## Dependency Graph
 
-## CLI (`cade`)
+```
+cade-core       (standalone — permissions, settings, skills, hooks, toolsets)
+cade-ai         (standalone — LLM providers, catalogue, retry)
+cade-desktop    (standalone — screen capture, window control, notifications, tray)
 
-### Modules
+cade-server     → cade-core, cade-ai
+cade-agent      → cade-core, cade-desktop
+cade-cli        → cade-core, cade-agent, cade-ai
 
-*   **`crates/cade-cli/src/cli/repl.rs`**: Implements the interactive REPL (Read-Eval-Print Loop) for CADE.
-*   **`crates/cade-cli/src/cli/headless.rs`**: Implements headless mode for running CADE from the command line without a UI.
-*   **`crates/cade-cli/src/cli/args.rs`**: Defines command-line arguments using `clap`.
-*   **`crates/cade-cli/src/cli/export_import.rs`**: Handles exporting and importing agent configurations and data.
+cade (root)     → all crates (re-exports for binaries)
+```
 
-### UI
+The graph is **strictly acyclic**. Three leaf crates (`cade-core`, `cade-ai`,
+`cade-desktop`) have zero dependencies on other workspace crates, making them
+independently compilable and testable.
 
-*   **`crates/cade-cli/src/ui/app.rs`**: Main application logic for the terminal UI using `ratatui`.
-*   **`crates/cade-cli/src/ui/component.rs`**: Defines the foundational `Component` trait for unified rendering and input handling.
-*   **`crates/cade-cli/src/ui/editor.rs`**: Implements the `Editor` component with bracketed-paste support and text-editing primitives.
-*   **`crates/cade-cli/src/ui/autocomplete.rs`**: Pluggable autocomplete providers (Tab path completion, `@` file picker, slash commands).
-*   **`crates/cade-cli/src/ui/markdown.rs`**: Handles markdown rendering in the UI.
-*   **`crates/cade-cli/src/ui/question.rs`**: Implements interactive question prompts in the UI.
-*   **`crates/cade-cli/src/ui/menu.rs`**: Implements menuing system for the UI.
+---
 
-### Agent
+## Crate Responsibilities
 
-*   **`crates/cade-agent/src/agent/client.rs`**: Defines the `CadeClient` for interacting with the `cade-server` REST API.
-*   **`crates/cade-agent/src/agent/session.rs`**: Manages agent sessions and conversation history.
-*   **`crates/cade-agent/src/agent/tools.rs`**: Defines the tools available to the agent.
+### `cade-core`
 
-## Server (`cade-server`)
+Shared types used across the workspace. No crate dependencies.
 
-### API
+| Module | Purpose |
+|--------|---------|
+| `permissions/` | `PermissionManager`, `PermissionMode` enum, allow/deny rules |
+| `settings/` | `SettingsManager`, global/local config, MCP server config |
+| `skills/` | Skill discovery, SKILL.md parsing, skill lifecycle |
+| `hooks/` | `HookEngine` — lifecycle hooks (PreToolUse, PostToolUse, Stop, etc.) |
+| `toolsets/` | `Toolset` enum — Default / Codex / Gemini tool families |
 
-*   **`crates/cade-server/src/server/api/mod.rs`**: Defines the Axum router and API endpoints.
-*   **`crates/cade-server/src/server/api/agents.rs`**: Handles agent-related API endpoints (create, list, get, delete, patch, tools, memory, conversations).
-*   **`crates/cade-server/src/server/api/messages.rs`**: Handles message-related API endpoints (send, stream, search).
-*   **`crates/cade-server/src/server/api/runs.rs`**: Handles background run API endpoints (get, stream).
-*   **`crates/cade-server/src/server/api/providers.rs`**: Handles LLM provider API endpoints (add, list, presets, remove).
-*   **`crates/cade-server/src/server/api/models.rs`**: Handles LLM model listing.
+### `cade-ai`
 
-### LLM
+LLM provider abstraction and model routing. No crate dependencies.
 
-*   **`crates/cade-server/src/server/llm/mod.rs`**: Defines the `LlmProvider` trait and related types.
-*   **`crates/cade-server/src/server/llm/anthropic.rs`**: Implements the Anthropic LLM provider.
-*   **`crates/cade-server/src/server/llm/openai.rs`**: Implements the OpenAI LLM provider.
-*   **`crates/cade-server/src/server/llm/gemini.rs`**: Implements the Gemini LLM provider.
-*   **`crates/cade-server/src/server/llm/catalogue.rs`**: Defines the model catalogue.
-*   **`crates/cade-server/src/server/llm/ollama.rs`**: Implements the Ollama LLM provider.
+| Module | Purpose |
+|--------|---------|
+| `lib.rs` | `LlmProvider` trait, `LlmRouter`, `CompletionRequest/Response`, `StreamChunk`, `TokenUsage`, `LlmMessage`, `AiConfig`, retry logic, preset providers |
+| `anthropic.rs` | Anthropic/Claude provider (extended thinking, streaming) |
+| `openai.rs` | OpenAI provider (Chat Completions + Responses API) |
+| `gemini.rs` | Google Gemini provider (thought signatures, vision) |
+| `ollama.rs` | Local Ollama provider (delegates to OpenAI-compatible API) |
+| `catalogue.rs` | Static model catalogue, context windows, pricing |
 
-### Storage
+### `cade-desktop`
 
-*   **`crates/cade-server/src/server/storage/sqlite.rs`**: Implements SQLite storage for agent state, messages, and providers.
-*   **`crates/cade-server/src/server/crypto.rs`**: Implements encryption for sensitive data.
+Desktop integration extensions. No crate dependencies.
 
-### Configuration and Utilities
+| Module | Purpose |
+|--------|---------|
+| `capture.rs` | Screen capture via `xcap` → base64 PNG |
+| `control.rs` | Window focus, text typing, key presses, mouse control (`xdotool`/`ydotool`) |
+| `notify.rs` | OS desktop notifications via `notify-rust` |
+| `tray.rs` | System tray icon via `ksni` |
 
-*   **`crates/cade-server/src/server/config.rs`**: Defines the `ServerConfig` struct and related functions.
-*   **`crates/cade-server/src/server/rate_limit.rs`**: Implements rate limiting for API requests.
+### `cade-server`
 
-## Shared Modules
+HTTP API server and persistence layer. Depends on `cade-core` and `cade-ai`.
 
-*   **`crates/cade-agent/src/mcp/mod.rs`**: Implements the Management Control Plane (MCP) for managing servers, agents, and tools.
-*   **`crates/cade-core/src/permissions/mod.rs`**: Handles permissions and access control.
-*   **`crates/cade-core/src/skills/mod.rs`**: Implements the skill system.
-*   **`crates/cade-agent/src/subagents/mod.rs`**: Implements sub-agent functionality.
-*   **`crates/cade-core/src/hooks/mod.rs`**: Defines hooks for extending CADE's functionality.
-*   **`crates/cade-core/src/settings/manager.rs`**: Manages application settings.
-*   **`crates/cade-core/src/toolsets/mod.rs`**: Defines the `Toolset` enum for different editing paradigms.
+| Module | Purpose |
+|--------|---------|
+| `api/mod.rs` | Axum router with all REST endpoints |
+| `api/agents.rs` | Agent CRUD, tools attachment, memory blocks, conversations |
+| `api/messages.rs` | Message send/stream, context building, auto-compaction |
+| `api/providers.rs` | LLM provider management (add/remove/list) |
+| `api/models.rs` | Live model listing from all providers |
+| `api/runs.rs` | Background run status/streaming |
+| `api/tools.rs` | Tool registration |
+| `api/auth.rs` | Bearer token authentication middleware |
+| `api/health.rs` | Health check and server config endpoints |
+| `config.rs` | `ServerConfig` from env vars, provider auto-detection |
+| `state.rs` | `AppState` — shared Axum state (DB, LLM, config) |
+| `storage/sqlite.rs` | SQLite persistence (agents, messages, tools, providers, memory) |
+| `crypto.rs` | AES-256-GCM encryption for sensitive data at rest |
+| `rate_limit.rs` | Per-agent token-bucket rate limiter |
 
-## Desktop Extensions
+### `cade-agent`
 
-*   **`crates/cade-desktop/src/desktop/mod.rs`**: Groups desktop-related modules.
-*   **`crates/cade-desktop/src/desktop/capture.rs`**: Implements screen capture functionality.
-*   **`crates/cade-desktop/src/desktop/control.rs`**: Implements desktop control (mouse, keyboard) functionality.
-*   **`crates/cade-desktop/src/desktop/notify.rs`**: Implements desktop notifications.
-*   **`crates/cade-desktop/src/desktop/tray.rs`**: Implements the system tray icon.
+Agent client, tool implementations, MCP, and subagents. Depends on `cade-core` and `cade-desktop`.
 
-## Toolsets
-* **`crates/cade-core/src/toolsets/mod.rs`**: Defines the `Toolset` enum which determines which family of tools to attach to the agent.
-    * `Default`: String-replace editing, optimised for Claude/Anthropic models.
-    * `Codex`: Patch-based editing (unified diff), optimised for OpenAI/GPT models.
-    * `Gemini`: String-replace variant, optimised for Google Gemini models.
+| Module | Purpose |
+|--------|---------|
+| `agent/client.rs` | `CadeClient` — REST client for cade-server, SSE streaming |
+| `agent/session.rs` | Per-directory session persistence |
+| `agent/tools.rs` | Tool registration with the server |
+| `tools/manager.rs` | Tool dispatch registry |
+| `tools/bash.rs` | Shell execution (streaming output) |
+| `tools/fs.rs` | Read/Write/Edit/ApplyPatch with sandbox support |
+| `tools/search.rs` | Grep and glob search |
+| `tools/desktop.rs` | Desktop tool wrappers |
+| `tools/ask.rs` | `ask_user_question` tool |
+| `tools/plan.rs` | Planning tools (EnterPlanMode, Todos, etc.) |
+| `mcp/` | MCP client — spawn and manage local MCP servers |
+| `subagents/` | Subagent runner (spawn ephemeral agents for parallel tasks) |
 
-## Tools
-* **`crates/cade-agent/src/tools/manager.rs`**: Manages the available tools.
-* **`crates/cade-agent/src/tools/bash.rs`**: Implements the `bash` tool.
-* **`crates/cade-agent/src/tools/fs.rs`**: Implements file system tools (`read_file`, `write_file`, `edit_file`, etc.).
-* **`crates/cade-agent/src/tools/search.rs`**: Implements the `grep` and `glob` tools.
-* **`crates/cade-agent/src/tools/desktop.rs`**: Implements the desktop interaction tools (`desktop_screenshot`, `desktop_list_windows`, `desktop_control`, `desktop_notify`).
-* **`crates/cade-agent/src/tools/ask.rs`**: Implements the `ask_user_question` tool.
+### `cade-cli`
+
+Terminal UI and REPL. Depends on `cade-core`, `cade-agent`, and `cade-ai`.
+
+| Module | Purpose |
+|--------|---------|
+| `cli/repl.rs` | Interactive REPL, slash commands, tool execution loop, streaming |
+| `cli/headless.rs` | Headless `-p` mode for CI/scripting |
+| `cli/args.rs` | CLI argument parsing (clap) |
+| `cli/export_import.rs` | Agent export/import |
+| `ui/app.rs` | Main TUI application (`TuiApp`), Ratatui rendering, key handling |
+| `ui/editor.rs` | `Editor` component — text buffer, undo/redo, bracketed paste |
+| `ui/component.rs` | `Component` trait for unified render/input interface |
+| `ui/autocomplete.rs` | Tab path completion, `@` fuzzy file picker |
+| `ui/markdown.rs` | Markdown → Ratatui spans (pulldown-cmark AST parser) |
+| `ui/question.rs` | Interactive question/approval prompts |
+| `ui/menu.rs` | `/help` menu system |
+| `ui/skills.rs` | `/skills` browser overlay |
+
+---
+
+## Key Data Flows
+
+### User Message → LLM Response
+
+```
+User input → TuiApp → Repl::agent_turn()
+  → CadeClient::stream_message_cancellable()        [HTTP SSE to cade-server]
+    → cade-server: build_context() + LlmProvider::stream()  [LLM API call]
+    → SSE chunks back to CLI
+  → UI consumer task → TuiApp::push_streaming_chunk()  [throttled ~60 FPS]
+  → Tool calls? → dispatch() → execute → stream_tool_return_cancellable()
+  → Loop until no more tool calls
+```
+
+### Streaming Architecture (R-01..R-04)
+
+```
+SSE token → on_event → ui_tx.send()    [non-blocking channel send, ~0µs]
+                           ↓
+UI task   → ui_rx.recv() → app.lock() → draw_throttled()  [max ~60 FPS]
+```
+
+Network I/O is fully decoupled from TUI rendering. The tick task handles
+input events and thinking animations on a separate loop.
+
+---
+
+## Security Model
+
+- Bash commands require explicit approval (unless `--yolo`)
+- File tools respect optional `CADE_FS_ROOT` sandbox
+- `apply_patch` validates paths against traversal attacks
+- Headless output is sanitized against ANSI injection
+- Server auth via Bearer token with constant-time comparison
+- Encryption at rest for sensitive DB fields (AES-256-GCM)
+- Settings files created with 0600 permissions
+
+See [SECURITY.md](SECURITY.md) for full details.

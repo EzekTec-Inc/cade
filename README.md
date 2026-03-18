@@ -444,46 +444,31 @@ cargo install --path .
 
 ## Project Structure
 
+CADE is a Cargo workspace with six independent crates:
+
 ```
 src/
-├── main.rs                  # Entry point, CLI arg handling, agent bootstrap
-├── lib.rs                   # Module declarations
-├── agent/
-│   ├── client.rs            # REST API client (agents, tools, memory, messages)
-│   ├── session.rs           # Per-directory session persistence
-│   └── tools.rs             # Tool registration with the server
-├── cli/
-│   ├── args.rs              # CLI argument parsing (clap)
-│   ├── repl.rs              # Interactive REPL, slash commands, tool execution loop
-│   └── headless.rs          # Headless -p mode
-├── server/
-│   ├── api/                 # axum route handlers (agents, messages, tools, runs…)
-│   ├── llm/                 # LLM provider abstraction (Anthropic, OpenAI, Gemini, Ollama)
-│   ├── storage/             # SQLite persistence
-│   ├── config.rs            # Server config from env vars
-│   └── state.rs             # Shared server state
-├── tools/
-│   ├── bash.rs              # Shell execution
-│   ├── fs.rs                # Read / Write / Edit / ApplyPatch
-│   ├── search.rs            # Grep / Glob
-│   ├── desktop.rs           # Desktop tool wrappers
-│   └── manager.rs           # Tool dispatch registry, schema registry
-├── toolsets/
-│   └── mod.rs               # Toolset definitions (Default / Codex / Gemini)
-├── desktop/
-│   ├── capture.rs           # Screen capture (xcap)
-│   ├── control.rs           # Window/app control (xdotool/ydotool)
-│   ├── notify.rs            # OS notifications (notify-rust)
-│   └── tray.rs              # System tray (ksni)
-├── mcp/                     # MCP client — spawn and call local MCP servers
-├── hooks/                   # Lifecycle hook engine
-├── permissions/             # Permission mode management
-├── settings/                # Settings manager (~/.cade/settings.json)
-├── skills/                  # SKILL.md discovery and loading
-├── subagents/               # Subagent runner
-└── bin/
-    └── cade-server.rs       # cade-server entry point
+├── main.rs                     # `cade` CLI entry point
+├── lib.rs                      # Re-exports workspace crates as cade::*
+└── bin/cade-server.rs          # `cade-server` entry point
+
+crates/
+├── cade-core/                  # Shared types (no crate deps)
+│   └── permissions, settings, skills, hooks, toolsets
+├── cade-ai/                    # LLM providers (no crate deps)
+│   └── anthropic, openai, gemini, ollama, catalogue
+├── cade-desktop/               # Desktop extensions (no crate deps)
+│   └── capture, control, notify, tray
+├── cade-server/                # HTTP API + SQLite (→ cade-core, cade-ai)
+│   └── api/, storage/, config, crypto, rate_limit
+├── cade-agent/                 # Client + tools (→ cade-core, cade-desktop)
+│   └── agent/, tools/, mcp/, subagents/
+└── cade-cli/                   # TUI + REPL (→ cade-core, cade-agent, cade-ai)
+    └── cli/, ui/
 ```
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full dependency graph, module
+descriptions, and data flow diagrams.
 
 ---
 
