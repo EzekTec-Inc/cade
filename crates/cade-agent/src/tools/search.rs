@@ -1,7 +1,7 @@
 use anyhow::Result;
 use globset::{Glob, GlobSetBuilder};
 use regex::Regex;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::path::Path;
 use walkdir::WalkDir;
 
@@ -110,7 +110,7 @@ impl GrepTool {
     }
 
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "grep",
             "description": "Search file contents using a regex pattern. Returns matching lines with file:line:content format. Skips target/, node_modules/, .git/.",
             "parameters": {
@@ -146,7 +146,7 @@ mod tests {
         let file = dir.path().join("test.rs");
         fs::write(&file, "fn main() {\n    println!(\"hello\");\n}\n").unwrap();
 
-        let args = serde_json::json!({
+        let args = json!({
             "pattern": "fn main",
             "path": dir.path().to_str().unwrap()
         });
@@ -161,7 +161,7 @@ mod tests {
         let file = dir.path().join("test.txt");
         fs::write(&file, "nothing interesting here").unwrap();
 
-        let args = serde_json::json!({
+        let args = json!({
             "pattern": "nonexistent_pattern_xyz",
             "path": dir.path().to_str().unwrap()
         });
@@ -175,7 +175,7 @@ mod tests {
         let file = dir.path().join("test.txt");
         fs::write(&file, "Hello World").unwrap();
 
-        let args = serde_json::json!({
+        let args = json!({
             "pattern": "hello",
             "path": dir.path().to_str().unwrap(),
             "case_insensitive": true
@@ -190,7 +190,7 @@ mod tests {
         fs::write(dir.path().join("match.rs"), "fn test()").unwrap();
         fs::write(dir.path().join("skip.txt"), "fn test()").unwrap();
 
-        let args = serde_json::json!({
+        let args = json!({
             "pattern": "fn test",
             "path": dir.path().to_str().unwrap(),
             "include": "*.rs"
@@ -206,7 +206,7 @@ mod tests {
         let file = dir.path().join("test.rs");
         fs::write(&file, "line1\nline2\ntarget\nline4\nline5\n").unwrap();
 
-        let args = serde_json::json!({
+        let args = json!({
             "pattern": "target",
             "path": dir.path().to_str().unwrap(),
             "context": 1
@@ -218,7 +218,7 @@ mod tests {
 
     #[tokio::test]
     async fn grep_invalid_regex() {
-        let args = serde_json::json!({
+        let args = json!({
             "pattern": "[invalid",
             "path": "."
         });
@@ -234,7 +234,7 @@ mod tests {
         fs::write(target_dir.join("build_output.txt"), "fn main").unwrap();
         fs::write(dir.path().join("src.rs"), "fn main").unwrap();
 
-        let args = serde_json::json!({
+        let args = json!({
             "pattern": "fn main",
             "path": dir.path().to_str().unwrap()
         });
@@ -312,7 +312,7 @@ impl GlobTool {
     }
 
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "glob",
             "description": "Find files matching a glob pattern (e.g. '**/*.rs'). Returns paths sorted by modification time (newest first). Skips target/, node_modules/, .git/.",
             "parameters": {
@@ -345,7 +345,7 @@ mod glob_tests {
         fs::write(dir.path().join("file2.rs"), "").unwrap();
         fs::write(dir.path().join("file3.txt"), "").unwrap();
 
-        let args = serde_json::json!({
+        let args = json!({
             "pattern": "*.rs",
             "path": dir.path().to_str().unwrap()
         });
@@ -360,7 +360,7 @@ mod glob_tests {
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join("file.txt"), "").unwrap();
 
-        let args = serde_json::json!({
+        let args = json!({
             "pattern": "*.xyz",
             "path": dir.path().to_str().unwrap()
         });
@@ -375,7 +375,7 @@ mod glob_tests {
         fs::create_dir_all(&sub).unwrap();
         fs::write(sub.join("nested.rs"), "").unwrap();
 
-        let args = serde_json::json!({
+        let args = json!({
             "pattern": "**/*.rs",
             "path": dir.path().to_str().unwrap()
         });
@@ -390,7 +390,7 @@ mod glob_tests {
             fs::write(dir.path().join(format!("file{i}.txt")), "").unwrap();
         }
 
-        let args = serde_json::json!({
+        let args = json!({
             "pattern": "*.txt",
             "path": dir.path().to_str().unwrap(),
             "limit": 3
@@ -408,7 +408,7 @@ mod glob_tests {
         fs::write(nm.join("dep.js"), "").unwrap();
         fs::write(dir.path().join("app.js"), "").unwrap();
 
-        let args = serde_json::json!({
+        let args = json!({
             "pattern": "**/*.js",
             "path": dir.path().to_str().unwrap()
         });
@@ -419,7 +419,7 @@ mod glob_tests {
 
     #[tokio::test]
     async fn glob_invalid_pattern() {
-        let args = serde_json::json!({"pattern": "[invalid"});
+        let args = json!({"pattern": "[invalid"});
         let result = GlobTool::run(&args).await;
         assert!(result.is_err());
     }

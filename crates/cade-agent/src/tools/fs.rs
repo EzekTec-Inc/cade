@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
 // ── SEC-A: Opt-in filesystem sandboxing ───────────────────────────────────────
@@ -110,7 +110,7 @@ impl ReadTool {
     }
 
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "read_file",
             "description": "Read a file's contents with line numbers. Optionally specify offset/limit for large files.",
             "parameters": {
@@ -154,7 +154,7 @@ impl WriteTool {
     }
 
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "write_file",
             "description": "Write content to a file. Creates parent directories if needed. Overwrites existing content.",
             "parameters": {
@@ -214,7 +214,7 @@ impl EditTool {
     }
 
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "edit_file",
             "description": "Replace an exact string in a file (str-replace). old_string must match exactly, including whitespace and indentation. Must be unique unless replace_all=true.",
             "parameters": {
@@ -311,7 +311,7 @@ impl ApplyPatchTool {
     }
 
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "apply_patch",
             "description": "Apply a unified diff patch to modify one or more files. \
 Use this to edit files by providing a standard unified diff (output of `diff -u`). \

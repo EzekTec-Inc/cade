@@ -1,5 +1,5 @@
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
@@ -200,7 +200,7 @@ impl BashTool {
     }
 
     pub fn schema() -> serde_json::Value {
-        serde_json::json!({
+        json!({
             "name": "bash",
             "description": "Execute a shell command. Returns stdout/stderr. Use for builds, tests, git, file inspection, and anything requiring a shell.",
             "parameters": {

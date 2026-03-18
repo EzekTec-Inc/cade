@@ -10,6 +10,7 @@
 //!
 //! Returns HTTP 429 with a Retry-After header when a bucket is exhausted.
 
+use serde_json::json;
 use std::{
     collections::HashMap,
     sync::{Arc, Mutex},
@@ -122,7 +123,7 @@ impl RateLimiter {
 
     /// Current config summary (for /v1/health).
     pub fn config_summary(&self) -> serde_json::Value {
-        serde_json::json!({
+        json!({
             "rpm_per_agent": self.rpm,
             "burst_tokens":  self.capacity,
         })

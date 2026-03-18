@@ -176,6 +176,7 @@ mod tests {
     type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
 
     use super::*;
+    use serde_json::json;
 
     // ── schemas_for_toolset ───────────────────────────────────────────────
 
@@ -297,13 +298,13 @@ mod tests {
 
     #[tokio::test]
     async fn native_tool_unknown_returns_none() {
-        let result = run_native_tool("nonexistent_tool", &serde_json::json!({})).await;
+        let result = run_native_tool("nonexistent_tool", &json!({})).await;
         assert!(result.is_none());
     }
 
     #[tokio::test]
     async fn native_tool_bash_runs() {
-        let args = serde_json::json!({"command": "echo hello"});
+        let args = json!({"command": "echo hello"});
         let result = run_native_tool("bash", &args).await;
         assert!(result.is_some());
         let output = result.unwrap().unwrap();
@@ -312,7 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn native_tool_grep_runs() {
-        let args = serde_json::json!({"pattern": "fn main", "path": ".", "include": "*.rs"});
+        let args = json!({"pattern": "fn main", "path": ".", "include": "*.rs"});
         let result = run_native_tool("grep", &args).await;
         assert!(result.is_some());
         // Should either find matches or report no matches
@@ -322,7 +323,7 @@ mod tests {
 
     #[tokio::test]
     async fn native_tool_glob_runs() {
-        let args = serde_json::json!({"pattern": "**/*.toml"});
+        let args = json!({"pattern": "**/*.toml"});
         let result = run_native_tool("glob", &args).await;
         assert!(result.is_some());
         let output = result.unwrap().unwrap();

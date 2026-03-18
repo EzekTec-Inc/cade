@@ -219,7 +219,7 @@ impl CadeClient {
         api_key: Option<&str>,
         base_url: Option<&str>,
     ) -> anyhow::Result<serde_json::Value> {
-        let mut body = serde_json::json!({ "name": name, "kind": kind });
+        let mut body = json!({ "name": name, "kind": kind });
         if let Some(k) = api_key  { body["api_key"]  = k.into(); }
         if let Some(u) = base_url { body["base_url"] = u.into(); }
         let resp = self.client
@@ -316,7 +316,7 @@ impl CadeClient {
         let resp = self.client
             .post(self.url(&format!("/agents/{agent_id}/tools")))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&serde_json::json!({ "tool_ids": tool_ids }))
+            .json(&json!({ "tool_ids": tool_ids }))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -365,7 +365,7 @@ impl CadeClient {
         let resp = self.client
             .patch(self.url(&format!("/agents/{agent_id}")))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&serde_json::json!({ "model": model }))
+            .json(&json!({ "model": model }))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -386,7 +386,7 @@ impl CadeClient {
         let resp = self.client
             .patch(self.url(&format!("/agents/{agent_id}")))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&serde_json::json!({ "system_prompt": prompt }))
+            .json(&json!({ "system_prompt": prompt }))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -440,7 +440,7 @@ impl CadeClient {
         let resp = self.client
             .patch(self.url(&format!("/agents/{agent_id}")))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&serde_json::json!({ "name": name }))
+            .json(&json!({ "name": name }))
             .send()
             .await?;
         if !resp.status().is_success() {
@@ -584,7 +584,7 @@ impl CadeClient {
         let resp = self.client
             .put(self.url(&format!("/agents/{agent_id}/memory/{label}/tier")))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .json(&serde_json::json!({ "tier": tier }))
+            .json(&json!({ "tier": tier }))
             .send().await?;
         if !resp.status().is_success() {
             bail!("set_memory_tier failed {}", resp.status());

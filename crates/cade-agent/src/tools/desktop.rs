@@ -2,7 +2,7 @@
 //! Wraps src/desktop/* and provides the same dispatch interface as other tools.
 
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 use cade_desktop::desktop::{
     capture::ScreenCapture,
@@ -65,7 +65,7 @@ impl DesktopCaptureTool {
     }
 
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "desktop_screenshot",
             "description": "Capture a screenshot of the full screen or a specific window and save it to disk. Returns the saved file path and image dimensions. Use save_path to control the destination (supports ~/... expansion).",
             "parameters": {
@@ -97,7 +97,7 @@ impl DesktopListWindowsTool {
     }
 
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "desktop_list_windows",
             "description": "List all visible (non-minimized) window titles on the desktop.",
             "parameters": {
@@ -165,7 +165,7 @@ impl DesktopControlTool {
     }
 
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "desktop_control",
             "description": "Control desktop windows and input. Uses xdotool (X11) or ydotool (Wayland). Actions: focus_window, type_text, key_press, move_mouse, click.",
             "parameters": {
@@ -208,7 +208,7 @@ impl DesktopNotifyTool {
     }
 
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "desktop_notify",
             "description": "Send a desktop OS notification to the user. Useful for alerting on task completion, errors, or when user input is needed.",
             "parameters": {

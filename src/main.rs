@@ -13,6 +13,7 @@ use cade::tools::schemas_for_names;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
+use serde_json::json;
 use std::path::PathBuf;
 
 use std::sync::{Arc, Mutex};
@@ -156,7 +157,7 @@ async fn push_env_providers_to_server(client: &CadeClient) {
 
 /// Register the `load_skill` tool that lets the agent load skill content on-demand.
 async fn register_load_skill_tool(client: &CadeClient) {
-    let schema = serde_json::json!({
+    let schema = json!({
         "name": "load_skill",
         "description": "Load the full content of a skill into context. Call this when starting a task that matches one of the available skills listed in your system prompt.",
         "input_schema": {
@@ -184,7 +185,7 @@ async fn register_load_skill_tool(client: &CadeClient) {
 
 /// Register the `install_skill` tool that lets the agent install skills from URLs.
 async fn register_install_skill_tool(client: &CadeClient) {
-    let schema = serde_json::json!({
+    let schema = json!({
         "name": "install_skill",
         "description": "Download and install a skill from a GitHub URL or direct SKILL.MD URL. Use when the user asks to install a skill.",
         "input_schema": {
@@ -217,7 +218,7 @@ async fn register_install_skill_tool(client: &CadeClient) {
 
 /// Register the `run_skill_script` tool — executes a script from a skill's scripts/ dir.
 async fn register_run_skill_script_tool(client: &CadeClient) {
-    let schema = serde_json::json!({
+    let schema = json!({
         "name": "run_skill_script",
         "description": "Execute a script from a skill's scripts/ directory. Use after load_skill to run deterministic tooling bundled with the skill.",
         "input_schema": {
@@ -254,7 +255,7 @@ async fn register_run_skill_script_tool(client: &CadeClient) {
 
 /// Register the `load_skill_ref` tool — lazy-loads a reference doc from a skill's references/ dir.
 async fn register_load_skill_ref_tool(client: &CadeClient) {
-    let schema = serde_json::json!({
+    let schema = json!({
         "name": "load_skill_ref",
         "description": "Lazy-load a reference document from a skill's references/ directory. Use only when you need deep documentation to solve a specific problem — avoids injecting tokens unnecessarily.",
         "input_schema": {
@@ -286,7 +287,7 @@ async fn register_load_skill_ref_tool(client: &CadeClient) {
 
 /// Register the `run_subagent` tool — spawns a focused subagent for a task.
 async fn register_run_subagent_tool(client: &CadeClient) {
-    let schema = serde_json::json!({
+    let schema = json!({
         "name": "run_subagent",
         "description": "Spawn a subagent to handle a task autonomously. Only the final answer \
     is returned — your context stays clean. Use for: codebase search (explore), implementation \
@@ -332,7 +333,7 @@ async fn register_run_subagent_tool(client: &CadeClient) {
 
 /// Register the `update_memory` tool that lets the agent update its own memory.
 async fn register_update_memory_tool(client: &CadeClient) {
-    let schema = serde_json::json!({
+    let schema = json!({
         "name": "update_memory",
         "description": "Update a persistent memory block. Use this to store important information about the user, project, or yourself that should be remembered across conversations. Call this whenever you learn something worth remembering.",
         "input_schema": {
@@ -372,7 +373,7 @@ async fn register_update_memory_tool(client: &CadeClient) {
 }
 
 async fn register_memory_apply_patch_tool(client: &CadeClient) {
-    let schema = serde_json::json!({
+    let schema = json!({
         "name": "memory_apply_patch",
         "description": "Edit a persistent memory block using a unified diff patch. Use this to store important information about the user, project, or yourself that should be remembered across conversations. Call this whenever you learn something worth remembering.",
         "input_schema": {
@@ -1078,7 +1079,7 @@ async fn main() -> Result<()> {
                 ).await {
                     Ok(_) => {}
                     Err(_) => {
-                        eprintln!("{}", serde_json::json!({
+                        eprintln!("{}", json!({
                             "type":     "result",
                             "subtype":  "error",
                             "is_error": true,
@@ -1103,7 +1104,7 @@ async fn main() -> Result<()> {
                 Ok(r) => r,
                 Err(_) => {
                     if fmt == "json" {
-                        eprintln!("{}", serde_json::json!({
+                        eprintln!("{}", json!({
                             "type":     "result",
                             "subtype":  "error",
                             "is_error": true,
@@ -1122,7 +1123,7 @@ async fn main() -> Result<()> {
         match result {
             Ok((output, stats)) => {
                 if fmt == "json" {
-                    println!("{}", serde_json::json!({
+                    println!("{}", json!({
                         "type":        "result",
                         "subtype":     "success",
                         "is_error":    false,
@@ -1138,7 +1139,7 @@ async fn main() -> Result<()> {
             }
             Err(e) => {
                 if fmt == "json" {
-                    eprintln!("{}", serde_json::json!({
+                    eprintln!("{}", json!({
                         "type":    "result",
                         "subtype": "error",
                         "is_error": true,

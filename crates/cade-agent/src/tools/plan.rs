@@ -1,10 +1,10 @@
 use anyhow::Result;
-use serde_json::Value;
+use serde_json::{Value, json};
 
 pub struct EnterPlanModeTool;
 impl EnterPlanModeTool {
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "EnterPlanMode",
             "description": "Enter a read-only planning mode. Use this when you need to explore the codebase or gather information without making any permanent changes.",
             "input_schema": {
@@ -19,7 +19,7 @@ impl EnterPlanModeTool {
 pub struct ExitPlanModeTool;
 impl ExitPlanModeTool {
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "ExitPlanMode",
             "description": "Exit the read-only planning mode and resume normal operation.",
             "input_schema": {
@@ -34,7 +34,7 @@ impl ExitPlanModeTool {
 pub struct TodoWriteTool;
 impl TodoWriteTool {
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "TodoWrite",
             "description": "Write your current plan or scratchpad to a todo file. Use this to keep track of tasks across steps.",
             "input_schema": {
@@ -61,7 +61,7 @@ impl TodoWriteTool {
 pub struct UpdatePlanTool;
 impl UpdatePlanTool {
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "UpdatePlan",
             "description": "Update your plan or scratchpad.",
             "input_schema": {
@@ -81,7 +81,7 @@ impl UpdatePlanTool {
 pub struct WriteTodosTool;
 impl WriteTodosTool {
     pub fn schema() -> Value {
-        serde_json::json!({
+        json!({
             "name": "WriteTodos",
             "description": "Write your current plan or scratchpad to a todo file.",
             "input_schema": {

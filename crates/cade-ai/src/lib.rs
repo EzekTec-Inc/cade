@@ -812,6 +812,7 @@ mod tests {
     type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
 
     use super::*;
+    use serde_json::json;
 
     // ── bare_model ────────────────────────────────────────────────────────
 
@@ -1072,7 +1073,7 @@ mod tests {
         let tc = LlmToolCall {
             id: "tc_123".into(),
             name: "bash".into(),
-            arguments: serde_json::json!({"command": "ls"}),
+            arguments: json!({"command": "ls"}),
             thought_signature: None,
         };
         let json = serde_json::to_string(&tc).unwrap();

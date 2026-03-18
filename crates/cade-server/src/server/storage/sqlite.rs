@@ -1539,6 +1539,7 @@ mod tests {
     type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
 
     use super::*;
+    use serde_json::json;
 
     fn setup_mem_db() -> Db {
         let conn = Connection::open_in_memory().unwrap();
@@ -1606,12 +1607,12 @@ mod tests {
 
         insert_message(&db, &MessageRow {
             id: "m1".to_string(), agent_id: agent_id.to_string(), conversation_id: None,
-            role: "user".to_string(), content: serde_json::json!("Rust is a systems programming language")
+            role: "user".to_string(), content: json!("Rust is a systems programming language")
         }).unwrap();
 
         insert_message(&db, &MessageRow {
             id: "m2".to_string(), agent_id: agent_id.to_string(), conversation_id: None,
-            role: "assistant".to_string(), content: serde_json::json!("I agree, Rust is safe and fast.")
+            role: "assistant".to_string(), content: json!("I agree, Rust is safe and fast.")
         }).unwrap();
 
         // Search for "systems"

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use serde_json::json;
 use std::io;
 use crossterm::event::KeyCode;
 
@@ -817,7 +818,7 @@ impl Repl {
                 let mut app = self.app.lock().unwrap();
                 std::mem::take(&mut app.pending_submit_images)
                     .into_iter()
-                    .map(|img| serde_json::json!({
+                    .map(|img| json!({
                         "media_type": img.media_type,
                         "data": img.data
                     }))

@@ -307,3 +307,37 @@ comments for scanability.
 **Verification:** `cargo test --workspace` — 295 tests pass.
 
 **Rollback:** Remove all `# --` comment lines from `[dependencies]` sections.
+
+---
+
+## 2026-03-18T00:09:00Z — rust10x Tier 4: Replace qualified serde_json::json! with use import
+
+**Summary:** Replaced all 55 occurrences of `serde_json::json!()` with `json!()`
+by adding `use serde_json::json;` imports, per rust10x audit item M11.
+
+**Files modified:**
+- `src/main.rs` — added `use serde_json::json;`, replaced 11 occurrences
+- `crates/cade-agent/src/agent/client.rs` — already had import, replaced 6 occurrences
+- `crates/cade-agent/src/tools/bash.rs` — expanded import, replaced 1 occurrence
+- `crates/cade-agent/src/tools/desktop.rs` — expanded import, replaced 4 occurrences
+- `crates/cade-agent/src/tools/fs.rs` — expanded import, replaced 4 occurrences
+- `crates/cade-agent/src/tools/manager.rs` — added import in test module, replaced 4 occurrences
+- `crates/cade-agent/src/tools/plan.rs` — expanded import, replaced 5 occurrences
+- `crates/cade-agent/src/tools/search.rs` — expanded import, replaced 15 occurrences
+- `crates/cade-ai/src/lib.rs` — added import in test module, replaced 1 occurrence
+- `crates/cade-cli/src/cli/repl.rs` — added import, replaced 1 occurrence
+- `crates/cade-server/src/server/rate_limit.rs` — added import, replaced 1 occurrence
+- `crates/cade-server/src/server/storage/sqlite.rs` — added import in test module, replaced 2 occurrences
+
+**Reason:** rust10x audit item M11 — macro imports should use `use` imports, not
+qualified paths.
+
+**Previous behavior:** `serde_json::json!({...})` used throughout codebase.
+
+**New behavior:** `json!({...})` with `use serde_json::json;` at module/test scope.
+
+**Verification:** `cargo test --workspace` — 295 tests pass.
+`cargo clippy --workspace --all-targets` — no unused import warnings.
+
+**Rollback:** Revert `use serde_json::json;` additions and replace `json!(` with
+`serde_json::json!(` in all affected files.
