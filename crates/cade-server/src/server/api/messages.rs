@@ -493,6 +493,9 @@ async fn build_context(
     // or run out of rows. Keeps oldest-first ordering.
     let soft_cap_chars = ((context_char_budget as f64) * 1.3).round() as usize;
     let mut offset: usize = 0;
+    let mut history_chunks = Vec::new();
+    let mut current_chars = total_chars(&messages); // starts with system prompt size
+
     loop {
         let batch = sqlite::list_messages_page(
             &state.db,
@@ -506,17 +509,29 @@ async fn build_context(
             break;
         }
         let batch_len = batch.len();
-        // list_messages_page returns oldest-first; append to preserve global order.
+        // list_messages_page returns oldest-first within the chunk.
+        let mut chunk_msgs = Vec::new();
         for row in batch.into_iter() {
-            messages.extend(db_row_to_llm(&row));
+            chunk_msgs.extend(db_row_to_llm(&row));
         }
+        
+        let chunk_chars = total_chars(&chunk_msgs);
+        history_chunks.push(chunk_msgs);
+        current_chars += chunk_chars;
+        
         offset = offset.saturating_add(batch_len);
-        if total_chars(&messages) >= soft_cap_chars {
+        if current_chars >= soft_cap_chars {
             break;
         }
         if batch_len < HISTORY_PAGE_SIZE {
             break; // no more rows
         }
+    }
+
+    // Assemble the final message array in true oldest-first chronological order:
+    // Newest chunks were pushed first, so we reverse the chunks before extending.
+    for chunk in history_chunks.into_iter().rev() {
+        messages.extend(chunk);
     }
 
     // Sanitize history: fix orphaned tool_calls, dedup tool_results, drop

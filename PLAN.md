@@ -1117,3 +1117,25 @@ git revert HEAD
 ```bash
 git revert HEAD
 ```
+
+---
+
+## 2026-03-21T02:00:00Z — Fix Context Assembly Ordering Bug (Hallucination Fix)
+
+**Summary:** Fixed a critical bug in `build_context` that caused the agent to hallucinate by reading conversation history out of order.
+
+**Files modified:**
+- `MODIFIED` `crates/cade-server/src/server/api/messages.rs`
+  - Refactored the `list_messages_page` pagination loop. Previously, it appended fetched chunks of history directly to the `messages` array. Since chunks are fetched backwards in time (newest pages first), this resulted in the newest messages appearing *before* older messages in the LLM's context window. The model was reading the oldest messages at the very end of its prompt, causing it to ignore the user's latest request and reply to the beginning of the conversation.
+  - Now, `build_context` correctly collects all history chunks into a `Vec` and `.rev()`s the chunk order before extending the `messages` array, ensuring true oldest-to-newest chronological order.
+
+**Reason:** User reported that CADE "gives a different result when prompted... keeps saying something else that makes it appear like its hallucinating." This was directly caused by the model seeing the oldest user prompts as the most recent text in its context window due to the reversed chunk ordering.
+
+**Previous behavior:** Context arrays were assembled as `[System, Newest 20 msgs, Older 20 msgs, Oldest 20 msgs]`.
+
+**New behavior:** Context arrays are correctly assembled as `[System, Oldest 20 msgs, Older 20 msgs, Newest 20 msgs]`.
+
+**Rollback steps:**
+```bash
+git revert HEAD
+```
