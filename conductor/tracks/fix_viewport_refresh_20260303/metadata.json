@@ -1,8 +1,0 @@
-{
-  "track_id": "fix_viewport_refresh_20260303",
-  "type": "bug",
-  "status": "in_progress",
-  "created_at": "2026-03-03T10:00:00Z",
-  "updated_at": "2026-03-03T10:00:00Z",
-  "description": "Fix viewport refresh issue after question modal"
-}

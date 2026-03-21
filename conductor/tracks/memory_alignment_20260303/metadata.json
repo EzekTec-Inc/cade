@@ -1,8 +1,0 @@
-{
-  "track_id": "memory_alignment_20260303",
-  "type": "feature",
-  "status": "new",
-  "created_at": "2026-03-03T10:00:00Z",
-  "updated_at": "2026-03-03T10:00:00Z",
-  "description": "Implement Letta-style memory alignment (Shared and Archival Memory)"
-}
