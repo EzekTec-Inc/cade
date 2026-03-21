@@ -3938,7 +3938,7 @@ impl Repl {
 
         // Clear cancel flag after turn completes
         self.cancel_turn.store(false, Ordering::SeqCst);
-        self.dispatch_tool_calls(stdout, messages, input, Some(bar_text), false, false)
+        self.dispatch_tool_calls(stdout, messages, input, Some(bar_text), false)
             .await?;
 
         // Blank line after every agent turn for visual block separation.
@@ -4425,11 +4425,6 @@ impl Repl {
     ///
     /// `reprompt_done`: true when this call is itself the result of an auto-reprompt
     /// injection — prevents infinite reprompt loops if the LLM keeps returning empty.
-    ///
-    /// `turn_has_text`: true if any prior response in this agent turn already produced
-    /// visible text.  Suppresses the empty-response re-prompt when the model spoke
-    /// earlier in the turn (e.g. introduced what it was doing) and then finished
-    /// silently after a tool — the user already received a meaningful response.
     async fn dispatch_tool_calls(
         &mut self,
         stdout: &mut io::Stdout,
@@ -4437,7 +4432,6 @@ impl Repl {
         user_input: &str,
         bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
         reprompt_done: bool,
-        turn_has_text: bool,
     ) -> Result<()> {
         // If the user cancelled (Esc/Ctrl+C) during Phase 2 tool-result sending,
         // stream_turn may return vec![] due to the cancellation rather than an
@@ -4460,10 +4454,8 @@ impl Repl {
 
             // Auto-reprompt: if the LLM produced nothing at all this entire turn,
             // inject a single follow-up user message so it knows it must respond.
-            // Suppressed when the model already spoke earlier in the turn
-            // (`turn_has_text`) — a silent finish after prior text is intentional.
             // `reprompt_done` guards against infinite loops — we only inject once.
-            if assistant_msg.trim().is_empty() && !reprompt_done && !turn_has_text {
+            if assistant_msg.trim().is_empty() && !reprompt_done {
                 tracing::warn!("Empty agent response after tool return — injecting re-prompt");
                 let _ = self.app.lock().expect("lock poisoned").push(RenderLine::SystemMsg(
                     "  ⎿  (no response after tool — re-prompting)".to_string(),
@@ -4483,7 +4475,7 @@ impl Repl {
                     )
                     .await?;
                 Box::pin(
-                    self.dispatch_tool_calls(stdout, follow, user_input, bar_text, true, false),
+                    self.dispatch_tool_calls(stdout, follow, user_input, bar_text, true),
                 )
                 .await?;
                 return Ok(());
@@ -4530,7 +4522,6 @@ impl Repl {
                     user_input,
                     bar_text,
                     false,
-                    turn_has_text,
                 ))
                 .await?;
             }
@@ -4540,11 +4531,6 @@ impl Repl {
         // Check if this response contained any assistant text alongside the tool calls.
         // Passed into each recursive dispatch so the re-prompt is suppressed when
         // the model spoke earlier in the chain (not just in prior tool-return rounds).
-        let response_had_text = messages
-            .iter()
-            .filter_map(|m| m.assistant_text())
-            .any(|t| !t.trim().is_empty());
-
         // -- Execute all tools, then send results as a batch
         //
         // Tools execute sequentially (preserves approval prompts and the
@@ -4779,7 +4765,6 @@ impl Repl {
             user_input,
             bar_text,
             false,
-            turn_has_text || response_had_text,
         ))
         .await?;
 

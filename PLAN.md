@@ -1094,3 +1094,26 @@ git revert HEAD
 ```bash
 git revert HEAD
 ```
+
+---
+
+## 2026-03-21T01:30:00Z — Fix Broken Chain-of-Thought on Empty Tool Responses
+
+**Summary:** Fixed a bug where CADE would stop and wait for user input if the LLM returned an empty response immediately after executing a tool.
+
+**Files modified:**
+- `MODIFIED` `crates/cade-cli/src/cli/repl.rs`
+  - Removed the `turn_has_text` check from the empty-response auto-reprompt logic.
+  - Removed `turn_has_text` argument from the `dispatch_tool_calls` signature and all recursive invocations.
+  - Removed the unused `response_had_text` variable.
+
+**Reason:** User reported that "CADE is not able to follow through chains of thoughts and responses and users continue to chat with it on tasks its working on." The previous logic suppressed the auto-reprompt if the model had already spoken text earlier in the same turn (i.e. *before* the tool execution). This caused the turn to silently finish without synthesizing the tool result, breaking the chain of thought. By removing the suppression flag, CADE will now *always* force the model to continue if it yields a completely empty response to a tool result.
+
+**Previous behavior:** If a model output text, then called a tool, and then returned an empty response after receiving the tool result, the turn ended silently.
+
+**New behavior:** If a model returns an empty response after a tool result, CADE will always inject `EMPTY_YIELD_REPROMPT` ("Tool execution complete. Please provide a text response...") to force continuation, ensuring the task completes.
+
+**Rollback steps:**
+```bash
+git revert HEAD
+```
