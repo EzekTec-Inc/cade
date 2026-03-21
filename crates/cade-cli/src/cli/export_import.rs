@@ -233,9 +233,9 @@ pub async fn resolve_agent_id(client: &CadeClient, name_or_id: &str) -> Result<S
         .filter(|a| a.name.to_lowercase().contains(&q))
         .collect();
     match matched.len() {
-        0 => return Err(crate::Error::custom(format!("No agent found matching '{name_or_id}'"))),
+        0 => Err(crate::Error::custom(format!("No agent found matching '{name_or_id}'"))),
         1 => Ok(matched[0].id.clone()),
-        n => return Err(crate::Error::custom(format!(
+        n => Err(crate::Error::custom(format!(
             "{n} agents match '{name_or_id}': {}",
             matched
                 .iter()

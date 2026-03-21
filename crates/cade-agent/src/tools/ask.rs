@@ -103,7 +103,7 @@ impl AskUserQuestionTool {
     pub fn parse_questions(args: &Value) -> Result<Vec<AskQuestion>> {
         let arr = args["questions"]
             .as_array()
-            .ok_or_else(|| crate::Error::custom(format!("'questions' must be an array")))?;
+            .ok_or_else(|| crate::Error::custom("'questions' must be an array".to_string()))?;
 
         if arr.is_empty() || arr.len() > 4 {
             return Err(crate::Error::custom(format!(

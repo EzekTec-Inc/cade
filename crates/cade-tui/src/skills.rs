@@ -401,9 +401,7 @@ pub fn show_skills_manager(
                         }
                     }
                     (KeyCode::Char('k'), _) | (KeyCode::Up, _) => {
-                        if cursor > 0 {
-                            cursor -= 1;
-                        }
+                        cursor = cursor.saturating_sub(1);
                         if cursor < list_scroll {
                             list_scroll = list_scroll.saturating_sub(1);
                         }
@@ -487,9 +485,7 @@ pub fn show_skills_manager(
                         }
                     }
                     (KeyCode::Left, _) => {
-                        if field_pos > 0 {
-                            field_pos -= 1;
-                        }
+                        field_pos = field_pos.saturating_sub(1);
                     }
                     (KeyCode::Right, _) => {
                         let max = edit_fields.get(field_cursor).map(|f| f.len()).unwrap_or(0);
@@ -503,8 +499,8 @@ pub fn show_skills_manager(
                     (KeyCode::Down, _) if field_cursor == 5 => detail_scroll += 1,
                     (KeyCode::Backspace, _) => {
                         let pos = field_pos;
-                        if pos > 0 {
-                            if let Some(f) = edit_fields.get_mut(field_cursor) {
+                        if pos > 0
+                            && let Some(f) = edit_fields.get_mut(field_cursor) {
                                 let new_pos = f[..pos]
                                     .char_indices()
                                     .next_back()
@@ -514,7 +510,6 @@ pub fn show_skills_manager(
                                 field_pos = new_pos;
                                 dirty = true;
                             }
-                        }
                     }
                     (KeyCode::Char(c), m)
                         if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>

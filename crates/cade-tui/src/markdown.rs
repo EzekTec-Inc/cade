@@ -53,7 +53,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                         Style::default().fg(RC::Rgb(80, 140, 200)),
                     ));
                 }
-                prefix_spans.extend(spans.drain(..));
+                prefix_spans.append(spans);
                 lines.push(Line::from(prefix_spans));
             }
         };

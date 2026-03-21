@@ -71,9 +71,9 @@ impl FileAutocompleteProvider {
         }
 
         let home = dirs::home_dir();
-        let expanded: PathBuf = if partial.starts_with("~/") {
+        let expanded: PathBuf = if let Some(stripped) = partial.strip_prefix("~/") {
             let h = home.as_deref()?;
-            h.join(&partial[2..])
+            h.join(stripped)
         } else {
             PathBuf::from(partial)
         };

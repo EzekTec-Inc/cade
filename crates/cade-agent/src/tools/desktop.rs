@@ -34,9 +34,9 @@ impl DesktopCaptureTool {
         // Resolve save path: explicit arg > ~/Pictures/cade_screenshot_<ts>.png > /tmp/
         let dest = if let Some(p) = save_path {
             // Expand ~ manually
-            if p.starts_with("~/") {
+            if let Some(stripped) = p.strip_prefix("~/") {
                 let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
-                home.join(&p[2..])
+                home.join(stripped)
             } else {
                 std::path::PathBuf::from(p)
             }
@@ -120,7 +120,7 @@ impl DesktopControlTool {
     pub async fn run(args: &Value) -> Result<String> {
         let action = args["action"]
             .as_str()
-            .ok_or_else(|| crate::Error::custom(format!("desktop_control: missing 'action'")))?;
+            .ok_or_else(|| crate::Error::custom("desktop_control: missing 'action'".to_string()))?;
 
         let ctrl = DesktopControl::detect().await;
 
@@ -128,32 +128,32 @@ impl DesktopControlTool {
             "focus_window" => {
                 let title = args["title"]
                     .as_str()
-                    .ok_or_else(|| crate::Error::custom(format!("focus_window requires 'title'")))?;
+                    .ok_or_else(|| crate::Error::custom("focus_window requires 'title'".to_string()))?;
                 ctrl.focus_window(title).await?;
                 Ok(format!("Focused window: {title}"))
             }
             "type_text" => {
                 let text = args["text"]
                     .as_str()
-                    .ok_or_else(|| crate::Error::custom(format!("type_text requires 'text'")))?;
+                    .ok_or_else(|| crate::Error::custom("type_text requires 'text'".to_string()))?;
                 ctrl.type_text(text).await?;
                 Ok(format!("Typed {} characters", text.len()))
             }
             "key_press" => {
                 let key = args["key"]
                     .as_str()
-                    .ok_or_else(|| crate::Error::custom(format!("key_press requires 'key'")))?;
+                    .ok_or_else(|| crate::Error::custom("key_press requires 'key'".to_string()))?;
                 ctrl.key_press(key).await?;
                 Ok(format!("Pressed key: {key}"))
             }
             "move_mouse" => {
                 let x = args["x"]
                     .as_i64()
-                    .ok_or_else(|| crate::Error::custom(format!("move_mouse requires 'x'")))?
+                    .ok_or_else(|| crate::Error::custom("move_mouse requires 'x'".to_string()))?
                     as i32;
                 let y = args["y"]
                     .as_i64()
-                    .ok_or_else(|| crate::Error::custom(format!("move_mouse requires 'y'")))?
+                    .ok_or_else(|| crate::Error::custom("move_mouse requires 'y'".to_string()))?
                     as i32;
                 ctrl.move_mouse(x, y).await?;
                 Ok(format!("Moved mouse to ({x}, {y})"))

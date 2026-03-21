@@ -1,3 +1,6 @@
+#![allow(clippy::empty_line_after_doc_comments)]
+#![allow(clippy::collapsible_match)]
+#![allow(clippy::too_many_arguments)]
 // region:    --- Modules
 
 mod error;

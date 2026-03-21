@@ -418,33 +418,30 @@ pub fn show_command_menu(terminal: &mut DefaultTerminal) -> Result<Option<String
         if !event::poll(std::time::Duration::from_millis(200))? {
             continue;
         }
-        match event::read()? {
-            Event::Key(k) => match k.code {
-                KeyCode::Esc | KeyCode::Char('q') => return Ok(None),
-                KeyCode::Enter => {
-                    if let Some(MenuItem::Cmd { cmd, .. }) = items.get(sel) {
-                        return Ok(Some(cmd.clone()));
-                    }
+        if let Event::Key(k) = event::read()? { match k.code {
+            KeyCode::Esc | KeyCode::Char('q') => return Ok(None),
+            KeyCode::Enter => {
+                if let Some(MenuItem::Cmd { cmd, .. }) = items.get(sel) {
+                    return Ok(Some(cmd.clone()));
                 }
-                KeyCode::Up | KeyCode::Char('k') => {
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                sel = prev_cmd(&items, sel);
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                sel = next_cmd(&items, sel);
+            }
+            KeyCode::PageUp => {
+                for _ in 0..8 {
                     sel = prev_cmd(&items, sel);
                 }
-                KeyCode::Down | KeyCode::Char('j') => {
+            }
+            KeyCode::PageDown => {
+                for _ in 0..8 {
                     sel = next_cmd(&items, sel);
                 }
-                KeyCode::PageUp => {
-                    for _ in 0..8 {
-                        sel = prev_cmd(&items, sel);
-                    }
-                }
-                KeyCode::PageDown => {
-                    for _ in 0..8 {
-                        sel = next_cmd(&items, sel);
-                    }
-                }
-                _ => {}
-            },
+            }
             _ => {}
-        }
+        } }
     }
 }

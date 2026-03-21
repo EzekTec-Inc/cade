@@ -291,8 +291,8 @@ pub fn skills_context(skills: &[Skill]) -> Option<String> {
 
 fn parse_skill(id: &str, content: &str, scope: SkillScope, path: PathBuf) -> Result<Skill> {
     let content = content.trim();
-    let (fm_str, body) = if content.starts_with("---") {
-        match content[3..].find("---") {
+    let (fm_str, body) = if let Some(stripped) = content.strip_prefix("---") {
+        match stripped.find("---") {
             Some(end) => (&content[3..end + 3], &content[end + 6..]),
             None => ("", content),
         }

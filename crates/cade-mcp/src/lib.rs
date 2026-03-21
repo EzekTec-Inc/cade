@@ -306,7 +306,7 @@ impl McpManager {
         // Protocol errors (-32XXX) mean the server is alive but rejected the call.
         // Reconnecting won't fix a bad argument or unknown method — return immediately.
         if Self::is_rpc_protocol_error(&error_msg) {
-            return Some(Err(Error::custom(format!("{error_msg}"))));
+            return Some(Err(Error::custom(error_msg.to_string())));
         }
 
         warn!(

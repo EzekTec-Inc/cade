@@ -46,7 +46,7 @@ impl Toolset {
         }
     }
 
-    pub fn from_str(s: &str) -> Option<Self> {
+    pub fn from_name(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "default" | "claude" | "anthropic" => Some(Self::Default),
             "codex" | "openai" | "gpt" => Some(Self::Codex),
@@ -191,31 +191,31 @@ mod tests {
         assert_eq!(Toolset::for_model("unknown-model"), Toolset::Default);
     }
 
-    // -- Toolset::from_str
+    // -- Toolset::from_name
 
     #[test]
     fn from_str_valid() {
-        assert_eq!(Toolset::from_str("default"), Some(Toolset::Default));
-        assert_eq!(Toolset::from_str("claude"), Some(Toolset::Default));
-        assert_eq!(Toolset::from_str("anthropic"), Some(Toolset::Default));
-        assert_eq!(Toolset::from_str("codex"), Some(Toolset::Codex));
-        assert_eq!(Toolset::from_str("openai"), Some(Toolset::Codex));
-        assert_eq!(Toolset::from_str("gpt"), Some(Toolset::Codex));
-        assert_eq!(Toolset::from_str("gemini"), Some(Toolset::Gemini));
-        assert_eq!(Toolset::from_str("google"), Some(Toolset::Gemini));
+        assert_eq!(Toolset::from_name("default"), Some(Toolset::Default));
+        assert_eq!(Toolset::from_name("claude"), Some(Toolset::Default));
+        assert_eq!(Toolset::from_name("anthropic"), Some(Toolset::Default));
+        assert_eq!(Toolset::from_name("codex"), Some(Toolset::Codex));
+        assert_eq!(Toolset::from_name("openai"), Some(Toolset::Codex));
+        assert_eq!(Toolset::from_name("gpt"), Some(Toolset::Codex));
+        assert_eq!(Toolset::from_name("gemini"), Some(Toolset::Gemini));
+        assert_eq!(Toolset::from_name("google"), Some(Toolset::Gemini));
     }
 
     #[test]
     fn from_str_case_insensitive() {
-        assert_eq!(Toolset::from_str("DEFAULT"), Some(Toolset::Default));
-        assert_eq!(Toolset::from_str("Codex"), Some(Toolset::Codex));
-        assert_eq!(Toolset::from_str("GEMINI"), Some(Toolset::Gemini));
+        assert_eq!(Toolset::from_name("DEFAULT"), Some(Toolset::Default));
+        assert_eq!(Toolset::from_name("Codex"), Some(Toolset::Codex));
+        assert_eq!(Toolset::from_name("GEMINI"), Some(Toolset::Gemini));
     }
 
     #[test]
     fn from_str_unknown() {
-        assert_eq!(Toolset::from_str("unknown"), None);
-        assert_eq!(Toolset::from_str(""), None);
+        assert_eq!(Toolset::from_name("unknown"), None);
+        assert_eq!(Toolset::from_name(""), None);
     }
 
     // -- Toolset names and schemas

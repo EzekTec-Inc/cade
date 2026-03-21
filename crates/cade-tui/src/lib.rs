@@ -1,3 +1,8 @@
+#![allow(clippy::manual_clamp)]
+#![allow(clippy::needless_range_loop)]
+#![allow(clippy::vec_init_then_push)]
+#![allow(clippy::if_same_then_else)]
+#![allow(clippy::empty_line_after_doc_comments)]
 /// CADE terminal UI layer — pure ratatui fullscreen rendering.
 ///
 /// Single render path: all output goes through [`TuiApp`] which owns one

@@ -205,7 +205,6 @@ impl CadeClient {
 
     /// Fetch the server's auto-detected provider and default model.
     /// Falls back to a local default if the endpoint is unavailable (e.g. CADE Cloud).
-    // -- Provider management
 
     pub async fn list_providers(&self) -> crate::Result<serde_json::Value> {
         let resp = self
@@ -409,7 +408,7 @@ impl CadeClient {
                 .ok()
                 .and_then(|v| v["detail"].as_str().map(String::from))
                 .unwrap_or(text);
-            return Err(crate::Error::custom(format!("{msg}")));
+            return Err(crate::Error::custom(msg.to_string()));
         }
         let body: serde_json::Value = resp.json().await?;
         Ok(body["model"].as_str().unwrap_or(model).to_string())
@@ -426,7 +425,7 @@ impl CadeClient {
             .await?;
         if !resp.status().is_success() {
             let text = resp.text().await.unwrap_or_default();
-            return Err(crate::Error::custom(format!("{text}")));
+            return Err(crate::Error::custom(text.to_string()));
         }
         Ok(())
     }
@@ -1227,7 +1226,7 @@ impl CadeClient {
                 .ok()
                 .and_then(|v| v["detail"].as_str().map(String::from))
                 .unwrap_or(text);
-            return Err(crate::Error::custom(format!("{msg}")));
+            return Err(crate::Error::custom(msg.to_string()));
         }
 
         let raw: Value = resp.json().await?;

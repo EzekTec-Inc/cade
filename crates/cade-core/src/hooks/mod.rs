@@ -2,7 +2,7 @@
 ///
 /// Mirrors CADE Code's hook system:
 ///   - Events: PreToolUse, PostToolUse, PostToolUseFailure, PermissionRequest,
-///             UserPromptSubmit, Stop, SubagentStop, SessionStart, SessionEnd, Notification
+///     UserPromptSubmit, Stop, SubagentStop, SessionStart, SessionEnd, Notification
 ///   - Hook types: command (shell script via stdin JSON)
 ///   - Exit codes: 0=allow, 1=log+continue, 2=block+stderr→agent
 ///   - PostToolUse stdout with {"additionalContext":"..."} is injected into tool result

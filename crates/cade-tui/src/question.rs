@@ -289,104 +289,99 @@ impl QuestionWidget {
             if !event::poll(std::time::Duration::from_millis(50))? {
                 continue;
             }
-            match event::read()? {
-                Event::Key(KeyEvent {
+            if let Event::Key(KeyEvent {
                     code, modifiers, ..
-                }) => {
-                    match (code, modifiers) {
-                        // Cancel
-                        (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                            break 'widget None;
+                }) = event::read()? {
+                match (code, modifiers) {
+                    // Cancel
+                    (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                        break 'widget None;
+                    }
+                    // Navigation
+                    (KeyCode::Up, _) => {
+                        cursor_pos = cursor_pos.saturating_sub(1);
+                    }
+                    (KeyCode::Down, _) => {
+                        if cursor_pos + 1 < total_items {
+                            cursor_pos += 1;
                         }
-                        // Navigation
-                        (KeyCode::Up, _) => {
-                            if cursor_pos > 0 {
-                                cursor_pos -= 1;
-                            }
-                        }
-                        (KeyCode::Down, _) => {
-                            if cursor_pos + 1 < total_items {
-                                cursor_pos += 1;
-                            }
-                        }
-                        (KeyCode::Tab, _) => {
-                            cursor_pos = (cursor_pos + 1) % total_items;
-                        }
-                        (KeyCode::BackTab, _) => {
-                            cursor_pos = if cursor_pos == 0 {
-                                total_items - 1
-                            } else {
-                                cursor_pos - 1
-                            };
-                        }
-                        // Number quick-select
-                        (KeyCode::Char(c), KeyModifiers::NONE)
-                            if c.is_ascii_digit() && c != '0' =>
-                        {
-                            let idx = (c as usize) - ('0' as usize) - 1;
-                            if idx < total_items {
-                                if question.multi_select {
-                                    if idx < n_real {
-                                        checked[idx] = !checked[idx];
-                                        cursor_pos = idx;
-                                    }
-                                } else if idx != other_idx {
-                                    let label = question.options[idx].label.clone();
-                                    break 'widget Some(QuestionAnswer::Single(label));
-                                } else {
+                    }
+                    (KeyCode::Tab, _) => {
+                        cursor_pos = (cursor_pos + 1) % total_items;
+                    }
+                    (KeyCode::BackTab, _) => {
+                        cursor_pos = if cursor_pos == 0 {
+                            total_items - 1
+                        } else {
+                            cursor_pos - 1
+                        };
+                    }
+                    // Number quick-select
+                    (KeyCode::Char(c), KeyModifiers::NONE)
+                        if c.is_ascii_digit() && c != '0' =>
+                    {
+                        let idx = (c as usize) - ('0' as usize) - 1;
+                        if idx < total_items {
+                            if question.multi_select {
+                                if idx < n_real {
+                                    checked[idx] = !checked[idx];
                                     cursor_pos = idx;
                                 }
+                            } else if idx != other_idx {
+                                let label = question.options[idx].label.clone();
+                                break 'widget Some(QuestionAnswer::Single(label));
+                            } else {
+                                cursor_pos = idx;
                             }
                         }
-                        // Backspace for custom text
-                        (KeyCode::Backspace, _) if cursor_pos == other_idx => {
-                            custom_text.pop();
-                        }
-                        // Enter
-                        (KeyCode::Enter, _) => {
-                            if question.multi_select {
-                                if cursor_pos == submit_idx {
-                                    let selected: Vec<String> = checked
-                                        .iter()
-                                        .enumerate()
-                                        .filter(|(_, c)| **c)
-                                        .map(|(i, _)| question.options[i].label.clone())
-                                        .collect();
-                                    if selected.is_empty() {
-                                        continue;
-                                    }
-                                    break 'widget Some(QuestionAnswer::Multi(selected));
-                                } else if cursor_pos == other_idx {
-                                    if !custom_text.is_empty() {
-                                        break 'widget Some(QuestionAnswer::Multi(vec![
-                                            custom_text.clone(),
-                                        ]));
-                                    }
-                                } else if cursor_pos < n_real {
-                                    checked[cursor_pos] = !checked[cursor_pos];
+                    }
+                    // Backspace for custom text
+                    (KeyCode::Backspace, _) if cursor_pos == other_idx => {
+                        custom_text.pop();
+                    }
+                    // Enter
+                    (KeyCode::Enter, _) => {
+                        if question.multi_select {
+                            if cursor_pos == submit_idx {
+                                let selected: Vec<String> = checked
+                                    .iter()
+                                    .enumerate()
+                                    .filter(|(_, c)| **c)
+                                    .map(|(i, _)| question.options[i].label.clone())
+                                    .collect();
+                                if selected.is_empty() {
+                                    continue;
                                 }
+                                break 'widget Some(QuestionAnswer::Multi(selected));
                             } else if cursor_pos == other_idx {
                                 if !custom_text.is_empty() {
-                                    break 'widget Some(QuestionAnswer::Single(
+                                    break 'widget Some(QuestionAnswer::Multi(vec![
                                         custom_text.clone(),
-                                    ));
+                                    ]));
                                 }
-                            } else {
-                                let label = question.options[cursor_pos].label.clone();
-                                break 'widget Some(QuestionAnswer::Single(label));
+                            } else if cursor_pos < n_real {
+                                checked[cursor_pos] = !checked[cursor_pos];
                             }
+                        } else if cursor_pos == other_idx {
+                            if !custom_text.is_empty() {
+                                break 'widget Some(QuestionAnswer::Single(
+                                    custom_text.clone(),
+                                ));
+                            }
+                        } else {
+                            let label = question.options[cursor_pos].label.clone();
+                            break 'widget Some(QuestionAnswer::Single(label));
                         }
-                        // Regular character input for "Type something." row
-                        (KeyCode::Char(c), m)
-                            if cursor_pos == other_idx
-                                && (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT) =>
-                        {
-                            custom_text.push(c);
-                        }
-                        _ => {}
                     }
+                    // Regular character input for "Type something." row
+                    (KeyCode::Char(c), m)
+                        if cursor_pos == other_idx
+                            && (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT) =>
+                    {
+                        custom_text.push(c);
+                    }
+                    _ => {}
                 }
-                _ => {}
             }
         };
 

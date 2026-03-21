@@ -657,7 +657,6 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 name = "cade"
 version = "0.2.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "atty",
  "axum",
@@ -686,7 +685,6 @@ dependencies = [
 name = "cade-agent"
 version = "0.2.0"
 dependencies = [
- "anyhow",
  "async-trait",
  "base64",
  "cade-core",
@@ -704,7 +702,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -716,7 +713,6 @@ dependencies = [
 name = "cade-ai"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "async-stream",
  "async-trait",
  "derive_more",
@@ -725,7 +721,6 @@ dependencies = [
  "reqwest-eventsource",
  "serde",
  "serde_json",
- "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tracing",
@@ -736,7 +731,6 @@ dependencies = [
 name = "cade-cli"
 version = "0.2.0"
 dependencies = [
- "anyhow",
  "arboard",
  "async-trait",
  "atty",
@@ -773,7 +767,6 @@ dependencies = [
 name = "cade-core"
 version = "0.2.0"
 dependencies = [
- "anyhow",
  "chrono",
  "derive_more",
  "dirs",
@@ -786,7 +779,6 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 2.0.18",
  "tokio",
  "tracing",
  "uuid",
@@ -797,7 +789,6 @@ dependencies = [
 name = "cade-desktop"
 version = "0.2.0"
 dependencies = [
- "anyhow",
  "base64",
  "cade-core",
  "derive_more",
@@ -814,7 +805,6 @@ dependencies = [
 name = "cade-mcp"
 version = "0.2.0"
 dependencies = [
- "anyhow",
  "cade-core",
  "derive_more",
  "dirs",
@@ -830,12 +820,12 @@ name = "cade-server"
 version = "0.2.0"
 dependencies = [
  "aes-gcm",
- "anyhow",
  "axum",
  "base64",
  "cade-ai",
  "cade-core",
  "chrono",
+ "derive_more",
  "dirs",
  "dotenvy",
  "futures",
@@ -848,7 +838,6 @@ dependencies = [
  "serde_json",
  "sha2",
  "subtle",
- "thiserror 2.0.18",
  "tokio",
  "tokio-stream",
  "tower-http 0.5.2",
@@ -860,7 +849,6 @@ dependencies = [
 name = "cade-tui"
 version = "0.2.0"
 dependencies = [
- "anyhow",
  "arboard",
  "base64",
  "cade-core",

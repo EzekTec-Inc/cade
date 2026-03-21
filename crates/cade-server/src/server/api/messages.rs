@@ -1,4 +1,3 @@
-use crate::server::Result;
 use axum::response::sse::Event;
 use axum::{
     Json,

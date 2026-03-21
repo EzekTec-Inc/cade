@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_arguments)]
 // region:    --- Modules
 
 // Re-use modules declared in lib.rs
@@ -796,10 +797,10 @@ async fn auto_start_server(base_url: &str) -> Result<()> {
         tracing::info!("cade-server ready.");
         Ok(())
     } else {
-        return Err(Error::custom(
+        Err(Error::custom(
             "Cannot connect to CADE server at {base_url}.\n\
              Start cade-server first: ./target/release/cade-server"
-        ));
+        ))
     }
 }
 
@@ -939,7 +940,7 @@ async fn main() -> Result<()> {
     let toolset = args
         .toolset
         .as_deref()
-        .and_then(Toolset::from_str)
+        .and_then(Toolset::from_name)
         .unwrap_or_else(|| Toolset::for_model(&default_model));
     tracing::info!(
         "Toolset: {} (model={})",

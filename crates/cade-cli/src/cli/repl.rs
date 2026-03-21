@@ -3393,7 +3393,7 @@ impl Repl {
                     SlashCmd::Toolset(arg) => {
                         let old_toolset = *self.current_toolset.lock().expect("lock poisoned");
                         let new_toolset = if let Some(name) = arg.as_deref() {
-                            match cade_core::toolsets::Toolset::from_str(name) {
+                            match cade_core::toolsets::Toolset::from_name(name) {
                                 Some(t) => t,
                                 None => {
                                     self.tui_dim("  Toolsets: default | codex | gemini");
@@ -4370,14 +4370,13 @@ impl Repl {
             let mut hints: Vec<String> = Vec::new();
             let mut suppress_truncation_hint = false;
 
-            if let Some(reason) = finish_reason_value.as_deref() {
-                if let Some((msg, category)) = finish_reason_hint(reason) {
+            if let Some(reason) = finish_reason_value.as_deref()
+                && let Some((msg, category)) = finish_reason_hint(reason) {
                     if matches!(category, FinishReasonCategory::OutputLimit) {
                         suppress_truncation_hint = true;
                     }
                     hints.push(msg);
                 }
-            }
 
             if looks_truncated && !suppress_truncation_hint {
                 hints.push(
@@ -4386,13 +4385,12 @@ impl Repl {
             }
 
             let context_pct_opt = { self.app.lock().expect("lock poisoned").context_pct };
-            if let Some(pct) = context_pct_opt {
-                if pct >= 95 {
+            if let Some(pct) = context_pct_opt
+                && pct >= 95 {
                     hints.push(format!(
                         "⚠ Context window is {pct}% full — CADE summarized or trimmed older turns. Consider /new or ask for a shorter reply."
                     ));
                 }
-            }
             for msg in hints {
                 self.tui_dim(msg);
             }
@@ -5496,7 +5494,7 @@ impl Repl {
     ///   1. Yes — run once
     ///   2. Yes, don't ask again — session-allow + run
     ///   3. No — deny
-    /// Generate a diff preview for file-mutation tools shown before the approval prompt.
+///      Generate a diff preview for file-mutation tools shown before the approval prompt.
     fn build_diff_preview(tool_name: &str, args: &serde_json::Value) -> Option<Vec<RenderLine>> {
         match tool_name {
             "edit_file" => {
@@ -6592,7 +6590,7 @@ impl Repl {
     async fn agent_picker(
         &self,
         app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
-        agents: &mut Vec<AgentState>,
+        agents: &mut [AgentState],
     ) -> Result<Option<AgentPickerResult>> {
         use crossterm::event::{self, Event, KeyCode};
         use ratatui::{
@@ -7425,8 +7423,6 @@ impl Repl {
             let subagent_type_c = subagent_type.clone();
             let task_id_c = task_id.clone();
             let _prompt_preview_c = prompt_preview.clone();
-            let seed_blocks = seed_blocks;
-            let hooks = hooks;
             async move {
                 // Determine agent to use
                 let (sub_agent_id, ephemeral) = if let Some(existing_id) = agent_id_arg {
@@ -7656,8 +7652,7 @@ fn finish_reason_hint(reason: &str) -> Option<(String, FinishReasonCategory)> {
     let normalized = reason
         .trim()
         .to_ascii_lowercase()
-        .replace('-', "_")
-        .replace(' ', "_");
+        .replace(['-', ' '], "_");
 
     if normalized.contains("max_token")
         || normalized == "length"

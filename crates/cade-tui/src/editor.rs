@@ -105,6 +105,12 @@ const PASTE_CHAR_THRESHOLD: usize = 1000;
 /// Maximum entries kept in the undo / redo stacks.
 const UNDO_LIMIT: usize = 100;
 
+impl Default for Editor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Editor {
     pub fn new() -> Self {
         Self {
@@ -400,12 +406,11 @@ impl Editor {
     pub fn expand_pastes(&mut self) {
         for entry in &self.paste_buffers {
             let marker = format!("[paste #{} +", entry.id);
-            if let Some(start) = self.input.find(&marker) {
-                if let Some(end) = self.input[start..].find(']') {
+            if let Some(start) = self.input.find(&marker)
+                && let Some(end) = self.input[start..].find(']') {
                     self.input
                         .replace_range(start..start + end + 1, &entry.text);
                 }
-            }
         }
         self.paste_buffers.clear();
         self.cursor_pos = self.cursor_pos.min(self.input.len());
@@ -438,12 +443,11 @@ impl Editor {
     pub fn drain_images(&mut self) -> Vec<ImageEntry> {
         for entry in &self.paste_images {
             let placeholder = format!("[image #{}:", entry.id);
-            if let Some(start) = self.input.find(&placeholder) {
-                if let Some(end) = self.input[start..].find(']') {
+            if let Some(start) = self.input.find(&placeholder)
+                && let Some(end) = self.input[start..].find(']') {
                     self.input.drain(start..start + end + 1);
                     self.cursor_pos = self.cursor_pos.min(self.input.len());
                 }
-            }
         }
         std::mem::take(&mut self.paste_images)
     }

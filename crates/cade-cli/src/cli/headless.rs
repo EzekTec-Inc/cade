@@ -66,11 +66,10 @@ pub async fn run_headless(
     tracing::debug!("headless: agent={agent_id}");
 
     // UserPromptSubmit hook — can block the turn entirely.
-    if !hooks.is_empty() {
-        if let HookOutcome::Block { reason } = hooks.user_prompt_submit(prompt).await {
+    if !hooks.is_empty()
+        && let HookOutcome::Block { reason } = hooks.user_prompt_submit(prompt).await {
             return Err(crate::Error::custom(format!("Prompt blocked by hook: {reason}")));
         }
-    }
 
     let t0 = std::time::Instant::now();
     let mut final_output = String::new();
@@ -102,14 +101,13 @@ pub async fn run_headless(
     .await?;
 
     // Stop hook — can annotate the final output but does not trigger a continuation turn.
-    if !hooks.is_empty() {
-        if let HookOutcome::Block { reason } =
+    if !hooks.is_empty()
+        && let HookOutcome::Block { reason } =
             hooks.stop("end_turn", prompt, &final_output, None).await
         {
             final_output.push_str("\n\n");
             final_output.push_str(&format!("[Stop hook: {reason}]"));
         }
-    }
 
     stats.duration_ms = t0.elapsed().as_millis();
     Ok((final_output.trim().to_string(), stats))
@@ -140,8 +138,8 @@ pub async fn run_headless_stream_json(
     emit(json!({ "type": "init", "agent_id": agent_id, "model": model }));
 
     // UserPromptSubmit hook — can block the turn entirely.
-    if !hooks.is_empty() {
-        if let HookOutcome::Block { reason } = hooks.user_prompt_submit(prompt).await {
+    if !hooks.is_empty()
+        && let HookOutcome::Block { reason } = hooks.user_prompt_submit(prompt).await {
             emit(json!({
                 "type":     "result",
                 "subtype":  "error",
@@ -151,7 +149,6 @@ pub async fn run_headless_stream_json(
             }));
             return;
         }
-    }
 
     let mut final_output = String::new();
     let mut stats = HeadlessStats::default();
@@ -213,14 +210,13 @@ pub async fn run_headless_stream_json(
     emit(json!({ "type": "message", "messageType": "stop_reason", "stopReason": "end_turn" }));
 
     // Stop hook — can annotate the final output but does not trigger a continuation turn.
-    if !hooks.is_empty() {
-        if let HookOutcome::Block { reason } =
+    if !hooks.is_empty()
+        && let HookOutcome::Block { reason } =
             hooks.stop("end_turn", prompt, &final_output, None).await
         {
             final_output.push_str("\n\n");
             final_output.push_str(&format!("[Stop hook: {reason}]"));
         }
-    }
 
     emit(json!({
         "type":       "result",
@@ -257,13 +253,12 @@ async fn run_one_tool(
     }
 
     // PreToolUse hook — can block execution
-    if !hooks.is_empty() {
-        if let HookOutcome::Block { reason } = hooks.pre_tool_use(&tool_name, &args).await {
+    if !hooks.is_empty()
+        && let HookOutcome::Block { reason } = hooks.pre_tool_use(&tool_name, &args).await {
             let msg = format!("Blocked by hook: {reason}");
             tracing::warn!("{msg}");
             return (call_id, msg, true);
         }
-    }
 
     // Intercept: update_memory
     if tool_name == "update_memory" {
@@ -587,9 +582,7 @@ async fn process_tool_calls(
             .map(|(call_id, tool_name, args)| {
                 let client = client.clone();
                 let agent_id = agent_id.to_string();
-                let mcp = mcp;
                 let perms = permissions.clone();
-                let hooks = hooks;
                 async move {
                     run_one_tool(
                         &client, &agent_id, call_id, tool_name, args, &perms, mcp, hooks,
@@ -777,9 +770,7 @@ async fn process_tool_calls_stream_json(
             .map(|(call_id, tool_name, args)| {
                 let client = client.clone();
                 let agent_id = agent_id.to_string();
-                let mcp = mcp;
                 let perms = permissions.clone();
-                let hooks = hooks;
                 async move {
                     let r = run_one_tool(
                         &client,

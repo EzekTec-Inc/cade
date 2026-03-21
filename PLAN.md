@@ -1019,3 +1019,34 @@ rm -f crates/cade-core/src/error.rs crates/cade-ai/src/error.rs crates/cade-desk
 **Result:** Users can now scroll up freely during an agent turn to review previous parts of the stream.
 
 
+
+---
+
+## 2026-03-21T00:00:00Z — Complete rust10x error migration and cleanup
+
+**Summary:** Completed the `anyhow` to `crate::Error` rust10x migration for `cade-server`, removed unused error dependencies (`anyhow`, `thiserror`) from the workspace, and cleaned up deleted scratch/project files from git.
+
+**Files modified/deleted:**
+- Removed `conductor/` directory, `.letta/`, `SECURITY.md`, `RUST10X_AUDIT_2026-03-18.md` from git.
+- `MODIFIED` all `Cargo.toml` files in workspace
+  - Removed `anyhow` and `thiserror` dependencies.
+- `CREATED` `crates/cade-server/src/server/error.rs`
+  - Added `Error` enum using `derive_more::{Display, From}` and `axum::response::IntoResponse`.
+- `MODIFIED` `crates/cade-server/src/server/mod.rs`
+  - Exported `error::{Error, Result}`.
+- `MODIFIED` `crates/cade-server/src/server/config.rs`
+- `MODIFIED` `crates/cade-server/src/server/crypto.rs`
+- `MODIFIED` `crates/cade-server/src/server/storage/sqlite.rs`
+- `MODIFIED` `crates/cade-server/src/server/api/messages.rs`
+  - Replaced `anyhow::Result`, `anyhow::Error`, `anyhow::anyhow!`, `anyhow::bail!`, and `.context()` with the crate-local `Error` and `Result` types.
+
+**Reason:** Project cleanup and completion of the rust10x error pattern migration (Phase 1) for the last remaining crate (`cade-server`).
+
+**Previous behavior:** `anyhow` and `thiserror` were present in `Cargo.toml` files, and `cade-server` still used `anyhow` for error handling. Stale files cluttered the git working tree.
+
+**New behavior:** The workspace uses the custom `derive_more` error pattern exclusively, unused dependencies are purged, and the working tree is clean.
+
+**Rollback steps:**
+```bash
+git revert HEAD
+```

@@ -1,3 +1,5 @@
+#![allow(clippy::field_reassign_with_default)]
+#![allow(clippy::items_after_test_module)]
 // region:    --- Modules
 
 mod error;

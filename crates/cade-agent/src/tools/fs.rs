@@ -93,7 +93,7 @@ impl ReadTool {
     pub async fn run(args: &Value) -> Result<String> {
         let path = args["path"]
             .as_str()
-            .ok_or_else(|| crate::Error::custom(format!("read_file: missing 'path'")))?;
+            .ok_or_else(|| crate::Error::custom("read_file: missing 'path'".to_string()))?;
         if let Some(root) = &fs_root() {
             ensure_within_root(root, path)?;
         }
@@ -147,13 +147,13 @@ impl WriteTool {
     pub async fn run(args: &Value) -> Result<String> {
         let path = args["path"]
             .as_str()
-            .ok_or_else(|| crate::Error::custom(format!("write_file: missing 'path'")))?;
+            .ok_or_else(|| crate::Error::custom("write_file: missing 'path'".to_string()))?;
         if let Some(root) = &fs_root() {
             ensure_within_root(root, path)?;
         }
         let content = args["content"]
             .as_str()
-            .ok_or_else(|| crate::Error::custom(format!("write_file: missing 'content'")))?;
+            .ok_or_else(|| crate::Error::custom("write_file: missing 'content'".to_string()))?;
 
         if let Some(parent) = Path::new(path).parent()
             && !parent.as_os_str().is_empty()
@@ -190,16 +190,16 @@ impl EditTool {
     pub async fn run(args: &Value) -> Result<String> {
         let path = args["path"]
             .as_str()
-            .ok_or_else(|| crate::Error::custom(format!("edit_file: missing 'path'")))?;
+            .ok_or_else(|| crate::Error::custom("edit_file: missing 'path'".to_string()))?;
         if let Some(root) = &fs_root() {
             ensure_within_root(root, path)?;
         }
         let old_string = args["old_string"]
             .as_str()
-            .ok_or_else(|| crate::Error::custom(format!("edit_file: missing 'old_string'")))?;
+            .ok_or_else(|| crate::Error::custom("edit_file: missing 'old_string'".to_string()))?;
         let new_string = args["new_string"]
             .as_str()
-            .ok_or_else(|| crate::Error::custom(format!("edit_file: missing 'new_string'")))?;
+            .ok_or_else(|| crate::Error::custom("edit_file: missing 'new_string'".to_string()))?;
         let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
         let content = std::fs::read_to_string(path).map_err(|e| crate::Error::custom(format!("read {path}: {e}")))?;
@@ -295,7 +295,7 @@ impl ApplyPatchTool {
     pub async fn run(args: &Value) -> Result<String> {
         let patch_str = args["patch"]
             .as_str()
-            .ok_or_else(|| crate::Error::custom(format!("apply_patch: missing 'patch'")))?;
+            .ok_or_else(|| crate::Error::custom("apply_patch: missing 'patch'".to_string()))?;
 
         validate_patch_paths(patch_str)?;
 
@@ -326,7 +326,7 @@ impl ApplyPatchTool {
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
-            return Err(crate::Error::custom(format!("patch failed:\n{stdout}{stderr}")))
+            Err(crate::Error::custom(format!("patch failed:\n{stdout}{stderr}")))
         }
     }
 

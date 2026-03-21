@@ -1,3 +1,4 @@
+#![allow(clippy::empty_line_after_doc_comments)]
 /// Regression tests for the tool-approval modal fixes.
 ///
 /// Covers three root-cause bugs:
@@ -14,6 +15,7 @@
 
 #[cfg(test)]
 mod permission_tests {
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
     use cade::permissions::{PermissionManager, PermissionMode, PermissionRule};
     use serde_json::json;
 
@@ -22,19 +24,20 @@ mod permission_tests {
     /// consecutive call to auto_approve returns true without prompting.
     #[test]
     fn session_allow_applied_before_second_tool() {
+        // -- Setup & Fixtures
         let mgr = PermissionManager::new(PermissionMode::Default);
-
-        // Initially no auto-approve for bash
         let args = json!({ "command": "cargo test" });
+
+        // -- Check (pre-condition)
         assert!(
             !mgr.auto_approve("bash", &args),
             "should require approval before session-allow is added"
         );
 
-        // Simulate what prompt_approval does on "Yes, don't ask again"
+        // -- Exec
         mgr.add_session_allow("bash");
 
-        // Second call to the same tool → must be auto-approved immediately
+        // -- Check
         assert!(
             mgr.auto_approve("bash", &args),
             "should be auto-approved after add_session_allow"
@@ -44,66 +47,100 @@ mod permission_tests {
     /// Session allow for a specific tool must not bleed into other tools.
     #[test]
     fn session_allow_is_tool_specific() {
+        // -- Setup & Fixtures
         let mgr = PermissionManager::new(PermissionMode::Default);
         mgr.add_session_allow("bash");
-
-        let bash_args  = json!({ "command": "ls" });
+        let bash_args = json!({ "command": "ls" });
         let write_args = json!({ "path": "foo.rs" });
 
-        assert!(mgr.auto_approve("bash",       &bash_args),  "bash should be allowed");
-        assert!(!mgr.auto_approve("write_file", &write_args), "write_file should still need approval");
+        // -- Check
+        assert!(
+            mgr.auto_approve("bash", &bash_args),
+            "bash should be allowed"
+        );
+        assert!(
+            !mgr.auto_approve("write_file", &write_args),
+            "write_file should still need approval"
+        );
     }
 
     /// Explicit deny overrides session allow (deny wins over allow).
     #[test]
-    fn deny_rule_overrides_session_allow() {
+    fn deny_rule_overrides_session_allow() -> Result<()> {
+        // -- Setup & Fixtures
         let mgr = PermissionManager::new(PermissionMode::Default);
         mgr.add_session_allow("bash");
-        mgr.add_deny_rule(PermissionRule::parse("bash(rm -rf:*)").unwrap());
-
+        mgr.add_deny_rule(PermissionRule::parse("bash(rm -rf:*)").ok_or("Should parse")?);
         let safe_args = json!({ "command": "ls -la" });
         let risky_args = json!({ "command": "rm -rf /tmp/foo" });
 
-        assert!(mgr.auto_approve("bash", &safe_args),  "safe bash should be allowed");
-        assert!(!mgr.auto_approve("bash", &risky_args), "rm -rf must be denied even after session allow");
+        // -- Check
+        assert!(
+            mgr.auto_approve("bash", &safe_args),
+            "safe bash should be allowed"
+        );
+        assert!(
+            !mgr.auto_approve("bash", &risky_args),
+            "rm -rf must be denied even after session allow"
+        );
+
+        Ok(())
     }
 
     /// BypassPermissions mode auto-approves everything.
     #[test]
     fn bypass_permissions_approves_all() {
+        // -- Setup & Fixtures
         let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
-        assert!(mgr.auto_approve("bash",       &json!({ "command": "rm -rf /" })));
+
+        // -- Check
+        assert!(mgr.auto_approve("bash", &json!({ "command": "rm -rf /" })));
         assert!(mgr.auto_approve("write_file", &json!({ "path": "/etc/passwd" })));
     }
 
     /// AcceptEdits only auto-approves file-mutation tools.
     #[test]
     fn accept_edits_approves_only_file_tools() {
+        // -- Setup & Fixtures
         let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
-        assert!(mgr.auto_approve("write_file",  &json!({ "path": "x.rs" })));
-        assert!(mgr.auto_approve("edit_file",   &json!({ "path": "x.rs" })));
+
+        // -- Check
+        assert!(mgr.auto_approve("write_file", &json!({ "path": "x.rs" })));
+        assert!(mgr.auto_approve("edit_file", &json!({ "path": "x.rs" })));
         assert!(mgr.auto_approve("apply_patch", &json!({ "path": "x.rs" })));
-        assert!(!mgr.auto_approve("bash",       &json!({ "command": "ls" })));
+        assert!(!mgr.auto_approve("bash", &json!({ "command": "ls" })));
     }
 
     /// Plan mode blocks write tools and write shell commands.
     #[test]
     fn plan_mode_blocks_write_operations() {
+        // -- Setup & Fixtures
         let mgr = PermissionManager::new(PermissionMode::Plan);
-        assert!(mgr.is_blocked("write_file",  &json!({ "path": "x.rs" })));
-        assert!(mgr.is_blocked("bash",        &json!({ "command": "rm foo" })));
-        assert!(!mgr.is_blocked("bash",       &json!({ "command": "ls -la" })));
-        assert!(!mgr.is_blocked("bash",       &json!({ "command": "cargo check" })));
+
+        // -- Check
+        assert!(mgr.is_blocked("write_file", &json!({ "path": "x.rs" })));
+        assert!(mgr.is_blocked("bash", &json!({ "command": "rm foo" })));
+        assert!(!mgr.is_blocked("bash", &json!({ "command": "ls -la" })));
+        assert!(!mgr.is_blocked("bash", &json!({ "command": "cargo check" })));
     }
 
     /// add_session_allow is idempotent — duplicate rules are not stored.
     #[test]
     fn session_allow_idempotent() {
+        // -- Setup & Fixtures
         let mgr = PermissionManager::new(PermissionMode::Default);
+
+        // -- Exec
         mgr.add_session_allow("bash");
         mgr.add_session_allow("bash");
         mgr.add_session_allow("bash");
-        assert_eq!(mgr.allow_rules().len(), 1, "duplicate rules must be de-duped");
+
+        // -- Check
+        assert_eq!(
+            mgr.allow_rules().len(),
+            1,
+            "duplicate rules must be de-duped"
+        );
     }
 }
 
@@ -119,22 +156,25 @@ mod back_to_back_tool_tests {
     /// auto-approved without any prompt.
     #[test]
     fn second_tool_call_auto_approved_after_dont_ask_again() {
-        let mgr  = PermissionManager::new(PermissionMode::Default);
+        // -- Setup & Fixtures
+        let mgr = PermissionManager::new(PermissionMode::Default);
         let args = json!({ "command": "cargo build" });
 
-        // First call: needs approval (returns false → would prompt)
+        // -- Check (pre-condition)
         assert!(!mgr.auto_approve("bash", &args), "first call needs prompt");
 
-        // User selects "Yes, don't ask again" → add_session_allow called
-        // BEFORE returning from prompt_approval (the Stage 1/2 fix ensures this)
+        // -- Exec
         mgr.add_session_allow("bash");
 
-        // Second call in the same turn: must be auto-approved
-        assert!(mgr.auto_approve("bash", &args), "second call must be auto-approved");
-
-        // Third call — same
-        assert!(mgr.auto_approve("bash", &json!({ "command": "cargo test" })),
-            "third call with different args must also be auto-approved");
+        // -- Check
+        assert!(
+            mgr.auto_approve("bash", &args),
+            "second call must be auto-approved"
+        );
+        assert!(
+            mgr.auto_approve("bash", &json!({ "command": "cargo test" })),
+            "third call with different args must also be auto-approved"
+        );
     }
 }
 
@@ -154,7 +194,7 @@ mod tick_task_guard_tests {
 
     #[test]
     fn async_question_routes_to_handle_question_key() {
-        // ask_question_async sets tx = Some(...)
+        // -- Exec & Check
         assert!(
             should_route_to_handle_question_key(true),
             "async modal (tx=Some) must route keys through handle_question_key"
@@ -163,7 +203,7 @@ mod tick_task_guard_tests {
 
     #[test]
     fn blocking_question_does_not_route_to_handle_question_key() {
-        // ask_question_blocking sets tx = None
+        // -- Exec & Check
         assert!(
             !should_route_to_handle_question_key(false),
             "blocking modal (tx=None) must NOT route keys through handle_question_key"
@@ -172,10 +212,17 @@ mod tick_task_guard_tests {
 
     #[test]
     fn no_active_question_does_not_route() {
-        // No active question → map_or(false, ...) = false
-        let active_question: Option<bool> = None; // None = no active question
+        // -- Setup & Fixtures
+        let active_question: Option<bool> = None;
+
+        // -- Exec
         let routes = active_question.is_some_and(|tx_some| tx_some);
-        assert!(!routes, "no active question must not route to handle_question_key");
+
+        // -- Check
+        assert!(
+            !routes,
+            "no active question must not route to handle_question_key"
+        );
     }
 }
 
@@ -183,19 +230,28 @@ mod tick_task_guard_tests {
 
 #[cfg(test)]
 mod rule_tests {
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
     use cade::permissions::PermissionRule;
 
     #[test]
-    fn parse_bare_tool_name() {
-        let r = PermissionRule::parse("Bash").unwrap();
+    fn parse_bare_tool_name() -> Result<()> {
+        // -- Exec
+        let r = PermissionRule::parse("Bash").ok_or("Should parse")?;
+
+        // -- Check
         assert_eq!(r.tool(), "bash");
         assert!(r.matches("bash", None));
         assert!(r.matches("bash", Some("any command")));
+
+        Ok(())
     }
 
     #[test]
     fn parse_tool_with_exact_arg() {
+        // -- Exec
         let r = PermissionRule::parse("Bash(cargo test)").unwrap();
+
+        // -- Check
         assert!(r.matches("bash", Some("cargo test")));
         assert!(!r.matches("bash", Some("cargo build")));
         assert!(!r.matches("bash", None));
@@ -203,7 +259,10 @@ mod rule_tests {
 
     #[test]
     fn parse_tool_with_prefix_wildcard() {
+        // -- Exec
         let r = PermissionRule::parse("Bash(rm -rf:*)").unwrap();
+
+        // -- Check
         assert!(r.matches("bash", Some("rm -rf /tmp/foo")));
         assert!(r.matches("bash", Some("rm -rf .")));
         assert!(!r.matches("bash", Some("rm foo")));
@@ -211,7 +270,10 @@ mod rule_tests {
 
     #[test]
     fn parse_tool_with_path_glob() {
+        // -- Exec
         let r = PermissionRule::parse("read_file(src/**)").unwrap();
+
+        // -- Check
         assert!(r.matches("read_file", Some("src/main.rs")));
         assert!(r.matches("read_file", Some("src/ui/app.rs")));
         assert!(!r.matches("read_file", Some("tests/foo.rs")));
@@ -219,16 +281,22 @@ mod rule_tests {
 
     #[test]
     fn parse_invalid_returns_none() {
+        // -- Exec & Check
         assert!(PermissionRule::parse("").is_none());
         assert!(PermissionRule::parse("   ").is_none());
     }
 
     #[test]
-    fn case_insensitive_tool_name() {
-        let r = PermissionRule::parse("BASH").unwrap();
+    fn case_insensitive_tool_name() -> Result<()> {
+        // -- Exec
+        let r = PermissionRule::parse("BASH").ok_or("Should parse")?;
+
+        // -- Check
         assert!(r.matches("bash", None));
         assert!(r.matches("BASH", None));
         assert!(r.matches("Bash", None));
+
+        Ok(())
     }
 }
 

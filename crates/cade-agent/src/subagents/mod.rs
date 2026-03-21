@@ -298,8 +298,8 @@ fn parse_subagent_md(
     path: PathBuf,
 ) -> Result<SubagentDef> {
     let content = content.trim();
-    let (fm_str, body) = if content.starts_with("---") {
-        match content[3..].find("---") {
+    let (fm_str, body) = if let Some(stripped) = content.strip_prefix("---") {
+        match stripped.find("---") {
             Some(end) => (&content[3..end + 3], &content[end + 6..]),
             None => ("", content),
         }

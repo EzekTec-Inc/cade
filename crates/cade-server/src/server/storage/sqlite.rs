@@ -1,4 +1,4 @@
-use crate::server::{Error, Result};
+use crate::server::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};

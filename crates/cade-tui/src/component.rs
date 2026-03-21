@@ -5,7 +5,7 @@
 //!
 //! - **`render(width)`** returns lines that fit within `width` columns.
 //! - **`handle_input(key)`** processes keyboard events; returns `true`
-//!    if the event was consumed.
+//!   if the event was consumed.
 //! - **`is_dirty()`** signals whether the component needs a redraw.
 //!
 //! Components are composed by embedding them in container structs (like

@@ -68,8 +68,8 @@ impl GrepTool {
             if !ext_filter.is_empty() {
                 let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
                 let matches_filter = ext_filter.iter().any(|pat| {
-                    if pat.starts_with('*') {
-                        fname.ends_with(&pat[1..])
+                    if let Some(stripped) = pat.strip_prefix('*') {
+                        fname.ends_with(stripped)
                     } else {
                         fname == *pat
                     }

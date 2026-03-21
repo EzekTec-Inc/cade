@@ -140,7 +140,7 @@ pub fn decrypt(encoded: &str) -> Result<String> {
         // New format — extract salt, derive key, decrypt
         let (salt, rest) = data.split_at(16);
         if rest.len() < 12 {
-            return Err(Error::custom(format!("Invalid encrypted data: nonce too short")));
+            return Err(Error::custom("Invalid encrypted data: nonce too short".to_string()));
         }
         let (nonce_bytes, ciphertext) = rest.split_at(12);
         let key_bytes = derive_key(salt)?;
@@ -171,7 +171,7 @@ pub fn decrypt(encoded: &str) -> Result<String> {
         return String::from_utf8(plaintext).map_err(|e| Error::custom(format!("UTF-8 decode failed: {e}")));
     }
 
-    return Err(Error::custom(format!("Invalid encrypted data: too short ({} bytes)", data.len())));
+    Err(Error::custom(format!("Invalid encrypted data: too short ({} bytes)", data.len())))
 }
 
 // -- Decryption

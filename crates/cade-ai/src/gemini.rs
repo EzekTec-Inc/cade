@@ -337,11 +337,10 @@ impl GeminiProvider {
                     {
                         let mut j = i;
                         while j < req.messages.len() && req.messages[j].role == "tool" {
-                            if let Some(id) = &req.messages[j].tool_call_id {
-                                if unsigned_call_ids.contains(id) {
+                            if let Some(id) = &req.messages[j].tool_call_id
+                                && unsigned_call_ids.contains(id) {
                                     has_unsigned = true;
                                 }
-                            }
                             j += 1;
                         }
                     }

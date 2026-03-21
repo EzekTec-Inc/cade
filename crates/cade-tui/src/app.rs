@@ -1,12 +1,10 @@
 /// TuiApp — single-terminal, pure ratatui fullscreen rendering for CADE.
-///
 /// Replaces the old hybrid (OutputRenderer DECSTBM + InputWidget Inline viewport +
 /// ThinkingBar raw crossterm).  A single `Terminal<CrosstermBackend<Stdout>>`
 /// (alternate screen, raw mode) is owned here.  Every piece of output — agent
 /// streaming, tool results, slash-command text, errors — is represented as a
 /// `RenderLine` pushed into `lines`.  `draw()` redraws the whole screen on every
 /// state change, eliminating all the CPR / DECSTBM / blank-row-tracking hacks.
-///
 /// Layout (each frame):
 /// ```text
 /// ┌─────────────────────────────────────────┐
@@ -415,40 +413,35 @@ impl TuiApp {
     }
 
     fn update_plan_state(&mut self) {
-        if self.active_plan.is_none() {
-            if let Some(caps) = plan_regex().captures(&self.streaming_text) {
-                if let Some(plan_block) = caps.get(1) {
+        if self.active_plan.is_none()
+            && let Some(caps) = plan_regex().captures(&self.streaming_text)
+                && let Some(plan_block) = caps.get(1) {
                     let mut steps = Vec::new();
                     for line in plan_block.as_str().lines() {
-                        if let Some(pos) = line.find(". ") {
-                            if let Ok(id) = line[..pos].trim().parse::<usize>() {
+                        if let Some(pos) = line.find(". ")
+                            && let Ok(id) = line[..pos].trim().parse::<usize>() {
                                 steps.push(PlanStep {
                                     id,
                                     description: line[pos + 2..].trim().to_string(),
                                     is_done: false,
                                 });
                             }
-                        }
                     }
                     if !steps.is_empty() {
                         self.active_plan = Some(PlanState { steps, is_visible: true });
                         self.draw_dirty = true;
                     }
                 }
-            }
-        }
         
         if let Some(plan) = &mut self.active_plan {
             let mut changed = false;
             for caps in done_regex().captures_iter(&self.streaming_text) {
-                if let Ok(id) = caps[1].parse::<usize>() {
-                    if let Some(step) = plan.steps.iter_mut().find(|s| s.id == id) {
-                        if !step.is_done {
+                if let Ok(id) = caps[1].parse::<usize>()
+                    && let Some(step) = plan.steps.iter_mut().find(|s| s.id == id)
+                        && !step.is_done {
                             step.is_done = true;
                             changed = true;
                         }
-                    }
-                }
             }
             if changed {
                 self.draw_dirty = true;
@@ -613,11 +606,10 @@ impl TuiApp {
 
     /// Update the thinking text from the animation/assessing timer.
     pub fn update_thinking_text(&mut self, text: String) {
-        if let Some(ts) = &self.thinking {
-            if let Ok(mut guard) = ts.text.lock() {
+        if let Some(ts) = &self.thinking
+            && let Ok(mut guard) = ts.text.lock() {
                 *guard = text;
             }
-        }
     }
 
     /// Stop the thinking animation.  Returns elapsed seconds (for summary line).
@@ -790,100 +782,95 @@ impl TuiApp {
             if !event::poll(std::time::Duration::from_millis(50))? {
                 continue;
             }
-            match event::read()? {
-                Event::Key(KeyEvent {
+            if let Event::Key(KeyEvent {
                     code, modifiers, ..
-                }) => match (code, modifiers) {
-                    (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                        break 'widget None;
+                }) = event::read()? { match (code, modifiers) {
+                (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                    break 'widget None;
+                }
+                (KeyCode::Up, _) => {
+                    cursor_pos = cursor_pos.saturating_sub(1);
+                }
+                (KeyCode::Down, _) => {
+                    if cursor_pos + 1 < total_items {
+                        cursor_pos += 1;
                     }
-                    (KeyCode::Up, _) => {
-                        if cursor_pos > 0 {
-                            cursor_pos -= 1;
-                        }
-                    }
-                    (KeyCode::Down, _) => {
-                        if cursor_pos + 1 < total_items {
-                            cursor_pos += 1;
-                        }
-                    }
-                    (KeyCode::Tab, _) => {
-                        cursor_pos = (cursor_pos + 1) % total_items;
-                    }
-                    (KeyCode::BackTab, _) => {
-                        cursor_pos = if cursor_pos == 0 {
-                            total_items - 1
-                        } else {
-                            cursor_pos - 1
-                        };
-                    }
-                    (KeyCode::Char(c), KeyModifiers::NONE) if c.is_ascii_digit() && c != '0' => {
-                        let idx = (c as usize) - ('0' as usize) - 1;
-                        if idx < total_items {
-                            if question.multi_select {
-                                if idx < n_real {
-                                    checked[idx] = !checked[idx];
-                                    cursor_pos = idx;
-                                }
-                            } else if idx != other_idx {
-                                let label = question.options[idx].label.clone();
-                                break 'widget Some(crate::question::QuestionAnswer::Single(
-                                    label,
-                                ));
-                            } else {
+                }
+                (KeyCode::Tab, _) => {
+                    cursor_pos = (cursor_pos + 1) % total_items;
+                }
+                (KeyCode::BackTab, _) => {
+                    cursor_pos = if cursor_pos == 0 {
+                        total_items - 1
+                    } else {
+                        cursor_pos - 1
+                    };
+                }
+                (KeyCode::Char(c), KeyModifiers::NONE) if c.is_ascii_digit() && c != '0' => {
+                    let idx = (c as usize) - ('0' as usize) - 1;
+                    if idx < total_items {
+                        if question.multi_select {
+                            if idx < n_real {
+                                checked[idx] = !checked[idx];
                                 cursor_pos = idx;
                             }
+                        } else if idx != other_idx {
+                            let label = question.options[idx].label.clone();
+                            break 'widget Some(crate::question::QuestionAnswer::Single(
+                                label,
+                            ));
+                        } else {
+                            cursor_pos = idx;
                         }
                     }
-                    (KeyCode::Backspace, _) if cursor_pos == other_idx => {
-                        custom_text.pop();
-                    }
-                    (KeyCode::Enter, _) => {
-                        if question.multi_select {
-                            if cursor_pos == submit_idx {
-                                let selected: Vec<String> = checked
-                                    .iter()
-                                    .enumerate()
-                                    .filter(|(_, c)| **c)
-                                    .map(|(i, _)| question.options[i].label.clone())
-                                    .collect();
-                                if !selected.is_empty() {
-                                    break 'widget Some(
-                                        crate::question::QuestionAnswer::Multi(selected),
-                                    );
-                                }
-                            } else if cursor_pos == other_idx {
-                                if !custom_text.is_empty() {
-                                    break 'widget Some(
-                                        crate::question::QuestionAnswer::Multi(vec![
-                                            custom_text.clone(),
-                                        ]),
-                                    );
-                                }
-                            } else if cursor_pos < n_real {
-                                checked[cursor_pos] = !checked[cursor_pos];
+                }
+                (KeyCode::Backspace, _) if cursor_pos == other_idx => {
+                    custom_text.pop();
+                }
+                (KeyCode::Enter, _) => {
+                    if question.multi_select {
+                        if cursor_pos == submit_idx {
+                            let selected: Vec<String> = checked
+                                .iter()
+                                .enumerate()
+                                .filter(|(_, c)| **c)
+                                .map(|(i, _)| question.options[i].label.clone())
+                                .collect();
+                            if !selected.is_empty() {
+                                break 'widget Some(
+                                    crate::question::QuestionAnswer::Multi(selected),
+                                );
                             }
                         } else if cursor_pos == other_idx {
                             if !custom_text.is_empty() {
-                                break 'widget Some(crate::question::QuestionAnswer::Single(
-                                    custom_text.clone(),
-                                ));
+                                break 'widget Some(
+                                    crate::question::QuestionAnswer::Multi(vec![
+                                        custom_text.clone(),
+                                    ]),
+                                );
                             }
-                        } else {
-                            let label = question.options[cursor_pos].label.clone();
-                            break 'widget Some(crate::question::QuestionAnswer::Single(label));
+                        } else if cursor_pos < n_real {
+                            checked[cursor_pos] = !checked[cursor_pos];
                         }
+                    } else if cursor_pos == other_idx {
+                        if !custom_text.is_empty() {
+                            break 'widget Some(crate::question::QuestionAnswer::Single(
+                                custom_text.clone(),
+                            ));
+                        }
+                    } else {
+                        let label = question.options[cursor_pos].label.clone();
+                        break 'widget Some(crate::question::QuestionAnswer::Single(label));
                     }
-                    (KeyCode::Char(c), m)
-                        if cursor_pos == other_idx
-                            && (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT) =>
-                    {
-                        custom_text.push(c);
-                    }
-                    _ => {}
-                },
+                }
+                (KeyCode::Char(c), m)
+                    if cursor_pos == other_idx
+                        && (m == KeyModifiers::NONE || m == KeyModifiers::SHIFT) =>
+                {
+                    custom_text.push(c);
+                }
                 _ => {}
-            }
+            } }
         };
 
         self.active_question = None;
@@ -968,9 +955,7 @@ impl TuiApp {
                     break 'widget None;
                 }
                 (KeyCode::Up, _) => {
-                    if cursor_pos > 0 {
-                        cursor_pos -= 1;
-                    }
+                    cursor_pos = cursor_pos.saturating_sub(1);
                 }
                 (KeyCode::Down, _) => {
                     if cursor_pos + 1 < total_items {
@@ -1249,7 +1234,7 @@ impl TuiApp {
     /// Returns `None` on Ctrl+D (exit signal).
     pub fn read_input(
         &mut self,
-        history: &mut Vec<String>,
+        history: &mut [String],
         hist_idx: &mut Option<usize>,
     ) -> Result<Option<String>> {
         self.editor.input.clear();
@@ -1324,7 +1309,7 @@ impl TuiApp {
     fn handle_key_input(
         &mut self,
         k: KeyEvent,
-        history: &mut Vec<String>,
+        history: &mut [String],
         hist_idx: &mut Option<usize>,
     ) -> Result<Option<Option<String>>> {
         // Some(None)        = Ctrl+D (exit)
@@ -1338,22 +1323,20 @@ impl TuiApp {
                     self.picker = None;
                 }
                 (KeyCode::Up, _) => {
-                    if let Some(pk) = &mut self.picker {
-                        if pk.cursor > 0 {
+                    if let Some(pk) = &mut self.picker
+                        && pk.cursor > 0 {
                             pk.cursor -= 1;
                         }
-                    }
                 }
                 (KeyCode::Down, _) => {
-                    if let Some(pk) = &mut self.picker {
-                        if !pk.matches.is_empty() && pk.cursor + 1 < pk.matches.len() {
+                    if let Some(pk) = &mut self.picker
+                        && !pk.matches.is_empty() && pk.cursor + 1 < pk.matches.len() {
                             pk.cursor += 1;
                         }
-                    }
                 }
                 (KeyCode::Enter, m) if m == KeyModifiers::NONE => {
-                    if let Some(pk) = self.picker.take() {
-                        if let Some(selected) = pk.matches.get(pk.cursor).cloned() {
+                    if let Some(pk) = self.picker.take()
+                        && let Some(selected) = pk.matches.get(pk.cursor).cloned() {
                             self.editor.snapshot();
                             let query_end = pk.at_pos + 1 + pk.query.len();
                             self.editor.input.drain(pk.at_pos..query_end.min(self.editor.input.len()));
@@ -1361,7 +1344,6 @@ impl TuiApp {
                             self.editor.cursor_pos = pk.at_pos + selected.len();
                         }
                         // dismiss whether or not a match was selected
-                    }
                 }
                 (KeyCode::Backspace, _) => {
                     if let Some(pk) = &mut self.picker {
@@ -1756,7 +1738,6 @@ impl Drop for TuiApp {
 /// Count the number of visual (terminal) rows a single `Line` occupies when
 /// word-wrapped to `content_w` columns.  Uses unicode display-width so emoji
 /// and CJK characters are measured correctly.
-///
 /// Matches ratatui's `WordWrapper` behaviour: words are broken on whitespace;
 /// a word that would overflow the current row starts a new row.
 fn count_wrapped_rows(line: &Line<'_>, content_w: u16) -> u16 {
@@ -1789,7 +1770,7 @@ fn count_wrapped_segment(text: &str, content_w: u16) -> u16 {
     let mut row_w: usize = 0;
     // split_inclusive preserves the trailing space/tab on each "word" token,
     // which keeps the total width calculation correct.
-    for word in text.split_inclusive(|c: char| c == ' ' || c == '\t') {
+    for word in text.split_inclusive([' ', '\t']) {
         let word_w = UnicodeWidthStr::width(word);
         if row_w > 0 && row_w + word_w > width {
             rows += 1;
@@ -1946,11 +1927,7 @@ fn render_frame(
     // V-04 / A-02: use messages_area height (excludes pinned header).
     let messages_h = messages_area.height;
     let visible = messages_h.saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT);
-    let max_skip = if total_visual > visible {
-        total_visual - visible
-    } else {
-        0
-    };
+    let max_skip = total_visual.saturating_sub(visible);
     let effective_up = (scroll as u16).min(max_skip);
     let para_scroll = max_skip - effective_up;
 
@@ -2203,8 +2180,8 @@ fn render_frame(
         render_question_inline(frame, aq, chunks[1], chunks[1]);
     }
     
-    if let Some(plan) = active_plan {
-        if plan.is_visible {
+    if let Some(plan) = active_plan
+        && plan.is_visible {
             use ratatui::widgets::{List, ListItem};
             let mut items = Vec::new();
             for step in &plan.steps {
@@ -2229,7 +2206,6 @@ fn render_frame(
             );
             frame.render_widget(list, chunks[2]); // chunks[2] is plan panel in my new chunks array
         }
-    }
 
     max_skip // V-04: returned so draw_impl can clamp self.scroll
 }
@@ -2237,7 +2213,6 @@ fn render_frame(
 // -- Overlay helpers
 
 /// Calculate the number of rows needed for the inline question panel.
-///
 /// Counts: 1 header + 1 blank + wrapped-question-rows + 1 blank
 ///       + per-option rows (label + optional description)
 ///       + submit row (multi-select) + other row + 1 blank + 1 hint.
@@ -2286,7 +2261,6 @@ fn question_height(aq: &ActiveQuestionDrawState, content_height: u16) -> u16 {
 
 /// Render the inline question panel — no border box, anchored to the bottom
 /// of the content viewport via the layout split in `render_frame`.
-///
 /// `sep_area`  — the single row reserved for the dashed separator (chunks[1]).
 /// `body_area` — the panel body rows (chunks[2]).
 fn render_question_inline(
@@ -2636,7 +2610,7 @@ fn render_line_to_text(
         }
         RenderLine::Reasoning { words: _, content } => {
             out.push(Line::from(Span::styled(
-                format!("💭 Thinking…"),
+                "💭 Thinking…".to_string(),
                 Style::default()
                     .fg(RC::DarkGray)
                     .add_modifier(Modifier::ITALIC),
@@ -2807,11 +2781,11 @@ fn calc_input_rows(buf: &str, available_width: u16) -> u16 {
         let rows = if chars == 0 {
             1
         } else {
-            ((chars + text_w - 1) / text_w) as u16
+            chars.div_ceil(text_w) as u16
         };
         total += rows;
     }
-    total.max(1).min(MAX_INPUT_ROWS)
+    total.clamp(1, MAX_INPUT_ROWS)
 }
 
 fn calc_visual_cursor(before_cursor: &str, available_width: u16) -> (u16, u16) {
@@ -2857,7 +2831,6 @@ fn calc_visual_cursor(before_cursor: &str, available_width: u16) -> (u16, u16) {
 /// (= available_width - 2, matching `calc_visual_cursor`), and a target
 /// `(row, col)` in visual space, return the **byte offset** in `buf` of the
 /// character at that visual position.
-///
 /// Used by the Up/Down cursor-movement logic.
 fn find_cursor_at_visual_row_col(
     buf: &str,
