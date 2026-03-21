@@ -3648,6 +3648,7 @@ impl Repl {
         let tick_queued_steering = self.queued_steering.clone();
         let tick_queued_followup = self.queued_followup.clone();
         let tick_modal_close_ms = self.last_modal_close_ms.clone();
+        let tick_permissions = self.permissions.clone();
         let tick_handle = tokio::spawn(async move {
             use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
             use futures::StreamExt;
@@ -3701,6 +3702,18 @@ impl Repl {
                                                     (KeyCode::Char('K'), _) => { app.follow = false; app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
                                                     (KeyCode::Char('J'), _) => { app.scroll = 0; app.follow = true; let _ = app.draw(); }
                                                     (KeyCode::Char('o'), KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
+                                                    (KeyCode::Tab, _) => {
+                                                        let next_mode = cade_tui::app::cycle_mode(app.mode);
+                                                        app.update_mode(next_mode);
+                                                        tick_permissions.set_mode(next_mode);
+                                                        let _ = app.draw();
+                                                    }
+                                                    (KeyCode::BackTab, _) => {
+                                                        let next_mode = cade_tui::app::cycle_mode_back(app.mode);
+                                                        app.update_mode(next_mode);
+                                                        tick_permissions.set_mode(next_mode);
+                                                        let _ = app.draw();
+                                                    }
 
                                                     // -- I-01: input during agent turn
                                                     //

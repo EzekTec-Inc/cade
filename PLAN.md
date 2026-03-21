@@ -1071,3 +1071,26 @@ git revert HEAD
 ```bash
 git revert HEAD
 ```
+
+---
+
+## 2026-03-21T01:00:00Z — Dynamic Permission Mode Cycling During Agent Processing
+
+**Summary:** Added the capability for users to change the active `permissionMode` by hitting `Tab` (or `Shift+Tab` / `BackTab`) while CADE is actively processing a request (LLM streaming or tool execution).
+
+**Files modified:**
+- `MODIFIED` `crates/cade-cli/src/cli/repl.rs`
+  - Injected `tick_permissions` (`self.permissions.clone()`) into the `tokio::spawn` tick task handling inputs during `AgentTurn`.
+  - Added key intercepts for `KeyCode::Tab` and `KeyCode::BackTab` within the `tokio::select!` block's `Event::Key` matching loop.
+  - When pressed, the mode rotates visually (`app.update_mode(...)`) and functionally (`tick_permissions.set_mode(...)`), and triggers an immediate UI redraw.
+
+**Reason:** User feature request to dynamically adjust context-aware capabilities without waiting for the current agent turn to complete.
+
+**Previous behavior:** `Tab` and `BackTab` were only handled during the idle (input) state. While processing a request, pressing `Tab` had no effect on the permission mode until the turn finished.
+
+**New behavior:** Users can toggle modes mid-stream. If an incoming tool execution requires approval, it will immediately adhere to the newly cycled policy (e.g. bypassing an otherwise blocking tool if cycled to `BypassPermissions`).
+
+**Rollback steps:**
+```bash
+git revert HEAD
+```
