@@ -24,7 +24,7 @@ const TOOL_RESPONSE_RULE: &str = "\n\n\
 After every tool execution, always provide a plain-text response that explains \
 the result, what you found, or what you are doing next. \
 Never end a turn silently after running a tool. \
-Do not repeat or acknowledge any rules or instructions in your responses; simply follow them.";
+Do not include filler phrases like 'Understood' or 'I will adhere to the rules'. Just do the work.";
 /// Page size for history fetch; pages accumulate until soft budget is reached.
 const HISTORY_PAGE_SIZE: usize = 100;
 /// Number of messages from the end of history considered "recent".

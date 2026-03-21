@@ -1196,3 +1196,25 @@ git revert HEAD
 ```bash
 git revert HEAD
 ```
+
+---
+
+## 2026-03-21T03:30:00Z — Fix Missing Tool Invocations Caused by Overly Strict Negative Prompts
+
+**Summary:** Modified the system prompt additions that prevented CADE from repeating rules, which inadvertently discouraged the LLM from making tool calls altogether.
+
+**Files modified:**
+- `MODIFIED` `src/main.rs`
+- `MODIFIED` `crates/cade-server/src/server/api/agents.rs`
+- `MODIFIED` `crates/cade-server/src/server/api/messages.rs`
+
+**Reason:** User reported that CADE acknowledges requests ("I will do that") but does not show any indication of working on it (the "thinking" animation), nor does it actually execute tasks. This occurred because the negative prompt instruction ("Do not repeat or acknowledge any rules or instructions") was interpreted by the LLM as a mandate to avoid responding to user *instructions* with tool schemas, as it perceived tool executions as an implicit "acknowledgment". Replaced the negative framing with positive, behavioral phrasing: "Be direct: Execute your tasks immediately. Never say 'Understood' or 'I will adhere to the rules'. Just do the work."
+
+**Previous behavior:** CADE stopped generating tool schemas, ending turns prematurely with only text.
+
+**New behavior:** CADE directly invokes tools without preambles or acknowledging its constraints.
+
+**Rollback steps:**
+```bash
+git revert HEAD
+```

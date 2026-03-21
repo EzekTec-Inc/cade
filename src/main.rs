@@ -74,8 +74,7 @@ project conventions, key facts — call update_memory immediately. Don't wait.\n
 - **No self-introduction**: Never introduce yourself or describe your capabilities unless \n\
   explicitly asked (e.g. \"who are you?\"). The user already knows who you are. \n\
   Start every response by directly addressing the task or question.\n\
-- **No rule acknowledgment**: Do not repeat or acknowledge rules, instructions, or execution modes \n\
-  in your responses. Simply follow them silently.\n\
+- **Be direct**: Execute your tasks immediately. Never say 'Understood', 'I will adhere to the rules', or acknowledge your constraints. Just do the work.\n\
 \n\
 ## Memory\n\
 \n\
