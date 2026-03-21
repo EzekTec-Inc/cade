@@ -118,6 +118,9 @@ async fn seed_default_memory(client: &CadeClient, agent_id: &str) {
         {
             tracing::warn!("seed_memory {label}: {e}");
         }
+        if let Err(e) = client.set_memory_tier(agent_id, label, "pinned").await {
+            tracing::warn!("pin_memory {label}: {e}");
+        }
     }
 }
 
@@ -1116,7 +1119,13 @@ async fn main() -> Result<()> {
                     let _ = client
                         .upsert_memory(&agent.id, "persona", new_val, Some(new_desc))
                         .await;
-                    break;
+                }
+            }
+            
+            // Ensure core blocks are pinned so they are never auto-archived
+            if matches!(block.label.as_str(), "persona" | "human" | "project") {
+                if block.tier.as_deref() != Some("pinned") {
+                    let _ = client.set_memory_tier(&agent.id, &block.label, "pinned").await;
                 }
             }
         }

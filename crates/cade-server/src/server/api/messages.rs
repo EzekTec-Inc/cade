@@ -34,11 +34,11 @@ const RECENT_WINDOW: usize = 40;
 /// They have already been processed; re-sending verbatim wastes tokens.
 const STALE_TOOL_RESULT_MAX_CHARS: usize = 300;
 /// Character budget for pinned memory blocks (always injected, highest priority).
-const PINNED_BUDGET: usize = 2_000;
+const PINNED_BUDGET: usize = 10_000;
 /// Character budget for short-term active memory blocks (full fidelity).
-const SHORT_BUDGET: usize = 4_500;
+const SHORT_BUDGET: usize = 40_000;
 /// Character budget for the long-term archived index (label + 80-char excerpt).
-const LONG_BUDGET: usize = 1_000;
+const LONG_BUDGET: usize = 5_000;
 /// Turns of inactivity before a short-term block is promoted to long-term.
 const STALE_THRESHOLD: i64 = 40;
 /// Awareness footer appended to system prompt when any memory tier is present.

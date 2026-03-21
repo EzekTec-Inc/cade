@@ -900,16 +900,12 @@ pub fn upsert_memory_block(
     let final_value: String = if let Some(limit) = effective_limit {
         let char_count = value.chars().count();
         if char_count > limit {
-            // Trim oldest (front) content — keep the tail (newest).
-            let start_byte = value
-                .char_indices()
-                .nth(char_count - limit)
-                .map(|(i, _)| i)
-                .unwrap_or(0);
-            format!("[…trimmed]\n{}", &value[start_byte..])
-        } else {
-            value.to_string()
+            return Err(crate::server::Error::custom(format!(
+                "Memory block '{}' exceeds character limit ({} > {}). Please edit or summarize to fit.",
+                label, char_count, limit
+            )));
         }
+        value.to_string()
     } else {
         value.to_string()
     };

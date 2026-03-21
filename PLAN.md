@@ -1165,3 +1165,34 @@ git revert HEAD
 ```bash
 git revert HEAD
 ```
+
+---
+
+## 2026-03-21T03:00:00Z — Fix Memory Corruption and Silenced Instructions
+
+**Summary:** Resolved multiple critical logic bugs that caused CADE to silently drop or corrupt its persistent memory blocks (e.g., `project`, `human`), leading to the agent "forgetting" instructions and conventions.
+
+**Files modified:**
+- `MODIFIED` `crates/cade-server/src/server/api/messages.rs`
+  - Increased `PINNED_BUDGET` from `2,000` to `10,000` chars.
+  - Increased `SHORT_BUDGET` from `4,500` to `40,000` chars.
+  - Increased `LONG_BUDGET` from `1,000` to `5,000` chars.
+- `MODIFIED` `crates/cade-server/src/server/storage/sqlite.rs`
+  - In `upsert_memory_block`, replaced the dangerous logic that silently stripped characters from the start of a memory block when it exceeded its limit. It now returns an explicit error forcing the agent to intelligently summarize or condense the block instead of corrupting its data structure.
+- `MODIFIED` `src/main.rs`
+  - Updated `seed_default_memory` to explicitly mark `persona`, `human`, and `project` blocks as `pinned`.
+  - Added a startup migration block to automatically upgrade existing `persona`, `human`, and `project` blocks from `short` to `pinned`.
+
+**Reason:** User reported that "CADE's memory is corrupted" and it "is no longer able to follow user's instructions". Deep investigation revealed three compounding issues:
+1. `SHORT_BUDGET` (4,500) was smaller than the `project` block's single limit (5,000). When `project`, `persona`, and `human` combined exceeded 4,500 characters, the context builder silently dropped them entirely from the prompt.
+2. The core memory blocks were defaulting to the `short` tier. Any block in the `short` tier that isn't updated for 40 turns gets auto-archived to the `long` tier, at which point the agent only sees the first 80 characters of the block. CADE was literally forgetting the project guidelines after 40 messages.
+3. When memory blocks hit their character limit, `upsert_memory_block` was silently truncating the oldest part (the top) of the markdown file. This completely corrupted the block formatting and dropped the most important header instructions.
+
+**Previous behavior:** Memory was auto-archived after 40 turns, silently dropped if it exceeded 4.5k chars, and silently decapitated if it grew too large.
+
+**New behavior:** Core memory blocks are `pinned` (never archived), budgets are aligned with modern context windows (40k chars), and over-limit updates return a hard error forcing the agent to synthesize instead of truncating.
+
+**Rollback steps:**
+```bash
+git revert HEAD
+```
