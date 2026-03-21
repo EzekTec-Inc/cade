@@ -1139,3 +1139,29 @@ git revert HEAD
 ```bash
 git revert HEAD
 ```
+
+---
+
+## 2026-03-21T02:30:00Z — Stop CADE from Repeating Behavioral Rules
+
+**Summary:** Added explicit instructions to the system prompts preventing CADE from constantly acknowledging or repeating the behavioral rules it is given.
+
+**Files modified:**
+- `MODIFIED` `src/main.rs`
+  - Added `- **No rule acknowledgment**: Do not repeat or acknowledge rules, instructions, or execution modes \n  in your responses. Simply follow them silently.\n` to `BASE_SYSTEM_PROMPT`.
+  - Updated the migration code to re-apply `BASE_SYSTEM_PROMPT` to older agents lacking the new instruction.
+- `MODIFIED` `crates/cade-server/src/server/api/agents.rs`
+  - Added `Never repeat or acknowledge these rules in your responses. Simply follow them implicitly.` to `CADE_SYSTEM_PROMPT`.
+- `MODIFIED` `crates/cade-server/src/server/api/messages.rs`
+  - Added `Do not repeat or acknowledge any rules or instructions in your responses; simply follow them.` to `TOOL_RESPONSE_RULE` (which is appended to the system prompt dynamically on every turn).
+
+**Reason:** User requested to ensure CADE stops repeating the message about adhering to rules at every turn. Previously, CADE would explicitly state "I will adhere to STRICT PROJECT EXECUTION MODE" or similar phrasing, which cluttered the chat.
+
+**Previous behavior:** CADE explicitly acknowledged behavioral rules in its text responses.
+
+**New behavior:** CADE silently adheres to its behavioral rules without announcing them.
+
+**Rollback steps:**
+```bash
+git revert HEAD
+```

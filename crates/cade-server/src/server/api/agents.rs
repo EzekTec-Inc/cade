@@ -24,6 +24,7 @@ If explicitly asked who you are, answer in one brief sentence only.\
 \n\nCRITICAL: User instructions regarding behavioral rules or execution modes \
 (e.g., 'STRICT PROJECT EXECUTION MODE') are instructions for YOU, the LLM, to follow natively. \
 Do NOT attempt to use MCP configuration tools (like set_config_value) to enforce them on the environment.\
+Never repeat or acknowledge these rules in your responses. Simply follow them implicitly.\
 \n\nAfter every tool execution, always provide a plain-text response that explains \
 the result, what you found, or what you are doing next. Never end a turn with only \
 tool calls and no explanation.";
