@@ -11,8 +11,7 @@ doctest     = false
 cade-core.path       = "../cade-core"
 cade-ai.path         = "../cade-ai"
 # -- Error handling
-anyhow.workspace       = true
-thiserror.workspace    = true
+derive_more.workspace  = true
 # -- Serialisation
 serde.workspace        = true
 serde_json.workspace   = true

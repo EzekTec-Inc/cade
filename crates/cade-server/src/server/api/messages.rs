@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::server::Result;
 use axum::response::sse::Event;
 use axum::{
     Json,
@@ -185,7 +185,7 @@ async fn summarize_for_compaction(
     state: &AppState,
     model: &str,
     chunk: &[LlmMessage],
-) -> Result<String, String> {
+) -> core::result::Result<String, String> {
     // Format the chunk as a readable transcript for the summarizer.
     let mut transcript = String::new();
     for msg in chunk {
@@ -279,7 +279,7 @@ async fn build_context(
     agent_id: &str,
     conversation_id: Option<&str>,
     is_tool_return: bool,
-) -> Result<(String, Vec<LlmMessage>, Vec<Value>), String> {
+) -> core::result::Result<(String, Vec<LlmMessage>, Vec<Value>), String> {
     let agent = sqlite::get_agent(&state.db, agent_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
@@ -914,7 +914,7 @@ fn resolve_conversation(
     state: &AppState,
     agent_id: &str,
     body: &Value,
-) -> Result<Option<String>, axum::response::Response> {
+) -> core::result::Result<Option<String>, axum::response::Response> {
     let conv_id = body["conversation_id"].as_str().filter(|s| !s.is_empty());
     match conv_id {
         None => Ok(None),

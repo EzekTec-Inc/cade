@@ -8,8 +8,6 @@ doctest     = false
 
 [dependencies]
 # -- Error handling
-anyhow.workspace     = true
-thiserror.workspace  = true
 # -- Others
 derive_more.workspace = true
 # -- Serialisation

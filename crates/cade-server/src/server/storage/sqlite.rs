@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::server::{Error, Result};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use std::sync::{Arc, Mutex};
@@ -23,7 +23,7 @@ pub fn open(path: &str) -> Result<Db> {
             std::fs::create_dir_all(parent)?;
         }
     let conn = Connection::open(path)
-        .with_context(|| format!("open SQLite at {path}"))?;
+        .map_err(|e| crate::server::error::Error::custom(format!("open SQLite at {path}: {e}")))?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     apply_schema(&conn)?;
     run_migrations(&conn)?;

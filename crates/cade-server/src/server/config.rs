@@ -25,16 +25,16 @@ pub enum LlmProviderKind {
 }
 
 impl std::str::FromStr for LlmProviderKind {
-    type Err = anyhow::Error;
+    type Err = crate::server::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "anthropic" | "claude" => Ok(Self::Anthropic),
             "openai" | "openai-compatible" => Ok(Self::OpenAI),
             "gemini" | "google" => Ok(Self::Gemini),
             "ollama" | "local" => Ok(Self::Ollama),
-            other => Err(anyhow::anyhow!(
+            other => Err(crate::server::Error::custom(format!(
                 "Unknown LLM provider '{other}'. Valid: anthropic, openai, gemini, ollama"
-            )),
+            ))),
         }
     }
 }
@@ -119,11 +119,11 @@ pub fn detect_provider() -> (LlmProviderKind, String) {
 }
 
 impl ServerConfig {
-    pub fn from_env() -> anyhow::Result<Self> {
+    pub fn from_env() -> crate::server::Result<Self> {
         Self::from_env_with_port(None)
     }
 
-    pub fn from_env_with_port(port_override: Option<u16>) -> anyhow::Result<Self> {
+    pub fn from_env_with_port(port_override: Option<u16>) -> crate::server::Result<Self> {
         let port: u16 = port_override
             .or_else(|| {
                 std::env::var("CADE_SERVER_PORT")

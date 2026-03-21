@@ -13,7 +13,6 @@ cade-agent.path   = "../cade-agent"
 cade-ai.path      = "../cade-ai"
 cade-tui.path     = "../cade-tui"
 # -- Error handling
-anyhow.workspace       = true
 # -- Others
 derive_more.workspace  = true
 # -- Serialisation
