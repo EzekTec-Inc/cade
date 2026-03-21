@@ -2,10 +2,8 @@
 
 pub mod sqlite;
 pub use sqlite::{
-    Db, AgentRow, MessageRow, ToolRow, open,
-    pending_tool_results, update_agent_model,
-    attach_tools_to_agent, get_agent_tool_ids,
-    clear_messages, search_messages,
+    AgentRow, Db, MessageRow, ToolRow, attach_tools_to_agent, clear_messages, get_agent_tool_ids,
+    get_tool_id_by_name, last_assistant_message, open, pending_tool_results, search_messages, update_agent_model,
 };
 
 // endregion: --- Modules

@@ -129,7 +129,10 @@ impl Args {
             if s.is_empty() {
                 vec![]
             } else {
-                s.split(',').map(|n| n.trim().to_string()).filter(|n| !n.is_empty()).collect()
+                s.split(',')
+                    .map(|n| n.trim().to_string())
+                    .filter(|n| !n.is_empty())
+                    .collect()
             }
         })
     }

@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::{Error, Result};
 use base64::Engine;
 use std::io::Cursor;
 
@@ -17,7 +17,9 @@ impl ScreenCapture {
         monitor_index: Option<usize>,
         window_title: Option<&str>,
     ) -> Result<String> {
-        let (b64, _, _) = self.capture_with_dimensions(monitor_index, window_title).await?;
+        let (b64, _, _) = self
+            .capture_with_dimensions(monitor_index, window_title)
+            .await?;
         Ok(b64)
     }
 
@@ -28,18 +30,19 @@ impl ScreenCapture {
         window_title: Option<&str>,
     ) -> Result<(String, u32, u32)> {
         let mut image = if let Some(title) = window_title {
-            let windows = xcap::Window::all().context("list windows")?;
+            let windows = xcap::Window::all()?;
             let window = windows
                 .into_iter()
                 .find(|w| w.title().ok().as_deref() == Some(title))
-                .with_context(|| format!("no window with title '{title}'"))?;
-            window.capture_image().context("capture window")?
+                .ok_or_else(|| Error::custom(format!("no window with title '{title}'")))?;
+            window.capture_image()?
         } else {
-            let monitors = xcap::Monitor::all().context("list monitors")?;
+            let monitors = xcap::Monitor::all()?;
             let idx = monitor_index.unwrap_or(0);
-            let monitor = monitors.get(idx)
-                .with_context(|| format!("monitor {idx} not found ({} available)", monitors.len()))?;
-            monitor.capture_image().context("capture monitor")?
+            let monitor = monitors.get(idx).ok_or_else(|| {
+                Error::custom(format!("monitor {idx} not found ({} available)", monitors.len()))
+            })?;
+            monitor.capture_image()?
         };
 
         // Resize to max 768px wide (reduces token cost for vision models)
@@ -59,14 +62,14 @@ impl ScreenCapture {
         let mut bytes: Vec<u8> = Vec::new();
         image
             .write_to(&mut Cursor::new(&mut bytes), xcap::image::ImageFormat::Png)
-            .context("encode PNG")?;
+            ?;
 
         Ok((base64::prelude::BASE64_STANDARD.encode(bytes), w, h))
     }
 
     /// List all visible window titles
     pub async fn list_windows(&self) -> Result<Vec<String>> {
-        let windows = xcap::Window::all().context("list windows")?;
+        let windows = xcap::Window::all()?;
         let titles = windows
             .iter()
             .filter(|w| !w.is_minimized().unwrap_or(true))

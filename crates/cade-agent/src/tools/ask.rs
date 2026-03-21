@@ -4,8 +4,8 @@
 /// The tool itself never executes via `dispatch()`.  It is intercepted in
 /// `execute_tool()` before the normal permission/hook pipeline, handled by
 /// `Repl::handle_ask_user_question()` which drives the interactive TUI.
-use anyhow::{anyhow, Result};
-use serde_json::{json, Value};
+use crate::Result;
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 // -- Data types
@@ -103,53 +103,61 @@ impl AskUserQuestionTool {
     pub fn parse_questions(args: &Value) -> Result<Vec<AskQuestion>> {
         let arr = args["questions"]
             .as_array()
-            .ok_or_else(|| anyhow!("'questions' must be an array"))?;
+            .ok_or_else(|| crate::Error::custom(format!("'questions' must be an array")))?;
 
         if arr.is_empty() || arr.len() > 4 {
-            return Err(anyhow!("'questions' must contain 1 to 4 items (got {})", arr.len()));
+            return Err(crate::Error::custom(format!(
+                "'questions' must contain 1 to 4 items (got {})",
+                arr.len()
+            )));
         }
 
         let mut questions = Vec::with_capacity(arr.len());
         for (qi, item) in arr.iter().enumerate() {
             let question = item["question"]
                 .as_str()
-                .ok_or_else(|| anyhow!("questions[{qi}].question must be a string"))?
+                .ok_or_else(|| crate::Error::custom(format!("questions[{qi}].question must be a string")))?
                 .to_string();
 
             let header = item["header"]
                 .as_str()
-                .ok_or_else(|| anyhow!("questions[{qi}].header must be a string"))?
+                .ok_or_else(|| crate::Error::custom(format!("questions[{qi}].header must be a string")))?
                 .to_string();
 
-            let multi_select = item["multiSelect"]
-                .as_bool()
-                .unwrap_or(false);
+            let multi_select = item["multiSelect"].as_bool().unwrap_or(false);
 
             let opts_arr = item["options"]
                 .as_array()
-                .ok_or_else(|| anyhow!("questions[{qi}].options must be an array"))?;
+                .ok_or_else(|| crate::Error::custom(format!("questions[{qi}].options must be an array")))?;
 
             if opts_arr.len() < 2 || opts_arr.len() > 4 {
-                return Err(anyhow!(
+                return Err(crate::Error::custom(format!(
                     "questions[{qi}].options must have 2–4 items (got {})",
                     opts_arr.len()
-                ));
+                )));
             }
 
             let mut options = Vec::with_capacity(opts_arr.len());
             for (oi, opt) in opts_arr.iter().enumerate() {
                 let label = opt["label"]
                     .as_str()
-                    .ok_or_else(|| anyhow!("questions[{qi}].options[{oi}].label must be a string"))?
+                    .ok_or_else(|| crate::Error::custom(format!("questions[{qi}].options[{oi}].label must be a string")))?
                     .to_string();
                 let description = opt["description"]
                     .as_str()
-                    .ok_or_else(|| anyhow!("questions[{qi}].options[{oi}].description must be a string"))?
+                    .ok_or_else(|| {
+                        crate::Error::custom(format!("questions[{qi}].options[{oi}].description must be a string"))
+                    })?
                     .to_string();
                 options.push(AskOption { label, description });
             }
 
-            questions.push(AskQuestion { question, header, options, multi_select });
+            questions.push(AskQuestion {
+                question,
+                header,
+                options,
+                multi_select,
+            });
         }
 
         Ok(questions)

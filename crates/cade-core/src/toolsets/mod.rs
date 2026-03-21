@@ -33,25 +33,25 @@ impl Toolset {
     pub fn display_name(&self) -> &'static str {
         match self {
             Self::Default => "Default (string-replace, Claude/Anthropic)",
-            Self::Codex   => "Codex (patch-based, OpenAI/GPT)",
-            Self::Gemini  => "Gemini (string-replace, Google)",
+            Self::Codex => "Codex (patch-based, OpenAI/GPT)",
+            Self::Gemini => "Gemini (string-replace, Google)",
         }
     }
 
     pub fn short_name(&self) -> &'static str {
         match self {
             Self::Default => "default",
-            Self::Codex   => "codex",
-            Self::Gemini  => "gemini",
+            Self::Codex => "codex",
+            Self::Gemini => "gemini",
         }
     }
 
     pub fn from_str(s: &str) -> Option<Self> {
         match s.to_lowercase().as_str() {
             "default" | "claude" | "anthropic" => Some(Self::Default),
-            "codex" | "openai" | "gpt"         => Some(Self::Codex),
-            "gemini" | "google"                 => Some(Self::Gemini),
-            _                                   => None,
+            "codex" | "openai" | "gpt" => Some(Self::Codex),
+            "gemini" | "google" => Some(Self::Gemini),
+            _ => None,
         }
     }
 
@@ -60,7 +60,7 @@ impl Toolset {
         match self {
             Self::Codex => "apply_patch",
             Self::Gemini => "Replace",
-            _           => "edit_file",
+            _ => "edit_file",
         }
     }
 
@@ -94,7 +94,7 @@ impl Toolset {
             Self::Codex => &[
                 "bash",
                 "read_file",
-                "apply_patch",   // replaces edit_file + write_file for Codex
+                "apply_patch", // replaces edit_file + write_file for Codex
                 "grep",
                 "glob",
                 "desktop_screenshot",
@@ -154,8 +154,14 @@ mod tests {
 
     #[test]
     fn for_model_claude() {
-        assert_eq!(Toolset::for_model("claude-sonnet-4-5-20250929"), Toolset::Default);
-        assert_eq!(Toolset::for_model("claude-3-opus-20240229"), Toolset::Default);
+        assert_eq!(
+            Toolset::for_model("claude-sonnet-4-5-20250929"),
+            Toolset::Default
+        );
+        assert_eq!(
+            Toolset::for_model("claude-3-opus-20240229"),
+            Toolset::Default
+        );
     }
 
     #[test]
@@ -242,8 +248,12 @@ mod tests {
             let core = ts.core_tool_names();
             let meta = ts.meta_tool_names();
             assert_eq!(all.len(), core.len() + meta.len());
-            for name in core { assert!(all.contains(name)); }
-            for name in meta { assert!(all.contains(name)); }
+            for name in core {
+                assert!(all.contains(name));
+            }
+            for name in meta {
+                assert!(all.contains(name));
+            }
         }
     }
 

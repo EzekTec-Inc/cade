@@ -10,6 +10,8 @@ doctest = false
 # -- Error handling
 anyhow.workspace       = true
 thiserror.workspace    = true
+# -- Others
+derive_more.workspace  = true
 # -- Serialisation
 serde.workspace        = true
 serde_json.workspace   = true
@@ -29,3 +31,4 @@ uuid.workspace         = true
 
 [lints.rust]
 unsafe_code = "forbid"
+# unused = { level = "allow", priority = -1 } # For exploratory dev.

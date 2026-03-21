@@ -1,13 +1,16 @@
-use anyhow::Result;
+use crate::Result;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{bare_model, provider_error, retry_with_backoff, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
+use super::{
+    CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
+    bare_model, provider_error, retry_with_backoff,
+};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const MODELS_URL: &str = "https://api.anthropic.com/v1/models?limit=1000";
@@ -24,18 +27,22 @@ pub async fn fetch_anthropic_models(api_key: &str) -> Vec<(String, String)> {
         .header("anthropic-version", ANTHROPIC_VERSION)
         .send();
     let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
-        Ok(Ok(r))  => r,
+        Ok(Ok(r)) => r,
         Ok(Err(_)) | Err(_) => return vec![],
     };
-    if !resp.status().is_success() { return vec![]; }
-    let Ok(body) = resp.json::<Value>().await else { return vec![]; };
+    if !resp.status().is_success() {
+        return vec![];
+    }
+    let Ok(body) = resp.json::<Value>().await else {
+        return vec![];
+    };
 
     body["data"]
         .as_array()
         .map(|arr| {
             arr.iter()
                 .filter_map(|m| {
-                    let id   = m["id"].as_str()?;
+                    let id = m["id"].as_str()?;
                     let name = m["display_name"].as_str().unwrap_or(id);
                     Some((id.to_string(), name.to_string()))
                 })
@@ -53,19 +60,24 @@ pub struct AnthropicProvider {
 
 impl AnthropicProvider {
     pub fn new(api_key: String) -> Self {
-        Self { 
+        Self {
             client: Client::builder()
                 .tcp_keepalive(std::time::Duration::from_secs(60))
                 .build()
-                .unwrap_or_else(|_| Client::new()), 
-            api_key 
+                .unwrap_or_else(|_| Client::new()),
+            api_key,
         }
     }
 
     fn build_body(&self, req: &CompletionRequest, stream: bool) -> Value {
         // Separate system messages from the conversation
-        let (system, messages): (Vec<_>, Vec<_>) = req.messages.iter().partition(|m| m.role == "system");
-        let system_text: String = system.iter().map(|m| m.content.as_str()).collect::<Vec<_>>().join("\n\n");
+        let (system, messages): (Vec<_>, Vec<_>) =
+            req.messages.iter().partition(|m| m.role == "system");
+        let system_text: String = system
+            .iter()
+            .map(|m| m.content.as_str())
+            .collect::<Vec<_>>()
+            .join("\n\n");
 
         // Anthropic rule: all tool_result blocks for a given assistant turn MUST be
         // in ONE user message. Consecutive "tool" messages must be merged.
@@ -89,12 +101,20 @@ impl AnthropicProvider {
                     anthropic_messages.push(json!({ "role": "user", "content": tool_results }));
                 }
                 "assistant" if m.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()) => {
-                    let tool_uses: Vec<Value> = m.tool_calls.as_ref().unwrap().iter().map(|tc| json!({
-                        "type": "tool_use",
-                        "id": tc.id,
-                        "name": tc.name,
-                        "input": tc.arguments
-                    })).collect();
+                    let tool_uses: Vec<Value> = m
+                        .tool_calls
+                        .as_deref()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|tc| {
+                            json!({
+                                "type": "tool_use",
+                                "id": tc.id,
+                                "name": tc.name,
+                                "input": tc.arguments
+                            })
+                        })
+                        .collect();
                     let mut blocks = tool_uses;
                     if !m.content.is_empty() {
                         blocks.insert(0, json!({"type": "text", "text": m.content}));
@@ -106,22 +126,28 @@ impl AnthropicProvider {
                     // When images are attached, build a multi-part content array.
                     // Anthropic format: [{"type":"image","source":{…}}, {"type":"text","text":"…"}]
                     if let Some(images) = &m.images
-                        && !images.is_empty() {
-                            let mut blocks: Vec<Value> = images.iter().map(|img| json!({
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": img.media_type,
-                                    "data": img.data
-                                }
-                            })).collect();
-                            if !m.content.is_empty() {
-                                blocks.push(json!({"type": "text", "text": m.content}));
-                            }
-                            anthropic_messages.push(json!({"role": m.role, "content": blocks}));
-                            i += 1;
-                            continue;
+                        && !images.is_empty()
+                    {
+                        let mut blocks: Vec<Value> = images
+                            .iter()
+                            .map(|img| {
+                                json!({
+                                    "type": "image",
+                                    "source": {
+                                        "type": "base64",
+                                        "media_type": img.media_type,
+                                        "data": img.data
+                                    }
+                                })
+                            })
+                            .collect();
+                        if !m.content.is_empty() {
+                            blocks.push(json!({"type": "text", "text": m.content}));
                         }
+                        anthropic_messages.push(json!({"role": m.role, "content": blocks}));
+                        i += 1;
+                        continue;
+                    }
                     anthropic_messages.push(json!({"role": m.role, "content": m.content}));
                     i += 1;
                 }
@@ -147,14 +173,26 @@ impl AnthropicProvider {
 
         // Build tools array in Anthropic format, injecting cache_control on
         // the last entry so the full tools prefix is cached.
-        let mut tools: Vec<Value> = req.tools.iter().map(|schema| {
-            let params = schema.get("parameters").or_else(|| schema.get("input_schema")).cloned().unwrap_or(json!({}));
-            json!({
-                "name": schema["name"],
-                "description": schema["description"],
-                "input_schema": params
+        let mut tools: Vec<Value> = req
+            .tools
+            .iter()
+            .map(|schema| {
+                // Accept either "parameters" or "input_schema"; filter out null
+                // values (can occur when schemas with the wrong key were stored in
+                // the DB) and fall back to a valid empty object schema.
+                let params = schema
+                    .get("parameters")
+                    .filter(|v| !v.is_null())
+                    .or_else(|| schema.get("input_schema").filter(|v| !v.is_null()))
+                    .cloned()
+                    .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
+                json!({
+                    "name": schema["name"],
+                    "description": schema["description"],
+                    "input_schema": params
+                })
             })
-        }).collect();
+            .collect();
 
         // Mark the last tool with cache_control to cache the entire tools list.
         if let Some(last) = tools.last_mut() {
@@ -169,14 +207,22 @@ impl AnthropicProvider {
         });
 
         if let Some(effort) = &req.reasoning_effort {
+            // Anthropic requires budget_tokens ≤ max_tokens. The max_tokens
+            // field is shared between reasoning and output, so we scale the
+            // reasoning budget relative to max_tokens.
+            let effective_max = req.max_tokens.max(4096);
             let budget = match effort.as_str() {
-                "low" => 1024,
-                "medium" => 4096,
-                "high" => 16384,
-                "xhigh" => 32768,
+                "low" => (effective_max / 4).max(1024), // 25% of max_tokens
+                "medium" => (effective_max / 2).max(2048), // 50%
+                "high" => (effective_max * 3 / 4).max(4096), // 75%
+                "xhigh" => effective_max.saturating_sub(1024), // nearly all
                 _ => 0,
             };
             if budget > 0 {
+                // Ensure max_tokens is at least budget + 1024 so the model
+                // still has room for visible output after reasoning.
+                let adjusted_max = effective_max.max(budget + 1024);
+                body["max_tokens"] = json!(adjusted_max);
                 body["thinking"] = json!({
                     "type": "enabled",
                     "budget_tokens": budget
@@ -199,7 +245,10 @@ impl AnthropicProvider {
     }
 
     fn parse_response(body: &Value) -> CompletionResponse {
-        let finish_reason = body["stop_reason"].as_str().unwrap_or("end_turn").to_string();
+        let finish_reason = body["stop_reason"]
+            .as_str()
+            .unwrap_or("end_turn")
+            .to_string();
         let mut content = None;
         let mut tool_calls = Vec::new();
 
@@ -211,9 +260,9 @@ impl AnthropicProvider {
                     }
                     "tool_use" => {
                         tool_calls.push(LlmToolCall {
-                            id:                block["id"].as_str().unwrap_or("").to_string(),
-                            name:              block["name"].as_str().unwrap_or("").to_string(),
-                            arguments:         block["input"].clone(),
+                            id: block["id"].as_str().unwrap_or("").to_string(),
+                            name: block["name"].as_str().unwrap_or("").to_string(),
+                            arguments: block["input"].clone(),
                             thought_signature: None,
                         });
                     }
@@ -222,7 +271,11 @@ impl AnthropicProvider {
             }
         }
 
-        CompletionResponse { content, tool_calls, finish_reason }
+        CompletionResponse {
+            content,
+            tool_calls,
+            finish_reason,
+        }
     }
 }
 
@@ -230,61 +283,73 @@ impl AnthropicProvider {
 impl LlmProvider for AnthropicProvider {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
         let body = self.build_body(req, false);
-        retry_with_backoff("Anthropic::complete", 3, std::time::Duration::from_secs(1), |_| {
-            let client  = self.client.clone();
-            let api_key = self.api_key.clone();
-            let body    = body.clone();
-            async move {
-                let resp = client
-                    .post(API_URL)
-                    .header("x-api-key", &api_key)
-                    .header("anthropic-version", "2023-06-01")
-                    .header("anthropic-beta", "prompt-caching-2024-07-31")
-                    .header("content-type", "application/json")
-                    .json(&body)
-                    .send()
-                    .await?;
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    let text = resp.text().await.unwrap_or_default();
-                    return Err(provider_error("Anthropic", status, &text));
+        retry_with_backoff(
+            "Anthropic::complete",
+            3,
+            std::time::Duration::from_secs(1),
+            |_| {
+                let client = self.client.clone();
+                let api_key = self.api_key.clone();
+                let body = body.clone();
+                async move {
+                    let resp = client
+                        .post(API_URL)
+                        .header("x-api-key", &api_key)
+                        .header("anthropic-version", ANTHROPIC_VERSION)
+                        .header("anthropic-beta", "prompt-caching-2024-07-31")
+                        .header("content-type", "application/json")
+                        .json(&body)
+                        .send()
+                        .await?;
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(provider_error("Anthropic", status, &text));
+                    }
+                    let json: serde_json::Value = resp.json().await?;
+                    Ok(Self::parse_response(&json))
                 }
-                let json: serde_json::Value = resp.json().await?;
-                Ok(Self::parse_response(&json))
-            }
-        }).await
+            },
+        )
+        .await
     }
 
     async fn stream(
         &self,
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
-        let body       = self.build_body(req, true);
-        let req_model  = req.model.clone();   // extracted before async_stream to avoid lifetime capture
+        let body = self.build_body(req, true);
+        let req_model = req.model.clone(); // extracted before async_stream to avoid lifetime capture
         // Retry the HTTP handshake only; the byte stream itself is not retried
         // (partial streams can't be safely resumed without re-sending the request).
-        let resp = retry_with_backoff("Anthropic::stream", 3, std::time::Duration::from_secs(1), |_| {
-            let client  = self.client.clone();
-            let api_key = self.api_key.clone();
-            let body    = body.clone();
-            async move {
-                let resp = client
-                    .post(API_URL)
-                    .header("x-api-key", &api_key)
-                    .header("anthropic-version", "2023-06-01")
-                    .header("anthropic-beta", "prompt-caching-2024-07-31")
-                    .header("content-type", "application/json")
-                    .json(&body)
-                    .send()
-                    .await?;
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    let text = resp.text().await.unwrap_or_default();
-                    return Err(provider_error("Anthropic", status, &text));
+        let resp = retry_with_backoff(
+            "Anthropic::stream",
+            3,
+            std::time::Duration::from_secs(1),
+            |_| {
+                let client = self.client.clone();
+                let api_key = self.api_key.clone();
+                let body = body.clone();
+                async move {
+                    let resp = client
+                        .post(API_URL)
+                        .header("x-api-key", &api_key)
+                        .header("anthropic-version", ANTHROPIC_VERSION)
+                        .header("anthropic-beta", "prompt-caching-2024-07-31")
+                        .header("content-type", "application/json")
+                        .json(&body)
+                        .send()
+                        .await?;
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(provider_error("Anthropic", status, &text));
+                    }
+                    Ok(resp)
                 }
-                Ok(resp)
-            }
-        }).await?;
+            },
+        )
+        .await?;
 
         let mut byte_stream = resp.bytes_stream();
 
@@ -305,7 +370,7 @@ impl LlmProvider for AnthropicProvider {
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = match chunk {
                     Ok(c) => c,
-                    Err(e) => { yield Err(anyhow::anyhow!("stream error: {e}")); break; }
+                    Err(e) => { yield Err(crate::Error::custom(format!("stream error: {e}"))); break; }
                 };
                 buf.push_str(&String::from_utf8_lossy(&chunk));
 
@@ -409,6 +474,9 @@ impl LlmProvider for AnthropicProvider {
                                     model: req_model.clone(),
                                 }));
                             }
+                            if let Some(reason) = event["stop_reason"].as_str() {
+                                yield Ok(StreamChunk::FinishReason(reason.to_string()));
+                            }
                             yield Ok(StreamChunk::Done);
                             break;
                         }
@@ -506,7 +574,8 @@ mod tests {
     }
 
     #[test]
-    fn build_body_includes_model_and_system() {
+    fn build_body_includes_model_and_system() -> Result<()> {
+        // -- Setup & Fixtures
         let provider = AnthropicProvider::new("sk-test".into());
         let req = CompletionRequest {
             model: "claude-sonnet-4-5-20250929".into(),
@@ -531,31 +600,32 @@ mod tests {
             reasoning_effort: None,
         };
         let body = provider.build_body(&req, false);
+        // -- Check
         assert_eq!(body["model"], "claude-sonnet-4-5-20250929");
-        assert!(!body["stream"].as_bool().unwrap());
-        // System prompt should be a structured block
+        let stream = body["stream"].as_bool().ok_or("Should have stream bool")?;
+        assert!(!stream);
         assert!(body["system"].is_array());
         assert_eq!(body["system"][0]["text"], "You are a helpful assistant.");
-        // Messages should only contain user (system is separated)
-        let msgs = body["messages"].as_array().unwrap();
+        let msgs = body["messages"].as_array().ok_or("Should have messages array")?;
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0]["role"], "user");
+
+        Ok(())
     }
 
     #[test]
-    fn build_body_with_tools_adds_cache_control() {
+    fn build_body_with_tools_adds_cache_control() -> Result<()> {
+        // -- Setup & Fixtures
         let provider = AnthropicProvider::new("sk-test".into());
         let req = CompletionRequest {
             model: "claude-sonnet-4-5-20250929".into(),
-            messages: vec![
-                super::super::LlmMessage {
-                    role: "user".into(),
-                    content: "Hello".into(),
-                    tool_call_id: None,
-                    tool_calls: None,
-                    images: None,
-                },
-            ],
+            messages: vec![super::super::LlmMessage {
+                role: "user".into(),
+                content: "Hello".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+            }],
             tools: vec![json!({
                 "name": "bash",
                 "description": "Run command",
@@ -565,10 +635,12 @@ mod tests {
             reasoning_effort: None,
         };
         let body = provider.build_body(&req, false);
-        let tools = body["tools"].as_array().unwrap();
+        // -- Check
+        let tools = body["tools"].as_array().ok_or("Should have tools array")?;
         assert_eq!(tools.len(), 1);
-        // Last tool should have cache_control
         assert!(tools[0]["cache_control"].is_object());
+
+        Ok(())
     }
 
     #[test]
@@ -576,15 +648,13 @@ mod tests {
         let provider = AnthropicProvider::new("sk-test".into());
         let req = CompletionRequest {
             model: "claude-sonnet-4-5-20250929".into(),
-            messages: vec![
-                super::super::LlmMessage {
-                    role: "user".into(),
-                    content: "Think hard".into(),
-                    tool_call_id: None,
-                    tool_calls: None,
-                    images: None,
-                },
-            ],
+            messages: vec![super::super::LlmMessage {
+                role: "user".into(),
+                content: "Think hard".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+            }],
             tools: vec![],
             max_tokens: 8192,
             reasoning_effort: Some("high".into()),
@@ -592,11 +662,13 @@ mod tests {
         let body = provider.build_body(&req, false);
         assert!(body["thinking"].is_object());
         assert_eq!(body["thinking"]["type"], "enabled");
-        assert_eq!(body["thinking"]["budget_tokens"], 16384);
+        // "high" = 75% of max_tokens (8192) = 6144, clamped to .max(4096)
+        assert_eq!(body["thinking"]["budget_tokens"], 6144);
     }
 
     #[test]
-    fn build_body_merges_consecutive_tool_results() {
+    fn build_body_merges_consecutive_tool_results() -> Result<()> {
+        // -- Setup & Fixtures
         let provider = AnthropicProvider::new("sk-test".into());
         let req = CompletionRequest {
             model: "claude-sonnet-4-5-20250929".into(),
@@ -613,8 +685,18 @@ mod tests {
                     content: "".into(),
                     tool_call_id: None,
                     tool_calls: Some(vec![
-                        super::super::LlmToolCall { id: "t1".into(), name: "bash".into(), arguments: json!({}), thought_signature: None },
-                        super::super::LlmToolCall { id: "t2".into(), name: "bash".into(), arguments: json!({}), thought_signature: None },
+                        super::super::LlmToolCall {
+                            id: "t1".into(),
+                            name: "bash".into(),
+                            arguments: json!({}),
+                            thought_signature: None,
+                        },
+                        super::super::LlmToolCall {
+                            id: "t2".into(),
+                            name: "bash".into(),
+                            arguments: json!({}),
+                            thought_signature: None,
+                        },
                     ]),
                     images: None,
                 },
@@ -638,13 +720,14 @@ mod tests {
             reasoning_effort: None,
         };
         let body = provider.build_body(&req, false);
-        let msgs = body["messages"].as_array().unwrap();
-        // user, assistant (with tool_use), user (merged tool_results)
+        // -- Check
+        let msgs = body["messages"].as_array().ok_or("Should have messages array")?;
         assert_eq!(msgs.len(), 3);
-        // Third message should contain both tool results in one user message
-        let tool_results = msgs[2]["content"].as_array().unwrap();
+        let tool_results = msgs[2]["content"].as_array().ok_or("Should have content array")?;
         assert_eq!(tool_results.len(), 2);
         assert_eq!(tool_results[0]["type"], "tool_result");
         assert_eq!(tool_results[1]["type"], "tool_result");
+
+        Ok(())
     }
 }

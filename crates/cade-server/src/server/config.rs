@@ -1,5 +1,5 @@
-use std::net::SocketAddr;
 use cade_ai::AiConfig;
+use std::net::SocketAddr;
 
 /// Runtime configuration for cade-server, resolved from env vars.
 #[derive(Debug, Clone)]
@@ -43,9 +43,9 @@ impl std::fmt::Display for LlmProviderKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Anthropic => write!(f, "anthropic"),
-            Self::OpenAI    => write!(f, "openai"),
-            Self::Gemini    => write!(f, "gemini"),
-            Self::Ollama    => write!(f, "ollama"),
+            Self::OpenAI => write!(f, "openai"),
+            Self::Gemini => write!(f, "gemini"),
+            Self::Ollama => write!(f, "ollama"),
         }
     }
 }
@@ -54,9 +54,9 @@ impl std::fmt::Display for LlmProviderKind {
 pub fn default_model_for(provider: &LlmProviderKind) -> &'static str {
     match provider {
         LlmProviderKind::Anthropic => "claude-opus-4-5",
-        LlmProviderKind::OpenAI    => "gpt-4o",
-        LlmProviderKind::Gemini    => "gemini-2.0-flash",
-        LlmProviderKind::Ollama    => "llama3.2",   // most likely installed; user can override
+        LlmProviderKind::OpenAI => "gpt-4o",
+        LlmProviderKind::Gemini => "gemini-2.0-flash",
+        LlmProviderKind::Ollama => "llama3.2", // most likely installed; user can override
     }
 }
 
@@ -66,18 +66,40 @@ pub fn default_model_for(provider: &LlmProviderKind) -> &'static str {
 pub fn detect_provider() -> (LlmProviderKind, String) {
     // User-explicit override takes highest priority
     if let Ok(p) = std::env::var("CADE_LLM_PROVIDER")
-        && let Ok(kind) = p.parse::<LlmProviderKind>() {
-            // Allow explicit model override too
-            let model = std::env::var("CADE_DEFAULT_MODEL")
-                .unwrap_or_else(|_| default_model_for(&kind).to_string());
-            return (kind, model);
-        }
+        && let Ok(kind) = p.parse::<LlmProviderKind>()
+    {
+        // Allow explicit model override too
+        let model = std::env::var("CADE_DEFAULT_MODEL")
+            .unwrap_or_else(|_| default_model_for(&kind).to_string());
+        return (kind, model);
+    }
 
     // Scan for API keys in priority order
     let providers: &[(fn() -> bool, LlmProviderKind)] = &[
-        (|| std::env::var("ANTHROPIC_API_KEY").map(|k| !k.is_empty()).unwrap_or(false), LlmProviderKind::Anthropic),
-        (|| std::env::var("OPENAI_API_KEY").map(|k| !k.is_empty()).unwrap_or(false),    LlmProviderKind::OpenAI),
-        (|| std::env::var("GOOGLE_API_KEY").map(|k| !k.is_empty()).unwrap_or(false),    LlmProviderKind::Gemini),
+        (
+            || {
+                std::env::var("ANTHROPIC_API_KEY")
+                    .map(|k| !k.is_empty())
+                    .unwrap_or(false)
+            },
+            LlmProviderKind::Anthropic,
+        ),
+        (
+            || {
+                std::env::var("OPENAI_API_KEY")
+                    .map(|k| !k.is_empty())
+                    .unwrap_or(false)
+            },
+            LlmProviderKind::OpenAI,
+        ),
+        (
+            || {
+                std::env::var("GOOGLE_API_KEY")
+                    .map(|k| !k.is_empty())
+                    .unwrap_or(false)
+            },
+            LlmProviderKind::Gemini,
+        ),
     ];
 
     for (check, kind) in providers {
@@ -112,7 +134,12 @@ impl ServerConfig {
         let addr: SocketAddr = format!("127.0.0.1:{port}").parse()?;
 
         let home = dirs::home_dir()
-            .map(|h| h.join(".cade").join("cade.db").to_string_lossy().to_string())
+            .map(|h| {
+                h.join(".cade")
+                    .join("cade.db")
+                    .to_string_lossy()
+                    .to_string()
+            })
             .unwrap_or_else(|| "cade.db".to_string());
         let db_path = std::env::var("CADE_DB_PATH").unwrap_or(home);
 
@@ -140,10 +167,10 @@ impl ServerConfig {
     pub fn to_ai_config(&self) -> AiConfig {
         AiConfig {
             anthropic_api_key: self.anthropic_api_key.clone(),
-            openai_api_key:    self.openai_api_key.clone(),
-            google_api_key:    self.google_api_key.clone(),
-            ollama_base_url:   self.ollama_base_url.clone(),
-            llm_provider:      self.llm_provider.to_string(),
+            openai_api_key: self.openai_api_key.clone(),
+            google_api_key: self.google_api_key.clone(),
+            ollama_base_url: self.ollama_base_url.clone(),
+            llm_provider: self.llm_provider.to_string(),
         }
     }
 }

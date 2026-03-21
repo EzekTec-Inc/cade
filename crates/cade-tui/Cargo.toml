@@ -11,6 +11,8 @@ doctest     = false
 cade-core.path       = "../cade-core"
 # -- Error handling
 anyhow.workspace       = true
+# -- Others
+derive_more.workspace  = true
 # -- Async
 tokio.workspace        = true
 # -- CLI / TUI
@@ -28,3 +30,4 @@ arboard.workspace      = true
 
 [lints.rust]
 unsafe_code = "forbid"
+# unused = { level = "allow", priority = -1 } # For exploratory dev.

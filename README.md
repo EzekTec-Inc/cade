@@ -289,6 +289,8 @@ View connected servers and tools with `/mcp`.
 
 User-defined shell scripts that fire at lifecycle events. Configure in `~/.cade/settings.json`:
 
+Hooks are applied in both interactive CADE TUI sessions and headless CLI runs (`--prompt`, `--output-format json|stream-json`).
+
 ```json
 {
   "hooks": {

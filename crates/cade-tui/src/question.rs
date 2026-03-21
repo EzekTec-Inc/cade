@@ -28,8 +28,7 @@
 ///
 /// Enter to toggle · ↑↓ navigate · Enter on Submit to confirm · Esc to cancel
 /// ```
-
-use anyhow::Result;
+use crate::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     DefaultTerminal,
@@ -44,7 +43,7 @@ use ratatui::{
 /// One labelled option in a question.
 #[derive(Debug, Clone)]
 pub struct QuestionOption {
-    pub label:       String,
+    pub label: String,
     pub description: String,
 }
 
@@ -79,7 +78,7 @@ impl QuestionAnswer {
     pub fn as_str(&self) -> String {
         match self {
             Self::Single(s) => s.clone(),
-            Self::Multi(v)  => v.join(", "),
+            Self::Multi(v) => v.join(", "),
         }
     }
 }
@@ -99,13 +98,17 @@ impl QuestionWidget {
         question: &Question,
     ) -> Result<Option<QuestionAnswer>> {
         // -- Build the effective options list
-        let n_real     = question.options.len();
-        let has_other  = question.allow_other;
+        let n_real = question.options.len();
+        let has_other = question.allow_other;
         let has_submit = question.multi_select;
         let total_items = n_real + usize::from(has_other) + usize::from(has_submit);
 
-        let other_idx  = if has_other  { n_real } else { usize::MAX };
-        let submit_idx = if has_submit { n_real + usize::from(has_other) } else { usize::MAX };
+        let other_idx = if has_other { n_real } else { usize::MAX };
+        let submit_idx = if has_submit {
+            n_real + usize::from(has_other)
+        } else {
+            usize::MAX
+        };
 
         // -- State
         let mut cursor_pos: usize = 0;
@@ -130,7 +133,9 @@ impl QuestionWidget {
                 // Header chip
                 lines.push(Line::from(Span::styled(
                     question.header.to_string(),
-                    Style::default().fg(Color::White).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
 
@@ -153,11 +158,13 @@ impl QuestionWidget {
                 // Options
                 for idx in 0..total_items {
                     let is_selected = cursor_pos == idx;
-                    let selector    = if is_selected { "❯" } else { " " };
+                    let selector = if is_selected { "❯" } else { " " };
 
                     if idx == submit_idx {
                         let label_style = if is_selected {
-                            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+                            Style::default()
+                                .fg(Color::Green)
+                                .add_modifier(Modifier::BOLD)
                         } else {
                             Style::default().fg(Color::DarkGray)
                         };
@@ -187,7 +194,7 @@ impl QuestionWidget {
 
                         let prefix = format!(" {}.    ", idx + 1);
                         let max_len = (term_w as usize).saturating_sub(prefix.len() + 3).max(10);
-                        
+
                         let mut chars: Vec<char> = display.chars().collect();
                         let mut chunks = Vec::new();
                         while !chars.is_empty() {
@@ -199,7 +206,10 @@ impl QuestionWidget {
                         for (i, chunk) in chunks.into_iter().enumerate() {
                             if i == 0 {
                                 lines.push(Line::from(vec![
-                                    Span::styled(selector.to_string(), Style::default().fg(Color::Green)),
+                                    Span::styled(
+                                        selector.to_string(),
+                                        Style::default().fg(Color::Green),
+                                    ),
                                     Span::styled(format!("{}{}", prefix, chunk), other_style),
                                 ]));
                             } else {
@@ -222,7 +232,9 @@ impl QuestionWidget {
                         ""
                     };
                     let label_style = if is_selected {
-                        Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+                        Style::default()
+                            .fg(Color::White)
+                            .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::White)
                     };
@@ -252,7 +264,9 @@ impl QuestionWidget {
                 };
                 lines.push(Line::from(Span::styled(
                     hint.to_string(),
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::DIM),
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::DIM),
                 )));
 
                 // Render: each line gets one row; clip to terminal height.
@@ -276,7 +290,9 @@ impl QuestionWidget {
                 continue;
             }
             match event::read()? {
-                Event::Key(KeyEvent { code, modifiers, .. }) => {
+                Event::Key(KeyEvent {
+                    code, modifiers, ..
+                }) => {
                     match (code, modifiers) {
                         // Cancel
                         (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
@@ -284,16 +300,24 @@ impl QuestionWidget {
                         }
                         // Navigation
                         (KeyCode::Up, _) => {
-                            if cursor_pos > 0 { cursor_pos -= 1; }
+                            if cursor_pos > 0 {
+                                cursor_pos -= 1;
+                            }
                         }
                         (KeyCode::Down, _) => {
-                            if cursor_pos + 1 < total_items { cursor_pos += 1; }
+                            if cursor_pos + 1 < total_items {
+                                cursor_pos += 1;
+                            }
                         }
                         (KeyCode::Tab, _) => {
                             cursor_pos = (cursor_pos + 1) % total_items;
                         }
                         (KeyCode::BackTab, _) => {
-                            cursor_pos = if cursor_pos == 0 { total_items - 1 } else { cursor_pos - 1 };
+                            cursor_pos = if cursor_pos == 0 {
+                                total_items - 1
+                            } else {
+                                cursor_pos - 1
+                            };
                         }
                         // Number quick-select
                         (KeyCode::Char(c), KeyModifiers::NONE)
@@ -322,22 +346,30 @@ impl QuestionWidget {
                         (KeyCode::Enter, _) => {
                             if question.multi_select {
                                 if cursor_pos == submit_idx {
-                                    let selected: Vec<String> = checked.iter().enumerate()
+                                    let selected: Vec<String> = checked
+                                        .iter()
+                                        .enumerate()
                                         .filter(|(_, c)| **c)
                                         .map(|(i, _)| question.options[i].label.clone())
                                         .collect();
-                                    if selected.is_empty() { continue; }
+                                    if selected.is_empty() {
+                                        continue;
+                                    }
                                     break 'widget Some(QuestionAnswer::Multi(selected));
                                 } else if cursor_pos == other_idx {
                                     if !custom_text.is_empty() {
-                                        break 'widget Some(QuestionAnswer::Multi(vec![custom_text.clone()]));
+                                        break 'widget Some(QuestionAnswer::Multi(vec![
+                                            custom_text.clone(),
+                                        ]));
                                     }
                                 } else if cursor_pos < n_real {
                                     checked[cursor_pos] = !checked[cursor_pos];
                                 }
                             } else if cursor_pos == other_idx {
                                 if !custom_text.is_empty() {
-                                    break 'widget Some(QuestionAnswer::Single(custom_text.clone()));
+                                    break 'widget Some(QuestionAnswer::Single(
+                                        custom_text.clone(),
+                                    ));
                                 }
                             } else {
                                 let label = question.options[cursor_pos].label.clone();

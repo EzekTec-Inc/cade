@@ -1,9 +1,9 @@
-use axum::extract::State;
 use axum::Json;
-use serde_json::{json, Value};
+use axum::extract::State;
+use serde_json::{Value, json};
 
-use cade_ai::PRESET_PROVIDERS;
 use crate::server::state::AppState;
+use cade_ai::PRESET_PROVIDERS;
 
 /// GET /v1/models
 ///
@@ -18,16 +18,14 @@ use crate::server::state::AppState;
 /// - `supported`:        [] — kept for backward compat; all models now in `dynamic`
 /// - `dynamic`:          live models from every configured provider, sorted by provider
 /// - `custom_providers`: live providers with no known model listing (manually /connect-ed)
-pub async fn list_models(
-    State(state): State<AppState>,
-) -> Json<Value> {
+pub async fn list_models(State(state): State<AppState>) -> Json<Value> {
     // Hot-sync: pick up API keys added to env after server start (write lock held briefly)
     {
         let mut router = state.llm_router.write().await;
         router.hot_sync_env_providers();
     }
 
-    let router     = state.llm_router.read().await;
+    let router = state.llm_router.read().await;
     let live_names = router.provider_names();
 
     // All models — fetched live concurrently, with per-provider catalogue fallback
@@ -36,11 +34,13 @@ pub async fn list_models(
 
     // Providers with no known model listing (not in catalogue, preset, or ollama)
     const KNOWN: &[&str] = &["anthropic", "openai", "gemini", "google", "ollama"];
-    let all_known: std::collections::HashSet<&str> = KNOWN.iter()
+    let all_known: std::collections::HashSet<&str> = KNOWN
+        .iter()
         .chain(PRESET_PROVIDERS.iter().map(|p| &p.name))
         .copied()
         .collect();
-    let custom_providers: Vec<String> = live_names.into_iter()
+    let custom_providers: Vec<String> = live_names
+        .into_iter()
         .filter(|n| !all_known.contains(n.as_str()))
         .collect();
 

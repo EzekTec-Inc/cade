@@ -31,16 +31,16 @@ use crate::server::state::AppState;
 
 #[derive(Debug)]
 struct Bucket {
-    tokens:      f64,
-    capacity:    f64,
-    refill_rate: f64,   // tokens per second
+    tokens: f64,
+    capacity: f64,
+    refill_rate: f64, // tokens per second
     last_refill: Instant,
 }
 
 impl Bucket {
     fn new(capacity: f64, rpm: f64) -> Self {
         Self {
-            tokens:      capacity,
+            tokens: capacity,
             capacity,
             refill_rate: rpm / 60.0,
             last_refill: Instant::now(),
@@ -49,9 +49,9 @@ impl Bucket {
 
     /// Consume one token. Returns `Ok(())` on success or `Err(retry_secs)` when limited.
     fn try_consume(&mut self) -> Result<(), u64> {
-        let now     = Instant::now();
+        let now = Instant::now();
         let elapsed = now.duration_since(self.last_refill).as_secs_f64();
-        self.tokens      = (self.tokens + elapsed * self.refill_rate).min(self.capacity);
+        self.tokens = (self.tokens + elapsed * self.refill_rate).min(self.capacity);
         self.last_refill = now;
 
         if self.tokens >= 1.0 {
@@ -68,9 +68,9 @@ impl Bucket {
 
 #[derive(Clone, Debug)]
 pub struct RateLimiter {
-    buckets:  Arc<Mutex<HashMap<String, Bucket>>>,
+    buckets: Arc<Mutex<HashMap<String, Bucket>>>,
     capacity: f64,
-    rpm:      f64,
+    rpm: f64,
 }
 
 impl RateLimiter {
@@ -85,11 +85,9 @@ impl RateLimiter {
             .and_then(|v| v.parse().ok())
             .unwrap_or(10.0);
         let capacity = burst.max(1.0);
-        tracing::info!(
-            "Rate limiter: {rpm} req/min per agent, burst={capacity} tokens"
-        );
+        tracing::info!("Rate limiter: {rpm} req/min per agent, burst={capacity} tokens");
         Self {
-            buckets:  Arc::new(Mutex::new(HashMap::new())),
+            buckets: Arc::new(Mutex::new(HashMap::new())),
             capacity,
             rpm,
         }
@@ -104,18 +102,18 @@ impl RateLimiter {
 
     /// Try to consume one token for `agent_id`.
     pub fn check(&self, agent_id: &str) -> Result<(), u64> {
-        let mut map = self.buckets.lock().unwrap();
-        
+        let mut map = self.buckets.lock().expect("rate limiter lock poisoned");
+
         if map.len() > 10_000 && !map.contains_key(agent_id) {
             let now = Instant::now();
             map.retain(|_, b| now.duration_since(b.last_refill).as_secs() < 600);
-            
+
             if map.len() > 10_000 {
                 return Err(60); // Retry after 60s to prevent OOM
             }
         }
 
-        let bucket  = map
+        let bucket = map
             .entry(agent_id.to_string())
             .or_insert_with(|| Bucket::new(self.capacity, self.rpm));
         bucket.try_consume()
@@ -141,7 +139,7 @@ pub async fn rate_limit_middleware(
     req: Request<Body>,
     next: Next,
 ) -> Response {
-    let path   = req.uri().path().to_string();
+    let path = req.uri().path().to_string();
     let method = req.method().clone();
 
     // Only throttle POST to inference endpoints
@@ -163,9 +161,7 @@ pub async fn rate_limit_middleware(
     match state.rate_limiter.check(&agent_id) {
         Ok(()) => next.run(req).await,
         Err(retry_secs) => {
-            tracing::warn!(
-                "Rate limit exceeded — agent='{agent_id}' retry_after={retry_secs}s"
-            );
+            tracing::warn!("Rate limit exceeded — agent='{agent_id}' retry_after={retry_secs}s");
             (
                 StatusCode::TOO_MANY_REQUESTS,
                 [
@@ -208,7 +204,10 @@ mod tests {
         let result = bucket.try_consume();
         assert!(result.is_err());
         let retry_secs = result.unwrap_err();
-        assert!(retry_secs >= 1, "retry_secs should be >= 1, got {retry_secs}");
+        assert!(
+            retry_secs >= 1,
+            "retry_secs should be >= 1, got {retry_secs}"
+        );
     }
 
     #[test]
@@ -246,16 +245,23 @@ mod tests {
     }
 
     #[test]
-    fn rate_limiter_prevents_oom() {
-        // Simulate many different agent IDs — should not panic
+    fn rate_limiter_prevents_oom() -> Result<()> {
+        // -- Setup & Fixtures
         let limiter = RateLimiter {
             buckets: Arc::new(Mutex::new(HashMap::new())),
             capacity: 1.0,
             rpm: 60.0,
         };
+
+        // -- Exec
         for i in 0..100 {
             let _ = limiter.check(&format!("agent-{i}"));
         }
-        assert!(limiter.buckets.lock().unwrap().len() <= 100);
+
+        // -- Check
+        let count = limiter.buckets.lock().map_err(|e| e.to_string())?.len();
+        assert!(count <= 100);
+
+        Ok(())
     }
 }

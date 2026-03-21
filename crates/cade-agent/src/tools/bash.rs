@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::Result;
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
@@ -25,11 +25,9 @@ impl BashTool {
     pub async fn run(args: &Value) -> Result<String> {
         let command = args["command"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("bash: missing 'command' arg"))?;
+            .ok_or_else(|| crate::Error::custom("bash: missing 'command' arg"))?;
 
-        let timeout_secs = args["timeout"]
-            .as_u64()
-            .unwrap_or(DEFAULT_TIMEOUT_SECS);
+        let timeout_secs = args["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
 
         // C-02: Defence-in-depth — log suspicious patterns even if the caller
         // already approved the command.
@@ -40,20 +38,14 @@ impl BashTool {
             );
         }
 
-        let output = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            async {
-                let mut cmd = Command::new("bash");
-                cade_core::agent_env::apply_agent_env(&mut cmd);
-                cmd.arg("-c")
-                    .arg(command)
-                    .output()
-                    .await
-            },
-        )
+        let output = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
+            let mut cmd = Command::new("bash");
+            cade_core::agent_env::apply_agent_env(&mut cmd);
+            cmd.arg("-c").arg(command).output().await
+        })
         .await
-        .map_err(|_| anyhow::anyhow!("Command timed out after {timeout_secs}s"))?
-        .map_err(|e| anyhow::anyhow!("Failed to spawn bash: {e}"))?;
+        .map_err(|_| crate::Error::custom(format!("Command timed out after {timeout_secs}s")))?
+        .map_err(|e| crate::Error::custom(format!("Failed to spawn bash: {e}")))?;
 
         let mut result = String::from_utf8_lossy(&output.stdout).to_string();
 
@@ -101,7 +93,7 @@ impl BashTool {
     {
         let command = args["command"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("bash: missing 'command' arg"))?;
+            .ok_or_else(|| crate::Error::custom("bash: missing 'command' arg"))?;
 
         let timeout_secs = args["timeout"].as_u64().unwrap_or(DEFAULT_TIMEOUT_SECS);
 
@@ -113,21 +105,18 @@ impl BashTool {
         }
 
         use std::process::Stdio;
-        let mut child = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            async {
-                let mut cmd = Command::new("bash");
-                cade_core::agent_env::apply_agent_env(&mut cmd);
-                cmd.arg("-c")
-                    .arg(command)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-            },
-        )
+        let mut child = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
+            let mut cmd = Command::new("bash");
+            cade_core::agent_env::apply_agent_env(&mut cmd);
+            cmd.arg("-c")
+                .arg(command)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        })
         .await
-        .map_err(|_| anyhow::anyhow!("Command timed out after {timeout_secs}s"))?
-        .map_err(|e| anyhow::anyhow!("Failed to spawn bash: {e}"))?;
+        .map_err(|_| crate::Error::custom(format!("Command timed out after {timeout_secs}s")))?
+        .map_err(|e| crate::Error::custom(format!("Failed to spawn bash: {e}")))?;
 
         let stdout = child.stdout.take().expect("stdout piped");
         let stderr = child.stderr.take().expect("stderr piped");
@@ -168,7 +157,7 @@ impl BashTool {
                 Err(_) => {
                     // Timeout: kill the child and stop reading.
                     let _ = child.kill().await;
-                    return Err(anyhow::anyhow!("Command timed out after {timeout_secs}s"));
+                    return Err(crate::Error::custom(format!("Command timed out after {timeout_secs}s")));
                 }
             }
         }
@@ -176,7 +165,7 @@ impl BashTool {
         // Wait for the reader tasks and the child process.
         let _ = out_task.await;
         let _ = err_task.await;
-        let status = child.wait().await.map_err(|e| anyhow::anyhow!("{e}"))?;
+        let status = child.wait().await.map_err(|e| crate::Error::custom(format!("{e}")))?;
 
         if !status.success() {
             let code = status.code().unwrap_or(-1);
@@ -233,29 +222,42 @@ mod tests {
     use serde_json::json;
 
     #[tokio::test]
-    async fn run_simple_command() {
+    async fn run_simple_command() -> Result<()> {
+        // -- Exec
         let args = json!({"command": "echo hello world"});
-        let output = BashTool::run(&args).await.unwrap();
+        let output = BashTool::run(&args).await?;
+
+        // -- Check
         assert!(output.contains("hello world"), "got: {output}");
+        Ok(())
     }
 
     #[tokio::test]
-    async fn run_command_with_exit_code() {
+    async fn run_command_with_exit_code() -> Result<()> {
+        // -- Exec
         let args = json!({"command": "exit 42"});
-        let output = BashTool::run(&args).await.unwrap();
+        let output = BashTool::run(&args).await?;
+
+        // -- Check
         assert!(output.contains("exit code 42"), "got: {output}");
+        Ok(())
     }
 
     #[tokio::test]
-    async fn run_command_with_stderr() {
+    async fn run_command_with_stderr() -> Result<()> {
+        // -- Exec
         let args = json!({"command": "echo error >&2"});
-        let output = BashTool::run(&args).await.unwrap();
+        let output = BashTool::run(&args).await?;
+
+        // -- Check
         assert!(output.contains("STDERR:"), "got: {output}");
         assert!(output.contains("error"), "got: {output}");
+        Ok(())
     }
 
     #[tokio::test]
     async fn run_missing_command_arg() {
+        // -- Exec & Check
         let args = json!({"timeout": 5});
         let result = BashTool::run(&args).await;
         assert!(result.is_err());
@@ -264,6 +266,7 @@ mod tests {
 
     #[tokio::test]
     async fn run_command_timeout() {
+        // -- Exec & Check
         let args = json!({"command": "sleep 60", "timeout": 1});
         let result = BashTool::run(&args).await;
         assert!(result.is_err());
@@ -272,39 +275,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn run_truncates_large_output() {
+    async fn run_truncates_large_output() -> Result<()> {
+        // -- Exec
         let args = json!({"command": "yes 'aaaaaaaaaa' | head -5000"});
-        let output = BashTool::run(&args).await.unwrap();
+        let output = BashTool::run(&args).await?;
+
+        // -- Check
         if output.len() > MAX_OUTPUT_CHARS + 200 {
             panic!("output should be truncated, got {} chars", output.len());
         }
+        Ok(())
     }
 
     #[tokio::test]
-    async fn streaming_simple_command() {
+    async fn streaming_simple_command() -> Result<()> {
+        // -- Setup & Fixtures
         let args = json!({"command": "echo line1; echo line2"});
         let mut lines_seen = Vec::new();
+
+        // -- Exec
         let output = BashTool::run_streaming(&args, |line| {
             lines_seen.push(line);
-        }).await.unwrap();
+        })
+        .await?;
+
+        // -- Check
         assert!(output.contains("line1"), "got: {output}");
         assert!(output.contains("line2"), "got: {output}");
         assert!(!lines_seen.is_empty(), "should have seen lines streamed");
+        Ok(())
     }
 
     #[tokio::test]
     async fn streaming_timeout() {
+        // -- Exec & Check
         let args = json!({"command": "sleep 60", "timeout": 1});
         let result = BashTool::run_streaming(&args, |_| {}).await;
         assert!(result.is_err());
     }
 
     #[test]
-    fn schema_is_valid() {
+    fn schema_is_valid() -> Result<()> {
+        // -- Exec
         let schema = BashTool::schema();
+
+        // -- Check
         assert_eq!(schema["name"], "bash");
-        assert!(schema["description"].as_str().unwrap().len() > 10);
+        let desc = schema["description"].as_str().ok_or("Should have description")?;
+        assert!(desc.len() > 10);
         assert!(schema["parameters"]["properties"]["command"].is_object());
+        Ok(())
     }
 }
 

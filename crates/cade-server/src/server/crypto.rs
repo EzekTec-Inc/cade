@@ -1,6 +1,6 @@
 use aes_gcm::{
-    aead::{Aead, KeyInit},
     Aes256Gcm, Nonce,
+    aead::{Aead, KeyInit},
 };
 use anyhow::{Context, Result};
 use hmac::Hmac;
@@ -21,8 +21,12 @@ use sha2::Sha256;
 /// rather than silently falling back to a known constant.  Callers should
 /// surface this clearly to the user.
 fn get_root_secret() -> Result<String> {
-    if let Ok(k) = std::env::var("CADE_DB_KEY") { return Ok(k); }
-    if let Ok(k) = std::env::var("CADE_MACHINE_SECRET") { return Ok(k); }
+    if let Ok(k) = std::env::var("CADE_DB_KEY") {
+        return Ok(k);
+    }
+    if let Ok(k) = std::env::var("CADE_MACHINE_SECRET") {
+        return Ok(k);
+    }
 
     let path = std::path::Path::new(".cade-db.key");
     if path.exists() {
@@ -33,10 +37,13 @@ fn get_root_secret() -> Result<String> {
 
     // Backwards compatibility check: if cade.db exists, fall back to machine_uid
     if std::path::Path::new("cade.db").exists()
-        && let Ok(uid) = machine_uid::get() {
-            tracing::warn!("Using legacy machine_uid for database encryption. Consider migrating to CADE_DB_KEY.");
-            return Ok(uid);
-        }
+        && let Ok(uid) = machine_uid::get()
+    {
+        tracing::warn!(
+            "Using legacy machine_uid for database encryption. Consider migrating to CADE_DB_KEY."
+        );
+        return Ok(uid);
+    }
 
     let mut key = [0u8; 32];
     getrandom::getrandom(&mut key).map_err(|e| anyhow::anyhow!("getrandom failed: {e}"))?;
@@ -45,7 +52,13 @@ fn get_root_secret() -> Result<String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;
-        if let Ok(mut f) = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+        {
             use std::io::Write;
             let _ = f.write_all(secret.as_bytes());
         }
@@ -85,8 +98,7 @@ fn derive_key(salt: &[u8]) -> Result<[u8; 32]> {
 pub fn encrypt(plaintext: &str) -> Result<String> {
     // H-01: generate a fresh 16-byte salt for every encryption
     let mut salt = [0u8; 16];
-    getrandom::getrandom(&mut salt)
-        .map_err(|e| anyhow::anyhow!("getrandom (salt) failed: {e}"))?;
+    getrandom::getrandom(&mut salt).map_err(|e| anyhow::anyhow!("getrandom (salt) failed: {e}"))?;
 
     let key_bytes = derive_key(&salt)?;
     let cipher = Aes256Gcm::new_from_slice(&key_bytes)
@@ -117,11 +129,8 @@ pub fn encrypt(plaintext: &str) -> Result<String> {
 // endregion: --- Tests
 
 pub fn decrypt(encoded: &str) -> Result<String> {
-    let data = base64::Engine::decode(
-        &base64::engine::general_purpose::STANDARD,
-        encoded,
-    )
-    .context("Base64 decode failed")?;
+    let data = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, encoded)
+        .context("Base64 decode failed")?;
 
     // New format: salt(16) + nonce(12) + ciphertext = min 29 bytes
     // Legacy format: nonce(12) + ciphertext = min 13 bytes
@@ -188,62 +197,76 @@ mod tests {
     static INIT: Once = Once::new();
     fn setup_test_key() {
         INIT.call_once(|| {
-            let _ = std::fs::write(
-                ".cade-db.key",
-                "test-crypto-secret-for-unit-tests",
-            );
+            let _ = std::fs::write(".cade-db.key", "test-crypto-secret-for-unit-tests");
         });
     }
 
     #[test]
-    fn encrypt_decrypt_roundtrip() {
+    fn encrypt_decrypt_roundtrip() -> Result<()> {
         setup_test_key();
+        // -- Setup & Fixtures
         let plaintext = "sk-ant-api03-very-secret-key-12345";
-        let encrypted = encrypt(plaintext).unwrap();
+
+        // -- Exec
+        let encrypted = encrypt(plaintext)?;
+
+        // -- Check
         assert_ne!(encrypted, plaintext);
         assert!(encrypted.len() > plaintext.len());
-
-        let decrypted = decrypt(&encrypted).unwrap();
+        let decrypted = decrypt(&encrypted)?;
         assert_eq!(decrypted, plaintext);
+
+        Ok(())
     }
 
     #[test]
-    fn encrypt_produces_different_ciphertext_each_time() {
+    fn encrypt_produces_different_ciphertext_each_time() -> Result<()> {
         setup_test_key();
+        // -- Setup & Fixtures
         let plaintext = "same-key-every-time";
-        let enc1 = encrypt(plaintext).unwrap();
-        let enc2 = encrypt(plaintext).unwrap();
-        assert_ne!(enc1, enc2);
 
-        assert_eq!(decrypt(&enc1).unwrap(), plaintext);
-        assert_eq!(decrypt(&enc2).unwrap(), plaintext);
+        // -- Exec
+        let enc1 = encrypt(plaintext)?;
+        let enc2 = encrypt(plaintext)?;
+
+        // -- Check
+        assert_ne!(enc1, enc2);
+        assert_eq!(decrypt(&enc1)?, plaintext);
+        assert_eq!(decrypt(&enc2)?, plaintext);
+
+        Ok(())
     }
 
     #[test]
     fn decrypt_invalid_base64_fails() {
         setup_test_key();
+        // -- Exec & Check
         let result = decrypt("not-valid-base64!!!");
         assert!(result.is_err());
     }
 
     #[test]
-    fn decrypt_too_short_fails() {
+    fn decrypt_too_short_fails() -> Result<()> {
         setup_test_key();
-        let short = base64::Engine::encode(
-            &base64::engine::general_purpose::STANDARD,
-            [0u8; 5],
-        );
+        // -- Setup & Fixtures
+        let short = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [0u8; 5]);
+
+        // -- Exec
         let result = decrypt(&short);
-        assert!(result.is_err());
-        let msg = result.unwrap_err().to_string();
+
+        // -- Check
+        let msg = result.err().ok_or("Should be an error")?.to_string();
         assert!(msg.contains("too short"), "got: {msg}");
+
+        Ok(())
     }
 
     #[test]
-    fn decrypt_corrupted_data_fails() {
+    fn decrypt_corrupted_data_fails() -> Result<()> {
         setup_test_key();
+        // -- Setup & Fixtures
         let plaintext = "original-key";
-        let encrypted = encrypt(plaintext).unwrap();
+        let encrypted = encrypt(plaintext)?;
 
         let mut chars: Vec<char> = encrypted.chars().collect();
         if chars.len() > 20 {
@@ -251,33 +274,55 @@ mod tests {
         }
         let corrupted: String = chars.into_iter().collect();
 
+        // -- Exec & Check
         let result = decrypt(&corrupted);
         assert!(result.is_err());
+
+        Ok(())
     }
 
     #[test]
-    fn encrypt_empty_string() {
+    fn encrypt_empty_string() -> Result<()> {
         setup_test_key();
-        let encrypted = encrypt("").unwrap();
-        let decrypted = decrypt(&encrypted).unwrap();
+        // -- Exec
+        let encrypted = encrypt("")?;
+        let decrypted = decrypt(&encrypted)?;
+
+        // -- Check
         assert_eq!(decrypted, "");
+
+        Ok(())
     }
 
     #[test]
-    fn encrypt_unicode_content() {
+    fn encrypt_unicode_content() -> Result<()> {
         setup_test_key();
+        // -- Setup & Fixtures
         let plaintext = "日本語のAPIキー🔑";
-        let encrypted = encrypt(plaintext).unwrap();
-        let decrypted = decrypt(&encrypted).unwrap();
+
+        // -- Exec
+        let encrypted = encrypt(plaintext)?;
+        let decrypted = decrypt(&encrypted)?;
+
+        // -- Check
         assert_eq!(decrypted, plaintext);
+
+        Ok(())
     }
 
     #[test]
-    fn encrypt_long_key() {
+    fn encrypt_long_key() -> Result<()> {
         setup_test_key();
+        // -- Setup & Fixtures
         let plaintext = "a".repeat(10_000);
-        let encrypted = encrypt(&plaintext).unwrap();
-        let decrypted = decrypt(&encrypted).unwrap();
+
+        // -- Exec
+        let encrypted = encrypt(&plaintext)?;
+        let decrypted = decrypt(&encrypted)?;
+
+        // -- Check
         assert_eq!(decrypted, plaintext);
+
+        Ok(())
     }
 }

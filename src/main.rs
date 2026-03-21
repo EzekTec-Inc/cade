@@ -11,7 +11,7 @@ use cade::settings;
 use cade::skills;
 use cade::tools::schemas_for_names;
 
-use anyhow::{bail, Context, Result};
+use cade::{Error, Result};
 use clap::Parser;
 use serde_json::json;
 use std::path::PathBuf;
@@ -19,16 +19,16 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use agent::{
+    CadeClient,
     client::{CreateAgentRequest, MemoryBlock},
     session::SessionStore,
     tools::register_cade_tools,
-    CadeClient,
 };
 use cade::toolsets::Toolset;
 use cli::{Args, Repl};
 use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
-use skills::{discover_all_skills, skills_listing, Skill};
+use skills::{Skill, discover_all_skills, skills_listing};
 
 // endregion: --- Modules
 
@@ -43,7 +43,9 @@ fn sanitize_for_terminal(s: &str) -> String {
             let c = ch as u32;
             if ch == '\n' || ch == '\t' {
                 true
-            } else { !(c <= 0x1F || c == 0x7F) }
+            } else {
+                !(c <= 0x1F || c == 0x7F)
+            }
         })
         .collect()
 }
@@ -107,9 +109,10 @@ const DEFAULT_MEMORY_BLOCKS: &[(&str, &str, &str, usize)] = &[
 /// Default max_chars for user-created memory blocks (not in DEFAULT_MEMORY_BLOCKS).
 async fn seed_default_memory(client: &CadeClient, agent_id: &str) {
     for (label, value, description, max_chars) in DEFAULT_MEMORY_BLOCKS {
-        if let Err(e) = client.upsert_memory_with_limit(
-            agent_id, label, value, Some(description), Some(*max_chars)
-        ).await {
+        if let Err(e) = client
+            .upsert_memory_with_limit(agent_id, label, value, Some(description), Some(*max_chars))
+            .await
+        {
             tracing::warn!("seed_memory {label}: {e}");
         }
     }
@@ -123,12 +126,23 @@ async fn seed_default_memory(client: &CadeClient, agent_id: &str) {
 async fn push_env_providers_to_server(client: &CadeClient) {
     // (name, kind, env_vars, base_url)
     let core: &[(&str, &str, &[&str], Option<&str>)] = &[
-        ("anthropic", "anthropic", &["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"], None),
-        ("openai",    "openai",    &["OPENAI_API_KEY"],                       None),
-        ("gemini",    "gemini",    &["GOOGLE_API_KEY", "GEMINI_API_KEY"],      None),
+        (
+            "anthropic",
+            "anthropic",
+            &["ANTHROPIC_API_KEY", "CLAUDE_API_KEY"],
+            None,
+        ),
+        ("openai", "openai", &["OPENAI_API_KEY"], None),
+        (
+            "gemini",
+            "gemini",
+            &["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+            None,
+        ),
     ];
     for (name, kind, vars, base_url) in core {
-        let key = vars.iter()
+        let key = vars
+            .iter()
             .find_map(|v| std::env::var(v).ok().filter(|k| !k.is_empty()));
         if let Some(key) = key {
             let _ = client.add_provider(name, kind, Some(&key), *base_url).await;
@@ -136,17 +150,40 @@ async fn push_env_providers_to_server(client: &CadeClient) {
     }
     // Preset OpenAI-compatible providers (Groq, OpenRouter, Together, etc.)
     let presets: &[(&str, &[&str], &str)] = &[
-        ("openrouter", &["OPENROUTER_API_KEY"],              "https://openrouter.ai/api/v1/chat/completions"),
-        ("groq",       &["GROQ_API_KEY"],                    "https://api.groq.com/openai/v1/chat/completions"),
-        ("together",   &["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"], "https://api.together.xyz/v1/chat/completions"),
-        ("fireworks",  &["FIREWORKS_API_KEY"],               "https://api.fireworks.ai/inference/v1/chat/completions"),
-        ("deepinfra",  &["DEEPINFRA_API_KEY"],               "https://api.deepinfra.com/v1/openai/chat/completions"),
+        (
+            "openrouter",
+            &["OPENROUTER_API_KEY"],
+            "https://openrouter.ai/api/v1/chat/completions",
+        ),
+        (
+            "groq",
+            &["GROQ_API_KEY"],
+            "https://api.groq.com/openai/v1/chat/completions",
+        ),
+        (
+            "together",
+            &["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"],
+            "https://api.together.xyz/v1/chat/completions",
+        ),
+        (
+            "fireworks",
+            &["FIREWORKS_API_KEY"],
+            "https://api.fireworks.ai/inference/v1/chat/completions",
+        ),
+        (
+            "deepinfra",
+            &["DEEPINFRA_API_KEY"],
+            "https://api.deepinfra.com/v1/openai/chat/completions",
+        ),
     ];
     for (name, vars, base_url) in presets {
-        let key = vars.iter()
+        let key = vars
+            .iter()
             .find_map(|v| std::env::var(v).ok().filter(|k| !k.is_empty()));
         if let Some(key) = key {
-            let _ = client.add_provider(name, "openai-compatible", Some(&key), Some(base_url)).await;
+            let _ = client
+                .add_provider(name, "openai-compatible", Some(&key), Some(base_url))
+                .await;
         }
     }
 }
@@ -156,7 +193,7 @@ async fn register_load_skill_tool(client: &CadeClient) {
     let schema = json!({
         "name": "load_skill",
         "description": "Load the full content of a skill into context. Call this when starting a task that matches one of the available skills listed in your system prompt.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "id": {
@@ -184,7 +221,7 @@ async fn register_install_skill_tool(client: &CadeClient) {
     let schema = json!({
         "name": "install_skill",
         "description": "Download and install a skill from a GitHub URL or direct SKILL.MD URL. Use when the user asks to install a skill.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "url": {
@@ -217,7 +254,7 @@ async fn register_run_skill_script_tool(client: &CadeClient) {
     let schema = json!({
         "name": "run_skill_script",
         "description": "Execute a script from a skill's scripts/ directory. Use after load_skill to run deterministic tooling bundled with the skill.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "skill_id": {
@@ -254,7 +291,7 @@ async fn register_load_skill_ref_tool(client: &CadeClient) {
     let schema = json!({
         "name": "load_skill_ref",
         "description": "Lazy-load a reference document from a skill's references/ directory. Use only when you need deep documentation to solve a specific problem — avoids injecting tokens unnecessarily.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "skill_id": {
@@ -288,7 +325,7 @@ async fn register_run_subagent_tool(client: &CadeClient) {
         "description": "Spawn a subagent to handle a task autonomously. Only the final answer \
     is returned — your context stays clean. Use for: codebase search (explore), implementation \
     (general-purpose, coder), code review (reviewer), or custom subagents.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "subagent_type": {
@@ -332,7 +369,7 @@ async fn register_update_memory_tool(client: &CadeClient) {
     let schema = json!({
         "name": "update_memory",
         "description": "Update a persistent memory block. Use this to store important information about the user, project, or yourself that should be remembered across conversations. Call this whenever you learn something worth remembering.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "label": {
@@ -372,7 +409,7 @@ async fn register_memory_apply_patch_tool(client: &CadeClient) {
     let schema = json!({
         "name": "memory_apply_patch",
         "description": "Edit a persistent memory block using a unified diff patch. Use this to store important information about the user, project, or yourself that should be remembered across conversations. Call this whenever you learn something worth remembering.",
-        "input_schema": {
+        "parameters": {
             "type": "object",
             "properties": {
                 "label": {
@@ -431,22 +468,22 @@ pub async fn register_and_attach_filtered(
     let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
     tracing::info!("Registered {} tools", tools.len());
     if !ids.is_empty()
-        && let Err(e) = client.attach_agent_tools(agent_id, &ids).await {
-            tracing::warn!("attach_agent_tools: {e}");
-        }
+        && let Err(e) = client.attach_agent_tools(agent_id, &ids).await
+    {
+        tracing::warn!("attach_agent_tools: {e}");
+    }
 }
 
 async fn register_cade_tools_filtered(
     client: &CadeClient,
     toolset: Toolset,
     filter: Option<&[String]>,
-) -> anyhow::Result<Vec<agent::client::ToolDef>> {
+) -> Result<Vec<agent::client::ToolDef>> {
     // schemas_for_toolset and schemas_for_names imported at top-level
     // When no filter, use normal registration path
-    if filter.is_none() {
-        return register_cade_tools(client, toolset).await;
-    }
-    let names = filter.unwrap();
+    let Some(names) = filter else {
+        return register_cade_tools(client, toolset).await.map_err(Error::Agent);
+    };
     let schemas = if names.is_empty() {
         // Empty filter → no tools (analysis-only mode)
         vec![]
@@ -463,7 +500,7 @@ async fn register_cade_tools_filtered(
 
     let mut registered = Vec::new();
     for schema in schemas {
-        let name        = schema["name"].as_str().unwrap_or("").to_string();
+        let name = schema["name"].as_str().unwrap_or("").to_string();
         let description = schema["description"].as_str().unwrap_or("").to_string();
         if let Some(t) = existing_map.get(&name) {
             registered.push(t.clone());
@@ -483,7 +520,6 @@ async fn register_cade_tools_filtered(
     }
     Ok(registered)
 }
-
 
 async fn resolve_agent_and_conversation(
     client: &CadeClient,
@@ -530,34 +566,46 @@ async fn resolve_agent_and_conversation(
                 "CADE coding agent with desktop extensions",
             ))
             .await
-            .context("create agent")?;
+            .map_err(|e| Error::custom(format!("create agent: {e}")))?;
         register_and_attach_filtered(client, &a.id, toolset, tool_filter.as_deref()).await;
         seed_default_memory(client, &a.id).await;
         session
             .set_agent(a.id.clone(), Some(a.name.clone()))
-            .context("save session")?;
+            .map_err(|e| Error::custom(format!("save session: {e}")))?;
         settings
             .set_last_agent(&a.id)
-            .context("save global session")?;
+            .map_err(|e| Error::custom(format!("save global session: {e}")))?;
         a
     } else if let Some(id) = &args.agent {
         client
             .get_agent(id)
             .await
-            .with_context(|| format!("get agent {id}"))?
+            .map_err(|e| Error::custom(format!("get agent {id}: {e}")))?
     } else if let Some(name_query) = &args.name {
         // --name: find agent by name (partial, case-insensitive)
-        let all = client.list_agents().await.context("list agents for --name")?;
+        let all = client
+            .list_agents()
+            .await
+            .map_err(|e| Error::custom(format!("list agents for --name: {e}")))?;
         let q = name_query.to_lowercase();
-        let matched: Vec<_> = all.iter().filter(|a| a.name.to_lowercase().contains(&q)).collect();
+        let matched: Vec<_> = all
+            .iter()
+            .filter(|a| a.name.to_lowercase().contains(&q))
+            .collect();
         match matched.len() {
-            0 => anyhow::bail!("No agent matching --name '{name_query}'"),
-            1 => client.get_agent(&matched[0].id).await
-                    .with_context(|| format!("get agent {}", matched[0].id))?,
-            n => anyhow::bail!(
-                "{n} agents match '{name_query}': {}",
-                matched.iter().map(|a| format!("{} ({})", a.name, a.id)).collect::<Vec<_>>().join(", ")
-            ),
+            0 => return Err(Error::custom(format!("No agent matching --name '{name_query}'"))),
+            1 => client
+                .get_agent(&matched[0].id)
+                .await
+                .map_err(|e| Error::custom(format!("get agent {}: {e}", matched[0].id)))?,
+            n => return Err(Error::custom(format!(
+            "{n} agents match '{name_query}': {}",
+                matched
+                    .iter()
+                    .map(|a| format!("{} ({})", a.name, a.id))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))),
         }
     } else if let Some(last_id) = session.session.agent_id.clone() {
         match client.get_agent(&last_id).await {
@@ -567,7 +615,7 @@ async fn resolve_agent_and_conversation(
                 let a = client
                     .create_agent(make_req(default_model.to_string(), "CADE coding agent"))
                     .await
-                    .context("create agent")?;
+                    .map_err(|e| Error::custom(format!("create agent: {e}")))?;
                 register_and_attach_filtered(client, &a.id, toolset, tool_filter.as_deref()).await;
                 seed_default_memory(client, &a.id).await;
                 session.set_agent(a.id.clone(), Some(a.name.clone()))?;
@@ -583,7 +631,7 @@ async fn resolve_agent_and_conversation(
                 "CADE coding agent with desktop extensions",
             ))
             .await
-            .context("create agent")?;
+            .map_err(|e| Error::custom(format!("create agent: {e}")))?;
         register_and_attach_filtered(client, &a.id, toolset, tool_filter.as_deref()).await;
         seed_default_memory(client, &a.id).await;
         session.set_agent(a.id.clone(), Some(a.name.clone()))?;
@@ -613,7 +661,9 @@ async fn resolve_agent_and_conversation(
         match client.create_conversation(&agent.id, "").await {
             Ok(conv) => {
                 let cid = conv["id"].as_str().unwrap_or("").to_string();
-                session.set_conversation(Some(cid.clone())).context("save conversation")?;
+                session
+                    .set_conversation(Some(cid.clone()))
+                    .map_err(|e| Error::custom(format!("save conversation: {e}")))?;
                 Some(cid)
             }
             Err(e) => {
@@ -629,7 +679,7 @@ async fn resolve_agent_and_conversation(
                 println!("\nConversations for {}:", agent.name);
                 for (i, c) in convs.iter().enumerate() {
                     let title = c["title"].as_str().unwrap_or("(untitled)");
-                    let cnt   = c["message_count"].as_i64().unwrap_or(0);
+                    let cnt = c["message_count"].as_i64().unwrap_or(0);
                     println!("  [{}] {}  ({} msgs)", i + 1, title, cnt);
                 }
                 println!("  [n] Start new conversation");
@@ -640,15 +690,21 @@ async fn resolve_agent_and_conversation(
                 std::io::stdin().read_line(&mut buf)?;
                 let choice = buf.trim();
                 if choice == "n" || choice == "N" {
-                    let conv = client.create_conversation(&agent.id, "").await
-                        .context("create conversation")?;
+                    let conv = client
+                        .create_conversation(&agent.id, "")
+                        .await
+                        .map_err(|e| Error::custom(format!("create conversation: {e}")))?;
                     let cid = conv["id"].as_str().unwrap_or("").to_string();
-                    session.set_conversation(Some(cid.clone())).context("save conversation")?;
+                    session
+                        .set_conversation(Some(cid.clone()))
+                        .map_err(|e| Error::custom(format!("save conversation: {e}")))?;
                     Some(cid)
                 } else if let Ok(n) = choice.parse::<usize>() {
                     if n >= 1 && n <= convs.len() {
                         let cid = convs[n - 1]["id"].as_str().unwrap_or("").to_string();
-                        session.set_conversation(Some(cid.clone())).context("save conversation")?;
+                        session
+                            .set_conversation(Some(cid.clone()))
+                            .map_err(|e| Error::custom(format!("save conversation: {e}")))?;
                         Some(cid)
                     } else {
                         eprintln!("Invalid choice — using default conversation");
@@ -663,13 +719,21 @@ async fn resolve_agent_and_conversation(
                 match client.create_conversation(&agent.id, "").await {
                     Ok(conv) => {
                         let cid = conv["id"].as_str().unwrap_or("").to_string();
-                        session.set_conversation(Some(cid.clone())).context("save conversation")?;
+                        session
+                            .set_conversation(Some(cid.clone()))
+                            .map_err(|e| Error::custom(format!("save conversation: {e}")))?;
                         Some(cid)
                     }
-                    Err(e) => { eprintln!("Warning: {e}"); None }
+                    Err(e) => {
+                        eprintln!("Warning: {e}");
+                        None
+                    }
                 }
             }
-            Err(e) => { eprintln!("Warning: list_conversations: {e}"); None }
+            Err(e) => {
+                eprintln!("Warning: list_conversations: {e}");
+                None
+            }
         }
     } else {
         // Use saved conversation_id (--continue or resume from session)
@@ -689,7 +753,9 @@ async fn auto_start_server(base_url: &str) -> Result<()> {
         let mut cmd = std::process::Command::new(&server_bin);
         cade_core::agent_env::apply_agent_env(&mut cmd);
         if let Ok(log) = std::fs::OpenOptions::new()
-            .create(true).append(true).open("/tmp/cade-server.log")
+            .create(true)
+            .append(true)
+            .open("/tmp/cade-server.log")
         {
             match log.try_clone() {
                 Ok(log_stderr) => {
@@ -697,16 +763,21 @@ async fn auto_start_server(base_url: &str) -> Result<()> {
                     cmd.stderr(log_stderr);
                 }
                 Err(_) => {
-                    eprintln!("Warning: Failed to duplicate stderr for cade-server log. Falling back to stdout.");
+                    eprintln!(
+                        "Warning: Failed to duplicate stderr for cade-server log. Falling back to stdout."
+                    );
                     cmd.stdout(log);
                 }
             }
         } else {
-            eprintln!("Warning: Failed to create /tmp/cade-server.log. Server output will go to stderr.");
+            eprintln!(
+                "Warning: Failed to create /tmp/cade-server.log. Server output will go to stderr."
+            );
         }
-        let _child = cmd.spawn().context("auto-start cade-server")?;
+        let _child = cmd.spawn().map_err(|e| Error::custom(format!("auto-start cade-server: {e}")))?;
 
-        let client = CadeClient::new(base_url.to_string(), "".to_string()).unwrap();
+        let client = CadeClient::new(base_url.to_string(), "".to_string())
+            .map_err(|e| Error::custom(format!("create health-check client: {e}")))?;
         let mut ready = false;
         for _ in 0..10 {
             tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
@@ -716,18 +787,19 @@ async fn auto_start_server(base_url: &str) -> Result<()> {
             }
         }
         if !ready {
-            bail!(
+            return Err(Error::custom(format!(
                 "cade-server failed to start. Check /tmp/cade-server.log\n\
-                 Or start it manually: {}", server_bin.display()
-            );
+                 Or start it manually: {}",
+                server_bin.display()
+            )));
         }
         tracing::info!("cade-server ready.");
         Ok(())
     } else {
-        bail!(
+        return Err(Error::custom(
             "Cannot connect to CADE server at {base_url}.\n\
              Start cade-server first: ./target/release/cade-server"
-        );
+        ));
     }
 }
 
@@ -738,11 +810,14 @@ async fn main() -> Result<()> {
     // directly to the terminal at the current cursor position (the input field),
     // corrupting the display.  Fall back to discarding logs if the file can't
     // be opened.
-    let log_writer: Box<dyn std::io::Write + Send + Sync> =
-        match std::fs::OpenOptions::new().create(true).append(true).open("/tmp/cade.log") {
-            Ok(f)  => Box::new(f),
-            Err(_) => Box::new(std::io::sink()),
-        };
+    let log_writer: Box<dyn std::io::Write + Send + Sync> = match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/cade.log")
+    {
+        Ok(f) => Box::new(f),
+        Err(_) => Box::new(std::io::sink()),
+    };
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
@@ -755,19 +830,19 @@ async fn main() -> Result<()> {
     let _ = dotenvy::dotenv();
 
     let args = Args::parse();
-    let cwd = std::env::current_dir().context("get cwd")?;
+    let cwd = std::env::current_dir().map_err(|e| Error::custom(format!("get cwd: {e}")))?;
 
     // Settings + session
-    let mut settings = SettingsManager::new(&cwd).context("load settings")?;
+    let mut settings = SettingsManager::new(&cwd).map_err(|e| Error::custom(format!("load settings: {e}")))?;
     let mut session = SessionStore::load(&cwd);
 
     // API credentials
     let api_key = settings
         .api_key()
-        .context("No CADE_API_KEY. Set via env var or ~/.cade/settings.json")?;
+        .ok_or_else(|| Error::custom("No CADE_API_KEY. Set via env var or ~/.cade/settings.json"))?;
     let base_url = settings.base_url();
 
-    let client = CadeClient::new(base_url.clone(), api_key).context("create CADE server")?;
+    let client = CadeClient::new(base_url.clone(), api_key).map_err(|e| Error::custom(format!("create CADE server: {e}")))?;
 
     if !client.health().await.unwrap_or(false) {
         auto_start_server(&base_url).await?;
@@ -814,7 +889,7 @@ async fn main() -> Result<()> {
     let perm_mode: PermissionMode = args
         .effective_permission_mode()
         .parse()
-        .context("invalid permission mode")?;
+        .map_err(|e| Error::custom(format!("invalid permission mode: {e}")))?;
     let strict_bash = settings.permission_settings().strict_bash;
     let permissions = PermissionManager::new_with_strict_bash(perm_mode, strict_bash);
 
@@ -886,8 +961,8 @@ async fn main() -> Result<()> {
         &cwd,
         &mut session,
         &mut settings,
-    ).await?;
-
+    )
+    .await?;
 
     // -- MCP server startup
     let mcp_configs = settings.merged_mcp_servers();
@@ -897,7 +972,7 @@ async fn main() -> Result<()> {
         println!("Starting {} MCP server(s)…", mcp_configs.len());
         let mgr = McpManager::start(&mcp_configs).await;
         let count = mgr.status().await.len();
-        let total  = mcp_configs.len();
+        let total = mcp_configs.len();
         if count == 0 {
             eprintln!("Warning: no MCP servers started successfully");
         } else {
@@ -915,7 +990,8 @@ async fn main() -> Result<()> {
     // below re-attach only this session's live MCP tools.
     {
         let non_mcp_ids: Vec<String> = client
-            .get_agent_tools(&agent.id).await
+            .get_agent_tools(&agent.id)
+            .await
             .unwrap_or_default()
             .into_iter()
             .filter(|(_, name)| !name.contains("__"))
@@ -971,7 +1047,11 @@ async fn main() -> Result<()> {
         if !mcp.is_empty().await {
             use agent::tools::register_mcp_tools;
             let mcp_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas().await)
-                .await.unwrap_or_default().into_iter().map(|t| t.id).collect();
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|t| t.id)
+                .collect();
             if !mcp_ids.is_empty() {
                 let _ = client.attach_agent_tools(&agent.id, &mcp_ids).await;
             }
@@ -988,7 +1068,10 @@ async fn main() -> Result<()> {
         }
         match client.rename_agent(&agent.id, new_name).await {
             Ok(_) => println!("✓ Renamed '{}' → '{new_name}'  ({})", agent.name, agent.id),
-            Err(e) => { eprintln!("✗ {e}"); std::process::exit(1); }
+            Err(e) => {
+                eprintln!("✗ {e}");
+                std::process::exit(1);
+            }
         }
         return Ok(());
     }
@@ -996,11 +1079,16 @@ async fn main() -> Result<()> {
     // Migrate old system prompt: if the stored prompt is the minimal server fallback
     // (no "Never introduce yourself" rule) update it to BASE_SYSTEM_PROMPT.
     // This runs once per old agent; after the update the check is skipped.
-    if agent.system_prompt.as_deref()
+    if agent
+        .system_prompt
+        .as_deref()
         .map(|p| !p.contains("Never introduce yourself"))
         .unwrap_or(true)
     {
-        if let Err(e) = client.patch_agent_system_prompt(&agent.id, BASE_SYSTEM_PROMPT).await {
+        if let Err(e) = client
+            .patch_agent_system_prompt(&agent.id, BASE_SYSTEM_PROMPT)
+            .await
+        {
             tracing::warn!("migrate system_prompt: {e}");
         } else {
             tracing::info!("Migrated system_prompt for agent {}", agent.id);
@@ -1022,7 +1110,9 @@ async fn main() -> Result<()> {
                 let needs_migration = v.starts_with("CADE is") || v.starts_with("I am CADE");
                 if needs_migration {
                     let (_, new_val, new_desc, _) = DEFAULT_MEMORY_BLOCKS[0]; // persona entry
-                    let _ = client.upsert_memory(&agent.id, "persona", new_val, Some(new_desc)).await;
+                    let _ = client
+                        .upsert_memory(&agent.id, "persona", new_val, Some(new_desc))
+                        .await;
                     break;
                 }
             }
@@ -1043,11 +1133,7 @@ async fn main() -> Result<()> {
         let mut buf = String::new();
         std::io::stdin().read_to_string(&mut buf).ok();
         let s = buf.trim().to_string();
-        if s.is_empty() {
-            None
-        } else {
-            Some(s)
-        }
+        if s.is_empty() { None } else { Some(s) }
     } else {
         None
     };
@@ -1063,51 +1149,79 @@ async fn main() -> Result<()> {
         let fmt = args.effective_output_format();
         let timeout_secs = args.timeout_secs;
 
+        // SessionStart hook (non-blocking) for headless runs
+        if !hook_engine.is_empty() {
+            hook_engine.session_start(&agent.id).await;
+        }
+
         if fmt == "stream-json" {
             let run = cli::headless::run_headless_stream_json(
-                &client, &agent.id, &default_model, &prompt, &permissions, &mcp
+                &client,
+                &agent.id,
+                &default_model,
+                &prompt,
+                &permissions,
+                &mcp,
+                &hook_engine,
             );
             if timeout_secs > 0 {
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(timeout_secs),
-                    run
-                ).await {
+                match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), run).await
+                {
                     Ok(_) => {}
                     Err(_) => {
-                        eprintln!("{}", json!({
-                            "type":     "result",
-                            "subtype":  "error",
-                            "is_error": true,
-                            "error":    format!("Headless run timed out after {timeout_secs}s"),
-                            "agent_id": agent.id,
-                        }));
+                        eprintln!(
+                            "{}",
+                            json!({
+                                "type":     "result",
+                                "subtype":  "error",
+                                "is_error": true,
+                                "error":    format!("Headless run timed out after {timeout_secs}s"),
+                                "agent_id": agent.id,
+                            })
+                        );
+                        if !hook_engine.is_empty() {
+                            hook_engine.session_end(&agent.id).await;
+                        }
                         std::process::exit(124);
                     }
                 }
             } else {
                 run.await;
             }
+            if !hook_engine.is_empty() {
+                hook_engine.session_end(&agent.id).await;
+            }
             std::process::exit(0);
         }
 
-        let run = cli::headless::run_headless(&client, &agent.id, &prompt, &permissions, &mcp);
+        let run = cli::headless::run_headless(
+            &client,
+            &agent.id,
+            &prompt,
+            &permissions,
+            &mcp,
+            &hook_engine,
+        );
         let result = if timeout_secs > 0 {
-            match tokio::time::timeout(
-                std::time::Duration::from_secs(timeout_secs),
-                run
-            ).await {
+            match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), run).await {
                 Ok(r) => r,
                 Err(_) => {
                     if fmt == "json" {
-                        eprintln!("{}", json!({
-                            "type":     "result",
-                            "subtype":  "error",
-                            "is_error": true,
-                            "error":    format!("Headless run timed out after {timeout_secs}s"),
-                            "agent_id": agent.id,
-                        }));
+                        eprintln!(
+                            "{}",
+                            json!({
+                                "type":     "result",
+                                "subtype":  "error",
+                                "is_error": true,
+                                "error":    format!("Headless run timed out after {timeout_secs}s"),
+                                "agent_id": agent.id,
+                            })
+                        );
                     } else {
                         eprintln!("Error: headless run timed out after {timeout_secs}s");
+                    }
+                    if !hook_engine.is_empty() {
+                        hook_engine.session_end(&agent.id).await;
                     }
                     std::process::exit(124);
                 }
@@ -1115,18 +1229,26 @@ async fn main() -> Result<()> {
         } else {
             run.await
         };
+
+        if !hook_engine.is_empty() {
+            hook_engine.session_end(&agent.id).await;
+        }
+
         match result {
             Ok((output, stats)) => {
                 if fmt == "json" {
-                    println!("{}", json!({
-                        "type":        "result",
-                        "subtype":     "success",
-                        "is_error":    false,
-                        "duration_ms": stats.duration_ms as u64,
-                        "num_turns":   stats.turn_count,
-                        "result":      output,
-                        "agent_id":    agent.id,
-                    }));
+                    println!(
+                        "{}",
+                        json!({
+                            "type":        "result",
+                            "subtype":     "success",
+                            "is_error":    false,
+                            "duration_ms": stats.duration_ms as u64,
+                            "num_turns":   stats.turn_count,
+                            "result":      output,
+                            "agent_id":    agent.id,
+                        })
+                    );
                 } else {
                     println!("{}", sanitize_for_terminal(&output));
                 }
@@ -1134,13 +1256,16 @@ async fn main() -> Result<()> {
             }
             Err(e) => {
                 if fmt == "json" {
-                    eprintln!("{}", json!({
-                        "type":    "result",
-                        "subtype": "error",
-                        "is_error": true,
-                        "error":   e.to_string(),
-                        "agent_id": agent.id,
-                    }));
+                    eprintln!(
+                        "{}",
+                        json!({
+                            "type":    "result",
+                            "subtype": "error",
+                            "is_error": true,
+                            "error":   e.to_string(),
+                            "agent_id": agent.id,
+                        })
+                    );
                 } else {
                     eprintln!("Error: {}", sanitize_for_terminal(&e.to_string()));
                 }
@@ -1171,21 +1296,25 @@ async fn main() -> Result<()> {
     }
 
     // Export agent
-    if let Some(ref name_or_id) = args.export_agent {
-        let target_id = cli::export_import::resolve_agent_id(&client, name_or_id).await
-            .context("--export-agent: resolve agent")?;
-        let out_path = args.output.clone().unwrap_or_else(|| {
-            cli::export_import::default_export_path(name_or_id)
-        });
-        cli::export_import::export_agent_to_file(&client, &target_id, &out_path).await
-            .context("--export-agent")?;
+    if let Some(name_or_id) = &args.export_agent {
+        let target_id = cli::export_import::resolve_agent_id(&client, name_or_id)
+            .await
+            .map_err(|e| Error::custom(format!("--export-agent: resolve agent: {e}")))?;
+        let out_path = args
+            .output
+            .clone()
+            .unwrap_or_else(|| cli::export_import::default_export_path(name_or_id));
+        cli::export_import::export_agent_to_file(&client, &target_id, &out_path)
+            .await
+            .map_err(|e| Error::custom(format!("--export-agent: {e}")))?;
         return Ok(());
     }
 
     // Import agent
-    if let Some(ref import_path) = args.import_agent {
-        let new_id = cli::export_import::import_agent_from_file(&client, import_path).await
-            .context("--import-agent")?;
+    if let Some(import_path) = &args.import_agent {
+        let new_id = cli::export_import::import_agent_from_file(&client, import_path)
+            .await
+            .map_err(|e| Error::custom(format!("--import-agent: {e}")))?;
         println!("Agent ID: {new_id}");
         return Ok(());
     }

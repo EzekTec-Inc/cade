@@ -14,6 +14,8 @@ cade-ai.path      = "../cade-ai"
 cade-tui.path     = "../cade-tui"
 # -- Error handling
 anyhow.workspace       = true
+# -- Others
+derive_more.workspace  = true
 # -- Serialisation
 serde.workspace        = true
 serde_json.workspace   = true
@@ -50,3 +52,4 @@ image.workspace        = true
 
 [lints.rust]
 unsafe_code = "forbid"
+# unused = { level = "allow", priority = -1 } # For exploratory dev.

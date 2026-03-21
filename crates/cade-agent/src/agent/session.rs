@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 

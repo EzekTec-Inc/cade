@@ -31,6 +31,8 @@ serde_json     = "1"
 # Error handling
 anyhow         = "1"
 thiserror      = "2"
+# -- Others
+derive_more    = { version = "2", features = ["from", "display"] }
 
 # Logging
 tracing        = "0.1"
@@ -115,6 +117,7 @@ cade-agent   = { path = "crates/cade-agent" }
 cade-cli     = { path = "crates/cade-cli" }
 # -- Shared by both binaries
 anyhow.workspace       = true
+derive_more.workspace  = true
 tokio.workspace        = true
 tracing.workspace      = true
 tracing-subscriber.workspace = true
@@ -128,12 +131,15 @@ async-trait.workspace  = true
 tokio-stream.workspace = true
 axum.workspace         = true
 tower-http.workspace   = true
+cade-tui = { version = "0.2.0", path = "crates/cade-tui" }
+ratatui.workspace = true
 
 [dev-dependencies]
 tokio-test = "0.4"
 
 [lints.rust]
 unsafe_code = "forbid"
+# unused = { level = "allow", priority = -1 } # For exploratory dev.
 
 [profile.dev]
 opt-level = 0

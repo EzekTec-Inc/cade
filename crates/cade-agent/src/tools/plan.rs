@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::Result;
 use serde_json::{Value, json};
 
 pub struct EnterPlanModeTool;
@@ -7,7 +7,7 @@ impl EnterPlanModeTool {
         json!({
             "name": "EnterPlanMode",
             "description": "Enter a read-only planning mode. Use this when you need to explore the codebase or gather information without making any permanent changes.",
-            "input_schema": {
+            "parameters": {
                 "type": "object",
                 "properties": {},
                 "required": []
@@ -22,7 +22,7 @@ impl ExitPlanModeTool {
         json!({
             "name": "ExitPlanMode",
             "description": "Exit the read-only planning mode and resume normal operation.",
-            "input_schema": {
+            "parameters": {
                 "type": "object",
                 "properties": {},
                 "required": []
@@ -37,7 +37,7 @@ impl TodoWriteTool {
         json!({
             "name": "TodoWrite",
             "description": "Write your current plan or scratchpad to a todo file. Use this to keep track of tasks across steps.",
-            "input_schema": {
+            "parameters": {
                 "type": "object",
                 "properties": {
                     "content": {
@@ -49,7 +49,7 @@ impl TodoWriteTool {
             }
         })
     }
-    
+
     pub async fn run(args: &Value) -> Result<String> {
         let content = args["content"].as_str().unwrap_or("");
         let path = std::env::current_dir()?.join(".cade-todo.md");
@@ -64,7 +64,7 @@ impl UpdatePlanTool {
         json!({
             "name": "UpdatePlan",
             "description": "Update your plan or scratchpad.",
-            "input_schema": {
+            "parameters": {
                 "type": "object",
                 "properties": {
                     "content": {
@@ -84,7 +84,7 @@ impl WriteTodosTool {
         json!({
             "name": "WriteTodos",
             "description": "Write your current plan or scratchpad to a todo file.",
-            "input_schema": {
+            "parameters": {
                 "type": "object",
                 "properties": {
                     "content": {

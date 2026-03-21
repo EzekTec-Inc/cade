@@ -1,15 +1,18 @@
-use anyhow::Result;
+use crate::Result;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use tokio_stream::Stream;
 
-use super::{bare_model, provider_error, retry_with_backoff, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
+use super::{
+    CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
+    bare_model, provider_error, retry_with_backoff,
+};
 
 /// Recursively strip JSON Schema fields that Gemini's functionDeclarations format rejects.
 ///
@@ -38,7 +41,8 @@ fn clean_gemini_schema(v: &mut Value) {
 }
 
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
-const GEMINI_LIST_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200";
+const GEMINI_LIST_URL: &str =
+    "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200";
 
 /// Fetch all generative-content-capable models available to this API key.
 /// Filters to models that support `generateContent` and whose names contain "gemini"
@@ -49,11 +53,15 @@ pub async fn fetch_gemini_models(api_key: &str) -> Vec<(String, String)> {
     let client = reqwest::Client::new();
     let req = client.get(&url).send();
     let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
-        Ok(Ok(r))  => r,
+        Ok(Ok(r)) => r,
         Ok(Err(_)) | Err(_) => return vec![],
     };
-    if !resp.status().is_success() { return vec![]; }
-    let Ok(body) = resp.json::<Value>().await else { return vec![]; };
+    if !resp.status().is_success() {
+        return vec![];
+    }
+    let Ok(body) = resp.json::<Value>().await else {
+        return vec![];
+    };
 
     body["models"]
         .as_array()
@@ -69,10 +77,14 @@ pub async fn fetch_gemini_models(api_key: &str) -> Vec<(String, String)> {
                         .as_array()
                         .map(|a| a.iter().any(|v| v.as_str() == Some("generateContent")))
                         .unwrap_or(false);
-                    if !supports_generate { return None; }
+                    if !supports_generate {
+                        return None;
+                    }
 
                     // Only "gemini" family (excludes embedding-*, aqa, etc.)
-                    if !id.contains("gemini") { return None; }
+                    if !id.contains("gemini") {
+                        return None;
+                    }
 
                     let display = m["displayName"].as_str().unwrap_or(id).to_string();
                     Some((id.to_string(), display))
@@ -158,9 +170,10 @@ impl GeminiProvider {
             "ttl": "3600s"
         });
         if let Some(sys) = system_text
-            && !sys.is_empty() {
-                body["systemInstruction"] = json!({"parts": [{"text": sys}]});
-            }
+            && !sys.is_empty()
+        {
+            body["systemInstruction"] = json!({"parts": [{"text": sys}]});
+        }
         if !tools.is_empty() {
             body["tools"] = json!([{"functionDeclarations": tools}]);
         }
@@ -176,7 +189,10 @@ impl GeminiProvider {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
             // Log at debug — this is expected when payload is below the min-token threshold
-            tracing::debug!("Gemini cache creation {status}: {}", &text[..text.len().min(300)]);
+            tracing::debug!(
+                "Gemini cache creation {status}: {}",
+                &text[..text.len().min(300)]
+            );
             return None;
         }
         let json: Value = resp.json().await.ok()?;
@@ -210,7 +226,13 @@ impl GeminiProvider {
         // Store with 55-min TTL (5-min buffer before the 1-hour server TTL)
         let expires_at = std::time::Instant::now() + std::time::Duration::from_secs(3300);
         let mut cache = self.content_cache.lock().unwrap_or_else(|e| e.into_inner());
-        cache.insert(hash, GeminiCacheEntry { name: name.clone(), expires_at });
+        cache.insert(
+            hash,
+            GeminiCacheEntry {
+                name: name.clone(),
+                expires_at,
+            },
+        );
 
         Some(name)
     }
@@ -242,15 +264,23 @@ impl GeminiProvider {
     }
 
     fn url(&self, model: &str, stream: bool) -> String {
-        let action = if stream { "streamGenerateContent?alt=sse" } else { "generateContent" };
+        let action = if stream {
+            "streamGenerateContent?alt=sse"
+        } else {
+            "generateContent"
+        };
         // Strip provider prefix for URL construction
-        format!("{GEMINI_BASE}/{}:{action}&key={}", bare_model(model), self.api_key)
+        format!(
+            "{GEMINI_BASE}/{}:{action}&key={}",
+            bare_model(model),
+            self.api_key
+        )
     }
 
     /// Convert our messages to Gemini `contents` format
     fn to_gemini_contents(req: &CompletionRequest) -> (Option<String>, Vec<Value>) {
         let mut system_text = None;
-        let mut contents = Vec::new();
+        let mut contents: Vec<Value> = Vec::new();
 
         // Build a call_id → function_name lookup from all assistant messages
         // so that tool-result messages can supply the correct function name in
@@ -258,13 +288,25 @@ impl GeminiProvider {
         // original `functionCall.name`; using a hardcoded "tool" causes 400s).
         let mut call_id_to_name: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
+        // Track tool call IDs that lack thought_signatures.  Newer Gemini models
+        // (e.g. gemini-3.x) require a `thoughtSignature` on every `functionCall`
+        // part.  Historical calls from other providers (Anthropic, OpenAI) or
+        // older Gemini models will not have one — we convert those exchanges to
+        // plain text summaries so the model still sees the context without
+        // triggering a 400 validation error.
+        let mut unsigned_call_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for msg in &req.messages {
             if msg.role == "assistant"
-                && let Some(calls) = &msg.tool_calls {
-                    for tc in calls {
-                        call_id_to_name.insert(tc.id.clone(), tc.name.clone());
+                && let Some(calls) = &msg.tool_calls
+            {
+                for tc in calls {
+                    call_id_to_name.insert(tc.id.clone(), tc.name.clone());
+                    if tc.thought_signature.is_none() {
+                        unsigned_call_ids.insert(tc.id.clone());
                     }
                 }
+            }
         }
 
         // Use indexed iteration so consecutive "tool" messages can be batched
@@ -284,59 +326,187 @@ impl GeminiProvider {
                     // Batch ALL consecutive tool messages into one user turn.
                     // Resolves each function name from the pre-built lookup so the
                     // functionResponse.name always matches its functionCall.name.
-                    let mut parts: Vec<Value> = Vec::new();
-                    while i < req.messages.len() && req.messages[i].role == "tool" {
-                        let m = &req.messages[i];
-                        let fn_name = m.tool_call_id
-                            .as_deref()
-                            .and_then(|id| call_id_to_name.get(id).map(String::as_str))
-                            .or(m.tool_call_id.as_deref())
-                            .unwrap_or("tool")
-                            .to_string();
-                        parts.push(json!({ "functionResponse": {
-                            "name": fn_name,
-                            "response": { "result": m.content }
-                        }}));
-                        i += 1;
+                    //
+                    // If ANY tool result in this batch belongs to a tool call
+                    // that lacked a thought_signature, the entire batch is
+                    // converted to plain text.  Gemini rejects mixed
+                    // functionResponse / text parts in the same turn when some
+                    // of the matching functionCall parts had no signature.
+                    let _batch_start = i;
+                    let mut has_unsigned = false;
+                    {
+                        let mut j = i;
+                        while j < req.messages.len() && req.messages[j].role == "tool" {
+                            if let Some(id) = &req.messages[j].tool_call_id {
+                                if unsigned_call_ids.contains(id) {
+                                    has_unsigned = true;
+                                }
+                            }
+                            j += 1;
+                        }
                     }
-                    contents.push(json!({"role": "user", "parts": parts}));
+
+                    if has_unsigned {
+                        // Convert to text summaries instead of functionResponse
+                        let mut text_parts: Vec<String> = Vec::new();
+                        while i < req.messages.len() && req.messages[i].role == "tool" {
+                            let m = &req.messages[i];
+                            let fn_name = m
+                                .tool_call_id
+                                .as_deref()
+                                .and_then(|id| call_id_to_name.get(id).map(String::as_str))
+                                .unwrap_or("tool");
+                            let content_preview: String = m.content.chars().take(500).collect();
+                            let truncated = if m.content.chars().count() > 500 {
+                                "…"
+                            } else {
+                                ""
+                            };
+                            text_parts.push(format!(
+                                "[Result of '{fn_name}': {content_preview}{truncated}]"
+                            ));
+                            i += 1;
+                        }
+                        let text = text_parts.join("\n");
+                        // Merge with preceding user turn if possible
+                        let merged = if let Some(last) = contents.last_mut() {
+                            if last.get("role").and_then(|v| v.as_str()) == Some("user") {
+                                if let Some(arr) =
+                                    last.get_mut("parts").and_then(|v| v.as_array_mut())
+                                {
+                                    arr.push(json!({"text": text}));
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        if !merged {
+                            contents.push(json!({"role": "user", "parts": [{"text": text}]}));
+                        }
+                    } else {
+                        let mut parts: Vec<Value> = Vec::new();
+                        while i < req.messages.len() && req.messages[i].role == "tool" {
+                            let m = &req.messages[i];
+                            let fn_name = m
+                                .tool_call_id
+                                .as_deref()
+                                .and_then(|id| call_id_to_name.get(id).map(String::as_str))
+                                .or(m.tool_call_id.as_deref())
+                                .unwrap_or("tool")
+                                .to_string();
+                            parts.push(json!({ "functionResponse": {
+                                "name": fn_name,
+                                "response": { "result": m.content }
+                            }}));
+                            i += 1;
+                        }
+                        contents.push(json!({"role": "user", "parts": parts}));
+                    }
                 }
                 "assistant" if msg.tool_calls.is_some() => {
-                    // Build parts: optional text first, then all functionCall parts.
-                    // Including any text prevents a separate preceding model(text) turn
-                    // from being orphaned when the message has both content and calls.
-                    let mut all_parts: Vec<Value> = Vec::new();
-                    if !msg.content.is_empty() {
-                        all_parts.push(json!({"text": msg.content}));
-                    }
-                    for tc in msg.tool_calls.as_ref().unwrap().iter() {
-                        let mut fc = serde_json::Map::new();
-                        fc.insert("name".to_string(), json!(tc.name));
-                        fc.insert("args".to_string(), tc.arguments.clone());
-                        let mut part = serde_json::Map::new();
-                        part.insert("functionCall".to_string(), Value::Object(fc));
-                        if let Some(sig) = &tc.thought_signature {
-                            part.insert("thoughtSignature".to_string(), json!(sig));
+                    // Check whether any tool call in this message lacks a
+                    // thought_signature.  If so, convert the entire turn to a
+                    // plain text summary.  Gemini models that enforce thought
+                    // signatures reject functionCall parts without one.
+                    let has_unsigned = msg
+                        .tool_calls
+                        .as_deref()
+                        .unwrap_or_default()
+                        .iter()
+                        .any(|tc| unsigned_call_ids.contains(&tc.id));
+
+                    if has_unsigned {
+                        // Fallback: emit a text-only model turn summarising
+                        // what the assistant did.
+                        let mut text_parts: Vec<String> = Vec::new();
+                        if !msg.content.is_empty() {
+                            text_parts.push(msg.content.clone());
                         }
-                        all_parts.push(Value::Object(part));
+                        for tc in msg.tool_calls.as_deref().unwrap_or_default() {
+                            let args_str = serde_json::to_string(&tc.arguments).unwrap_or_default();
+                            let args_preview: String = args_str.chars().take(200).collect();
+                            let truncated = if args_str.chars().count() > 200 {
+                                "…"
+                            } else {
+                                ""
+                            };
+                            text_parts
+                                .push(format!("[Called '{}': {args_preview}{truncated}]", tc.name));
+                        }
+                        let summary = text_parts.join("\n");
+                        if !summary.is_empty() {
+                            let merged = if let Some(last) = contents.last_mut() {
+                                if last.get("role").and_then(|v| v.as_str()) == Some("model") {
+                                    if let Some(arr) =
+                                        last.get_mut("parts").and_then(|v| v.as_array_mut())
+                                    {
+                                        arr.push(json!({"text": summary}));
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
+                            if !merged {
+                                contents
+                                    .push(json!({"role": "model", "parts": [{"text": summary}]}));
+                            }
+                        }
+                        i += 1;
+                    } else {
+                        // Build parts: optional text first, then all functionCall parts.
+                        // Including any text prevents a separate preceding model(text) turn
+                        // from being orphaned when the message has both content and calls.
+                        let mut all_parts: Vec<Value> = Vec::new();
+                        if !msg.content.is_empty() {
+                            all_parts.push(json!({"text": msg.content}));
+                        }
+                        for tc in msg.tool_calls.as_deref().unwrap_or_default().iter() {
+                            let mut fc = serde_json::Map::new();
+                            fc.insert("name".to_string(), json!(tc.name));
+                            fc.insert("args".to_string(), tc.arguments.clone());
+                            let mut part = serde_json::Map::new();
+                            part.insert("functionCall".to_string(), Value::Object(fc));
+                            if let Some(sig) = &tc.thought_signature {
+                                part.insert("thoughtSignature".to_string(), json!(sig));
+                            }
+                            all_parts.push(Value::Object(part));
+                        }
+                        // If the immediately preceding contents entry is already a model
+                        // turn (e.g., a text-only assistant message that preceded this
+                        // tool-call message after context trimming removed the user turn
+                        // between them), merge our parts into it.  Two consecutive model
+                        // turns cause Gemini 400 "function call turn ordering" errors.
+                        let merged = if let Some(last) = contents.last_mut() {
+                            if last.get("role").and_then(|v| v.as_str()) == Some("model") {
+                                if let Some(arr) =
+                                    last.get_mut("parts").and_then(|v| v.as_array_mut())
+                                {
+                                    arr.append(&mut all_parts);
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+                        if !merged {
+                            contents.push(json!({"role": "model", "parts": all_parts}));
+                        }
+                        i += 1;
                     }
-                    // If the immediately preceding contents entry is already a model
-                    // turn (e.g., a text-only assistant message that preceded this
-                    // tool-call message after context trimming removed the user turn
-                    // between them), merge our parts into it.  Two consecutive model
-                    // turns cause Gemini 400 "function call turn ordering" errors.
-                    let merged = if let Some(last) = contents.last_mut() {
-                        if last.get("role").and_then(|v| v.as_str()) == Some("model") {
-                            if let Some(arr) = last.get_mut("parts").and_then(|v| v.as_array_mut()) {
-                                arr.append(&mut all_parts);
-                                true
-                            } else { false }
-                        } else { false }
-                    } else { false };
-                    if !merged {
-                        contents.push(json!({"role": "model", "parts": all_parts}));
-                    }
-                    i += 1;
                 }
                 "assistant" => {
                     // Gemini rejects empty text parts — only add the message if
@@ -379,13 +549,23 @@ impl GeminiProvider {
                         // to avoid the Gemini API rejecting mixed inline_data in a merged part.
                         if let Some(last) = contents.last_mut() {
                             if last.get("role").and_then(|v| v.as_str()) == Some("user") {
-                                if let Some(arr) = last.get_mut("parts").and_then(|v| v.as_array_mut()) {
+                                if let Some(arr) =
+                                    last.get_mut("parts").and_then(|v| v.as_array_mut())
+                                {
                                     arr.append(&mut new_parts);
                                     true
-                                } else { false }
-                            } else { false }
-                        } else { false }
-                    } else { false };
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    };
 
                     if !merged {
                         contents.push(json!({
@@ -402,7 +582,10 @@ impl GeminiProvider {
 
     fn parse_response(body: &Value) -> CompletionResponse {
         let candidate = &body["candidates"][0];
-        let finish_reason = candidate["finishReason"].as_str().unwrap_or("STOP").to_string();
+        let finish_reason = candidate["finishReason"]
+            .as_str()
+            .unwrap_or("STOP")
+            .to_string();
         let mut content = None;
         let mut tool_calls = Vec::new();
 
@@ -412,19 +595,24 @@ impl GeminiProvider {
                     content = Some(text.to_string());
                 }
                 if let Some(fc) = part.get("functionCall") {
-                    let thought_signature = part["thoughtSignature"].as_str()
+                    let thought_signature = part["thoughtSignature"]
+                        .as_str()
                         .or(part["thought_signature"].as_str())
                         .map(String::from);
                     tool_calls.push(LlmToolCall {
-                        id:                uuid::Uuid::new_v4().to_string(),
-                        name:              fc["name"].as_str().unwrap_or("").to_string(),
-                        arguments:         fc["args"].clone(),
+                        id: uuid::Uuid::new_v4().to_string(),
+                        name: fc["name"].as_str().unwrap_or("").to_string(),
+                        arguments: fc["args"].clone(),
                         thought_signature,
                     });
                 }
             }
         }
-        CompletionResponse { content, tool_calls, finish_reason }
+        CompletionResponse {
+            content,
+            tool_calls,
+            finish_reason,
+        }
     }
 }
 
@@ -432,76 +620,106 @@ impl GeminiProvider {
 impl LlmProvider for GeminiProvider {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
         let (system_text, contents) = Self::to_gemini_contents(req);
-        let tools: Vec<Value> = req.tools.iter().map(|s| {
-            let mut params = s["parameters"].clone();
-            clean_gemini_schema(&mut params);
-            json!({
-                "name": s["name"],
-                "description": s["description"],
-                "parameters": params
+        let tools: Vec<Value> = req
+            .tools
+            .iter()
+            .map(|s| {
+                let mut params = s
+                    .get("parameters")
+                    .filter(|v| !v.is_null())
+                    .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
+                    .cloned()
+                    .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
+                clean_gemini_schema(&mut params);
+                json!({
+                    "name": s["name"],
+                    "description": s["description"],
+                    "parameters": params
+                })
             })
-        }).collect();
+            .collect();
 
         let base_body = json!({ "contents": contents });
-        let body = self.apply_system_and_tools(
-            bare_model(&req.model), base_body, &system_text, &tools
-        ).await;
+        let body = self
+            .apply_system_and_tools(bare_model(&req.model), base_body, &system_text, &tools)
+            .await;
 
         let url = self.url(&req.model, false);
-        retry_with_backoff("Gemini::complete", 3, std::time::Duration::from_secs(1), |_| {
-            let client = self.client.clone();
-            let url    = url.clone();
-            let body   = body.clone();
-            async move {
-                let resp = client.post(&url).json(&body).send().await?;
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    let text = resp.text().await.unwrap_or_default();
-                    return Err(provider_error("Gemini", status, &text));
+        retry_with_backoff(
+            "Gemini::complete",
+            3,
+            std::time::Duration::from_secs(1),
+            |_| {
+                let client = self.client.clone();
+                let url = url.clone();
+                let body = body.clone();
+                async move {
+                    let resp = client.post(&url).json(&body).send().await?;
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(provider_error("Gemini", status, &text));
+                    }
+                    Ok(Self::parse_response(&resp.json::<Value>().await?))
                 }
-                Ok(Self::parse_response(&resp.json::<Value>().await?))
-            }
-        }).await
+            },
+        )
+        .await
     }
 
     async fn stream(
         &self,
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
-        let req_model = req.model.clone();   // extracted before async_stream to avoid lifetime capture
+        let req_model = req.model.clone(); // extracted before async_stream to avoid lifetime capture
         let (system_text, contents) = Self::to_gemini_contents(req);
-        let tools: Vec<Value> = req.tools.iter().map(|s| {
-            let mut params = s["parameters"].clone();
-            clean_gemini_schema(&mut params);
-            json!({"name": s["name"], "description": s["description"], "parameters": params})
-        }).collect();
+        let tools: Vec<Value> = req
+            .tools
+            .iter()
+            .map(|s| {
+                let mut params = s
+                    .get("parameters")
+                    .filter(|v| !v.is_null())
+                    .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
+                    .cloned()
+                    .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
+                clean_gemini_schema(&mut params);
+                json!({"name": s["name"], "description": s["description"], "parameters": params})
+            })
+            .collect();
 
         let base_body = json!({ "contents": contents });
-        let body = self.apply_system_and_tools(
-            bare_model(&req_model), base_body, &system_text, &tools
-        ).await;
+        let body = self
+            .apply_system_and_tools(bare_model(&req_model), base_body, &system_text, &tools)
+            .await;
 
         let url = self.url(&req_model, true);
-        let resp = retry_with_backoff("Gemini::stream", 3, std::time::Duration::from_secs(1), |_| {
-            let client = self.client.clone();
-            let url    = url.clone();
-            let body   = body.clone();
-            async move {
-                let resp = client.post(&url).json(&body).send().await?;
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    let text = resp.text().await.unwrap_or_default();
-                    return Err(provider_error("Gemini", status, &text));
+        let resp = retry_with_backoff(
+            "Gemini::stream",
+            3,
+            std::time::Duration::from_secs(1),
+            |_| {
+                let client = self.client.clone();
+                let url = url.clone();
+                let body = body.clone();
+                async move {
+                    let resp = client.post(&url).json(&body).send().await?;
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(provider_error("Gemini", status, &text));
+                    }
+                    Ok(resp)
                 }
-                Ok(resp)
-            }
-        }).await?;
+            },
+        )
+        .await?;
 
         let mut byte_stream = resp.bytes_stream();
         let s = stream! {
             let mut buf = String::new();
             while let Some(chunk) = byte_stream.next().await {
-                let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(anyhow::anyhow!("{e}")); break; } };
+                let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(crate::Error::custom(format!("{e}"))); break; } };
                 buf.push_str(&String::from_utf8_lossy(&chunk));
 
                 while let Some(pos) = buf.find('\n') {
@@ -562,8 +780,9 @@ impl LlmProvider for GeminiProvider {
                                     }
                                 }
                             }
-                            
-                            if candidate["finishReason"].as_str().is_some() {
+
+                            if let Some(reason) = candidate["finishReason"].as_str() {
+                                yield Ok(StreamChunk::FinishReason(reason.to_string()));
                                 yield Ok(StreamChunk::Done); return;
                             }
                         }

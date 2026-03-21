@@ -1,7 +1,7 @@
-use anyhow::Result;
+use crate::Result;
 use serde_json::{Value, json};
 
-use super::client::{CreateToolRequest, CadeClient, ToolDef};
+use super::client::{CadeClient, CreateToolRequest, ToolDef};
 use crate::tools::schemas_for_toolset;
 use cade_core::toolsets::Toolset;
 
@@ -9,33 +9,18 @@ use cade_core::toolsets::Toolset;
 ///
 /// Skips already-registered tools (by name) to stay idempotent across restarts.
 /// Returns the full list of `ToolDef`s — needed for `attach_agent_tools()`.
-pub async fn register_mcp_tools(
-    client: &CadeClient,
-    schemas: Vec<Value>,
-) -> Result<Vec<ToolDef>> {
+pub async fn register_mcp_tools(client: &CadeClient, schemas: Vec<Value>) -> Result<Vec<ToolDef>> {
     if schemas.is_empty() {
         return Ok(vec![]);
     }
 
-    // Fetch existing tools once — avoids N individual lookups
-    let existing = client.list_tools().await.unwrap_or_default();
-    let existing_map: std::collections::HashMap<String, ToolDef> =
-        existing.into_iter().map(|t| (t.name.clone(), t)).collect();
-
     let mut registered = Vec::new();
 
     for schema in schemas {
-        let name        = schema["name"].as_str().unwrap_or("").to_string();
+        let name = schema["name"].as_str().unwrap_or("").to_string();
         let description = schema["description"].as_str().unwrap_or("").to_string();
 
         if name.is_empty() {
-            continue;
-        }
-
-        // Already registered on this server — reuse, don't re-create
-        if let Some(existing_tool) = existing_map.get(&name) {
-            tracing::debug!("MCP tool '{}' already registered — reusing", name);
-            registered.push(existing_tool.clone());
             continue;
         }
 
@@ -66,25 +51,11 @@ pub async fn register_mcp_tools(
 ///
 /// Execution happens client-side in Rust — the Python stubs are never run.
 pub async fn register_cade_tools(client: &CadeClient, toolset: Toolset) -> Result<Vec<ToolDef>> {
-    // Fetch already-registered tools so we skip re-registration
-    let existing = client.list_tools().await.unwrap_or_default();
-    let existing_names: std::collections::HashSet<String> =
-        existing.iter().map(|t| t.name.clone()).collect();
-
     let mut registered = Vec::new();
 
     for schema in schemas_for_toolset(toolset) {
         let name = schema["name"].as_str().unwrap_or("").to_string();
         let description = schema["description"].as_str().unwrap_or("").to_string();
-
-        // Skip if already registered on the server
-        if existing_names.contains(&name) {
-            if let Some(t) = existing.iter().find(|t| t.name == name) {
-                tracing::debug!("Tool '{}' already registered — reusing", name);
-                registered.push(t.clone());
-            }
-            continue;
-        }
 
         // Build a Python stub whose function name matches the tool name.
         // CADE server the tool name from `def <name>(...)`, so this must
@@ -93,10 +64,18 @@ pub async fn register_cade_tools(client: &CadeClient, toolset: Toolset) -> Resul
 
         // Full OpenAI-compatible JSON schema (the API accepts this to override
         // what it would auto-generate from the stub)
+        // Tool schemas may use either "parameters" or "input_schema" as the key;
+        // normalise to "parameters" for storage so build_body() always finds it.
+        let params = schema
+            .get("parameters")
+            .filter(|v| !v.is_null())
+            .or_else(|| schema.get("input_schema").filter(|v| !v.is_null()))
+            .cloned()
+            .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
         let json_schema = json!({
             "name": name,
             "description": description,
-            "parameters": schema["parameters"]
+            "parameters": params
         });
 
         let req = CreateToolRequest {
@@ -168,21 +147,21 @@ fn build_python_stub(name: &str, description: &str, params: &Value) -> String {
 fn json_type_to_python(json_type: &str) -> &'static str {
     match json_type {
         "integer" => "int",
-        "number"  => "float",
+        "number" => "float",
         "boolean" => "bool",
-        "array"   => "list",
-        "object"  => "dict",
-        _         => "str",  // default: string
+        "array" => "list",
+        "object" => "dict",
+        _ => "str", // default: string
     }
 }
 
 fn python_default(py_type: &str) -> &'static str {
     match py_type {
-        "int"   => "0",
+        "int" => "0",
         "float" => "0.0",
-        "bool"  => "False",
-        "list"  => "None",
-        "dict"  => "None",
-        _       => "None",
+        "bool" => "False",
+        "list" => "None",
+        "dict" => "None",
+        _ => "None",
     }
 }

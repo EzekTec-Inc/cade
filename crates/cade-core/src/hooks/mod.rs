@@ -7,10 +7,9 @@
 ///   - Exit codes: 0=allow, 1=log+continue, 2=block+stderr→agent
 ///   - PostToolUse stdout with {"additionalContext":"..."} is injected into tool result
 // region:    --- Modules
-
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use tokio::process::Command;
 
 use crate::settings::manager::HooksConfig;
@@ -28,7 +27,9 @@ pub enum HookOutcome {
 }
 
 impl HookOutcome {
-    pub fn is_block(&self) -> bool { matches!(self, Self::Block { .. }) }
+    pub fn is_block(&self) -> bool {
+        matches!(self, Self::Block { .. })
+    }
 
     pub fn reason(&self) -> Option<&str> {
         match self {
@@ -43,15 +44,20 @@ impl HookOutcome {
 #[derive(Clone)]
 pub struct HookEngine {
     hooks: Arc<HooksConfig>,
-    cwd:   PathBuf,
+    cwd: PathBuf,
 }
 
 impl HookEngine {
     pub fn new(hooks: HooksConfig, cwd: PathBuf) -> Self {
-        Self { hooks: Arc::new(hooks), cwd }
+        Self {
+            hooks: Arc::new(hooks),
+            cwd,
+        }
     }
 
-    pub fn is_empty(&self) -> bool { self.hooks.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.hooks.is_empty()
+    }
 
     // -- Tool lifecycle
 
@@ -63,7 +69,8 @@ impl HookEngine {
             "tool_name":         tool_name,
             "tool_input":        args,
         });
-        self.run_entries_blocking(&self.hooks.pre_tool_use, tool_name, input).await
+        self.run_entries_blocking(&self.hooks.pre_tool_use, tool_name, input)
+            .await
     }
 
     /// Fire after a tool succeeds.
@@ -85,7 +92,8 @@ impl HookEngine {
             "preceding_reasoning":       preceding_reasoning.unwrap_or(""),
             "preceding_assistant_message": preceding_assistant_message.unwrap_or(""),
         });
-        self.run_entries_context(&self.hooks.post_tool_use, tool_name, input).await
+        self.run_entries_context(&self.hooks.post_tool_use, tool_name, input)
+            .await
     }
 
     /// Fire after a tool fails (non-blocking).
@@ -106,7 +114,8 @@ impl HookEngine {
             "preceding_reasoning":       preceding_reasoning.unwrap_or(""),
             "preceding_assistant_message": preceding_assistant_message.unwrap_or(""),
         });
-        self.run_entries_fire_forget(&self.hooks.post_tool_use_failure, tool_name, input).await;
+        self.run_entries_fire_forget(&self.hooks.post_tool_use_failure, tool_name, input)
+            .await;
     }
 
     /// Fire when the permission prompt is about to appear. Returns `Block` to
@@ -118,7 +127,8 @@ impl HookEngine {
             "tool_name":         tool_name,
             "tool_input":        args,
         });
-        self.run_entries_blocking(&self.hooks.permission_request, tool_name, input).await
+        self.run_entries_blocking(&self.hooks.permission_request, tool_name, input)
+            .await
     }
 
     // -- Conversation lifecycle
@@ -130,7 +140,8 @@ impl HookEngine {
             "working_directory": self.cwd,
             "prompt":            prompt,
         });
-        self.run_all_blocking(&self.hooks.user_prompt_submit, input).await
+        self.run_all_blocking(&self.hooks.user_prompt_submit, input)
+            .await
     }
 
     /// Fire when the agent finishes responding (no more tool calls). Returns
@@ -167,7 +178,8 @@ impl HookEngine {
             "result":         result,
             "is_error":       is_error,
         });
-        self.run_all_blocking(&self.hooks.subagent_stop, input).await
+        self.run_all_blocking(&self.hooks.subagent_stop, input)
+            .await
     }
 
     /// Fire at session start (non-blocking).
@@ -177,7 +189,8 @@ impl HookEngine {
             "working_directory": self.cwd,
             "agent_id":          agent_id,
         });
-        self.run_all_fire_forget(&self.hooks.session_start, input).await;
+        self.run_all_fire_forget(&self.hooks.session_start, input)
+            .await;
     }
 
     /// Fire at session end (non-blocking).
@@ -187,7 +200,8 @@ impl HookEngine {
             "working_directory": self.cwd,
             "agent_id":          agent_id,
         });
-        self.run_all_fire_forget(&self.hooks.session_end, input).await;
+        self.run_all_fire_forget(&self.hooks.session_end, input)
+            .await;
     }
 
     /// Fire when a desktop notification is sent (non-blocking).
@@ -197,7 +211,8 @@ impl HookEngine {
             "message":    message,
             "level":      level,
         });
-        self.run_all_fire_forget(&self.hooks.notification, input).await;
+        self.run_all_fire_forget(&self.hooks.notification, input)
+            .await;
     }
 }
 
@@ -212,7 +227,9 @@ impl HookEngine {
         input: Value,
     ) -> HookOutcome {
         for entry in entries {
-            if !matcher_matches(&entry.matcher, tool_name) { continue; }
+            if !matcher_matches(&entry.matcher, tool_name) {
+                continue;
+            }
             for hook in &entry.hooks {
                 match run_hook_command(hook, &input, &self.cwd).await {
                     HookResult::Block(reason) => return HookOutcome::Block { reason },
@@ -249,7 +266,9 @@ impl HookEngine {
     ) -> Option<String> {
         let mut context: Option<String> = None;
         for entry in entries {
-            if !matcher_matches(&entry.matcher, tool_name) { continue; }
+            if !matcher_matches(&entry.matcher, tool_name) {
+                continue;
+            }
             for hook in &entry.hooks {
                 if let Some(extra) = run_hook_command_with_context(hook, &input, &self.cwd).await {
                     context = Some(match context {
@@ -269,7 +288,9 @@ impl HookEngine {
         input: Value,
     ) {
         for entry in entries {
-            if !matcher_matches(&entry.matcher, tool_name) { continue; }
+            if !matcher_matches(&entry.matcher, tool_name) {
+                continue;
+            }
             for hook in &entry.hooks {
                 let _ = run_hook_command(hook, &input, &self.cwd).await;
             }
@@ -319,8 +340,8 @@ fn regex_match(pattern: &str, text: &str) -> bool {
 
 #[derive(Debug)]
 enum HookResult {
-    Allow,      // exit 0
-    Continue,   // exit 1 — log, action proceeds
+    Allow,         // exit 0
+    Continue,      // exit 1 — log, action proceeds
     Block(String), // exit 2 — stderr shown to agent
 }
 
@@ -336,7 +357,8 @@ async fn run_hook_command(
     let result = tokio::time::timeout(
         Duration::from_millis(timeout_ms),
         spawn_command(command, &input_str, cwd),
-    ).await;
+    )
+    .await;
 
     match result {
         Err(_) => {
@@ -347,33 +369,31 @@ async fn run_hook_command(
             tracing::warn!("Hook failed to spawn: {command}: {e}");
             HookResult::Continue
         }
-        Ok(Ok((exit_code, stdout, stderr))) => {
-            match exit_code {
-                0 => {
-                    if !stdout.is_empty() {
-                        tracing::debug!("Hook stdout: {}", stdout.trim());
-                    }
-                    HookResult::Allow
+        Ok(Ok((exit_code, stdout, stderr))) => match exit_code {
+            0 => {
+                if !stdout.is_empty() {
+                    tracing::debug!("Hook stdout: {}", stdout.trim());
                 }
-                1 => {
-                    tracing::warn!("Hook non-blocking error: {command}: {}", stderr.trim());
-                    HookResult::Continue
-                }
-                2 => {
-                    let reason = if stderr.trim().is_empty() {
-                        format!("Hook blocked: {command}")
-                    } else {
-                        stderr.trim().to_string()
-                    };
-                    tracing::info!("Hook blocked action: {reason}");
-                    HookResult::Block(reason)
-                }
-                other => {
-                    tracing::warn!("Hook unexpected exit {other}: {command}");
-                    HookResult::Continue
-                }
+                HookResult::Allow
             }
-        }
+            1 => {
+                tracing::warn!("Hook non-blocking error: {command}: {}", stderr.trim());
+                HookResult::Continue
+            }
+            2 => {
+                let reason = if stderr.trim().is_empty() {
+                    format!("Hook blocked: {command}")
+                } else {
+                    stderr.trim().to_string()
+                };
+                tracing::info!("Hook blocked action: {reason}");
+                HookResult::Block(reason)
+            }
+            other => {
+                tracing::warn!("Hook unexpected exit {other}: {command}");
+                HookResult::Continue
+            }
+        },
     }
 }
 
@@ -389,13 +409,15 @@ async fn run_hook_command_with_context(
     let result = tokio::time::timeout(
         Duration::from_millis(*timeout),
         spawn_command(command, &input_str, cwd),
-    ).await;
+    )
+    .await;
 
     match result {
         Ok(Ok((0, stdout, _))) if !stdout.trim().is_empty() => {
             // Parse stdout for additionalContext
             if let Ok(v) = serde_json::from_str::<Value>(&stdout) {
-                let ctx = v.get("additionalContext")
+                let ctx = v
+                    .get("additionalContext")
                     .or_else(|| v.pointer("/hookSpecificOutput/additionalContext"))
                     .and_then(|c| c.as_str())
                     .map(String::from);
@@ -408,7 +430,10 @@ async fn run_hook_command_with_context(
             None
         }
         Ok(Ok((2, _, stderr))) => {
-            tracing::warn!("PostToolUse hook exit 2 (ignored for PostToolUse): {}", stderr.trim());
+            tracing::warn!(
+                "PostToolUse hook exit 2 (ignored for PostToolUse): {}",
+                stderr.trim()
+            );
             None
         }
         _ => None,
@@ -419,7 +444,7 @@ async fn spawn_command(
     command: &str,
     stdin_data: &str,
     cwd: &PathBuf,
-) -> anyhow::Result<(i32, String, String)> {
+) -> crate::Result<(i32, String, String)> {
     use tokio::io::AsyncWriteExt;
 
     let mut child = {
@@ -483,7 +508,9 @@ mod tests {
 
     #[test]
     fn hook_outcome_block_with_reason() {
-        let outcome = HookOutcome::Block { reason: "denied".into() };
+        let outcome = HookOutcome::Block {
+            reason: "denied".into(),
+        };
         assert!(outcome.is_block());
         assert_eq!(outcome.reason(), Some("denied"));
     }
@@ -501,7 +528,10 @@ mod tests {
         let mut config = HooksConfig::default();
         config.pre_tool_use.push(HookEntry {
             matcher: None,
-            hooks: vec![HookDef::Command { command: "echo ok".into(), timeout: 5000 }],
+            hooks: vec![HookDef::Command {
+                command: "echo ok".into(),
+                timeout: 5000,
+            }],
         });
         let engine = HookEngine::new(config, PathBuf::from("."));
         assert!(!engine.is_empty());
@@ -535,7 +565,10 @@ mod tests {
     fn matcher_alternation() {
         assert!(matcher_matches(&Some("bash|edit_file".into()), "bash"));
         assert!(matcher_matches(&Some("bash|edit_file".into()), "edit_file"));
-        assert!(!matcher_matches(&Some("bash|edit_file".into()), "read_file"));
+        assert!(!matcher_matches(
+            &Some("bash|edit_file".into()),
+            "read_file"
+        ));
     }
 
     #[test]
@@ -550,11 +583,17 @@ mod tests {
     fn hooks_config_merge() {
         let entry_a = HookEntry {
             matcher: Some("bash".into()),
-            hooks: vec![HookDef::Command { command: "echo a".into(), timeout: 5000 }],
+            hooks: vec![HookDef::Command {
+                command: "echo a".into(),
+                timeout: 5000,
+            }],
         };
         let entry_b = HookEntry {
             matcher: Some("edit_file".into()),
-            hooks: vec![HookDef::Command { command: "echo b".into(), timeout: 5000 }],
+            hooks: vec![HookDef::Command {
+                command: "echo b".into(),
+                timeout: 5000,
+            }],
         };
 
         let mut a = HooksConfig::default();
@@ -579,7 +618,10 @@ mod tests {
         let mut config = HooksConfig::default();
         config.pre_tool_use.push(HookEntry {
             matcher: None,
-            hooks: vec![HookDef::Command { command: "exit 0".into(), timeout: 5000 }],
+            hooks: vec![HookDef::Command {
+                command: "exit 0".into(),
+                timeout: 5000,
+            }],
         });
         let engine = HookEngine::new(config, PathBuf::from("."));
         let outcome = engine.pre_tool_use("bash", &json!({})).await;
@@ -591,7 +633,10 @@ mod tests {
         let mut config = HooksConfig::default();
         config.pre_tool_use.push(HookEntry {
             matcher: None,
-            hooks: vec![HookDef::Command { command: "echo 'forbidden' >&2; exit 2".into(), timeout: 5000 }],
+            hooks: vec![HookDef::Command {
+                command: "echo 'forbidden' >&2; exit 2".into(),
+                timeout: 5000,
+            }],
         });
         let engine = HookEngine::new(config, PathBuf::from("."));
         let outcome = engine.pre_tool_use("bash", &json!({})).await;
@@ -604,7 +649,10 @@ mod tests {
         let mut config = HooksConfig::default();
         config.pre_tool_use.push(HookEntry {
             matcher: None,
-            hooks: vec![HookDef::Command { command: "exit 1".into(), timeout: 5000 }],
+            hooks: vec![HookDef::Command {
+                command: "exit 1".into(),
+                timeout: 5000,
+            }],
         });
         let engine = HookEngine::new(config, PathBuf::from("."));
         let outcome = engine.pre_tool_use("bash", &json!({})).await;
@@ -622,7 +670,9 @@ mod tests {
             }],
         });
         let engine = HookEngine::new(config, PathBuf::from("."));
-        let ctx = engine.post_tool_use("bash", &json!({}), "output", None, None).await;
+        let ctx = engine
+            .post_tool_use("bash", &json!({}), "output", None, None)
+            .await;
         assert_eq!(ctx.as_deref(), Some("extra info"));
     }
 
@@ -631,7 +681,10 @@ mod tests {
         let mut config = HooksConfig::default();
         config.pre_tool_use.push(HookEntry {
             matcher: Some("^edit_file$".into()),
-            hooks: vec![HookDef::Command { command: "exit 2".into(), timeout: 5000 }],
+            hooks: vec![HookDef::Command {
+                command: "exit 2".into(),
+                timeout: 5000,
+            }],
         });
         let engine = HookEngine::new(config, PathBuf::from("."));
         // bash should not match ^edit_file$ → allow
@@ -644,7 +697,10 @@ mod tests {
         let mut config = HooksConfig::default();
         config.pre_tool_use.push(HookEntry {
             matcher: None,
-            hooks: vec![HookDef::Command { command: "sleep 10".into(), timeout: 100 }],
+            hooks: vec![HookDef::Command {
+                command: "sleep 10".into(),
+                timeout: 100,
+            }],
         });
         let engine = HookEngine::new(config, PathBuf::from("."));
         let outcome = engine.pre_tool_use("bash", &json!({})).await;

@@ -1,10 +1,10 @@
+use crate::server::state::AppState;
 use axum::{
     extract::{Request, State},
     http::StatusCode,
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use crate::server::state::AppState;
 
 /// Bearer-token auth middleware.
 ///
@@ -13,11 +13,7 @@ use crate::server::state::AppState;
 ///
 /// If the env var is not set, the middleware is a no-op (local dev mode).
 /// The `/v1/health` endpoint is always allowed through without auth.
-pub async fn auth_middleware(
-    State(state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
     // Health check is always public
     if req.uri().path() == "/v1/health" {
         return next.run(req).await;
@@ -37,7 +33,12 @@ pub async fn auth_middleware(
 
     use subtle::ConstantTimeEq;
     match provided {
-        Some(token) if token.len() == expected.len() && token.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1 => next.run(req).await,
+        Some(token)
+            if token.len() == expected.len()
+                && token.as_bytes().ct_eq(expected.as_bytes()).unwrap_u8() == 1 =>
+        {
+            next.run(req).await
+        }
         _ => {
             tracing::warn!(
                 "Unauthorized request to {} — missing or invalid Bearer token",

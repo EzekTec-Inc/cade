@@ -1,9 +1,11 @@
-use anyhow::Result;
+// region:    --- Modules
+
+use cade::{Error, Result};
+use axum::http::{HeaderValue, Method, Request};
 use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
-use axum::http::{Request, HeaderValue, Method};
 
 use cade::server::{
     api::router,
@@ -15,12 +17,19 @@ use cade::server::{
 
 use cade_ai::{CompletionRequest, LlmProvider, LlmRouter};
 
+// endregion: --- Modules
+
 /// CADE server — LLM gateway and agent state store
 #[derive(Parser, Debug)]
 #[command(name = "cade-server", version, about)]
 struct ServerArgs {
     /// Port to listen on (overrides CADE_SERVER_PORT env var, default 8284)
-    #[arg(long = "port", short = 'p', env = "CADE_SERVER_PORT", default_value_t = 8284)]
+    #[arg(
+        long = "port",
+        short = 'p',
+        env = "CADE_SERVER_PORT",
+        default_value_t = 8284
+    )]
     port: u16,
 }
 
@@ -38,7 +47,8 @@ async fn main() -> Result<()> {
     // Parse CLI args first so --port / CADE_SERVER_PORT is available
     let args = ServerArgs::parse();
 
-    let config = ServerConfig::from_env_with_port(Some(args.port))?;
+    let config = ServerConfig::from_env_with_port(Some(args.port))
+        .map_err(|e| Error::custom(e.to_string()))?;
 
     tracing::info!(
         "CADE Server v{} | provider={} | db={}",
@@ -47,7 +57,8 @@ async fn main() -> Result<()> {
         config.db_path
     );
 
-    let db = open_db(&config.db_path)?;
+    let db = open_db(&config.db_path)
+        .map_err(|e| Error::custom(e.to_string()))?;
 
     // Build router from env vars first
     let ai_config = config.to_ai_config();
@@ -57,13 +68,22 @@ async fn main() -> Result<()> {
     let db_providers = match sqlite::list_providers(&db) {
         Ok(providers) => providers,
         Err(e) => {
-            tracing::warn!("Could not load providers from DB: {e}. Continuing with env-var providers only.");
+            tracing::warn!(
+                "Could not load providers from DB: {e}. Continuing with env-var providers only."
+            );
             vec![]
         }
     };
     for row in &db_providers {
-        if !row.enabled { continue; }
-        if let Some(p) = LlmRouter::provider_from_row(&row.kind, row.api_key.clone(), row.base_url.clone(), &ai_config) {
+        if !row.enabled {
+            continue;
+        }
+        if let Some(p) = LlmRouter::provider_from_row(
+            &row.kind,
+            row.api_key.clone(),
+            row.base_url.clone(),
+            &ai_config,
+        ) {
             // Store the API key so list_dynamic_models() can fetch live model lists.
             let key = row.api_key.clone().unwrap_or_default();
             router_inner.add_provider_with_key(row.name.clone(), p, key);
@@ -71,7 +91,10 @@ async fn main() -> Result<()> {
         }
     }
 
-    tracing::info!("Active providers: {}", router_inner.provider_names().join(", "));
+    tracing::info!(
+        "Active providers: {}",
+        router_inner.provider_names().join(", ")
+    );
 
     let llm_router = Arc::new(RwLock::new(router_inner));
     // llm field: thin Arc pointing to the router itself (router implements LlmProvider)
@@ -105,15 +128,23 @@ async fn main() -> Result<()> {
             // H-03: Restrict CORS to localhost origins only (not permissive/open)
             CorsLayer::new()
                 .allow_origin([
-                    "http://localhost".parse::<HeaderValue>().unwrap(),
+                    "http://localhost".parse::<HeaderValue>().expect("valid header"),
                     format!("http://localhost:{}", config.addr.port())
-                        .parse::<HeaderValue>().unwrap(),
-                    "http://127.0.0.1".parse::<HeaderValue>().unwrap(),
+                        .parse::<HeaderValue>()
+                        .expect("valid header"),
+                    "http://127.0.0.1".parse::<HeaderValue>().expect("valid header"),
                     format!("http://127.0.0.1:{}", config.addr.port())
-                        .parse::<HeaderValue>().unwrap(),
+                        .parse::<HeaderValue>()
+                        .expect("valid header"),
                 ])
-                .allow_methods([Method::GET, Method::POST, Method::PUT,
-                                Method::PATCH, Method::DELETE, Method::OPTIONS])
+                .allow_methods([
+                    Method::GET,
+                    Method::POST,
+                    Method::PUT,
+                    Method::PATCH,
+                    Method::DELETE,
+                    Method::OPTIONS,
+                ])
                 .allow_headers(tower_http::cors::Any),
         )
         .layer(trace_layer);
@@ -146,26 +177,35 @@ impl LlmProvider for RouterAdapter {
     async fn complete(
         &self,
         req: &CompletionRequest,
-    ) -> anyhow::Result<cade_ai::CompletionResponse> {
+    ) -> cade_ai::Result<cade_ai::CompletionResponse> {
         let (provider, bare_model) = {
             let router = self.0.read().await;
             router.resolve_provider(&req.model)?
         };
-        let routed = CompletionRequest { model: bare_model, ..req.clone() };
+        let routed = CompletionRequest {
+            model: bare_model,
+            ..req.clone()
+        };
         provider.complete(&routed).await
     }
 
     async fn stream(
         &self,
         req: &CompletionRequest,
-    ) -> anyhow::Result<std::pin::Pin<Box<dyn tokio_stream::Stream<
-        Item = anyhow::Result<cade_ai::StreamChunk>
-    > + Send>>> {
+    ) -> cade_ai::Result<
+        std::pin::Pin<
+            Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+        >,
+    > {
         let (provider, bare_model) = {
             let router = self.0.read().await;
             router.resolve_provider(&req.model)?
         };
-        let routed = CompletionRequest { model: bare_model, ..req.clone() };
+        let routed = CompletionRequest {
+            model: bare_model,
+            ..req.clone()
+        };
+        
         provider.stream(&routed).await
     }
 }

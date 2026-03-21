@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use crate::Result;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
@@ -12,7 +12,9 @@ use std::path::{Path, PathBuf};
 fn fs_root() -> Option<PathBuf> {
     std::env::var("CADE_FS_ROOT").ok().and_then(|v| {
         let v = v.trim().to_string();
-        if v.is_empty() { return None; }
+        if v.is_empty() {
+            return None;
+        }
         Some(std::fs::canonicalize(&v).unwrap_or_else(|_| PathBuf::from(v)))
     })
 }
@@ -23,7 +25,11 @@ fn fs_root() -> Option<PathBuf> {
 /// lexical normalization to detect `..` escapes.
 fn ensure_within_root(root: &Path, raw_path: &str) -> Result<()> {
     let p = Path::new(raw_path);
-    let abs = if p.is_absolute() { p.to_path_buf() } else { root.join(p) };
+    let abs = if p.is_absolute() {
+        p.to_path_buf()
+    } else {
+        root.join(p)
+    };
 
     // Lexical normalization: resolve `.` and `..` components.
     let mut parts: Vec<std::path::Component> = Vec::new();
@@ -32,8 +38,12 @@ fn ensure_within_root(root: &Path, raw_path: &str) -> Result<()> {
             std::path::Component::ParentDir => {
                 if let Some(last) = parts.last() {
                     match last {
-                        std::path::Component::Normal(_) => { parts.pop(); }
-                        _ => { parts.push(std::path::Component::ParentDir); }
+                        std::path::Component::Normal(_) => {
+                            parts.pop();
+                        }
+                        _ => {
+                            parts.push(std::path::Component::ParentDir);
+                        }
                     }
                 } else {
                     parts.push(std::path::Component::ParentDir);
@@ -49,15 +59,15 @@ fn ensure_within_root(root: &Path, raw_path: &str) -> Result<()> {
     let mut current = normalized.as_path();
     let mut non_existent = Vec::new();
 
-    while !current.exists() && current.parent().is_some() {
+    while !current.exists() {
+        let Some(parent) = current.parent() else { break };
         if let Some(name) = current.file_name() {
             non_existent.push(name.to_os_string());
         }
-        current = current.parent().unwrap();
+        current = parent;
     }
 
-    let mut resolved = std::fs::canonicalize(current)
-        .unwrap_or_else(|_| current.to_path_buf());
+    let mut resolved = std::fs::canonicalize(current).unwrap_or_else(|_| current.to_path_buf());
 
     // Reconstruct the full path
     for comp in non_existent.into_iter().rev() {
@@ -65,10 +75,12 @@ fn ensure_within_root(root: &Path, raw_path: &str) -> Result<()> {
     }
 
     if !resolved.starts_with(root) {
-        anyhow::bail!(
+        return Err(crate::Error::custom(format!(
             "path '{}' (resolved to '{}') is outside the allowed filesystem root '{}'",
-            raw_path, resolved.display(), root.display()
-        );
+            raw_path,
+            resolved.display(),
+            root.display()
+        )));
     }
     Ok(())
 }
@@ -81,13 +93,14 @@ impl ReadTool {
     pub async fn run(args: &Value) -> Result<String> {
         let path = args["path"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("read_file: missing 'path'"))?;
-        if let Some(ref root) = fs_root() { ensure_within_root(root, path)?; }
+            .ok_or_else(|| crate::Error::custom(format!("read_file: missing 'path'")))?;
+        if let Some(root) = &fs_root() {
+            ensure_within_root(root, path)?;
+        }
         let offset = args["offset"].as_u64().unwrap_or(0) as usize;
         let limit = args["limit"].as_u64().unwrap_or(0) as usize;
 
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("read {path}"))?;
+        let content = std::fs::read_to_string(path).map_err(|e| crate::Error::custom(format!("read {path}: {e}")))?;
 
         let lines: Vec<&str> = content.lines().collect();
         let total = lines.len();
@@ -134,20 +147,21 @@ impl WriteTool {
     pub async fn run(args: &Value) -> Result<String> {
         let path = args["path"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("write_file: missing 'path'"))?;
-        if let Some(ref root) = fs_root() { ensure_within_root(root, path)?; }
+            .ok_or_else(|| crate::Error::custom(format!("write_file: missing 'path'")))?;
+        if let Some(root) = &fs_root() {
+            ensure_within_root(root, path)?;
+        }
         let content = args["content"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("write_file: missing 'content'"))?;
+            .ok_or_else(|| crate::Error::custom(format!("write_file: missing 'content'")))?;
 
         if let Some(parent) = Path::new(path).parent()
-            && !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .with_context(|| format!("create dirs for {path}"))?;
-            }
+            && !parent.as_os_str().is_empty()
+        {
+            std::fs::create_dir_all(parent).map_err(|e| crate::Error::custom(format!("create dirs for {path}: {e}")))?;
+        }
 
-        std::fs::write(path, content)
-            .with_context(|| format!("write {path}"))?;
+        std::fs::write(path, content).map_err(|e| crate::Error::custom(format!("write {path}: {e}")))?;
 
         Ok(format!("Written {} bytes to {path}", content.len()))
     }
@@ -176,18 +190,19 @@ impl EditTool {
     pub async fn run(args: &Value) -> Result<String> {
         let path = args["path"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("edit_file: missing 'path'"))?;
-        if let Some(ref root) = fs_root() { ensure_within_root(root, path)?; }
+            .ok_or_else(|| crate::Error::custom(format!("edit_file: missing 'path'")))?;
+        if let Some(root) = &fs_root() {
+            ensure_within_root(root, path)?;
+        }
         let old_string = args["old_string"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("edit_file: missing 'old_string'"))?;
+            .ok_or_else(|| crate::Error::custom(format!("edit_file: missing 'old_string'")))?;
         let new_string = args["new_string"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("edit_file: missing 'new_string'"))?;
+            .ok_or_else(|| crate::Error::custom(format!("edit_file: missing 'new_string'")))?;
         let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
-        let content = std::fs::read_to_string(path)
-            .with_context(|| format!("read {path}"))?;
+        let content = std::fs::read_to_string(path).map_err(|e| crate::Error::custom(format!("read {path}: {e}")))?;
 
         let count = content.matches(old_string).count();
         if count == 0 {
@@ -206,8 +221,7 @@ impl EditTool {
             content.replacen(old_string, new_string, 1)
         };
 
-        std::fs::write(path, &new_content)
-            .with_context(|| format!("write {path}"))?;
+        std::fs::write(path, &new_content).map_err(|e| crate::Error::custom(format!("write {path}: {e}")))?;
 
         Ok(format!("Replaced {count} occurrence(s) in {path}"))
     }
@@ -258,16 +272,20 @@ fn validate_patch_paths(patch_str: &str) -> Result<()> {
 
         // Disallow absolute paths and any `..` segment (path traversal).
         if p.starts_with('/') {
-            anyhow::bail!("apply_patch: absolute paths are not allowed in patch: '{p}'");
+            return Err(crate::Error::custom(format!("apply_patch: absolute paths are not allowed in patch: '{p}'")));
         }
         if p.len() >= 3 {
             let bytes = p.as_bytes();
             if bytes[1] == b':' && (bytes[2] == b'/' || bytes[2] == b'\\') {
-                anyhow::bail!("apply_patch: absolute Windows-style paths are not allowed in patch: '{p}'");
+                return Err(crate::Error::custom(format!(
+                    "apply_patch: absolute Windows-style paths are not allowed in patch: '{p}'"
+                )));
             }
         }
-        if p.split(&['/','\\'][..]).any(|seg| seg == "..") {
-            anyhow::bail!("apply_patch: parent-directory segments ('..') are not allowed in patch path: '{p}'");
+        if p.split(&['/', '\\'][..]).any(|seg| seg == "..") {
+            return Err(crate::Error::custom(format!(
+                "apply_patch: parent-directory segments ('..') are not allowed in patch path: '{p}'"
+            )));
         }
     }
     Ok(())
@@ -277,16 +295,17 @@ impl ApplyPatchTool {
     pub async fn run(args: &Value) -> Result<String> {
         let patch_str = args["patch"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("apply_patch: missing 'patch'"))?;
+            .ok_or_else(|| crate::Error::custom(format!("apply_patch: missing 'patch'")))?;
 
         validate_patch_paths(patch_str)?;
 
         // Write patch to a tempfile then apply with `patch -p1`
         use std::io::Write;
         let mut tmp_file = tempfile::NamedTempFile::new()
-            .with_context(|| "apply_patch: failed to create tempfile")?;
-        tmp_file.write_all(patch_str.as_bytes())
-            .with_context(|| "apply_patch: failed to write tempfile")?;
+            .map_err(|e| crate::Error::custom(format!("apply_patch: failed to create tempfile: {e}")))?;
+        tmp_file
+            .write_all(patch_str.as_bytes())
+            .map_err(|e| crate::Error::custom(format!("apply_patch: failed to write tempfile: {e}")))?;
         tmp_file.flush()?;
 
         let mut cmd = tokio::process::Command::new("patch");
@@ -295,17 +314,19 @@ impl ApplyPatchTool {
             .args(["-p1", "--input", tmp_file.path().to_str().unwrap_or("")])
             .output()
             .await
-            .with_context(|| "apply_patch: failed to run `patch` command (is it installed?)")?;
+            .map_err(|e| crate::Error::custom(format!("apply_patch: failed to run `patch` command (is it installed?): {e}")))?;
 
         let _ = tmp_file.close();
 
         if output.status.success() {
             let stdout = String::from_utf8_lossy(&output.stdout);
-            Ok(format!("Patch applied successfully.\n{stdout}").trim().to_string())
+            Ok(format!("Patch applied successfully.\n{stdout}")
+                .trim()
+                .to_string())
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
-            anyhow::bail!("patch failed:\n{stdout}{stderr}")
+            return Err(crate::Error::custom(format!("patch failed:\n{stdout}{stderr}")))
         }
     }
 
@@ -313,9 +334,9 @@ impl ApplyPatchTool {
         json!({
             "name": "apply_patch",
             "description": "Apply a unified diff patch to modify one or more files. \
-Use this to edit files by providing a standard unified diff (output of `diff -u`). \
-Supports multi-file patches and new file creation. Preferred for large or complex edits \
-where string-replace would be fragile.",
+        Use this to edit files by providing a standard unified diff (output of `diff -u`). \
+        Supports multi-file patches and new file creation. Preferred for large or complex edits \
+        where string-replace would be fragile.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -394,28 +415,39 @@ mod tests {
     // -- ensure_within_root
 
     #[test]
-    fn within_root_relative_ok() {
-        let root = std::env::current_dir().unwrap();
+    fn within_root_relative_ok() -> Result<()> {
+        // -- Exec & Check
+        let root = std::env::current_dir()?;
         assert!(ensure_within_root(&root, "src/main.rs").is_ok());
+        Ok(())
     }
 
     #[test]
-    fn within_root_absolute_inside_ok() {
-        let root = std::env::current_dir().unwrap();
+    fn within_root_absolute_inside_ok() -> Result<()> {
+        // -- Setup & Fixtures
+        let root = std::env::current_dir()?;
         let abs = root.join("src/main.rs");
-        assert!(ensure_within_root(&root, abs.to_str().unwrap()).is_ok());
+
+        // -- Check
+        let path_str = abs.to_str().ok_or("Should be valid UTF-8")?;
+        assert!(ensure_within_root(&root, path_str).is_ok());
+        Ok(())
     }
 
     #[test]
-    fn within_root_parent_escape() {
-        let root = std::env::current_dir().unwrap();
+    fn within_root_parent_escape() -> Result<()> {
+        // -- Exec & Check
+        let root = std::env::current_dir()?;
         assert!(ensure_within_root(&root, "../../../etc/passwd").is_err());
+        Ok(())
     }
 
     #[test]
-    fn within_root_absolute_outside() {
-        let root = std::env::current_dir().unwrap();
+    fn within_root_absolute_outside() -> Result<()> {
+        // -- Exec & Check
+        let root = std::env::current_dir()?;
         assert!(ensure_within_root(&root, "/etc/passwd").is_err());
+        Ok(())
     }
 }
 

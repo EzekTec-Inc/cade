@@ -1,13 +1,16 @@
-use anyhow::Result;
+use crate::Result;
 use async_stream::stream;
 use async_trait::async_trait;
 use futures::StreamExt;
 use reqwest::Client;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::pin::Pin;
 use tokio_stream::Stream;
 
-use super::{bare_model, provider_error, retry_with_backoff, CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage};
+use super::{
+    CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
+    bare_model, provider_error, retry_with_backoff,
+};
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
@@ -69,15 +72,19 @@ pub async fn fetch_openai_chat_models(api_key: &str) -> Vec<String> {
         .header("Authorization", format!("Bearer {api_key}"))
         .send();
     let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
-        Ok(Ok(r))  => r,
+        Ok(Ok(r)) => r,
         Ok(Err(_)) | Err(_) => return vec![],
     };
-    if !resp.status().is_success() { return vec![]; }
-    let Ok(body) = resp.json::<Value>().await else { return vec![]; };
+    if !resp.status().is_success() {
+        return vec![];
+    }
+    let Ok(body) = resp.json::<Value>().await else {
+        return vec![];
+    };
 
     let arr = match body["data"].as_array() {
         Some(a) => a.clone(),
-        None    => return vec![],
+        None => return vec![],
     };
 
     // Keep only models that support chat completions — filter by well-known prefixes
@@ -91,10 +98,13 @@ pub async fn fetch_openai_chat_models(api_key: &str) -> Vec<String> {
     };
 
     // Sort newest first using the `created` Unix timestamp
-    let mut entries: Vec<(u64, String)> = arr.iter()
+    let mut entries: Vec<(u64, String)> = arr
+        .iter()
         .filter_map(|m| {
             let id = m["id"].as_str()?;
-            if !is_chat_model(id) { return None; }
+            if !is_chat_model(id) {
+                return None;
+            }
             let created = m["created"].as_u64().unwrap_or(0);
             Some((created, id.to_string()))
         })
@@ -110,11 +120,15 @@ pub async fn fetch_model_ids(models_url: &str, api_key: &str) -> Vec<String> {
         .header("Authorization", format!("Bearer {api_key}"))
         .send();
     let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
-        Ok(Ok(r))  => r,
+        Ok(Ok(r)) => r,
         Ok(Err(_)) | Err(_) => return vec![],
     };
-    if !resp.status().is_success() { return vec![]; }
-    let Ok(body) = resp.json::<Value>().await else { return vec![]; };
+    if !resp.status().is_success() {
+        return vec![];
+    }
+    let Ok(body) = resp.json::<Value>().await else {
+        return vec![];
+    };
 
     // Try { "data": [...] } (OpenAI format)
     let items = if let Some(arr) = body["data"].as_array() {
@@ -126,7 +140,8 @@ pub async fn fetch_model_ids(models_url: &str, api_key: &str) -> Vec<String> {
         return vec![];
     };
 
-    let mut ids: Vec<String> = items.iter()
+    let mut ids: Vec<String> = items
+        .iter()
         .filter_map(|m| m["id"].as_str().map(String::from))
         .filter(|id| !id.is_empty())
         .collect();
@@ -156,30 +171,38 @@ impl OpenAiProvider {
     }
 
     fn to_openai_messages(req: &CompletionRequest) -> Value {
-        let messages: Vec<Value> = req.messages.iter().map(|m| {
-            match m.role.as_str() {
-                "tool" => json!({
-                    "role": "tool",
-                    // OpenAI rejects null tool_call_id — fall back to empty string
-                    // so the message is at least structurally valid.
-                    "tool_call_id": m.tool_call_id.as_deref().unwrap_or(""),
-                    "content": m.content
-                }),
-                "assistant" if m.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()) => {
-                    let tcs: Vec<Value> = m.tool_calls.as_ref().unwrap().iter().map(|tc| json!({
+        let messages: Vec<Value> = req
+            .messages
+            .iter()
+            .map(|m| {
+                match m.role.as_str() {
+                    "tool" => json!({
+                        "role": "tool",
+                        // OpenAI rejects null tool_call_id — fall back to empty string
+                        // so the message is at least structurally valid.
+                        "tool_call_id": m.tool_call_id.as_deref().unwrap_or(""),
+                        "content": m.content
+                    }),
+                    "assistant" if m.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()) => {
+                        let tcs: Vec<Value> = m.tool_calls.as_deref().unwrap_or_default().iter().map(|tc| json!({
                         "id": tc.id,
                         "type": "function",
                         "function": { "name": tc.name, "arguments": tc.arguments.to_string() }
                     })).collect();
-                    // OpenAI requires `content` to be null (not "") when tool_calls present
-                    let content = if m.content.is_empty() { Value::Null } else { Value::String(m.content.clone()) };
-                    json!({"role": "assistant", "content": content, "tool_calls": tcs})
-                }
-                _ => {
-                    // When images are attached, build a multi-part content array.
-                    // OpenAI vision format: [{"type":"image_url","image_url":{"url":"data:…"}}, …]
-                    if let Some(images) = &m.images
-                        && !images.is_empty() {
+                        // OpenAI requires `content` to be null (not "") when tool_calls present
+                        let content = if m.content.is_empty() {
+                            Value::Null
+                        } else {
+                            Value::String(m.content.clone())
+                        };
+                        json!({"role": "assistant", "content": content, "tool_calls": tcs})
+                    }
+                    _ => {
+                        // When images are attached, build a multi-part content array.
+                        // OpenAI vision format: [{"type":"image_url","image_url":{"url":"data:…"}}, …]
+                        if let Some(images) = &m.images
+                            && !images.is_empty()
+                        {
                             let mut parts: Vec<Value> = images.iter().map(|img| json!({
                                 "type": "image_url",
                                 "image_url": {
@@ -191,16 +214,20 @@ impl OpenAiProvider {
                             }
                             return json!({"role": m.role, "content": parts});
                         }
-                    json!({"role": m.role, "content": m.content})
-                },
-            }
-        }).collect();
+                        json!({"role": m.role, "content": m.content})
+                    }
+                }
+            })
+            .collect();
         json!(messages)
     }
 
     fn parse_response(body: &Value) -> CompletionResponse {
         let choice = &body["choices"][0];
-        let finish_reason = choice["finish_reason"].as_str().unwrap_or("stop").to_string();
+        let finish_reason = choice["finish_reason"]
+            .as_str()
+            .unwrap_or("stop")
+            .to_string();
         let msg = &choice["message"];
         let content = msg["content"].as_str().map(|s| s.to_string());
         let tool_calls: Vec<LlmToolCall> = msg["tool_calls"]
@@ -208,44 +235,67 @@ impl OpenAiProvider {
             .unwrap_or(&vec![])
             .iter()
             .map(|tc| LlmToolCall {
-                id:                tc["id"].as_str().unwrap_or("").to_string(),
-                name:              tc["function"]["name"].as_str().unwrap_or("").to_string(),
-                arguments:         serde_json::from_str(
-                    tc["function"]["arguments"].as_str().unwrap_or("{}")
-                ).unwrap_or_default(),
+                id: tc["id"].as_str().unwrap_or("").to_string(),
+                name: tc["function"]["name"].as_str().unwrap_or("").to_string(),
+                arguments: serde_json::from_str(
+                    tc["function"]["arguments"].as_str().unwrap_or("{}"),
+                )
+                .unwrap_or_default(),
                 thought_signature: None,
             })
             .collect();
-        CompletionResponse { content, tool_calls, finish_reason }
+        CompletionResponse {
+            content,
+            tool_calls,
+            finish_reason,
+        }
     }
 
     fn build_tools(req: &CompletionRequest) -> Value {
-        let tools: Vec<Value> = req.tools.iter().map(|s| {
-            let mut params = s.get("parameters").or_else(|| s.get("input_schema")).cloned().unwrap_or(json!({}));
-            clean_openai_schema(&mut params);
-            json!({
-                "type": "function",
-                "function": {
-                    "name": s["name"],
-                    "description": s["description"],
-                    "parameters": params
-                }
+        let tools: Vec<Value> = req
+            .tools
+            .iter()
+            .map(|s| {
+                let mut params = s
+                    .get("parameters")
+                    .filter(|v| !v.is_null())
+                    .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
+                    .cloned()
+                    .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
+                clean_openai_schema(&mut params);
+                json!({
+                    "type": "function",
+                    "function": {
+                        "name": s["name"],
+                        "description": s["description"],
+                        "parameters": params
+                    }
+                })
             })
-        }).collect();
+            .collect();
         json!(tools)
     }
 
     fn build_responses_tools(req: &CompletionRequest) -> Value {
-        let tools: Vec<Value> = req.tools.iter().map(|s| {
-            let mut params = s.get("parameters").or_else(|| s.get("input_schema")).cloned().unwrap_or(json!({}));
-            clean_openai_schema(&mut params);
-            json!({
-                "type": "function",
-                "name": s["name"],
-                "description": s["description"],
-                "parameters": params
+        let tools: Vec<Value> = req
+            .tools
+            .iter()
+            .map(|s| {
+                let mut params = s
+                    .get("parameters")
+                    .filter(|v| !v.is_null())
+                    .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
+                    .cloned()
+                    .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
+                clean_openai_schema(&mut params);
+                json!({
+                    "type": "function",
+                    "name": s["name"],
+                    "description": s["description"],
+                    "parameters": params
+                })
             })
-        }).collect();
+            .collect();
         json!(tools)
     }
 
@@ -262,7 +312,7 @@ impl OpenAiProvider {
                     if !m.content.is_empty() {
                         items.push(json!({"role": "assistant", "content": m.content}));
                     }
-                    for tc in m.tool_calls.as_ref().unwrap() {
+                    for tc in m.tool_calls.as_deref().unwrap_or_default() {
                         items.push(json!({
                             "type": "function_call",
                             "call_id": tc.id,
@@ -291,11 +341,14 @@ impl OpenAiProvider {
                     let mut text = String::new();
                     for part in &parts {
                         if part["type"].as_str() == Some("output_text")
-                            && let Some(t) = part["text"].as_str() {
-                                text.push_str(t);
-                            }
+                            && let Some(t) = part["text"].as_str()
+                        {
+                            text.push_str(t);
+                        }
                     }
-                    if !text.is_empty() { content = Some(text); }
+                    if !text.is_empty() {
+                        content = Some(text);
+                    }
                 }
                 "function_call" => {
                     finish_reason = "tool_calls".to_string();
@@ -303,17 +356,29 @@ impl OpenAiProvider {
                     let id = item["call_id"].as_str().unwrap_or("").to_string();
                     let args_str = item["arguments"].as_str().unwrap_or("{}");
                     let arguments = serde_json::from_str(args_str).unwrap_or_default();
-                    tool_calls.push(LlmToolCall { id, name, arguments, thought_signature: None });
+                    tool_calls.push(LlmToolCall {
+                        id,
+                        name,
+                        arguments,
+                        thought_signature: None,
+                    });
                 }
                 _ => {}
             }
         }
 
         if body["status"].as_str() == Some("incomplete") {
-            finish_reason = body["incomplete_details"]["reason"].as_str().unwrap_or("stop").to_string();
+            finish_reason = body["incomplete_details"]["reason"]
+                .as_str()
+                .unwrap_or("stop")
+                .to_string();
         }
 
-        CompletionResponse { content, tool_calls, finish_reason }
+        CompletionResponse {
+            content,
+            tool_calls,
+            finish_reason,
+        }
     }
 }
 
@@ -333,28 +398,35 @@ impl LlmProvider for OpenAiProvider {
                 body["tools"] = Self::build_responses_tools(req);
             }
             if let Some(effort) = &req.reasoning_effort
-                && ["low", "medium", "high"].contains(&effort.as_str()) {
-                    body["reasoning_effort"] = effort.clone().into();
-                }
-            return retry_with_backoff("OpenAI::complete", 3, std::time::Duration::from_secs(1), |_| {
-                let client  = self.client.clone();
-                let api_key = self.api_key.clone();
-                let body    = body.clone();
-                async move {
-                    let resp = client
-                        .post(OPENAI_RESPONSES_URL)
-                        .bearer_auth(&api_key)
-                        .json(&body)
-                        .send()
-                        .await?;
-                    if !resp.status().is_success() {
-                        let status = resp.status();
-                        let text = resp.text().await.unwrap_or_default();
-                        return Err(provider_error("OpenAI", status, &text));
+                && ["low", "medium", "high"].contains(&effort.as_str())
+            {
+                body["reasoning_effort"] = effort.clone().into();
+            }
+            return retry_with_backoff(
+                "OpenAI::complete",
+                3,
+                std::time::Duration::from_secs(1),
+                |_| {
+                    let client = self.client.clone();
+                    let api_key = self.api_key.clone();
+                    let body = body.clone();
+                    async move {
+                        let resp = client
+                            .post(OPENAI_RESPONSES_URL)
+                            .bearer_auth(&api_key)
+                            .json(&body)
+                            .send()
+                            .await?;
+                        if !resp.status().is_success() {
+                            let status = resp.status();
+                            let text = resp.text().await.unwrap_or_default();
+                            return Err(provider_error("OpenAI", status, &text));
+                        }
+                        Ok(Self::parse_responses_response(&resp.json::<Value>().await?))
                     }
-                    Ok(Self::parse_responses_response(&resp.json::<Value>().await?))
-                }
-            }).await;
+                },
+            )
+            .await;
         }
 
         let mut body = if needs_max_completion_tokens(bare_model_id) {
@@ -374,30 +446,37 @@ impl LlmProvider for OpenAiProvider {
             body["tools"] = Self::build_tools(req);
         }
         if let Some(effort) = &req.reasoning_effort
-            && ["low", "medium", "high"].contains(&effort.as_str()) {
-                body["reasoning_effort"] = effort.clone().into();
-            }
+            && ["low", "medium", "high"].contains(&effort.as_str())
+        {
+            body["reasoning_effort"] = effort.clone().into();
+        }
 
-        retry_with_backoff("OpenAI::complete", 3, std::time::Duration::from_secs(1), |_| {
-            let client   = self.client.clone();
-            let base_url = self.base_url.clone();
-            let api_key  = self.api_key.clone();
-            let body     = body.clone();
-            async move {
-                let resp = client
-                    .post(&base_url)
-                    .bearer_auth(&api_key)
-                    .json(&body)
-                    .send()
-                    .await?;
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    let text = resp.text().await.unwrap_or_default();
-                    return Err(provider_error("OpenAI", status, &text));
+        retry_with_backoff(
+            "OpenAI::complete",
+            3,
+            std::time::Duration::from_secs(1),
+            |_| {
+                let client = self.client.clone();
+                let base_url = self.base_url.clone();
+                let api_key = self.api_key.clone();
+                let body = body.clone();
+                async move {
+                    let resp = client
+                        .post(&base_url)
+                        .bearer_auth(&api_key)
+                        .json(&body)
+                        .send()
+                        .await?;
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(provider_error("OpenAI", status, &text));
+                    }
+                    Ok(Self::parse_response(&resp.json::<Value>().await?))
                 }
-                Ok(Self::parse_response(&resp.json::<Value>().await?))
-            }
-        }).await
+            },
+        )
+        .await
     }
 
     async fn stream(
@@ -419,29 +498,36 @@ impl LlmProvider for OpenAiProvider {
                 body["tools"] = Self::build_responses_tools(req);
             }
             if let Some(effort) = &req.reasoning_effort
-                && ["low", "medium", "high"].contains(&effort.as_str()) {
-                    body["reasoning_effort"] = effort.clone().into();
-                }
+                && ["low", "medium", "high"].contains(&effort.as_str())
+            {
+                body["reasoning_effort"] = effort.clone().into();
+            }
 
-            let resp = retry_with_backoff("OpenAI::stream", 3, std::time::Duration::from_secs(1), |_| {
-                let client  = self.client.clone();
-                let api_key = self.api_key.clone();
-                let body    = body.clone();
-                async move {
-                    let resp = client
-                        .post(OPENAI_RESPONSES_URL)
-                        .bearer_auth(&api_key)
-                        .json(&body)
-                        .send()
-                        .await?;
-                    if !resp.status().is_success() {
-                        let status = resp.status();
-                        let text = resp.text().await.unwrap_or_default();
-                        return Err(provider_error("OpenAI", status, &text));
+            let resp = retry_with_backoff(
+                "OpenAI::stream",
+                3,
+                std::time::Duration::from_secs(1),
+                |_| {
+                    let client = self.client.clone();
+                    let api_key = self.api_key.clone();
+                    let body = body.clone();
+                    async move {
+                        let resp = client
+                            .post(OPENAI_RESPONSES_URL)
+                            .bearer_auth(&api_key)
+                            .json(&body)
+                            .send()
+                            .await?;
+                        if !resp.status().is_success() {
+                            let status = resp.status();
+                            let text = resp.text().await.unwrap_or_default();
+                            return Err(provider_error("OpenAI", status, &text));
+                        }
+                        Ok(resp)
                     }
-                    Ok(resp)
-                }
-            }).await?;
+                },
+            )
+            .await?;
 
             let mut byte_stream = resp.bytes_stream();
             let s = stream! {
@@ -450,7 +536,7 @@ impl LlmProvider for OpenAiProvider {
                     std::collections::BTreeMap::new();
 
                 while let Some(chunk) = byte_stream.next().await {
-                    let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(anyhow::anyhow!("{e}")); break; } };
+                    let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(crate::Error::custom(format!("{e}"))); break; } };
                     buf.push_str(&String::from_utf8_lossy(&chunk));
 
                     while let Some((pos, len)) = {
@@ -466,12 +552,12 @@ impl LlmProvider for OpenAiProvider {
                     } {
                         let block = buf[..pos].trim().to_string();
                         buf = buf[pos + len..].to_string();
-                        
+
                         if block.is_empty() { continue; }
-                        
+
                         let mut event_type = String::new();
                         let mut data_str = String::new();
-                        
+
                         for line in block.lines() {
                             let line = line.trim();
                             if let Some(t) = line.strip_prefix("event: ") {
@@ -480,9 +566,9 @@ impl LlmProvider for OpenAiProvider {
                                 data_str = d.trim().to_string();
                             }
                         }
-                        
+
                         if data_str.is_empty() || data_str == "[DONE]" { continue; }
-                        
+
                         let v: Value = match serde_json::from_str(&data_str) { Ok(v) => v, Err(_) => continue };
 
                         match event_type.as_str() {
@@ -530,6 +616,11 @@ impl LlmProvider for OpenAiProvider {
                                                 model:              req_model.clone(),
                                             }));
                                         }
+                                        if let Some(reason) = v["response"]["output"].as_array()
+                                            .and_then(|arr| arr.iter().find_map(|item| item["finish_reason"].as_str()))
+                                            .or_else(|| v["response"]["status"].as_str()) {
+                                                yield Ok(StreamChunk::FinishReason(reason.to_string()));
+                                        }
                                         yield Ok(StreamChunk::Done);
                                         return;
                                     }
@@ -571,30 +662,37 @@ impl LlmProvider for OpenAiProvider {
             body["tools"] = Self::build_tools(req);
         }
         if let Some(effort) = &req.reasoning_effort
-            && ["low", "medium", "high"].contains(&effort.as_str()) {
-                body["reasoning_effort"] = effort.clone().into();
-            }
+            && ["low", "medium", "high"].contains(&effort.as_str())
+        {
+            body["reasoning_effort"] = effort.clone().into();
+        }
 
-        let resp = retry_with_backoff("OpenAI::stream", 3, std::time::Duration::from_secs(1), |_| {
-            let client   = self.client.clone();
-            let base_url = self.base_url.clone();
-            let api_key  = self.api_key.clone();
-            let body     = body.clone();
-            async move {
-                let resp = client
-                    .post(&base_url)
-                    .bearer_auth(&api_key)
-                    .json(&body)
-                    .send()
-                    .await?;
-                if !resp.status().is_success() {
-                    let status = resp.status();
-                    let text = resp.text().await.unwrap_or_default();
-                    return Err(provider_error("OpenAI", status, &text));
+        let resp = retry_with_backoff(
+            "OpenAI::stream",
+            3,
+            std::time::Duration::from_secs(1),
+            |_| {
+                let client = self.client.clone();
+                let base_url = self.base_url.clone();
+                let api_key = self.api_key.clone();
+                let body = body.clone();
+                async move {
+                    let resp = client
+                        .post(&base_url)
+                        .bearer_auth(&api_key)
+                        .json(&body)
+                        .send()
+                        .await?;
+                    if !resp.status().is_success() {
+                        let status = resp.status();
+                        let text = resp.text().await.unwrap_or_default();
+                        return Err(provider_error("OpenAI", status, &text));
+                    }
+                    Ok(resp)
                 }
-                Ok(resp)
-            }
-        }).await?;
+            },
+        )
+        .await?;
 
         let mut byte_stream = resp.bytes_stream();
         let s = stream! {
@@ -604,9 +702,10 @@ impl LlmProvider for OpenAiProvider {
             // tool calls in one turn are accumulated and emitted separately.
             let mut tool_map: std::collections::BTreeMap<usize, (String, String, String)> =
                 std::collections::BTreeMap::new();
+            let mut finish_emitted = false;
 
             while let Some(chunk) = byte_stream.next().await {
-                let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(anyhow::anyhow!("{e}")); break; } };
+                let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(crate::Error::custom(format!("{e}"))); break; } };
                 buf.push_str(&String::from_utf8_lossy(&chunk));
 
                 while let Some(pos) = buf.find('\n') {
@@ -644,22 +743,28 @@ impl LlmProvider for OpenAiProvider {
                             if let Some(a) = tc["function"]["arguments"].as_str() { entry.2.push_str(a); }
                         }
                     }
-                    if let Some("stop" | "tool_calls") = v["choices"][0]["finish_reason"].as_str() {
-                        // Emit every accumulated tool call in index order
-                        let calls: Vec<(String, String, String)> =
-                            tool_map.values().cloned().collect();
-                        tool_map.clear();
-                        for (id, name, args_str) in calls {
-                            if !name.is_empty() {
-                                let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
-                                    tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
-                                    serde_json::Value::Object(Default::default())
-                                });
-                                yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
+                    if let Some(reason) = v["choices"][0]["finish_reason"].as_str() {
+                        if matches!(reason, "stop" | "tool_calls") {
+                            // Emit every accumulated tool call in index order
+                            let calls: Vec<(String, String, String)> =
+                                tool_map.values().cloned().collect();
+                            tool_map.clear();
+                            for (id, name, args_str) in calls {
+                                if !name.is_empty() {
+                                    let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
+                                        tracing::warn!("Tool '{}' argument JSON parse failed: {e}; raw: {args_str:?}", name);
+                                        serde_json::Value::Object(Default::default())
+                                    });
+                                    yield Ok(StreamChunk::ToolCall(LlmToolCall { id, name, arguments: args, thought_signature: None }));
+                                }
                             }
+                            // Don't return here — OpenAI sends usage in a separate chunk
+                            // before [DONE] when stream_options.include_usage=true.
                         }
-                        // Don't return here — OpenAI sends usage in a separate chunk
-                        // before [DONE] when stream_options.include_usage=true.
+                        if !finish_emitted {
+                            yield Ok(StreamChunk::FinishReason(reason.to_string()));
+                            finish_emitted = true;
+                        }
                     }
                     // Usage chunk: may arrive in any chunk, including the separate
                     // empty-choices chunk OpenAI sends after finish_reason.
@@ -835,7 +940,8 @@ mod tests {
     }
 
     #[test]
-    fn to_openai_messages_basic() {
+    fn to_openai_messages_basic() -> Result<()> {
+        // -- Setup & Fixtures
         let req = CompletionRequest {
             model: "gpt-4o".into(),
             messages: vec![
@@ -858,15 +964,20 @@ mod tests {
             max_tokens: 4096,
             reasoning_effort: None,
         };
+        // -- Exec
         let messages = OpenAiProvider::to_openai_messages(&req);
-        let arr = messages.as_array().unwrap();
+
+        // -- Check
+        let arr = messages.as_array().ok_or("Should be an array")?;
         assert_eq!(arr.len(), 2);
         assert_eq!(arr[0]["role"], "system");
         assert_eq!(arr[1]["role"], "user");
+
+        Ok(())
     }
 
     #[test]
-    fn build_tools_wraps_in_function_type() {
+    fn build_tools_wraps_in_function_type() -> Result<()> {
         let req = CompletionRequest {
             model: "gpt-4o".into(),
             messages: vec![],
@@ -878,10 +989,15 @@ mod tests {
             max_tokens: 4096,
             reasoning_effort: None,
         };
+        // -- Exec
         let tools = OpenAiProvider::build_tools(&req);
-        let arr = tools.as_array().unwrap();
+
+        // -- Check
+        let arr = tools.as_array().ok_or("Should be an array")?;
         assert_eq!(arr.len(), 1);
         assert_eq!(arr[0]["type"], "function");
         assert_eq!(arr[0]["function"]["name"], "bash");
+
+        Ok(())
     }
 }

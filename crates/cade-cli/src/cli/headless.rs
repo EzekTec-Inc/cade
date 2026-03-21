@@ -1,11 +1,12 @@
-use anyhow::Result;
+use crate::Result;
 use futures::future::join_all;
 use serde_json::json;
 
 use cade_agent::agent::{CadeClient, client::CadeMessage};
 use cade_agent::mcp::McpManager;
-use cade_core::permissions::PermissionManager;
 use cade_agent::tools::dispatch;
+use cade_core::hooks::{HookEngine, HookOutcome};
+use cade_core::permissions::PermissionManager;
 
 /// Strip control characters that could act as ANSI/terminal escape sequences
 /// when printed in headless mode. Newlines and tabs are preserved; other
@@ -16,7 +17,9 @@ fn sanitize_for_terminal(s: &str) -> String {
             let c = ch as u32;
             if ch == '\n' || ch == '\t' {
                 true
-            } else { !(c <= 0x1F || c == 0x7F) }
+            } else {
+                !(c <= 0x1F || c == 0x7F)
+            }
         })
         .collect()
 }
@@ -25,9 +28,9 @@ fn sanitize_for_terminal(s: &str) -> String {
 
 #[derive(Debug, Default)]
 pub struct HeadlessStats {
-    pub turn_count:   u32,
-    pub tool_count:   u32,
-    pub duration_ms:  u128,
+    pub turn_count: u32,
+    pub tool_count: u32,
+    pub duration_ms: u128,
 }
 
 // -- Tool classification
@@ -42,7 +45,10 @@ pub struct HeadlessStats {
 ///   - `run_skill_script`  — executes a skill script (side-effects)
 ///   - `load_skill_ref`    — lazy-loads a reference doc
 fn is_sequential_tool(name: &str) -> bool {
-    matches!(name, "update_memory" | "load_skill" | "install_skill" | "run_skill_script" | "load_skill_ref")
+    matches!(
+        name,
+        "update_memory" | "load_skill" | "install_skill" | "run_skill_script" | "load_skill_ref"
+    )
 }
 
 // -- Text mode (default)
@@ -55,8 +61,16 @@ pub async fn run_headless(
     prompt: &str,
     permissions: &PermissionManager,
     mcp: &McpManager,
+    hooks: &HookEngine,
 ) -> Result<(String, HeadlessStats)> {
     tracing::debug!("headless: agent={agent_id}");
+
+    // UserPromptSubmit hook — can block the turn entirely.
+    if !hooks.is_empty() {
+        if let HookOutcome::Block { reason } = hooks.user_prompt_submit(prompt).await {
+            return Err(crate::Error::custom(format!("Prompt blocked by hook: {reason}")));
+        }
+    }
 
     let t0 = std::time::Instant::now();
     let mut final_output = String::new();
@@ -75,7 +89,27 @@ pub async fn run_headless(
 
     stats.turn_count += 1;
     collect_assistant_text(&messages, &mut final_output);
-    process_tool_calls(client, agent_id, messages, permissions, &mut final_output, mcp, &mut stats).await?;
+    process_tool_calls(
+        client,
+        agent_id,
+        messages,
+        permissions,
+        &mut final_output,
+        mcp,
+        &mut stats,
+        hooks,
+    )
+    .await?;
+
+    // Stop hook — can annotate the final output but does not trigger a continuation turn.
+    if !hooks.is_empty() {
+        if let HookOutcome::Block { reason } =
+            hooks.stop("end_turn", prompt, &final_output, None).await
+        {
+            final_output.push_str("\n\n");
+            final_output.push_str(&format!("[Stop hook: {reason}]"));
+        }
+    }
 
     stats.duration_ms = t0.elapsed().as_millis();
     Ok((final_output.trim().to_string(), stats))
@@ -92,20 +126,35 @@ pub async fn run_headless_stream_json(
     prompt: &str,
     permissions: &PermissionManager,
     mcp: &McpManager,
+    hooks: &HookEngine,
 ) {
     use std::io::Write;
     let t0 = std::time::Instant::now();
 
     let emit = |obj: serde_json::Value| {
-        println!("{}", obj);
+        println!("{obj}");
         let _ = std::io::stdout().flush();
     };
 
     // Init event
     emit(json!({ "type": "init", "agent_id": agent_id, "model": model }));
 
+    // UserPromptSubmit hook — can block the turn entirely.
+    if !hooks.is_empty() {
+        if let HookOutcome::Block { reason } = hooks.user_prompt_submit(prompt).await {
+            emit(json!({
+                "type":     "result",
+                "subtype":  "error",
+                "is_error": true,
+                "error":    format!("Prompt blocked by hook: {reason}"),
+                "agent_id": agent_id,
+            }));
+            return;
+        }
+    }
+
     let mut final_output = String::new();
-    let mut stats        = HeadlessStats::default();
+    let mut stats = HeadlessStats::default();
     let seq = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
 
     let seq2 = std::sync::Arc::clone(&seq);
@@ -124,10 +173,15 @@ pub async fn run_headless_stream_json(
         .await;
 
     let messages = match messages {
-        Ok(m) => { stats.turn_count += 1; m }
+        Ok(m) => {
+            stats.turn_count += 1;
+            m
+        }
         Err(e) => {
-            emit(json!({ "type": "result", "subtype": "error", "error": e.to_string(),
-                         "agent_id": agent_id }));
+            emit(
+                json!({ "type": "result", "subtype": "error", "error": e.to_string(),
+                         "agent_id": agent_id }),
+            );
             return;
         }
     };
@@ -136,16 +190,38 @@ pub async fn run_headless_stream_json(
 
     // Process tool calls — emit events for each call + result
     let result = process_tool_calls_stream_json(
-        client, agent_id, messages, permissions, &mut final_output, mcp, &mut stats, &emit
-    ).await;
+        client,
+        agent_id,
+        messages,
+        permissions,
+        &mut final_output,
+        mcp,
+        &mut stats,
+        &emit,
+        hooks,
+    )
+    .await;
 
     if let Err(e) = result {
-        emit(json!({ "type": "result", "subtype": "error", "error": e.to_string(),
-                     "agent_id": agent_id }));
+        emit(
+            json!({ "type": "result", "subtype": "error", "error": e.to_string(),
+                     "agent_id": agent_id }),
+        );
         return;
     }
 
     emit(json!({ "type": "message", "messageType": "stop_reason", "stopReason": "end_turn" }));
+
+    // Stop hook — can annotate the final output but does not trigger a continuation turn.
+    if !hooks.is_empty() {
+        if let HookOutcome::Block { reason } =
+            hooks.stop("end_turn", prompt, &final_output, None).await
+        {
+            final_output.push_str("\n\n");
+            final_output.push_str(&format!("[Stop hook: {reason}]"));
+        }
+    }
+
     emit(json!({
         "type":       "result",
         "subtype":    "success",
@@ -171,6 +247,7 @@ async fn run_one_tool(
     args: serde_json::Value,
     permissions: &PermissionManager,
     mcp: &McpManager,
+    hooks: &HookEngine,
 ) -> (String, String, bool) {
     // Permission check
     if permissions.is_blocked(&tool_name, &args) {
@@ -179,81 +256,131 @@ async fn run_one_tool(
         return (call_id, reason, true);
     }
 
+    // PreToolUse hook — can block execution
+    if !hooks.is_empty() {
+        if let HookOutcome::Block { reason } = hooks.pre_tool_use(&tool_name, &args).await {
+            let msg = format!("Blocked by hook: {reason}");
+            tracing::warn!("{msg}");
+            return (call_id, msg, true);
+        }
+    }
+
     // Intercept: update_memory
     if tool_name == "update_memory" {
-        let label     = args["label"].as_str().unwrap_or("").trim().to_string();
-        let value     = args["value"].as_str().unwrap_or("").to_string();
+        let label = args["label"].as_str().unwrap_or("").trim().to_string();
+        let value = args["value"].as_str().unwrap_or("").to_string();
         let operation = args["operation"].as_str().unwrap_or("set");
         let final_value = if operation == "append" {
-            let existing = client.get_memory(agent_id).await
+            let existing = client
+                .get_memory(agent_id)
+                .await
                 .unwrap_or_default()
                 .into_iter()
                 .find(|b| b.label == label)
                 .map(|b| b.value)
                 .unwrap_or_default();
-            if existing.is_empty() { value } else { format!("{existing}\n{value}") }
-        } else { value };
+            if existing.is_empty() {
+                value
+            } else {
+                format!("{existing}\n{value}")
+            }
+        } else {
+            value
+        };
         let description = args["description"].as_str().map(String::from);
-        let (msg, err) = match client.upsert_memory(agent_id, &label, &final_value, description.as_deref()).await {
-            Ok(_)  => (format!("Memory block '{label}' updated"), false),
+        let (msg, err) = match client
+            .upsert_memory(agent_id, &label, &final_value, description.as_deref())
+            .await
+        {
+            Ok(_) => (format!("Memory block '{label}' updated"), false),
             Err(e) => (format!("Failed: {e}"), true),
         };
-        return (call_id, msg, err);
+        return finalize_tool_result(hooks, call_id, tool_name, args, msg, err).await;
     }
 
     // Intercept: load_skill
     if tool_name == "load_skill" {
-        let id     = args["id"].as_str().unwrap_or("").trim().to_string();
+        let id = args["id"].as_str().unwrap_or("").trim().to_string();
         let skills = cade_core::skills::discover_all_skills(
-            &std::env::current_dir().unwrap_or_default(), None, None
+            &std::env::current_dir().unwrap_or_default(),
+            None,
+            None,
         );
         let (msg, err) = match skills.into_iter().find(|s| s.id == id) {
             Some(s) => (s.to_context_block(), false),
-            None    => (format!("Skill '{id}' not found"), true),
+            None => (format!("Skill '{id}' not found"), true),
         };
-        return (call_id, msg, err);
+        return finalize_tool_result(hooks, call_id, tool_name, args, msg, err).await;
     }
 
     // Intercept: run_skill_script
     if tool_name == "run_skill_script" {
-        let skill_id    = args["skill_id"].as_str().unwrap_or("").trim().to_string();
-        let script      = args["script"].as_str().unwrap_or("").trim().to_string();
+        let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
+        let script = args["script"].as_str().unwrap_or("").trim().to_string();
         let script_args: Vec<String> = args["args"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
 
         if skill_id.is_empty() || script.is_empty() {
-            return (call_id, "error: 'skill_id' and 'script' are required".to_string(), true);
+            let msg = "error: 'skill_id' and 'script' are required".to_string();
+            return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
         }
 
         let skills = cade_core::skills::discover_all_skills(
-            &std::env::current_dir().unwrap_or_default(), None, None
+            &std::env::current_dir().unwrap_or_default(),
+            None,
+            None,
         );
         let skill = match skills.into_iter().find(|s| s.id == skill_id) {
             Some(s) => s,
-            None    => return (call_id, format!("Skill '{skill_id}' not found"), true),
+            None => {
+                let msg = format!("Skill '{skill_id}' not found");
+                return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
+            }
         };
         let sk = match skill.scripts.iter().find(|s| s.name == script) {
             Some(s) => s.clone(),
             None => {
                 let available: Vec<&str> = skill.scripts.iter().map(|s| s.name.as_str()).collect();
-                let list = if available.is_empty() { "none".to_string() } else { available.join(", ") };
-                return (call_id, format!("Script '{script}' not found in skill '{skill_id}'. Available: {list}"), true);
+                let list = if available.is_empty() {
+                    "none".to_string()
+                } else {
+                    available.join(", ")
+                };
+                let msg =
+                    format!("Script '{script}' not found in skill '{skill_id}'. Available: {list}");
+                return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
             }
         };
 
-        tracing::info!("Running skill script: {} {}", sk.path.display(), script_args.join(" "));
+        tracing::info!(
+            "Running skill script: {} {}",
+            sk.path.display(),
+            script_args.join(" ")
+        );
         let mut cmd = tokio::process::Command::new(&sk.path);
         cade_core::agent_env::apply_agent_env(&mut cmd);
         match cmd.args(&script_args).output().await {
-            Err(e) => return (call_id, format!("Failed to run script: {e}"), true),
+            Err(e) => {
+                let msg = format!("Failed to run script: {e}");
+                return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
+            }
             Ok(out) => {
-                let stdout   = String::from_utf8_lossy(&out.stdout).to_string();
-                let stderr   = String::from_utf8_lossy(&out.stderr).to_string();
-                let combined = if stderr.is_empty() { stdout } else { format!("{stdout}\n[stderr]\n{stderr}") };
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                let combined = if stderr.is_empty() {
+                    stdout
+                } else {
+                    format!("{stdout}\n[stderr]\n{stderr}")
+                };
                 let is_error = !out.status.success();
-                return (call_id, combined, is_error);
+                return finalize_tool_result(hooks, call_id, tool_name, args, combined, is_error)
+                    .await;
             }
         }
     }
@@ -261,33 +388,52 @@ async fn run_one_tool(
     // Intercept: load_skill_ref
     if tool_name == "load_skill_ref" {
         let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
-        let doc      = args["doc"].as_str().unwrap_or("").trim().to_string();
+        let doc = args["doc"].as_str().unwrap_or("").trim().to_string();
 
         if skill_id.is_empty() || doc.is_empty() {
-            return (call_id, "error: 'skill_id' and 'doc' are required".to_string(), true);
+            let msg = "error: 'skill_id' and 'doc' are required".to_string();
+            return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
         }
 
         let skills = cade_core::skills::discover_all_skills(
-            &std::env::current_dir().unwrap_or_default(), None, None
+            &std::env::current_dir().unwrap_or_default(),
+            None,
+            None,
         );
         let skill = match skills.into_iter().find(|s| s.id == skill_id) {
             Some(s) => s,
-            None    => return (call_id, format!("Skill '{skill_id}' not found"), true),
+            None => {
+                let msg = format!("Skill '{skill_id}' not found");
+                return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
+            }
         };
         let r = match skill.references.iter().find(|r| {
             r.name == doc || r.path.file_name().and_then(|n| n.to_str()).unwrap_or("") == doc
         }) {
             Some(r) => r.clone(),
             None => {
-                let available: Vec<&str> = skill.references.iter().map(|r| r.name.as_str()).collect();
-                let list = if available.is_empty() { "none".to_string() } else { available.join(", ") };
-                return (call_id, format!("Reference '{doc}' not found in skill '{skill_id}'. Available: {list}"), true);
+                let available: Vec<&str> =
+                    skill.references.iter().map(|r| r.name.as_str()).collect();
+                let list = if available.is_empty() {
+                    "none".to_string()
+                } else {
+                    available.join(", ")
+                };
+                let msg =
+                    format!("Reference '{doc}' not found in skill '{skill_id}'. Available: {list}");
+                return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
             }
         };
 
         match std::fs::read_to_string(&r.path) {
-            Ok(content) => return (call_id, format!("# Reference: {doc} (skill: {skill_id})\n\n{content}"), false),
-            Err(e)      => return (call_id, format!("Failed to read reference '{doc}': {e}"), true),
+            Ok(content) => {
+                let msg = format!("# Reference: {doc} (skill: {skill_id})\n\n{content}");
+                return finalize_tool_result(hooks, call_id, tool_name, args, msg, false).await;
+            }
+            Err(e) => {
+                let msg = format!("Failed to read reference '{doc}': {e}");
+                return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
+            }
         }
     }
 
@@ -295,7 +441,57 @@ async fn run_one_tool(
     tracing::info!("Executing tool: {tool_name}");
     let result = dispatch(call_id.clone(), &tool_name, &args, mcp).await;
     tracing::debug!("Tool '{}': {} bytes", tool_name, result.output.len());
-    (call_id, result.output, result.is_error)
+    finalize_tool_result(
+        hooks,
+        call_id,
+        tool_name,
+        args,
+        result.output,
+        result.is_error,
+    )
+    .await
+}
+
+/// Apply PostToolUse / PostToolUseFailure hooks for a completed tool.
+async fn finalize_tool_result(
+    hooks: &HookEngine,
+    call_id: String,
+    tool_name: String,
+    args: serde_json::Value,
+    mut output: String,
+    is_error: bool,
+) -> (String, String, bool) {
+    if hooks.is_empty() {
+        return (call_id, output, is_error);
+    }
+
+    let preceding_reasoning: Option<&str> = None;
+    let preceding_assistant_message: Option<&str> = None;
+
+    if is_error {
+        hooks
+            .post_tool_use_failure(
+                &tool_name,
+                &args,
+                &output,
+                preceding_reasoning,
+                preceding_assistant_message,
+            )
+            .await;
+    } else if let Some(extra) = hooks
+        .post_tool_use(
+            &tool_name,
+            &args,
+            &output,
+            preceding_reasoning,
+            preceding_assistant_message,
+        )
+        .await
+    {
+        output = format!("{}\n\n[Hook context: {extra}]", output);
+    }
+
+    (call_id, output, is_error)
 }
 
 // -- Text-mode tool loop
@@ -308,11 +504,10 @@ async fn process_tool_calls(
     output: &mut String,
     mcp: &McpManager,
     stats: &mut HeadlessStats,
+    hooks: &HookEngine,
 ) -> Result<()> {
-    let tool_calls: Vec<(String, String, serde_json::Value)> = messages
-        .iter()
-        .filter_map(|m| m.as_tool_call())
-        .collect();
+    let tool_calls: Vec<(String, String, serde_json::Value)> =
+        messages.iter().filter_map(|m| m.as_tool_call()).collect();
 
     if tool_calls.is_empty() {
         return Ok(());
@@ -321,14 +516,24 @@ async fn process_tool_calls(
     // Split into sequential (state-mutating) and parallel (independent) calls.
     // Sequential tools are handled one at a time in original order.
     // If all calls in the batch are sequential, fall through to sequential path.
-    let all_sequential = tool_calls.iter().all(|(_, name, _)| is_sequential_tool(name));
+    let all_sequential = tool_calls
+        .iter()
+        .all(|(_, name, _)| is_sequential_tool(name));
 
     if all_sequential || tool_calls.len() == 1 {
         // -- Sequential path
         for (call_id, tool_name, args) in tool_calls {
             let (cid, out, is_err) = run_one_tool(
-                client, agent_id, call_id, tool_name, args, permissions, mcp
-            ).await;
+                client,
+                agent_id,
+                call_id,
+                tool_name,
+                args,
+                permissions,
+                mcp,
+                hooks,
+            )
+            .await;
 
             let follow = client
                 .stream_tool_return(agent_id, &cid, &out, is_err, |msg| {
@@ -342,7 +547,17 @@ async fn process_tool_calls(
             collect_assistant_text(&follow, output);
             stats.turn_count += 1;
             stats.tool_count += 1;
-            Box::pin(process_tool_calls(client, agent_id, follow, permissions, output, mcp, stats)).await?;
+            Box::pin(process_tool_calls(
+                client,
+                agent_id,
+                follow,
+                permissions,
+                output,
+                mcp,
+                stats,
+                hooks,
+            ))
+            .await?;
         }
     } else {
         // -- Parallel path
@@ -362,19 +577,24 @@ async fn process_tool_calls(
 
         tracing::info!(
             "Parallel tool dispatch: {} concurrent + {} sequential",
-            parallel_batch.len(), sequential_remainder.len()
+            parallel_batch.len(),
+            sequential_remainder.len()
         );
 
         // Spawn all parallel tools concurrently
         let futures: Vec<_> = parallel_batch
             .into_iter()
             .map(|(call_id, tool_name, args)| {
-                let client    = client.clone();
-                let agent_id  = agent_id.to_string();
-                let mcp       = mcp;
-                let perms     = permissions.clone();
+                let client = client.clone();
+                let agent_id = agent_id.to_string();
+                let mcp = mcp;
+                let perms = permissions.clone();
+                let hooks = hooks;
                 async move {
-                    run_one_tool(&client, &agent_id, call_id, tool_name, args, &perms, mcp).await
+                    run_one_tool(
+                        &client, &agent_id, call_id, tool_name, args, &perms, mcp, hooks,
+                    )
+                    .await
                 }
             })
             .collect();
@@ -405,15 +625,25 @@ async fn process_tool_calls(
                 follow_msgs = follow;
             } else {
                 // Non-last results — server buffers them, returns []
-                client.send_tool_return(agent_id, &call_id, &out, is_err).await?;
+                client
+                    .send_tool_return(agent_id, &call_id, &out, is_err)
+                    .await?;
             }
         }
 
         // Now handle any sequential tools that were in this batch
         for (call_id, tool_name, args) in sequential_remainder {
             let (cid, out, is_err) = run_one_tool(
-                client, agent_id, call_id, tool_name, args, permissions, mcp
-            ).await;
+                client,
+                agent_id,
+                call_id,
+                tool_name,
+                args,
+                permissions,
+                mcp,
+                hooks,
+            )
+            .await;
 
             let follow = client
                 .stream_tool_return(agent_id, &cid, &out, is_err, |msg| {
@@ -429,7 +659,17 @@ async fn process_tool_calls(
 
         collect_assistant_text(&follow_msgs, output);
         stats.turn_count += total as u32;
-        Box::pin(process_tool_calls(client, agent_id, follow_msgs, permissions, output, mcp, stats)).await?;
+        Box::pin(process_tool_calls(
+            client,
+            agent_id,
+            follow_msgs,
+            permissions,
+            output,
+            mcp,
+            stats,
+            hooks,
+        ))
+        .await?;
     }
 
     Ok(())
@@ -446,17 +686,18 @@ async fn process_tool_calls_stream_json(
     mcp: &McpManager,
     stats: &mut HeadlessStats,
     emit: &impl Fn(serde_json::Value),
+    hooks: &HookEngine,
 ) -> Result<()> {
-    let tool_calls: Vec<(String, String, serde_json::Value)> = messages
-        .iter()
-        .filter_map(|m| m.as_tool_call())
-        .collect();
+    let tool_calls: Vec<(String, String, serde_json::Value)> =
+        messages.iter().filter_map(|m| m.as_tool_call()).collect();
 
     if tool_calls.is_empty() {
         return Ok(());
     }
 
-    let all_sequential = tool_calls.iter().all(|(_, name, _)| is_sequential_tool(name));
+    let all_sequential = tool_calls
+        .iter()
+        .all(|(_, name, _)| is_sequential_tool(name));
 
     if all_sequential || tool_calls.len() == 1 {
         // -- Sequential path
@@ -464,8 +705,16 @@ async fn process_tool_calls_stream_json(
             emit(json!({ "type": "tool_call", "tool": tool_name, "args": args }));
 
             let (cid, result_output, is_error) = run_one_tool(
-                client, agent_id, call_id, tool_name.clone(), args, permissions, mcp
-            ).await;
+                client,
+                agent_id,
+                call_id,
+                tool_name.clone(),
+                args,
+                permissions,
+                mcp,
+                hooks,
+            )
+            .await;
 
             emit(json!({
                 "type": "tool_result",
@@ -490,13 +739,22 @@ async fn process_tool_calls_stream_json(
             collect_assistant_text(&follow, output);
             stats.turn_count += 1;
             Box::pin(process_tool_calls_stream_json(
-                client, agent_id, follow, permissions, output, mcp, stats, emit
-            )).await?;
+                client,
+                agent_id,
+                follow,
+                permissions,
+                output,
+                mcp,
+                stats,
+                emit,
+                hooks,
+            ))
+            .await?;
         }
     } else {
         // -- Parallel path
         let total = tool_calls.len();
-        let mut parallel_batch  = Vec::new();
+        let mut parallel_batch = Vec::new();
         let mut sequential_remainder = Vec::new();
 
         for tc in tool_calls {
@@ -510,18 +768,30 @@ async fn process_tool_calls_stream_json(
 
         tracing::info!(
             "Parallel tool dispatch (stream-json): {} concurrent + {} sequential",
-            parallel_batch.len(), sequential_remainder.len()
+            parallel_batch.len(),
+            sequential_remainder.len()
         );
 
         let futures: Vec<_> = parallel_batch
             .into_iter()
             .map(|(call_id, tool_name, args)| {
-                let client   = client.clone();
+                let client = client.clone();
                 let agent_id = agent_id.to_string();
-                let mcp      = mcp;
-                let perms    = permissions.clone();
+                let mcp = mcp;
+                let perms = permissions.clone();
+                let hooks = hooks;
                 async move {
-                    let r = run_one_tool(&client, &agent_id, call_id, tool_name.clone(), args, &perms, mcp).await;
+                    let r = run_one_tool(
+                        &client,
+                        &agent_id,
+                        call_id,
+                        tool_name.clone(),
+                        args,
+                        &perms,
+                        mcp,
+                        hooks,
+                    )
+                    .await;
                     (tool_name, r)
                 }
             })
@@ -560,15 +830,25 @@ async fn process_tool_calls_stream_json(
                     .await?;
                 follow_msgs = follow;
             } else {
-                client.send_tool_return(agent_id, &call_id, &out, is_err).await?;
+                client
+                    .send_tool_return(agent_id, &call_id, &out, is_err)
+                    .await?;
             }
         }
 
         for (call_id, tool_name, args) in sequential_remainder {
             emit(json!({ "type": "tool_call", "tool": tool_name, "args": args }));
             let (cid, out, is_err) = run_one_tool(
-                client, agent_id, call_id, tool_name.clone(), args, permissions, mcp
-            ).await;
+                client,
+                agent_id,
+                call_id,
+                tool_name.clone(),
+                args,
+                permissions,
+                mcp,
+                hooks,
+            )
+            .await;
             emit(json!({
                 "type": "tool_result", "tool": tool_name,
                 "output": out, "is_error": is_err
@@ -591,8 +871,17 @@ async fn process_tool_calls_stream_json(
         collect_assistant_text(&follow_msgs, output);
         stats.turn_count += total as u32;
         Box::pin(process_tool_calls_stream_json(
-            client, agent_id, follow_msgs, permissions, output, mcp, stats, emit
-        )).await?;
+            client,
+            agent_id,
+            follow_msgs,
+            permissions,
+            output,
+            mcp,
+            stats,
+            emit,
+            hooks,
+        ))
+        .await?;
     }
 
     Ok(())
@@ -601,10 +890,11 @@ async fn process_tool_calls_stream_json(
 fn collect_assistant_text(messages: &[CadeMessage], output: &mut String) {
     for msg in messages {
         if let Some(text) = msg.assistant_text()
-            && !text.is_empty() {
-                output.push_str(text);
-                output.push('\n');
-            }
+            && !text.is_empty()
+        {
+            output.push_str(text);
+            output.push('\n');
+        }
     }
 }
 

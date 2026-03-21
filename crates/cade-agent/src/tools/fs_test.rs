@@ -26,11 +26,12 @@ fn ensure_within_root(root: &Path, raw_path: &str) -> Result<(), String> {
     let mut current = normalized.as_path();
     let mut non_existent = Vec::new();
 
-    while !current.exists() && current.parent().is_some() {
+    while !current.exists() {
+        let Some(parent) = current.parent() else { break };
         if let Some(name) = current.file_name() {
             non_existent.push(name.to_os_string());
         }
-        current = current.parent().unwrap();
+        current = parent;
     }
 
     let mut resolved = std::fs::canonicalize(current)
@@ -48,7 +49,7 @@ fn ensure_within_root(root: &Path, raw_path: &str) -> Result<(), String> {
 
 fn main() {
     let root = Path::new("/tmp/cade_test_root");
-    std::fs::create_dir_all(root).unwrap();
+    std::fs::create_dir_all(root).expect("create test root dir");
     std::os::unix::fs::symlink("/etc", root.join("etc_symlink")).unwrap_or(());
     
     match ensure_within_root(root, "etc_symlink/passwd") {

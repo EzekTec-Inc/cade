@@ -1,14 +1,17 @@
 // region:    --- Modules
 
+mod error;
+
+pub use error::{Error, Result};
+
 pub mod anthropic;
 pub mod catalogue;
 pub mod gemini;
 pub mod ollama;
 pub mod openai;
 
-pub use catalogue::{ModelEntry, CATALOGUE};
+pub use catalogue::{CATALOGUE, ModelEntry};
 
-use anyhow::Result;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -86,14 +89,14 @@ pub struct CompletionResponse {
 /// Token usage reported by the LLM at the end of a completion.
 #[derive(Debug, Clone, Default)]
 pub struct TokenUsage {
-    pub input_tokens:       u32,
-    pub output_tokens:      u32,
-    pub cache_read_tokens:  u32,
+    pub input_tokens: u32,
+    pub output_tokens: u32,
+    pub cache_read_tokens: u32,
     /// Tokens written into the prompt cache on this request (first cache miss).
     /// Non-zero only on Anthropic; billed at 1.25× normal input rate.
     pub cache_write_tokens: u32,
     /// The model that produced this usage (e.g. "gemini/gemini-2.5-pro").
-    pub model:              String,
+    pub model: String,
 }
 
 /// A chunk from a streaming response
@@ -105,6 +108,8 @@ pub enum StreamChunk {
     ToolCall(LlmToolCall),
     /// Token usage reported at end of stream (before Done).
     Usage(TokenUsage),
+    /// Provider-specific finish reason (e.g. "max_tokens", "length", "SAFETY").
+    FinishReason(String),
     Done,
 }
 
@@ -124,10 +129,7 @@ pub trait LlmProvider: Send + Sync {
 /// Which HTTP status codes are worth retrying (transient / rate-limit errors).
 /// 400, 401, 403, 404 are permanent — fail fast.
 pub fn is_retryable_status(status: reqwest::StatusCode) -> bool {
-    matches!(
-        status.as_u16(),
-        429 | 500 | 502 | 503 | 504
-    )
+    matches!(status.as_u16(), 429 | 500 | 502 | 503 | 504)
 }
 
 /// Retry an async fallible operation with exponential backoff.
@@ -148,7 +150,7 @@ where
     F: FnMut(u32) -> Fut,
     Fut: std::future::Future<Output = Result<T>>,
 {
-    let mut last_err = anyhow::anyhow!("retry_with_backoff: no attempts made");
+    let mut last_err = crate::Error::custom("retry_with_backoff: no attempts made");
     for attempt in 1..=max_attempts {
         match f(attempt).await {
             Ok(v) => return Ok(v),
@@ -180,9 +182,9 @@ where
 /// Returns true if the error looks like a transient / rate-limit failure.
 /// Checks for connection errors (reqwest) and for "NNN:" prefixed status codes
 /// embedded in provider_error() formatted strings.
-fn is_retryable_error(e: &anyhow::Error) -> bool {
-    // reqwest network-level errors (connection refused, timeout, etc.)
-    if let Some(re) = e.downcast_ref::<reqwest::Error>() {
+fn is_retryable_error(e: &Error) -> bool {
+    // Check embedded reqwest errors
+    if let Error::Reqwest(re) = e {
         if re.is_connect() || re.is_timeout() || re.is_request() {
             return true;
         }
@@ -191,7 +193,7 @@ fn is_retryable_error(e: &anyhow::Error) -> bool {
         }
     }
     // provider_error() formats as "Anthropic 429: ..." — scan the message
-    let msg = e.to_string();
+    let msg = format!("{e:?}");
     for code in ["429", "500", "502", "503", "504"] {
         if msg.contains(code) {
             return true;
@@ -206,12 +208,12 @@ fn is_retryable_error(e: &anyhow::Error) -> bool {
 /// Falls back to the raw text if the body isn't JSON or lacks that field.
 ///
 /// Returns an `anyhow::Error` ready to propagate with `return Err(...)`.
-pub fn provider_error(provider: &str, status: reqwest::StatusCode, body: &str) -> anyhow::Error {
+pub fn provider_error(provider: &str, status: reqwest::StatusCode, body: &str) -> Error {
     let msg = serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|v| v["error"]["message"].as_str().map(String::from))
         .unwrap_or_else(|| body.trim().to_string());
-    anyhow::anyhow!("{provider} {status}: {msg}")
+    Error::custom(format!("{provider} {status}: {msg}"))
 }
 
 /// Strip optional `provider/` prefix from a model handle.
@@ -237,42 +239,42 @@ pub fn bare_model(model: &str) -> &str {
 /// - `models_url`: live model listing endpoint (`None` → not supported by this provider)
 #[derive(Debug, Clone)]
 pub struct PresetDef {
-    pub name:       &'static str,
-    pub env_vars:   &'static [&'static str],
-    pub chat_url:   &'static str,
+    pub name: &'static str,
+    pub env_vars: &'static [&'static str],
+    pub chat_url: &'static str,
     pub models_url: Option<&'static str>,
 }
 
 /// All known OpenAI-compatible preset providers with their auto-detection env vars.
 pub const PRESET_PROVIDERS: &[PresetDef] = &[
     PresetDef {
-        name:       "openrouter",
-        env_vars:   &["OPENROUTER_API_KEY"],
-        chat_url:   "https://openrouter.ai/api/v1/chat/completions",
+        name: "openrouter",
+        env_vars: &["OPENROUTER_API_KEY"],
+        chat_url: "https://openrouter.ai/api/v1/chat/completions",
         models_url: Some("https://openrouter.ai/api/v1/models"),
     },
     PresetDef {
-        name:       "groq",
-        env_vars:   &["GROQ_API_KEY"],
-        chat_url:   "https://api.groq.com/openai/v1/chat/completions",
+        name: "groq",
+        env_vars: &["GROQ_API_KEY"],
+        chat_url: "https://api.groq.com/openai/v1/chat/completions",
         models_url: Some("https://api.groq.com/openai/v1/models"),
     },
     PresetDef {
-        name:       "together",
-        env_vars:   &["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"],
-        chat_url:   "https://api.together.xyz/v1/chat/completions",
+        name: "together",
+        env_vars: &["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"],
+        chat_url: "https://api.together.xyz/v1/chat/completions",
         models_url: Some("https://api.together.xyz/v1/models"),
     },
     PresetDef {
-        name:       "fireworks",
-        env_vars:   &["FIREWORKS_API_KEY"],
-        chat_url:   "https://api.fireworks.ai/inference/v1/chat/completions",
+        name: "fireworks",
+        env_vars: &["FIREWORKS_API_KEY"],
+        chat_url: "https://api.fireworks.ai/inference/v1/chat/completions",
         models_url: Some("https://api.fireworks.ai/inference/v1/models"),
     },
     PresetDef {
-        name:       "deepinfra",
-        env_vars:   &["DEEPINFRA_API_KEY"],
-        chat_url:   "https://api.deepinfra.com/v1/openai/chat/completions",
+        name: "deepinfra",
+        env_vars: &["DEEPINFRA_API_KEY"],
+        chat_url: "https://api.deepinfra.com/v1/openai/chat/completions",
         models_url: Some("https://api.deepinfra.com/v1/openai/models"),
     },
 ];
@@ -280,7 +282,8 @@ pub const PRESET_PROVIDERS: &[PresetDef] = &[
 /// Backward-compat alias for providers.rs and repl.rs /connect preset lookup.
 /// Derived from PRESET_PROVIDERS so there is a single source of truth.
 pub fn openai_compat_presets() -> Vec<(&'static str, &'static str)> {
-    PRESET_PROVIDERS.iter()
+    PRESET_PROVIDERS
+        .iter()
         .map(|p| (p.name, p.chat_url))
         .collect()
 }
@@ -288,17 +291,26 @@ pub fn openai_compat_presets() -> Vec<(&'static str, &'static str)> {
 /// Deprecated constant kept for compile-time references — use `openai_compat_presets()` instead.
 #[deprecated(note = "use PRESET_PROVIDERS or openai_compat_presets()")]
 pub const OPENAI_COMPAT_PRESETS: &[(&str, &str)] = &[
-    ("openrouter", "https://openrouter.ai/api/v1/chat/completions"),
-    ("together",   "https://api.together.xyz/v1/chat/completions"),
-    ("groq",       "https://api.groq.com/openai/v1/chat/completions"),
-    ("fireworks",  "https://api.fireworks.ai/inference/v1/chat/completions"),
-    ("deepinfra",  "https://api.deepinfra.com/v1/openai/chat/completions"),
+    (
+        "openrouter",
+        "https://openrouter.ai/api/v1/chat/completions",
+    ),
+    ("together", "https://api.together.xyz/v1/chat/completions"),
+    ("groq", "https://api.groq.com/openai/v1/chat/completions"),
+    (
+        "fireworks",
+        "https://api.fireworks.ai/inference/v1/chat/completions",
+    ),
+    (
+        "deepinfra",
+        "https://api.deepinfra.com/v1/openai/chat/completions",
+    ),
 ];
 
 pub struct LlmRouter {
-    providers:        std::collections::HashMap<String, Arc<dyn LlmProvider>>,
+    providers: std::collections::HashMap<String, Arc<dyn LlmProvider>>,
     /// API keys stored per provider name — used for live model listing calls.
-    provider_keys:    std::collections::HashMap<String, String>,
+    provider_keys: std::collections::HashMap<String, String>,
     default_provider: String,
     /// Base URL for the Ollama instance (used by /v1/models to query /api/tags).
     pub ollama_base_url: String,
@@ -348,18 +360,29 @@ impl LlmRouter {
         // -- Preset providers auto-detected from env vars
         for preset in PRESET_PROVIDERS {
             // Skip if already registered (avoid overwriting a core provider)
-            if providers.contains_key(preset.name) { continue; }
-            let key = preset.env_vars.iter()
+            if providers.contains_key(preset.name) {
+                continue;
+            }
+            let key = preset
+                .env_vars
+                .iter()
                 .find_map(|var| std::env::var(var).ok().filter(|k| !k.is_empty()));
             if let Some(key) = key {
                 tracing::info!(
                     "Auto-detected provider '{}' from env var '{}'",
                     preset.name,
-                    preset.env_vars.iter().find(|v| std::env::var(v).is_ok()).unwrap_or(&"?")
+                    preset
+                        .env_vars
+                        .iter()
+                        .find(|v| std::env::var(v).is_ok())
+                        .unwrap_or(&"?")
                 );
                 providers.insert(
                     preset.name.to_string(),
-                    Arc::new(openai::OpenAiProvider::new(key.clone(), Some(preset.chat_url.to_string()))),
+                    Arc::new(openai::OpenAiProvider::new(
+                        key.clone(),
+                        Some(preset.chat_url.to_string()),
+                    )),
                 );
                 provider_keys.insert(preset.name.to_string(), key);
             }
@@ -367,9 +390,10 @@ impl LlmRouter {
 
         // Ensure the configured default is actually available; fall back gracefully
         if !providers.contains_key(&default_provider)
-            && let Some(first) = providers.keys().next() {
-                default_provider = first.clone();
-            }
+            && let Some(first) = providers.keys().next()
+        {
+            default_provider = first.clone();
+        }
 
         Self {
             providers,
@@ -394,7 +418,12 @@ impl LlmRouter {
 
     /// Add a provider with its API key. Prefer this over add_provider whenever the key
     /// is available so that list_dynamic_models() can fetch live model lists.
-    pub fn add_provider_with_key(&mut self, name: String, provider: Arc<dyn LlmProvider>, key: String) {
+    pub fn add_provider_with_key(
+        &mut self,
+        name: String,
+        provider: Arc<dyn LlmProvider>,
+        key: String,
+    ) {
         tracing::info!("Provider hot-loaded with key: {name}");
         self.providers.insert(name.clone(), provider);
         if !key.is_empty() {
@@ -435,10 +464,12 @@ impl LlmRouter {
             }
         }
 
-        let missing_openai = !self.providers.contains_key("openai")
-            || needs_key(&self.provider_keys, "openai");
+        let missing_openai =
+            !self.providers.contains_key("openai") || needs_key(&self.provider_keys, "openai");
         if missing_openai {
-            let key = std::env::var("OPENAI_API_KEY").ok().filter(|k| !k.is_empty());
+            let key = std::env::var("OPENAI_API_KEY")
+                .ok()
+                .filter(|k| !k.is_empty());
             if let Some(key) = key {
                 tracing::info!("hot_sync: registering/updating openai from env");
                 self.providers.insert(
@@ -449,8 +480,8 @@ impl LlmRouter {
             }
         }
 
-        let missing_gemini = !self.providers.contains_key("gemini")
-            || needs_key(&self.provider_keys, "gemini");
+        let missing_gemini =
+            !self.providers.contains_key("gemini") || needs_key(&self.provider_keys, "gemini");
         if missing_gemini {
             let key = std::env::var("GOOGLE_API_KEY")
                 .or_else(|_| std::env::var("GEMINI_API_KEY"))
@@ -475,8 +506,12 @@ impl LlmRouter {
         for preset in PRESET_PROVIDERS {
             let missing = !self.providers.contains_key(preset.name)
                 || needs_key(&self.provider_keys, preset.name);
-            if !missing { continue; }
-            let key = preset.env_vars.iter()
+            if !missing {
+                continue;
+            }
+            let key = preset
+                .env_vars
+                .iter()
                 .find_map(|var| std::env::var(var).ok().filter(|k| !k.is_empty()));
             if let Some(key) = key {
                 tracing::info!("hot_sync: registering/updating {} from env", preset.name);
@@ -500,8 +535,7 @@ impl LlmRouter {
             tracing::info!("Provider removed: {name}");
             // Reset default if we just removed it
             if self.default_provider == name {
-                self.default_provider = self.providers.keys()
-                    .next().cloned().unwrap_or_default();
+                self.default_provider = self.providers.keys().next().cloned().unwrap_or_default();
             }
             true
         } else {
@@ -526,11 +560,16 @@ impl LlmRouter {
         use futures::future::join_all;
 
         // Build one future per provider that supports live model listing
-        type ModelFut = std::pin::Pin<Box<dyn std::future::Future<Output = Vec<ModelEntry>> + Send>>;
+        type ModelFut =
+            std::pin::Pin<Box<dyn std::future::Future<Output = Vec<ModelEntry>> + Send>>;
         let mut tasks: Vec<ModelFut> = Vec::new();
 
         for name in self.providers.keys() {
-            let key = self.provider_keys.get(name.as_str()).cloned().unwrap_or_default();
+            let key = self
+                .provider_keys
+                .get(name.as_str())
+                .cloned()
+                .unwrap_or_default();
 
             match name.as_str() {
                 // -- Local Ollama
@@ -538,18 +577,19 @@ impl LlmRouter {
                     let url = self.ollama_base_url.clone();
                     tasks.push(Box::pin(async move {
                         let ol = ollama::OllamaProvider::new(url);
-                        ol.list_models().await
+                        ol.list_models()
+                            .await
                             .into_iter()
                             .map(|m| {
                                 let id = format!("ollama/{m}");
                                 ModelEntry {
-                                    provider:       "ollama".into(),
-                                    id:             id.clone(),
-                                    display_name:   m,
-                                    toolset:        "default".into(),
-                                    max_tokens:     catalogue::max_tokens_for_model(&id),
+                                    provider: "ollama".into(),
+                                    id: id.clone(),
+                                    display_name: m,
+                                    toolset: "default".into(),
+                                    max_tokens: catalogue::max_tokens_for_model(&id),
                                     context_window: catalogue::context_window_for_model(&id),
-                                    dynamic:        true,
+                                    dynamic: true,
                                 }
                             })
                             .collect()
@@ -562,23 +602,28 @@ impl LlmRouter {
                         let live = anthropic::fetch_anthropic_models(&key).await;
                         if live.is_empty() {
                             // Provider is configured but endpoint unreachable — use catalogue
-                            CATALOGUE.iter()
+                            CATALOGUE
+                                .iter()
                                 .filter(|(p, ..)| *p == "anthropic")
                                 .map(catalogue::ModelEntry::from_catalogue)
                                 .collect()
                         } else {
-                            live.into_iter().map(|(id, display)| {
-                                let full_id = format!("anthropic/{id}");
-                                ModelEntry {
-                                    provider:       "anthropic".into(),
-                                    id:             full_id.clone(),
-                                    display_name:   display,
-                                    toolset:        "default".into(),
-                                    max_tokens:     catalogue::max_tokens_for_model(&full_id),
-                                    context_window: catalogue::context_window_for_model(&full_id),
-                                    dynamic:        true,
-                                }
-                            }).collect()
+                            live.into_iter()
+                                .map(|(id, display)| {
+                                    let full_id = format!("anthropic/{id}");
+                                    ModelEntry {
+                                        provider: "anthropic".into(),
+                                        id: full_id.clone(),
+                                        display_name: display,
+                                        toolset: "default".into(),
+                                        max_tokens: catalogue::max_tokens_for_model(&full_id),
+                                        context_window: catalogue::context_window_for_model(
+                                            &full_id,
+                                        ),
+                                        dynamic: true,
+                                    }
+                                })
+                                .collect()
                         }
                     }));
                 }
@@ -588,23 +633,28 @@ impl LlmRouter {
                     tasks.push(Box::pin(async move {
                         let ids = openai::fetch_openai_chat_models(&key).await;
                         if ids.is_empty() {
-                            CATALOGUE.iter()
+                            CATALOGUE
+                                .iter()
                                 .filter(|(p, ..)| *p == "openai")
                                 .map(catalogue::ModelEntry::from_catalogue)
                                 .collect()
                         } else {
-                            ids.into_iter().map(|id| {
-                                let full_id = format!("openai/{id}");
-                                ModelEntry {
-                                    provider:       "openai".into(),
-                                    id:             full_id.clone(),
-                                    display_name:   id.clone(),
-                                    toolset:        "codex".into(),
-                                    max_tokens:     catalogue::max_tokens_for_model(&full_id),
-                                    context_window: catalogue::context_window_for_model(&full_id),
-                                    dynamic:        true,
-                                }
-                            }).collect()
+                            ids.into_iter()
+                                .map(|id| {
+                                    let full_id = format!("openai/{id}");
+                                    ModelEntry {
+                                        provider: "openai".into(),
+                                        id: full_id.clone(),
+                                        display_name: id.clone(),
+                                        toolset: "codex".into(),
+                                        max_tokens: catalogue::max_tokens_for_model(&full_id),
+                                        context_window: catalogue::context_window_for_model(
+                                            &full_id,
+                                        ),
+                                        dynamic: true,
+                                    }
+                                })
+                                .collect()
                         }
                     }));
                 }
@@ -615,23 +665,28 @@ impl LlmRouter {
                     tasks.push(Box::pin(async move {
                         let live = gemini::fetch_gemini_models(&key).await;
                         if live.is_empty() {
-                            CATALOGUE.iter()
+                            CATALOGUE
+                                .iter()
                                 .filter(|(p, ..)| *p == "gemini")
                                 .map(catalogue::ModelEntry::from_catalogue)
                                 .collect()
                         } else {
-                            live.into_iter().map(|(id, display)| {
-                                let full_id = format!("{n}/{id}");
-                                ModelEntry {
-                                    provider:       n.clone(),
-                                    id:             full_id.clone(),
-                                    display_name:   display,
-                                    toolset:        "gemini".into(),
-                                    max_tokens:     catalogue::max_tokens_for_model(&full_id),
-                                    context_window: catalogue::context_window_for_model(&full_id),
-                                    dynamic:        true,
-                                }
-                            }).collect()
+                            live.into_iter()
+                                .map(|(id, display)| {
+                                    let full_id = format!("{n}/{id}");
+                                    ModelEntry {
+                                        provider: n.clone(),
+                                        id: full_id.clone(),
+                                        display_name: display,
+                                        toolset: "gemini".into(),
+                                        max_tokens: catalogue::max_tokens_for_model(&full_id),
+                                        context_window: catalogue::context_window_for_model(
+                                            &full_id,
+                                        ),
+                                        dynamic: true,
+                                    }
+                                })
+                                .collect()
                         }
                     }));
                 }
@@ -639,27 +694,31 @@ impl LlmRouter {
                 // -- Preset providers (Groq, OpenRouter, etc.)
                 _ => {
                     if let Some(preset) = PRESET_PROVIDERS.iter().find(|p| p.name == name.as_str())
-                        && let Some(models_url) = preset.models_url {
-                            let n   = name.clone();
-                            let url = models_url.to_string();
-                            tasks.push(Box::pin(async move {
-                                openai::fetch_model_ids(&url, &key).await
-                                    .into_iter()
-                                    .map(|id| {
-                                        let full_id = format!("{n}/{id}");
-                                        ModelEntry {
-                                            provider:       n.clone(),
-                                            id:             full_id.clone(),
-                                            display_name:   id,
-                                            toolset:        "default".into(),
-                                            max_tokens:     catalogue::max_tokens_for_model(&full_id),
-                                            context_window: catalogue::context_window_for_model(&full_id),
-                                            dynamic:        true,
-                                        }
-                                    })
-                                    .collect()
-                            }));
-                        }
+                        && let Some(models_url) = preset.models_url
+                    {
+                        let n = name.clone();
+                        let url = models_url.to_string();
+                        tasks.push(Box::pin(async move {
+                            openai::fetch_model_ids(&url, &key)
+                                .await
+                                .into_iter()
+                                .map(|id| {
+                                    let full_id = format!("{n}/{id}");
+                                    ModelEntry {
+                                        provider: n.clone(),
+                                        id: full_id.clone(),
+                                        display_name: id,
+                                        toolset: "default".into(),
+                                        max_tokens: catalogue::max_tokens_for_model(&full_id),
+                                        context_window: catalogue::context_window_for_model(
+                                            &full_id,
+                                        ),
+                                        dynamic: true,
+                                    }
+                                })
+                                .collect()
+                        }));
+                    }
                 }
             }
         }
@@ -678,7 +737,9 @@ impl LlmRouter {
     ) -> Option<Arc<dyn LlmProvider>> {
         match kind {
             "anthropic" => {
-                let key = api_key.clone().or_else(|| config.anthropic_api_key.clone())?;
+                let key = api_key
+                    .clone()
+                    .or_else(|| config.anthropic_api_key.clone())?;
                 Some(Arc::new(anthropic::AnthropicProvider::new(key)))
             }
             "openai" => {
@@ -690,7 +751,8 @@ impl LlmRouter {
                 Some(Arc::new(gemini::GeminiProvider::new(key)))
             }
             "ollama" => {
-                let base = base_url.clone()
+                let base = base_url
+                    .clone()
                     .unwrap_or_else(|| config.ollama_base_url.clone());
                 Some(Arc::new(ollama::OllamaProvider::new(base)))
             }
@@ -712,40 +774,44 @@ impl LlmRouter {
     ///
     /// Public so `RouterAdapter` in `cade-server.rs` can resolve a provider Arc while
     /// holding the lock for only this call, then drop the lock before making HTTP calls.
-    pub fn resolve_provider(&self, model: &str) -> anyhow::Result<(Arc<dyn LlmProvider>, String)> {
+    pub fn resolve_provider(&self, model: &str) -> Result<(Arc<dyn LlmProvider>, String)> {
         // 1. Explicit prefix: `gemini/gemini-2.5-pro`
         if let Some(slash) = model.find('/') {
             let prefix = &model[..slash];
-            let bare   = model[slash + 1..].to_string();
-            return self.providers
+            let bare = model[slash + 1..].to_string();
+            return self
+                .providers
                 .get(prefix)
                 .map(|p| (Arc::clone(p), bare))
-                .ok_or_else(|| anyhow::anyhow!(
-                    "Provider '{}' is not configured. Run /connect {} to add it.",
-                    prefix, prefix
-                ));
+                .ok_or_else(|| {
+                    Error::custom(format!(
+                        "Provider '{prefix}' is not configured. Run /connect {prefix} to add it."
+                    ))
+                });
         }
 
         // 2. Infer provider from model name pattern
         if let Some(prefix) = infer_provider_prefix(model) {
-            return self.providers
+            return self
+                .providers
                 .get(prefix)
                 .map(|p| (Arc::clone(p), model.to_string()))
-                .ok_or_else(|| anyhow::anyhow!(
-                    "Model '{}' requires the '{}' provider. Run /connect {} to add it.",
-                    model, prefix, prefix
-                ));
+                .ok_or_else(|| {
+                    Error::custom(format!(
+                        "Model '{model}' requires the '{prefix}' provider. Run /connect {prefix} to add it."
+                    ))
+                });
         }
 
         // 3. Truly unknown model — use the default provider
         self.providers
             .get(&self.default_provider)
             .map(|p| (Arc::clone(p), model.to_string()))
-            .ok_or_else(|| anyhow::anyhow!("No LLM provider available"))
+            .ok_or_else(|| Error::custom("No LLM provider available"))
     }
 
     /// Validate that the given model string can be routed.
-    pub fn validate_model(&self, model: &str) -> anyhow::Result<()> {
+    pub fn validate_model(&self, model: &str) -> Result<()> {
         self.resolve_provider(model).map(|_| ())
     }
 }
@@ -782,7 +848,10 @@ fn infer_provider_prefix(model: &str) -> Option<&'static str> {
 impl LlmProvider for LlmRouter {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
         let (provider, bare_model) = self.resolve_provider(&req.model)?;
-        let routed = CompletionRequest { model: bare_model, ..req.clone() };
+        let routed = CompletionRequest {
+            model: bare_model,
+            ..req.clone()
+        };
         provider.complete(&routed).await
     }
 
@@ -791,7 +860,10 @@ impl LlmProvider for LlmRouter {
         req: &CompletionRequest,
     ) -> Result<std::pin::Pin<Box<dyn futures::Stream<Item = Result<StreamChunk>> + Send>>> {
         let (provider, bare_model) = self.resolve_provider(&req.model)?;
-        let routed = CompletionRequest { model: bare_model, ..req.clone() };
+        let routed = CompletionRequest {
+            model: bare_model,
+            ..req.clone()
+        };
         provider.stream(&routed).await
     }
 }
@@ -816,14 +888,20 @@ mod tests {
 
     #[test]
     fn bare_model_strips_provider_prefix() {
-        assert_eq!(bare_model("anthropic/claude-sonnet-4-5-20250929"), "claude-sonnet-4-5-20250929");
+        assert_eq!(
+            bare_model("anthropic/claude-sonnet-4-5-20250929"),
+            "claude-sonnet-4-5-20250929"
+        );
         assert_eq!(bare_model("openai/gpt-4o"), "gpt-4o");
         assert_eq!(bare_model("gemini/gemini-2.5-pro"), "gemini-2.5-pro");
     }
 
     #[test]
     fn bare_model_no_prefix_unchanged() {
-        assert_eq!(bare_model("claude-sonnet-4-5-20250929"), "claude-sonnet-4-5-20250929");
+        assert_eq!(
+            bare_model("claude-sonnet-4-5-20250929"),
+            "claude-sonnet-4-5-20250929"
+        );
         assert_eq!(bare_model("gpt-4o"), "gpt-4o");
     }
 
@@ -832,9 +910,13 @@ mod tests {
     #[test]
     fn retryable_statuses() {
         assert!(is_retryable_status(reqwest::StatusCode::TOO_MANY_REQUESTS)); // 429
-        assert!(is_retryable_status(reqwest::StatusCode::INTERNAL_SERVER_ERROR)); // 500
+        assert!(is_retryable_status(
+            reqwest::StatusCode::INTERNAL_SERVER_ERROR
+        )); // 500
         assert!(is_retryable_status(reqwest::StatusCode::BAD_GATEWAY)); // 502
-        assert!(is_retryable_status(reqwest::StatusCode::SERVICE_UNAVAILABLE)); // 503
+        assert!(is_retryable_status(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE
+        )); // 503
         assert!(is_retryable_status(reqwest::StatusCode::GATEWAY_TIMEOUT)); // 504
     }
 
@@ -871,13 +953,17 @@ mod tests {
 
     #[test]
     fn retryable_error_from_provider_error() {
-        let err = provider_error("Anthropic", reqwest::StatusCode::TOO_MANY_REQUESTS, "rate limited");
+        let err = provider_error(
+            "Anthropic",
+            reqwest::StatusCode::TOO_MANY_REQUESTS,
+            "rate limited",
+        );
         assert!(is_retryable_error(&err));
     }
 
     #[test]
     fn non_retryable_error() {
-        let err = anyhow::anyhow!("Invalid API key (401)");
+        let err = crate::Error::custom("Invalid API key (401)");
         // Contains "401" which is not in the retryable list... but wait,
         // the check is naive substring. Let's verify:
         // 401 is NOT in ["429", "500", "502", "503", "504"]
@@ -888,8 +974,14 @@ mod tests {
 
     #[test]
     fn infer_claude() {
-        assert_eq!(infer_provider_prefix("claude-sonnet-4-5-20250929"), Some("anthropic"));
-        assert_eq!(infer_provider_prefix("claude-3-opus-20240229"), Some("anthropic"));
+        assert_eq!(
+            infer_provider_prefix("claude-sonnet-4-5-20250929"),
+            Some("anthropic")
+        );
+        assert_eq!(
+            infer_provider_prefix("claude-3-opus-20240229"),
+            Some("anthropic")
+        );
     }
 
     #[test]
@@ -949,7 +1041,8 @@ mod tests {
     }
 
     #[test]
-    fn router_resolve_explicit_prefix() {
+    fn router_resolve_explicit_prefix() -> Result<()> {
+        // -- Setup & Fixtures
         let config = AiConfig {
             anthropic_api_key: Some("sk-test".into()),
             openai_api_key: None,
@@ -958,12 +1051,17 @@ mod tests {
             llm_provider: "anthropic".into(),
         };
         let router = LlmRouter::build(&config);
-        let (_, bare) = router.resolve_provider("anthropic/claude-sonnet-4-5-20250929").unwrap();
+
+        // -- Exec & Check
+        let (_, bare) = router.resolve_provider("anthropic/claude-sonnet-4-5-20250929")?;
         assert_eq!(bare, "claude-sonnet-4-5-20250929");
+
+        Ok(())
     }
 
     #[test]
-    fn router_resolve_inferred_prefix() {
+    fn router_resolve_inferred_prefix() -> Result<()> {
+        // -- Setup & Fixtures
         let config = AiConfig {
             anthropic_api_key: Some("sk-test".into()),
             openai_api_key: None,
@@ -972,8 +1070,12 @@ mod tests {
             llm_provider: "anthropic".into(),
         };
         let router = LlmRouter::build(&config);
-        let (_, bare) = router.resolve_provider("claude-sonnet-4-5-20250929").unwrap();
+
+        // -- Exec & Check
+        let (_, bare) = router.resolve_provider("claude-sonnet-4-5-20250929")?;
         assert_eq!(bare, "claude-sonnet-4-5-20250929");
+
+        Ok(())
     }
 
     #[test]
@@ -992,7 +1094,7 @@ mod tests {
     }
 
     #[test]
-    fn router_resolve_missing_provider_errors() {
+    fn router_resolve_missing_provider_errors() -> Result<()> {
         let config = AiConfig {
             anthropic_api_key: None,
             openai_api_key: None,
@@ -1003,9 +1105,10 @@ mod tests {
         let router = LlmRouter::build(&config);
         // anthropic/ prefix but no anthropic provider configured
         let result = router.resolve_provider("anthropic/claude-sonnet-4-5");
-        assert!(result.is_err());
-        let msg = result.err().unwrap().to_string();
+        let msg = result.err().ok_or("Should be an error")?.to_string();
         assert!(msg.contains("not configured"), "got: {msg}");
+
+        Ok(())
     }
 
     #[test]
@@ -1018,18 +1121,30 @@ mod tests {
             llm_provider: "ollama".into(),
         };
         let mut router = LlmRouter::build(&config);
-        assert!(!router.provider_names().contains(&"test-provider".to_string()));
+        assert!(
+            !router
+                .provider_names()
+                .contains(&"test-provider".to_string())
+        );
 
         // Add a provider
-        let provider: Arc<dyn LlmProvider> = Arc::new(
-            crate::ollama::OllamaProvider::new("http://localhost:11434".into())
-        );
+        let provider: Arc<dyn LlmProvider> = Arc::new(crate::ollama::OllamaProvider::new(
+            "http://localhost:11434".into(),
+        ));
         router.add_provider("test-provider".into(), provider);
-        assert!(router.provider_names().contains(&"test-provider".to_string()));
+        assert!(
+            router
+                .provider_names()
+                .contains(&"test-provider".to_string())
+        );
 
         // Remove it
         assert!(router.remove_provider("test-provider"));
-        assert!(!router.provider_names().contains(&"test-provider".to_string()));
+        assert!(
+            !router
+                .provider_names()
+                .contains(&"test-provider".to_string())
+        );
 
         // Removing again returns false
         assert!(!router.remove_provider("test-provider"));
@@ -1052,7 +1167,8 @@ mod tests {
     // -- LlmMessage serialization
 
     #[test]
-    fn llm_message_roundtrip() {
+    fn llm_message_roundtrip() -> Result<()> {
+        // -- Setup & Fixtures
         let msg = LlmMessage {
             role: "user".into(),
             content: "Hello".into(),
@@ -1060,24 +1176,37 @@ mod tests {
             tool_calls: None,
             images: None,
         };
-        let json = serde_json::to_string(&msg).unwrap();
-        let parsed: LlmMessage = serde_json::from_str(&json).unwrap();
+
+        // -- Exec
+        let json = serde_json::to_string(&msg)?;
+        let parsed: LlmMessage = serde_json::from_str(&json)?;
+
+        // -- Check
         assert_eq!(parsed.role, "user");
         assert_eq!(parsed.content, "Hello");
+
+        Ok(())
     }
 
     #[test]
-    fn llm_tool_call_roundtrip() {
+    fn llm_tool_call_roundtrip() -> Result<()> {
+        // -- Setup & Fixtures
         let tc = LlmToolCall {
             id: "tc_123".into(),
             name: "bash".into(),
             arguments: json!({"command": "ls"}),
             thought_signature: None,
         };
-        let json = serde_json::to_string(&tc).unwrap();
-        let parsed: LlmToolCall = serde_json::from_str(&json).unwrap();
+
+        // -- Exec
+        let json = serde_json::to_string(&tc)?;
+        let parsed: LlmToolCall = serde_json::from_str(&json)?;
+
+        // -- Check
         assert_eq!(parsed.id, "tc_123");
         assert_eq!(parsed.name, "bash");
+
+        Ok(())
     }
 
     // -- TokenUsage defaults

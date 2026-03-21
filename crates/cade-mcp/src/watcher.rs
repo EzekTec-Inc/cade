@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 /// returned silently — the REPL never receives on it until directories appear
 /// (a restart is needed in that edge case, which is acceptable).
 pub fn spawn_mcp_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
-    use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
     use notify::event::ModifyKind;
+    use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
     let (tx, rx) = tokio::sync::mpsc::channel::<()>(4);
 
@@ -27,7 +27,7 @@ pub fn spawn_mcp_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
     // atomic-write renames that some editors use.
     let mut watch_dirs: Vec<PathBuf> = Vec::new();
 
-    if let Some(ref h) = home {
+    if let Some(h) = &home {
         let global_dir = h.join(".cade");
         if global_dir.exists() {
             watch_dirs.push(global_dir);
@@ -47,7 +47,7 @@ pub fn spawn_mcp_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
         let (sync_tx, sync_rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
 
         let mut watcher = match RecommendedWatcher::new(sync_tx, Config::default()) {
-            Ok(w)  => w,
+            Ok(w) => w,
             Err(e) => {
                 tracing::warn!("mcp watcher: failed to create watcher: {e}");
                 return;

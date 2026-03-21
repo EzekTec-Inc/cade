@@ -16,8 +16,8 @@
 ///   ]
 /// }
 /// ```
-use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use crate::Result;
+use serde_json::{Value, json};
 
 use cade_agent::agent::client::{CadeClient, CreateAgentRequest, MemoryBlock};
 
@@ -27,29 +27,40 @@ use cade_agent::agent::client::{CadeClient, CreateAgentRequest, MemoryBlock};
 /// Fetches: agent metadata, memory blocks, conversations + their messages.
 pub async fn export_agent(client: &CadeClient, agent_id: &str) -> Result<Value> {
     // 1. Agent metadata
-    let agent = client.get_agent(agent_id).await
-        .with_context(|| format!("get_agent {agent_id}"))?;
+    let agent = client
+        .get_agent(agent_id)
+        .await
+        .map_err(|e| crate::Error::custom(format!("get_agent {agent_id}: {e}")))?;
 
     // 2. Memory blocks
-    let memory = client.get_memory(agent_id).await
-        .unwrap_or_default();
+    let memory = client.get_memory(agent_id).await.unwrap_or_default();
 
-    let memory_json: Vec<Value> = memory.iter().map(|b| json!({
-        "label":       b.label,
-        "value":       b.value,
-        "description": b.description,
-    })).collect();
+    let memory_json: Vec<Value> = memory
+        .iter()
+        .map(|b| {
+            json!({
+                "label":       b.label,
+                "value":       b.value,
+                "description": b.description,
+            })
+        })
+        .collect();
 
     // 3. Conversations + messages
-    let convs = client.list_conversations(agent_id).await.unwrap_or_default();
+    let convs = client
+        .list_conversations(agent_id)
+        .await
+        .unwrap_or_default();
     let mut conversations_json: Vec<Value> = Vec::new();
 
     for conv in &convs {
-        let conv_id   = conv["id"].as_str().unwrap_or("").to_string();
+        let conv_id = conv["id"].as_str().unwrap_or("").to_string();
         let conv_title = conv["title"].as_str().unwrap_or("").to_string();
 
         // GET /v1/agents/:id/messages?conversation_id=<id>
-        let msgs = client.get_conversation_messages(agent_id, &conv_id).await
+        let msgs = client
+            .get_conversation_messages(agent_id, &conv_id)
+            .await
             .unwrap_or_default();
 
         conversations_json.push(json!({
@@ -60,7 +71,9 @@ pub async fn export_agent(client: &CadeClient, agent_id: &str) -> Result<Value> 
     }
 
     // Also grab messages that don't belong to any conversation (legacy / default)
-    let default_msgs = client.get_conversation_messages(agent_id, "").await
+    let default_msgs = client
+        .get_conversation_messages(agent_id, "")
+        .await
         .unwrap_or_default();
     if !default_msgs.is_empty() {
         conversations_json.push(json!({
@@ -95,14 +108,17 @@ pub async fn export_agent_to_file(
     output_path: &str,
 ) -> Result<()> {
     let payload = export_agent(client, agent_id).await?;
-    let pretty  = serde_json::to_string_pretty(&payload)?;
+    let pretty = serde_json::to_string_pretty(&payload)?;
 
     if output_path == "-" {
         println!("{pretty}");
     } else {
         std::fs::write(output_path, &pretty)
-            .with_context(|| format!("write export to {output_path}"))?;
-        println!("✓ Exported agent '{}' → {output_path}", payload["agent"]["name"].as_str().unwrap_or(agent_id));
+            .map_err(|e| crate::Error::custom(format!("write export to {output_path}: {e}")))?;
+        println!(
+            "✓ Exported agent '{}' → {output_path}",
+            payload["agent"]["name"].as_str().unwrap_or(agent_id)
+        );
     }
     Ok(())
 }
@@ -120,11 +136,10 @@ pub async fn import_agent_from_file(client: &CadeClient, input_path: &str) -> Re
         s
     } else {
         std::fs::read_to_string(input_path)
-            .with_context(|| format!("read import file {input_path}"))?
+            .map_err(|e| crate::Error::custom(format!("read import file {input_path}: {e}")))?
     };
 
-    let payload: Value = serde_json::from_str(&content)
-        .context("parse export JSON")?;
+    let payload: Value = serde_json::from_str(&content).map_err(|e| crate::Error::custom(format!("parse export JSON: {e}")))?;
 
     import_agent(client, &payload).await
 }
@@ -133,12 +148,12 @@ pub async fn import_agent_from_file(client: &CadeClient, input_path: &str) -> Re
 pub async fn import_agent(client: &CadeClient, payload: &Value) -> Result<String> {
     let version = payload["cade_export_version"].as_u64().unwrap_or(0);
     if version != 1 {
-        anyhow::bail!("Unsupported export version: {version} (expected 1)");
+        return Err(crate::Error::custom(format!("Unsupported export version: {version} (expected 1)")));
     }
 
     let agent_data = &payload["agent"];
-    let orig_name  = agent_data["name"].as_str().unwrap_or("imported-agent");
-    let model      = agent_data["model"].as_str().unwrap_or("").to_string();
+    let orig_name = agent_data["name"].as_str().unwrap_or("imported-agent");
+    let model = agent_data["model"].as_str().unwrap_or("").to_string();
     let description = agent_data["description"].as_str().map(String::from);
     let system_prompt = agent_data["system_prompt"].as_str().map(String::from);
 
@@ -154,22 +169,29 @@ pub async fn import_agent(client: &CadeClient, payload: &Value) -> Result<String
             let label = b["label"].as_str()?.to_string();
             let value = b["value"].as_str().unwrap_or("").to_string();
             let description = b["description"].as_str().map(String::from);
-            Some(MemoryBlock { label, value, description, tier: None })
+            Some(MemoryBlock {
+                label,
+                value,
+                description,
+                tier: None,
+            })
         })
         .collect();
 
     // Create the new agent
     let req = CreateAgentRequest {
-        name:          Some(import_name.clone()),
-        model:         model.clone(),
+        name: Some(import_name.clone()),
+        model: model.clone(),
         description,
         system_prompt,
         memory_blocks,
-        tool_ids:      vec![],
+        tool_ids: vec![],
     };
 
-    let new_agent = client.create_agent(req).await
-        .context("create agent during import")?;
+    let new_agent = client
+        .create_agent(req)
+        .await
+        .map_err(|e| crate::Error::custom(format!("create agent during import: {e}")))?;
 
     println!("✓ Created agent '{import_name}' ({})", new_agent.id);
 
@@ -187,10 +209,7 @@ pub async fn import_agent(client: &CadeClient, payload: &Value) -> Result<String
         println!("     re-triggering tool calls. Use the export file as an archive.");
     }
 
-    let mem_count = payload["memory"]
-        .as_array()
-        .map(|a| a.len())
-        .unwrap_or(0);
+    let mem_count = payload["memory"].as_array().map(|a| a.len()).unwrap_or(0);
     println!("  ✓ {mem_count} memory block(s) restored.");
 
     Ok(new_agent.id)
@@ -207,18 +226,23 @@ pub async fn resolve_agent_id(client: &CadeClient, name_or_id: &str) -> Result<S
         return Ok(name_or_id.to_string());
     }
     // Fall back to name search
-    let all = client.list_agents().await.context("list agents")?;
-    let q   = name_or_id.to_lowercase();
-    let matched: Vec<_> = all.iter()
+    let all = client.list_agents().await.map_err(|e| crate::Error::custom(format!("list agents: {e}")))?;
+    let q = name_or_id.to_lowercase();
+    let matched: Vec<_> = all
+        .iter()
         .filter(|a| a.name.to_lowercase().contains(&q))
         .collect();
     match matched.len() {
-        0 => anyhow::bail!("No agent found matching '{name_or_id}'"),
+        0 => return Err(crate::Error::custom(format!("No agent found matching '{name_or_id}'"))),
         1 => Ok(matched[0].id.clone()),
-        n => anyhow::bail!(
+        n => return Err(crate::Error::custom(format!(
             "{n} agents match '{name_or_id}': {}",
-            matched.iter().map(|a| format!("{} ({})", a.name, a.id)).collect::<Vec<_>>().join(", ")
-        ),
+            matched
+                .iter()
+                .map(|a| format!("{} ({})", a.name, a.id))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ))),
     }
 }
 
@@ -228,7 +252,13 @@ pub async fn resolve_agent_id(client: &CadeClient, name_or_id: &str) -> Result<S
 pub fn default_export_path(agent_name: &str) -> String {
     let slug: String = agent_name
         .chars()
-        .map(|c| if c.is_alphanumeric() { c.to_lowercase().next().unwrap_or(c) } else { '-' })
+        .map(|c| {
+            if c.is_alphanumeric() {
+                c.to_lowercase().next().unwrap_or(c)
+            } else {
+                '-'
+            }
+        })
         .collect::<String>()
         .trim_matches('-')
         .to_string();

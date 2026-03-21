@@ -81,10 +81,7 @@ impl FileAutocompleteProvider {
         let (parent, file_prefix, dir_suffix) = if partial.ends_with('/') {
             (expanded.clone(), "", true)
         } else {
-            let p = expanded
-                .parent()
-                .unwrap_or(Path::new("."))
-                .to_path_buf();
+            let p = expanded.parent().unwrap_or(Path::new(".")).to_path_buf();
             let f = expanded.file_name().and_then(|n| n.to_str()).unwrap_or("");
             (p, f, false)
         };
@@ -119,7 +116,7 @@ impl FileAutocompleteProvider {
 
         let parent_display: String = {
             let parent_str = parent.to_string_lossy();
-            if let Some(ref h) = home {
+            if let Some(h) = &home {
                 if parent.starts_with(h) {
                     let rel = parent
                         .strip_prefix(h)

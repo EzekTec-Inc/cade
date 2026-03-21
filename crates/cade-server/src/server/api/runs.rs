@@ -1,27 +1,21 @@
+use axum::response::sse::Event;
 use axum::{
+    Json,
     extract::{Path, Query, State},
     http::StatusCode,
     response::{IntoResponse, Response, Sse},
-    Json,
 };
-use axum::response::sse::Event;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
-use crate::server::{
-    state::AppState,
-    storage::sqlite,
-};
+use crate::server::{state::AppState, storage::sqlite};
 
 fn err(status: StatusCode, msg: &str) -> Response {
     (status, Json(json!({ "detail": msg }))).into_response()
 }
 
 /// GET /v1/runs/:run_id — run status + last seq_id
-pub async fn get_run(
-    State(state): State<AppState>,
-    Path(run_id): Path<String>,
-) -> Response {
+pub async fn get_run(State(state): State<AppState>, Path(run_id): Path<String>) -> Response {
     match sqlite::get_run(&state.db, &run_id) {
         Ok(Some(r)) => {
             // Find last seq_id
@@ -37,10 +31,11 @@ pub async fn get_run(
                 "last_seq_id":     last_seq,
                 "created_at":      r.created_at,
                 "updated_at":      r.updated_at,
-            })).into_response()
+            }))
+            .into_response()
         }
         Ok(None) => err(StatusCode::NOT_FOUND, "run not found"),
-        Err(e)   => err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
 
@@ -59,12 +54,12 @@ pub async fn stream_run(
 
     let run = match sqlite::get_run(&state.db, &run_id) {
         Ok(Some(r)) => r,
-        Ok(None)    => return err(StatusCode::NOT_FOUND, "run not found"),
-        Err(e)      => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
+        Ok(None) => return err(StatusCode::NOT_FOUND, "run not found"),
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
     let events = match sqlite::run_events_after(&state.db, &run_id, after_seq) {
-        Ok(e)  => e,
+        Ok(e) => e,
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     };
 
@@ -91,10 +86,8 @@ pub async fn stream_run(
     let stream = futures::stream::iter(
         sse_events
             .into_iter()
-            .map(|v| Ok::<Event, std::convert::Infallible>(
-                Event::default().data(v.to_string())
-            ))
-            .chain(std::iter::once(Ok(Event::default().data("[DONE]"))))
+            .map(|v| Ok::<Event, std::convert::Infallible>(Event::default().data(v.to_string())))
+            .chain(std::iter::once(Ok(Event::default().data("[DONE]")))),
     );
 
     Sse::new(stream).into_response()

@@ -1,10 +1,10 @@
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
-    Json,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use uuid::Uuid;
 
 use crate::server::{
@@ -92,7 +92,7 @@ pub async fn create_agent(
         model: body.model.clone(),
         description: body.description.clone(),
         system_prompt: Some(system_prompt),
-        created_at: None,  // populated by DB via now_ts()
+        created_at: None, // populated by DB via now_ts()
     };
 
     sqlite::create_agent(&state.db, &row).map_err(|e| server_err(e.to_string()))?;
@@ -111,7 +111,10 @@ pub async fn create_agent(
     };
     if !tool_ids_to_wire.is_empty() {
         let _ = sqlite::attach_tools_to_agent(&state.db, &id, &tool_ids_to_wire);
-        tracing::info!("Auto-wired {} tools to new agent {id}", tool_ids_to_wire.len());
+        tracing::info!(
+            "Auto-wired {} tools to new agent {id}",
+            tool_ids_to_wire.len()
+        );
     }
 
     // Handle memory blocks
@@ -255,10 +258,13 @@ pub async fn get_memory(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let blocks = sqlite::get_memory_blocks_full(&state.db, &agent_id)
         .map_err(|e| server_err(e.to_string()))?;
-    let arr: Vec<Value> = blocks.into_iter()
-        .map(|(label, value, description, tier)| json!({
-            "label": label, "value": value, "description": description, "tier": tier
-        }))
+    let arr: Vec<Value> = blocks
+        .into_iter()
+        .map(|(label, value, description, tier)| {
+            json!({
+                "label": label, "value": value, "description": description, "tier": tier
+            })
+        })
         .collect();
     Ok(Json(json!({ "blocks": arr })))
 }
@@ -271,13 +277,22 @@ pub async fn set_memory_tier_handler(
 ) -> Result<StatusCode, (StatusCode, Json<Value>)> {
     let tier = body["tier"].as_str().unwrap_or("short");
     if !matches!(tier, "short" | "long" | "pinned") {
-        return Err((StatusCode::BAD_REQUEST, Json(json!({ "detail": "tier must be 'short', 'long', or 'pinned'" }))));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(json!({ "detail": "tier must be 'short', 'long', or 'pinned'" })),
+        ));
     }
     let reset_turn = tier != "long"; // reactivation resets last_turn; demotion does not
     let found = sqlite::set_memory_tier(&state.db, &agent_id, &label, tier, reset_turn)
         .map_err(|e| server_err(e.to_string()))?;
-    if found { Ok(StatusCode::NO_CONTENT) }
-    else { Err((StatusCode::NOT_FOUND, Json(json!({ "detail": format!("Block '{label}' not found") })))) }
+    if found {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "detail": format!("Block '{label}' not found") })),
+        ))
+    }
 }
 
 /// DELETE /v1/agents/:id/memory/:label
@@ -317,15 +332,21 @@ pub async fn get_memory_history(
     Path((agent_id, label)): Path<(String, String)>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let limit = params.get("limit")
+    let limit = params
+        .get("limit")
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(5)
         .min(20);
     let history = sqlite::get_memory_history(&state.db, &agent_id, &label, limit)
         .map_err(|e| server_err(e.to_string()))?;
-    let items: Vec<Value> = history.iter().map(|(id, val, ts)| json!({
-        "id": id, "value": val, "updated_at": ts
-    })).collect();
+    let items: Vec<Value> = history
+        .iter()
+        .map(|(id, val, ts)| {
+            json!({
+                "id": id, "value": val, "updated_at": ts
+            })
+        })
+        .collect();
     Ok(Json(json!(items)))
 }
 
@@ -339,7 +360,10 @@ pub async fn restore_memory_revision(
     if found {
         Ok(StatusCode::NO_CONTENT)
     } else {
-        Err((StatusCode::NOT_FOUND, Json(json!({"detail": "revision not found"}))))
+        Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "revision not found"})),
+        ))
     }
 }
 
@@ -387,6 +411,23 @@ pub async fn search_messages_handler(
         })
         .collect();
     Ok(Json(json!({ "messages": messages, "query": query })))
+}
+
+/// GET /v1/agents/:id/messages/latest — fetch the most recent assistant turn
+pub async fn latest_assistant_message(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let conv_id = params.get("conversation_id").map(String::as_str);
+    match sqlite::last_assistant_message(&state.db, &agent_id, conv_id) {
+        Ok(Some(row)) => Ok(Json(json!({ "message": row }))),
+        Ok(None) => Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": "no assistant messages"})),
+        )),
+        Err(e) => Err(server_err(e.to_string())),
+    }
 }
 
 // -- Conversation endpoints
@@ -515,9 +556,14 @@ pub async fn search_memory_handler(
         // No ?q= → delegate to get_memory_full (list all with tier)
         let blocks = sqlite::get_memory_blocks_full(&state.db, &agent_id)
             .map_err(|e| server_err(e.to_string()))?;
-        let out: Vec<Value> = blocks.iter().map(|(l, v, d, t)| json!({
-            "label": l, "value": v, "description": d, "tier": t
-        })).collect();
+        let out: Vec<Value> = blocks
+            .iter()
+            .map(|(l, v, d, t)| {
+                json!({
+                    "label": l, "value": v, "description": d, "tier": t
+                })
+            })
+            .collect();
         return Ok(Json(json!({ "blocks": out })));
     }
 
@@ -529,15 +575,21 @@ pub async fn search_memory_handler(
     let full = sqlite::get_memory_blocks_full(&state.db, &agent_id).unwrap_or_default();
     for (label, _value, _snippet) in &rows {
         if let Some((_, _, _, tier)) = full.iter().find(|(l, _, _, _)| l == label)
-            && tier == "long" {
-                let _ = sqlite::set_memory_tier(&state.db, &agent_id, label, "short", true);
-            }
+            && tier == "long"
+        {
+            let _ = sqlite::set_memory_tier(&state.db, &agent_id, label, "short", true);
+        }
     }
 
-    let blocks: Vec<Value> = rows.iter().map(|(label, value, snippet)| json!({
-        "label":   label,
-        "value":   value,
-        "snippet": snippet,
-    })).collect();
+    let blocks: Vec<Value> = rows
+        .iter()
+        .map(|(label, value, snippet)| {
+            json!({
+                "label":   label,
+                "value":   value,
+                "snippet": snippet,
+            })
+        })
+        .collect();
     Ok(Json(json!({ "blocks": blocks, "query": query })))
 }

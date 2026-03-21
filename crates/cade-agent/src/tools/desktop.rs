@@ -1,7 +1,7 @@
 //! Desktop extension tools — exposed to the CADE agent as callable functions.
 //! Wraps src/desktop/* and provides the same dispatch interface as other tools.
 
-use anyhow::Result;
+use crate::Result;
 use serde_json::{Value, json};
 
 use cade_desktop::desktop::{
@@ -19,9 +19,9 @@ impl DesktopCaptureTool {
         use base64::Engine;
         use std::io::Write;
 
-        let monitor     = args["monitor"].as_u64().map(|n| n as usize);
-        let window      = args["window_title"].as_str();
-        let save_path   = args["save_path"].as_str();
+        let monitor = args["monitor"].as_u64().map(|n| n as usize);
+        let window = args["window_title"].as_str();
+        let save_path = args["save_path"].as_str();
 
         let capture = ScreenCapture::new();
         let (b64, width, height) = capture.capture_with_dimensions(monitor, window).await?;
@@ -29,7 +29,7 @@ impl DesktopCaptureTool {
         // Decode base64 → PNG bytes
         let png_bytes = base64::prelude::BASE64_STANDARD
             .decode(&b64)
-            .map_err(|e| anyhow::anyhow!("base64 decode: {e}"))?;
+            .map_err(|e| crate::Error::custom(format!("base64 decode: {e}")))?;
 
         // Resolve save path: explicit arg > ~/Pictures/cade_screenshot_<ts>.png > /tmp/
         let dest = if let Some(p) = save_path {
@@ -43,8 +43,8 @@ impl DesktopCaptureTool {
         } else {
             let ts = chrono::Local::now().format("%Y%m%d_%H%M%S");
             let home = dirs::home_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
-            let dir  = home.join("Pictures");
-            let _    = std::fs::create_dir_all(&dir);
+            let dir = home.join("Pictures");
+            let _ = std::fs::create_dir_all(&dir);
             dir.join(format!("cade_screenshot_{ts}.png"))
         };
 
@@ -54,13 +54,16 @@ impl DesktopCaptureTool {
         }
 
         let mut f = std::fs::File::create(&dest)
-            .map_err(|e| anyhow::anyhow!("Cannot write to {}: {e}", dest.display()))?;
+            .map_err(|e| crate::Error::custom(format!("Cannot write to {}: {e}", dest.display())))?;
         f.write_all(&png_bytes)?;
 
         let kb = png_bytes.len() / 1024;
         Ok(format!(
             "Screenshot saved: {} ({}×{} px, {}KB)",
-            dest.display(), width, height, kb
+            dest.display(),
+            width,
+            height,
+            kb
         ))
     }
 
@@ -117,7 +120,7 @@ impl DesktopControlTool {
     pub async fn run(args: &Value) -> Result<String> {
         let action = args["action"]
             .as_str()
-            .ok_or_else(|| anyhow::anyhow!("desktop_control: missing 'action'"))?;
+            .ok_or_else(|| crate::Error::custom(format!("desktop_control: missing 'action'")))?;
 
         let ctrl = DesktopControl::detect().await;
 
@@ -125,31 +128,33 @@ impl DesktopControlTool {
             "focus_window" => {
                 let title = args["title"]
                     .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("focus_window requires 'title'"))?;
+                    .ok_or_else(|| crate::Error::custom(format!("focus_window requires 'title'")))?;
                 ctrl.focus_window(title).await?;
                 Ok(format!("Focused window: {title}"))
             }
             "type_text" => {
                 let text = args["text"]
                     .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("type_text requires 'text'"))?;
+                    .ok_or_else(|| crate::Error::custom(format!("type_text requires 'text'")))?;
                 ctrl.type_text(text).await?;
                 Ok(format!("Typed {} characters", text.len()))
             }
             "key_press" => {
                 let key = args["key"]
                     .as_str()
-                    .ok_or_else(|| anyhow::anyhow!("key_press requires 'key'"))?;
+                    .ok_or_else(|| crate::Error::custom(format!("key_press requires 'key'")))?;
                 ctrl.key_press(key).await?;
                 Ok(format!("Pressed key: {key}"))
             }
             "move_mouse" => {
                 let x = args["x"]
                     .as_i64()
-                    .ok_or_else(|| anyhow::anyhow!("move_mouse requires 'x'"))? as i32;
+                    .ok_or_else(|| crate::Error::custom(format!("move_mouse requires 'x'")))?
+                    as i32;
                 let y = args["y"]
                     .as_i64()
-                    .ok_or_else(|| anyhow::anyhow!("move_mouse requires 'y'"))? as i32;
+                    .ok_or_else(|| crate::Error::custom(format!("move_mouse requires 'y'")))?
+                    as i32;
                 ctrl.move_mouse(x, y).await?;
                 Ok(format!("Moved mouse to ({x}, {y})"))
             }
@@ -158,9 +163,9 @@ impl DesktopControlTool {
                 ctrl.click(button).await?;
                 Ok(format!("Clicked button {button}"))
             }
-            other => Err(anyhow::anyhow!(
+            other => Err(crate::Error::custom(format!(
                 "Unknown action '{other}'. Valid: focus_window, type_text, key_press, move_mouse, click"
-            )),
+            ))),
         }
     }
 

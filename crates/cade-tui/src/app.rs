@@ -24,7 +24,7 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use anyhow::Result;
+use crate::Result;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
     EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
@@ -188,12 +188,12 @@ use regex::Regex;
 
 fn plan_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?im)^Plan:\s*\n((?:^\d+\.\s+.*(?:\n|$))+)").unwrap())
+    RE.get_or_init(|| Regex::new(r"(?im)^Plan:\s*\n((?:^\d+\.\s+.*(?:\n|$))+)").expect("valid regex"))
 }
 
 fn done_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r"(?i)\[DONE:(\d+)\]").unwrap())
+    RE.get_or_init(|| Regex::new(r"(?i)\[DONE:(\d+)\]").expect("valid regex"))
 }
 
 // -- TuiApp
@@ -438,7 +438,7 @@ impl TuiApp {
             }
         }
         
-        if let Some(ref mut plan) = self.active_plan {
+        if let Some(plan) = &mut self.active_plan {
             let mut changed = false;
             for caps in done_regex().captures_iter(&self.streaming_text) {
                 if let Ok(id) = caps[1].parse::<usize>() {
@@ -613,8 +613,10 @@ impl TuiApp {
 
     /// Update the thinking text from the animation/assessing timer.
     pub fn update_thinking_text(&mut self, text: String) {
-        if let Some(ref ts) = self.thinking {
-            *ts.text.lock().unwrap() = text;
+        if let Some(ts) = &self.thinking {
+            if let Ok(mut guard) = ts.text.lock() {
+                *guard = text;
+            }
         }
     }
 
@@ -672,7 +674,7 @@ impl TuiApp {
         let thinking_text = self
             .thinking
             .as_ref()
-            .map(|ts| ts.text.lock().unwrap().clone());
+            .and_then(|ts| ts.text.lock().ok().map(|g| g.clone()));
         let thinking_elapsed = self.thinking.as_ref().map(|ts| ts.started.elapsed());
         let expand_all = self.expand_all;
         let active_question = self.active_question.as_ref().map(|s| s.draw_state.clone());
@@ -886,7 +888,7 @@ impl TuiApp {
 
         self.active_question = None;
 
-        if let Some(ref ans) = answer {
+        if let Some(ans) = &answer {
             self.push(RenderLine::QuestionResult {
                 header: question.header.to_string(),
                 answer: ans.as_str(),
@@ -1058,7 +1060,7 @@ impl TuiApp {
         self.scroll = 0;
         self.pending_lines = 0;
 
-        if let Some(ref ans) = answer {
+        if let Some(ans) = &answer {
             self.push(RenderLine::QuestionResult {
                 header: question.header.clone(),
                 answer: ans.as_str(),
@@ -1227,7 +1229,7 @@ impl TuiApp {
                 if let Some(tx) = aq.tx.take() {
                     let _ = tx.send(ans.clone());
                 }
-                if let Some(ref a) = ans {
+                if let Some(a) = &ans {
                     let _ = self.push(RenderLine::QuestionResult {
                         header: aq.draw_state.question.header.clone(),
                         answer: a.as_str(),
@@ -1336,14 +1338,14 @@ impl TuiApp {
                     self.picker = None;
                 }
                 (KeyCode::Up, _) => {
-                    if let Some(ref mut pk) = self.picker {
+                    if let Some(pk) = &mut self.picker {
                         if pk.cursor > 0 {
                             pk.cursor -= 1;
                         }
                     }
                 }
                 (KeyCode::Down, _) => {
-                    if let Some(ref mut pk) = self.picker {
+                    if let Some(pk) = &mut self.picker {
                         if !pk.matches.is_empty() && pk.cursor + 1 < pk.matches.len() {
                             pk.cursor += 1;
                         }
@@ -1362,7 +1364,7 @@ impl TuiApp {
                     }
                 }
                 (KeyCode::Backspace, _) => {
-                    if let Some(ref mut pk) = self.picker {
+                    if let Some(pk) = &mut self.picker {
                         if pk.query.is_empty() {
                             // Delete the @ and dismiss
                             if pk.at_pos < self.editor.input.len() {
@@ -1385,7 +1387,7 @@ impl TuiApp {
                 }
                 (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
                     // Append char to both input and picker query
-                    if let Some(ref mut pk) = self.picker {
+                    if let Some(pk) = &mut self.picker {
                         let query_end = pk.at_pos + 1 + pk.query.len();
                         self.editor.input.insert(query_end, c);
                         self.editor.cursor_pos = query_end + c.len_utf8();
@@ -2999,7 +3001,7 @@ fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect) {
 /// prefix when the path is under the user's home directory.
 fn abbreviate_cwd(path: &std::path::Path) -> String {
     let home = dirs::home_dir();
-    let (prefix, rel_path) = if let Some(ref h) = home {
+    let (prefix, rel_path) = if let Some(h) = &home {
         if let Ok(rel) = path.strip_prefix(h) {
             ("~/".to_string(), rel.to_path_buf())
         } else {
@@ -3110,12 +3112,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_question_result_formatting() {
+    fn test_app_question_result_formatting() {
+        // -- Setup & Fixtures
         let line = RenderLine::QuestionResult {
             header: "Decision".to_string(),
             answer: "Yes".to_string(),
         };
 
+        // -- Check
         match line {
             RenderLine::QuestionResult { header, answer } => {
                 assert_eq!(header, "Decision");
@@ -3126,7 +3130,8 @@ mod tests {
     }
 
     #[test]
-    fn test_count_wrapped_segment() {
+    fn test_app_count_wrapped_segment() {
+        // -- Exec & Check
         assert_eq!(count_wrapped_segment("a", 10), 1);
         assert_eq!(count_wrapped_segment("1234567890", 10), 1);
         assert_eq!(count_wrapped_segment("12345678901", 10), 2);

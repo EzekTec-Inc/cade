@@ -1,6 +1,6 @@
-use axum::{extract::State, Json};
-use serde_json::{json, Value};
 use crate::server::state::AppState;
+use axum::{Json, extract::State};
+use serde_json::{Value, json};
 
 pub async fn get_health(State(_state): State<AppState>) -> Json<Value> {
     Json(json!({

@@ -25,7 +25,7 @@ impl std::fmt::Display for PermissionRule {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.pattern {
             Some(p) => write!(f, "{}({})", self.tool, p),
-            None    => write!(f, "{}", self.tool),
+            None => write!(f, "{}", self.tool),
         }
     }
 }
@@ -35,14 +35,19 @@ impl PermissionRule {
     /// Returns `None` if the input is empty or malformed.
     pub fn parse(s: &str) -> Option<Self> {
         let s = s.trim();
-        if s.is_empty() { return None; }
+        if s.is_empty() {
+            return None;
+        }
         if let Some(paren) = s.find('(') {
-            let tool    = s[..paren].trim().to_lowercase();
-            let rest    = s[paren + 1..].trim_end_matches(')').trim().to_string();
+            let tool = s[..paren].trim().to_lowercase();
+            let rest = s[paren + 1..].trim_end_matches(')').trim().to_string();
             let pattern = if rest.is_empty() { None } else { Some(rest) };
             Some(Self { tool, pattern })
         } else {
-            Some(Self { tool: s.to_lowercase(), pattern: None })
+            Some(Self {
+                tool: s.to_lowercase(),
+                pattern: None,
+            })
         }
     }
 
@@ -51,7 +56,9 @@ impl PermissionRule {
     /// `tool_name` — the tool being invoked (e.g. "bash")
     /// `tool_arg`  — the first meaningful string argument (command / path)
     /// Canonical tool name (lowercase).
-    pub fn tool(&self) -> &str { &self.tool }
+    pub fn tool(&self) -> &str {
+        &self.tool
+    }
 
     /// Display string for the argument pattern, e.g. `(cargo test)` or empty.
     pub fn arg_display(&self) -> String {
@@ -66,8 +73,8 @@ impl PermissionRule {
             return false;
         }
         match (&self.pattern, tool_arg) {
-            (None, _)             => true,             // no pattern → match all invocations
-            (Some(_), None)       => false,             // pattern requires an arg
+            (None, _) => true,        // no pattern → match all invocations
+            (Some(_), None) => false, // pattern requires an arg
             (Some(pat), Some(arg)) => pattern_matches(pat, arg),
         }
     }
@@ -85,7 +92,11 @@ fn pattern_matches(pattern: &str, arg: &str) -> bool {
         arg.starts_with(prefix)
     } else if let Some(prefix) = pattern.strip_suffix("/**") {
         // Path glob: "src/**" matches "src/foo/bar.rs"
-        let dir = if prefix.ends_with('/') { prefix.to_string() } else { format!("{prefix}/") };
+        let dir = if prefix.ends_with('/') {
+            prefix.to_string()
+        } else {
+            format!("{prefix}/")
+        };
         arg.starts_with(dir.as_str()) || arg == prefix
     } else if pattern == "**" {
         true
@@ -99,12 +110,10 @@ fn pattern_matches(pattern: &str, arg: &str) -> bool {
 pub fn tool_first_arg(tool_name: &str, args: &serde_json::Value) -> Option<String> {
     // Known arg key names per tool type
     let keys = match tool_name.to_lowercase().as_str() {
-        "bash" | "shell" | "run_command" | "execute_command"
-            => &["command", "cmd"][..],
-        "read_file" | "write_file" | "edit_file" | "create_file"
-        | "delete_file" | "move_file" | "rename_file" | "apply_patch"
-            => &["path", "file_path", "filename"][..],
-        _   => &["path", "command", "query"][..],
+        "bash" | "shell" | "run_command" | "execute_command" => &["command", "cmd"][..],
+        "read_file" | "write_file" | "edit_file" | "create_file" | "delete_file" | "move_file"
+        | "rename_file" | "apply_patch" => &["path", "file_path", "filename"][..],
+        _ => &["path", "command", "query"][..],
     };
     for key in keys {
         if let Some(v) = args.get(key).and_then(|v| v.as_str()) {
@@ -115,8 +124,7 @@ pub fn tool_first_arg(tool_name: &str, args: &serde_json::Value) -> Option<Strin
 }
 
 /// Permission mode controlling how tool calls are approved
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum PermissionMode {
     /// Prompt user for each tool call (default)
     #[default]
@@ -129,27 +137,26 @@ pub enum PermissionMode {
     BypassPermissions,
 }
 
-
 impl std::fmt::Display for PermissionMode {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Default           => write!(f, "default"),
-            Self::AcceptEdits       => write!(f, "acceptEdits"),
-            Self::Plan              => write!(f, "plan"),
+            Self::Default => write!(f, "default"),
+            Self::AcceptEdits => write!(f, "acceptEdits"),
+            Self::Plan => write!(f, "plan"),
             Self::BypassPermissions => write!(f, "bypassPermissions"),
         }
     }
 }
 
 impl std::str::FromStr for PermissionMode {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
+    type Err = crate::Error;
+    fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
         match s {
-            "default"           => Ok(Self::Default),
-            "acceptEdits"       => Ok(Self::AcceptEdits),
-            "plan"              => Ok(Self::Plan),
+            "default" => Ok(Self::Default),
+            "acceptEdits" => Ok(Self::AcceptEdits),
+            "plan" => Ok(Self::Plan),
             "bypassPermissions" => Ok(Self::BypassPermissions),
-            other => anyhow::bail!("unknown permission mode: {other}"),
+            other => Err(crate::Error::custom(format!("unknown permission mode: {other}"))),
         }
     }
 }
@@ -159,8 +166,14 @@ impl std::str::FromStr for PermissionMode {
 /// Tools that are intrinsically write/mutating regardless of arguments.
 /// In plan mode these are always blocked.
 const WRITE_TOOLS: &[&str] = &[
-    "write_file", "edit_file", "create_file", "delete_file",
-    "move_file",  "rename_file", "patch_file", "apply_diff",
+    "write_file",
+    "edit_file",
+    "create_file",
+    "delete_file",
+    "move_file",
+    "rename_file",
+    "patch_file",
+    "apply_diff",
     "desktop_control",   // sends input / clicks
     "send_notification", // side-effect
 ];
@@ -169,45 +182,56 @@ const WRITE_TOOLS: &[&str] = &[
 /// permitted in plan mode when running via the `bash` tool.
 const READONLY_CMDS: &[&str] = &[
     // filesystem observation
-    "ls", "la", "ll", "dir", "tree",
-    "cat", "less", "more", "head", "tail",
-    "find", "fd", "locate",
-    "file", "stat", "du", "df", "lsblk",
-    // text search
-    "grep", "rg", "ag", "awk", "sed",  // sed without -i is read-only
-    "wc", "sort", "uniq", "cut", "tr",
-    "diff", "comm", "cmp",
-    // path / env
-    "pwd", "which", "whereis", "type",
-    "echo", "printf", "date", "uname",
-    "env", "printenv", "id", "whoami", "groups",
-    "hostname", "uptime",
-    // process / network observation
-    "ps", "pgrep", "top", "htop", "lsof",
-    "netstat", "ss", "ip", "ifconfig", "ping",
+    "ls", "la", "ll", "dir", "tree", "cat", "less", "more", "head", "tail", "find", "fd", "locate",
+    "file", "stat", "du", "df", "lsblk", // text search
+    "grep", "rg", "ag", "awk", "sed", // sed without -i is read-only
+    "wc", "sort", "uniq", "cut", "tr", "diff", "comm", "cmp", // path / env
+    "pwd", "which", "whereis", "type", "echo", "printf", "date", "uname", "env", "printenv", "id",
+    "whoami", "groups", "hostname", "uptime", // process / network observation
+    "ps", "pgrep", "top", "htop", "lsof", "netstat", "ss", "ip", "ifconfig", "ping",
     // git — read-only subcommands handled separately
-    "git",
-    // build inspection
-    "cargo",
-    // package observation
+    "git", // build inspection
+    "cargo", // package observation
     "dpkg", "apt", "snap", "pip", "npm", "yarn",
 ];
 
 /// Git subcommands that are read-only (all others are write).
 const READONLY_GIT: &[&str] = &[
-    "status", "log", "diff", "show", "branch", "tag",
-    "remote", "stash",  // stash list/show only — guarded by context check
-    "describe", "shortlog", "reflog",
-    "ls-files", "ls-tree", "cat-file",
-    "config", "rev-parse", "rev-list",
-    "blame", "grep", "bisect",  // bisect start = write, but observation is fine
+    "status",
+    "log",
+    "diff",
+    "show",
+    "branch",
+    "tag",
+    "remote",
+    "stash", // stash list/show only — guarded by context check
+    "describe",
+    "shortlog",
+    "reflog",
+    "ls-files",
+    "ls-tree",
+    "cat-file",
+    "config",
+    "rev-parse",
+    "rev-list",
+    "blame",
+    "grep",
+    "bisect", // bisect start = write, but observation is fine
 ];
 
 /// Cargo subcommands that are read-only.
 const READONLY_CARGO: &[&str] = &[
-    "check", "clippy", "test", "bench",
-    "doc", "read-manifest", "locate-project",
-    "metadata", "tree", "search", "info",
+    "check",
+    "clippy",
+    "test",
+    "bench",
+    "doc",
+    "read-manifest",
+    "locate-project",
+    "metadata",
+    "tree",
+    "search",
+    "info",
     "audit",
 ];
 
@@ -237,9 +261,11 @@ pub fn bash_command_is_write(command: &str) -> bool {
 /// Returns true if the command contains high-risk patterns that should be flagged.
 pub fn bash_command_is_suspicious(command: &str) -> bool {
     let cmd = command.to_lowercase();
-    
+
     // 1. Nested shell execution / execution of arbitrary input
-    let nested = ["$(", "`", "sh ", "bash ", "zsh ", "python ", "perl ", "php ", "ruby ", "node "];
+    let nested = [
+        "$(", "`", "sh ", "bash ", "zsh ", "python ", "perl ", "php ", "ruby ", "node ",
+    ];
     if nested.iter().any(|&p| cmd.contains(p)) {
         return true;
     }
@@ -274,8 +300,8 @@ fn contains_write_redirect(cmd: &str) -> bool {
     for c in chars {
         match c {
             '\'' if !in_double => in_single = !in_single,
-            '"'  if !in_single => in_double = !in_double,
-            '>'  if !in_single && !in_double => return true, // > or >>
+            '"' if !in_single => in_double = !in_double,
+            '>' if !in_single && !in_double => return true, // > or >>
             _ => {}
         }
     }
@@ -327,22 +353,33 @@ fn segment_is_write(seg: &str) -> bool {
         c if !READONLY_CMDS.contains(&c) => true,
 
         "git" => {
-            let sub = tokens.get(if first.contains('=') { 2 } else { 1 }).copied().unwrap_or("");
+            let sub = tokens
+                .get(if first.contains('=') { 2 } else { 1 })
+                .copied()
+                .unwrap_or("");
             // stash with arguments other than list/show is write
             if sub == "stash" {
-                let action = tokens.get(if first.contains('=') { 3 } else { 2 }).copied().unwrap_or("list");
+                let action = tokens
+                    .get(if first.contains('=') { 3 } else { 2 })
+                    .copied()
+                    .unwrap_or("list");
                 return !matches!(action, "list" | "show");
             }
             !READONLY_GIT.contains(&sub)
         }
 
         "cargo" => {
-            let sub = tokens.get(if first.contains('=') { 2 } else { 1 }).copied().unwrap_or("");
+            let sub = tokens
+                .get(if first.contains('=') { 2 } else { 1 })
+                .copied()
+                .unwrap_or("");
             !READONLY_CARGO.contains(&sub)
         }
 
         // sed with -i modifies in-place
-        "sed" => tokens.iter().any(|t| t.starts_with("-i") || *t == "--in-place"),
+        "sed" => tokens
+            .iter()
+            .any(|t| t.starts_with("-i") || *t == "--in-place"),
 
         // awk, grep, diff, etc. are always read-only
         _ => false,
@@ -395,91 +432,115 @@ mod tests {
     }
 
     #[test]
-    fn parse_tool_with_prefix_wildcard() {
-        let r = PermissionRule::parse("Bash(rm -rf:*)").unwrap();
+    fn parse_tool_with_prefix_wildcard() -> Result<()> {
+        let r = PermissionRule::parse("Bash(rm -rf:*)").ok_or("Should parse")?;
         assert_eq!(r.tool, "bash");
         assert_eq!(r.pattern.as_deref(), Some("rm -rf:*"));
+
+        Ok(())
     }
 
     #[test]
-    fn parse_tool_with_path_glob() {
-        let r = PermissionRule::parse("Read(src/**)").unwrap();
+    fn parse_tool_with_path_glob() -> Result<()> {
+        let r = PermissionRule::parse("Read(src/**)").ok_or("Should parse")?;
         assert_eq!(r.tool, "read");
         assert_eq!(r.pattern.as_deref(), Some("src/**"));
+
+        Ok(())
     }
 
     #[test]
-    fn parse_case_insensitive_tool_name() {
-        let r = PermissionRule::parse("WRITE_FILE").unwrap();
+    fn parse_case_insensitive_tool_name() -> Result<()> {
+        let r = PermissionRule::parse("WRITE_FILE").ok_or("Should parse")?;
         assert_eq!(r.tool, "write_file");
+
+        Ok(())
     }
 
     #[test]
-    fn parse_empty_parens() {
-        let r = PermissionRule::parse("Bash()").unwrap();
+    fn parse_empty_parens() -> Result<()> {
+        let r = PermissionRule::parse("Bash()").ok_or("Should parse")?;
         assert_eq!(r.tool, "bash");
         assert_eq!(r.pattern, None);
+
+        Ok(())
     }
 
     // -- PermissionRule::matches
 
     #[test]
-    fn matches_bare_tool_all_args() {
-        let r = PermissionRule::parse("bash").unwrap();
+    fn matches_bare_tool_all_args() -> Result<()> {
+        let r = PermissionRule::parse("bash").ok_or("Should parse")?;
         assert!(r.matches("bash", Some("anything")));
         assert!(r.matches("bash", None));
         assert!(r.matches("BASH", Some("x"))); // tool comparison is case-insensitive
+
+        Ok(())
     }
 
     #[test]
-    fn matches_exact_arg() {
-        let r = PermissionRule::parse("Bash(cargo test)").unwrap();
+    fn matches_exact_arg() -> Result<()> {
+        let r = PermissionRule::parse("Bash(cargo test)").ok_or("Should parse")?;
         assert!(r.matches("bash", Some("cargo test")));
         assert!(!r.matches("bash", Some("cargo build")));
         assert!(!r.matches("bash", None));
+
+        Ok(())
     }
 
     #[test]
-    fn matches_prefix_wildcard() {
-        let r = PermissionRule::parse("Bash(rm -rf:*)").unwrap();
+    fn matches_prefix_wildcard() -> Result<()> {
+        let r = PermissionRule::parse("Bash(rm -rf:*)").ok_or("Should parse")?;
         assert!(r.matches("bash", Some("rm -rf /tmp/foo")));
         assert!(r.matches("bash", Some("rm -rf")));
         assert!(!r.matches("bash", Some("rm foo")));
+
+        Ok(())
     }
 
     #[test]
-    fn matches_path_glob() {
-        let r = PermissionRule::parse("Read(src/**)").unwrap();
+    fn matches_path_glob() -> Result<()> {
+        let r = PermissionRule::parse("Read(src/**)").ok_or("Should parse")?;
         assert!(r.matches("read", Some("src/main.rs")));
         assert!(r.matches("read", Some("src/lib/utils.rs")));
         assert!(r.matches("read", Some("src"))); // exact match on base
         assert!(!r.matches("read", Some("tests/main.rs")));
+
+        Ok(())
     }
 
     #[test]
-    fn matches_double_star_pattern() {
-        let r = PermissionRule::parse("Read(**)").unwrap();
+    fn matches_double_star_pattern() -> Result<()> {
+        let r = PermissionRule::parse("Read(**)").ok_or("Should parse")?;
         assert!(r.matches("read", Some("anything/at/all")));
+
+        Ok(())
     }
 
     #[test]
-    fn wrong_tool_never_matches() {
-        let r = PermissionRule::parse("bash").unwrap();
+    fn wrong_tool_never_matches() -> Result<()> {
+        let r = PermissionRule::parse("bash").ok_or("Should parse")?;
         assert!(!r.matches("read_file", Some("foo")));
+
+        Ok(())
     }
 
     // -- PermissionRule::Display
 
     #[test]
-    fn display_bare() {
-        let r = PermissionRule::parse("bash").unwrap();
+    fn display_bare() -> Result<()> {
+        let r = PermissionRule::parse("bash").ok_or("Should parse")?;
         assert_eq!(r.to_string(), "bash");
+
+        Ok(())
     }
 
     #[test]
-    fn display_with_pattern() {
-        let r = PermissionRule::parse("Bash(cargo test)").unwrap();
+    fn display_with_pattern() -> Result<()> {
+        let r = PermissionRule::parse("Bash(cargo test)").ok_or("Should parse")?;
         assert_eq!(r.to_string(), "bash(cargo test)");
+
+        Ok(())
     }
 
     // -- tool_first_arg
@@ -493,13 +554,19 @@ mod tests {
     #[test]
     fn tool_first_arg_read_file_path() {
         let args = json!({"path": "src/main.rs"});
-        assert_eq!(tool_first_arg("read_file", &args).as_deref(), Some("src/main.rs"));
+        assert_eq!(
+            tool_first_arg("read_file", &args).as_deref(),
+            Some("src/main.rs")
+        );
     }
 
     #[test]
     fn tool_first_arg_unknown_tool_checks_common_keys() {
         let args = json!({"query": "search term"});
-        assert_eq!(tool_first_arg("custom_tool", &args).as_deref(), Some("search term"));
+        assert_eq!(
+            tool_first_arg("custom_tool", &args).as_deref(),
+            Some("search term")
+        );
     }
 
     #[test]
@@ -516,11 +583,13 @@ mod tests {
     }
 
     #[test]
-    fn permission_mode_roundtrip() {
+    fn permission_mode_roundtrip() -> Result<()> {
         for mode_str in &["default", "acceptEdits", "plan", "bypassPermissions"] {
-            let mode: PermissionMode = mode_str.parse().unwrap();
+            let mode: PermissionMode = mode_str.parse()?;
             assert_eq!(mode.to_string(), *mode_str);
         }
+
+        Ok(())
     }
 
     #[test]
@@ -599,7 +668,9 @@ mod tests {
     #[test]
     fn sed_inplace_is_write() {
         assert!(bash_command_is_write("sed -i 's/foo/bar/' file.txt"));
-        assert!(bash_command_is_write("sed --in-place 's/foo/bar/' file.txt"));
+        assert!(bash_command_is_write(
+            "sed --in-place 's/foo/bar/' file.txt"
+        ));
         assert!(!bash_command_is_write("sed 's/foo/bar/' file.txt"));
     }
 
@@ -801,9 +872,9 @@ mod tests {
 
 #[derive(Clone, Default)]
 pub struct PermissionManager {
-    mode:        Arc<Mutex<PermissionMode>>,
+    mode: Arc<Mutex<PermissionMode>>,
     allow_rules: Arc<Mutex<Vec<PermissionRule>>>,
-    deny_rules:  Arc<Mutex<Vec<PermissionRule>>>,
+    deny_rules: Arc<Mutex<Vec<PermissionRule>>>,
     /// SEC-B1: When true, bash tools are never auto-approved.
     strict_bash: bool,
 }
@@ -811,9 +882,9 @@ pub struct PermissionManager {
 impl PermissionManager {
     pub fn new(mode: PermissionMode) -> Self {
         Self {
-            mode:        Arc::new(Mutex::new(mode)),
+            mode: Arc::new(Mutex::new(mode)),
             allow_rules: Arc::new(Mutex::new(Vec::new())),
-            deny_rules:  Arc::new(Mutex::new(Vec::new())),
+            deny_rules: Arc::new(Mutex::new(Vec::new())),
             strict_bash: false,
         }
     }
@@ -829,24 +900,32 @@ impl PermissionManager {
     /// Construct with the strict_bash flag pre-set.
     pub fn new_with_strict_bash(mode: PermissionMode, strict_bash: bool) -> Self {
         Self {
-            mode:        Arc::new(Mutex::new(mode)),
+            mode: Arc::new(Mutex::new(mode)),
             allow_rules: Arc::new(Mutex::new(Vec::new())),
-            deny_rules:  Arc::new(Mutex::new(Vec::new())),
+            deny_rules: Arc::new(Mutex::new(Vec::new())),
             strict_bash,
         }
     }
 
-    pub fn mode(&self) -> PermissionMode { *self.mode.lock().unwrap() }
-    pub fn set_mode(&self, mode: PermissionMode) { *self.mode.lock().unwrap() = mode; }
+    pub fn mode(&self) -> PermissionMode {
+        *self.mode.lock().unwrap()
+    }
+    pub fn set_mode(&self, mode: PermissionMode) {
+        *self.mode.lock().unwrap() = mode;
+    }
 
     pub fn add_allow_rule(&self, rule: PermissionRule) {
         let mut rules = self.allow_rules.lock().unwrap();
-        if !rules.contains(&rule) { rules.push(rule); }
+        if !rules.contains(&rule) {
+            rules.push(rule);
+        }
     }
 
     pub fn add_deny_rule(&self, rule: PermissionRule) {
         let mut rules = self.deny_rules.lock().unwrap();
-        if !rules.contains(&rule) { rules.push(rule); }
+        if !rules.contains(&rule) {
+            rules.push(rule);
+        }
     }
 
     /// Add a session-scope allow rule by raw string (e.g. from `A` keypress in prompt).
@@ -857,8 +936,12 @@ impl PermissionManager {
         }
     }
 
-    pub fn allow_rules(&self) -> Vec<PermissionRule> { self.allow_rules.lock().unwrap().clone() }
-    pub fn deny_rules(&self)  -> Vec<PermissionRule> { self.deny_rules.lock().unwrap().clone() }
+    pub fn allow_rules(&self) -> Vec<PermissionRule> {
+        self.allow_rules.lock().unwrap().clone()
+    }
+    pub fn deny_rules(&self) -> Vec<PermissionRule> {
+        self.deny_rules.lock().unwrap().clone()
+    }
 
     /// Returns true if the tool call should proceed without prompting.
     ///
@@ -871,31 +954,49 @@ impl PermissionManager {
         let arg_ref = arg.as_deref();
 
         // Explicit deny wins over everything
-        if self.deny_rules.lock().unwrap().iter().any(|r| r.matches(tool_name, arg_ref)) {
+        if self
+            .deny_rules
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.matches(tool_name, arg_ref))
+        {
             return false;
         }
 
         // SEC-B1: strict_bash — never auto-approve bash tools, even if
         // an allow rule matches.  Every bash call requires explicit approval.
         if self.strict_bash
-            && matches!(tool_name, "bash" | "shell" | "run_command" | "execute_command")
+            && matches!(
+                tool_name,
+                "bash" | "shell" | "run_command" | "execute_command"
+            )
         {
             return false;
         }
 
         // Explicit allow
-        if self.allow_rules.lock().unwrap().iter().any(|r| r.matches(tool_name, arg_ref)) {
+        if self
+            .allow_rules
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.matches(tool_name, arg_ref))
+        {
             return true;
         }
 
         // SEC-B3: Prevent Auto-Approval of Config/Skill Edits (RCE Mitigation)
-        if matches!(tool_name, "write_file" | "edit_file" | "apply_patch" | "write" | "edit" | "patch")
-            && let Some(path) = arg_ref
-                && (path.contains(".cade/settings.json") ||
-                   path.contains("settings.local.json") ||
-                   path.contains(".skills/")) {
-                    return false;
-                }
+        if matches!(
+            tool_name,
+            "write_file" | "edit_file" | "apply_patch" | "write" | "edit" | "patch"
+        ) && let Some(path) = arg_ref
+            && (path.contains(".cade/settings.json")
+                || path.contains("settings.local.json")
+                || path.contains(".skills/"))
+        {
+            return false;
+        }
 
         // Mode-based
         match self.mode() {
@@ -926,7 +1027,13 @@ impl PermissionManager {
         let arg_ref = arg.as_deref();
 
         // Explicit deny rules block regardless of mode
-        if self.deny_rules.lock().unwrap().iter().any(|r| r.matches(tool_name, arg_ref)) {
+        if self
+            .deny_rules
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|r| r.matches(tool_name, arg_ref))
+        {
             return true;
         }
 
@@ -940,7 +1047,10 @@ impl PermissionManager {
         }
 
         // Bash — allow read-only commands, block write ones
-        if matches!(tool_name, "bash" | "shell" | "run_command" | "execute_command") {
+        if matches!(
+            tool_name,
+            "bash" | "shell" | "run_command" | "execute_command"
+        ) {
             let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
             return bash_command_is_write(cmd);
         }
@@ -954,15 +1064,25 @@ impl PermissionManager {
         let arg_ref = arg.as_deref();
 
         // Check deny rule first
-        if let Some(rule) = self.deny_rules.lock().unwrap().iter()
+        if let Some(rule) = self
+            .deny_rules
+            .lock()
+            .unwrap()
+            .iter()
             .find(|r| r.matches(tool_name, arg_ref))
         {
             return format!("blocked by deny rule: {rule}");
         }
 
-        if matches!(tool_name, "bash" | "shell" | "run_command" | "execute_command") {
+        if matches!(
+            tool_name,
+            "bash" | "shell" | "run_command" | "execute_command"
+        ) {
             let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-            format!("plan mode: '{}' would modify system state", cmd.chars().take(60).collect::<String>())
+            format!(
+                "plan mode: '{}' would modify system state",
+                cmd.chars().take(60).collect::<String>()
+            )
         } else {
             format!("plan mode: '{tool_name}' is a write/mutating tool")
         }

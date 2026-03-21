@@ -1,15 +1,22 @@
-use axum::{extract::{Path, State}, http::StatusCode, Json};
-use serde_json::{json, Value};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
+use serde_json::{Value, json};
 
-use cade_ai::{LlmRouter, PRESET_PROVIDERS};
 use crate::server::{
     state::AppState,
     storage::sqlite::{self, ProviderRow},
 };
+use cade_ai::{LlmRouter, PRESET_PROVIDERS};
 
 fn server_err(msg: String) -> (StatusCode, Json<Value>) {
     tracing::error!("500 providers: {msg}");
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"detail": msg})))
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({"detail": msg})),
+    )
 }
 
 fn bad_req(msg: &str) -> (StatusCode, Json<Value>) {
@@ -20,19 +27,23 @@ fn bad_req(msg: &str) -> (StatusCode, Json<Value>) {
 pub async fn list_providers(
     State(state): State<AppState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let db_rows = sqlite::list_providers(&state.db)
-        .map_err(|e| server_err(e.to_string()))?;
+    let db_rows = sqlite::list_providers(&state.db).map_err(|e| server_err(e.to_string()))?;
 
     let live_names = state.llm_router.read().await.provider_names();
 
-    let providers: Vec<Value> = db_rows.iter().map(|r| json!({
-        "name":     r.name,
-        "kind":     r.kind,
-        "base_url": r.base_url,
-        "enabled":  r.enabled,
-        "live":     live_names.contains(&r.name),
-        // Never expose the API key
-    })).collect();
+    let providers: Vec<Value> = db_rows
+        .iter()
+        .map(|r| {
+            json!({
+                "name":     r.name,
+                "kind":     r.kind,
+                "base_url": r.base_url,
+                "enabled":  r.enabled,
+                "live":     live_names.contains(&r.name),
+                // Never expose the API key
+            })
+        })
+        .collect();
 
     // Also include env-var providers not in the DB
     let mut all = providers;
@@ -62,16 +73,33 @@ pub async fn add_provider(
     State(state): State<AppState>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let name = body["name"].as_str().ok_or_else(|| bad_req("'name' is required"))?.trim().to_string();
-    let mut kind = body["kind"].as_str().unwrap_or("openai-compatible").trim().to_string();
-    let api_key  = body["api_key"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
-    let base_url = body["base_url"].as_str().map(|s| s.trim().to_string()).filter(|s| !s.is_empty());
+    let name = body["name"]
+        .as_str()
+        .ok_or_else(|| bad_req("'name' is required"))?
+        .trim()
+        .to_string();
+    let mut kind = body["kind"]
+        .as_str()
+        .unwrap_or("openai-compatible")
+        .trim()
+        .to_string();
+    let api_key = body["api_key"]
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+    let base_url = body["base_url"]
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
 
-    if name.is_empty() { return Err(bad_req("'name' cannot be empty")); }
+    if name.is_empty() {
+        return Err(bad_req("'name' cannot be empty"));
+    }
 
     // Preset shortcut: if kind == "preset" or kind == name and it matches a PresetDef, auto-fill base_url
     let base_url = if kind == "openai-compatible" || kind == "preset" || kind == name {
-        if let Some(preset_url) = PRESET_PROVIDERS.iter()
+        if let Some(preset_url) = PRESET_PROVIDERS
+            .iter()
             .find(|p| p.name == name.as_str())
             .map(|p| p.chat_url.to_string())
         {
@@ -87,31 +115,54 @@ pub async fn add_provider(
     // Validate kind
     match kind.as_str() {
         "anthropic" | "openai" | "gemini" | "ollama" | "openai-compatible" => {}
-        other => return Err(bad_req(&format!(
-            "Invalid kind '{}'. Valid: anthropic, openai, gemini, ollama, openai-compatible", other
-        ))),
+        other => {
+            return Err(bad_req(&format!(
+                "Invalid kind '{}'. Valid: anthropic, openai, gemini, ollama, openai-compatible",
+                other
+            )));
+        }
     }
     if kind == "openai-compatible" && base_url.is_none() {
-        return Err(bad_req("'base_url' is required for openai-compatible providers"));
+        return Err(bad_req(
+            "'base_url' is required for openai-compatible providers",
+        ));
     }
 
-    let row = ProviderRow { name: name.clone(), kind: kind.clone(), api_key, base_url, enabled: true };
+    let row = ProviderRow {
+        name: name.clone(),
+        kind: kind.clone(),
+        api_key,
+        base_url,
+        enabled: true,
+    };
 
     // Build the live provider and add to router — store API key so live model listing works.
     let ai_config = state.config.to_ai_config();
-    if let Some(provider) = LlmRouter::provider_from_row(&row.kind, row.api_key.clone(), row.base_url.clone(), &ai_config) {
+    if let Some(provider) = LlmRouter::provider_from_row(
+        &row.kind,
+        row.api_key.clone(),
+        row.base_url.clone(),
+        &ai_config,
+    ) {
         let key = row.api_key.clone().unwrap_or_default();
-        state.llm_router.write().await.add_provider_with_key(name.clone(), provider, key);
+        state
+            .llm_router
+            .write()
+            .await
+            .add_provider_with_key(name.clone(), provider, key);
     } else {
-        return Err(bad_req("Could not construct provider — check api_key/base_url"));
+        return Err(bad_req(
+            "Could not construct provider — check api_key/base_url",
+        ));
     }
 
     // Persist to DB
-    sqlite::upsert_provider(&state.db, &row)
-        .map_err(|e| server_err(e.to_string()))?;
+    sqlite::upsert_provider(&state.db, &row).map_err(|e| server_err(e.to_string()))?;
 
     tracing::info!("Provider added: {} ({})", name, kind);
-    Ok(Json(json!({ "name": name, "kind": kind, "status": "connected" })))
+    Ok(Json(
+        json!({ "name": name, "kind": kind, "status": "connected" }),
+    ))
 }
 
 /// DELETE /v1/providers/:name — remove a provider
@@ -120,11 +171,14 @@ pub async fn remove_provider(
     Path(name): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let removed_live = state.llm_router.write().await.remove_provider(&name);
-    let removed_db   = sqlite::delete_provider(&state.db, &name)
-        .map_err(|e| server_err(e.to_string()))?;
+    let removed_db =
+        sqlite::delete_provider(&state.db, &name).map_err(|e| server_err(e.to_string()))?;
 
     if !removed_live && !removed_db {
-        return Err((StatusCode::NOT_FOUND, Json(json!({"detail": format!("Provider '{}' not found", name)}))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({"detail": format!("Provider '{}' not found", name)})),
+        ));
     }
 
     tracing::info!("Provider removed: {}", name);
@@ -133,12 +187,17 @@ pub async fn remove_provider(
 
 /// GET /v1/providers/presets — list available OpenAI-compatible presets
 pub async fn list_presets() -> Json<Value> {
-    let presets: Vec<Value> = PRESET_PROVIDERS.iter().map(|p| json!({
-        "name":     p.name,
-        "kind":     "openai-compatible",
-        "base_url": p.chat_url,
-        "models_url": p.models_url,
-        "env_vars": p.env_vars,
-    })).collect();
+    let presets: Vec<Value> = PRESET_PROVIDERS
+        .iter()
+        .map(|p| {
+            json!({
+                "name":     p.name,
+                "kind":     "openai-compatible",
+                "base_url": p.chat_url,
+                "models_url": p.models_url,
+                "env_vars": p.env_vars,
+            })
+        })
+        .collect();
     Json(json!({ "presets": presets }))
 }

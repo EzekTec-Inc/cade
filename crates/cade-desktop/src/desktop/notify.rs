@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::Result;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Urgency {
@@ -20,7 +20,7 @@ pub fn send_notification(title: &str, body: &str, urgency: Urgency) -> Result<()
         .summary(title)
         .body(body)
         .urgency(urgency_level)
-        .show()?;
+        .show().map_err(crate::Error::custom_from_err)?;
 
     Ok(())
 }

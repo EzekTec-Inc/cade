@@ -11,9 +11,9 @@
 //! (history navigation, `@` file picker, Tab path completion) remain in
 //! `TuiApp::handle_key_input`; only the text-editing primitives live here.
 
-use std::collections::VecDeque;
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use super::component::{Component, RenderedLine};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use std::collections::VecDeque;
 
 // -- Input mode
 
@@ -129,7 +129,8 @@ impl Editor {
         if self.undo_stack.len() >= UNDO_LIMIT {
             self.undo_stack.pop_front();
         }
-        self.undo_stack.push_back((self.input.clone(), self.cursor_pos));
+        self.undo_stack
+            .push_back((self.input.clone(), self.cursor_pos));
         self.redo_stack.clear();
     }
 
@@ -140,7 +141,8 @@ impl Editor {
             if self.redo_stack.len() >= UNDO_LIMIT {
                 self.redo_stack.pop_front();
             }
-            self.redo_stack.push_back((self.input.clone(), self.cursor_pos));
+            self.redo_stack
+                .push_back((self.input.clone(), self.cursor_pos));
             self.input = input;
             self.cursor_pos = pos;
             true
@@ -155,7 +157,8 @@ impl Editor {
             if self.undo_stack.len() >= UNDO_LIMIT {
                 self.undo_stack.pop_front();
             }
-            self.undo_stack.push_back((self.input.clone(), self.cursor_pos));
+            self.undo_stack
+                .push_back((self.input.clone(), self.cursor_pos));
             self.input = input;
             self.cursor_pos = pos;
             true
@@ -303,10 +306,7 @@ impl Editor {
         let trimmed = before.trim_end_matches(|c: char| c.is_whitespace() && c != '\n');
         let new_pos = if trimmed.is_empty() {
             // Only whitespace before cursor; jump to 0 or previous newline.
-            before
-                .rfind('\n')
-                .map(|i| i + 1)
-                .unwrap_or(0)
+            before.rfind('\n').map(|i| i + 1).unwrap_or(0)
         } else {
             trimmed
                 .rfind(|c: char| c.is_whitespace())
@@ -402,7 +402,8 @@ impl Editor {
             let marker = format!("[paste #{} +", entry.id);
             if let Some(start) = self.input.find(&marker) {
                 if let Some(end) = self.input[start..].find(']') {
-                    self.input.replace_range(start..start + end + 1, &entry.text);
+                    self.input
+                        .replace_range(start..start + end + 1, &entry.text);
                 }
             }
         }
@@ -479,12 +480,11 @@ impl Component for Editor {
 
         // Build the display string with a visible cursor marker.
         let before = &self.input[..self.cursor_pos.min(self.input.len())];
-        let at_cursor = self.input[self.cursor_pos..]
-            .chars()
-            .next()
-            .unwrap_or(' ');
+        let at_cursor = self.input[self.cursor_pos..].chars().next().unwrap_or(' ');
         let after_start = self.cursor_pos
-            + at_cursor.len_utf8().min(self.input.len().saturating_sub(self.cursor_pos));
+            + at_cursor
+                .len_utf8()
+                .min(self.input.len().saturating_sub(self.cursor_pos));
         let after = &self.input[after_start..];
         let display = format!("{before}\x1b[7m{at_cursor}\x1b[27m{after}");
 
@@ -507,29 +507,60 @@ impl Component for Editor {
     fn handle_input(&mut self, key: KeyEvent) -> bool {
         match (key.code, key.modifiers) {
             // -- Text editing (consumed)
-            (KeyCode::Char('u'), KeyModifiers::CONTROL) => { self.delete_to_start(); true }
-            (KeyCode::Char('k'), KeyModifiers::CONTROL) => { self.delete_to_end(); true }
-            (KeyCode::Char('w'), KeyModifiers::CONTROL) => { self.delete_word_back(); true }
-            (KeyCode::Char('z'), KeyModifiers::CONTROL) => { self.undo(); true }
-            (KeyCode::Char('y'), KeyModifiers::CONTROL) => { self.redo(); true }
-            (KeyCode::Char('a'), KeyModifiers::CONTROL) |
-            (KeyCode::Home, _)                          => { self.move_home(); true }
-            (KeyCode::Char('e'), KeyModifiers::CONTROL) |
-            (KeyCode::End, _)                           => { self.move_end(); true }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
+                self.delete_to_start();
+                true
+            }
+            (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
+                self.delete_to_end();
+                true
+            }
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                self.delete_word_back();
+                true
+            }
+            (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
+                self.undo();
+                true
+            }
+            (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
+                self.redo();
+                true
+            }
+            (KeyCode::Char('a'), KeyModifiers::CONTROL) | (KeyCode::Home, _) => {
+                self.move_home();
+                true
+            }
+            (KeyCode::Char('e'), KeyModifiers::CONTROL) | (KeyCode::End, _) => {
+                self.move_end();
+                true
+            }
             // Word navigation (Alt+Arrow or Ctrl+Arrow)
-            (KeyCode::Left,  m) if m.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
-                self.move_word_left(); true
+            (KeyCode::Left, m) if m.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
+                self.move_word_left();
+                true
             }
             (KeyCode::Right, m) if m.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
-                self.move_word_right(); true
+                self.move_word_right();
+                true
             }
-            (KeyCode::Left, _)                          => { self.move_left(); true }
-            (KeyCode::Right, _)                         => { self.move_right(); true }
-            (KeyCode::Backspace, _)                     => { self.delete_back(); true }
-            (KeyCode::Delete, _)                        => { self.delete_forward(); true }
-            (KeyCode::Char(c), m)
-                if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
-            {
+            (KeyCode::Left, _) => {
+                self.move_left();
+                true
+            }
+            (KeyCode::Right, _) => {
+                self.move_right();
+                true
+            }
+            (KeyCode::Backspace, _) => {
+                self.delete_back();
+                true
+            }
+            (KeyCode::Delete, _) => {
+                self.delete_forward();
+                true
+            }
+            (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
                 self.insert_char(c);
                 true
             }
@@ -554,8 +585,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_insert_and_delete() {
+    fn test_editor_insert_and_delete() {
+        // -- Setup & Fixtures
         let mut editor = Editor::new();
+
+        // -- Exec & Check
         editor.insert_str("hello");
         assert_eq!(editor.input, "hello");
         assert_eq!(editor.cursor_pos, 5);
@@ -571,11 +605,13 @@ mod tests {
     }
 
     #[test]
-    fn test_undo_redo() {
+    fn test_editor_undo_redo() {
+        // -- Setup & Fixtures
         let mut editor = Editor::new();
         editor.insert_str("hello");
         assert_eq!(editor.input, "hello");
 
+        // -- Exec & Check
         editor.undo();
         assert_eq!(editor.input, "");
 
@@ -584,32 +620,35 @@ mod tests {
     }
 
     #[test]
-    fn test_word_movement() {
+    fn test_editor_word_movement() {
+        // -- Setup & Fixtures
         let mut editor = Editor::new();
         editor.insert_str("one two three");
-        
-        // move to start of "three"
+
+        // -- Exec & Check
         editor.move_word_left();
         assert_eq!(editor.cursor_pos, 8);
-        
-        // move to start of "two"
+
         editor.move_word_left();
         assert_eq!(editor.cursor_pos, 4);
 
-        // move right over "two"
         editor.move_word_right();
         assert_eq!(editor.cursor_pos, 8);
     }
 
     #[test]
-    fn test_delete_to_end() {
+    fn test_editor_delete_to_end() {
+        // -- Setup & Fixtures
         let mut editor = Editor::new();
         editor.insert_str("hello world\nnewline");
-        editor.cursor_pos = 5; // after "hello"
+        editor.cursor_pos = 5;
+
+        // -- Exec
         editor.delete_to_end();
+
+        // -- Check
         assert_eq!(editor.input, "hello\nnewline");
-        
-        // undo test
+
         editor.undo();
         assert_eq!(editor.input, "hello world\nnewline");
     }

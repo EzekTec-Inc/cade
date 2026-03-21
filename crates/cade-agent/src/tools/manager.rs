@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::Result;
 use serde_json::Value;
 
 use super::{
@@ -6,8 +6,8 @@ use super::{
     bash::BashTool,
     desktop::{DesktopCaptureTool, DesktopControlTool, DesktopListWindowsTool, DesktopNotifyTool},
     fs::{ApplyPatchTool, EditTool, ReadTool, WriteTool},
-    search::{GlobTool, GrepTool},
     plan::{EnterPlanModeTool, ExitPlanModeTool, TodoWriteTool, UpdatePlanTool, WriteTodosTool},
+    search::{GlobTool, GrepTool},
 };
 use crate::mcp::McpManager;
 use cade_core::toolsets::Toolset;
@@ -30,13 +30,13 @@ pub async fn dispatch(
 ) -> ToolResult {
     // Try native tools first, fall through to MCP
     let (output, is_error) = match run_native_tool(tool_name, arguments).await {
-        Some(Ok(out))  => (out, false),
-        Some(Err(e))   => (format!("Error: {e}"), true),
+        Some(Ok(out)) => (out, false),
+        Some(Err(e)) => (format!("Error: {e}"), true),
         None => {
             // Not a native tool — try MCP servers
             match mcp.call_tool(tool_name, arguments).await {
                 Some(Ok((out, err_flag))) => (out, err_flag),
-                Some(Err(e))             => {
+                Some(Err(e)) => {
                     let msg = e.to_string();
                     // rmcp already formats errors as "Mcp error: -32XXX: ..." — avoid
                     // double-prefixing as "MCP error: Mcp error: -32XXX: ...".
@@ -45,7 +45,7 @@ pub async fn dispatch(
                     } else {
                         (format!("MCP error: {msg}"), true)
                     }
-                },
+                }
                 None => (format!("Unknown tool: '{tool_name}'"), true),
             }
         }
@@ -123,7 +123,7 @@ pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
             BashTool::schema(),
             ReadTool::schema(),
             WriteTool::schema(),
-            EditTool::schema(),       // string-replace
+            EditTool::schema(), // string-replace
             GrepTool::schema(),
             GlobTool::schema(),
             EnterPlanModeTool::schema(),
@@ -146,8 +146,7 @@ pub fn all_schemas() -> Vec<Value> {
 /// Filter schemas to only the named tools. Names are case-insensitive.
 /// Used to implement `--tools "bash,read_file"`.
 pub fn schemas_for_names(toolset: Toolset, names: &[String]) -> Vec<Value> {
-    let lower: std::collections::HashSet<String> =
-        names.iter().map(|n| n.to_lowercase()).collect();
+    let lower: std::collections::HashSet<String> = names.iter().map(|n| n.to_lowercase()).collect();
     schemas_for_toolset(toolset)
         .into_iter()
         .filter(|s| {
@@ -163,8 +162,12 @@ pub fn schemas_for_names(toolset: Toolset, names: &[String]) -> Vec<Value> {
 pub fn is_native_write_tool(name: &str) -> bool {
     matches!(
         name,
-        "bash" | "write_file" | "edit_file" | "apply_patch"
-            | "desktop_control" | "desktop_screenshot"
+        "bash"
+            | "write_file"
+            | "edit_file"
+            | "apply_patch"
+            | "desktop_control"
+            | "desktop_screenshot"
     )
 }
 
@@ -196,13 +199,20 @@ mod tests {
     #[test]
     fn default_toolset_has_bash_and_edit_file() {
         let schemas = schemas_for_toolset(Toolset::Default);
-        let names: Vec<&str> = schemas.iter()
-            .filter_map(|s| s["name"].as_str())
-            .collect();
+        let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
         assert!(names.contains(&"bash"), "missing bash in {names:?}");
-        assert!(names.contains(&"edit_file"), "missing edit_file in {names:?}");
-        assert!(names.contains(&"read_file"), "missing read_file in {names:?}");
-        assert!(names.contains(&"write_file"), "missing write_file in {names:?}");
+        assert!(
+            names.contains(&"edit_file"),
+            "missing edit_file in {names:?}"
+        );
+        assert!(
+            names.contains(&"read_file"),
+            "missing read_file in {names:?}"
+        );
+        assert!(
+            names.contains(&"write_file"),
+            "missing write_file in {names:?}"
+        );
         assert!(names.contains(&"grep"), "missing grep in {names:?}");
         assert!(names.contains(&"glob"), "missing glob in {names:?}");
     }
@@ -210,32 +220,44 @@ mod tests {
     #[test]
     fn codex_toolset_has_apply_patch() {
         let schemas = schemas_for_toolset(Toolset::Codex);
-        let names: Vec<&str> = schemas.iter()
-            .filter_map(|s| s["name"].as_str())
-            .collect();
-        assert!(names.contains(&"apply_patch"), "missing apply_patch in {names:?}");
-        assert!(!names.contains(&"write_file"), "should not have write_file in Codex toolset");
+        let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
+        assert!(
+            names.contains(&"apply_patch"),
+            "missing apply_patch in {names:?}"
+        );
+        assert!(
+            !names.contains(&"write_file"),
+            "should not have write_file in Codex toolset"
+        );
     }
 
     #[test]
     fn gemini_toolset_has_renamed_tools() {
         let schemas = schemas_for_toolset(Toolset::Gemini);
-        let names: Vec<&str> = schemas.iter()
-            .filter_map(|s| s["name"].as_str())
-            .collect();
-        assert!(names.contains(&"RunShellCommand"), "missing RunShellCommand in {names:?}");
-        assert!(names.contains(&"Replace"), "missing Replace (Gemini edit) in {names:?}");
-        assert!(names.contains(&"ReadFileGemini"), "missing ReadFileGemini in {names:?}");
+        let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
+        assert!(
+            names.contains(&"RunShellCommand"),
+            "missing RunShellCommand in {names:?}"
+        );
+        assert!(
+            names.contains(&"Replace"),
+            "missing Replace (Gemini edit) in {names:?}"
+        );
+        assert!(
+            names.contains(&"ReadFileGemini"),
+            "missing ReadFileGemini in {names:?}"
+        );
     }
 
     #[test]
     fn all_toolsets_include_ask_user_question() {
         for ts in [Toolset::Default, Toolset::Codex, Toolset::Gemini] {
             let schemas = schemas_for_toolset(ts);
-            let names: Vec<&str> = schemas.iter()
-                .filter_map(|s| s["name"].as_str())
-                .collect();
-            assert!(names.contains(&"ask_user_question"), "missing ask_user_question in {ts} toolset");
+            let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
+            assert!(
+                names.contains(&"ask_user_question"),
+                "missing ask_user_question in {ts} toolset"
+            );
         }
     }
 
@@ -243,11 +265,15 @@ mod tests {
     fn all_toolsets_include_desktop_tools() {
         for ts in [Toolset::Default, Toolset::Codex, Toolset::Gemini] {
             let schemas = schemas_for_toolset(ts);
-            let names: Vec<&str> = schemas.iter()
-                .filter_map(|s| s["name"].as_str())
-                .collect();
-            assert!(names.contains(&"desktop_screenshot"), "missing desktop_screenshot in {ts}");
-            assert!(names.contains(&"desktop_list_windows"), "missing desktop_list_windows in {ts}");
+            let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
+            assert!(
+                names.contains(&"desktop_screenshot"),
+                "missing desktop_screenshot in {ts}"
+            );
+            assert!(
+                names.contains(&"desktop_list_windows"),
+                "missing desktop_list_windows in {ts}"
+            );
         }
     }
 
@@ -267,9 +293,7 @@ mod tests {
         let names = vec!["bash".to_string(), "grep".to_string()];
         let schemas = schemas_for_names(Toolset::Default, &names);
         assert_eq!(schemas.len(), 2);
-        let schema_names: Vec<&str> = schemas.iter()
-            .filter_map(|s| s["name"].as_str())
-            .collect();
+        let schema_names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
         assert!(schema_names.contains(&"bash"));
         assert!(schema_names.contains(&"grep"));
     }
@@ -316,31 +340,42 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn native_tool_bash_runs() {
+    async fn native_tool_bash_runs() -> Result<()> {
+        // -- Exec
         let args = json!({"command": "echo hello"});
         let result = run_native_tool("bash", &args).await;
-        assert!(result.is_some());
-        let output = result.unwrap().unwrap();
+
+        // -- Check
+        let output = result.ok_or("Should return Some")??;
         assert!(output.contains("hello"), "got: {output}");
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn native_tool_grep_runs() {
+    async fn native_tool_grep_runs() -> Result<()> {
+        // -- Exec
         let args = json!({"pattern": "fn main", "path": ".", "include": "*.rs"});
         let result = run_native_tool("grep", &args).await;
-        assert!(result.is_some());
-        // Should either find matches or report no matches
-        let output = result.unwrap().unwrap();
+
+        // -- Check
+        let output = result.ok_or("Should return Some")??;
         assert!(!output.is_empty());
+
+        Ok(())
     }
 
     #[tokio::test]
-    async fn native_tool_glob_runs() {
+    async fn native_tool_glob_runs() -> Result<()> {
+        // -- Exec
         let args = json!({"pattern": "**/*.toml"});
         let result = run_native_tool("glob", &args).await;
-        assert!(result.is_some());
-        let output = result.unwrap().unwrap();
+
+        // -- Check
+        let output = result.ok_or("Should return Some")??;
         assert!(output.contains("Cargo.toml"), "got: {output}");
+
+        Ok(())
     }
 
     // -- Schema validation
@@ -352,7 +387,11 @@ mod tests {
                 let name = schema["name"].as_str();
                 assert!(name.is_some(), "schema missing name: {schema}");
                 let desc = schema["description"].as_str();
-                assert!(desc.is_some(), "schema '{}' missing description", name.unwrap_or("?"));
+                assert!(
+                    desc.is_some(),
+                    "schema '{}' missing description",
+                    name.unwrap_or("?")
+                );
             }
         }
     }

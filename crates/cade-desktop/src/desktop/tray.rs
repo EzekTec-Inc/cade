@@ -64,7 +64,9 @@ pub fn spawn_tray() -> Result<mpsc::Sender<TrayMsg>, String> {
             }
         }
 
-        let tray = ksni::TrayService::new(CadeTray { status: TrayStatus::Idle });
+        let tray = ksni::TrayService::new(CadeTray {
+            status: TrayStatus::Idle,
+        });
         let handle = tray.handle();
 
         // Spawn message handler

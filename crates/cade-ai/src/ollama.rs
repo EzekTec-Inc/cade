@@ -2,13 +2,13 @@
 /// Available since Ollama 0.1.24.
 use super::openai::OpenAiProvider;
 use super::{CompletionRequest, CompletionResponse, LlmProvider, StreamChunk};
-use anyhow::Result;
+use crate::Result;
 use async_trait::async_trait;
 use std::pin::Pin;
 use tokio_stream::Stream;
 
 pub struct OllamaProvider {
-    inner:    OpenAiProvider,
+    inner: OpenAiProvider,
     base_url: String,
 }
 
@@ -17,15 +17,22 @@ impl OllamaProvider {
         let base_url = base_url.trim_end_matches('/').to_string();
         let url = format!("{base_url}/v1/chat/completions");
         // Ollama doesn't require an API key — use a placeholder
-        Self { inner: OpenAiProvider::new("ollama".to_string(), Some(url)), base_url }
+        Self {
+            inner: OpenAiProvider::new("ollama".to_string(), Some(url)),
+            base_url,
+        }
     }
 
     /// Query Ollama's `/api/tags` endpoint and return installed model names.
     /// Returns an empty Vec if Ollama is unreachable or returns no models.
     pub async fn list_models(&self) -> Vec<String> {
         let url = format!("{}/api/tags", self.base_url);
-        let Ok(resp) = reqwest::get(&url).await else { return vec![] };
-        let Ok(body) = resp.json::<serde_json::Value>().await else { return vec![] };
+        let Ok(resp) = reqwest::get(&url).await else {
+            return vec![];
+        };
+        let Ok(body) = resp.json::<serde_json::Value>().await else {
+            return vec![];
+        };
         body["models"]
             .as_array()
             .map(|arr| {

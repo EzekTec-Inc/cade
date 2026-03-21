@@ -1,6 +1,6 @@
 // region:    --- Modules
 
-use anyhow::Result;
+use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -13,21 +13,21 @@ use std::path::{Path, PathBuf};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum SkillScope {
     /// Built-in skills shipped with CADE
-    Builtin  = 0,
+    Builtin = 0,
     /// Machine-global skills in ~/.cade/skills/
-    Global   = 1,
+    Global = 1,
     /// Agent-scoped skills in ~/.cade/agents/{id}/skills/
-    Agent    = 2,
+    Agent = 2,
     /// Project-scoped skills in <cwd>/.skills/  (highest priority)
-    Project  = 3,
+    Project = 3,
 }
 
 impl std::fmt::Display for SkillScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Builtin => write!(f, "builtin"),
-            Self::Global  => write!(f, "global"),
-            Self::Agent   => write!(f, "agent"),
+            Self::Global => write!(f, "global"),
+            Self::Agent => write!(f, "agent"),
             Self::Project => write!(f, "project"),
         }
     }
@@ -81,18 +81,27 @@ pub struct SkillReference {
 impl Skill {
     /// One-line entry for the skills listing injected into the system prompt.
     pub fn listing_line(&self) -> String {
-        let cat = self.category.as_deref()
+        let cat = self
+            .category
+            .as_deref()
             .map(|c| format!(" [{c}]"))
             .unwrap_or_default();
-        let phase = self.rpi_phase.as_deref()
+        let phase = self
+            .rpi_phase
+            .as_deref()
             .map(|p| format!(" <{p}>"))
             .unwrap_or_default();
-        format!("- {} [{}]{}{}: {}", self.id, self.scope, cat, phase, self.description)
+        format!(
+            "- {} [{}]{}{}: {}",
+            self.id, self.scope, cat, phase, self.description
+        )
     }
 
     /// Full formatted block returned by `load_skill` tool.
     pub fn to_context_block(&self) -> String {
-        let cat = self.category.as_deref()
+        let cat = self
+            .category
+            .as_deref()
             .map(|c| format!("[{c}] "))
             .unwrap_or_default();
         let mut out = format!(
@@ -105,7 +114,7 @@ impl Skill {
         if !self.triggers.is_empty() {
             out.push_str(&format!("Triggers: {}\n", self.triggers.join(", ")));
         }
-        if let Some(ref phase) = self.rpi_phase {
+        if let Some(phase) = &self.rpi_phase {
             out.push_str(&format!("RPI Phase: {phase}\n"));
         }
         if !self.scripts.is_empty() {
@@ -175,16 +184,25 @@ pub fn discover_skills_in(dir: &Path, scope: SkillScope) -> Vec<Skill> {
         let path = entry.path();
         let content = match std::fs::read_to_string(path) {
             Ok(c) => c,
-            Err(e) => { tracing::warn!("Cannot read {}: {e}", path.display()); continue; }
+            Err(e) => {
+                tracing::warn!("Cannot read {}: {e}", path.display());
+                continue;
+            }
         };
         let rel = path.strip_prefix(dir).unwrap_or(path);
-        let id = rel.parent()
+        let id = rel
+            .parent()
             .map(|p| p.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
             .unwrap_or_default();
-        if id.is_empty() { continue; }
+        if id.is_empty() {
+            continue;
+        }
 
         match parse_skill(&id, &content, scope, path.to_path_buf()) {
-            Ok(s) => { tracing::debug!("Loaded skill: {} [{}]", s.id, s.scope); skills.push(s); }
+            Ok(s) => {
+                tracing::debug!("Loaded skill: {} [{}]", s.id, s.scope);
+                skills.push(s);
+            }
             Err(e) => tracing::warn!("Bad skill at {}: {e}", path.display()),
         }
     }
@@ -206,7 +224,7 @@ pub fn discover_all_skills(
     let mut all: Vec<Skill> = Vec::new();
 
     // Lowest priority first
-    if let Some(ref ch) = cade_home {
+    if let Some(ch) = &cade_home {
         all.extend(discover_skills_in(&ch.join("skills"), SkillScope::Global));
         if let Some(id) = agent_id {
             all.extend(discover_skills_in(
@@ -215,7 +233,10 @@ pub fn discover_all_skills(
             ));
         }
     }
-    all.extend(discover_skills_in(&cwd.join(".skills"), SkillScope::Project));
+    all.extend(discover_skills_in(
+        &cwd.join(".skills"),
+        SkillScope::Project,
+    ));
 
     // Merge: for each ID keep only the highest-scope version
     let mut seen: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
@@ -242,7 +263,7 @@ pub fn skills_listing(skills: &[Skill]) -> Option<String> {
     }
     let mut out = String::from(
         "# Available Skills\n\
-         Use the `load_skill` tool to load a skill's full content when working on a relevant task.\n\n"
+         Use the `load_skill` tool to load a skill's full content when working on a relevant task.\n\n",
     );
     for s in skills {
         out.push_str(&s.listing_line());
@@ -255,7 +276,9 @@ pub fn skills_listing(skills: &[Skill]) -> Option<String> {
 #[deprecated(note = "Injects too many tokens. Use skills_listing instead.")]
 #[allow(deprecated)] // Keep here in case it's used internally for debug temporarily
 pub fn skills_context(skills: &[Skill]) -> Option<String> {
-    if skills.is_empty() { return None; }
+    if skills.is_empty() {
+        return None;
+    }
     let mut out = "# Available Skills\n\n".to_string();
     for s in skills {
         out.push_str(&s.to_context_block());
@@ -281,7 +304,7 @@ fn parse_skill(id: &str, content: &str, scope: SkillScope, path: PathBuf) -> Res
 
     // Discover scripts/ and references/ relative to the SKILL.MD file
     let skill_dir = path.parent().unwrap_or(path.as_path());
-    let scripts   = discover_scripts(skill_dir, &fm.tools);
+    let scripts = discover_scripts(skill_dir, &fm.tools);
     let references = discover_references(skill_dir);
 
     Ok(Skill {
@@ -312,20 +335,31 @@ fn discover_scripts(skill_dir: &Path, tool_hints: &[FrontmatterTool]) -> Vec<Ski
         for entry in entries.flatten() {
             let p = entry.path();
             if p.is_file() {
-                let name = p.file_stem()
+                let name = p
+                    .file_stem()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .to_string();
-                if name.is_empty() { continue; }
+                if name.is_empty() {
+                    continue;
+                }
                 // Match description from frontmatter tools: block if present
-                let description = tool_hints.iter()
-                    .find(|t| t.entrypoint.as_deref()
-                        .map(|e| e.contains(&name))
-                        .unwrap_or(false)
-                        || t.name == name)
+                let description = tool_hints
+                    .iter()
+                    .find(|t| {
+                        t.entrypoint
+                            .as_deref()
+                            .map(|e| e.contains(&name))
+                            .unwrap_or(false)
+                            || t.name == name
+                    })
                     .map(|t| t.description.clone())
                     .unwrap_or_default();
-                scripts.push(SkillScript { name, description, path: p });
+                scripts.push(SkillScript {
+                    name,
+                    description,
+                    path: p,
+                });
             }
         }
     }
@@ -344,11 +378,14 @@ fn discover_references(skill_dir: &Path) -> Vec<SkillReference> {
         for entry in entries.flatten() {
             let p = entry.path();
             if p.is_file() {
-                let name = p.file_stem()
+                let name = p
+                    .file_stem()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .to_string();
-                if name.is_empty() { continue; }
+                if name.is_empty() {
+                    continue;
+                }
                 refs.push(SkillReference { name, path: p });
             }
         }
@@ -395,37 +432,53 @@ fn parse_frontmatter(fm: &str) -> Frontmatter {
 
         // If we hit another top-level key (no leading spaces/dash), exit tools block
         if in_tools && !line.starts_with(' ') && !line.starts_with('-') && !trimmed.is_empty() {
-            if let Some(t) = current_tool.take() { out.tools.push(t); }
+            if let Some(t) = current_tool.take() {
+                out.tools.push(t);
+            }
             in_tools = false;
         }
 
         if in_tools {
             // New tool entry
             if trimmed.starts_with("- name:") {
-                if let Some(t) = current_tool.take() { out.tools.push(t); }
-                let val = trimmed.trim_start_matches("- name:").trim().trim_matches('"').to_string();
-                current_tool = Some(FrontmatterTool { name: val, ..Default::default() });
-            } else if let Some(ref mut t) = current_tool
-                && let Some((k, v)) = trimmed.split_once(':') {
-                    let v = v.trim().trim_matches('"').trim_matches('\'');
-                    match k.trim() {
-                        "description" => t.description = v.to_string(),
-                        "entrypoint"  => t.entrypoint = Some(v.to_string()),
-                        _ => {}
-                    }
+                if let Some(t) = current_tool.take() {
+                    out.tools.push(t);
                 }
+                let val = trimmed
+                    .trim_start_matches("- name:")
+                    .trim()
+                    .trim_matches('"')
+                    .to_string();
+                current_tool = Some(FrontmatterTool {
+                    name: val,
+                    ..Default::default()
+                });
+            } else if let Some(t) = &mut current_tool
+                && let Some((k, v)) = trimmed.split_once(':')
+            {
+                let v = v.trim().trim_matches('"').trim_matches('\'');
+                match k.trim() {
+                    "description" => t.description = v.to_string(),
+                    "entrypoint" => t.entrypoint = Some(v.to_string()),
+                    _ => {}
+                }
+            }
             continue;
         }
 
         // YAML multiline list item (e.g. `  - item`)
         if trimmed.starts_with("- ") && (line.starts_with(' ') || line.starts_with('\t')) {
             if let Some(field) = current_list_field {
-                let item = trimmed[2..].trim().trim_matches('"').trim_matches('\'').to_string();
+                let item = trimmed[2..]
+                    .trim()
+                    .trim_matches('"')
+                    .trim_matches('\'')
+                    .to_string();
                 if !item.is_empty() {
                     match field {
-                        "tags"                     => out.tags.push(item),
-                        "trigger" | "triggers"     => out.triggers.push(item),
-                        "capabilities"             => out.capabilities.push(item),
+                        "tags" => out.tags.push(item),
+                        "trigger" | "triggers" => out.triggers.push(item),
+                        "capabilities" => out.capabilities.push(item),
                         _ => {}
                     }
                 }
@@ -443,10 +496,10 @@ fn parse_frontmatter(fm: &str) -> Frontmatter {
             let key = key.trim();
             let val = val.trim().trim_matches('"').trim_matches('\'');
             match key {
-                "name"        => out.name = Some(val.to_string()),
+                "name" => out.name = Some(val.to_string()),
                 "description" => out.description = Some(val.to_string()),
-                "category"    => out.category = Some(val.to_string()),
-                "rpi_phase"   => out.rpi_phase = Some(val.to_string()),
+                "category" => out.category = Some(val.to_string()),
+                "rpi_phase" => out.rpi_phase = Some(val.to_string()),
                 "tags" | "trigger" | "triggers" | "capabilities" => {
                     if val.is_empty() {
                         // No inline value — items will follow as `  - item` lines
@@ -459,9 +512,9 @@ fn parse_frontmatter(fm: &str) -> Frontmatter {
                             .filter(|s| !s.is_empty())
                             .collect();
                         match key {
-                            "tags"                     => out.tags = parsed,
-                            "trigger" | "triggers"     => out.triggers = parsed,
-                            "capabilities"             => out.capabilities = parsed,
+                            "tags" => out.tags = parsed,
+                            "trigger" | "triggers" => out.triggers = parsed,
+                            "capabilities" => out.capabilities = parsed,
                             _ => {}
                         }
                     }
@@ -472,7 +525,9 @@ fn parse_frontmatter(fm: &str) -> Frontmatter {
     }
 
     // Flush final tool
-    if let Some(t) = current_tool.take() { out.tools.push(t); }
+    if let Some(t) = current_tool.take() {
+        out.tools.push(t);
+    }
 
     out
 }
@@ -486,11 +541,9 @@ fn parse_frontmatter(fm: &str) -> Frontmatter {
 /// Uses `notify` 6.x `RecommendedWatcher` (inotify on Linux, FSEvents on macOS,
 /// ReadDirectoryChangesW on Windows). The watcher runs on a dedicated std thread
 /// (notify is not async-native) and forwards events to a `tokio::sync::mpsc` channel.
-pub fn spawn_skill_watcher(
-    cwd: &Path,
-) -> tokio::sync::mpsc::Receiver<()> {
-    use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+pub fn spawn_skill_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
     use notify::event::{CreateKind, ModifyKind, RemoveKind};
+    use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 
     let (tx, rx) = tokio::sync::mpsc::channel::<()>(8);
 
@@ -500,7 +553,7 @@ pub fn spawn_skill_watcher(
 
     let mut watch_dirs: Vec<PathBuf> = Vec::new();
 
-    if let Some(ref ch) = cade_home {
+    if let Some(ch) = &cade_home {
         let global_skills = ch.join("skills");
         if global_skills.exists() {
             watch_dirs.push(global_skills);
@@ -524,7 +577,7 @@ pub fn spawn_skill_watcher(
         let (sync_tx, sync_rx) = std::sync::mpsc::channel::<notify::Result<Event>>();
 
         let mut watcher = match RecommendedWatcher::new(sync_tx, Config::default()) {
-            Ok(w)  => w,
+            Ok(w) => w,
             Err(e) => {
                 tracing::warn!("skill watcher: failed to create watcher: {e}");
                 return;
@@ -581,17 +634,17 @@ pub fn github_url_to_raw_skill(url: &str) -> Option<String> {
         .trim_start_matches("http://github.com/");
     let parts: Vec<&str> = stripped.splitn(5, '/').collect();
     if parts.len() >= 5 && parts[2] == "tree" {
-        let user   = parts[0];
-        let repo   = parts[1];
+        let user = parts[0];
+        let repo = parts[1];
         let branch = parts[3];
-        let path   = parts[4];
+        let path = parts[4];
         Some(format!(
             "https://raw.githubusercontent.com/{user}/{repo}/{branch}/{path}/SKILL.MD"
         ))
     } else if parts.len() >= 5 && parts[2] == "blob" {
         // Direct file URL — return as-is converted to raw
         let branch = parts[3];
-        let path   = parts[4..].join("/");
+        let path = parts[4..].join("/");
         Some(format!(
             "https://raw.githubusercontent.com/{}/{}/{}/{}",
             parts[0], parts[1], branch, path
@@ -606,20 +659,34 @@ pub fn github_url_to_raw_skill(url: &str) -> Option<String> {
 /// Write edited skill fields back to the SKILL.MD file on disk.
 /// fields: [name, description, category, tags_csv, triggers_csv, body]
 pub fn write_skill_to_disk(skill: &Skill, fields: &[String]) -> std::io::Result<()> {
-    let name     = &fields[0];
-    let desc     = &fields[1];
-    let cat      = &fields[2];
+    let name = &fields[0];
+    let desc = &fields[1];
+    let cat = &fields[2];
     let tags_str = &fields[3];
     let trig_str = &fields[4];
-    let body     = &fields[5];
+    let body = &fields[5];
 
     let fmt_list = |s: &str| -> String {
-        let items: Vec<String> = s.split(',').map(|t| t.trim().to_string()).filter(|t| !t.is_empty()).collect();
-        if items.is_empty() { "[]".to_string() }
-        else { format!("[{}]", items.iter().map(|t| format!("\"{}\"", t)).collect::<Vec<_>>().join(", ")) }
+        let items: Vec<String> = s
+            .split(',')
+            .map(|t| t.trim().to_string())
+            .filter(|t| !t.is_empty())
+            .collect();
+        if items.is_empty() {
+            "[]".to_string()
+        } else {
+            format!(
+                "[{}]",
+                items
+                    .iter()
+                    .map(|t| format!("\"{}\"", t))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+        }
     };
 
-    let tags_yaml  = fmt_list(tags_str);
+    let tags_yaml = fmt_list(tags_str);
     let trigs_yaml = fmt_list(trig_str);
 
     let content = format!(
@@ -630,14 +697,11 @@ pub fn write_skill_to_disk(skill: &Skill, fields: &[String]) -> std::io::Result<
 
 /// Download and install a skill from a URL into `target_dir/<skill-name>/SKILL.MD`.
 /// Returns the installed skill on success.
-pub async fn install_skill_from_url(
-    url: &str,
-    target_dir: &Path,
-) -> Result<Skill> {
+pub async fn install_skill_from_url(url: &str, target_dir: &Path) -> Result<Skill> {
     // Resolve to raw content URL if needed
     let raw_url = if url.contains("github.com") && url.contains("/tree/") {
         github_url_to_raw_skill(url)
-            .ok_or_else(|| anyhow::anyhow!("Cannot parse GitHub URL: {url}"))?
+            .ok_or_else(|| Error::custom(format!("Cannot parse GitHub URL: {url}")))?
     } else {
         url.to_string()
     };
@@ -653,15 +717,22 @@ pub async fn install_skill_from_url(
         .replace(' ', "-");
 
     // SEC-B4: Validate derived skill ID to prevent path traversal
-    if !skill_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
-        anyhow::bail!("Invalid skill ID derived from URL: {}", skill_id);
+    if !skill_id
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-')
+    {
+        return Err(Error::custom(format!("Invalid skill ID derived from URL: {skill_id}")));
     }
 
     let skill_dir = target_dir.join(&skill_id);
     let skill_file = skill_dir.join("SKILL.MD");
 
     if skill_file.exists() {
-        anyhow::bail!("Skill '{}' already installed at {}", skill_id, skill_file.display());
+        return Err(Error::custom(format!(
+            "Skill '{}' already installed at {}",
+            skill_id,
+            skill_file.display()
+        )));
     }
 
     // Fetch content
@@ -714,59 +785,79 @@ mod tests {
     // -- Frontmatter parsing
 
     #[test]
-    fn parse_skill_minimal() {
+    fn parse_skill_minimal() -> Result<()> {
         let content = "---\nname: Test Skill\ndescription: A test\n---\nBody here.";
-        let skill = parse_skill("test-skill", content, SkillScope::Project, PathBuf::from("/fake/SKILL.MD")).unwrap();
+        let skill = parse_skill(
+            "test-skill",
+            content,
+            SkillScope::Project,
+            PathBuf::from("/fake/SKILL.MD"),
+        )
+        ?;
         assert_eq!(skill.id, "test-skill");
         assert_eq!(skill.name, "Test Skill");
         assert_eq!(skill.description, "A test");
         assert_eq!(skill.body, "Body here.");
         assert_eq!(skill.scope, SkillScope::Project);
+
+        Ok(())
     }
 
     #[test]
-    fn parse_skill_with_tags_inline() {
+    fn parse_skill_with_tags_inline() -> Result<()> {
         let content = "---\nname: S\ndescription: D\ntags: [\"rust\", \"testing\"]\n---\nBody";
-        let skill = parse_skill("s", content, SkillScope::Global, PathBuf::from("/f")).unwrap();
+        let skill = parse_skill("s", content, SkillScope::Global, PathBuf::from("/f"))?;
         assert_eq!(skill.tags, vec!["rust", "testing"]);
+
+        Ok(())
     }
 
     #[test]
-    fn parse_skill_with_tags_multiline() {
+    fn parse_skill_with_tags_multiline() -> Result<()> {
         let content = "---\nname: S\ndescription: D\ntags:\n  - rust\n  - testing\n---\nBody";
-        let skill = parse_skill("s", content, SkillScope::Global, PathBuf::from("/f")).unwrap();
+        let skill = parse_skill("s", content, SkillScope::Global, PathBuf::from("/f"))?;
         assert_eq!(skill.tags, vec!["rust", "testing"]);
+
+        Ok(())
     }
 
     #[test]
-    fn parse_skill_with_triggers() {
+    fn parse_skill_with_triggers() -> Result<()> {
         let content = "---\nname: S\ndescription: D\ntriggers: [debug, \"fix error\"]\n---\nBody";
-        let skill = parse_skill("s", content, SkillScope::Global, PathBuf::from("/f")).unwrap();
+        let skill = parse_skill("s", content, SkillScope::Global, PathBuf::from("/f"))?;
         assert_eq!(skill.triggers, vec!["debug", "fix error"]);
+
+        Ok(())
     }
 
     #[test]
-    fn parse_skill_with_tools_block() {
+    fn parse_skill_with_tools_block() -> Result<()> {
         let content = "---\nname: S\ndescription: D\ntools:\n  - name: my_tool\n    description: does stuff\n    entrypoint: scripts/my_tool.sh\n---\nBody";
-        let skill = parse_skill("s", content, SkillScope::Global, PathBuf::from("/f")).unwrap();
+        let skill = parse_skill("s", content, SkillScope::Global, PathBuf::from("/f"))?;
         // tools are parsed but scripts require actual disk files — verify frontmatter parsed
         assert_eq!(skill.body, "Body");
+
+        Ok(())
     }
 
     #[test]
-    fn parse_skill_no_frontmatter() {
+    fn parse_skill_no_frontmatter() -> Result<()> {
         let content = "Just a body with no frontmatter.";
-        let skill = parse_skill("bare", content, SkillScope::Builtin, PathBuf::from("/f")).unwrap();
+        let skill = parse_skill("bare", content, SkillScope::Builtin, PathBuf::from("/f"))?;
         assert_eq!(skill.name, "bare"); // falls back to id
         assert_eq!(skill.description, "");
         assert_eq!(skill.body, "Just a body with no frontmatter.");
+
+        Ok(())
     }
 
     #[test]
-    fn parse_skill_rpi_phase() {
+    fn parse_skill_rpi_phase() -> Result<()> {
         let content = "---\nname: S\ndescription: D\nrpi_phase: Implement\n---\nBody";
-        let skill = parse_skill("s", content, SkillScope::Global, PathBuf::from("/f")).unwrap();
+        let skill = parse_skill("s", content, SkillScope::Global, PathBuf::from("/f"))?;
         assert_eq!(skill.rpi_phase.as_deref(), Some("Implement"));
+
+        Ok(())
     }
 
     // -- Skill::matches_trigger
@@ -798,10 +889,12 @@ mod tests {
     }
 
     #[test]
-    fn trigger_multi_word_substring() {
+    fn trigger_multi_word_substring() -> Result<()> {
         let s = make_skill(vec!["fix error"]);
         assert!(s.matches_trigger("Can you fix error in module?"));
         assert!(!s.matches_trigger("fix the error")); // not exact substring
+
+        Ok(())
     }
 
     #[test]
@@ -840,26 +933,35 @@ mod tests {
     }
 
     #[test]
-    fn skills_listing_nonempty() {
+    fn skills_listing_nonempty() -> Result<()> {
         let s = make_skill(vec![]);
-        let listing = skills_listing(&[s]).unwrap();
+        let listing = skills_listing(&[s]).ok_or("Should produce listing")?;
         assert!(listing.contains("Available Skills"));
+
+        Ok(())
     }
 
     // -- github_url_to_raw_skill
 
     #[test]
-    fn github_tree_url_conversion() {
+    fn github_tree_url_conversion() -> Result<()> {
         let url = "https://github.com/user/repo/tree/main/skills/my-skill";
-        let raw = github_url_to_raw_skill(url).unwrap();
-        assert_eq!(raw, "https://raw.githubusercontent.com/user/repo/main/skills/my-skill/SKILL.MD");
+        let raw = github_url_to_raw_skill(url).ok_or("Should convert URL")?;
+        assert_eq!(
+            raw,
+            "https://raw.githubusercontent.com/user/repo/main/skills/my-skill/SKILL.MD"
+        );
+
+        Ok(())
     }
 
     #[test]
-    fn github_blob_url_conversion() {
+    fn github_blob_url_conversion() -> Result<()> {
         let url = "https://github.com/user/repo/blob/main/skills/SKILL.MD";
-        let raw = github_url_to_raw_skill(url).unwrap();
+        let raw = github_url_to_raw_skill(url).ok_or("Should convert URL")?;
         assert!(raw.starts_with("https://raw.githubusercontent.com/"));
+
+        Ok(())
     }
 
     #[test]
@@ -870,24 +972,32 @@ mod tests {
     // -- discover_skills_in (filesystem)
 
     #[test]
-    fn discover_skills_empty_dir() {
-        let dir = tempfile::tempdir().unwrap();
+    fn discover_skills_empty_dir() -> Result<()> {
+        let dir = tempfile::tempdir()?;
         let skills = discover_skills_in(dir.path(), SkillScope::Project);
         assert!(skills.is_empty());
+
+        Ok(())
     }
 
     #[test]
-    fn discover_skills_finds_skill_md() {
-        let dir = tempfile::tempdir().unwrap();
+    fn discover_skills_finds_skill_md() -> Result<()> {
+        let dir = tempfile::tempdir()?;
         let skill_dir = dir.path().join("my-skill");
-        fs::create_dir_all(&skill_dir).unwrap();
-        fs::write(skill_dir.join("SKILL.MD"), "---\nname: My Skill\ndescription: Test\n---\nBody").unwrap();
+        fs::create_dir_all(&skill_dir)?;
+        fs::write(
+            skill_dir.join("SKILL.MD"),
+            "---\nname: My Skill\ndescription: Test\n---\nBody",
+        )
+        ?;
 
         let skills = discover_skills_in(dir.path(), SkillScope::Project);
         assert_eq!(skills.len(), 1);
         assert_eq!(skills[0].id, "my-skill");
         assert_eq!(skills[0].name, "My Skill");
         assert_eq!(skills[0].scope, SkillScope::Project);
+
+        Ok(())
     }
 
     #[test]
@@ -899,23 +1009,33 @@ mod tests {
     // -- discover_all_skills merging
 
     #[test]
-    fn discover_all_skills_higher_scope_wins() {
-        let dir = tempfile::tempdir().unwrap();
-        let cade_home = tempfile::tempdir().unwrap();
+    fn discover_all_skills_higher_scope_wins() -> Result<()> {
+        let dir = tempfile::tempdir()?;
+        let cade_home = tempfile::tempdir()?;
 
         // Global skill
         let global_dir = cade_home.path().join("skills").join("shared");
-        fs::create_dir_all(&global_dir).unwrap();
-        fs::write(global_dir.join("SKILL.MD"), "---\nname: Global Version\ndescription: global\n---\nGlobal body").unwrap();
+        fs::create_dir_all(&global_dir)?;
+        fs::write(
+            global_dir.join("SKILL.MD"),
+            "---\nname: Global Version\ndescription: global\n---\nGlobal body",
+        )
+        ?;
 
         // Project skill with same ID
         let proj_dir = dir.path().join(".skills").join("shared");
-        fs::create_dir_all(&proj_dir).unwrap();
-        fs::write(proj_dir.join("SKILL.MD"), "---\nname: Project Version\ndescription: project\n---\nProject body").unwrap();
+        fs::create_dir_all(&proj_dir)?;
+        fs::write(
+            proj_dir.join("SKILL.MD"),
+            "---\nname: Project Version\ndescription: project\n---\nProject body",
+        )
+        ?;
 
         let skills = discover_all_skills(dir.path(), None, Some(cade_home.path()));
-        let shared = skills.iter().find(|s| s.id == "shared").unwrap();
+        let shared = skills.iter().find(|s| s.id == "shared").ok_or("Should find skill")?;
         assert_eq!(shared.name, "Project Version"); // project scope wins
         assert_eq!(shared.scope, SkillScope::Project);
+
+        Ok(())
     }
 }

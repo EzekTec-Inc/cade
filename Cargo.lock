@@ -667,9 +667,12 @@ dependencies = [
  "cade-core",
  "cade-desktop",
  "cade-server",
+ "cade-tui",
  "chrono",
  "clap 4.5.60",
+ "derive_more",
  "dotenvy",
+ "ratatui",
  "serde_json",
  "tokio",
  "tokio-stream",
@@ -690,6 +693,7 @@ dependencies = [
  "cade-desktop",
  "cade-mcp",
  "chrono",
+ "derive_more",
  "dirs",
  "futures",
  "globset",
@@ -715,6 +719,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "derive_more",
  "futures",
  "reqwest",
  "reqwest-eventsource",
@@ -743,6 +748,7 @@ dependencies = [
  "chrono",
  "clap 4.5.60",
  "crossterm",
+ "derive_more",
  "dirs",
  "futures",
  "ignore",
@@ -769,6 +775,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "derive_more",
  "dirs",
  "dotenvy",
  "globset",
@@ -793,6 +800,7 @@ dependencies = [
  "anyhow",
  "base64",
  "cade-core",
+ "derive_more",
  "image",
  "ksni",
  "notify-rust",
@@ -808,6 +816,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "cade-core",
+ "derive_more",
  "dirs",
  "notify",
  "rmcp",
@@ -856,6 +865,7 @@ dependencies = [
  "base64",
  "cade-core",
  "crossterm",
+ "derive_more",
  "dirs",
  "image",
  "pulldown-cmark",
@@ -1062,6 +1072,15 @@ name = "convert_case"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baaaa0ecca5b51987b9423ccdc971514dd8b0bb7b4060b983d3664dad3f1f89f"
+dependencies = [
+ "unicode-segmentation",
+]
+
+[[package]]
+name = "convert_case"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "633458d4ef8c78b72454de2d54fd6ab2e60f9e02be22f3c6104cdc8a4e0fceb9"
 dependencies = [
  "unicode-segmentation",
 ]
@@ -1318,6 +1337,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7cd812cc2bc1d69d4764bd80df88b4317eaef9e773c75226407d9bc0876b211c"
 dependencies = [
  "powerfmt",
+]
+
+[[package]]
+name = "derive_more"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d751e9e49156b02b44f9c1815bcb94b984cdcc4396ecc32521c739452808b134"
+dependencies = [
+ "derive_more-impl",
+]
+
+[[package]]
+name = "derive_more-impl"
+version = "2.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "799a97264921d8623a957f6c3b9011f3b5492f557bbb7a5a19b7fa6d06ba8dcb"
+dependencies = [
+ "convert_case 0.10.0",
+ "proc-macro2",
+ "quote",
+ "rustc_version",
+ "syn",
+ "unicode-xid",
 ]
 
 [[package]]
@@ -2629,7 +2671,7 @@ checksum = "b6b8cfa2a7656627b4c92c6b9ef929433acd673d5ab3708cda1b18478ac00df4"
 dependencies = [
  "bitflags 2.11.0",
  "cc",
- "convert_case",
+ "convert_case 0.8.0",
  "cookie-factory",
  "libc",
  "libspa-sys",
@@ -4029,6 +4071,15 @@ name = "rustc-hash"
 version = "2.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "357703d41365b4b27c590e3ed91eabb1b663f07c4c084095e60cbed4362dff0d"
+
+[[package]]
+name = "rustc_version"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
+dependencies = [
+ "semver",
+]
 
 [[package]]
 name = "rustix"
