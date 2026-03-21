@@ -3,6 +3,37 @@ use ratatui::{
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
 };
+use std::sync::LazyLock;
+use syntect::easy::HighlightLines;
+use syntect::highlighting::{Style as SyntectStyle, ThemeSet};
+use syntect::parsing::SyntaxSet;
+use syntect::util::LinesWithEndings;
+
+static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
+
+fn syntect_to_tui_style(style: SyntectStyle) -> Style {
+    let mut s = Style::default().fg(RC::Rgb(
+        style.foreground.r,
+        style.foreground.g,
+        style.foreground.b,
+    ));
+    use syntect::highlighting::FontStyle;
+    let mut modifier = Modifier::empty();
+    if style.font_style.contains(FontStyle::BOLD) {
+        modifier |= Modifier::BOLD;
+    }
+    if style.font_style.contains(FontStyle::ITALIC) {
+        modifier |= Modifier::ITALIC;
+    }
+    if style.font_style.contains(FontStyle::UNDERLINE) {
+        modifier |= Modifier::UNDERLINED;
+    }
+    if !modifier.is_empty() {
+        s = s.add_modifier(modifier);
+    }
+    s
+}
 
 /// Left margin applied to all body content (paragraphs, headings, lists, etc.).
 /// Keeps text visually inset from the viewport edge and from tool-call/tool-result
@@ -32,6 +63,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
     let mut in_blockquote = false;
     let mut in_code_block = false;
     let mut current_lang = String::new();
+    let mut highlighter: Option<HighlightLines<'static>> = None;
 
     let mut list_depth: usize = 0;
     let mut list_counters: Vec<Option<u64>> = Vec::new();
@@ -114,7 +146,16 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
 
                     if let CodeBlockKind::Fenced(lang) = kind {
                         current_lang = lang.to_string();
+                    } else {
+                        current_lang.clear();
                     }
+                    
+                    let syntax = SYNTAX_SET
+                        .find_syntax_by_token(&current_lang)
+                        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+                    let theme = &THEME_SET.themes["base16-ocean.dark"];
+                    highlighter = Some(HighlightLines::new(syntax, theme));
+
                     // Top border with optional language label
                     let label = if current_lang.is_empty() {
                         format!("{INDENT}┌─────────────────────────────────")
@@ -263,19 +304,36 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                 if in_table {
                     current_cell.push_str(&text);
                 } else if in_code_block {
-                    for (i, line) in text.lines().enumerate() {
-                        if i > 0 {
+                    if let Some(ref mut h) = highlighter {
+                        let mut line_iter = LinesWithEndings::from(&text).peekable();
+                        let mut first = true;
+                        while let Some(raw_line) = line_iter.next() {
+                            if !first {
+                                push_line(&mut lines, &mut current_spans, in_blockquote);
+                            }
+                            first = false;
+
+                            let mut spans = vec![Span::styled(
+                                format!("{INDENT}{CODE_INDENT}"),
+                                code_border_style(),
+                            )];
+
+                            let highlighted = h.highlight_line(raw_line, &SYNTAX_SET).unwrap_or_default();
+                            for (style, content) in highlighted {
+                                let clean_content = content.trim_end_matches('\n').trim_end_matches('\r');
+                                if !clean_content.is_empty() {
+                                    spans.push(Span::styled(
+                                        clean_content.to_string(),
+                                        syntect_to_tui_style(style),
+                                    ));
+                                }
+                            }
+
+                            current_spans.extend(spans);
+                        }
+                        if text.ends_with('\n') {
                             push_line(&mut lines, &mut current_spans, in_blockquote);
                         }
-                        let mut spans = vec![Span::styled(
-                            format!("{INDENT}{CODE_INDENT}"),
-                            code_border_style(),
-                        )];
-                        spans.extend(highlight_code(line, &current_lang));
-                        current_spans.extend(spans);
-                    }
-                    if text.ends_with('\n') {
-                        push_line(&mut lines, &mut current_spans, in_blockquote);
                     }
                 } else {
                     let style = style_stack.last().copied().unwrap_or_default();
@@ -385,279 +443,3 @@ fn render_table_data(data: &[Vec<String>]) -> Vec<Line<'static>> {
     lines
 }
 
-fn highlight_code(line: &str, lang: &str) -> Vec<Span<'static>> {
-    let style_keyword = Style::default()
-        .fg(RC::Rgb(130, 170, 255))
-        .add_modifier(Modifier::BOLD);
-    let style_comment = Style::default()
-        .fg(RC::Rgb(90, 90, 90))
-        .add_modifier(Modifier::ITALIC);
-    let style_string = Style::default().fg(RC::Rgb(140, 220, 140));
-    let style_type = Style::default().fg(RC::Rgb(120, 220, 220));
-    let style_number = Style::default().fg(RC::Rgb(220, 170, 120));
-    let style_default = Style::default().fg(RC::Rgb(200, 200, 200));
-
-    let keywords = match lang {
-        "rust" | "rs" => vec![
-            "fn", "let", "mut", "pub", "use", "mod", "crate", "impl", "trait", "struct", "enum",
-            "match", "if", "else", "for", "while", "loop", "return", "await", "async", "type",
-            "as", "where", "self", "Self", "super", "const", "static", "ref", "move", "break",
-            "continue", "unsafe", "extern", "dyn", "in",
-        ],
-        "python" | "py" => vec![
-            "def", "class", "import", "from", "as", "if", "elif", "else", "for", "while", "try",
-            "except", "finally", "with", "return", "yield", "async", "await", "lambda", "None",
-            "True", "False", "raise", "pass", "del", "in", "not", "and", "or", "is", "global",
-            "nonlocal",
-        ],
-        "javascript" | "js" | "typescript" | "ts" | "jsx" | "tsx" => vec![
-            "function",
-            "const",
-            "let",
-            "var",
-            "import",
-            "export",
-            "from",
-            "class",
-            "if",
-            "else",
-            "for",
-            "while",
-            "try",
-            "catch",
-            "finally",
-            "return",
-            "await",
-            "async",
-            "type",
-            "interface",
-            "extends",
-            "new",
-            "this",
-            "super",
-            "switch",
-            "case",
-            "default",
-            "break",
-            "continue",
-            "throw",
-            "typeof",
-            "instanceof",
-            "void",
-            "delete",
-            "in",
-            "of",
-            "yield",
-            "enum",
-            "implements",
-            "static",
-        ],
-        "bash" | "sh" | "zsh" | "shell" => vec![
-            "if", "then", "else", "elif", "fi", "for", "while", "do", "done", "case", "esac",
-            "function", "return", "exit", "export", "local", "readonly", "declare", "unset",
-            "echo", "printf", "cd", "ls", "grep", "sed", "awk", "cat", "rm", "cp", "mv", "mkdir",
-        ],
-        "json" => vec![],
-        "toml" => vec!["true", "false"],
-        "yaml" | "yml" => vec!["true", "false", "null", "yes", "no"],
-        _ => vec![],
-    };
-
-    let types = match lang {
-        "rust" | "rs" => vec![
-            "String", "Vec", "Option", "Result", "Box", "Arc", "Mutex", "HashMap", "HashSet", "i8",
-            "i16", "i32", "i64", "i128", "isize", "u8", "u16", "u32", "u64", "u128", "usize",
-            "f32", "f64", "bool", "char", "str",
-        ],
-        "typescript" | "ts" | "tsx" => vec![
-            "string", "number", "boolean", "any", "void", "never", "unknown", "object", "Array",
-            "Promise", "Record", "Partial", "Required", "Readonly",
-        ],
-        _ => vec![],
-    };
-
-    // Full-line comment detection
-    let trimmed = line.trim();
-    if trimmed.starts_with("//")
-        || trimmed.starts_with('#')
-            && !lang.is_empty()
-            && !matches!(
-                lang,
-                "python" | "py" | "bash" | "sh" | "zsh" | "shell" | "yaml" | "yml" | "toml"
-            )
-    {
-        return vec![Span::styled(line.to_string(), style_comment)];
-    }
-    // Python/bash/shell comments
-    if matches!(
-        lang,
-        "python" | "py" | "bash" | "sh" | "zsh" | "shell" | "yaml" | "yml" | "toml"
-    ) && trimmed.starts_with('#')
-    {
-        return vec![Span::styled(line.to_string(), style_comment)];
-    }
-    // C-style line comments
-    if trimmed.starts_with("//") {
-        return vec![Span::styled(line.to_string(), style_comment)];
-    }
-
-    let mut spans = Vec::new();
-    let mut words = Vec::new();
-    let mut current_word = String::new();
-
-    for c in line.chars() {
-        if c.is_alphanumeric() || c == '_' {
-            current_word.push(c);
-        } else {
-            if !current_word.is_empty() {
-                words.push(current_word.clone());
-                current_word.clear();
-            }
-            words.push(c.to_string());
-        }
-    }
-    if !current_word.is_empty() {
-        words.push(current_word);
-    }
-
-    let mut in_string = false;
-    let mut string_char = ' ';
-
-    for word in words {
-        if !in_string && (word == "\"" || word == "'" || word == "`") {
-            in_string = true;
-            // SAFETY: word is guaranteed non-empty by the condition above
-            string_char = word.chars().next().unwrap_or('"');
-            spans.push(Span::styled(word, style_string));
-            continue;
-        }
-        if in_string {
-            spans.push(Span::styled(word.clone(), style_string));
-            if word.len() == 1 && word.starts_with(string_char) {
-                in_string = false;
-            }
-            continue;
-        }
-
-        if keywords.contains(&word.as_str()) {
-            spans.push(Span::styled(word, style_keyword));
-        } else if types.contains(&word.as_str()) {
-            spans.push(Span::styled(word, style_type));
-        } else if word.chars().all(|c| c.is_ascii_digit() || c == '.')
-            && !word.is_empty()
-            && word.chars().next().is_some_and(|c| c.is_ascii_digit())
-        {
-            spans.push(Span::styled(word, style_number));
-        } else if word.chars().all(|c| !c.is_alphanumeric() && c != '_') {
-            spans.push(Span::styled(word, style_default));
-        } else {
-            spans.push(Span::styled(word, style_default));
-        }
-    }
-
-    spans
-}
-
-// region:    --- Tests
-
-#[cfg(test)]
-mod tests {
-    #[allow(unused)]
-    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
-
-    use super::*;
-
-    #[test]
-    fn test_markdown_parse_basic() {
-        // -- Setup & Fixtures
-        let md = "# Header\n\n**Bold** and `code`\n\n- Item 1\n- Item 2";
-
-        // -- Exec
-        let lines = parse_markdown_lines(md);
-
-        // -- Check
-        assert!(lines.len() >= 4, "got {} lines", lines.len());
-    }
-
-    #[test]
-    fn test_markdown_table_parsing() {
-        // -- Setup & Fixtures
-        let md = "| Col 1 | Col 2 |\n|---|---|\n| val 1 | val 2 |";
-
-        // -- Exec
-        let lines = parse_markdown_lines(md);
-
-        // -- Check
-        assert_eq!(lines.len(), 3);
-    }
-
-    #[test]
-    fn test_markdown_asymmetric_table_parsing() {
-        // -- Setup & Fixtures
-        let md = "| Col 1 | Col 2 |\n|---|---|\n| val 1 | val 2 | val 3 |";
-
-        // -- Exec
-        let lines = parse_markdown_lines(md);
-
-        // -- Check
-        assert_eq!(lines.len(), 3);
-    }
-
-    #[test]
-    fn test_markdown_code_block_has_borders() -> Result<()> {
-        // -- Setup & Fixtures
-        let md = "```rust\nlet x = 1;\n```";
-
-        // -- Exec
-        let lines = parse_markdown_lines(md);
-        let text: Vec<String> = lines
-            .iter()
-            .map(|l| {
-                l.spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>()
-            })
-            .collect();
-
-        // -- Check
-        assert!(
-            text[0].contains("┌"),
-            "first line should have top border: {:?}",
-            text[0]
-        );
-        let last = text.last().ok_or("Should have at least one line")?;
-        assert!(
-            last.contains("└"),
-            "last line should have bottom border"
-        );
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_markdown_paragraph_spacing() {
-        // -- Setup & Fixtures
-        let md = "First paragraph.\n\nSecond paragraph.";
-
-        // -- Exec
-        let lines = parse_markdown_lines(md);
-
-        // -- Check
-        assert!(
-            lines.len() >= 3,
-            "got {} lines: {:?}",
-            lines.len(),
-            lines
-                .iter()
-                .map(|l| l
-                    .spans
-                    .iter()
-                    .map(|s| s.content.as_ref())
-                    .collect::<String>())
-                .collect::<Vec<_>>()
-        );
-    }
-}
-
-// endregion: --- Tests

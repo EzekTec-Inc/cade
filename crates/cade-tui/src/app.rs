@@ -2522,24 +2522,54 @@ fn render_line_to_text(
                     ),
                 ]));
             } else {
+                use ansi_to_tui::IntoText;
                 let show_limit = if expand_all { 20 } else { 3 };
                 let show = lns.len().min(show_limit);
 
-                // First line — bold, with ⎿ gutter
-                out.push(Line::from(vec![
-                    Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
-                    Span::styled(
-                        truncate_str(lns[0], inner_w),
-                        Style::default().fg(color).add_modifier(Modifier::BOLD),
-                    ),
-                ]));
-                // Subsequent shown lines — indented to match the ⎿ gutter
-                for ln in &lns[1..show] {
-                    out.push(Line::from(vec![
-                        Span::raw("     "),
-                        Span::styled(truncate_str(ln, inner_w), Style::default().fg(color)),
-                    ]));
+                for (i, ln) in lns.iter().take(show).enumerate() {
+                    let mut spans = Vec::new();
+                    if i == 0 {
+                        spans.push(Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)));
+                    } else {
+                        spans.push(Span::raw("     "));
+                    }
+
+                    // Parse ANSI colors. fallback to raw text if parse fails.
+                    let parsed_text = ln.into_text().unwrap_or_else(|_| ratatui::text::Text::raw(ln.to_string()));
+                    let mut parsed_spans: Vec<Span> = parsed_text
+                        .lines
+                        .into_iter()
+                        .flat_map(|line| line.spans)
+                        .collect();
+
+                    // Apply default color if no ANSI styles are present, otherwise preserve them.
+                    if parsed_spans.iter().all(|s| s.style == Style::default()) {
+                        let text_content = parsed_spans.into_iter().map(|s| s.content).collect::<String>();
+                        let mut style = Style::default().fg(color);
+                        if i == 0 {
+                            style = style.add_modifier(Modifier::BOLD);
+                        }
+                        spans.push(Span::styled(truncate_str(&text_content, inner_w), style));
+                    } else {
+                        // Apply truncation logic across spans
+                        let mut remaining = inner_w;
+                        for mut s in parsed_spans {
+                            let len = s.content.chars().count();
+                            if len > remaining {
+                                let truncated = s.content.chars().take(remaining).collect::<String>();
+                                s.content = std::borrow::Cow::Owned(truncated);
+                                spans.push(s);
+                                break;
+                            } else {
+                                spans.push(s);
+                                remaining -= len;
+                            }
+                        }
+                    }
+
+                    out.push(Line::from(spans));
                 }
+
                 // Truncation hint
                 let remaining = lns.len().saturating_sub(show);
                 if remaining > 0 {
@@ -2575,6 +2605,7 @@ fn render_line_to_text(
                     ),
                 ]));
             } else {
+                use ansi_to_tui::IntoText;
                 let visible = if expand_all { lines.len() } else { lines.len().min(*max_visible) };
                 let hidden  = lines.len().saturating_sub(visible);
 
@@ -2590,21 +2621,44 @@ fn render_line_to_text(
                 // Tail lines — most recent `visible` lines.
                 let start = lines.len() - visible;
                 for (i, ln) in lines[start..].iter().enumerate() {
+                    let mut spans = Vec::new();
                     if i == 0 && hidden == 0 {
-                        // First (and possibly only) line gets the ⎿ gutter.
-                        out.push(Line::from(vec![
-                            Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
-                            Span::styled(
-                                truncate_str(ln, inner_w),
-                                Style::default().fg(color).add_modifier(Modifier::BOLD),
-                            ),
-                        ]));
+                        spans.push(Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)));
                     } else {
-                        out.push(Line::from(vec![
-                            Span::raw("     "),
-                            Span::styled(truncate_str(ln, inner_w), Style::default().fg(color)),
-                        ]));
+                        spans.push(Span::raw("     "));
                     }
+
+                    let parsed_text = ln.into_text().unwrap_or_else(|_| ratatui::text::Text::raw(ln.to_string()));
+                    let mut parsed_spans: Vec<Span> = parsed_text
+                        .lines
+                        .into_iter()
+                        .flat_map(|line| line.spans)
+                        .collect();
+
+                    if parsed_spans.iter().all(|s| s.style == Style::default()) {
+                        let text_content = parsed_spans.into_iter().map(|s| s.content).collect::<String>();
+                        let mut style = Style::default().fg(color);
+                        if i == 0 && hidden == 0 {
+                            style = style.add_modifier(Modifier::BOLD);
+                        }
+                        spans.push(Span::styled(truncate_str(&text_content, inner_w), style));
+                    } else {
+                        let mut remaining = inner_w;
+                        for mut s in parsed_spans {
+                            let len = s.content.chars().count();
+                            if len > remaining {
+                                let truncated = s.content.chars().take(remaining).collect::<String>();
+                                s.content = std::borrow::Cow::Owned(truncated);
+                                spans.push(s);
+                                break;
+                            } else {
+                                spans.push(s);
+                                remaining -= len;
+                            }
+                        }
+                    }
+
+                    out.push(Line::from(spans));
                 }
             }
         }
