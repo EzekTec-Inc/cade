@@ -123,71 +123,97 @@ CADE features a highly responsive, custom-built terminal user interface (TUI) po
 
 ## Interactive slash commands
 
-### Navigation
-| Command | Description |
-|---------|-------------|
-| `/help` | Show all commands |
-| `/exit` | Quit |
-| `/clear` | Clear the screen |
-| `/info` | Show session info (agent, model, mode) |
+Type `/help` or `/?` inside any CADE session to open the interactive command browser.
 
-### Agent management
+### Session
 | Command | Description |
 |---------|-------------|
-| `/new` | Start a fresh conversation (same agent) |
-| `/new-agent` | Create a new agent |
-| `/agents` | List all agents |
-| `/agent` | Show current agent ID |
-| `/name <n>` | Resume agent by name |
-| `/resume` | Browse past conversations |
-| `/delete [id]` | Delete an agent |
+| `/help` or `/?` | Open the full-screen command browser |
+| `/info` | Show agent, model, mode, cwd, and version |
+| `/agent` | Show current agent name and ID |
+| `/agents` | List and switch agents (r = rename, d = delete) |
+| `/new-agent` | Create a brand-new agent |
 | `/rename <name>` | Rename the current agent |
-| `/pin` | Pin current agent as default |
+| `/delete [name]` | Delete an agent by name or ID |
+| `/pin` | Pin current agent to settings as default |
+| `/new` | Start a fresh conversation on the current agent |
+| `/resume` | Browse past conversations and switch to one |
+| `/checkpoint [label]` | Save a checkpoint of the current working-tree state |
+| `/tree` | Browse and restore checkpoints (fullscreen picker) |
+| `/fork [label]` | Create a new conversation branched from a checkpoint |
+| `/artifacts` | List stored artifacts (logs, diffs, reports) |
+| `/exit` or `/quit` | Quit CADE |
 
-### Memory & skills
+### Model & Mode
 | Command | Description |
 |---------|-------------|
-| `/memory` | Show all memory blocks |
-| `/remember <text>` | Append a note to project memory |
-| `/init` | Inject current environment context |
-| `/skills [filter]` | List available skills |
+| `/model [provider/name]` | Interactive model picker, or switch directly |
+| `/reasoning [none\|low\|medium\|high\|xhigh]` | Set reasoning effort level |
+| `/toolset [default\|codex\|gemini]` | Show or switch toolset |
+| `/mode [name]` | Show or set permission mode |
+| `/plan` | Switch to read-only plan mode |
+| `/todos` | Toggle visibility of the active plan / checklist |
+| `/default` | Return to default permission mode |
+| `/yolo` | Bypass all permission prompts (auto-approve all tools) |
+| `/approve-always <pattern>` | Add a permanent allow rule for matching tools |
+| `/deny-always <pattern>` | Add a permanent deny rule for matching tools |
+| `/permissions` | Show current permission mode and rules |
 
-### Tools & MCP
+### Memory
 | Command | Description |
 |---------|-------------|
-| `/link` | Re-attach all native + MCP tools to the agent |
-| `/unlink` | Detach all tools from the agent |
-| `/mcp` | List connected MCP servers and their tools |
-| `/toolset [name]` | Show or switch toolset (default / codex / gemini) |
+| `/memory` | List all memory blocks |
+| `/memory view <label>` | Show the full content of a memory block |
+| `/memory set <label> <value>` | Set a memory block value |
+| `/memory edit <label>` | Interactively edit a memory block |
+| `/memory delete <label>` | Delete a memory block |
+| `/memory history <label>` | Show last 5 revisions of a memory block |
+| `/init` | Analyse project and populate memory |
+| `/remember <text>` | Ask the agent to update memory with the given text |
+| `/reflect [focus]` | Trigger reflection to extract memory from conversation history |
 
-### Model & mode
+### Tools & Providers
 | Command | Description |
 |---------|-------------|
-| `/model <m>` | Switch model mid-session |
-| `/mode [name]` | Show or switch permission mode |
-| `/yolo` | Disable all permission prompts |
-| `/plan` | Enable read-only mode |
-| `/default` | Restore default permission mode |
-| `/stream` | Toggle SSE streaming on/off |
-
-### Permissions
-| Command | Description |
-|---------|-------------|
-| `/permissions` | Show current permission rules |
-| `/approve-always <pattern>` | Always approve matching tools |
-| `/deny-always <pattern>` | Always deny matching tools |
-
-### Other
-| Command | Description |
-|---------|-------------|
+| `/backend [local\|docker\|ssh\|readonly]` | Show or switch execution backend |
+| `/link` | Register and attach all tools to the current agent |
+| `/unlink` | Detach all tools from the current agent |
+| `/mcp` | Show MCP server status and tools |
+| `/mcp reload` | Reload MCP servers from config |
+| `/connect [preset]` | Connect a new AI provider interactively |
+| `/disconnect <name>` | Remove a configured provider |
 | `/providers` | List configured LLM providers |
-| `/connect <url>` | Connect to a different CADE server |
-| `/disconnect` | Disconnect from server |
-| `/hooks` | Show configured lifecycle hooks |
-| `/subagents` | List running subagents |
-| `/usage` | Show token usage for this session |
+
+### Skills & Subagents
+| Command | Description |
+|---------|-------------|
+| `/skills` | List loaded skills |
+| `/skills create <name>` | Scaffold a new skill |
+| `/skills show <id>` | Show full detail for a skill |
+| `/skills reload` | Reload skills from disk |
+| `/subagents` | List available subagent definitions |
+| `/<skill-id>` | Run a loaded skill directly (e.g. `/commit`, `/review`) |
+
+### Diagnostics
+| Command | Description |
+|---------|-------------|
 | `/search <query>` | Search message history |
-| `/feedback` | Send feedback |
+| `/context` | Show current context window usage |
+| `/usage` | Token usage for this session |
+| `/cost` | Estimate API cost for this session |
+| `/stats` | Full session stats — tokens, tool calls, timing |
+| `/stats model` | Per-model breakdown: requests, input, cache, output |
+| `/stream` | Toggle streaming mode on/off |
+| `/hooks` | Show configured lifecycle hooks |
+| `/feedback` | Report issues or give feedback |
+| `/debug-last` | Dump the last assistant message as stored on the server |
+
+### Misc
+| Command | Description |
+|---------|-------------|
+| `/copy` | Toggle copy mode (disables mouse scroll for text selection) |
+| `/export [file.json]` | Export the current agent state to a JSON file |
+| `/clear` | Clear screen and context window |
 | `/logout` | Clear stored API key and exit |
 
 ---
@@ -446,7 +472,7 @@ cargo install --path .
 
 ## Project Structure
 
-CADE is a Cargo workspace with six independent crates:
+CADE is a Cargo workspace with twelve independent crates:
 
 ```
 src/
