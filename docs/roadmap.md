@@ -58,13 +58,13 @@
 - [x] **rust10x compliance**: Tier 1–4 fixes (lint guards, regions, dependency sections, macro imports)
 
 ### Medium Term
-- [ ] **Plugin system**: Dynamic tool loading via shared libraries or WASM
+- [x] **Plugin system**: Dynamic tool loading via shared libraries or WASM
 - [ ] **Multi-agent collaboration**: Named agents with message passing
 - [ ] **Web UI**: Browser-based interface alongside the terminal
 - [ ] **Windows/macOS support**: Cross-platform desktop extensions
-- [ ] **Session replay**: Re-watch recorded coding sessions
+- [x] **Session replay**: Re-watch recorded coding sessions
 
 ### Long Term
-- [ ] **Self-improvement loop**: Agent learns from past sessions automatically
+- [x] **Self-improvement loop**: Agent learns from past sessions automatically
 - [ ] **Team features**: Shared agents, memory, and skills across a team
 - [ ] **IDE integration**: VS Code / JetBrains extensions

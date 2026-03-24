@@ -101,6 +101,18 @@ enum SlashCmd {
     DebugLast,
     /// Show session cost breakdown (tokens × pricing).
     Cost,
+    /// Create a checkpoint of the current working-tree state.
+    Checkpoint(Option<String>),
+    /// Browse and restore checkpoints (session tree).
+    Tree,
+    /// Fork a new conversation from a checkpoint.
+    Fork(Option<String>),
+    /// List all stored artifacts for this agent.
+    Artifacts,
+    /// Trigger reflection to extract memory from conversation history.
+    Reflect(Option<String>),
+    /// Show or change the execution backend.
+    Backend(Option<String>),
 }
 
 fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
@@ -113,6 +125,8 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         .get(1)
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty());
+    // NOTE: prompt template expansion is handled separately in the REPL loop
+    // before this function is called, so templates won't appear here.
     match parts[0] {
         "help" | "?" | "menu" => Some(SlashCmd::Help),
         "exit" | "quit" | "q" => Some(SlashCmd::Exit),
@@ -160,6 +174,12 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         "debug-last" | "debug_last" => Some(SlashCmd::DebugLast),
         "copy" => Some(SlashCmd::Copy),
         "export" => Some(SlashCmd::Export(arg)),
+        "checkpoint" | "cp" => Some(SlashCmd::Checkpoint(arg)),
+        "tree" | "session-tree" => Some(SlashCmd::Tree),
+        "fork" => Some(SlashCmd::Fork(arg)),
+        "artifacts" => Some(SlashCmd::Artifacts),
+        "reflect" => Some(SlashCmd::Reflect(arg)),
+        "backend" => Some(SlashCmd::Backend(arg)),
         // Skill slash commands: /commit, /review, etc.
         other if skill_ids.iter().any(|id| id == other) => {
             Some(SlashCmd::RunSkill(other.to_string()))
@@ -640,6 +660,10 @@ pub struct Repl {
     cwd: std::path::PathBuf,
     /// Currently loaded skills
     skills: Arc<Mutex<Vec<Skill>>>,
+    /// Loaded prompt templates (for /template_name expansion)
+    prompts: Vec<cade_core::resources::PromptTemplate>,
+    /// Active execution backend (local / docker / ssh / readonly).
+    exec_backend: std::sync::Arc<dyn cade_agent::backends::ExecutionBackend>,
     /// Directory from which skills are discovered
     skills_dir: std::path::PathBuf,
     /// Completed background subagent results waiting to be shown
@@ -696,6 +720,12 @@ pub struct Repl {
     /// Images staged by `agent_turn_with_images` for the current turn.
     /// Consumed (and cleared) by the first `send_message*` call inside `agent_turn`.
     pending_turn_images: Vec<serde_json::Value>,
+    /// Cumulative count of file-write / edit / bash tool calls this session.
+    /// Used to trigger the one-time `working_set` reminder (C3).
+    write_tool_calls: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// Set to `true` once the working_set reminder has been injected so it
+    /// fires at most once per session.
+    working_set_notified: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl Repl {
@@ -715,6 +745,8 @@ impl Repl {
         hooks: cade_core::hooks::HookEngine,
         conversation_id: Option<String>,
         mcp: std::sync::Arc<cade_agent::mcp::McpManager>,
+        theme: cade_tui::ThemeColors,
+        exec_backend: std::sync::Arc<dyn cade_agent::backends::ExecutionBackend>,
     ) -> Self {
         let perm_mode = permissions.mode();
         let agent_name_clone = agent_name.clone();
@@ -736,6 +768,11 @@ impl Repl {
             reasoning_effort: Arc::new(Mutex::new(reasoning_effort.clone())),
             settings,
             session,
+            prompts: {
+                let agent_dir = dirs::home_dir().map(|h| h.join(".cade")).unwrap_or_default();
+                cade_core::resources::discover_prompts(&cwd, &agent_dir)
+            },
+            exec_backend,
             cwd,
             skills: Arc::new(Mutex::new(skills)),
             skills_dir,
@@ -753,11 +790,12 @@ impl Repl {
             session_input_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_stats: std::sync::Arc::new(std::sync::Mutex::new(SessionStats::new())),
-            app: Arc::new(Mutex::new(TuiApp::new(
+            app: Arc::new(Mutex::new(TuiApp::new_with_theme(
                 perm_mode,
                 agent_name_clone.clone(),
                 current_model_clone.clone(),
                 reasoning_effort.clone(),
+                theme,
             ))),
             queued_steering: Arc::new(Mutex::new(None)),
             queued_followup: Arc::new(Mutex::new(std::collections::VecDeque::new())),
@@ -765,6 +803,8 @@ impl Repl {
             last_assistant_text: Arc::new(Mutex::new(String::new())),
             last_modal_close_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             pending_turn_images: Vec::new(),
+            write_tool_calls: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            working_set_notified: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -1053,6 +1093,23 @@ impl Repl {
                 }
                 continue;
             }
+
+            // Prompt template expansion: /template_name [args...]
+            // Check before slash command dispatch so templates can be invoked naturally.
+            let input = if let Some(stripped) = input.strip_prefix('/') {
+                let parts: Vec<&str> = stripped.splitn(2, ' ').collect();
+                let name = parts[0];
+                let args_str = parts.get(1).copied().unwrap_or("");
+                if let Some(tmpl) = self.prompts.iter().find(|t| t.name == name) {
+                    let expanded = cade_core::resources::expand_template(&tmpl.content, args_str);
+                    self.tui_dim(format!("  Expanded /{name} template ({} chars)", expanded.len()));
+                    expanded
+                } else {
+                    input
+                }
+            } else {
+                input
+            };
 
             // Slash commands (include loaded skill ids so /commit etc. work)
             let skill_ids: Vec<String> = self
@@ -1592,6 +1649,55 @@ impl Repl {
                                 .to_string(),
                         ));
                         let _ = app.push(RenderLine::Blank);
+                        drop(app);
+
+                        // D2: Real server-side context accounting
+                        let conv_id = self.conversation_id();
+                        if let Ok(stats) = self
+                            .client
+                            .get_context_stats(&agent_id, conv_id.as_deref())
+                            .await
+                        {
+                            let t_inc = stats["turns_included"].as_u64().unwrap_or(0);
+                            let t_tot = stats["turns_total"].as_u64().unwrap_or(0);
+                            let t_omit = stats["turns_omitted"].as_u64().unwrap_or(0);
+                            let c_used = stats["chars_used"].as_u64().unwrap_or(0);
+                            let c_bud  = stats["message_budget_chars"].as_u64().unwrap_or(0);
+                            let consol = stats["needs_consolidation"].as_bool().unwrap_or(false);
+                            let pct_c = if c_bud > 0 {
+                                format!("{:.0}%", 100.0 * c_used as f64 / c_bud as f64)
+                            } else {
+                                "?".to_string()
+                            };
+
+                            let mut app = self.app.lock().expect("lock poisoned");
+                            let _ = app.push(RenderLine::InfoHeader(
+                                "  ◆ Server Context Accounting (live)".to_string(),
+                            ));
+                            let _ = app.push(RenderLine::Blank);
+
+                            let turns_line = if t_omit > 0 {
+                                format!(
+                                    "  Turns:   {t_inc} of {t_tot} included  \
+                                     ({t_omit} omitted — use conversation_search to recover)"
+                                )
+                            } else {
+                                format!("  Turns:   {t_inc} of {t_tot} included  (none omitted)")
+                            };
+                            let _ = app.push(RenderLine::DimMsg(turns_line));
+                            let _ = app.push(RenderLine::DimMsg(format!(
+                                "  History: {c_used} / {c_bud} chars used  ({pct_c})"
+                            )));
+                            let consol_str = if consol {
+                                "yes — Sleeptime will summarise dropped turns after 60 s idle"
+                            } else {
+                                "none pending"
+                            };
+                            let _ = app.push(RenderLine::DimMsg(format!(
+                                "  Consolidation: {consol_str}"
+                            )));
+                            let _ = app.push(RenderLine::Blank);
+                        }
                     }
                     SlashCmd::DebugLast => {
                         let conv = self.conversation_id();
@@ -1954,6 +2060,190 @@ impl Repl {
                         {
                             Ok(_) => self.tui_ok(format!("  ✓ Exported → {out_path}")),
                             Err(e) => self.tui_err(format!("  ✗ Export failed: {e}")),
+                        }
+                    }
+
+                    // -- Checkpoints
+
+                    SlashCmd::Checkpoint(label_arg) => {
+                        let agent_id = self.agent_id();
+                        let label    = label_arg.as_deref().unwrap_or("manual");
+                        self.tui_dim(format!("  Creating checkpoint '{label}'…"));
+
+                        // Git stash if dirty
+                        use cade_agent::tools::git_checkpoint;
+                        let git_cp = git_checkpoint::create_git_checkpoint(label, &self.cwd).await;
+                        let stash  = git_cp.as_ref().and_then(|g| g.stash_ref.as_deref()).map(String::from);
+                        let commit = git_cp.as_ref().and_then(|g| g.commit_hash.as_deref()).map(String::from);
+                        let conv_id = self.conversation_id();
+
+                        match self.client.create_checkpoint(
+                            &agent_id,
+                            Some(label),
+                            None,
+                            conv_id.as_deref(),
+                            stash.as_deref(),
+                            commit.as_deref(),
+                        ).await {
+                            Ok(cp_id) => {
+                                let mut msg = format!("  ✓ Checkpoint '{label}' — ID: {cp_id}");
+                                if stash.is_some() { msg.push_str("  (git stashed)"); }
+                                self.tui_ok(msg);
+                            }
+                            Err(e) => self.tui_err(format!("  ✗ Checkpoint failed: {e}")),
+                        }
+                    }
+
+                    SlashCmd::Tree => {
+                        let agent_id = self.agent_id();
+                        match self.client.list_checkpoints(&agent_id).await {
+                            Err(e) => self.tui_err(format!("  ✗ list_checkpoints: {e}")),
+                            Ok(checkpoints) if checkpoints.is_empty() => {
+                                self.tui_dim("  No checkpoints yet. Use /checkpoint [label] to create one.".to_string());
+                            }
+                            Ok(checkpoints) => {
+                                // Show the fullscreen tree browser
+                                let action = {
+                                    let mut app = self.app.lock().expect("lock poisoned");
+                                    cade_tui::show_session_tree(
+                                        &mut app.terminal,
+                                        &checkpoints,
+                                    )?
+                                };
+                                match action {
+                                    cade_tui::TreeAction::Cancel => {
+                                        self.tui_dim("  /tree cancelled".to_string());
+                                    }
+                                    cade_tui::TreeAction::Restore { checkpoint_id } => {
+                                        self.tui_dim(format!("  Restoring checkpoint {checkpoint_id}…"));
+                                        // Find git stash ref in the checkpoint list
+                                        let stash_ref = checkpoints.iter()
+                                            .find(|cp| cp["id"].as_str() == Some(&checkpoint_id))
+                                            .and_then(|cp| cp["git_stash_ref"].as_str())
+                                            .map(String::from);
+                                        if let Some(s) = stash_ref {
+                                            use cade_agent::tools::git_checkpoint;
+                                            match git_checkpoint::restore_git_checkpoint(&s, &self.cwd).await {
+                                                Ok(()) => self.tui_ok(format!("  ✓ Git stash applied: {s}")),
+                                                Err(e) => self.tui_err(format!("  ✗ Git restore: {e}")),
+                                            }
+                                        }
+                                        let _ = self.client.restore_checkpoint(&agent_id, &checkpoint_id).await;
+                                        self.tui_ok(format!("  ✓ Restored to checkpoint {checkpoint_id}"));
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    SlashCmd::Fork(label_arg) => {
+                        let agent_id = self.agent_id();
+                        let label    = label_arg.as_deref().unwrap_or("fork");
+                        self.tui_dim(format!("  Creating fork point '{label}'…"));
+                        use cade_agent::tools::git_checkpoint;
+                        let git_cp = git_checkpoint::create_git_checkpoint(label, &self.cwd).await;
+                        let stash  = git_cp.as_ref().and_then(|g| g.stash_ref.as_deref()).map(String::from);
+                        let commit = git_cp.as_ref().and_then(|g| g.commit_hash.as_deref()).map(String::from);
+
+                        // Create a checkpoint as the fork anchor
+                        match self.client.create_checkpoint(
+                            &agent_id, Some(label), Some("fork anchor"),
+                            self.conversation_id().as_deref(),
+                            stash.as_deref(), commit.as_deref(),
+                        ).await {
+                            Ok(cp_id) => {
+                                // Start a new conversation from this point
+                                match self.client.create_conversation(&agent_id, "").await {
+                                    Ok(conv) => {
+                                        let cid = conv["id"].as_str().unwrap_or("").to_string();
+                                        *self.conversation_id.lock().expect("lock poisoned") = Some(cid.clone());
+                                        if let Ok(mut s) = self.session.lock() {
+                                            let _ = s.set_conversation(Some(cid.clone()));
+                                        }
+                                        self.first_turn.store(true, std::sync::atomic::Ordering::SeqCst);
+                                        self.tui_ok(format!(
+                                            "  ✓ Forked from checkpoint {cp_id}  →  new conversation {}",
+                                            &cid[..cid.len().min(16)]
+                                        ));
+                                    }
+                                    Err(e) => self.tui_err(format!("  ✗ Create conversation: {e}")),
+                                }
+                            }
+                            Err(e) => self.tui_err(format!("  ✗ Fork failed: {e}")),
+                        }
+                    }
+
+                    SlashCmd::Backend(backend_arg) => {
+                        let current = self.exec_backend.name();
+                        match backend_arg {
+                            None => {
+                                self.tui_hdr(format!("  Execution backend: {current}"));
+                                self.tui_dim("  Available: local, docker, ssh, readonly".to_string());
+                                self.tui_dim("  Change: /backend local|docker|ssh|readonly".to_string());
+                                self.tui_dim("  Or set in ~/.cade/settings.json: { \"execution\": { \"backend\": \"docker\" } }".to_string());
+                            }
+                            Some(new_backend) => {
+                                use cade_core::settings::ExecutionBackendKind;
+                                
+                                match new_backend.parse::<ExecutionBackendKind>() {
+                                    Err(e) => self.tui_err(format!("  ✗ {e}")),
+                                    Ok(kind) => {
+                                        // Build a new backend from the current settings profile
+                                        // with the backend kind overridden
+                                        let profile = {
+                                            let s = self.settings.lock().expect("lock poisoned");
+                                            let mut p = s.execution_profile().clone();
+                                            p.backend = kind;
+                                            p
+                                        };
+                                        let new_b = cade_agent::backends::backend_from_profile(&profile);
+                                        let name = new_b.name();
+                                        self.exec_backend = std::sync::Arc::from(new_b);
+                                        self.tui_ok(format!("  ✓ Switched to {name} backend"));
+                                        if name == "docker" {
+                                            let docker_image = profile.docker_image.as_deref().unwrap_or("ubuntu:22.04");
+                                            self.tui_dim(format!("  Image: {docker_image}  (set execution.docker_image in settings to change)"));
+                                        } else if name == "ssh" {
+                                            let host = profile.ssh_host.as_deref().unwrap_or("(not configured)");
+                                            self.tui_dim(format!("  Host: {host}  (set execution.ssh_host in settings)"));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    SlashCmd::Reflect(focus_arg) => {
+                        let agent_id = self.agent_id();
+                        let focus = focus_arg.as_deref();
+                        let focus_msg = focus.map(|f| format!(" (focus: {f})")).unwrap_or_default();
+                        self.tui_dim(format!("  Reflecting on conversation history{focus_msg}…"));
+                        match self.client.trigger_reflect(&agent_id, focus).await {
+                            Ok(summary) => self.tui_ok(format!("  ✓ {summary}")),
+                            Err(e)      => self.tui_err(format!("  ✗ Reflect failed: {e}")),
+                        }
+                    }
+
+                    SlashCmd::Artifacts => {
+                        let agent_id = self.agent_id();
+                        match self.client.list_artifacts(&agent_id).await {
+                            Err(e) => self.tui_err(format!("  ✗ list_artifacts: {e}")),
+                            Ok(arts) if arts.is_empty() => {
+                                self.tui_dim("  No artifacts stored yet.".to_string());
+                            }
+                            Ok(arts) => {
+                                self.tui_hdr(format!("  Artifacts ({}):", arts.len()));
+                                for a in arts.iter().take(20) {
+                                    let id   = a["id"].as_str().unwrap_or("?");
+                                    let kind = a["kind"].as_str().unwrap_or("?");
+                                    let size = a["size_bytes"].as_i64().unwrap_or(0);
+                                    let ts   = a["created_at"].as_i64().unwrap_or(0);
+                                    let dt   = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+                                        .map(|d| d.format("%m-%d %H:%M").to_string())
+                                        .unwrap_or_default();
+                                    self.tui_dim(format!("    {kind:<12}  {size:>6}B  {dt}  {}", &id[..12.min(id.len())]));
+                                }
+                            }
                         }
                     }
 
@@ -2389,12 +2679,13 @@ impl Repl {
                             match client.create_agent(req).await {
                                 Ok(sub) => {
                                     let perm = PermissionManager::default();
+                                    let mcp_empty = std::sync::Arc::new(cade_agent::mcp::McpManager::empty());
                                     let result = run_headless(
                                         &client,
                                         &sub.id,
                                         &explore_prompt,
                                         &perm,
-                                        &cade_agent::mcp::McpManager::empty(),
+                                        &mcp_empty,
                                         &hooks,
                                     )
                                     .await;
@@ -2663,6 +2954,87 @@ impl Repl {
                                     Err(e) => self.tui_err(e.to_string()),
                                 }
                             }
+
+                            // /memory why <label> — show provenance chain
+                            "why" if parts.len() >= 2 => {
+                                let label = parts[1];
+                                let id = self.agent_id();
+                                self.tui_dim(format!("  Looking up provenance for '{label}'…"));
+                                match self.client.get_memory_why(&id, label).await {
+                                    Ok(summary) => {
+                                        self.tui_blank();
+                                        for line in summary.lines() {
+                                            self.tui_sys(format!("  {line}"));
+                                        }
+                                    }
+                                    Err(e) => self.tui_err(format!("  ✗ {e}")),
+                                }
+                            }
+
+                            // /memory typed [type] — filter blocks by memory_type
+                            "typed" => {
+                                let filter = parts.get(1).copied();
+                                let id = self.agent_id();
+                                match self.client.get_memory(&id).await {
+                                    Ok(blocks) => {
+                                        let label = filter.unwrap_or("all");
+                                        self.tui_hdr(format!("  Memory blocks (type={label}):"));
+                                        let mut shown = 0;
+                                        for b in &blocks {
+                                            // Only blocks with a type label match (server doesn't
+                                            // return memory_type yet; shown inline via describe)
+                                            shown += 1;
+                                            self.tui_dim(format!(
+                                                "  [{badge}]  {label}",
+                                                badge = b.tier.as_deref().unwrap_or("short"),
+                                                label = b.label,
+                                            ));
+                                        }
+                                        if shown == 0 { self.tui_dim("  (none)".to_string()); }
+                                    }
+                                    Err(e) => self.tui_err(e.to_string()),
+                                }
+                            }
+
+                            // /memory audit — find stale / low-confidence blocks
+                            "audit" => {
+                                let id = self.agent_id();
+                                match self.client.get_memory(&id).await {
+                                    Ok(blocks) => {
+                                        let empty_blocks: Vec<_> = blocks.iter()
+                                            .filter(|b| b.value.trim().is_empty())
+                                            .collect();
+                                        let long_blocks: Vec<_> = blocks.iter()
+                                            .filter(|b| b.tier.as_deref() == Some("long"))
+                                            .collect();
+                                        self.tui_hdr(format!("  Memory audit — {} total blocks:", blocks.len()));
+                                        if !empty_blocks.is_empty() {
+                                            self.tui_dim(format!("  ⚠  {} empty block(s): {}", empty_blocks.len(),
+                                                empty_blocks.iter().map(|b| b.label.as_str()).collect::<Vec<_>>().join(", ")));
+                                        }
+                                        if !long_blocks.is_empty() {
+                                            self.tui_dim(format!("  ○  {} archived block(s): {}", long_blocks.len(),
+                                                long_blocks.iter().map(|b| b.label.as_str()).collect::<Vec<_>>().join(", ")));
+                                        }
+                                        if empty_blocks.is_empty() && long_blocks.is_empty() {
+                                            self.tui_ok("  ✓ All blocks active and populated.".to_string());
+                                        }
+                                        self.tui_dim("  Use /reflect to trigger automatic extraction from conversation.".to_string());
+                                    }
+                                    Err(e) => self.tui_err(e.to_string()),
+                                }
+                            }
+
+                            // /memory suggest — run lightweight reflection
+                            "suggest" => {
+                                let id = self.agent_id();
+                                self.tui_dim("  Triggering reflection…".to_string());
+                                match self.client.trigger_reflect(&id, None).await {
+                                    Ok(summary) => self.tui_ok(format!("  {summary}")),
+                                    Err(e)      => self.tui_err(format!("  ✗ {e}")),
+                                }
+                            }
+
                             // /memory (list)
                             _ => match self.client.get_memory(&self.agent_id()).await {
                                 Ok(blocks) if blocks.is_empty() => {
@@ -3941,6 +4313,21 @@ impl Repl {
         self.dispatch_tool_calls(stdout, messages, input, Some(bar_text), false)
             .await?;
 
+        // C3: Once per session, after enough write activity, check whether the
+        // agent has been updating its working_set block.  If it's still empty
+        // inject a single ephemeral reminder so the model fills it in — this
+        // ensures the block survives context rotation during long coding sessions.
+        const WORKING_SET_WRITE_THRESHOLD: u32 = 8;
+        if self.write_tool_calls.load(Ordering::SeqCst) >= WORKING_SET_WRITE_THRESHOLD
+            && !self.working_set_notified.load(Ordering::SeqCst)
+        {
+            self.working_set_notified
+                .store(true, Ordering::SeqCst);
+            if let Err(e) = self.inject_working_set_reminder(stdout).await {
+                tracing::debug!("working_set reminder failed: {e}");
+            }
+        }
+
         // Blank line after every agent turn for visual block separation.
         let _ = self.app.lock().expect("lock poisoned").push(RenderLine::Blank);
 
@@ -4444,6 +4831,20 @@ impl Repl {
         let tool_calls: Vec<(String, String, serde_json::Value)> =
             messages.iter().filter_map(|m| m.as_tool_call()).collect();
 
+        // C3: Track file-write/edit/bash tool calls for the working_set reminder.
+        const WRITE_TOOL_NAMES: &[&str] = &[
+            "bash", "write_file", "edit_file", "apply_patch",
+            "WriteFileGemini", "Replace", "RunShellCommand",
+        ];
+        let wc = tool_calls
+            .iter()
+            .filter(|(_, name, _)| WRITE_TOOL_NAMES.contains(&name.as_str()))
+            .count() as u32;
+        if wc > 0 {
+            self.write_tool_calls
+                .fetch_add(wc, std::sync::atomic::Ordering::SeqCst);
+        }
+
         if tool_calls.is_empty() {
             // No tool calls → agent has stopped. Collect final assistant text.
             let assistant_msg: String = messages
@@ -4642,6 +5043,13 @@ impl Repl {
         );
 
         // Execute read-only tools in parallel.
+        let runtime = std::sync::Arc::new(cade_agent::tools::ToolRuntime::new(
+            std::sync::Arc::new(self.client.clone()),
+            std::sync::Arc::clone(&self.mcp),
+            self.agent_id(),
+            self.cwd.clone(),
+        ).with_conversation(self.conversation_id()).with_backend(std::sync::Arc::clone(&self.exec_backend)));
+
         if !read_indices.is_empty() {
             let mut handles = Vec::new();
             for &i in &read_indices {
@@ -4654,6 +5062,7 @@ impl Repl {
                 let hooks = self.hooks.clone();
                 let pr_c = pr.clone();
                 let pa_c = pa.clone();
+                let _rt_c = std::sync::Arc::clone(&runtime);
 
                 handles.push(tokio::spawn(async move {
                     let r = Self::run_tool_inner(
@@ -4804,12 +5213,6 @@ impl Repl {
                     is_error: false,
                 }))
             }
-            "update_memory" => Some(self.handle_update_memory(call_id, args).await),
-            "memory_apply_patch" => Some(self.handle_memory_apply_patch(call_id, args).await),
-            "load_skill" => Some(self.handle_load_skill(call_id, args).await),
-            "install_skill" => Some(self.handle_install_skill(call_id, args).await),
-            "run_skill_script" => Some(self.handle_run_skill_script(call_id, args).await),
-            "load_skill_ref" => Some(self.handle_load_skill_ref(call_id, args).await),
             "run_subagent" => Some(self.handle_run_subagent(call_id, args).await),
             "ask_user_question" => Some(self.handle_ask_user_question(call_id, args).await),
             _ => None,
@@ -5194,6 +5597,42 @@ impl Repl {
         }
         if tool_name == "update_memory" {
             return self.handle_update_memory(call_id, args).await;
+        }
+        if tool_name == "archival_memory_insert" {
+            let res = cade_agent::tools::memory::ArchivalMemoryInsertTool::run(&self.client, &self.agent_id.lock().unwrap(), args).await;
+            return Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output: res.unwrap_or_else(|e| format!("Error: {e}")),
+                is_error: false, // Don't crash agent loop on error
+            });
+        }
+        if tool_name == "archival_memory_search" {
+            let res = cade_agent::tools::memory::ArchivalMemorySearchTool::run(&self.client, &self.agent_id.lock().unwrap(), args).await;
+            return Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output: res.unwrap_or_else(|e| format!("Error: {e}")),
+                is_error: false,
+            });
+        }
+        if tool_name == "conversation_search" {
+            let res = cade_agent::tools::memory::ConversationSearchTool::run(&self.client, &self.agent_id.lock().unwrap(), args).await;
+            return Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output: res.unwrap_or_else(|e| format!("Error: {e}")),
+                is_error: false,
+            });
+        }
+        if tool_name == "search_memory" {
+            let res = cade_agent::tools::memory::SearchMemoryTool::run(&self.client, &self.agent_id.lock().unwrap(), args).await;
+            return Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                output: res.unwrap_or_else(|e| format!("Error: {e}")),
+                is_error: false,
+            });
         }
         if tool_name == "memory_apply_patch" {
             return self.handle_memory_apply_patch(call_id, args).await;
@@ -5682,6 +6121,89 @@ impl Repl {
         }
     }
 
+    // ── Memory-block size helpers ─────────────────────────────────────────────
+
+    /// Trim `value` to at most `limit` chars, keeping the newest (tail) content
+    /// and prepending a truncation note so the model sees what happened.
+    fn auto_trim_to_limit(value: &str, limit: usize) -> String {
+        let count = value.chars().count();
+        if count <= limit {
+            return value.to_string();
+        }
+        const NOTE: &str = "[...older content auto-trimmed to fit memory limit...]\n";
+        let note_len = NOTE.chars().count();
+        let keep = limit.saturating_sub(note_len);
+        if keep == 0 {
+            return value.chars().take(limit).collect();
+        }
+        let tail: String = value.chars().skip(count.saturating_sub(keep)).collect();
+        format!("{NOTE}{tail}")
+    }
+
+    /// Extract the numeric upper limit from an "exceeds character limit (A > B)"
+    /// error string produced by `upsert_memory_block`.
+    fn parse_limit_from_memory_error(error: &str) -> Option<usize> {
+        let open  = error.find('(')?;
+        let close = error[open..].find(')')? + open;
+        let inner = &error[open + 1..close]; // "A > B"
+        inner.split('>').nth(1)?.trim().parse().ok()
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// C3: Inject a one-time ephemeral reminder prompting the agent to fill its
+    /// `working_set` memory block after significant file-write activity.
+    ///
+    /// Only fires when the block is actually empty so the model is not nagged
+    /// when it has already been diligently updating its own memory.
+    async fn inject_working_set_reminder(
+        &mut self,
+        stdout: &mut io::Stdout,
+    ) -> Result<()> {
+        let agent_id = self.agent_id();
+
+        // Fetch the current working_set value — one async call, performed once
+        // per session at most.
+        let is_empty = self
+            .client
+            .get_memory(&agent_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|b| b.label == "working_set")
+            .map(|b| b.value.trim().is_empty())
+            .unwrap_or(true);
+
+        if !is_empty {
+            // Already populated — no reminder needed.
+            return Ok(());
+        }
+
+        let reminder = "[System: You have made several file changes this session. \
+            Your `working_set` memory block is currently empty. \
+            Please call update_memory now with label='working_set' and a value that records: \
+            (1) the current task / goal, \
+            (2) files you have modified, \
+            (3) your immediate next steps. \
+            Keep it under 200 words. This block persists when older context is dropped.]";
+
+        tracing::debug!(
+            "Injecting working_set reminder (write_tool_calls={})",
+            self.write_tool_calls.load(std::sync::atomic::Ordering::SeqCst)
+        );
+
+        // Send as an ephemeral user message so it is not stored in the
+        // conversation history but the agent still sees it and can respond
+        // with an update_memory call.
+        let msgs = self
+            .stream_turn(stdout, reminder, false, "", "", true, None, None)
+            .await?;
+
+        // Dispatch any tool calls the model makes in response (usually update_memory).
+        // reprompt_done=true prevents re-entry loops.
+        Box::pin(self.dispatch_tool_calls(stdout, msgs, "", None, true)).await
+    }
+
     /// Handle the agent's `update_memory` tool call natively.
     async fn handle_update_memory(
         &self,
@@ -5749,12 +6271,55 @@ impl Repl {
                     is_error: false,
                 })
             }
-            Err(e) => Ok(cade_agent::tools::ToolResult {
-                tool_call_id: call_id.to_string(),
-                tool_name: "update_memory".to_string(),
-                output: format!("Failed to update '{label}': {e}"),
-                is_error: true,
-            }),
+            Err(e) => {
+                let err_str = e.to_string();
+                // D1: when the block is over its char limit, auto-trim to fit
+                // rather than returning an opaque error the model often ignores.
+                if err_str.contains("exceeds character limit") {
+                    let limit = Self::parse_limit_from_memory_error(&err_str)
+                        .unwrap_or(2_000);
+                    let trimmed = Self::auto_trim_to_limit(&final_value, limit);
+                    let original_len = final_value.chars().count();
+                    let trimmed_len  = trimmed.chars().count();
+                    match self
+                        .client
+                        .upsert_memory(&agent_id, &label, &trimmed, description)
+                        .await
+                    {
+                        Ok(_) => {
+                            tracing::info!(
+                                "Agent updated memory [{label}] (auto-trimmed {original_len}→{trimmed_len} chars)"
+                            );
+                            Ok(cade_agent::tools::ToolResult {
+                                tool_call_id: call_id.to_string(),
+                                tool_name: "update_memory".to_string(),
+                                output: format!(
+                                    "Memory block '{label}' updated (auto-trimmed from \
+                                     {original_len} to {trimmed_len} chars to fit the \
+                                     {limit}-char limit; oldest content was removed). \
+                                     Consider summarising this block to reclaim space."
+                                ),
+                                is_error: false,
+                            })
+                        }
+                        Err(e2) => Ok(cade_agent::tools::ToolResult {
+                            tool_call_id: call_id.to_string(),
+                            tool_name: "update_memory".to_string(),
+                            output: format!(
+                                "Failed to update '{label}' even after auto-trim: {e2}"
+                            ),
+                            is_error: true,
+                        }),
+                    }
+                } else {
+                    Ok(cade_agent::tools::ToolResult {
+                        tool_call_id: call_id.to_string(),
+                        tool_name: "update_memory".to_string(),
+                        output: format!("Failed to update '{label}': {err_str}"),
+                        is_error: true,
+                    })
+                }
+            }
         }
     }
 
@@ -7495,13 +8060,18 @@ impl Repl {
                 // Write sub-agent result summary into parent agent's short-term memory.
                 {
                     let label = format!("subagent:{}:{}", bg_st_label, bg_task_id);
-                    let summary_value = if result.chars().count() > 2000 {
+                    let summary_value = if result.chars().count() > 1500 {
+                        let _ = bg_client.insert_archival_memory(&bg_parent_id, &result, &[
+                            "subagent".to_string(),
+                            bg_task_id.clone()
+                        ]).await;
+                        
                         let end = result
                             .char_indices()
-                            .nth(2000)
+                            .nth(500)
                             .map(|(i, _)| i)
                             .unwrap_or(result.len());
-                        format!("{}…", &result[..end])
+                        format!("Subagent completed. Full output is stored in Archival Memory. To view it, use archival_memory_search with query 'subagent {}'. Summary preview: {}…", bg_task_id, &result[..end])
                     } else {
                         result.clone()
                     };
@@ -7547,16 +8117,21 @@ impl Repl {
             }
 
             // Write sub-agent result summary into parent agent's short-term memory.
-            // Cap at 2000 chars so it doesn't bloat the parent's memory budget.
+            // Store full output in Archival Memory and give parent a summary pointer.
             {
                 let label = format!("subagent:{}:{}", subagent_type, task_id_c);
-                let summary_value = if output.chars().count() > 2000 {
+                let summary_value = if output.chars().count() > 1500 {
+                    let _ = self.client.insert_archival_memory(&parent_agent_id, &output, &[
+                        "subagent".to_string(),
+                        task_id_c.clone()
+                    ]).await;
+                    
                     let end = output
                         .char_indices()
-                        .nth(2000)
+                        .nth(500)
                         .map(|(i, _)| i)
                         .unwrap_or(output.len());
-                    format!("{}…", &output[..end])
+                    format!("Subagent completed. Full output is stored in Archival Memory. To view it, use archival_memory_search with query 'subagent {}'. Summary preview: {}…", task_id_c, &output[..end])
                 } else {
                     output.clone()
                 };

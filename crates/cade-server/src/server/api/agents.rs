@@ -98,23 +98,20 @@ pub async fn create_agent(
 
     sqlite::create_agent(&state.db, &row).map_err(|e| server_err(e.to_string()))?;
 
-    // Auto-wire: attach tools from the request body first; fall back to wiring
-    // all registered tools so a freshly-created agent is never "unwired" and
-    // does not fall back to receiving the full tool list on every turn.
-    let tool_ids_to_wire: Vec<String> = if !body.tool_ids.is_empty() {
-        body.tool_ids.clone()
-    } else {
-        sqlite::list_tools(&state.db)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|t| t.id)
-            .collect()
-    };
-    if !tool_ids_to_wire.is_empty() {
-        let _ = sqlite::attach_tools_to_agent(&state.db, &id, &tool_ids_to_wire);
+    // Tool wiring: attach only the tools explicitly provided by the client.
+    //
+    // The CLI calls register_and_attach_filtered() immediately after this
+    // endpoint and passes exactly the right toolset-specific IDs.
+    //
+    // The old "fall back to all registered tools" behaviour caused every new
+    // agent to inherit every tool ever registered on the server — including
+    // stale MCP tools from past sessions — inflating the tool-schema section
+    // of every prompt with schemas for tools that may not even be running.
+    if !body.tool_ids.is_empty() {
+        let _ = sqlite::attach_tools_to_agent(&state.db, &id, &body.tool_ids);
         tracing::info!(
-            "Auto-wired {} tools to new agent {id}",
-            tool_ids_to_wire.len()
+            "Wired {} tool(s) to new agent {id}",
+            body.tool_ids.len()
         );
     }
 
@@ -593,4 +590,40 @@ pub async fn search_memory_handler(
         })
         .collect();
     Ok(Json(json!({ "blocks": blocks, "query": query })))
+}
+
+#[derive(serde::Deserialize)]
+pub struct InsertArchivalReq {
+    pub content: String,
+    pub tags: Vec<String>,
+}
+
+/// POST /v1/agents/:id/archival
+pub async fn insert_archival_memory_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(payload): Json<InsertArchivalReq>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let id = sqlite::insert_archival_memory(&state.db, &agent_id, &payload.content, &payload.tags)
+        .map_err(|e| server_err(e.to_string()))?;
+    Ok(Json(json!({ "id": id, "status": "success" })))
+}
+
+/// GET /v1/agents/:id/archival/search?q=<query>&limit=<limit>
+pub async fn search_archival_memory_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let query = params.get("q").map(String::as_str).unwrap_or("");
+    let limit = params.get("limit").and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
+    
+    if query.is_empty() {
+        return Ok(Json(json!({ "results": [] })));
+    }
+
+    let records = sqlite::search_archival_memory(&state.db, &agent_id, query, limit)
+        .map_err(|e| server_err(e.to_string()))?;
+    
+    Ok(Json(json!({ "results": records })))
 }

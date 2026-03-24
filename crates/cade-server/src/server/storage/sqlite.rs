@@ -257,6 +257,237 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         }
     }
 
+    // Migration 9: Archival Memory
+    let has_archival: bool = conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='archival_memory'",
+        [],
+        |r| r.get::<_, i64>(0),
+    ).unwrap_or(0) > 0;
+
+    if !has_archival {
+        tracing::info!("Running migration: implement FTS5 Archival Memory table");
+        let res = conn.execute_batch(r#"
+            BEGIN;
+            CREATE VIRTUAL TABLE archival_memory USING fts5(
+                id UNINDEXED,
+                agent_id UNINDEXED,
+                content,
+                tags,
+                created_at UNINDEXED
+            );
+            COMMIT;
+        "#);
+        if let Err(e) = res {
+            tracing::error!("FTS5 archival_memory migration failed: {}", e);
+        } else {
+            tracing::info!("Migration complete: FTS5 archival_memory implemented");
+        }
+    }
+
+    // Migration 10: Conversation branching + checkpoints
+    {
+        let has_branch_id: bool = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='branch_id'",
+            [], |r| r.get::<_, i64>(0),
+        ).unwrap_or(0) > 0;
+        if !has_branch_id {
+            tracing::info!("Migration 10a: adding branch_id / parent_id to messages");
+            let _ = conn.execute_batch(
+                "ALTER TABLE messages ADD COLUMN parent_id TEXT;
+                 ALTER TABLE messages ADD COLUMN branch_id TEXT NOT NULL DEFAULT 'main';
+                 CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(agent_id, branch_id);"
+            );
+        }
+        let has_checkpoints: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='checkpoints'",
+            [], |r| r.get::<_, i64>(0),
+        ).unwrap_or(0) > 0;
+        if !has_checkpoints {
+            tracing::info!("Migration 10b: creating checkpoints table");
+            let _ = conn.execute_batch(r#"
+                CREATE TABLE IF NOT EXISTS checkpoints (
+                    id              TEXT PRIMARY KEY,
+                    agent_id        TEXT NOT NULL,
+                    conversation_id TEXT,
+                    branch_id       TEXT NOT NULL DEFAULT 'main',
+                    label           TEXT,
+                    description     TEXT,
+                    created_at      INTEGER NOT NULL,
+                    git_stash_ref   TEXT,
+                    git_commit_hash TEXT,
+                    parent_id       TEXT,
+                    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_checkpoints_agent  ON checkpoints(agent_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_checkpoints_parent ON checkpoints(parent_id);
+            "#);
+        }
+    }
+
+    // Migration 11: Artifact store
+    {
+        let has_artifacts: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='artifacts'",
+            [], |r| r.get::<_, i64>(0),
+        ).unwrap_or(0) > 0;
+        if !has_artifacts {
+            tracing::info!("Migration 11: creating artifacts table");
+            let _ = conn.execute_batch(r#"
+                CREATE TABLE IF NOT EXISTS artifacts (
+                    id           TEXT PRIMARY KEY,
+                    agent_id     TEXT NOT NULL,
+                    run_id       TEXT,
+                    tool_call_id TEXT,
+                    kind         TEXT NOT NULL,
+                    content_type TEXT NOT NULL,
+                    data_text    TEXT,
+                    data_blob    BLOB,
+                    metadata_json TEXT NOT NULL DEFAULT '{}',
+                    size_bytes   INTEGER NOT NULL DEFAULT 0,
+                    created_at   INTEGER NOT NULL,
+                    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_artifacts_agent ON artifacts(agent_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_artifacts_run   ON artifacts(run_id);
+                CREATE INDEX IF NOT EXISTS idx_artifacts_kind  ON artifacts(kind);
+            "#);
+        }
+    }
+
+    // Migration 12: Tool execution log
+    {
+        let has_te: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tool_executions'",
+            [], |r| r.get::<_, i64>(0),
+        ).unwrap_or(0) > 0;
+        if !has_te {
+            tracing::info!("Migration 12: creating tool_executions table");
+            let _ = conn.execute_batch(r#"
+                CREATE TABLE IF NOT EXISTS tool_executions (
+                    id              TEXT PRIMARY KEY,
+                    run_id          TEXT,
+                    agent_id        TEXT NOT NULL,
+                    conversation_id TEXT,
+                    checkpoint_id   TEXT,
+                    tool_name       TEXT NOT NULL,
+                    arguments_json  TEXT NOT NULL,
+                    output          TEXT,
+                    is_error        INTEGER NOT NULL DEFAULT 0,
+                    duration_ms     INTEGER,
+                    created_at      INTEGER NOT NULL,
+                    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_tool_exec_agent      ON tool_executions(agent_id, created_at DESC);
+                CREATE INDEX IF NOT EXISTS idx_tool_exec_run        ON tool_executions(run_id);
+                CREATE INDEX IF NOT EXISTS idx_tool_exec_checkpoint ON tool_executions(checkpoint_id);
+            "#);
+        }
+    }
+
+    // Migration 13: Eval harness
+    {
+        let has_eval: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='eval_tasks'",
+            [], |r| r.get::<_, i64>(0),
+        ).unwrap_or(0) > 0;
+        if !has_eval {
+            tracing::info!("Migration 13: creating eval tables");
+            let _ = conn.execute_batch(r#"
+                CREATE TABLE IF NOT EXISTS eval_tasks (
+                    id            TEXT PRIMARY KEY,
+                    name          TEXT NOT NULL,
+                    description   TEXT,
+                    prompt        TEXT NOT NULL,
+                    expected_json TEXT,
+                    tags_json     TEXT NOT NULL DEFAULT '[]',
+                    created_at    INTEGER NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS eval_runs (
+                    id            TEXT PRIMARY KEY,
+                    task_id       TEXT NOT NULL,
+                    agent_id      TEXT,
+                    model         TEXT,
+                    status        TEXT NOT NULL DEFAULT 'pending',
+                    score         REAL,
+                    pass_criteria TEXT,
+                    result_json   TEXT,
+                    tool_calls_n  INTEGER NOT NULL DEFAULT 0,
+                    tokens_in     INTEGER NOT NULL DEFAULT 0,
+                    tokens_out    INTEGER NOT NULL DEFAULT 0,
+                    duration_ms   INTEGER,
+                    created_at    INTEGER NOT NULL,
+                    completed_at  INTEGER,
+                    FOREIGN KEY (task_id) REFERENCES eval_tasks(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_eval_runs_task  ON eval_runs(task_id);
+                CREATE INDEX IF NOT EXISTS idx_eval_runs_model ON eval_runs(model);
+            "#);
+        }
+    }
+
+    // Migration 14: Typed memory + provenance
+    {
+        let has_type: bool = conn.query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('shared_memory_blocks') WHERE name='memory_type'",
+            [], |r| r.get::<_, i64>(0),
+        ).unwrap_or(0) > 0;
+        if !has_type {
+            tracing::info!("Migration 14: adding memory_type and provenance fields");
+            let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'generic'", []);
+            let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0", []);
+            let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN source_msg_id TEXT", []);
+            let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN source_te_id TEXT", []);
+            let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'", []);
+            let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN expires_at INTEGER", []);
+        }
+        let has_evidence: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_evidence'",
+            [], |r| r.get::<_, i64>(0),
+        ).unwrap_or(0) > 0;
+        if !has_evidence {
+            let _ = conn.execute_batch(r#"
+                CREATE TABLE IF NOT EXISTS memory_evidence (
+                    id         TEXT PRIMARY KEY,
+                    block_id   TEXT NOT NULL,
+                    kind       TEXT NOT NULL,
+                    reference  TEXT NOT NULL,
+                    excerpt    TEXT,
+                    confidence REAL NOT NULL DEFAULT 1.0,
+                    created_at INTEGER NOT NULL,
+                    FOREIGN KEY (block_id) REFERENCES shared_memory_blocks(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_evidence_block ON memory_evidence(block_id);
+            "#);
+        }
+    }
+
+    // Migration 15: Reflection log
+    {
+        let has_reflection: bool = conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='reflection_log'",
+            [], |r| r.get::<_, i64>(0),
+        ).unwrap_or(0) > 0;
+        if !has_reflection {
+            tracing::info!("Migration 15: creating reflection_log table");
+            let _ = conn.execute_batch(r#"
+                CREATE TABLE IF NOT EXISTS reflection_log (
+                    id             TEXT PRIMARY KEY,
+                    agent_id       TEXT NOT NULL,
+                    trigger        TEXT NOT NULL,
+                    model          TEXT,
+                    blocks_created INTEGER NOT NULL DEFAULT 0,
+                    blocks_updated INTEGER NOT NULL DEFAULT 0,
+                    blocks_deleted INTEGER NOT NULL DEFAULT 0,
+                    summary        TEXT,
+                    duration_ms    INTEGER,
+                    created_at     INTEGER NOT NULL,
+                    FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+                );
+                CREATE INDEX IF NOT EXISTS idx_reflection_log_agent ON reflection_log(agent_id, created_at DESC);
+            "#);
+        }
+    }
+
     Ok(())
 }
 
@@ -363,6 +594,14 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             INSERT INTO messages_fts(messages_fts, rowid, content) VALUES('delete', old.rowid, old.content);
             INSERT INTO messages_fts(rowid, content) VALUES (new.rowid, new.content);
         END;
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS archival_memory USING fts5(
+            id UNINDEXED,
+            agent_id UNINDEXED,
+            content,
+            tags,
+            created_at UNINDEXED
+        );
 
         CREATE TABLE IF NOT EXISTS tools (
             id          TEXT PRIMARY KEY,
@@ -1430,6 +1669,77 @@ pub fn search_memory(
     Ok(results)
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ArchivalRecord {
+    pub id: String,
+    pub content: String,
+    pub tags: Vec<String>,
+    pub created_at: i64,
+}
+
+/// Insert a new large data block into Archival Memory.
+pub fn insert_archival_memory(
+    db: &Db,
+    agent_id: &str,
+    content: &str,
+    tags: &[String],
+) -> Result<String> {
+    let conn = db.lock().expect("db lock poisoned");
+    let id = uuid::Uuid::new_v4().to_string();
+    let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
+    
+    conn.execute(
+        "INSERT INTO archival_memory (id, agent_id, content, tags, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![id, agent_id, content, tags_json, now_ts()],
+    )?;
+    Ok(id)
+}
+
+/// Search Archival Memory using FTS5 (BM25 ranking).
+pub fn search_archival_memory(
+    db: &Db,
+    agent_id: &str,
+    query: &str,
+    limit: usize,
+) -> Result<Vec<ArchivalRecord>> {
+    let conn = db.lock().expect("db lock poisoned");
+    
+    // FTS5 requires queries to be properly quoted to avoid syntax errors
+    let fts_query = format!("\"{}\"", query.replace('\"', "\"\""));
+    
+    let mut stmt = conn.prepare(
+        "SELECT id, content, tags, created_at
+         FROM archival_memory
+         WHERE archival_memory MATCH ?2 AND agent_id = ?1
+         ORDER BY bm25(archival_memory)
+         LIMIT ?3"
+    )?;
+    
+    let rows = stmt.query_map(params![agent_id, fts_query, limit], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })?;
+    
+    let mut results = Vec::new();
+    for row in rows.filter_map(|r| r.ok()) {
+        let (id, content, tags_str, created_at) = row;
+        let tags = serde_json::from_str(&tags_str).unwrap_or_default();
+        results.push(ArchivalRecord {
+            id,
+            content,
+            tags,
+            created_at,
+        });
+    }
+    
+    Ok(results)
+}
+
 pub fn pending_tool_results(
     db: &Db,
     agent_id: &str,
@@ -1580,6 +1890,157 @@ pub fn delete_provider(db: &Db, name: &str) -> Result<bool> {
     Ok(n > 0)
 }
 
+// region:    --- Typed memory + provenance + reflection helpers
+
+/// Upsert a memory block with typed metadata (memory_type, confidence).
+/// Falls back to `upsert_memory_block` for the core logic, then updates
+/// the extra columns if the migration has been applied.
+#[allow(clippy::too_many_arguments)]
+pub fn upsert_memory_block_typed(
+    db: &Db,
+    agent_id:    &str,
+    label:       &str,
+    value:       &str,
+    description: Option<&str>,
+    max_chars:   Option<usize>,
+    memory_type: Option<&str>,
+    confidence:  Option<f64>,
+) -> Result<()> {
+    // Core upsert first
+    upsert_memory_block(db, agent_id, label, value, description, max_chars)?;
+
+    // Update typed columns (safe — ALTER TABLE already ran in migration 14)
+    if memory_type.is_some() || confidence.is_some() {
+        let conn = db.lock().expect("db lock poisoned");
+        if let Some(mt) = memory_type {
+            let _ = conn.execute(
+                "UPDATE shared_memory_blocks SET memory_type = ?1 WHERE label = ?2",
+                params![mt, label],
+            );
+        }
+        if let Some(c) = confidence {
+            let _ = conn.execute(
+                "UPDATE shared_memory_blocks SET confidence = ?1 WHERE label = ?2",
+                params![c, label],
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Insert a memory evidence entry for a block.
+pub fn insert_memory_evidence(
+    db:        &Db,
+    agent_id:  &str,
+    label:     &str,
+    kind:      &str,
+    reference: &str,
+    excerpt:   Option<&str>,
+    confidence: f64,
+) -> Result<String> {
+    let conn = db.lock().expect("db lock poisoned");
+
+    // Find the block_id
+    let block_id: Option<String> = conn.query_row(
+        "SELECT b.id FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.label = ?2 LIMIT 1",
+        params![agent_id, label],
+        |r| r.get(0),
+    ).optional()?;
+
+    let Some(block_id) = block_id else {
+        return Err(crate::server::Error::custom(format!(
+            "Memory block '{label}' not found for agent {agent_id}"
+        )));
+    };
+
+    let id = format!("ev-{}", uuid::Uuid::new_v4());
+    conn.execute(
+        "INSERT OR IGNORE INTO memory_evidence (id, block_id, kind, reference, excerpt, confidence, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![id, block_id, kind, reference, excerpt, confidence, now_ts()],
+    )?;
+    Ok(id)
+}
+
+/// List evidence entries for a memory block.
+pub fn list_memory_evidence(
+    db: &Db,
+    agent_id: &str,
+    label: &str,
+) -> Result<Vec<(String, String, String, Option<String>, f64, i64)>> {
+    let conn = db.lock().expect("db lock poisoned");
+    let mut stmt = conn.prepare(
+        "SELECT e.id, e.kind, e.reference, e.excerpt, e.confidence, e.created_at
+         FROM memory_evidence e
+         JOIN shared_memory_blocks b ON b.id = e.block_id
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.label = ?2
+         ORDER BY e.created_at DESC LIMIT 20"
+    )?;
+    let rows = stmt.query_map(params![agent_id, label], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, Option<String>>(3)?,
+            r.get::<_, f64>(4)?,
+            r.get::<_, i64>(5)?,
+        ))
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+/// Insert a reflection log entry.
+#[allow(clippy::too_many_arguments)]
+pub fn insert_reflection_log(
+    db:             &Db,
+    id:             &str,
+    agent_id:       &str,
+    trigger:        &str,
+    blocks_created: usize,
+    blocks_updated: usize,
+    summary:        &str,
+    duration_ms:    u128,
+) -> Result<()> {
+    let conn = db.lock().expect("db lock poisoned");
+    conn.execute(
+        "INSERT OR IGNORE INTO reflection_log
+         (id, agent_id, trigger, blocks_created, blocks_updated, summary, duration_ms, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+        params![
+            id, agent_id, trigger,
+            blocks_created as i64, blocks_updated as i64,
+            summary, duration_ms as i64, now_ts()
+        ],
+    )?;
+    Ok(())
+}
+
+/// List reflection log entries for an agent.
+pub fn list_reflection_log(db: &Db, agent_id: &str) -> Result<Vec<serde_json::Value>> {
+    let conn = db.lock().expect("db lock poisoned");
+    let mut stmt = conn.prepare(
+        "SELECT id, trigger, blocks_created, blocks_updated, summary, duration_ms, created_at
+         FROM reflection_log WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 50"
+    )?;
+    let rows = stmt.query_map(params![agent_id], |r| {
+        Ok(serde_json::json!({
+            "id":             r.get::<_, String>(0)?,
+            "trigger":        r.get::<_, String>(1)?,
+            "blocks_created": r.get::<_, i64>(2)?,
+            "blocks_updated": r.get::<_, i64>(3)?,
+            "summary":        r.get::<_, Option<String>>(4)?,
+            "duration_ms":    r.get::<_, Option<i64>>(5)?,
+            "created_at":     r.get::<_, i64>(6)?,
+        }))
+    })?;
+    Ok(rows.filter_map(|r| r.ok()).collect())
+}
+
+// endregion: --- Typed memory + provenance + reflection helpers
+
 // region:    --- Tests
 
 #[cfg(test)]
@@ -1590,17 +2051,17 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    fn setup_mem_db() -> Db {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        apply_schema(&conn).unwrap();
-        run_migrations(&conn).unwrap();
-        Arc::new(Mutex::new(conn))
+    fn setup_mem_db() -> Result<Db> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        apply_schema(&conn)?;
+        run_migrations(&conn)?;
+        Ok(Arc::new(Mutex::new(conn)))
     }
 
     #[test]
-    fn test_sqlite_shared_memory() {
-        let db = setup_mem_db();
+    fn test_sqlite_shared_memory() -> Result<()> {
+        let db = setup_mem_db()?;
         let agent1 = "agent-1";
         let agent2 = "agent-2";
 
@@ -1608,120 +2069,125 @@ mod tests {
         create_agent(&db, &AgentRow {
             id: agent1.to_string(), name: "A1".to_string(), model: "m".to_string(),
             description: None, system_prompt: None, created_at: None,
-        }).unwrap();
+        })?;
         create_agent(&db, &AgentRow {
             id: agent2.to_string(), name: "A2".to_string(), model: "m".to_string(),
             description: None, system_prompt: None, created_at: None,
-        }).unwrap();
+        })?;
 
         // 1. Agent 1 creates a block
-        upsert_memory_block(&db, agent1, "shared_fact", "Initial value", None, None).unwrap();
+        upsert_memory_block(&db, agent1, "shared_fact", "Initial value", None, None)?;
         
         // Find the block ID
         let block_id: String = {
-            let conn = db.lock().unwrap();
+            let conn = db.lock().unwrap(); // Keep this one unwrap() as it's a Mutex poison error which is fine, or use lock().map_err(|e| e.to_string())?
             conn.query_row(
                 "SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?1",
                 params![agent1],
                 |r| r.get(0)
-            ).unwrap()
+            )?
         };
 
         // 2. Link Agent 2 to the same block
-        link_shared_memory_block(&db, agent2, &block_id).unwrap();
+        link_shared_memory_block(&db, agent2, &block_id)?;
 
         // 3. Verify both see the same value
-        let b1 = get_memory_blocks(&db, agent1).unwrap();
-        let b2 = get_memory_blocks(&db, agent2).unwrap();
+        let b1 = get_memory_blocks(&db, agent1)?;
+        let b2 = get_memory_blocks(&db, agent2)?;
         assert_eq!(b1[0].1, "Initial value");
         assert_eq!(b2[0].1, "Initial value");
 
         // 4. Agent 2 updates the block
-        upsert_memory_block(&db, agent2, "shared_fact", "Updated by A2", None, None).unwrap();
+        upsert_memory_block(&db, agent2, "shared_fact", "Updated by A2", None, None)?;
 
         // 5. Verify Agent 1 sees the update
-        let b1_new = get_memory_blocks(&db, agent1).unwrap();
+        let b1_new = get_memory_blocks(&db, agent1)?;
         assert_eq!(b1_new[0].1, "Updated by A2");
+
+        Ok(())
     }
 
     #[test]
-    fn test_sqlite_archival_memory_fts() {
-        let db = setup_mem_db();
+    fn test_sqlite_archival_memory_fts() -> Result<()> {
+        let db = setup_mem_db()?;
         let agent_id = "agent-fts";
 
         create_agent(&db, &AgentRow {
             id: agent_id.to_string(), name: "A".to_string(), model: "m".to_string(),
             description: None, system_prompt: None, created_at: None,
-        }).unwrap();
+        })?;
 
         insert_message(&db, &MessageRow {
             id: "m1".to_string(), agent_id: agent_id.to_string(), conversation_id: None,
             role: "user".to_string(), content: json!("Rust is a systems programming language")
-        }).unwrap();
+        })?;
 
         insert_message(&db, &MessageRow {
             id: "m2".to_string(), agent_id: agent_id.to_string(), conversation_id: None,
             role: "assistant".to_string(), content: json!("I agree, Rust is safe and fast.")
-        }).unwrap();
+        })?;
 
         // Search for "systems"
-        let res = search_messages(&db, agent_id, "systems", None).unwrap();
+        let res = search_messages(&db, agent_id, "systems", None)?;
         assert_eq!(res.len(), 1);
-        assert!(res[0].content.as_str().unwrap().contains("systems"));
+        assert!(res[0].content.as_str().ok_or("not string")?.contains("systems"));
 
         // Search for "safe"
-        let res2 = search_messages(&db, agent_id, "safe", None).unwrap();
+        let res2 = search_messages(&db, agent_id, "safe", None)?;
         assert_eq!(res2.len(), 1);
-        assert!(res2[0].content.as_str().unwrap().contains("fast"));
+        assert!(res2[0].content.as_str().ok_or("not string")?.contains("fast"));
+
+        Ok(())
     }
 
     #[test]
-    fn test_sqlite_migration_8_removes_stale_providers() {
+    fn test_sqlite_migration_8_removes_stale_providers() -> Result<()> {
         // Build a DB with schema but WITHOUT running migrations yet
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        apply_schema(&conn).unwrap();
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        apply_schema(&conn)?;
 
         // Insert a provider with a valid encrypted key
-        let valid_key = crate::server::crypto::encrypt("sk-real-key").unwrap();
+        let valid_key = crate::server::crypto::encrypt("sk-real-key")?;
         conn.execute(
             "INSERT INTO providers (name, kind, api_key, base_url, enabled, created_at)
              VALUES ('good', 'anthropic', ?1, NULL, 1, 0)",
             params![valid_key],
-        ).unwrap();
+        )?;
 
         // Insert a provider with garbage that cannot be decrypted
         conn.execute(
             "INSERT INTO providers (name, kind, api_key, base_url, enabled, created_at)
              VALUES ('stale', 'openai', 'not-a-real-encrypted-value', NULL, 1, 0)",
             params![],
-        ).unwrap();
+        )?;
 
         // Insert a provider with NULL api_key (e.g. ollama) — should survive
         conn.execute(
             "INSERT INTO providers (name, kind, api_key, base_url, enabled, created_at)
              VALUES ('ollama', 'ollama', NULL, 'http://localhost:11434', 1, 0)",
             params![],
-        ).unwrap();
+        )?;
 
         // Verify 3 rows before migration
         let count: i64 = conn.query_row(
             "SELECT COUNT(*) FROM providers", [], |r| r.get(0),
-        ).unwrap();
+        )?;
         assert_eq!(count, 3);
 
         // Run migrations — migration 8 should remove 'stale'
-        run_migrations(&conn).unwrap();
+        run_migrations(&conn)?;
 
         // Verify: 'stale' removed, 'good' and 'ollama' survive
         let remaining: Vec<String> = {
-            let mut stmt = conn.prepare("SELECT name FROM providers ORDER BY name").unwrap();
-            stmt.query_map([], |r| r.get::<_, String>(0))
-                .unwrap()
+            let mut stmt = conn.prepare("SELECT name FROM providers ORDER BY name")?;
+            stmt.query_map([], |r| r.get::<_, String>(0))?
                 .filter_map(|r| r.ok())
                 .collect()
         };
         assert_eq!(remaining, vec!["good", "ollama"]);
+
+        Ok(())
     }
 }
 

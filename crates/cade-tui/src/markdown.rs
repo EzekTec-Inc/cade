@@ -305,9 +305,9 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                     current_cell.push_str(&text);
                 } else if in_code_block {
                     if let Some(ref mut h) = highlighter {
-                        let mut line_iter = LinesWithEndings::from(&text).peekable();
+                        let line_iter = LinesWithEndings::from(&text);
                         let mut first = true;
-                        while let Some(raw_line) = line_iter.next() {
+                        for raw_line in line_iter {
                             if !first {
                                 push_line(&mut lines, &mut current_spans, in_blockquote);
                             }

@@ -64,6 +64,22 @@ const SECTIONS: &[Section] = &[
                 cmd: "/resume",
                 desc: "Browse past conversations and switch to one",
             },
+            CmdEntry {
+                cmd: "/checkpoint",
+                desc: "/checkpoint [label]  — save a checkpoint of the current state",
+            },
+            CmdEntry {
+                cmd: "/tree",
+                desc: "Browse and restore checkpoints  (fullscreen picker)",
+            },
+            CmdEntry {
+                cmd: "/fork",
+                desc: "/fork [label]  — create a new conversation from a checkpoint",
+            },
+            CmdEntry {
+                cmd: "/artifacts",
+                desc: "List stored artifacts (logs, diffs, reports)",
+            },
         ],
     },
     Section {
@@ -156,6 +172,10 @@ const SECTIONS: &[Section] = &[
         name: "Tools & Providers",
         items: &[
             CmdEntry {
+                cmd: "/backend",
+                desc: "/backend [local|docker|ssh|readonly]  — show or switch execution backend",
+            },
+            CmdEntry {
                 cmd: "/link",
                 desc: "Register + attach all tools to current agent",
             },
@@ -178,6 +198,23 @@ const SECTIONS: &[Section] = &[
             CmdEntry {
                 cmd: "/providers",
                 desc: "List configured providers",
+            },
+        ],
+    },
+    Section {
+        name: "Web & Grounding",
+        items: &[
+            CmdEntry {
+                cmd: "web_search",
+                desc: "Agent tool: search the web (set BRAVE_SEARCH_API_KEY for best results)",
+            },
+            CmdEntry {
+                cmd: "fetch_doc",
+                desc: "Agent tool: fetch and read a URL as clean text",
+            },
+            CmdEntry {
+                cmd: "index_repository",
+                desc: "Agent tool: index codebase for symbol_search / find_references",
             },
         ],
     },

@@ -26,7 +26,7 @@ use agent::{
     tools::register_cade_tools,
 };
 use cade::toolsets::Toolset;
-use cli::{Args, Repl};
+use cli::{Args, EvalAction, PackageAction, PackageSubcommand, Repl};
 use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
 use skills::{Skill, discover_all_skills, skills_listing};
@@ -68,24 +68,57 @@ executes on their real filesystem. Be precise and careful.\n\
 - **Explore before modifying**: Use Read/Glob/Grep to understand code before editing.\n\
 - **Verify changes**: After editing, re-read the modified section to confirm correctness.\n\
 - **Bash for builds/tests**: Always run the build/test after code changes to catch errors.\n\
-- **update_memory**: When you learn something worth remembering — user preferences, \
-project conventions, key facts — call update_memory immediately. Don't wait.\n\
+- **Checkpoints**: Always use `create_checkpoint` before risky operations, large refactors, or \
+  destructive file modifications so you can easily revert if you make a mistake.\n\
 - **Concise responses**: Lead with the answer or action. Skip preamble.\n\
 - **No self-introduction**: Never introduce yourself or describe your capabilities unless \n\
   explicitly asked (e.g. \"who are you?\"). The user already knows who you are. \n\
   Start every response by directly addressing the task or question.\n\
 - **Be direct**: Execute your tasks immediately. Never say 'Understood', 'I will adhere to the rules', or acknowledge your constraints. Just do the work.\n\
 \n\
-## Memory\n\
+## Architecture & Meta-tools\n\
 \n\
-Your memory blocks (injected below) persist across sessions. The `persona` block describes \
-your identity. The `human` block holds facts about the user. The `project` block holds \
-current project context. Update them proactively as you learn.\n\
+- **Subagents (`run_subagent`)**: Delegate complex or token-heavy tasks (like deep codebase \
+  exploration, large file rewrites, or code review) to subagents to keep your active context clean.\n\
+- **Skills (`load_skill`)**: Proactively check your `skills` memory block. Use `load_skill` \
+  to pull in domain-specific knowledge or bundled tooling when starting a recognized task.\n\
+- **Hooks**: Tools may be intercepted by user-defined Hooks. If a tool returns \
+  `[Blocked by hook: <reason>]`, fix the root cause instead of trying to bypass it. If it returns \
+  `[Hook context: ...]`, incorporate that extra context into your next steps.\n\
+\n\
+## Memory System (CRITICAL)\n\
+\n\
+You have a limited active memory (Recall Memory). Older conversation turns are automatically \
+dropped from your view. Memory blocks idle for 40+ turns are archived (replaced with an excerpt \
+in your prompt).\n\
+\n\
+**Retrieval tools — use these instead of guessing:**\n\
+- `conversation_search(query)` — search dropped conversation history. Use whenever you are \
+  unsure what was already done, decided, or said.\n\
+- `search_memory(query)` — search persistent memory blocks by keyword. Archived blocks that \
+  match are automatically promoted back to active memory so they reappear in your prompt.\n\
+- `archival_memory_search(query)` — search large artifacts stored out-of-context (logs, \
+  dumps, subagent outputs).\n\
+\n\
+**Storage tools — use proactively:**\n\
+- `update_memory(label, value)` — persist facts about the user, project, or yourself. \
+  Core blocks (persona, human, project) are always injected into your prompt.\n\
+- `update_memory(label='working_set', value=...)` — **after every significant code change**, \
+  record: (1) current task, (2) files modified, (3) next steps. \
+  This block persists when older turns are dropped from your context window.\n\
+- `archival_memory_insert(content)` — offload large text (logs, file dumps) so your active \
+  context window does not overflow.\n\
+\n\
+- **NEVER hallucinate**: If you do not see something in your current context, DO NOT guess. \
+  Use `conversation_search` or `search_memory` first.\n\
 ";
 
 /// Default memory block labels and their seed values.
-/// (label, value, description, max_chars)
-const DEFAULT_MEMORY_BLOCKS: &[(&str, &str, &str, usize)] = &[
+/// (label, initial_value, description, max_chars, tier)
+///
+/// Tier is "pinned" for blocks that must always be visible in every prompt,
+/// and "short" for blocks that can age out normally.
+const DEFAULT_MEMORY_BLOCKS: &[(&str, &str, &str, usize, &str)] = &[
     (
         "persona",
         "I prefer terse, accurate responses — I lead with action and skip preamble. \
@@ -93,32 +126,42 @@ const DEFAULT_MEMORY_BLOCKS: &[(&str, &str, &str, usize)] = &[
          I never introduce myself unprompted; I address the task directly.",
         "Who I am, what I value, and how I approach working with people",
         2_000,
+        "pinned",
     ),
     (
         "human",
         "",
         "What I know about the person I'm working with — their name, preferences, and working style",
         3_000,
+        "pinned",
     ),
     (
         "project",
         "",
         "Current project context, tech stack, conventions, and ongoing work",
         5_000,
+        "pinned",
+    ),
+    (
+        "working_set",
+        "",
+        "Active task, files currently being edited, recent changes, and immediate next steps. \
+         Update this after every significant code change so it survives context rotation.",
+        3_000,
+        "short",
     ),
 ];
 
-/// Default max_chars for user-created memory blocks (not in DEFAULT_MEMORY_BLOCKS).
 async fn seed_default_memory(client: &CadeClient, agent_id: &str) {
-    for (label, value, description, max_chars) in DEFAULT_MEMORY_BLOCKS {
+    for (label, value, description, max_chars, tier) in DEFAULT_MEMORY_BLOCKS {
         if let Err(e) = client
             .upsert_memory_with_limit(agent_id, label, value, Some(description), Some(*max_chars))
             .await
         {
             tracing::warn!("seed_memory {label}: {e}");
         }
-        if let Err(e) = client.set_memory_tier(agent_id, label, "pinned").await {
-            tracing::warn!("pin_memory {label}: {e}");
+        if let Err(e) = client.set_memory_tier(agent_id, label, tier).await {
+            tracing::warn!("set_memory_tier {label}={tier}: {e}");
         }
     }
 }
@@ -193,257 +236,6 @@ async fn push_env_providers_to_server(client: &CadeClient) {
     }
 }
 
-/// Register the `load_skill` tool that lets the agent load skill content on-demand.
-async fn register_load_skill_tool(client: &CadeClient) {
-    let schema = json!({
-        "name": "load_skill",
-        "description": "Load the full content of a skill into context. Call this when starting a task that matches one of the available skills listed in your system prompt.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "id": {
-                    "type": "string",
-                    "description": "The skill ID to load (from the Available Skills list)"
-                }
-            },
-            "required": ["id"]
-        }
-    });
-    use agent::client::CreateToolRequest;
-    let req = CreateToolRequest {
-        source_code: String::new(),
-        source_type: "json".to_string(),
-        json_schema: Some(schema),
-        tags: vec![],
-    };
-    if let Err(e) = client.create_tool(req).await {
-        tracing::debug!("load_skill tool: {e}");
-    }
-}
-
-/// Register the `install_skill` tool that lets the agent install skills from URLs.
-async fn register_install_skill_tool(client: &CadeClient) {
-    let schema = json!({
-        "name": "install_skill",
-        "description": "Download and install a skill from a GitHub URL or direct SKILL.MD URL. Use when the user asks to install a skill.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "GitHub tree URL or direct SKILL.MD URL to install"
-                },
-                "scope": {
-                    "type": "string",
-                    "enum": ["project", "global"],
-                    "description": "Where to install: project (.skills/) or global (~/.cade/skills/)"
-                }
-            },
-            "required": ["url"]
-        }
-    });
-    use agent::client::CreateToolRequest;
-    let req = CreateToolRequest {
-        source_code: String::new(),
-        source_type: "json".to_string(),
-        json_schema: Some(schema),
-        tags: vec![],
-    };
-    if let Err(e) = client.create_tool(req).await {
-        tracing::debug!("install_skill tool: {e}");
-    }
-}
-
-/// Register the `run_skill_script` tool — executes a script from a skill's scripts/ dir.
-async fn register_run_skill_script_tool(client: &CadeClient) {
-    let schema = json!({
-        "name": "run_skill_script",
-        "description": "Execute a script from a skill's scripts/ directory. Use after load_skill to run deterministic tooling bundled with the skill.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "skill_id": {
-                    "type": "string",
-                    "description": "The skill ID that owns the script"
-                },
-                "script": {
-                    "type": "string",
-                    "description": "Script name (filename stem, e.g. 'explain_error')"
-                },
-                "args": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "Optional arguments to pass to the script"
-                }
-            },
-            "required": ["skill_id", "script"]
-        }
-    });
-    use agent::client::CreateToolRequest;
-    let req = CreateToolRequest {
-        source_code: String::new(),
-        source_type: "json".to_string(),
-        json_schema: Some(schema),
-        tags: vec![],
-    };
-    if let Err(e) = client.create_tool(req).await {
-        tracing::debug!("run_skill_script tool: {e}");
-    }
-}
-
-/// Register the `load_skill_ref` tool — lazy-loads a reference doc from a skill's references/ dir.
-async fn register_load_skill_ref_tool(client: &CadeClient) {
-    let schema = json!({
-        "name": "load_skill_ref",
-        "description": "Lazy-load a reference document from a skill's references/ directory. Use only when you need deep documentation to solve a specific problem — avoids injecting tokens unnecessarily.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "skill_id": {
-                    "type": "string",
-                    "description": "The skill ID that owns the reference"
-                },
-                "doc": {
-                    "type": "string",
-                    "description": "Reference doc name (filename stem, e.g. 'dictionary_of_pain')"
-                }
-            },
-            "required": ["skill_id", "doc"]
-        }
-    });
-    use agent::client::CreateToolRequest;
-    let req = CreateToolRequest {
-        source_code: String::new(),
-        source_type: "json".to_string(),
-        json_schema: Some(schema),
-        tags: vec![],
-    };
-    if let Err(e) = client.create_tool(req).await {
-        tracing::debug!("load_skill_ref tool: {e}");
-    }
-}
-
-/// Register the `run_subagent` tool — spawns a focused subagent for a task.
-async fn register_run_subagent_tool(client: &CadeClient) {
-    let schema = json!({
-        "name": "run_subagent",
-        "description": "Spawn a subagent to handle a task autonomously. Only the final answer \
-    is returned — your context stays clean. Use for: codebase search (explore), implementation \
-    (general-purpose, coder), code review (reviewer), or custom subagents.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "subagent_type": {
-                    "type": "string",
-                    "description": "Built-in type (explore, general-purpose, coder, reviewer) or custom name from .cade/agents/"
-                },
-                "prompt": {
-                    "type": "string",
-                    "description": "The task description for the subagent"
-                },
-                "background": {
-                    "type": "boolean",
-                    "description": "Run in background — tool returns immediately, you get notified on completion (default false)"
-                },
-                "agent_id": {
-                    "type": "string",
-                    "description": "Optional: deploy an existing stateful agent as the subagent by its agent ID"
-                },
-                "model": {
-                    "type": "string",
-                    "description": "Optional: override the subagent's model"
-                }
-            },
-            "required": ["subagent_type", "prompt"]
-        }
-    });
-    use agent::client::CreateToolRequest;
-    let req = CreateToolRequest {
-        source_code: String::new(),
-        source_type: "json".to_string(),
-        json_schema: Some(schema),
-        tags: vec![],
-    };
-    if let Err(e) = client.create_tool(req).await {
-        tracing::debug!("run_subagent tool: {e}");
-    }
-}
-
-/// Register the `update_memory` tool that lets the agent update its own memory.
-async fn register_update_memory_tool(client: &CadeClient) {
-    let schema = json!({
-        "name": "update_memory",
-        "description": "Update a persistent memory block. Use this to store important information about the user, project, or yourself that should be remembered across conversations. Call this whenever you learn something worth remembering.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "label": {
-                    "type": "string",
-                    "description": "Memory block name: 'human' (user info), 'project' (project context), 'persona' (your identity/style), or any custom label"
-                },
-                "value": {
-                    "type": "string",
-                    "description": "Content to store in the memory block"
-                },
-                "operation": {
-                    "type": "string",
-                    "enum": ["set", "append"],
-                    "description": "set = replace the block entirely, append = add to existing content"
-                },
-                "description": {
-                    "type": "string",
-                    "description": "Short description of what this block is for (optional, shown in /memory display)"
-                }
-            },
-            "required": ["label", "value"]
-        }
-    });
-    use agent::client::CreateToolRequest;
-    let req = CreateToolRequest {
-        source_code: String::new(),
-        source_type: "json".to_string(),
-        json_schema: Some(schema),
-        tags: vec![],
-    };
-    if let Err(e) = client.create_tool(req).await {
-        tracing::debug!("update_memory tool already registered or failed: {e}");
-    }
-}
-
-async fn register_memory_apply_patch_tool(client: &CadeClient) {
-    let schema = json!({
-        "name": "memory_apply_patch",
-        "description": "Edit a persistent memory block using a unified diff patch. Use this to store important information about the user, project, or yourself that should be remembered across conversations. Call this whenever you learn something worth remembering.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "label": {
-                    "type": "string",
-                    "description": "Memory block name: 'human' (user info), 'project' (project context), 'persona' (your identity/style), or any custom label"
-                },
-                "patch": {
-                    "type": "string",
-                    "description": "A valid unified diff patch string. To create a new block or replace entirely, write a patch from an empty file."
-                },
-                "description": {
-                    "type": "string",
-                    "description": "Short description of what this block is for (optional, shown in /memory display)"
-                }
-            },
-            "required": ["label", "patch"]
-        }
-    });
-    use agent::client::CreateToolRequest;
-    let req = CreateToolRequest {
-        source_code: String::new(),
-        source_type: "json".to_string(),
-        json_schema: Some(schema),
-        tags: vec![],
-    };
-    if let Err(e) = client.create_tool(req).await {
-        tracing::debug!("memory_apply_patch tool already registered or failed: {e}");
-    }
-}
 
 /// Register all CADE tools on the server and attach them to the given agent.
 pub async fn register_and_attach(client: &CadeClient, agent_id: &str, toolset: Toolset) {
@@ -460,13 +252,8 @@ pub async fn register_and_attach_filtered(
     toolset: Toolset,
     tool_filter: Option<&[String]>,
 ) {
-    register_update_memory_tool(client).await;
-    register_memory_apply_patch_tool(client).await;
-    register_load_skill_tool(client).await;
-    register_install_skill_tool(client).await;
-    register_run_skill_script_tool(client).await;
-    register_load_skill_ref_tool(client).await;
-    register_run_subagent_tool(client).await;
+    // Register all meta tools (memory, skills, subagents) via the centralised registry.
+    cade_agent::tools::register_meta_tools(client).await;
     let tools = register_cade_tools_filtered(client, toolset, tool_filter)
         .await
         .unwrap_or_default();
@@ -533,9 +320,25 @@ async fn resolve_agent_and_conversation(
     toolset: Toolset,
     skills_block: &Option<String>,
     cwd: &std::path::Path,
+    agent_dir: &std::path::Path,
     session: &mut SessionStore,
     settings: &mut SettingsManager,
-) -> Result<(agent::client::AgentState, Vec<Skill>, Option<String>)> {
+) -> Result<(agent::client::AgentState, Vec<Skill>, Option<String>, String)> {
+    // Build system prompt: base + any context files (AGENTS.md, CLAUDE.md, CADE.md)
+    let context_files = cade_core::resources::context_files::discover_context_files(cwd, agent_dir);
+    let context_block = cade_core::resources::context_files::build_context_block(&context_files);
+    let effective_system_prompt = if context_block.is_empty() {
+        BASE_SYSTEM_PROMPT.to_string()
+    } else {
+        format!("{BASE_SYSTEM_PROMPT}{context_block}")
+    };
+    if !context_files.is_empty() {
+        let names: Vec<String> = context_files.iter()
+            .map(|f| f.path.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string())
+            .collect();
+        tracing::info!("Loaded {} context file(s): {}", context_files.len(), names.join(", "));
+    }
+
     let make_req = |model: String, desc: &str| {
         // Inject only the compact listing as a memory block.
         // Full skill content is loaded on-demand by the agent via load_skill tool.
@@ -556,7 +359,7 @@ async fn resolve_agent_and_conversation(
             )),
             model,
             description: Some(desc.to_string()),
-            system_prompt: Some(BASE_SYSTEM_PROMPT.to_string()),
+            system_prompt: Some(effective_system_prompt.clone()),
             memory_blocks,
             tool_ids: vec![],
         }
@@ -744,7 +547,7 @@ async fn resolve_agent_and_conversation(
         // Use saved conversation_id (--continue or resume from session)
         session.session.conversation_id.clone()
     };
-    Ok((agent, loaded_skills, conversation_id))
+    Ok((agent, loaded_skills, conversation_id, effective_system_prompt))
 }
 
 async fn auto_start_server(base_url: &str) -> Result<()> {
@@ -834,11 +637,47 @@ async fn main() -> Result<()> {
 
     let _ = dotenvy::dotenv();
 
-    let args = Args::parse();
+    let mut args = Args::parse();
     let cwd = std::env::current_dir().map_err(|e| Error::custom(format!("get cwd: {e}")))?;
+
+    // Agent config directory: $CADE_AGENT_DIR or ~/.cade
+    let agent_dir: std::path::PathBuf = std::env::var("CADE_AGENT_DIR").ok()
+        .map(std::path::PathBuf::from)
+        .or_else(|| {
+            let home: Option<std::path::PathBuf> = dirs::home_dir();
+            home.map(|h| h.join(".cade"))
+        })
+        .unwrap_or_else(|| cwd.join(".cade"));
 
     // Settings + session
     let mut settings = SettingsManager::new(&cwd).map_err(|e| Error::custom(format!("load settings: {e}")))?;
+
+    // -- Package subcommand (runs before server connection, no server needed)
+    let is_eval_subcommand = matches!(&args.package, Some(PackageSubcommand::Eval { .. }));
+    if let Some(PackageSubcommand::Package { action }) = args.package.take() {
+        match action {
+            PackageAction::Install { source, project_local } => {
+                cade::cli::package::cmd_install(&source, project_local, &mut settings, &cwd, &agent_dir)
+                    .await
+                    .map_err(|e| Error::custom(format!("package install: {e}")))?;
+            }
+            PackageAction::Remove { source } => {
+                cade::cli::package::cmd_remove(&source, &agent_dir)
+                    .map_err(|e| Error::custom(format!("package remove: {e}")))?;
+            }
+            PackageAction::List => {
+                cade::cli::package::cmd_list(&agent_dir)
+                    .map_err(|e| Error::custom(format!("package list: {e}")))?;
+            }
+            PackageAction::Update => {
+                cade::cli::package::cmd_update(&agent_dir)
+                    .await
+                    .map_err(|e| Error::custom(format!("package update: {e}")))?;
+            }
+        }
+        return Ok(());
+    }
+    // Eval subcommand deferred — needs server connection (handled after agent resolution below)
     let mut session = SessionStore::load(&cwd);
 
     // API credentials
@@ -957,13 +796,14 @@ async fn main() -> Result<()> {
     let skills_block = skills_listing(&initial_loaded_skills);
 
     // Agent resolution — helper closure avoids repeating the create logic
-    let (agent, loaded_skills, conversation_id) = resolve_agent_and_conversation(
+    let (agent, loaded_skills, conversation_id, effective_system_prompt) = resolve_agent_and_conversation(
         &client,
         &args,
         &default_model,
         toolset,
         &skills_block,
         &cwd,
+        &agent_dir,
         &mut session,
         &mut settings,
     )
@@ -1082,7 +922,7 @@ async fn main() -> Result<()> {
     }
 
     // Migrate old system prompt: if the stored prompt is the minimal server fallback
-    // (no "Never introduce yourself" rule) update it to BASE_SYSTEM_PROMPT.
+    // (no "Never introduce yourself" rule) update it to effective_system_prompt.
     // This runs once per old agent; after the update the check is skipped.
     if agent
         .system_prompt
@@ -1091,7 +931,7 @@ async fn main() -> Result<()> {
         .unwrap_or(true)
     {
         if let Err(e) = client
-            .patch_agent_system_prompt(&agent.id, BASE_SYSTEM_PROMPT)
+            .patch_agent_system_prompt(&agent.id, &effective_system_prompt)
             .await
         {
             tracing::warn!("migrate system_prompt: {e}");
@@ -1114,19 +954,20 @@ async fn main() -> Result<()> {
                 let v = block.value.trim_start();
                 let needs_migration = v.starts_with("CADE is") || v.starts_with("I am CADE");
                 if needs_migration {
-                    let (_, new_val, new_desc, _) = DEFAULT_MEMORY_BLOCKS[0]; // persona entry
+                    let (_, new_val, new_desc, _, _) = DEFAULT_MEMORY_BLOCKS[0]; // persona entry
                     let _ = client
                         .upsert_memory(&agent.id, "persona", new_val, Some(new_desc))
                         .await;
                 }
             }
             
-            // Ensure core blocks are pinned so they are never auto-archived
-            if matches!(block.label.as_str(), "persona" | "human" | "project") {
-                if block.tier.as_deref() != Some("pinned") {
+            // Ensure core blocks are pinned so they are never auto-archived.
+            // working_set intentionally stays as short-tier (it should age out
+            // when stale); session_summary is managed by the Sleeptime task.
+            if matches!(block.label.as_str(), "persona" | "human" | "project")
+                && block.tier.as_deref() != Some("pinned") {
                     let _ = client.set_memory_tier(&agent.id, &block.label, "pinned").await;
                 }
-            }
         }
     }
 
@@ -1148,6 +989,54 @@ async fn main() -> Result<()> {
     } else {
         None
     };
+
+    // -- Eval subcommand (needs server + agent)
+    if is_eval_subcommand {
+        if let Some(PackageSubcommand::Eval { action }) = args.package.take() {
+            match action {
+                EvalAction::List => {
+                    cade::cli::eval::cmd_list(&client)
+                        .await
+                        .map_err(|e| Error::custom(format!("eval list: {e}")))?;
+                }
+                EvalAction::Show { id } => {
+                    cade::cli::eval::cmd_show(&client, &id)
+                        .await
+                        .map_err(|e| Error::custom(format!("eval show: {e}")))?;
+                }
+                EvalAction::Run { task, model } => {
+                    let result = cade::cli::eval::cmd_run(
+                        &client, &task, model.as_deref(), &cwd,
+                    ).await.map_err(|e| Error::custom(format!("eval run: {e}")))?;
+                    result.print_summary();
+                }
+                EvalAction::Bench { dir, model, concurrency } => {
+                    cade::cli::eval::cmd_bench(
+                        &client, &dir, model.as_deref(), concurrency, &cwd,
+                    ).await.map_err(|e| Error::custom(format!("eval bench: {e}")))?;
+                }
+            }
+        }
+        return Ok(());
+    }
+
+    // -- RPC mode: JSON-RPC over stdin/stdout for embedding CADE in other processes
+    if args.mode.as_deref() == Some("rpc") {
+        let session_opts = cade_sdk::session::SessionOptions {
+            server_url: base_url.clone(),
+            api_key:    settings.api_key().unwrap_or_default(),
+            agent_id:   Some(agent.id.clone()),
+            cwd:        cwd.clone(),
+            ..Default::default()
+        };
+        match cade_sdk::session::AgentSession::create(session_opts).await {
+            Ok(sdk_session) => {
+                cade_sdk::rpc::run_rpc_server(sdk_session).await;
+                return Ok(());
+            }
+            Err(e) => return Err(Error::custom(format!("RPC session init: {e}"))),
+        }
+    }
 
     let headless_prompt: Option<String> = match (&args.prompt, &piped_stdin) {
         (Some(p), Some(stdin)) => Some(format!("{stdin}\n\n{p}")),
@@ -1330,12 +1219,39 @@ async fn main() -> Result<()> {
         return Ok(());
     }
 
+    // Load active theme before settings is moved into Arc
+    let theme_colors = {
+        use cade_core::resources::discover_themes;
+        use cade_tui::ThemeColors;
+        let theme_name = settings.global().theme.clone().unwrap_or_default();
+        if theme_name.is_empty() || theme_name == "dark" {
+            ThemeColors::dark()
+        } else if theme_name == "light" {
+            ThemeColors::light()
+        } else {
+            let discovered = discover_themes(&cwd, &agent_dir);
+            discovered.iter()
+                .find(|t| t.name == theme_name)
+                .map(ThemeColors::from_theme)
+                .unwrap_or_else(ThemeColors::dark)
+        }
+    };
+
+    // Build execution backend from settings before moving settings into Arc (Phase 6)
+    let exec_backend: std::sync::Arc<dyn cade_agent::backends::ExecutionBackend> = {
+        let profile = settings.execution_profile().clone();
+        let b = cade_agent::backends::backend_from_profile(&profile);
+        let backend_name = b.name();
+        if backend_name != "local" {
+            eprintln!("  Execution backend: {backend_name}");
+        }
+        std::sync::Arc::from(b)
+    };
+
     // Interactive REPL
     let settings_arc = Arc::new(Mutex::new(settings));
     let session_arc = Arc::new(Mutex::new(session));
     // Use the agent's actual model from DB as the initial REPL model.
-    // default_model is the server-detected default for NEW agents;
-    // for EXISTING agents the DB value is what the server actually uses for inference.
     let initial_model = agent.model.clone().unwrap_or(default_model.to_string());
 
     let repl = Repl::new(
@@ -1354,6 +1270,8 @@ async fn main() -> Result<()> {
         hook_engine,
         conversation_id,
         mcp,
+        theme_colors,
+        exec_backend,
     );
     // --continue: mark first turn as already done so env context isn't re-injected
     if args.continue_last {

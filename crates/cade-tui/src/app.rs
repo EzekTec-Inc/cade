@@ -41,6 +41,7 @@ use unicode_width::UnicodeWidthStr;
 
 use cade_core::permissions::PermissionMode;
 use crate::autocomplete::FileAutocompleteProvider;
+use crate::colors::ThemeColors;
 use crate::editor::{Editor, ImageEntry};
 
 // -- Constants
@@ -277,12 +278,31 @@ pub struct TuiApp {
     /// the draw if less than `DRAW_MIN_INTERVAL` has elapsed, dramatically
     /// reducing redraws during high-frequency streaming (tokens, live bash).
     last_draw_at: Instant,
+
+    /// Active color theme — replaces hardcoded RC::Rgb values at render time.
+    pub colors: ThemeColors,
 }
 
 impl TuiApp {
     /// Create the TuiApp and initialise the ratatui terminal
     /// (enters alternate screen + enables raw mode).
-    pub fn new(mode: PermissionMode, agent_name: String, model: String, reasoning_effort: Option<String>) -> Self {
+    pub fn new(
+        mode: PermissionMode,
+        agent_name: String,
+        model: String,
+        reasoning_effort: Option<String>,
+    ) -> Self {
+        Self::new_with_theme(mode, agent_name, model, reasoning_effort, ThemeColors::dark())
+    }
+
+    /// Create a `TuiApp` with an explicit color theme.
+    pub fn new_with_theme(
+        mode: PermissionMode,
+        agent_name: String,
+        model: String,
+        reasoning_effort: Option<String>,
+        colors: ThemeColors,
+    ) -> Self {
         let terminal = ratatui::init();
         let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture, EnableBracketedPaste, EnableFocusChange);
         if supports_keyboard_enhancement().unwrap_or(false) {
@@ -323,6 +343,7 @@ impl TuiApp {
             queued_count: 0,
             draw_dirty: false,
             last_draw_at: Instant::now(),
+            colors,
         }
     }
 
@@ -372,7 +393,7 @@ impl TuiApp {
         let mut total: u16 = 0;
         for rl in self.lines.iter().rev() {
             let mut text_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
-            render_line_to_text(rl, w, self.expand_all, &mut text_lines);
+            render_line_to_text(rl, w, self.expand_all, &mut text_lines, &self.colors);
             for tl in &text_lines {
                 total = total.saturating_add(count_wrapped_rows(tl, cw));
             }
@@ -679,6 +700,7 @@ impl TuiApp {
         let footer_extra = self.footer_extra.clone();
         let reasoning_effort = self.reasoning_effort.clone();
         let active_plan_snap = self.active_plan.clone();
+        let colors = self.colors.clone();
 
         // V-04: capture max_skip returned by render_frame to clamp self.scroll.
         let mut max_skip: u16 = 0;
@@ -716,6 +738,7 @@ impl TuiApp {
                 footer_extra.as_deref(),
                 reasoning_effort.as_deref(),
                 active_plan_snap.as_ref(),
+                &colors,
             );
         })?;
 
@@ -1817,13 +1840,23 @@ fn render_frame(
     footer_extra: Option<&str>,
     reasoning_effort: Option<&str>,
     active_plan: Option<&PlanState>,
+    colors: &ThemeColors,
 ) -> u16 {
     // returns max_skip for V-04 scroll clamping
     let area = frame.area();
     let w = area.width as usize;
 
     let available_w = area.width.saturating_sub(2).max(1);
-    let input_rows = calc_input_rows(input, available_w).clamp(1, MAX_INPUT_ROWS);
+    let mut input_rows = calc_input_rows(input, available_w).clamp(1, MAX_INPUT_ROWS);
+
+    let inline_h = active_question
+        .map(|aq| question_height(aq, area.height))
+        .unwrap_or(0);
+
+    if inline_h > 0 {
+        input_rows = inline_h;
+    }
+
     // A-02: footer_extra adds one row below the normal footer when present.
     let footer_extra_h: u16 = if footer_extra.is_some() { 1 } else { 0 };
     let bottom_rows = FIXED_ROWS + input_rows + footer_extra_h;
@@ -1835,12 +1868,6 @@ fn render_frame(
 
     let content_height = area.height - bottom_rows;
 
-    // When a question is active, carve the inline panel out of the content area.
-    // Layout becomes 8 slots; without a question it stays 6 (question slots = 0).
-    let inline_h = active_question
-        .map(|aq| question_height(aq, content_height))
-        .unwrap_or(0);
-        
     let plan_h = if let Some(plan) = active_plan {
         if plan.is_visible {
             (plan.steps.len() as u16 + 2).min(10).max(4)
@@ -1851,16 +1878,16 @@ fn render_frame(
         0
     };
     
-    let shrunk_content = content_height.saturating_sub(inline_h).saturating_sub(plan_h);
+    let shrunk_content = content_height.saturating_sub(plan_h);
 
-    let chunks = if inline_h > 0 || plan_h > 0 {
+    let chunks = if plan_h > 0 {
         Layout::vertical([
             Constraint::Length(shrunk_content), // [0] content  (shrunk)
-            Constraint::Length(inline_h),       // [1] question panel
+            Constraint::Length(0),              // [1] unused
             Constraint::Length(plan_h),         // [2] plan panel
             Constraint::Length(1),              // [3] status
             Constraint::Length(1),              // [4] top separator
-            Constraint::Length(input_rows),     // [5] input
+            Constraint::Length(input_rows),     // [5] input or question
             Constraint::Length(1),              // [6] bottom separator
             Constraint::Length(1),              // [7] footer
         ])
@@ -1874,7 +1901,7 @@ fn render_frame(
             Constraint::Length(0),              // [2] (unused)
             Constraint::Length(1),              // [3] status
             Constraint::Length(1),              // [4] top separator
-            Constraint::Length(input_rows),     // [5] input
+            Constraint::Length(input_rows),     // [5] input or question
             Constraint::Length(1),              // [6] bottom separator
             Constraint::Length(1),              // [7] footer
         ])
@@ -1886,7 +1913,7 @@ fn render_frame(
     let (header_area_opt, messages_area) = {
         let mut header_text: Vec<Line<'static>> = Vec::new();
         for rl in header_lines {
-            render_line_to_text(rl, w, false, &mut header_text);
+            render_line_to_text(rl, w, false, &mut header_text, colors);
         }
         if header_text.is_empty() {
             (None, chunks[0])
@@ -1912,10 +1939,10 @@ fn render_frame(
     // -- Content area
     let mut text_lines: Vec<Line<'static>> = Vec::new();
     for rl in lines {
-        render_line_to_text(rl, w, expand_all, &mut text_lines);
+        render_line_to_text(rl, w, expand_all, &mut text_lines, colors);
     }
     if let Some(s) = streaming {
-        render_assistant_lines(s, w, &mut text_lines);
+        render_assistant_lines(s, w, &mut text_lines, colors);
     }
 
     // Count visual rows (word-wrap at content width, matching ratatui's WordWrapper).
@@ -1949,7 +1976,7 @@ fn render_frame(
             width: messages_area.width,
             height: picker_h,
         };
-        render_picker(frame, pk, picker_rect);
+        render_picker(frame, pk, picker_rect, colors);
     }
 
     // -- Status row
@@ -1983,7 +2010,7 @@ fn render_frame(
         (
             s.clone(),
             Style::default()
-                .fg(RC::Rgb(100, 170, 120))
+                .fg(colors.success)
                 .add_modifier(Modifier::DIM),
         )
     } else {
@@ -2024,7 +2051,7 @@ fn render_frame(
     // U-02: Top separator pulses cyan when the agent is thinking or streaming,
     // giving a peripheral activity signal without cluttering the status bar.
     // Bottom separator always uses the mode color (stable reference point).
-    let mode_color = mode_sep_color(mode);
+    let mode_color = mode_sep_color(mode, colors);
     let top_sep_color = if let Some(elapsed) = thinking_elapsed {
         // Thinking / tool-calling: animated cyan pulse matching the spinner.
         let ms = elapsed.as_millis();
@@ -2038,7 +2065,7 @@ fn render_frame(
         RC::Rgb(r, g, b)
     } else if streaming.is_some() {
         // Pure text streaming (thinking animation already stopped): fixed bright cyan.
-        RC::Rgb(80, 190, 255)
+        colors.accent
     } else {
         mode_color
     };
@@ -2055,56 +2082,60 @@ fn render_frame(
         chunks[6],
     );
 
-    // -- Input area
-    // Build one ratatui Line per logical line so wrapping is correct and the
-    // "> " prefix only appears on the first line.  Subsequent lines get a
-    // "  " (2-space) indent so text columns align with the first line.
-    let input_placeholder = if queued_count > 0 {
-        format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
+    // -- Input area or Question Panel
+    if let Some(aq) = active_question {
+        render_question_inline(frame, aq, chunks[5], chunks[5], colors);
     } else {
-        "Type a message…".to_string()
-    };
-    let input_paragraph: Vec<Line<'static>> = if input.is_empty() {
-        vec![Line::from(vec![
-            Span::styled("> ", Style::default().fg(RC::White)),
-            Span::styled(input_placeholder, Style::default().fg(RC::DarkGray)),
-        ])]
-    } else {
-        input
-            .split('\n')
-            .enumerate()
-            .map(|(i, seg)| {
-                let prefix = if i == 0 { "> " } else { "  " };
-                Line::from(vec![
-                    Span::styled(prefix, Style::default().fg(RC::Rgb(120, 120, 120))),
-                    Span::styled(seg.to_string(), Style::default().fg(RC::White)),
-                ])
-            })
-            .collect()
-    };
-    frame.render_widget(
-        Paragraph::new(input_paragraph).wrap(Wrap { trim: false }),
-        chunks[5],
-    );
+        // Build one ratatui Line per logical line so wrapping is correct and the
+        // "> " prefix only appears on the first line.  Subsequent lines get a
+        // "  " (2-space) indent so text columns align with the first line.
+        let input_placeholder = if queued_count > 0 {
+            format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
+        } else {
+            "Type a message…".to_string()
+        };
+        let input_paragraph: Vec<Line<'static>> = if input.is_empty() {
+            vec![Line::from(vec![
+                Span::styled("> ", Style::default().fg(RC::White)),
+                Span::styled(input_placeholder, Style::default().fg(RC::DarkGray)),
+            ])]
+        } else {
+            input
+                .split('\n')
+                .enumerate()
+                .map(|(i, seg)| {
+                    let prefix = if i == 0 { "> " } else { "  " };
+                    Line::from(vec![
+                        Span::styled(prefix, Style::default().fg(colors.dim)),
+                        Span::styled(seg.to_string(), Style::default().fg(RC::White)),
+                    ])
+                })
+                .collect()
+        };
+        frame.render_widget(
+            Paragraph::new(input_paragraph).wrap(Wrap { trim: false }),
+            chunks[5],
+        );
 
-    // Cursor position
-    let before = &input[..cursor_pos.min(input.len())];
-    let (vis_row, vis_col) = calc_visual_cursor(before, available_w);
-    let cx = (chunks[5].x + vis_col).min(chunks[5].x + chunks[5].width.saturating_sub(1));
-    let cy = (chunks[5].y + vis_row).min(chunks[5].y + chunks[5].height.saturating_sub(1));
-    frame.set_cursor_position((cx, cy));
+        // Cursor position
+        let before = &input[..cursor_pos.min(input.len())];
+        let (vis_row, vis_col) = calc_visual_cursor(before, available_w);
+        let cx = (chunks[5].x + vis_col).min(chunks[5].x + chunks[5].width.saturating_sub(1));
+        let cy = (chunks[5].y + vis_row).min(chunks[5].y + chunks[5].height.saturating_sub(1));
+        frame.set_cursor_position((cx, cy));
+    }
 
     // -- Footer
-    let (left_label, left_glyph, left_color) = mode_footer_left(mode);
+    let (left_label, left_glyph, left_color) = mode_footer_left(mode, colors);
     let right_agent = agent_name.to_string();
     let right_model = format!(" [{}]", truncate_str(model, 30));
     let right_reasoning = reasoning_effort.map(|r| format!(" [{r}]")).unwrap_or_default();
     // Context % with severity color: gray < 80%, amber 80-89%, red ≥ 90%
     let (right_ctx, right_ctx_color) = match context_pct {
-        Some(p) if p >= 90 => (format!(" {p}%"), RC::Rgb(210, 60, 60)),
-        Some(p) if p >= 80 => (format!(" {p}%"), RC::Rgb(210, 140, 40)),
-        Some(p) => (format!(" {p}%"), RC::Rgb(90, 90, 90)),
-        None => (String::new(), RC::Rgb(90, 90, 90)),
+        Some(p) if p >= 90 => (format!(" {p}%"), colors.error),
+        Some(p) if p >= 80 => (format!(" {p}%"), colors.warning),
+        Some(p) => (format!(" {p}%"), colors.muted),
+        None => (String::new(), colors.muted),
     };
     // CWD segment — shown in the centre of the footer in dark gray
     let mid_cwd = format!("  {cwd}  ");
@@ -2135,11 +2166,11 @@ fn render_frame(
     footer.push(Span::raw(" ".repeat(pad)));
     footer.push(Span::styled(
         mid_cwd,
-        Style::default().fg(RC::Rgb(90, 90, 90)),
+        Style::default().fg(colors.muted),
     ));
     footer.push(Span::styled(
         right_agent,
-        Style::default().fg(RC::Rgb(140, 140, 249)),
+        Style::default().fg(colors.thinking_minimal),
     ));
     footer.push(Span::styled(right_model, Style::default().fg(RC::DarkGray)));
     if !right_reasoning.is_empty() {
@@ -2168,18 +2199,13 @@ fn render_frame(
         frame.render_widget(
             Paragraph::new(Span::styled(
                 extra.to_string(),
-                Style::default().fg(RC::Rgb(80, 80, 80)),
+                Style::default().fg(colors.dim),
             )),
             extra_rect,
         );
     }
 
-    // -- Inline question panel (anchored to bottom of content viewport)
-    if let Some(aq) = active_question {
-        // chunks[1] = question panel (no separator right now)
-        render_question_inline(frame, aq, chunks[1], chunks[1]);
-    }
-    
+
     if let Some(plan) = active_plan
         && plan.is_visible {
             use ratatui::widgets::{List, ListItem};
@@ -2268,6 +2294,7 @@ fn render_question_inline(
     aq: &ActiveQuestionDrawState,
     sep_area: Rect,
     body_area: Rect,
+    colors: &ThemeColors,
 ) {
     let q = &aq.question;
 
@@ -2278,7 +2305,7 @@ fn render_question_inline(
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             dash_str,
-            Style::default().fg(RC::Rgb(70, 70, 100)),
+            Style::default().fg(colors.border),
         ))),
         sep_area,
     );
@@ -2421,6 +2448,7 @@ fn render_line_to_text(
     width: usize,
     expand_all: bool,
     out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
 ) {
     match rl {
         RenderLine::Separator => {
@@ -2458,7 +2486,7 @@ fn render_line_to_text(
             if !label.is_empty() {
                 spans.push(Span::styled(
                     label.clone(),
-                    Style::default().fg(RC::Rgb(153, 153, 153)),
+                    Style::default().fg(colors.muted),
                 ));
             }
             out.push(Line::from(spans));
@@ -2482,7 +2510,7 @@ fn render_line_to_text(
             let display = display_tool_name(name);
             let name_style = Style::default()
                 .add_modifier(Modifier::BOLD)
-                .fg(RC::Rgb(140, 140, 249));
+                .fg(colors.thinking_minimal);
             // Budget: width minus "● " (2) + name len + "()" (2) + a little breathing room.
             let budget = width.saturating_sub(display.len() + 6);
             let dot_color = RC::Rgb(100, 207, 180); // teal — distinct from assistant purple
@@ -2504,9 +2532,9 @@ fn render_line_to_text(
         }
         RenderLine::ToolResult { is_error, content } => {
             let color = if *is_error {
-                RC::Rgb(241, 104, 159)
+                colors.diff_removed
             } else {
-                RC::Rgb(100, 207, 100)
+                colors.diff_added
             };
             let inner_w = width.saturating_sub(5);
             let lns: Vec<&str> = content.lines().collect();
@@ -2536,7 +2564,7 @@ fn render_line_to_text(
 
                     // Parse ANSI colors. fallback to raw text if parse fails.
                     let parsed_text = ln.into_text().unwrap_or_else(|_| ratatui::text::Text::raw(ln.to_string()));
-                    let mut parsed_spans: Vec<Span> = parsed_text
+                    let parsed_spans: Vec<Span> = parsed_text
                         .lines
                         .into_iter()
                         .flat_map(|line| line.spans)
@@ -2592,7 +2620,7 @@ fn render_line_to_text(
         }
         RenderLine::LiveOutput { lines, max_visible, done: _ } => {
             let inner_w = width.saturating_sub(5);
-            let color = RC::Rgb(100, 207, 100); // same green as successful ToolResult
+            let color = colors.diff_added; // same green as successful ToolResult
 
             if lines.is_empty() {
                 // Nothing arrived yet — show a placeholder so the entry is
@@ -2629,7 +2657,7 @@ fn render_line_to_text(
                     }
 
                     let parsed_text = ln.into_text().unwrap_or_else(|_| ratatui::text::Text::raw(ln.to_string()));
-                    let mut parsed_spans: Vec<Span> = parsed_text
+                    let parsed_spans: Vec<Span> = parsed_text
                         .lines
                         .into_iter()
                         .flat_map(|line| line.spans)
@@ -2792,12 +2820,12 @@ fn render_line_to_text(
     }
 }
 
-fn render_assistant_lines(text: &str, _width: usize, out: &mut Vec<Line<'static>>) {
+fn render_assistant_lines(text: &str, _width: usize, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
     let md_lines = crate::markdown::parse_markdown_lines(text);
     if md_lines.is_empty() {
         out.push(Line::from(Span::styled(
             "● ",
-            Style::default().fg(RC::Rgb(140, 100, 200)),
+            Style::default().fg(colors.tool_title),
         )));
         return;
     }
@@ -2806,7 +2834,7 @@ fn render_assistant_lines(text: &str, _width: usize, out: &mut Vec<Line<'static>
             // Prepend "● " (purple dot) to the first line of the response.
             let mut spans = vec![Span::styled(
                 "● ",
-                Style::default().fg(RC::Rgb(140, 100, 200)),
+                Style::default().fg(colors.tool_title),
             )];
             spans.extend(ml.spans.into_iter());
             out.push(Line::from(spans));
@@ -2955,7 +2983,7 @@ impl TuiApp {
 
 
 /// Render the `@` file picker as a floating overlay at the bottom of `area`.
-fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect) {
+fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, colors: &ThemeColors) {
     if area.height == 0 {
         return;
     }
@@ -2965,7 +2993,7 @@ fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect) {
     // Top dashed separator (matches question-panel style)
     lines.push(Line::from(Span::styled(
         "╌".repeat(w),
-        Style::default().fg(RC::Rgb(70, 70, 110)),
+        Style::default().fg(colors.border),
     )));
 
     // Header: "@ <query>" + no-match hint
@@ -2978,7 +3006,7 @@ fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect) {
         Span::styled(
             format!(" @ {}", pk.query),
             Style::default()
-                .fg(RC::Rgb(140, 140, 249))
+                .fg(colors.thinking_minimal)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(no_match, Style::default().fg(RC::DarkGray)),
@@ -2994,13 +3022,13 @@ fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect) {
                 Style::default().fg(RC::White).add_modifier(Modifier::BOLD),
             )
         } else {
-            (" ", Style::default().fg(RC::Rgb(130, 130, 130)))
+            (" ", Style::default().fg(colors.muted))
         };
         lines.push(Line::from(Span::styled(format!(" {glyph} {m}"), style)));
     }
 
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(RC::Rgb(18, 18, 32))),
+        Paragraph::new(lines).style(Style::default().bg(colors.tool_pending_bg)),
         area,
     );
 }
@@ -3069,21 +3097,21 @@ fn abbreviate_cwd(path: &std::path::Path) -> String {
     format!("{prefix}{display}")
 }
 
-fn mode_sep_color(mode: PermissionMode) -> RC {
+fn mode_sep_color(mode: PermissionMode, colors: &ThemeColors) -> RC {
     match mode {
-        PermissionMode::Default => RC::Rgb(70, 72, 74),
-        PermissionMode::AcceptEdits => RC::Rgb(140, 140, 249),
-        PermissionMode::Plan => RC::Green,
-        PermissionMode::BypassPermissions => RC::Red,
+        PermissionMode::Default         => colors.border_muted,
+        PermissionMode::AcceptEdits     => colors.thinking_minimal,
+        PermissionMode::Plan            => colors.success,
+        PermissionMode::BypassPermissions => colors.error,
     }
 }
 
-fn mode_footer_left(mode: PermissionMode) -> (&'static str, &'static str, RC) {
+fn mode_footer_left<'a>(mode: PermissionMode, colors: &ThemeColors) -> (&'a str, &'a str, RC) {
     match mode {
-        PermissionMode::Default => ("Press / for commands", "", RC::Rgb(70, 72, 74)),
-        PermissionMode::AcceptEdits => ("accept edits", "⏵⏵", RC::Rgb(140, 140, 249)),
-        PermissionMode::Plan => ("plan mode", "⏸", RC::Green),
-        PermissionMode::BypassPermissions => ("bypass (allow all)", "⚡", RC::Red),
+        PermissionMode::Default         => ("Press / for commands", "",      colors.border_muted),
+        PermissionMode::AcceptEdits     => ("accept edits",          "⏵⏵", colors.thinking_minimal),
+        PermissionMode::Plan            => ("plan mode",             "⏸",   colors.success),
+        PermissionMode::BypassPermissions => ("bypass (allow all)", "⚡",   colors.error),
     }
 }
 

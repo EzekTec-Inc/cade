@@ -9,7 +9,7 @@ own server, requiring no external platform.
 
 ## Workspace Layout
 
-CADE is a Cargo workspace with six independent crates plus a root package that
+CADE is a Cargo workspace with twelve independent crates plus a root package that
 owns the two binaries (`cade` and `cade-server`).
 
 ```

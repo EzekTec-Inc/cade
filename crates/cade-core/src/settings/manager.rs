@@ -142,11 +142,114 @@ pub struct GlobalSettings {
     /// Default true preserves backward compatibility.
     #[serde(default = "default_true")]
     pub store_api_key: bool,
+
+    // -- Resource system (Phase 1)
+
+    /// Installed packages (npm:, git:, or local path).
+    #[serde(default)]
+    pub packages: Vec<crate::resources::packages::PackageSource>,
+    /// Active theme name.  Empty string or absent = built-in default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    /// Extra prompt template directories or files beyond the standard locations.
+    #[serde(default)]
+    pub extra_prompts: Vec<std::path::PathBuf>,
+    /// Extra skill directories beyond the standard locations.
+    #[serde(default)]
+    pub extra_skills: Vec<std::path::PathBuf>,
+    /// Extra context file paths (appended to AGENTS.md discovery results).
+    #[serde(default)]
+    pub extra_context_files: Vec<std::path::PathBuf>,
+
+    // -- Execution backend (Phase 6)
+
+    /// Where to run bash commands and file operations.
+    #[serde(default)]
+    pub execution: ExecutionProfile,
 }
 
 fn default_true() -> bool {
     true
 }
+
+// region:    --- Execution backend settings
+
+/// Which execution backend to use for bash and file operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum ExecutionBackendKind {
+    /// Run commands on the local machine (default).
+    #[default]
+    Local,
+    /// Run commands inside a Docker container.
+    Docker,
+    /// Run commands on a remote host via SSH.
+    Ssh,
+    /// Block all writes; allow reads only.
+    ReadOnly,
+}
+
+impl ExecutionBackendKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Local    => "local",
+            Self::Docker   => "docker",
+            Self::Ssh      => "ssh",
+            Self::ReadOnly => "readonly",
+        }
+    }
+}
+
+impl std::str::FromStr for ExecutionBackendKind {
+    type Err = String;
+    fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "local"    => Ok(Self::Local),
+            "docker"   => Ok(Self::Docker),
+            "ssh"      => Ok(Self::Ssh),
+            "readonly" | "read-only" | "read_only" => Ok(Self::ReadOnly),
+            other => Err(format!("Unknown backend '{other}'. Valid: local, docker, ssh, readonly")),
+        }
+    }
+}
+
+impl std::fmt::Display for ExecutionBackendKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+/// Full execution profile — backend selection + backend-specific config.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExecutionProfile {
+    /// Which backend to use (default: local).
+    #[serde(default)]
+    pub backend: ExecutionBackendKind,
+
+    // -- Docker settings
+    /// Docker image for the docker backend (e.g. "ubuntu:22.04").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker_image: Option<String>,
+    /// Extra flags passed to `docker run`.
+    #[serde(default)]
+    pub docker_flags: Vec<String>,
+
+    // -- SSH settings
+    /// Remote host name or IP.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_host: Option<String>,
+    /// Remote username.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_user: Option<String>,
+    /// Path to SSH private key.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_key_path: Option<String>,
+    /// SSH port (default 22).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_port: Option<u16>,
+}
+
+// endregion: --- Execution backend settings
 
 /// Project settings stored in .cade/settings.json (committable — share with team)
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -701,6 +804,18 @@ impl SettingsManager {
 
     pub fn global(&self) -> &GlobalSettings {
         &self.global
+    }
+    pub fn global_settings_mut(&mut self) -> &mut GlobalSettings {
+        &mut self.global
+    }
+
+    /// Returns the active execution profile.
+    pub fn execution_profile(&self) -> &ExecutionProfile {
+        &self.global.execution
+    }
+    /// Persist global settings to disk.
+    pub fn save_global(&self) -> Result<()> {
+        Self::save_json(&self.global_path, &self.global)
     }
     pub fn local(&self) -> &LocalSettings {
         &self.local

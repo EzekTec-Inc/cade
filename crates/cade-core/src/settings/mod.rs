@@ -1,6 +1,9 @@
 // region:    --- Modules
 
 pub mod manager;
-pub use manager::{McpServerConfig, SettingsManager};
+pub use manager::{
+    ExecutionBackendKind, ExecutionProfile,
+    McpServerConfig, SettingsManager,
+};
 
 // endregion: --- Modules

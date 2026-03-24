@@ -1,3 +1,5 @@
+pub mod adapter;
+
 /// Which family of tools to attach to the agent.
 /// Different model families are trained with different editing paradigms —
 /// mismatching them produces degraded edit quality.
@@ -109,7 +111,15 @@ impl Toolset {
     pub fn meta_tool_names(&self) -> &'static [&'static str] {
         match self {
             Self::Codex => &[
+                // memory write
                 "memory_apply_patch",
+                // memory retrieval — must always be available so the agent can
+                // recover archived context even on long coding sessions
+                "search_memory",
+                "conversation_search",
+                "archival_memory_insert",
+                "archival_memory_search",
+                // skills / subagents
                 "load_skill",
                 "install_skill",
                 "run_skill_script",
@@ -117,7 +127,15 @@ impl Toolset {
                 "run_subagent",
             ],
             _ => &[
+                // memory write
                 "update_memory",
+                // memory retrieval — must always be available so the agent can
+                // recover archived context even on long coding sessions
+                "search_memory",
+                "conversation_search",
+                "archival_memory_insert",
+                "archival_memory_search",
+                // skills / subagents
                 "load_skill",
                 "install_skill",
                 "run_skill_script",

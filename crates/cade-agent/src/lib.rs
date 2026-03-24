@@ -8,6 +8,7 @@ mod error;
 pub use error::{Error, Result};
 
 pub mod agent;
+pub mod backends;
 pub mod mcp;
 pub mod subagents;
 pub mod tools;

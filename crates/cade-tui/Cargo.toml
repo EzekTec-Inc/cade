@@ -24,6 +24,8 @@ ansi-to-tui.workspace  = true
 # -- Misc utilities
 regex.workspace        = true
 dirs.workspace         = true
+chrono.workspace       = true
+serde_json.workspace   = true
 # -- Clipboard / image
 image.workspace        = true
 base64.workspace       = true

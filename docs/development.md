@@ -14,7 +14,7 @@ cargo test --workspace
 
 ## Workspace Structure
 
-CADE is a Cargo workspace with six crates. Changes to one crate only recompile
+CADE is a Cargo workspace with twelve crates. Changes to one crate only recompile
 that crate and its dependents — not the entire project.
 
 | Crate | Rebuild triggers recompile of… |

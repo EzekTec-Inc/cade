@@ -1,4 +1,27 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
+
+// region:    --- Package subcommands
+
+/// Package management action.
+#[derive(Subcommand, Debug)]
+pub enum PackageAction {
+    /// Install a package (npm:@foo/pkg, git:github.com/user/repo, or local path)
+    Install {
+        /// Package source specification
+        source: String,
+        /// Install project-locally (.cade/packages/) instead of globally
+        #[arg(short = 'l', long)]
+        project_local: bool,
+    },
+    /// Remove an installed package
+    Remove { source: String },
+    /// List installed packages
+    List,
+    /// Update all non-pinned packages
+    Update,
+}
+
+// endregion: --- Package subcommands
 
 /// CADE — Coding AI assistant with Desktop Extensions
 #[derive(Parser, Debug)]
@@ -117,7 +140,58 @@ pub struct Args {
     /// Example: cade --import-agent backup.json
     #[arg(long = "import-agent", conflicts_with_all = ["prompt", "export_agent"])]
     pub import_agent: Option<String>,
+
+    // -- RPC mode
+    /// Run in JSON-RPC mode (stdin/stdout), compatible with cade-sdk RPC protocol.
+    #[arg(long = "mode", value_name = "MODE")]
+    pub mode: Option<String>,
+
+    // -- Package management (delegated to cade package <action>)
+    /// Package management: install, remove, list, update
+    #[command(subcommand)]
+    pub package: Option<PackageSubcommand>,
 }
+
+/// Top-level package subcommand group.
+#[derive(Subcommand, Debug)]
+pub enum PackageSubcommand {
+    /// Manage CADE packages
+    Package {
+        #[command(subcommand)]
+        action: PackageAction,
+    },
+    /// Eval harness: run benchmark tasks
+    Eval {
+        #[command(subcommand)]
+        action: EvalAction,
+    },
+}
+
+// region:    --- Eval subcommands
+
+#[derive(Subcommand, Debug)]
+pub enum EvalAction {
+    /// Run a single eval task from a JSON file
+    Run {
+        task: std::path::PathBuf,
+        #[arg(short = 'm', long)]
+        model: Option<String>,
+    },
+    /// Run all *.json eval tasks in a directory
+    Bench {
+        dir: std::path::PathBuf,
+        #[arg(short = 'm', long)]
+        model: Option<String>,
+        #[arg(short = 'c', long, default_value = "4")]
+        concurrency: usize,
+    },
+    /// List eval tasks and recent runs
+    List,
+    /// Show a specific eval run by ID
+    Show { id: String },
+}
+
+// endregion: --- Eval subcommands
 
 impl Args {
     /// Parse --tools into an optional name list.

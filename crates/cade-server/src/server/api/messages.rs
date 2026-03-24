@@ -25,14 +25,26 @@ After every tool execution, always provide a plain-text response that explains \
 the result, what you found, or what you are doing next. \
 Never end a turn silently after running a tool. \
 Do not include filler phrases like 'Understood' or 'I will adhere to the rules'. Just do the work.";
-/// Page size for history fetch; pages accumulate until soft budget is reached.
-const HISTORY_PAGE_SIZE: usize = 100;
-/// Number of messages from the end of history considered "recent".
-/// Tool results inside this window are kept at full fidelity.
+/// Number of recent messages examined when deciding whether to include extended
+/// (desktop_*) tool schemas.  These are only sent when the corresponding tool was
+/// actually called within this window, saving prompt tokens on sessions that do not
+/// use desktop features.
 const RECENT_WINDOW: usize = 40;
-/// Tool results outside the recent window are trimmed to this many chars.
-/// They have already been processed; re-sending verbatim wastes tokens.
-const STALE_TOOL_RESULT_MAX_CHARS: usize = 300;
+/// Safety cap on the number of DB rows fetched per `build_context` call.
+/// Budget-based turn selection keeps far fewer rows in practice; this cap guards
+/// against pathologically large conversations on resource-constrained hosts.
+const MAX_ROWS_SAFETY_CAP: usize = 2_000;
+/// Tool names that must always appear in the tool-schema list even when extended
+/// tools are pruned on long conversations.  These are the agent's primary
+/// mechanism for recovering archived context and must never be silently dropped.
+const ALWAYS_INCLUDE_TOOL_NAMES: &[&str] = &[
+    "search_memory",
+    "conversation_search",
+    "archival_memory_insert",
+    "archival_memory_search",
+    "update_memory",
+    "memory_apply_patch",
+];
 /// Character budget for pinned memory blocks (always injected, highest priority).
 const PINNED_BUDGET: usize = 10_000;
 /// Character budget for short-term active memory blocks (full fidelity).
@@ -43,10 +55,11 @@ const LONG_BUDGET: usize = 5_000;
 const STALE_THRESHOLD: i64 = 40;
 /// Awareness footer appended to system prompt when any memory tier is present.
 const MEMORY_AWARENESS_FOOTER: &str = "\n\nMemory system: blocks idle for 40+ turns are \
-archived. The Archived Memory section above lists them with excerpts. Call \
-search_memory(query) when a task may need archived context — retrieved blocks \
-return to active memory automatically. Pin critical reference blocks with \
-update_memory(label, value, tier=\"pinned\").";
+archived. The Archived Memory section above lists them with label + excerpt only. \
+To retrieve a full archived block, call the `search_memory` tool with a keyword — \
+matched blocks are automatically promoted back to active memory. \
+To search dropped conversation history, use the `conversation_search` tool. \
+To keep a critical block permanently active, ask the user to run `/memory pin <label>`.";
 /// Cap on a single tool-result content string (chars). ~2k tokens.
 /// Prevents huge outputs (screenshots, logs) from blowing the context window.
 /// 8 192 chars covers the vast majority of useful tool outputs (diffs, file
@@ -83,20 +96,15 @@ const TOOL_SCHEMA_CHARS_ESTIMATE: usize = 600;
 /// 0.85 means: when the assembled messages use ≥ 85% of the (already-reserved)
 /// char budget.  Triggering earlier than the old 0.98 gives the summarizer
 /// room to run without the hard-trim loop immediately evicting the summary.
-const COMPACT_THRESHOLD: f64 = 0.85;
 /// Emergency compaction threshold — bypasses cooldown.  When context hits this
 /// level, compaction runs regardless of how recently the last one happened.
-const COMPACT_EMERGENCY_THRESHOLD: f64 = 0.95;
 /// Minimum number of user+assistant messages that must exist before
 /// compaction is even considered (avoids summarizing trivially short sessions).
-const COMPACT_MIN_MESSAGES: usize = 10;
 /// Number of recent messages to keep at full fidelity (never summarized).
 /// Must be ≥ 4 so the model always sees the latest user+assistant exchange.
-const COMPACT_KEEP_RECENT: usize = 8;
 /// Cooldown: minimum number of turns between successive compactions for
 /// the same agent.  Prevents re-summarizing every turn once the threshold
 /// is crossed.  Bypassed when usage ≥ COMPACT_EMERGENCY_THRESHOLD.
-const COMPACT_COOLDOWN_TURNS: i64 = 5;
 
 // -- Message history sanitizer
 //
@@ -174,105 +182,38 @@ fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
     result
 }
 
-// -- Auto-compaction: summarize old turns into short-term memory
-
-/// Summarize a slice of conversation messages into a compact block.
-///
-/// Uses the same LLM provider that the agent normally talks to.
-/// Returns `Ok(summary_text)` on success, or an error (caller should
-/// log and fall back to plain trimming).
-async fn summarize_for_compaction(
-    state: &AppState,
-    model: &str,
-    chunk: &[LlmMessage],
-) -> core::result::Result<String, String> {
-    // Format the chunk as a readable transcript for the summarizer.
-    let mut transcript = String::new();
-    for msg in chunk {
-        if msg.role == "system" {
-            continue;
-        }
-        let role_label = match msg.role.as_str() {
-            "user" => "User",
-            "assistant" => "Assistant",
-            "tool" => "Tool result",
-            _ => &msg.role,
-        };
-        if !msg.content.is_empty() {
-            transcript.push_str(&format!("[{role_label}]: {}\n\n", msg.content));
-        }
-        if let Some(calls) = &msg.tool_calls {
-            for tc in calls {
-                transcript.push_str(&format!(
-                    "[{role_label} called {}({})]\n\n",
-                    tc.name,
-                    serde_json::to_string(&tc.arguments).unwrap_or_default()
-                ));
-            }
-        }
-    }
-
-    if transcript.trim().is_empty() {
-        return Err("empty transcript — nothing to summarize".to_string());
-    }
-
-    // Cap the transcript we send to the summarizer to avoid exceeding its own
-    // context window.  Use at most ~40% of the model's budget for the input.
-    let model_budget = {
-        let w = catalogue::context_window_for_model(model) as usize;
-        (w * CHARS_PER_TOKEN).clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)
-    };
-    let max_input_chars = model_budget * 2 / 5;
-    if transcript.chars().count() > max_input_chars {
-        let byte_end = transcript
-            .char_indices()
-            .nth(max_input_chars)
-            .map(|(i, _)| i)
-            .unwrap_or(transcript.len());
-        transcript.truncate(byte_end);
-        transcript.push_str("\n[…transcript truncated for summarization]");
-    }
-
-    let system_msg = LlmMessage {
-        role: "system".to_string(),
-        content: "You are a precise summarizer. Produce a concise summary of the \
-conversation below. Preserve: task goals, key decisions, file paths, \
-code changes, constraints, and current state. Omit: greetings, filler, \
-verbose tool output. Output plain text, no markdown headers. \
-Keep under 800 words."
-            .to_string(),
-        tool_call_id: None,
-        tool_calls: None,
-        images: None,
-    };
-    let user_msg = LlmMessage {
-        role: "user".to_string(),
-        content: format!("Summarize this conversation:\n\n{transcript}"),
-        tool_call_id: None,
-        tool_calls: None,
-        images: None,
-    };
-
-    let req = CompletionRequest {
-        model: model.to_string(),
-        messages: vec![system_msg, user_msg],
-        tools: vec![],
-        max_tokens: 2048,
-        reasoning_effort: None,
-    };
-
-    let resp = state.llm.complete(&req).await.map_err(|e| e.to_string())?;
-    resp.content
-        .filter(|s| !s.trim().is_empty())
-        .ok_or_else(|| "summarizer returned empty content".to_string())
-}
-
 // -- Context builder
 //
 // Key design rule:
 //   Callers PERSIST a message to SQLite BEFORE calling build_context.
 //   build_context loads everything from SQLite — no new_message parameter.
 //   This prevents the double-message bug that breaks tool_use/tool_result ordering.
+
+/// Group a flat, oldest-first list of [`LlmMessage`]s into logical turns.
+///
+/// A turn starts at each `user` message and includes every following non-`user`
+/// message (assistant text, tool calls, tool results) up to but not including the
+/// next `user` message.
+///
+/// Turn grouping is the unit of inclusion/exclusion in the budget-based context
+/// builder.  A turn is always added or dropped as a whole so that `tool_call` /
+/// `tool_result` pairs are never split at the context boundary — a split would
+/// produce an invalid message sequence and a provider 400 error.
+fn group_into_turns(messages: &[LlmMessage]) -> Vec<Vec<LlmMessage>> {
+    let mut turns: Vec<Vec<LlmMessage>> = Vec::new();
+    let mut current: Vec<LlmMessage> = Vec::new();
+    for msg in messages {
+        // A new user message starts a new turn (flush the current one first).
+        if msg.role == "user" && !current.is_empty() {
+            turns.push(std::mem::take(&mut current));
+        }
+        current.push(msg.clone());
+    }
+    if !current.is_empty() {
+        turns.push(current);
+    }
+    turns
+}
 
 async fn build_context(
     state: &AppState,
@@ -466,74 +407,99 @@ async fn build_context(
         TOOL_SCHEMA_CHARS_ESTIMATE,
         tool_schema_reserve,
     );
-    // Count both content text AND tool_calls JSON so tool-heavy sessions are
-    // trimmed accurately.  Counting only content underestimates context size
-    // when many tool-call schemas / large argument payloads are in history.
-    let total_chars = |msgs: &[LlmMessage]| -> usize {
-        msgs.iter()
+
+    // ── Budget-based, turn-aware history assembly ──────────────────────────
+    //
+    // Algorithm:
+    //  1. Fetch up to MAX_ROWS_SAFETY_CAP rows (safety guard; normal sessions
+    //     stay well below this because budget exhausts first).
+    //  2. Convert rows to LlmMessages and group them into logical turns so that
+    //     tool_call / tool_result pairs are never split at the context boundary.
+    //  3. Walk turns from newest to oldest, adding each complete turn while the
+    //     char budget allows.  The most-recent turn is ALWAYS included — it
+    //     carries the current user request the model must respond to.
+    //  4. Reverse back to oldest-first and flatten into the message list.
+    let all_rows = sqlite::list_messages_page(
+        &state.db,
+        agent_id,
+        conversation_id,
+        MAX_ROWS_SAFETY_CAP,
+        0,
+    )
+    .unwrap_or_default();
+
+    // Convert DB rows to LlmMessages (oldest-first).
+    let all_llm_msgs: Vec<LlmMessage> = all_rows
+        .iter()
+        .flat_map(db_row_to_llm)
+        .collect();
+
+    // Group into logical turns.
+    let turns = group_into_turns(&all_llm_msgs);
+
+    // Deduct the already-assembled system-prompt size from the message budget.
+    let system_chars = messages.first().map(|m| m.content.chars().count()).unwrap_or(0);
+    let message_budget = context_char_budget.saturating_sub(system_chars);
+
+    let mut selected: Vec<&[LlmMessage]> = Vec::new();
+    let mut budget_used: usize = 0;
+    let mut omitted_turns: usize = 0;
+
+    for turn in turns.iter().rev() {
+        // Approximate turn cost: sum of content chars + serialised tool-call
+        // argument strings (arguments are JSON text and can be large).
+        let turn_chars: usize = turn
+            .iter()
             .map(|m| {
                 m.content.chars().count()
                     + m.tool_calls
                         .as_deref()
-                        .and_then(|tcs| serde_json::to_string(tcs).ok())
-                        .map(|s| s.len())
-                        .unwrap_or(0)
-                    + m.images
-                        .as_ref()
-                        .map(|imgs| {
-                            imgs.iter()
-                                .map(|img| img.data.len() + img.media_type.len())
-                                .sum()
-                        })
-                        .unwrap_or(0)
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|tc| tc.arguments.to_string().len())
+                        .sum::<usize>()
             })
-            .sum()
-    };
+            .sum();
 
-    // Page backwards through history until we hit a soft budget (1.3× char budget)
-    // or run out of rows. Keeps oldest-first ordering.
-    let soft_cap_chars = ((context_char_budget as f64) * 1.3).round() as usize;
-    let mut offset: usize = 0;
-    let mut history_chunks = Vec::new();
-    let mut current_chars = total_chars(&messages); // starts with system prompt size
+        if selected.is_empty() {
+            // Always include the most-recent turn regardless of size.
+            selected.push(turn.as_slice());
+            budget_used += turn_chars;
+        } else if budget_used + turn_chars <= message_budget {
+            selected.push(turn.as_slice());
+            budget_used += turn_chars;
+        } else {
+            omitted_turns += 1;
+        }
+    }
 
-    loop {
-        let batch = sqlite::list_messages_page(
-            &state.db,
+    if omitted_turns > 0 {
+        tracing::debug!(
+            "build_context [{}]: {}/{} turns fit in budget \
+             ({} chars used / {} budget); {} older turn(s) omitted — \
+             agent can recover them via conversation_search / search_memory",
             agent_id,
-            conversation_id,
-            HISTORY_PAGE_SIZE,
-            offset,
-        )
-        .unwrap_or_default();
-        if batch.is_empty() {
-            break;
-        }
-        let batch_len = batch.len();
-        // list_messages_page returns oldest-first within the chunk.
-        let mut chunk_msgs = Vec::new();
-        for row in batch.into_iter() {
-            chunk_msgs.extend(db_row_to_llm(&row));
-        }
-        
-        let chunk_chars = total_chars(&chunk_msgs);
-        history_chunks.push(chunk_msgs);
-        current_chars += chunk_chars;
-        
-        offset = offset.saturating_add(batch_len);
-        if current_chars >= soft_cap_chars {
-            break;
-        }
-        if batch_len < HISTORY_PAGE_SIZE {
-            break; // no more rows
+            selected.len(),
+            turns.len(),
+            budget_used,
+            message_budget,
+            omitted_turns,
+        );
+        // Signal the Sleeptime consolidation task.  After 60 s of inactivity
+        // it will summarise the dropped turns into the `session_summary` block.
+        let mut activity = state.agent_activity.write().await;
+        let entry = activity
+            .entry(agent_id.to_string())
+            .or_insert((chrono::Utc::now().timestamp(), true, conversation_id.map(String::from)));
+        entry.1 = true; // needs_consolidation = true
+        if conversation_id.is_some() {
+            entry.2 = conversation_id.map(String::from);
         }
     }
 
-    // Assemble the final message array in true oldest-first chronological order:
-    // Newest chunks were pushed first, so we reverse the chunks before extending.
-    for chunk in history_chunks.into_iter().rev() {
-        messages.extend(chunk);
-    }
+    // Reverse (was newest-first) back to oldest-first, then flatten.
+    selected.reverse();
+    messages.extend(selected.into_iter().flat_map(|t| t.iter().cloned()));
 
     // Sanitize history: fix orphaned tool_calls, dedup tool_results, drop
     // stray tool_results so Anthropic never sees an invalid sequence.
@@ -544,9 +510,6 @@ async fn build_context(
     }
 
     // Strip trailing empty assistant messages left by prior empty LLM responses.
-    // These produce no content for any provider and can create invalid turn
-    // ordering (e.g. consecutive user turns in Gemini after the empty model
-    // turn is skipped).
     while messages.len() > 1 {
         if let Some(last) = messages.last()
             && last.role == "assistant"
@@ -559,194 +522,7 @@ async fn build_context(
         break;
     }
 
-    // Stale tool-result summarization: tool results outside the recent window
-    // have already been processed by the model. Re-sending them verbatim is
-    // wasteful; trim them to a short excerpt to reduce token footprint while
-    // preserving enough context for the model to understand what happened.
-    if messages.len() > 1 + RECENT_WINDOW {
-        let stale_until = messages.len() - RECENT_WINDOW;
-        for msg in &mut messages[1..stale_until] {
-            if msg.role == "tool" {
-                let char_count = msg.content.chars().count();
-                if char_count > STALE_TOOL_RESULT_MAX_CHARS {
-                    let truncated: String = msg
-                        .content
-                        .chars()
-                        .take(STALE_TOOL_RESULT_MAX_CHARS)
-                        .collect();
-                    msg.content = format!(
-                        "{truncated}\n[…{} chars trimmed]",
-                        char_count - STALE_TOOL_RESULT_MAX_CHARS
-                    );
-                }
-            }
-        }
-    }
-
-    // -- Auto-compaction: summarize old turns into memory when near capacity
-    //
-    // Trigger: total assembled chars ≥ COMPACT_THRESHOLD (85%) of budget
-    //          AND enough messages exist AND cooldown has elapsed.
-    //          At COMPACT_EMERGENCY_THRESHOLD (95%) the cooldown is bypassed.
-    //
-    // On trigger:
-    //   1. Extract the oldest dialogue turns (everything except the recent tail).
-    //   2. Summarize them via a single LLM call.
-    //   3. Write the summary as a short-term memory block (ages normally).
-    //   4. **Remove the compacted messages** from the in-flight array.
-    //   5. Inject the summary after the system prompt so context is preserved.
-    //   6. Update cooldown stamp.
-    //
-    // On failure: log a warning and fall through to the existing hard-trim loop.
-    {
-        let current_total = total_chars(&messages);
-        let usage_ratio = current_total as f64 / context_char_budget as f64;
-        let non_system_count = messages.iter().filter(|m| m.role != "system").count();
-
-        let should_compact =
-            usage_ratio >= COMPACT_THRESHOLD && non_system_count >= COMPACT_MIN_MESSAGES;
-
-        if should_compact {
-            // Cooldown check — bypassed at emergency threshold.
-            let is_emergency = usage_ratio >= COMPACT_EMERGENCY_THRESHOLD;
-            let last_compact_turn: i64 = {
-                let blocks = sqlite::get_active_blocks(&state.db, agent_id).unwrap_or_default();
-                blocks
-                    .iter()
-                    .find(|(label, ..)| label == "__compact_turn")
-                    .and_then(|(_, val, ..)| val.trim().parse::<i64>().ok())
-                    .unwrap_or(0)
-            };
-            let cooldown_ok =
-                is_emergency || (current_turn - last_compact_turn) >= COMPACT_COOLDOWN_TURNS;
-
-            if cooldown_ok {
-                // Determine the chunk to summarize: messages[1..end-COMPACT_KEEP_RECENT]
-                // (skip system prompt at [0], keep recent tail).
-                let keep_start = messages.len().saturating_sub(COMPACT_KEEP_RECENT);
-                if keep_start > 1 {
-                    let chunk = &messages[1..keep_start];
-                    let has_dialogue = chunk
-                        .iter()
-                        .any(|m| m.role == "user" || m.role == "assistant");
-
-                    if has_dialogue {
-                        let compacted_count = chunk.len();
-                        tracing::info!(
-                            "Auto-compaction triggered for agent '{}': usage {:.0}% ({}/{} chars), \
-                             summarizing {} messages{}",
-                            agent_id,
-                            usage_ratio * 100.0,
-                            current_total,
-                            context_char_budget,
-                            compacted_count,
-                            if is_emergency {
-                                " [EMERGENCY — cooldown bypassed]"
-                            } else {
-                                ""
-                            },
-                        );
-
-                        match summarize_for_compaction(state, &agent.model, chunk).await {
-                            Ok(summary) => {
-                                // Write summary into short-term memory.
-                                let label = format!("summary:compact:turn{current_turn}");
-                                let desc = Some("Auto-compacted conversation history");
-                                let _ = sqlite::upsert_memory_block(
-                                    &state.db, agent_id, &label, &summary, desc, None,
-                                );
-                                // Update cooldown stamp.
-                                let _ = sqlite::upsert_memory_block(
-                                    &state.db,
-                                    agent_id,
-                                    "__compact_turn",
-                                    &current_turn.to_string(),
-                                    Some("Internal: last auto-compaction turn"),
-                                    None,
-                                );
-
-                                // **Remove the compacted messages** from the array.
-                                // This is the critical fix: without removal, the summary
-                                // injection INCREASES total size and the hard-trim loop
-                                // immediately evicts the summary.
-                                messages.drain(1..keep_start);
-
-                                // Inject summary right after the system prompt (index 1).
-                                messages.insert(1, LlmMessage {
-                                    role: "user".to_string(),
-                                    content: format!(
-                                        "[System: the following is an auto-compacted summary \
-                                         of earlier conversation history ({compacted_count} messages). \
-                                         Continue from where the summary leaves off.]\n\n{summary}"
-                                    ),
-                                    tool_call_id: None,
-                                    tool_calls: None,
-                                    images: None,
-                                });
-                                // Add an empty assistant ack so provider turn ordering is valid.
-                                messages.insert(2, LlmMessage {
-                                    role: "assistant".to_string(),
-                                    content: "Understood. I have the compacted context and will continue from there.".to_string(),
-                                    tool_call_id: None,
-                                    tool_calls: None,
-                                    images: None,
-                                });
-
-                                tracing::info!(
-                                    "Auto-compaction complete for agent '{}': removed {} messages, \
-                                     summary={} chars, stored as '{}'",
-                                    agent_id,
-                                    compacted_count,
-                                    summary.chars().count(),
-                                    label,
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Auto-compaction summarization failed for agent '{}': {}. \
-                                     Falling back to hard trim.",
-                                    agent_id,
-                                    e,
-                                );
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Hard trim: drop oldest non-system messages until total fits the budget.
-    // This always runs (whether or not compaction happened above) to guarantee
-    // the final message array respects the model's context window.
-    //
-    // IMPORTANT: remove messages in atomic units to avoid orphaning tool_results.
-    // An assistant message with tool_calls + all its following tool results form
-    // an indivisible group.  Removing only part of the group causes the LLM to
-    // receive an invalid sequence (orphaned tool_results or tool_calls without
-    // results), leading to empty responses and infinite re-prompt loops.
-    while total_chars(&messages) > context_char_budget && messages.len() > 3 {
-        // messages[0] is always the system prompt — inspect messages[1]
-        let role = messages[1].role.as_str();
-        let has_tool_calls = role == "assistant"
-            && messages[1].tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
-
-        if has_tool_calls {
-            // Remove the assistant(tool_calls) message AND all immediately
-            // following tool result messages as one atomic unit.
-            messages.remove(1); // assistant with tool_calls
-            while messages.len() > 1 && messages[1].role == "tool" {
-                messages.remove(1);
-            }
-        } else {
-            messages.remove(1);
-        }
-    }
-    // Repair: trimming may have left a non-user turn as the first content message
-    // (e.g. an assistant(tool_calls) whose preceding user turn was trimmed away).
-    // All providers require the conversation to begin with a user turn; remove
-    // any leading non-user messages until one is found or only 2 messages remain.
-    // Apply the same atomic-removal rule for assistant+tool groups.
+    // Ensure the conversation begins with a user turn (all providers require this).
     while messages.len() > 2 && messages[1].role != "user" {
         let has_tool_calls = messages[1].role == "assistant"
             && messages[1].tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
@@ -760,8 +536,7 @@ async fn build_context(
         }
     }
 
-    // Re-sanitize after trimming: a second pass guarantees every provider
-    // sees a valid sequence (cheap linear scan).
+    // Re-sanitize after trimming
     if messages.len() > 1 {
         let system_msg = messages.remove(0);
         let sanitized = sanitize_messages(messages);
@@ -785,14 +560,15 @@ async fn build_context(
             .collect()
     };
 
-    // Lazy tool loading: on long conversations only send "extended" tools
-    // (desktop_*, search_*) if they were actually used in the recent window.
-    // Core tools (bash, file I/O, memory helpers, etc.) are always included.
-    // On short conversations every tool is sent so the model can discover
-    // what's available before deciding what to call.
-    const EXTENDED_TOOL_PREFIXES: &[&str] = &["desktop_", "search_"];
+    // Lazy tool schema loading: on long conversations, desktop_* tools are pruned
+    // unless they were actually called in the recent message window.  This saves
+    // prompt tokens for sessions that never use desktop features.
+    //
+    // ALWAYS_INCLUDE_TOOL_NAMES are never pruned — they are the agent's primary
+    // mechanism for recovering archived/dropped context and must always be present.
+    const EXTENDED_TOOL_PREFIXES: &[&str] = &["desktop_"];
     let tool_schemas: Vec<Value> = if messages.len() > 1 + RECENT_WINDOW {
-        // Collect tool names used in the recent window
+        // Collect tool names called in the recent window.
         let recent_start = messages.len().saturating_sub(RECENT_WINDOW);
         let mut recently_used: std::collections::HashSet<&str> = std::collections::HashSet::new();
         for msg in &messages[recent_start..] {
@@ -806,6 +582,10 @@ async fn build_context(
             .into_iter()
             .filter(|schema| {
                 let name = schema["name"].as_str().unwrap_or("");
+                // Memory/retrieval tools are always included.
+                if ALWAYS_INCLUDE_TOOL_NAMES.contains(&name) {
+                    return true;
+                }
                 let is_extended = EXTENDED_TOOL_PREFIXES.iter().any(|p| name.starts_with(p));
                 !is_extended || recently_used.contains(name)
             })
@@ -815,6 +595,139 @@ async fn build_context(
     };
 
     Ok((agent.model, messages, tool_schemas))
+}
+
+// ── Real context-window stats ─────────────────────────────────────────────────
+//
+// Mirrors the exact budget arithmetic used by `build_context` so the CLI can
+// show accurate turn counts and char usage without guessing from token percentages.
+
+/// GET /v1/agents/:id/context?conversation_id=<id>
+///
+/// Returns accurate server-side context-window accounting: how many turns are
+/// included vs omitted, chars used vs budget, and whether a Sleeptime
+/// consolidation is pending.
+pub async fn get_context_stats_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let conv_id = params.get("conversation_id").map(String::as_str);
+    match compute_context_stats(&state, &agent_id, conv_id).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(StatusCode::NOT_FOUND, &e).into_response(),
+    }
+}
+
+/// Compute context-window stats without assembling the full message list for the LLM.
+/// Shares all budget constants with `build_context` so the numbers are identical.
+async fn compute_context_stats(
+    state: &AppState,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+) -> core::result::Result<Value, String> {
+    let agent = sqlite::get_agent(&state.db, agent_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
+
+    // ── Same budget formula as build_context ────────────────────────────────
+    let window_tokens = catalogue::context_window_for_model(&agent.model);
+    let output_reserve =
+        ((window_tokens as f64) * OUTPUT_RESERVE_FRACTION).round() as usize;
+    let input_budget_tokens = (window_tokens as usize).saturating_sub(output_reserve);
+    let agent_tool_count = sqlite::get_agent_tool_ids(&state.db, agent_id)
+        .unwrap_or_default()
+        .len()
+        .max(1);
+    let tool_schema_reserve = agent_tool_count * TOOL_SCHEMA_CHARS_ESTIMATE;
+    let context_char_budget = {
+        let raw = input_budget_tokens.saturating_mul(CHARS_PER_TOKEN);
+        raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)
+            .saturating_sub(tool_schema_reserve)
+            .max(MIN_CONTEXT_CHARS)
+    };
+
+    // ── Load and group messages (same as build_context) ─────────────────────
+    let all_rows = sqlite::list_messages_page(
+        &state.db,
+        agent_id,
+        conversation_id,
+        MAX_ROWS_SAFETY_CAP,
+        0,
+    )
+    .unwrap_or_default();
+
+    let all_llm_msgs: Vec<LlmMessage> = all_rows
+        .iter()
+        .flat_map(db_row_to_llm)
+        .collect();
+
+    let turns = group_into_turns(&all_llm_msgs);
+    let total_turns = turns.len();
+
+    // System prompt and memory chars (overhead subtracted from the message budget)
+    let system_chars = agent
+        .system_prompt
+        .as_deref()
+        .map(|s| s.chars().count())
+        .unwrap_or(0);
+    let memory_chars: usize = sqlite::get_active_blocks(&state.db, agent_id)
+        .unwrap_or_default()
+        .iter()
+        .map(|(_, v, _, _, _)| v.chars().count())
+        .sum();
+    let message_budget = context_char_budget.saturating_sub(system_chars);
+
+    // ── Turn selection (same walk as build_context) ──────────────────────────
+    let mut turns_included = 0usize;
+    let mut turns_omitted  = 0usize;
+    let mut chars_used     = 0usize;
+
+    for turn in turns.iter().rev() {
+        let turn_chars: usize = turn
+            .iter()
+            .map(|m| {
+                m.content.chars().count()
+                    + m.tool_calls
+                        .as_deref()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|tc| tc.arguments.to_string().len())
+                        .sum::<usize>()
+            })
+            .sum();
+
+        if turns_included == 0 || chars_used + turn_chars <= message_budget {
+            turns_included += 1;
+            chars_used += turn_chars;
+        } else {
+            turns_omitted += 1;
+        }
+    }
+
+    // ── Consolidation flag ───────────────────────────────────────────────────
+    let needs_consolidation = {
+        let activity = state.agent_activity.read().await;
+        activity
+            .get(agent_id)
+            .map(|(_, needs, _)| *needs)
+            .unwrap_or(false)
+    };
+
+    Ok(json!({
+        "model":                   agent.model,
+        "window_tokens":           window_tokens,
+        "turns_total":             total_turns,
+        "turns_included":          turns_included,
+        "turns_omitted":           turns_omitted,
+        "chars_used":              chars_used,
+        "message_budget_chars":    message_budget,
+        "memory_chars":            memory_chars,
+        "system_prompt_chars":     system_chars,
+        "tool_count":              agent_tool_count,
+        "tool_schema_reserve_chars": tool_schema_reserve,
+        "needs_consolidation":     needs_consolidation,
+    }))
 }
 
 /// Convert a DB MessageRow to one or more LlmMessages.
@@ -959,6 +872,17 @@ pub async fn send_message(
         Err(r) => return r,
     };
     let conv_id_ref = conv_id.as_deref();
+
+    // Track last-active timestamp; needs_consolidation is set inside build_context
+    // when turns are actually dropped — not unconditionally on every message.
+    {
+        let mut activity = state.agent_activity.write().await;
+        let entry = activity
+            .entry(agent_id.clone())
+            .or_insert((0, false, conv_id.clone()));
+        entry.0 = chrono::Utc::now().timestamp();
+        entry.2 = conv_id.clone();
+    }
 
     if body["role"].as_str() == Some("tool") {
         return handle_tool_return_blocking(&state, &agent_id, conv_id_ref, &body).await;
@@ -1161,6 +1085,17 @@ pub async fn stream_message(
     };
     let conv_str = conv_id.clone();
     let conv_id_ref = conv_str.as_deref();
+
+    // Track last-active timestamp; needs_consolidation is set inside build_context
+    // when turns are actually dropped — not unconditionally on every message.
+    {
+        let mut activity = state.agent_activity.write().await;
+        let entry = activity
+            .entry(agent_id.clone())
+            .or_insert((0, false, conv_id.clone()));
+        entry.0 = chrono::Utc::now().timestamp();
+        entry.2 = conv_id.clone();
+    }
 
     let is_tool_return = body["role"].as_str() == Some("tool");
 
@@ -1418,4 +1353,265 @@ fn maybe_set_conv_title(state: &AppState, conv_id: &str, text: &str) {
 
 fn err(status: StatusCode, msg: &str) -> Response {
     (status, Json(json!({ "detail": msg }))).into_response()
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn user(text: &str) -> LlmMessage {
+        LlmMessage {
+            role: "user".to_string(),
+            content: text.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+        }
+    }
+
+    fn assistant(text: &str) -> LlmMessage {
+        LlmMessage {
+            role: "assistant".to_string(),
+            content: text.to_string(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+        }
+    }
+
+    fn tool_result(id: &str, content: &str) -> LlmMessage {
+        LlmMessage {
+            role: "tool".to_string(),
+            content: content.to_string(),
+            tool_call_id: Some(id.to_string()),
+            tool_calls: None,
+            images: None,
+        }
+    }
+
+    // ── group_into_turns ──────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_input_produces_no_turns() {
+        assert!(group_into_turns(&[]).is_empty());
+    }
+
+    #[test]
+    fn single_user_message_is_one_turn() {
+        let turns = group_into_turns(&[user("hello")]);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].len(), 1);
+        assert_eq!(turns[0][0].role, "user");
+    }
+
+    #[test]
+    fn user_assistant_is_one_turn() {
+        let msgs = vec![user("q"), assistant("a")];
+        let turns = group_into_turns(&msgs);
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].len(), 2);
+    }
+
+    #[test]
+    fn two_user_messages_produce_two_turns() {
+        let msgs = vec![user("q1"), assistant("a1"), user("q2"), assistant("a2")];
+        let turns = group_into_turns(&msgs);
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0][0].content, "q1");
+        assert_eq!(turns[1][0].content, "q2");
+    }
+
+    #[test]
+    fn tool_call_and_result_stay_within_same_turn() {
+        // user → assistant (with tool call) → tool result → assistant response
+        let msgs = vec![
+            user("do the thing"),
+            assistant(""),        // assistant triggers tool
+            tool_result("tc1", "ok"),
+            assistant("done"),    // assistant responds after tool
+        ];
+        let turns = group_into_turns(&msgs);
+        // All four messages are in one turn (only one user message)
+        assert_eq!(turns.len(), 1);
+        assert_eq!(turns[0].len(), 4);
+    }
+
+    #[test]
+    fn multi_tool_call_turn_stays_intact() {
+        let msgs = vec![
+            user("q"),
+            assistant(""),
+            tool_result("tc1", "r1"),
+            tool_result("tc2", "r2"),
+            assistant("summary"),
+            user("next q"),
+            assistant("a2"),
+        ];
+        let turns = group_into_turns(&msgs);
+        assert_eq!(turns.len(), 2);
+        // First turn has 5 messages (user + assistant + 2 tool results + assistant)
+        assert_eq!(turns[0].len(), 5);
+        // Second turn has 2 messages (user + assistant)
+        assert_eq!(turns[1].len(), 2);
+    }
+
+    #[test]
+    fn orphaned_assistant_at_start_forms_its_own_turn() {
+        // Unusual but must not panic; sanitize_messages cleans it up later.
+        let msgs = vec![assistant("orphan"), user("q"), assistant("a")];
+        let turns = group_into_turns(&msgs);
+        // "orphan" assistant has no preceding user → it starts a turn by itself
+        // because current is empty when we encounter it, so the flush branch
+        // never triggers.  Then user("q") flushes that turn.
+        assert_eq!(turns.len(), 2);
+        assert_eq!(turns[0][0].role, "assistant");
+        assert_eq!(turns[1][0].role, "user");
+    }
+
+    #[test]
+    fn back_to_back_user_messages_each_start_a_turn() {
+        let msgs = vec![user("a"), user("b"), user("c")];
+        let turns = group_into_turns(&msgs);
+        assert_eq!(turns.len(), 3);
+        for (i, t) in turns.iter().enumerate() {
+            assert_eq!(t.len(), 1);
+            assert_eq!(t[0].role, "user");
+            let expected = ["a", "b", "c"][i];
+            assert_eq!(t[0].content, expected);
+        }
+    }
+
+    // ── Budget-based turn selection (D4) ──────────────────────────────────────
+
+    /// Build a minimal user+assistant turn whose TOTAL chars() count is `chars`.
+    /// Split evenly between user and assistant messages.
+    fn make_turn_of_size(chars: usize) -> Vec<LlmMessage> {
+        let half = chars / 2;
+        let rest = chars - half; // absorbs odd remainders
+        vec![
+            LlmMessage { role: "user".to_string(),      content: "x".repeat(half), tool_call_id: None, tool_calls: None, images: None },
+            LlmMessage { role: "assistant".to_string(), content: "x".repeat(rest), tool_call_id: None, tool_calls: None, images: None },
+        ]
+    }
+
+    /// Simulate the turn-selection loop from `build_context`.
+    fn select_turns(turns: &[Vec<LlmMessage>], budget: usize) -> (usize, usize) {
+        let mut included = 0;
+        let mut omitted  = 0;
+        let mut used     = 0usize;
+        for turn in turns.iter().rev() {
+            let chars: usize = turn.iter().map(|m| m.content.chars().count()).sum();
+            if included == 0 || used + chars <= budget {
+                included += 1;
+                used += chars;
+            } else {
+                omitted += 1;
+            }
+        }
+        (included, omitted)
+    }
+
+    #[test]
+    fn all_turns_fit_when_budget_is_large() {
+        // 5 turns × 100 chars each = 500 chars total; budget = 10 000 → all fit
+        let turns: Vec<Vec<LlmMessage>> = (0..5).map(|_| make_turn_of_size(100)).collect();
+        let (included, omitted) = select_turns(&turns, 10_000);
+        assert_eq!(included, 5);
+        assert_eq!(omitted,  0);
+    }
+
+    #[test]
+    fn oldest_turns_dropped_when_budget_is_tight() {
+        // 10 turns × 200 chars = 2 000 chars; budget = 600 → only 3 newest fit
+        let turns: Vec<Vec<LlmMessage>> = (0..10).map(|_| make_turn_of_size(200)).collect();
+        let (included, omitted) = select_turns(&turns, 600);
+        assert_eq!(included, 3, "exactly 3 turns of 200 chars fit in 600");
+        assert_eq!(omitted,  7);
+    }
+
+    #[test]
+    fn most_recent_turn_always_included_even_if_oversized() {
+        // One giant turn (5 000 chars) with budget of only 1 000 → still included.
+        let turns = vec![make_turn_of_size(5_000)];
+        let (included, omitted) = select_turns(&turns, 1_000);
+        assert_eq!(included, 1, "most-recent turn must always be included");
+        assert_eq!(omitted,  0);
+    }
+
+    #[test]
+    fn many_turns_long_session_regression() {
+        // Simulate a 100-turn session with 300 chars per turn (30 000 chars total).
+        // Budget of 9 000 chars → expect ~30 turns included.
+        let turns: Vec<Vec<LlmMessage>> = (0..100).map(|_| make_turn_of_size(300)).collect();
+        let (included, omitted) = select_turns(&turns, 9_000);
+        assert_eq!(included, 30);
+        assert_eq!(omitted,  70);
+    }
+
+    #[test]
+    fn single_turn_session_always_fully_included() {
+        let turns = vec![make_turn_of_size(50)];
+        let (included, omitted) = select_turns(&turns, 100);
+        assert_eq!(included, 1);
+        assert_eq!(omitted,  0);
+    }
+
+    #[test]
+    fn tool_call_and_result_kept_atomically_during_selection() {
+        // Turn 1 (old, large): user + assistant(tool_call) + tool_result + assistant = 4 msgs
+        // Turn 2 (new, small): user + assistant = 2 msgs
+        // Budget only fits turn 2 → turn 1 must be dropped as a whole.
+        let big_turn = vec![
+            user("big task"),
+            assistant(""),
+            tool_result("tc1", "x".repeat(300).as_str()),
+            assistant("done"),
+        ];
+        let small_turn = vec![user("small task"), assistant("ok")];
+        let turns = vec![big_turn, small_turn];
+
+        let big_chars: usize = turns[0].iter().map(|m| m.content.chars().count()).sum();
+        let small_chars: usize = turns[1].iter().map(|m| m.content.chars().count()).sum();
+        let budget = small_chars + 10; // fits exactly 1 small turn but not the big one
+
+        let (included, omitted) = select_turns(&turns, budget);
+        // Only the most recent (small) turn fits.
+        assert_eq!(included, 1, "big turn must be dropped as a whole (budget {budget}, big={big_chars})");
+        assert_eq!(omitted,  1);
+    }
+
+    // ── ALWAYS_INCLUDE_TOOL_NAMES ─────────────────────────────────────────────
+
+    #[test]
+    fn always_include_list_covers_all_retrieval_tools() {
+        // Every retrieval/memory tool must be in the always-include list so
+        // they are never accidentally pruned on long conversations.
+        for name in &[
+            "search_memory",
+            "conversation_search",
+            "archival_memory_insert",
+            "archival_memory_search",
+            "update_memory",
+            "memory_apply_patch",
+        ] {
+            assert!(
+                ALWAYS_INCLUDE_TOOL_NAMES.contains(name),
+                "'{name}' missing from ALWAYS_INCLUDE_TOOL_NAMES"
+            );
+        }
+    }
+
+    // ── Constants sanity ─────────────────────────────────────────────────────
+
+    #[test]
+    fn constants_are_sane() {
+        assert!(MAX_ROWS_SAFETY_CAP > 100, "safety cap too small");
+        assert!(RECENT_WINDOW >= 10, "recent window too small for useful tool-usage detection");
+        assert!(PINNED_BUDGET >= 5_000, "pinned budget too small for typical memory blocks");
+        assert!(SHORT_BUDGET > PINNED_BUDGET, "short budget should exceed pinned budget");
+        assert!(MIN_CONTEXT_CHARS < MAX_CONTEXT_CHARS);
+        assert!(OUTPUT_RESERVE_FRACTION > 0.0 && OUTPUT_RESERVE_FRACTION < 0.5);
+    }
 }

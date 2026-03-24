@@ -5,6 +5,10 @@ members = [
     "crates/cade-server",
     "crates/cade-desktop",
     "crates/cade-agent",
+    "crates/cade-plugin",
+    "crates/cade-sdk",
+    "crates/cade-codeintel",
+    "crates/cade-web",
     "crates/cade-tui",
     "crates/cade-mcp",
     "crates/cade-cli",
@@ -67,6 +71,8 @@ sha2           = "0.10"
 hmac           = "0.12"
 getrandom      = "0.2"
 machine-uid    = "0.3"
+urlencoding    = "2.1"
+url            = "2"
 
 # Desktop
 xcap           = "0.8.2"
@@ -115,6 +121,8 @@ cade-server  = { path = "crates/cade-server" }
 cade-desktop = { path = "crates/cade-desktop" }
 cade-agent   = { path = "crates/cade-agent" }
 cade-cli     = { path = "crates/cade-cli" }
+cade-sdk     = { path = "crates/cade-sdk" }
+cade-codeintel = { path = "crates/cade-codeintel" }
 # -- Shared by both binaries
 derive_more.workspace  = true
 tokio.workspace        = true
@@ -125,6 +133,7 @@ serde_json.workspace   = true
 dotenvy.workspace      = true
 chrono.workspace       = true
 atty.workspace         = true
+dirs.workspace         = true
 # -- Used by cade-server binary (RouterAdapter)
 async-trait.workspace  = true
 tokio-stream.workspace = true

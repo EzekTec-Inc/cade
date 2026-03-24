@@ -4,7 +4,7 @@ use serde_json::json;
 
 use cade_agent::agent::{CadeClient, client::CadeMessage};
 use cade_agent::mcp::McpManager;
-use cade_agent::tools::dispatch;
+use cade_agent::tools::{ToolRuntime, dispatch};
 use cade_core::hooks::{HookEngine, HookOutcome};
 use cade_core::permissions::PermissionManager;
 
@@ -60,7 +60,7 @@ pub async fn run_headless(
     agent_id: &str,
     prompt: &str,
     permissions: &PermissionManager,
-    mcp: &McpManager,
+    mcp: &std::sync::Arc<McpManager>,
     hooks: &HookEngine,
 ) -> Result<(String, HeadlessStats)> {
     tracing::debug!("headless: agent={agent_id}");
@@ -123,7 +123,7 @@ pub async fn run_headless_stream_json(
     model: &str,
     prompt: &str,
     permissions: &PermissionManager,
-    mcp: &McpManager,
+    mcp: &std::sync::Arc<McpManager>,
     hooks: &HookEngine,
 ) {
     use std::io::Write;
@@ -242,17 +242,17 @@ async fn run_one_tool(
     tool_name: String,
     args: serde_json::Value,
     permissions: &PermissionManager,
-    mcp: &McpManager,
+    mcp: &std::sync::Arc<McpManager>,
     hooks: &HookEngine,
 ) -> (String, String, bool) {
-    // Permission check
+    // -- Permission check
     if permissions.is_blocked(&tool_name, &args) {
         let reason = permissions.block_reason(&tool_name, &args);
         tracing::warn!("{reason}");
         return (call_id, reason, true);
     }
 
-    // PreToolUse hook — can block execution
+    // -- PreToolUse hook — can block execution
     if !hooks.is_empty()
         && let HookOutcome::Block { reason } = hooks.pre_tool_use(&tool_name, &args).await {
             let msg = format!("Blocked by hook: {reason}");
@@ -260,192 +260,21 @@ async fn run_one_tool(
             return (call_id, msg, true);
         }
 
-    // Intercept: update_memory
-    if tool_name == "update_memory" {
-        let label = args["label"].as_str().unwrap_or("").trim().to_string();
-        let value = args["value"].as_str().unwrap_or("").to_string();
-        let operation = args["operation"].as_str().unwrap_or("set");
-        let final_value = if operation == "append" {
-            let existing = client
-                .get_memory(agent_id)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .find(|b| b.label == label)
-                .map(|b| b.value)
-                .unwrap_or_default();
-            if existing.is_empty() {
-                value
-            } else {
-                format!("{existing}\n{value}")
-            }
-        } else {
-            value
-        };
-        let description = args["description"].as_str().map(String::from);
-        let (msg, err) = match client
-            .upsert_memory(agent_id, &label, &final_value, description.as_deref())
-            .await
-        {
-            Ok(_) => (format!("Memory block '{label}' updated"), false),
-            Err(e) => (format!("Failed: {e}"), true),
-        };
-        return finalize_tool_result(hooks, call_id, tool_name, args, msg, err).await;
+    // -- Unified dispatch via ToolRuntime (memory, skills, checkpoints, native tools)
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let runtime = ToolRuntime::new(std::sync::Arc::new(client.clone()), std::sync::Arc::clone(mcp), agent_id.to_string(), cwd);
+    if let Some(result) = runtime.execute(call_id.clone(), &tool_name, &args).await {
+        return finalize_tool_result(
+            hooks, call_id, tool_name, args, result.output, result.is_error,
+        ).await;
     }
 
-    // Intercept: load_skill
-    if tool_name == "load_skill" {
-        let id = args["id"].as_str().unwrap_or("").trim().to_string();
-        let skills = cade_core::skills::discover_all_skills(
-            &std::env::current_dir().unwrap_or_default(),
-            None,
-            None,
-        );
-        let (msg, err) = match skills.into_iter().find(|s| s.id == id) {
-            Some(s) => (s.to_context_block(), false),
-            None => (format!("Skill '{id}' not found"), true),
-        };
-        return finalize_tool_result(hooks, call_id, tool_name, args, msg, err).await;
-    }
-
-    // Intercept: run_skill_script
-    if tool_name == "run_skill_script" {
-        let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
-        let script = args["script"].as_str().unwrap_or("").trim().to_string();
-        let script_args: Vec<String> = args["args"]
-            .as_array()
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        if skill_id.is_empty() || script.is_empty() {
-            let msg = "error: 'skill_id' and 'script' are required".to_string();
-            return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
-        }
-
-        let skills = cade_core::skills::discover_all_skills(
-            &std::env::current_dir().unwrap_or_default(),
-            None,
-            None,
-        );
-        let skill = match skills.into_iter().find(|s| s.id == skill_id) {
-            Some(s) => s,
-            None => {
-                let msg = format!("Skill '{skill_id}' not found");
-                return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
-            }
-        };
-        let sk = match skill.scripts.iter().find(|s| s.name == script) {
-            Some(s) => s.clone(),
-            None => {
-                let available: Vec<&str> = skill.scripts.iter().map(|s| s.name.as_str()).collect();
-                let list = if available.is_empty() {
-                    "none".to_string()
-                } else {
-                    available.join(", ")
-                };
-                let msg =
-                    format!("Script '{script}' not found in skill '{skill_id}'. Available: {list}");
-                return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
-            }
-        };
-
-        tracing::info!(
-            "Running skill script: {} {}",
-            sk.path.display(),
-            script_args.join(" ")
-        );
-        let mut cmd = tokio::process::Command::new(&sk.path);
-        cade_core::agent_env::apply_agent_env(&mut cmd);
-        match cmd.args(&script_args).output().await {
-            Err(e) => {
-                let msg = format!("Failed to run script: {e}");
-                return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
-            }
-            Ok(out) => {
-                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                let combined = if stderr.is_empty() {
-                    stdout
-                } else {
-                    format!("{stdout}\n[stderr]\n{stderr}")
-                };
-                let is_error = !out.status.success();
-                return finalize_tool_result(hooks, call_id, tool_name, args, combined, is_error)
-                    .await;
-            }
-        }
-    }
-
-    // Intercept: load_skill_ref
-    if tool_name == "load_skill_ref" {
-        let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
-        let doc = args["doc"].as_str().unwrap_or("").trim().to_string();
-
-        if skill_id.is_empty() || doc.is_empty() {
-            let msg = "error: 'skill_id' and 'doc' are required".to_string();
-            return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
-        }
-
-        let skills = cade_core::skills::discover_all_skills(
-            &std::env::current_dir().unwrap_or_default(),
-            None,
-            None,
-        );
-        let skill = match skills.into_iter().find(|s| s.id == skill_id) {
-            Some(s) => s,
-            None => {
-                let msg = format!("Skill '{skill_id}' not found");
-                return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
-            }
-        };
-        let r = match skill.references.iter().find(|r| {
-            r.name == doc || r.path.file_name().and_then(|n| n.to_str()).unwrap_or("") == doc
-        }) {
-            Some(r) => r.clone(),
-            None => {
-                let available: Vec<&str> =
-                    skill.references.iter().map(|r| r.name.as_str()).collect();
-                let list = if available.is_empty() {
-                    "none".to_string()
-                } else {
-                    available.join(", ")
-                };
-                let msg =
-                    format!("Reference '{doc}' not found in skill '{skill_id}'. Available: {list}");
-                return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
-            }
-        };
-
-        match std::fs::read_to_string(&r.path) {
-            Ok(content) => {
-                let msg = format!("# Reference: {doc} (skill: {skill_id})\n\n{content}");
-                return finalize_tool_result(hooks, call_id, tool_name, args, msg, false).await;
-            }
-            Err(e) => {
-                let msg = format!("Failed to read reference '{doc}': {e}");
-                return finalize_tool_result(hooks, call_id, tool_name, args, msg, true).await;
-            }
-        }
-    }
-
-    // Generic tool dispatch
+    // -- Fallback: interactive-only tools (run_subagent, ask_user_question) — dispatch natively
     tracing::info!("Executing tool: {tool_name}");
     let result = dispatch(call_id.clone(), &tool_name, &args, mcp).await;
-    tracing::debug!("Tool '{}': {} bytes", tool_name, result.output.len());
-    finalize_tool_result(
-        hooks,
-        call_id,
-        tool_name,
-        args,
-        result.output,
-        result.is_error,
-    )
-    .await
+    finalize_tool_result(hooks, call_id, tool_name, args, result.output, result.is_error).await
 }
+
 
 /// Apply PostToolUse / PostToolUseFailure hooks for a completed tool.
 async fn finalize_tool_result(
@@ -497,7 +326,7 @@ async fn process_tool_calls(
     messages: Vec<CadeMessage>,
     permissions: &PermissionManager,
     output: &mut String,
-    mcp: &McpManager,
+    mcp: &std::sync::Arc<McpManager>,
     stats: &mut HeadlessStats,
     hooks: &HookEngine,
 ) -> Result<()> {
@@ -676,7 +505,7 @@ async fn process_tool_calls_stream_json(
     messages: Vec<CadeMessage>,
     permissions: &PermissionManager,
     output: &mut String,
-    mcp: &McpManager,
+    mcp: &std::sync::Arc<McpManager>,
     stats: &mut HeadlessStats,
     emit: &impl Fn(serde_json::Value),
     hooks: &HookEngine,

@@ -11,6 +11,7 @@ doctest     = false
 cade-core.path    = "../cade-core"
 cade-desktop.path = "../cade-desktop"
 cade-mcp.path     = "../cade-mcp"
+cade-web.path     = "../cade-web"
 # -- Error handling
 # -- Others
 derive_more.workspace  = true
@@ -33,6 +34,7 @@ chrono.workspace       = true
 tempfile.workspace     = true
 regex.workspace        = true
 base64.workspace       = true
+urlencoding.workspace = true
 # -- Filesystem
 globset.workspace      = true
 ignore.workspace       = true

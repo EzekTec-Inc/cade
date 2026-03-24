@@ -60,6 +60,11 @@ async fn main() -> Result<()> {
     let db = open_db(&config.db_path)
         .map_err(|e| Error::custom(e.to_string()))?;
 
+    // C6: Ensure codeintel schema exists at startup
+    if let Err(e) = cade_codeintel::ensure_schema(&db) {
+        tracing::warn!("Failed to initialize codeintel schema: {e}");
+    }
+
     // Build router from env vars first
     let ai_config = config.to_ai_config();
     let mut router_inner = LlmRouter::build(&ai_config);
@@ -112,7 +117,46 @@ async fn main() -> Result<()> {
         config: Arc::new(config.clone()),
         rate_limiter: RateLimiter::from_env(),
         memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
     };
+
+    // ── Sleeptime consolidation task ─────────────────────────────────────────
+    // Polls every 30 s.  When an agent has been inactive for 60 s AND its
+    // build_context dropped turns in the last request, call consolidate_agent
+    // to summarise the dropped turns into the `session_summary` memory block.
+    let state_bg = state.clone();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
+            let mut pending: Vec<(String, Option<String>)> = Vec::new();
+            {
+                let mut activity = state_bg.agent_activity.write().await;
+                let now = chrono::Utc::now().timestamp();
+                for (agent_id, (last_active, needs_consolidation, conv_id)) in activity.iter_mut() {
+                    if *needs_consolidation && (now - *last_active) > 60 {
+                        *needs_consolidation = false;
+                        pending.push((agent_id.clone(), conv_id.clone()));
+                    }
+                }
+            }
+
+            for (agent_id, conv_id) in pending {
+                tracing::info!(
+                    "Sleeptime consolidation triggered for agent {} (conv={:?})",
+                    agent_id, conv_id
+                );
+                let state_c = state_bg.clone();
+                tokio::spawn(async move {
+                    cade::server::consolidation::consolidate_agent(
+                        &state_c,
+                        &agent_id,
+                        conv_id.as_deref(),
+                    )
+                    .await;
+                });
+            }
+        }
+    });
 
     let trace_layer = TraceLayer::new_for_http()
         .make_span_with(|req: &Request<_>| {
