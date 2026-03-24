@@ -19,11 +19,17 @@ that crate and its dependents — not the entire project.
 
 | Crate | Rebuild triggers recompile of… |
 |-------|-------------------------------|
-| `cade-core` | cade-server, cade-agent, cade-cli |
-| `cade-ai` | cade-server, cade-cli |
+| `cade-core` | cade-server, cade-agent, cade-cli, cade-plugin, cade-mcp, cade-web, cade-codeintel, cade-tui, cade-sdk |
+| `cade-ai` | cade-server, cade-cli, cade-sdk |
 | `cade-desktop` | cade-agent |
+| `cade-mcp` | cade-agent |
+| `cade-web` | cade-agent |
+| `cade-codeintel` | cade-server |
+| `cade-tui` | cade-cli |
+| `cade-plugin` | cade-agent, cade-cli |
+| `cade-sdk` | root binary (cade) |
 | `cade-server` | root binary (cade-server) |
-| `cade-agent` | cade-cli |
+| `cade-agent` | cade-cli, cade-sdk |
 | `cade-cli` | root binary (cade) |
 
 ## Environment Variables
