@@ -9,11 +9,11 @@ use crate::Result;
 
 #[derive(Debug, Clone)]
 pub struct FetchedDoc {
-    pub url:         String,
-    pub title:       String,
-    pub text:        String,
-    pub word_count:  usize,
-    pub truncated:   bool,
+    pub url: String,
+    pub title: String,
+    pub text: String,
+    pub word_count: usize,
+    pub truncated: bool,
 }
 
 impl FetchedDoc {
@@ -35,7 +35,10 @@ pub async fn fetch_doc(url_str: &str, max_chars: usize) -> Result<FetchedDoc> {
     // Validate URL
     let parsed = Url::parse(url_str)?;
     if !matches!(parsed.scheme(), "http" | "https") {
-        return Err(crate::Error::custom(format!("Unsupported scheme: {}", parsed.scheme())));
+        return Err(crate::Error::custom(format!(
+            "Unsupported scheme: {}",
+            parsed.scheme()
+        )));
     }
 
     let client = Client::builder()
@@ -50,7 +53,8 @@ pub async fn fetch_doc(url_str: &str, max_chars: usize) -> Result<FetchedDoc> {
         return Err(crate::Error::custom(format!("HTTP {status} for {url_str}")));
     }
 
-    let content_type = resp.headers()
+    let content_type = resp
+        .headers()
         .get(reqwest::header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
@@ -66,8 +70,8 @@ pub async fn fetch_doc(url_str: &str, max_chars: usize) -> Result<FetchedDoc> {
         let text = body.chars().take(max_chars).collect::<String>();
         let truncated = body.len() > max_chars;
         Ok(FetchedDoc {
-            url:        url_str.to_string(),
-            title:      url_str.to_string(),
+            url: url_str.to_string(),
+            title: url_str.to_string(),
             word_count: text.split_whitespace().count(),
             truncated,
             text,
@@ -83,25 +87,43 @@ fn parse_html(url_str: &str, html: &str, max_chars: usize) -> Result<FetchedDoc>
     let document = Html::parse_document(html);
 
     // -- Extract title
-    let title = extract_title(&document)
-        .unwrap_or_else(|| url_str.to_string());
+    let title = extract_title(&document).unwrap_or_else(|| url_str.to_string());
 
     // -- Remove noise elements
     let noise_selectors = [
-        "script", "style", "noscript", "nav", "footer", "header",
-        "aside", ".ad", ".ads", ".advertisement", ".cookie-banner",
-        ".social-share", ".comments", ".sidebar", "[aria-hidden='true']",
-        "form", "button", "input", "select",
+        "script",
+        "style",
+        "noscript",
+        "nav",
+        "footer",
+        "header",
+        "aside",
+        ".ad",
+        ".ads",
+        ".advertisement",
+        ".cookie-banner",
+        ".social-share",
+        ".comments",
+        ".sidebar",
+        "[aria-hidden='true']",
+        "form",
+        "button",
+        "input",
+        "select",
     ];
 
     // -- Extract main content
     // Priority: <main>, <article>, [role=main], then fallback to <body>
-    let main_sel = Selector::parse("main, article, [role='main'], .content, .post-content, .entry-content, #content, #main")
-        .expect("valid selector");
+    let main_sel = Selector::parse(
+        "main, article, [role='main'], .content, .post-content, .entry-content, #content, #main",
+    )
+    .expect("valid selector");
 
     let body_sel = Selector::parse("body").expect("valid selector");
 
-    let content_node = document.select(&main_sel).next()
+    let content_node = document
+        .select(&main_sel)
+        .next()
         .or_else(|| document.select(&body_sel).next());
 
     let Some(content_node) = content_node else {
@@ -125,23 +147,35 @@ fn parse_html(url_str: &str, html: &str, max_chars: usize) -> Result<FetchedDoc>
     let text: String = text.chars().take(max_chars).collect();
     let word_count = text.split_whitespace().count();
 
-    Ok(FetchedDoc { url: url_str.to_string(), title, text, word_count, truncated })
+    Ok(FetchedDoc {
+        url: url_str.to_string(),
+        title,
+        text,
+        word_count,
+        truncated,
+    })
 }
 
 fn extract_title(document: &Html) -> Option<String> {
     // Try <meta property="og:title"> first (usually cleaner)
     if let Ok(sel) = Selector::parse("meta[property='og:title']")
         && let Some(el) = document.select(&sel).next()
-            && let Some(content) = el.value().attr("content") {
-                let t = content.trim().to_string();
-                if !t.is_empty() { return Some(t); }
-            }
+        && let Some(content) = el.value().attr("content")
+    {
+        let t = content.trim().to_string();
+        if !t.is_empty() {
+            return Some(t);
+        }
+    }
     // Fall back to <title>
     if let Ok(sel) = Selector::parse("title")
-        && let Some(el) = document.select(&sel).next() {
-            let t = el.text().collect::<String>().trim().to_string();
-            if !t.is_empty() { return Some(t); }
+        && let Some(el) = document.select(&sel).next()
+    {
+        let t = el.text().collect::<String>().trim().to_string();
+        if !t.is_empty() {
+            return Some(t);
         }
+    }
     None
 }
 
@@ -153,9 +187,23 @@ fn extract_text_from_node(
 ) -> String {
     // Walk the subtree and collect text from paragraph-level elements
     let mut text = String::new();
-    let block_tags = ["p", "h1", "h2", "h3", "h4", "h5", "h6",
-                      "li", "td", "th", "blockquote", "pre",
-                      "div", "section", "article"];
+    let block_tags = [
+        "p",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "li",
+        "td",
+        "th",
+        "blockquote",
+        "pre",
+        "div",
+        "section",
+        "article",
+    ];
 
     collect_text_recursive(node, &block_tags, &mut text, 0);
     text
@@ -167,13 +215,26 @@ fn collect_text_recursive(
     out: &mut String,
     depth: usize,
 ) {
-    if depth > 50 { return; } // avoid deep recursion on malformed HTML
+    if depth > 50 {
+        return;
+    } // avoid deep recursion on malformed HTML
 
     let tag = node.value().name().to_lowercase();
 
     // Skip noise tags entirely
-    if matches!(tag.as_str(), "script" | "style" | "noscript" | "nav" |
-                "footer" | "header" | "aside" | "form" | "button" | "input") {
+    if matches!(
+        tag.as_str(),
+        "script"
+            | "style"
+            | "noscript"
+            | "nav"
+            | "footer"
+            | "header"
+            | "aside"
+            | "form"
+            | "button"
+            | "input"
+    ) {
         return;
     }
 
@@ -238,11 +299,11 @@ mod tests {
     fn test_fetched_doc_context_block() {
         // -- Setup & Fixtures
         let doc = FetchedDoc {
-            url:        "https://example.com".to_string(),
-            title:      "Example Domain".to_string(),
-            text:       "This domain is for use in examples.".to_string(),
+            url: "https://example.com".to_string(),
+            title: "Example Domain".to_string(),
+            text: "This domain is for use in examples.".to_string(),
             word_count: 7,
-            truncated:  false,
+            truncated: false,
         };
 
         // -- Exec
@@ -258,11 +319,11 @@ mod tests {
     fn test_fetched_doc_truncated_indicator() {
         // -- Setup & Fixtures
         let doc = FetchedDoc {
-            url:        "https://example.com".to_string(),
-            title:      "Test".to_string(),
-            text:       "content".to_string(),
+            url: "https://example.com".to_string(),
+            title: "Test".to_string(),
+            text: "content".to_string(),
             word_count: 1,
-            truncated:  true,
+            truncated: true,
         };
 
         // -- Exec & Check

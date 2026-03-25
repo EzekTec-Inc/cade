@@ -32,12 +32,12 @@ impl ToolSurfaceAdapter {
 
         let pairs: &[(&'static str, &'static str)] = match ts {
             Toolset::Gemini => &[
-                (BASH,       "RunShellCommand"),
-                (READ_FILE,  "ReadFileGemini"),
+                (BASH, "RunShellCommand"),
+                (READ_FILE, "ReadFileGemini"),
                 (WRITE_FILE, "WriteFileGemini"),
-                (EDIT_FILE,  "Replace"),
-                (GREP,       "SearchFileContent"),
-                (GLOB,       "GlobGemini"),
+                (EDIT_FILE, "Replace"),
+                (GREP, "SearchFileContent"),
+                (GLOB, "GlobGemini"),
             ],
             // Default and Codex use canonical names — no translation needed.
             _ => &[],
@@ -104,10 +104,10 @@ mod tests {
         let adapter = ToolSurfaceAdapter::for_toolset(Toolset::Gemini);
 
         // -- Check
-        assert_eq!(adapter.to_external("bash"),       "RunShellCommand");
-        assert_eq!(adapter.to_external("read_file"),  "ReadFileGemini");
-        assert_eq!(adapter.to_external("edit_file"),  "Replace");
-        assert_eq!(adapter.to_external("grep"),       "SearchFileContent");
+        assert_eq!(adapter.to_external("bash"), "RunShellCommand");
+        assert_eq!(adapter.to_external("read_file"), "ReadFileGemini");
+        assert_eq!(adapter.to_external("edit_file"), "Replace");
+        assert_eq!(adapter.to_external("grep"), "SearchFileContent");
     }
 
     #[test]
@@ -116,10 +116,10 @@ mod tests {
         let adapter = ToolSurfaceAdapter::for_toolset(Toolset::Gemini);
 
         // -- Check
-        assert_eq!(adapter.to_canonical("RunShellCommand"),  "bash");
-        assert_eq!(adapter.to_canonical("ReadFileGemini"),   "read_file");
-        assert_eq!(adapter.to_canonical("Replace"),          "edit_file");
-        assert_eq!(adapter.to_canonical("SearchFileContent"),"grep");
+        assert_eq!(adapter.to_canonical("RunShellCommand"), "bash");
+        assert_eq!(adapter.to_canonical("ReadFileGemini"), "read_file");
+        assert_eq!(adapter.to_canonical("Replace"), "edit_file");
+        assert_eq!(adapter.to_canonical("SearchFileContent"), "grep");
     }
 
     #[test]
@@ -128,8 +128,11 @@ mod tests {
         let adapter = ToolSurfaceAdapter::for_toolset(Toolset::Gemini);
 
         // -- Check — tools with no alias pass through unchanged
-        assert_eq!(adapter.to_external("desktop_screenshot"), "desktop_screenshot");
-        assert_eq!(adapter.to_canonical("desktop_notify"),    "desktop_notify");
+        assert_eq!(
+            adapter.to_external("desktop_screenshot"),
+            "desktop_screenshot"
+        );
+        assert_eq!(adapter.to_canonical("desktop_notify"), "desktop_notify");
     }
 
     #[test]

@@ -278,8 +278,7 @@ impl McpManager {
         if is_disabled {
             return Some(Err(Error::custom(format!(
                 "MCP server '{}' is disabled after {} failed reconnect attempts",
-                server_key,
-                MAX_RECONNECT_ATTEMPTS
+                server_key, MAX_RECONNECT_ATTEMPTS
             ))));
         }
 
@@ -362,7 +361,9 @@ impl McpManager {
                         // Schema definitely changed (tool vanished) — signal REPL
                         self.schemas_dirty
                             .store(true, std::sync::atomic::Ordering::SeqCst);
-                        return Some(Err(Error::custom("Tool '{prefixed_name}' not found after MCP server reconnect")));
+                        return Some(Err(Error::custom(
+                            "Tool '{prefixed_name}' not found after MCP server reconnect",
+                        )));
                     };
 
                     // Replace old server entry with the fresh connection
@@ -391,7 +392,9 @@ impl McpManager {
                             let text = extract_content_text(&ctr.content);
                             Ok((text, is_error))
                         }
-                        Err(e) => Err(Error::custom(format!("MCP call failed after reconnect: {e}"))),
+                        Err(e) => Err(Error::custom(format!(
+                            "MCP call failed after reconnect: {e}"
+                        ))),
                     });
                 }
                 Err(e) => {
@@ -417,8 +420,10 @@ impl McpManager {
             );
         }
 
-        Some(Err(Error::custom("MCP server disabled: all {MAX_RECONNECT_ATTEMPTS} reconnect attempts failed \
-             (original error: {error_msg})")))
+        Some(Err(Error::custom(
+            "MCP server disabled: all {MAX_RECONNECT_ATTEMPTS} reconnect attempts failed \
+             (original error: {error_msg})",
+        )))
     }
 
     /// Whether a tool requires user permission (mutable tools).
@@ -456,8 +461,12 @@ impl McpManager {
         // Suppress server stderr from polluting CADE's terminal
         cmd.stderr(std::process::Stdio::null());
 
-        let transport = TokioChildProcess::new(cmd)
-            .map_err(|e| Error::custom(format!("spawn MCP server '{key}' ({}): {e}", config.command)))?;
+        let transport = TokioChildProcess::new(cmd).map_err(|e| {
+            Error::custom(format!(
+                "spawn MCP server '{key}' ({}): {e}",
+                config.command
+            ))
+        })?;
 
         let service = ()
             .serve(transport)

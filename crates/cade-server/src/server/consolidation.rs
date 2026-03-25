@@ -9,10 +9,7 @@
 
 use cade_ai::{CompletionRequest, LlmMessage, catalogue};
 
-use crate::server::{
-    state::AppState,
-    storage::sqlite,
-};
+use crate::server::{state::AppState, storage::sqlite};
 
 // ── tunables ──────────────────────────────────────────────────────────────────
 
@@ -45,11 +42,7 @@ const CHARS_PER_TOKEN: usize = 3;
 ///
 /// This is safe to call concurrently for different agents; all DB access is
 /// through the existing `Arc<Mutex<Connection>>` pool.
-pub async fn consolidate_agent(
-    state: &AppState,
-    agent_id: &str,
-    conversation_id: Option<&str>,
-) {
+pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id: Option<&str>) {
     let agent = match sqlite::get_agent(&state.db, agent_id) {
         Ok(Some(a)) => a,
         Ok(None) => {
@@ -63,14 +56,8 @@ pub async fn consolidate_agent(
     };
 
     // ── 1. Fetch recent messages ──────────────────────────────────────────────
-    let all_rows = sqlite::list_messages_page(
-        &state.db,
-        agent_id,
-        conversation_id,
-        500,
-        0,
-    )
-    .unwrap_or_default();
+    let all_rows = sqlite::list_messages_page(&state.db, agent_id, conversation_id, 500, 0)
+        .unwrap_or_default();
 
     if all_rows.len() < MIN_ROWS_FOR_CONSOLIDATION {
         tracing::debug!(
@@ -127,7 +114,8 @@ pub async fn consolidate_agent(
     if dropped == 0 {
         tracing::debug!(
             "consolidate [{}]: all {} turns fit in budget — nothing to summarise",
-            agent_id, total_turns
+            agent_id,
+            total_turns
         );
         return;
     }
@@ -246,7 +234,8 @@ pub async fn consolidate_agent(
     ) {
         tracing::warn!(
             "consolidate [{}]: failed to write session_summary: {}",
-            agent_id, e
+            agent_id,
+            e
         );
         return;
     }
@@ -318,8 +307,8 @@ mod tests {
     fn tool_result_stays_in_same_turn_as_its_call() {
         let msgs = vec![
             m("user", "do thing"),
-            m("assistant", ""),   // triggers tool call
-            m("tool", "ok"),      // result
+            m("assistant", ""), // triggers tool call
+            m("tool", "ok"),    // result
             m("assistant", "done"),
             m("user", "next"),
         ];

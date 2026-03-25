@@ -18,14 +18,14 @@ use crate::Result;
 /// A single eval task loaded from a JSON file.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct EvalTask {
-    pub name:        String,
+    pub name: String,
     pub description: Option<String>,
-    pub prompt:      String,
+    pub prompt: String,
     /// Shell command to run before the agent turn (e.g. "git checkout scenario-1")
-    pub setup:       Option<String>,
+    pub setup: Option<String>,
     /// Assertions to check after the run
     #[serde(default)]
-    pub assertions:  Vec<Assertion>,
+    pub assertions: Vec<Assertion>,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
 }
@@ -33,14 +33,16 @@ pub struct EvalTask {
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Assertion {
-    CommandPasses     { command: String },
-    OutputContains    { text: String },
+    CommandPasses { command: String },
+    OutputContains { text: String },
     OutputNotContains { text: String },
-    FileExists        { path: String },
-    FileNotExists     { path: String },
+    FileExists { path: String },
+    FileNotExists { path: String },
 }
 
-fn default_timeout() -> u64 { 120 }
+fn default_timeout() -> u64 {
+    120
+}
 
 // endregion: --- Task format
 
@@ -48,19 +50,19 @@ fn default_timeout() -> u64 { 120 }
 
 #[derive(Debug)]
 pub struct EvalResult {
-    pub task_name:   String,
-    pub run_id:      String,
-    pub passed:      bool,
-    pub score:       f64,
-    pub output:      String,
-    pub failures:    Vec<String>,
+    pub task_name: String,
+    pub run_id: String,
+    pub passed: bool,
+    pub score: f64,
+    pub output: String,
+    pub failures: Vec<String>,
     pub duration_ms: u128,
 }
 
 impl EvalResult {
     pub fn print_summary(&self) {
         let icon = if self.passed { "✓" } else { "✗" };
-        let pct  = (self.score * 100.0) as u32;
+        let pct = (self.score * 100.0) as u32;
         println!(
             "{icon} {name}  score={pct}%  run={}",
             &self.run_id[..12.min(self.run_id.len())],
@@ -78,25 +80,36 @@ impl EvalResult {
 
 /// `cade eval list`
 pub async fn cmd_list(client: &CadeClient) -> Result<()> {
-    let tasks = client.list_eval_tasks().await
+    let tasks = client
+        .list_eval_tasks()
+        .await
         .map_err(|e| crate::Error::custom(format!("list_eval_tasks: {e}")))?;
     if tasks.is_empty() {
         println!("No eval tasks found.");
     } else {
         println!("Eval tasks ({}):", tasks.len());
         for t in &tasks {
-            println!("  {}  {}", t["id"].as_str().unwrap_or("?"), t["name"].as_str().unwrap_or("?"));
+            println!(
+                "  {}  {}",
+                t["id"].as_str().unwrap_or("?"),
+                t["name"].as_str().unwrap_or("?")
+            );
         }
     }
-    let runs = client.list_eval_runs().await
+    let runs = client
+        .list_eval_runs()
+        .await
         .map_err(|e| crate::Error::custom(format!("list_eval_runs: {e}")))?;
     if !runs.is_empty() {
         println!("\nRecent runs ({}):", runs.len().min(10));
         for r in runs.iter().take(10) {
-            let id     = r["id"].as_str().unwrap_or("?");
+            let id = r["id"].as_str().unwrap_or("?");
             let status = r["status"].as_str().unwrap_or("?");
-            let score  = r["score"].as_f64().map(|s| format!("{:.0}%", s * 100.0)).unwrap_or_else(|| "—".into());
-            let model  = r["model"].as_str().unwrap_or("?");
+            let score = r["score"]
+                .as_f64()
+                .map(|s| format!("{:.0}%", s * 100.0))
+                .unwrap_or_else(|| "—".into());
+            let model = r["model"].as_str().unwrap_or("?");
             println!("  {id}  {status:<10}  {score:<6}  {model}");
         }
     }
@@ -105,7 +118,9 @@ pub async fn cmd_list(client: &CadeClient) -> Result<()> {
 
 /// `cade eval show <run_id>`
 pub async fn cmd_show(client: &CadeClient, run_id: &str) -> Result<()> {
-    let run = client.get_eval_run(run_id).await
+    let run = client
+        .get_eval_run(run_id)
+        .await
         .map_err(|e| crate::Error::custom(format!("get_eval_run: {e}")))?;
     println!("{}", serde_json::to_string_pretty(&run).unwrap_or_default());
     Ok(())
@@ -144,29 +159,42 @@ pub async fn cmd_bench(
         println!("No *.json task files in {}", tasks_dir.display());
         return Ok(vec![]);
     }
-    println!("Running {} eval task(s) (concurrency={concurrency})…", task_files.len());
+    println!(
+        "Running {} eval task(s) (concurrency={concurrency})…",
+        task_files.len()
+    );
 
     let mut all_results = Vec::new();
     for chunk in task_files.chunks(concurrency) {
-        let futs: Vec<_> = chunk.iter().map(|f| {
-            let c = client.clone();
-            let f = f.clone();
-            let m = model_opt.map(String::from);
-            let cwd = cwd.to_path_buf();
-            async move { cmd_run(&c, &f, m.as_deref(), &cwd).await }
-        }).collect();
+        let futs: Vec<_> = chunk
+            .iter()
+            .map(|f| {
+                let c = client.clone();
+                let f = f.clone();
+                let m = model_opt.map(String::from);
+                let cwd = cwd.to_path_buf();
+                async move { cmd_run(&c, &f, m.as_deref(), &cwd).await }
+            })
+            .collect();
         let results = futures::future::join_all(futs).await;
         for r in results {
             match r {
-                Ok(res) => { res.print_summary(); all_results.push(res); }
-                Err(e)  => eprintln!("✗ task error: {e}"),
+                Ok(res) => {
+                    res.print_summary();
+                    all_results.push(res);
+                }
+                Err(e) => eprintln!("✗ task error: {e}"),
             }
         }
     }
 
     let passed = all_results.iter().filter(|r| r.passed).count();
-    let total  = all_results.len();
-    let avg    = if total > 0 { all_results.iter().map(|r| r.score).sum::<f64>() / total as f64 } else { 0.0 };
+    let total = all_results.len();
+    let avg = if total > 0 {
+        all_results.iter().map(|r| r.score).sum::<f64>() / total as f64
+    } else {
+        0.0
+    };
     println!("\n── Benchmark summary ──");
     println!("{passed}/{total} passed  avg_score={:.0}%", avg * 100.0);
     Ok(all_results)
@@ -188,7 +216,8 @@ async fn run_task(
     // Optional setup step
     if let Some(setup_cmd) = &task.setup {
         let status = std::process::Command::new("sh")
-            .arg("-c").arg(setup_cmd)
+            .arg("-c")
+            .arg(setup_cmd)
             .current_dir(cwd)
             .status()
             .map_err(|e| crate::Error::custom(format!("setup: {e}")))?;
@@ -200,14 +229,16 @@ async fn run_task(
     // Create ephemeral agent
     let model = model_opt.unwrap_or("anthropic/claude-sonnet-4-5-20250929");
     let req = cade_agent::agent::client::CreateAgentRequest {
-        name:          Some(format!("eval-{}", task.name)),
-        model:         model.to_string(),
-        description:   Some(format!("eval: {}", task.name)),
+        name: Some(format!("eval-{}", task.name)),
+        model: model.to_string(),
+        description: Some(format!("eval: {}", task.name)),
         system_prompt: None,
         memory_blocks: vec![],
-        tool_ids:      vec![],
+        tool_ids: vec![],
     };
-    let agent = client.create_agent(req).await
+    let agent = client
+        .create_agent(req)
+        .await
         .map_err(|e| crate::Error::custom(format!("create_agent: {e}")))?;
 
     // Register tools with the eval agent
@@ -221,25 +252,29 @@ async fn run_task(
     }
 
     // Create eval run record
-    let run_id = client.create_eval_run(&agent.id, Some(&agent.id), Some(model))
+    let run_id = client
+        .create_eval_run(&agent.id, Some(&agent.id), Some(model))
         .await
         .unwrap_or_else(|_| format!("local-{}", uuid::Uuid::new_v4()));
 
     // Run the prompt with timeout
     let permissions = PermissionManager::new(PermissionMode::BypassPermissions);
-    let mcp   = std::sync::Arc::new(McpManager::empty());
+    let mcp = std::sync::Arc::new(McpManager::empty());
     let hooks = cade_core::hooks::HookEngine::new(Default::default(), cwd.to_path_buf());
 
     let run_fut = crate::cli::headless::run_headless(
-        client, &agent.id, &task.prompt, &permissions, &mcp, &hooks,
+        client,
+        &agent.id,
+        &task.prompt,
+        &permissions,
+        &mcp,
+        &hooks,
     );
-    let (final_output, _stats) = tokio::time::timeout(
-        std::time::Duration::from_secs(task.timeout_secs),
-        run_fut,
-    )
-    .await
-    .map_err(|_| crate::Error::custom(format!("timed out after {}s", task.timeout_secs)))?
-    .map_err(|e| crate::Error::custom(format!("headless run: {e}")))?;
+    let (final_output, _stats) =
+        tokio::time::timeout(std::time::Duration::from_secs(task.timeout_secs), run_fut)
+            .await
+            .map_err(|_| crate::Error::custom(format!("timed out after {}s", task.timeout_secs)))?
+            .map_err(|e| crate::Error::custom(format!("headless run: {e}")))?;
 
     // Delete the ephemeral agent
     let _ = client.delete_agent(&agent.id).await;
@@ -270,23 +305,29 @@ async fn run_task(
             }
             Assertion::CommandPasses { command } => {
                 let ok = std::process::Command::new("sh")
-                    .arg("-c").arg(command).current_dir(cwd)
-                    .status().map(|s| s.success()).unwrap_or(false);
-                if !ok { failures.push(format!("command_passes: '{command}' failed")); }
+                    .arg("-c")
+                    .arg(command)
+                    .current_dir(cwd)
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false);
+                if !ok {
+                    failures.push(format!("command_passes: '{command}' failed"));
+                }
             }
         }
     }
 
-    let total  = task.assertions.len().max(1);
+    let total = task.assertions.len().max(1);
     let pass_n = total - failures.len().min(total);
-    let score  = pass_n as f64 / total as f64;
+    let score = pass_n as f64 / total as f64;
 
     Ok(EvalResult {
-        task_name:   task.name.clone(),
+        task_name: task.name.clone(),
         run_id,
-        passed:      failures.is_empty(),
+        passed: failures.is_empty(),
         score,
-        output:      final_output,
+        output: final_output,
         failures,
         duration_ms: t0.elapsed().as_millis(),
     })

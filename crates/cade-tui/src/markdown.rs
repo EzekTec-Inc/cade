@@ -149,7 +149,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                     } else {
                         current_lang.clear();
                     }
-                    
+
                     let syntax = SYNTAX_SET
                         .find_syntax_by_token(&current_lang)
                         .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
@@ -318,9 +318,11 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                                 code_border_style(),
                             )];
 
-                            let highlighted = h.highlight_line(raw_line, &SYNTAX_SET).unwrap_or_default();
+                            let highlighted =
+                                h.highlight_line(raw_line, &SYNTAX_SET).unwrap_or_default();
                             for (style, content) in highlighted {
-                                let clean_content = content.trim_end_matches('\n').trim_end_matches('\r');
+                                let clean_content =
+                                    content.trim_end_matches('\n').trim_end_matches('\r');
                                 if !clean_content.is_empty() {
                                     spans.push(Span::styled(
                                         clean_content.to_string(),
@@ -442,4 +444,3 @@ fn render_table_data(data: &[Vec<String>]) -> Vec<Line<'static>> {
     }
     lines
 }
-

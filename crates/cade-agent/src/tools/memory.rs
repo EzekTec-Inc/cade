@@ -1,5 +1,5 @@
 use crate::Result;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // ── archival_memory_insert ────────────────────────────────────────────────────
 
@@ -36,14 +36,20 @@ impl ArchivalMemoryInsertTool {
         let content = args["content"].as_str().unwrap_or_default();
         let tags: Vec<String> = args["tags"]
             .as_array()
-            .map(|v| v.iter().filter_map(|t| t.as_str().map(String::from)).collect())
+            .map(|v| {
+                v.iter()
+                    .filter_map(|t| t.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
 
         if content.is_empty() {
             return Ok("Error: content cannot be empty".to_string());
         }
 
-        let id = client.insert_archival_memory(agent_id, content, &tags).await?;
+        let id = client
+            .insert_archival_memory(agent_id, content, &tags)
+            .await?;
         Ok(format!("Stored in archival memory. ID: {id}"))
     }
 }
@@ -87,17 +93,27 @@ impl ArchivalMemorySearchTool {
             return Ok("Error: query cannot be empty".to_string());
         }
 
-        let results = client.search_archival_memory(agent_id, query, limit).await?;
+        let results = client
+            .search_archival_memory(agent_id, query, limit)
+            .await?;
         if results.is_empty() {
             return Ok(format!("No archival memory entries matched '{query}'."));
         }
 
-        let mut out = format!("Found {} archival result(s) for '{query}':\n\n", results.len());
+        let mut out = format!(
+            "Found {} archival result(s) for '{query}':\n\n",
+            results.len()
+        );
         for r in &results {
             let id = r["id"].as_str().unwrap_or("?");
             let tags = r["tags"]
                 .as_array()
-                .map(|v| v.iter().filter_map(|t| t.as_str()).collect::<Vec<_>>().join(", "))
+                .map(|v| {
+                    v.iter()
+                        .filter_map(|t| t.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                })
                 .unwrap_or_default();
             let content = r["content"].as_str().unwrap_or_default();
             let tag_str = if tags.is_empty() {
@@ -229,8 +245,8 @@ impl SearchMemoryTool {
 
             let tier_note = match tier {
                 "pinned" => " [pinned — always active]",
-                "long"   => " [was archived — now reactivated]",
-                _        => "",
+                "long" => " [was archived — now reactivated]",
+                _ => "",
             };
 
             out.push_str(&format!("[{label}]{tier_note}\n{snippet}\n\n"));
@@ -383,7 +399,11 @@ mod tests {
         assert_eq!(schema["name"].as_str(), Some("conversation_search"));
         let required = &schema["parameters"]["required"];
         assert!(
-            required.as_array().unwrap().iter().any(|v| v.as_str() == Some("query")),
+            required
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("query")),
             "query must be required"
         );
     }
@@ -400,7 +420,11 @@ mod tests {
         );
         let required = &schema["parameters"]["required"];
         assert!(
-            required.as_array().unwrap().iter().any(|v| v.as_str() == Some("query")),
+            required
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("query")),
             "query must be required"
         );
     }
@@ -413,7 +437,11 @@ mod tests {
         assert_eq!(schema["name"].as_str(), Some("archival_memory_insert"));
         let required = &schema["parameters"]["required"];
         assert!(
-            required.as_array().unwrap().iter().any(|v| v.as_str() == Some("content")),
+            required
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("content")),
             "content must be required"
         );
     }
@@ -426,7 +454,11 @@ mod tests {
         assert_eq!(schema["name"].as_str(), Some("archival_memory_search"));
         let required = &schema["parameters"]["required"];
         assert!(
-            required.as_array().unwrap().iter().any(|v| v.as_str() == Some("query")),
+            required
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|v| v.as_str() == Some("query")),
             "query must be required"
         );
     }

@@ -45,11 +45,12 @@ impl DesktopControl {
                 Self::new_command("xdotool")
                     .args(["search", "--name", title, "windowactivate"])
                     .output()
-                    .await
-                    ?;
+                    .await?;
             }
             ControlTool::Ydotool => {
-                return Err(Error::custom("ydotool does not support window focus by title"));
+                return Err(Error::custom(
+                    "ydotool does not support window focus by title",
+                ));
             }
         }
         Ok(())
@@ -62,15 +63,13 @@ impl DesktopControl {
                 Self::new_command("xdotool")
                     .args(["type", "--clearmodifiers", text])
                     .output()
-                    .await
-                    ?;
+                    .await?;
             }
             ControlTool::Ydotool => {
                 Self::new_command("ydotool")
                     .args(["type", text])
                     .output()
-                    .await
-                    ?;
+                    .await?;
             }
         }
         Ok(())
@@ -83,15 +82,13 @@ impl DesktopControl {
                 Self::new_command("xdotool")
                     .args(["key", key])
                     .output()
-                    .await
-                    ?;
+                    .await?;
             }
             ControlTool::Ydotool => {
                 Self::new_command("ydotool")
                     .args(["key", key])
                     .output()
-                    .await
-                    ?;
+                    .await?;
             }
         }
         Ok(())
@@ -104,15 +101,13 @@ impl DesktopControl {
                 Self::new_command("xdotool")
                     .args(["mousemove", &x.to_string(), &y.to_string()])
                     .output()
-                    .await
-                    ?;
+                    .await?;
             }
             ControlTool::Ydotool => {
                 Self::new_command("ydotool")
                     .args(["mousemove", "--absolute", &x.to_string(), &y.to_string()])
                     .output()
-                    .await
-                    ?;
+                    .await?;
             }
         }
         Ok(())
@@ -125,15 +120,13 @@ impl DesktopControl {
                 Self::new_command("xdotool")
                     .args(["click", &button.to_string()])
                     .output()
-                    .await
-                    ?;
+                    .await?;
             }
             ControlTool::Ydotool => {
                 Self::new_command("ydotool")
                     .args(["click", &button.to_string()])
                     .output()
-                    .await
-                    ?;
+                    .await?;
             }
         }
         Ok(())

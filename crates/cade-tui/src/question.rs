@@ -290,8 +290,9 @@ impl QuestionWidget {
                 continue;
             }
             if let Event::Key(KeyEvent {
-                    code, modifiers, ..
-                }) = event::read()? {
+                code, modifiers, ..
+            }) = event::read()?
+            {
                 match (code, modifiers) {
                     // Cancel
                     (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
@@ -317,9 +318,7 @@ impl QuestionWidget {
                         };
                     }
                     // Number quick-select
-                    (KeyCode::Char(c), KeyModifiers::NONE)
-                        if c.is_ascii_digit() && c != '0' =>
-                    {
+                    (KeyCode::Char(c), KeyModifiers::NONE) if c.is_ascii_digit() && c != '0' => {
                         let idx = (c as usize) - ('0' as usize) - 1;
                         if idx < total_items {
                             if question.multi_select {
@@ -364,9 +363,7 @@ impl QuestionWidget {
                             }
                         } else if cursor_pos == other_idx {
                             if !custom_text.is_empty() {
-                                break 'widget Some(QuestionAnswer::Single(
-                                    custom_text.clone(),
-                                ));
+                                break 'widget Some(QuestionAnswer::Single(custom_text.clone()));
                             }
                         } else {
                             let label = question.options[cursor_pos].label.clone();

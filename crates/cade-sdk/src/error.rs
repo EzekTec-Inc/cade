@@ -15,7 +15,9 @@ pub enum Error {
 }
 
 impl Error {
-    pub fn custom(msg: impl Into<String>) -> Self { Self::Custom(msg.into()) }
+    pub fn custom(msg: impl Into<String>) -> Self {
+        Self::Custom(msg.into())
+    }
 }
 
 impl std::error::Error for Error {}

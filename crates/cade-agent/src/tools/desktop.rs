@@ -53,8 +53,9 @@ impl DesktopCaptureTool {
             let _ = std::fs::create_dir_all(parent);
         }
 
-        let mut f = std::fs::File::create(&dest)
-            .map_err(|e| crate::Error::custom(format!("Cannot write to {}: {e}", dest.display())))?;
+        let mut f = std::fs::File::create(&dest).map_err(|e| {
+            crate::Error::custom(format!("Cannot write to {}: {e}", dest.display()))
+        })?;
         f.write_all(&png_bytes)?;
 
         let kb = png_bytes.len() / 1024;
@@ -126,9 +127,9 @@ impl DesktopControlTool {
 
         match action {
             "focus_window" => {
-                let title = args["title"]
-                    .as_str()
-                    .ok_or_else(|| crate::Error::custom("focus_window requires 'title'".to_string()))?;
+                let title = args["title"].as_str().ok_or_else(|| {
+                    crate::Error::custom("focus_window requires 'title'".to_string())
+                })?;
                 ctrl.focus_window(title).await?;
                 Ok(format!("Focused window: {title}"))
             }

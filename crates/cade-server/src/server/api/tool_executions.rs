@@ -1,5 +1,9 @@
 /// Tool execution log handler.
-use axum::{Json, extract::{Path, State}, http::StatusCode};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
 use serde_json::{Value, json};
 use uuid::Uuid;
 

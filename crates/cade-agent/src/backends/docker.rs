@@ -19,7 +19,7 @@ use super::{BashOutput, DirEntry, ExecutionBackend};
 /// or exec into an existing container (`exec` mode, using `container_id`).
 pub struct DockerBackend {
     /// Docker image to use for `docker run` invocations.
-    pub image:       String,
+    pub image: String,
     /// Extra flags passed to `docker run` (e.g. `["--network=none"]`).
     pub extra_flags: Vec<String>,
 }
@@ -30,9 +30,12 @@ impl DockerBackend {
         let mut cmd = Command::new("docker");
         let cwd_str = cwd.to_string_lossy();
         cmd.args([
-            "run", "--rm",
-            "-v",  &format!("{cwd_str}:/workspace"),
-            "-w",  "/workspace",
+            "run",
+            "--rm",
+            "-v",
+            &format!("{cwd_str}:/workspace"),
+            "-w",
+            "/workspace",
         ]);
         for flag in &self.extra_flags {
             cmd.arg(flag);
@@ -46,27 +49,31 @@ impl DockerBackend {
 
 #[async_trait]
 impl ExecutionBackend for DockerBackend {
-    async fn exec_bash(&self, command: &str, cwd: &Path, timeout_secs: u64) -> crate::Result<BashOutput> {
+    async fn exec_bash(
+        &self,
+        command: &str,
+        cwd: &Path,
+        timeout_secs: u64,
+    ) -> crate::Result<BashOutput> {
         // Warn if Docker is not available
         let docker_check = Command::new("docker").arg("info").output().await;
         if docker_check.is_err() || !docker_check.unwrap().status.success() {
             return Err(crate::Error::custom(
-                "Docker is not available. Install Docker or switch to local backend."
+                "Docker is not available. Install Docker or switch to local backend.",
             ));
         }
 
         let mut cmd = self.build_run_cmd(command, cwd);
-        let result = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            cmd.output(),
-        )
-        .await
-        .map_err(|_| crate::Error::custom(format!("docker run timed out after {timeout_secs}s")))?
-        .map_err(|e| crate::Error::custom(format!("docker run: {e}")))?;
+        let result = tokio::time::timeout(Duration::from_secs(timeout_secs), cmd.output())
+            .await
+            .map_err(|_| {
+                crate::Error::custom(format!("docker run timed out after {timeout_secs}s"))
+            })?
+            .map_err(|e| crate::Error::custom(format!("docker run: {e}")))?;
 
         Ok(BashOutput {
-            stdout:    String::from_utf8_lossy(&result.stdout).to_string(),
-            stderr:    String::from_utf8_lossy(&result.stderr).to_string(),
+            stdout: String::from_utf8_lossy(&result.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&result.stderr).to_string(),
             exit_code: result.status.code().unwrap_or(-1),
             timed_out: false,
         })
@@ -102,15 +109,17 @@ impl ExecutionBackend for DockerBackend {
         while let Ok(Some(e)) = rd.next_entry().await {
             let meta = e.metadata().await.ok();
             entries.push(DirEntry {
-                path:   e.path(),
+                path: e.path(),
                 is_dir: meta.as_ref().map(|m| m.is_dir()).unwrap_or(false),
-                size:   meta.map(|m| m.len()),
+                size: meta.map(|m| m.len()),
             });
         }
         Ok(entries)
     }
 
-    fn name(&self) -> &'static str { "docker" }
+    fn name(&self) -> &'static str {
+        "docker"
+    }
 }
 
 // endregion: --- DockerBackend

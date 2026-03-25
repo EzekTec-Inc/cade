@@ -14,22 +14,26 @@ use super::{BashOutput, DirEntry, ExecutionBackend};
 
 pub struct SshBackend {
     /// Remote host name or IP.
-    pub host:     String,
+    pub host: String,
     /// Remote username.
-    pub user:     String,
+    pub user: String,
     /// Path to the SSH private key file (uses SSH agent / default if None).
     pub key_path: Option<PathBuf>,
     /// SSH port (default 22).
-    pub port:     u16,
+    pub port: u16,
 }
 
 impl SshBackend {
     fn base_ssh_args(&self) -> Vec<String> {
         let mut args = vec![
-            "-o".to_string(), "BatchMode=yes".to_string(),
-            "-o".to_string(), "ConnectTimeout=10".to_string(),
-            "-o".to_string(), "StrictHostKeyChecking=accept-new".to_string(),
-            "-p".to_string(), self.port.to_string(),
+            "-o".to_string(),
+            "BatchMode=yes".to_string(),
+            "-o".to_string(),
+            "ConnectTimeout=10".to_string(),
+            "-o".to_string(),
+            "StrictHostKeyChecking=accept-new".to_string(),
+            "-p".to_string(),
+            self.port.to_string(),
         ];
         if let Some(key) = &self.key_path {
             args.push("-i".to_string());
@@ -62,8 +66,8 @@ impl SshBackend {
             .map_err(|e| crate::Error::custom(format!("ssh: {e}")))?;
 
         Ok(BashOutput {
-            stdout:    String::from_utf8_lossy(&result.stdout).to_string(),
-            stderr:    String::from_utf8_lossy(&result.stderr).to_string(),
+            stdout: String::from_utf8_lossy(&result.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&result.stderr).to_string(),
             exit_code: result.status.code().unwrap_or(-1),
             timed_out: false,
         })
@@ -72,7 +76,12 @@ impl SshBackend {
 
 #[async_trait]
 impl ExecutionBackend for SshBackend {
-    async fn exec_bash(&self, command: &str, cwd: &Path, timeout_secs: u64) -> crate::Result<BashOutput> {
+    async fn exec_bash(
+        &self,
+        command: &str,
+        cwd: &Path,
+        timeout_secs: u64,
+    ) -> crate::Result<BashOutput> {
         if self.host.is_empty() {
             return Err(crate::Error::custom("SSH backend: host is not configured"));
         }
@@ -82,13 +91,19 @@ impl ExecutionBackend for SshBackend {
     async fn read_file(&self, path: &Path) -> crate::Result<String> {
         // Use `ssh <host> cat <path>` to read a remote file
         let mut cmd = Command::new("ssh");
-        for arg in self.base_ssh_args() { cmd.arg(arg); }
+        for arg in self.base_ssh_args() {
+            cmd.arg(arg);
+        }
         cmd.arg("cat").arg(path.to_string_lossy().as_ref());
-        let out = cmd.output().await
+        let out = cmd
+            .output()
+            .await
             .map_err(|e| crate::Error::custom(format!("ssh cat: {e}")))?;
         if !out.status.success() {
             let stderr = String::from_utf8_lossy(&out.stderr);
-            return Err(crate::Error::custom(format!("remote read failed: {stderr}")));
+            return Err(crate::Error::custom(format!(
+                "remote read failed: {stderr}"
+            )));
         }
         Ok(String::from_utf8_lossy(&out.stdout).to_string())
     }
@@ -97,18 +112,25 @@ impl ExecutionBackend for SshBackend {
         // Use `ssh <host> tee <path>` with stdin
         use tokio::io::AsyncWriteExt;
         let mut cmd = Command::new("ssh");
-        for arg in self.base_ssh_args() { cmd.arg(arg); }
+        for arg in self.base_ssh_args() {
+            cmd.arg(arg);
+        }
         cmd.arg("tee").arg(path.to_string_lossy().as_ref());
         cmd.stdin(std::process::Stdio::piped());
         cmd.stdout(std::process::Stdio::null());
 
-        let mut child = cmd.spawn()
+        let mut child = cmd
+            .spawn()
             .map_err(|e| crate::Error::custom(format!("ssh tee: {e}")))?;
         if let Some(mut stdin) = child.stdin.take() {
-            stdin.write_all(content.as_bytes()).await
+            stdin
+                .write_all(content.as_bytes())
+                .await
                 .map_err(|e| crate::Error::custom(format!("ssh write stdin: {e}")))?;
         }
-        let status = child.wait().await
+        let status = child
+            .wait()
+            .await
             .map_err(|e| crate::Error::custom(format!("ssh tee wait: {e}")))?;
         if !status.success() {
             return Err(crate::Error::custom("remote write failed"));
@@ -118,27 +140,42 @@ impl ExecutionBackend for SshBackend {
 
     async fn path_exists(&self, path: &Path) -> bool {
         let mut cmd = Command::new("ssh");
-        for arg in self.base_ssh_args() { cmd.arg(arg); }
-        cmd.arg("test").arg("-e").arg(path.to_string_lossy().as_ref());
-        cmd.output().await.map(|o| o.status.success()).unwrap_or(false)
+        for arg in self.base_ssh_args() {
+            cmd.arg(arg);
+        }
+        cmd.arg("test")
+            .arg("-e")
+            .arg(path.to_string_lossy().as_ref());
+        cmd.output()
+            .await
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 
     async fn list_dir(&self, path: &Path) -> crate::Result<Vec<DirEntry>> {
         // Use `ls -la --time-style=long-iso` on the remote
         let cmd_str = format!("ls -1pF {:?}", path.to_string_lossy().to_string());
         let out = self.run_remote(&cmd_str, path, 10).await?;
-        let entries: Vec<DirEntry> = out.stdout.lines()
+        let entries: Vec<DirEntry> = out
+            .stdout
+            .lines()
             .filter(|l| !l.is_empty() && *l != "./" && *l != "../")
             .map(|l| {
                 let is_dir = l.ends_with('/');
-                let name   = l.trim_end_matches('/').trim_end_matches('*');
-                DirEntry { path: path.join(name), is_dir, size: None }
+                let name = l.trim_end_matches('/').trim_end_matches('*');
+                DirEntry {
+                    path: path.join(name),
+                    is_dir,
+                    size: None,
+                }
             })
             .collect();
         Ok(entries)
     }
 
-    fn name(&self) -> &'static str { "ssh" }
+    fn name(&self) -> &'static str {
+        "ssh"
+    }
 }
 
 // endregion: --- SshBackend

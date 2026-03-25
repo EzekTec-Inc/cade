@@ -40,7 +40,10 @@ impl ScreenCapture {
             let monitors = xcap::Monitor::all()?;
             let idx = monitor_index.unwrap_or(0);
             let monitor = monitors.get(idx).ok_or_else(|| {
-                Error::custom(format!("monitor {idx} not found ({} available)", monitors.len()))
+                Error::custom(format!(
+                    "monitor {idx} not found ({} available)",
+                    monitors.len()
+                ))
             })?;
             monitor.capture_image()?
         };
@@ -60,9 +63,7 @@ impl ScreenCapture {
 
         let (w, h) = (image.width(), image.height());
         let mut bytes: Vec<u8> = Vec::new();
-        image
-            .write_to(&mut Cursor::new(&mut bytes), xcap::image::ImageFormat::Png)
-            ?;
+        image.write_to(&mut Cursor::new(&mut bytes), xcap::image::ImageFormat::Png)?;
 
         Ok((base64::prelude::BASE64_STANDARD.encode(bytes), w, h))
     }

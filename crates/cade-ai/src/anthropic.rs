@@ -606,7 +606,9 @@ mod tests {
         assert!(!stream);
         assert!(body["system"].is_array());
         assert_eq!(body["system"][0]["text"], "You are a helpful assistant.");
-        let msgs = body["messages"].as_array().ok_or("Should have messages array")?;
+        let msgs = body["messages"]
+            .as_array()
+            .ok_or("Should have messages array")?;
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0]["role"], "user");
 
@@ -721,9 +723,13 @@ mod tests {
         };
         let body = provider.build_body(&req, false);
         // -- Check
-        let msgs = body["messages"].as_array().ok_or("Should have messages array")?;
+        let msgs = body["messages"]
+            .as_array()
+            .ok_or("Should have messages array")?;
         assert_eq!(msgs.len(), 3);
-        let tool_results = msgs[2]["content"].as_array().ok_or("Should have content array")?;
+        let tool_results = msgs[2]["content"]
+            .as_array()
+            .ok_or("Should have content array")?;
         assert_eq!(tool_results.len(), 2);
         assert_eq!(tool_results[0]["type"], "tool_result");
         assert_eq!(tool_results[1]["type"], "tool_result");

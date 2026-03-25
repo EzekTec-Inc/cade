@@ -500,16 +500,17 @@ pub fn show_skills_manager(
                     (KeyCode::Backspace, _) => {
                         let pos = field_pos;
                         if pos > 0
-                            && let Some(f) = edit_fields.get_mut(field_cursor) {
-                                let new_pos = f[..pos]
-                                    .char_indices()
-                                    .next_back()
-                                    .map(|(i, _)| i)
-                                    .unwrap_or(0);
-                                f.drain(new_pos..pos);
-                                field_pos = new_pos;
-                                dirty = true;
-                            }
+                            && let Some(f) = edit_fields.get_mut(field_cursor)
+                        {
+                            let new_pos = f[..pos]
+                                .char_indices()
+                                .next_back()
+                                .map(|(i, _)| i)
+                                .unwrap_or(0);
+                            f.drain(new_pos..pos);
+                            field_pos = new_pos;
+                            dirty = true;
+                        }
                     }
                     (KeyCode::Char(c), m)
                         if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>

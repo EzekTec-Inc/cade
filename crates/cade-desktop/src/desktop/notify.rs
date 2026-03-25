@@ -20,7 +20,8 @@ pub fn send_notification(title: &str, body: &str, urgency: Urgency) -> Result<()
         .summary(title)
         .body(body)
         .urgency(urgency_level)
-        .show().map_err(crate::Error::custom_from_err)?;
+        .show()
+        .map_err(crate::Error::custom_from_err)?;
 
     Ok(())
 }

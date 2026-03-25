@@ -18,12 +18,12 @@ pub enum Language {
 impl Language {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Rust       => "rust",
-            Self::Python     => "python",
+            Self::Rust => "rust",
+            Self::Python => "python",
             Self::TypeScript => "typescript",
             Self::JavaScript => "javascript",
-            Self::Go         => "go",
-            Self::Unknown    => "unknown",
+            Self::Go => "go",
+            Self::Unknown => "unknown",
         }
     }
 }
@@ -31,12 +31,12 @@ impl Language {
 /// Detect the language of a file by extension.
 pub fn detect_language(path: &Path) -> Language {
     match path.extension().and_then(|e| e.to_str()) {
-        Some("rs")          => Language::Rust,
-        Some("py")          => Language::Python,
+        Some("rs") => Language::Rust,
+        Some("py") => Language::Python,
         Some("ts") | Some("tsx") => Language::TypeScript,
         Some("js") | Some("jsx") => Language::JavaScript,
-        Some("go")          => Language::Go,
-        _                   => Language::Unknown,
+        Some("go") => Language::Go,
+        _ => Language::Unknown,
     }
 }
 
@@ -48,10 +48,10 @@ pub fn detect_language(path: &Path) -> Language {
 pub fn get_grammar(lang: Language) -> Option<tree_sitter::Language> {
     match lang {
         #[cfg(feature = "lang-rust")]
-        Language::Rust       => Some(tree_sitter_rust::language()),
+        Language::Rust => Some(tree_sitter_rust::language()),
 
         #[cfg(feature = "lang-python")]
-        Language::Python     => Some(tree_sitter_python::language()),
+        Language::Python => Some(tree_sitter_python::language()),
 
         // TypeScript grammar uses an incompatible Language wrapper in ts 0.23 —
         // disabled until the ecosystem stabilises.
@@ -61,7 +61,7 @@ pub fn get_grammar(lang: Language) -> Option<tree_sitter::Language> {
         Language::JavaScript => Some(tree_sitter_javascript::language()),
 
         #[cfg(feature = "lang-go")]
-        Language::Go         => Some(tree_sitter_go::language()),
+        Language::Go => Some(tree_sitter_go::language()),
 
         _ => None,
     }
@@ -92,19 +92,19 @@ pub enum SymbolKind {
 impl SymbolKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Function  => "fn",
-            Self::Method    => "method",
-            Self::Struct    => "struct",
-            Self::Enum      => "enum",
-            Self::Trait     => "trait",
+            Self::Function => "fn",
+            Self::Method => "method",
+            Self::Struct => "struct",
+            Self::Enum => "enum",
+            Self::Trait => "trait",
             Self::Interface => "interface",
-            Self::Class     => "class",
-            Self::Const     => "const",
-            Self::Type      => "type",
-            Self::Module    => "module",
-            Self::Variable  => "variable",
-            Self::Field     => "field",
-            Self::Other     => "other",
+            Self::Class => "class",
+            Self::Const => "const",
+            Self::Type => "type",
+            Self::Module => "module",
+            Self::Variable => "variable",
+            Self::Field => "field",
+            Self::Other => "other",
         }
     }
 }

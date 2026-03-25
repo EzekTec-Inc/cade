@@ -18,9 +18,9 @@ pub enum ContextScope {
 
 #[derive(Debug, Clone)]
 pub struct ContextFile {
-    pub path:    PathBuf,
+    pub path: PathBuf,
     pub content: String,
-    pub scope:   ContextScope,
+    pub scope: ContextScope,
 }
 
 // endregion: --- Types
@@ -42,7 +42,11 @@ pub fn discover_context_files(cwd: &Path, agent_dir: &Path) -> Vec<ContextFile> 
     for name in CONTEXT_FILENAMES {
         let p = agent_dir.join(name);
         if let Ok(content) = std::fs::read_to_string(&p) {
-            files.push(ContextFile { path: p, content, scope: ContextScope::Global });
+            files.push(ContextFile {
+                path: p,
+                content,
+                scope: ContextScope::Global,
+            });
         }
     }
 
@@ -56,7 +60,11 @@ pub fn discover_context_files(cwd: &Path, agent_dir: &Path) -> Vec<ContextFile> 
                 // Avoid re-loading global file if agent_dir == cwd ancestor
                 let already = files.iter().any(|f| f.path == p);
                 if !already {
-                    files.push(ContextFile { path: p, content, scope: ContextScope::Project });
+                    files.push(ContextFile {
+                        path: p,
+                        content,
+                        scope: ContextScope::Project,
+                    });
                 }
             }
         }
@@ -73,7 +81,11 @@ pub fn build_context_block(files: &[ContextFile]) -> String {
     }
     let mut out = String::new();
     for f in files {
-        out.push_str(&format!("\n\n---\n<!-- context: {} -->\n\n{}", f.path.display(), f.content.trim()));
+        out.push_str(&format!(
+            "\n\n---\n<!-- context: {} -->\n\n{}",
+            f.path.display(),
+            f.content.trim()
+        ));
     }
     out
 }
@@ -103,9 +115,10 @@ fn collect_project_ancestors(cwd: &Path) -> Vec<PathBuf> {
 
     // Ensure stop point itself is included.
     if let Some(root) = &git_root
-        && !chain.contains(root) {
-            chain.push(root.clone());
-        }
+        && !chain.contains(root)
+    {
+        chain.push(root.clone());
+    }
 
     // Reverse so we go root → cwd (least specific → most specific).
     chain.reverse();
@@ -172,7 +185,11 @@ mod tests {
         let files = discover_context_files(cwd.path(), agent_dir.path());
 
         // -- Check
-        assert!(files.iter().any(|f| f.content.contains("project instructions")));
+        assert!(
+            files
+                .iter()
+                .any(|f| f.content.contains("project instructions"))
+        );
     }
 
     #[test]
@@ -198,9 +215,9 @@ mod tests {
     fn test_build_context_block_nonempty() {
         // -- Setup & Fixtures
         let file = ContextFile {
-            path:    PathBuf::from("/fake/AGENTS.md"),
+            path: PathBuf::from("/fake/AGENTS.md"),
             content: "some content".to_string(),
-            scope:   ContextScope::Global,
+            scope: ContextScope::Global,
         };
 
         // -- Exec

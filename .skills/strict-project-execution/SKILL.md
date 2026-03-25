@@ -26,8 +26,8 @@ If a requested change would violate any of the above, stop, explain why, and ask
 
 For Rust coding sessions:
 
-- Use **Context7** for documentation and API reference lookups when documentation is needed
-- Use **OpenViking** for context and memory management, including preserving session facts, constraints, and known vs unknown information across the conversation
+- Use **Context7** mcp server for documentation and API reference lookups when documentation is needed
+- Use **OpenViking** mcp server for context and memory management, including preserving session facts, constraints, and known vs unknown information across the conversation
 
 Tool use never overrides the rules in this skill.
 
@@ -207,7 +207,7 @@ If the user references rust10x material but does not provide the relevant conten
 
 Do not assume the contents of external links.
 
-The rust10x location on this machines is at: `~/.aipack-base/pack/installed/pro/rust10x/` 
+The rust10x directory location on this machines is at: `~/.aipack-base/pack/installed/pro/rust10x/` 
 
 ### SQLite Time Policy
 

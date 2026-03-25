@@ -20,10 +20,17 @@ impl WebSearchTool {
             return Ok(format!("No results found for '{query}'."));
         }
 
-        let mut out = format!("Web search results for '{query}' ({} result(s)):\n\n", results.len());
+        let mut out = format!(
+            "Web search results for '{query}' ({} result(s)):\n\n",
+            results.len()
+        );
         for (i, r) in results.iter().enumerate() {
-            out.push_str(&format!("{}. **{}**\n   {}\n   {}\n\n",
-                i + 1, r.title, r.url, r.snippet
+            out.push_str(&format!(
+                "{}. **{}**\n   {}\n   {}\n\n",
+                i + 1,
+                r.title,
+                r.url,
+                r.snippet
             ));
         }
         Ok(out.trim_end().to_string())

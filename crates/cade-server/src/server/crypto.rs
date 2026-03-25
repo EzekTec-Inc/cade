@@ -1,8 +1,8 @@
+use crate::server::{Error, Result};
 use aes_gcm::{
     Aes256Gcm, Nonce,
     aead::{Aead, KeyInit},
 };
-use crate::server::{Error, Result};
 use hmac::Hmac;
 use sha2::Sha256;
 
@@ -98,7 +98,8 @@ fn derive_key(salt: &[u8]) -> Result<[u8; 32]> {
 pub fn encrypt(plaintext: &str) -> Result<String> {
     // H-01: generate a fresh 16-byte salt for every encryption
     let mut salt = [0u8; 16];
-    getrandom::getrandom(&mut salt).map_err(|e| Error::custom(format!("getrandom (salt) failed: {e}")))?;
+    getrandom::getrandom(&mut salt)
+        .map_err(|e| Error::custom(format!("getrandom (salt) failed: {e}")))?;
 
     let key_bytes = derive_key(&salt)?;
     let cipher = Aes256Gcm::new_from_slice(&key_bytes)
@@ -140,7 +141,9 @@ pub fn decrypt(encoded: &str) -> Result<String> {
         // New format — extract salt, derive key, decrypt
         let (salt, rest) = data.split_at(16);
         if rest.len() < 12 {
-            return Err(Error::custom("Invalid encrypted data: nonce too short".to_string()));
+            return Err(Error::custom(
+                "Invalid encrypted data: nonce too short".to_string(),
+            ));
         }
         let (nonce_bytes, ciphertext) = rest.split_at(12);
         let key_bytes = derive_key(salt)?;
@@ -150,7 +153,8 @@ pub fn decrypt(encoded: &str) -> Result<String> {
         let plaintext = cipher
             .decrypt(nonce, ciphertext)
             .map_err(|e| Error::custom(format!("Decryption failed: {e}")))?;
-        return String::from_utf8(plaintext).map_err(|e| Error::custom(format!("UTF-8 decode failed: {e}")));
+        return String::from_utf8(plaintext)
+            .map_err(|e| Error::custom(format!("UTF-8 decode failed: {e}")));
     }
 
     // Legacy format — use the old static salt for backwards compatibility
@@ -168,10 +172,14 @@ pub fn decrypt(encoded: &str) -> Result<String> {
             "Decrypted a legacy (static-salt) API key — \
              re-save the provider to upgrade to the new format."
         );
-        return String::from_utf8(plaintext).map_err(|e| Error::custom(format!("UTF-8 decode failed: {e}")));
+        return String::from_utf8(plaintext)
+            .map_err(|e| Error::custom(format!("UTF-8 decode failed: {e}")));
     }
 
-    Err(Error::custom(format!("Invalid encrypted data: too short ({} bytes)", data.len())))
+    Err(Error::custom(format!(
+        "Invalid encrypted data: too short ({} bytes)",
+        data.len()
+    )))
 }
 
 // -- Decryption

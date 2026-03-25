@@ -39,12 +39,14 @@ pub struct PluginHookDef {
     pub timeout_ms: u64,
 }
 
-fn default_timeout() -> u64 { 60_000 }
+fn default_timeout() -> u64 {
+    60_000
+}
 
 /// Top-level plugin manifest.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PluginManifest {
-    pub name:    String,
+    pub name: String,
     #[serde(default)]
     pub version: Option<String>,
     #[serde(default)]
@@ -52,15 +54,15 @@ pub struct PluginManifest {
 
     // Resources this plugin contributes
     #[serde(default)]
-    pub tools:     Vec<PluginToolDef>,
+    pub tools: Vec<PluginToolDef>,
     #[serde(default)]
-    pub hooks:     Vec<PluginHookDef>,
+    pub hooks: Vec<PluginHookDef>,
     #[serde(default)]
-    pub skills:    Vec<PathBuf>,
+    pub skills: Vec<PathBuf>,
     #[serde(default)]
-    pub prompts:   Vec<PathBuf>,
+    pub prompts: Vec<PathBuf>,
     #[serde(default)]
-    pub themes:    Vec<PathBuf>,
+    pub themes: Vec<PathBuf>,
     #[serde(default)]
     pub subagents: Vec<PathBuf>,
 }
@@ -93,18 +95,18 @@ impl PluginManifest {
             .unwrap_or("unknown")
             .to_string();
         for (dir, field) in &[
-            ("tools",    "tools"),
-            ("skills",   "skills"),
-            ("prompts",  "prompts"),
-            ("themes",   "themes"),
-            ("subagents","subagents"),
+            ("tools", "tools"),
+            ("skills", "skills"),
+            ("prompts", "prompts"),
+            ("themes", "themes"),
+            ("subagents", "subagents"),
         ] {
             let p = root.join(dir);
             if p.is_dir() {
                 match *field {
-                    "skills"    => m.skills    = vec![p],
-                    "prompts"   => m.prompts   = vec![p],
-                    "themes"    => m.themes    = vec![p],
+                    "skills" => m.skills = vec![p],
+                    "prompts" => m.prompts = vec![p],
+                    "themes" => m.themes = vec![p],
                     "subagents" => m.subagents = vec![p],
                     _ => {} // tools handled separately via JSON schemas
                 }

@@ -157,7 +157,9 @@ impl BashTool {
                 Err(_) => {
                     // Timeout: kill the child and stop reading.
                     let _ = child.kill().await;
-                    return Err(crate::Error::custom(format!("Command timed out after {timeout_secs}s")));
+                    return Err(crate::Error::custom(format!(
+                        "Command timed out after {timeout_secs}s"
+                    )));
                 }
             }
         }
@@ -165,7 +167,10 @@ impl BashTool {
         // Wait for the reader tasks and the child process.
         let _ = out_task.await;
         let _ = err_task.await;
-        let status = child.wait().await.map_err(|e| crate::Error::custom(format!("{e}")))?;
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| crate::Error::custom(format!("{e}")))?;
 
         if !status.success() {
             let code = status.code().unwrap_or(-1);
@@ -321,7 +326,9 @@ mod tests {
 
         // -- Check
         assert_eq!(schema["name"], "bash");
-        let desc = schema["description"].as_str().ok_or("Should have description")?;
+        let desc = schema["description"]
+            .as_str()
+            .ok_or("Should have description")?;
         assert!(desc.len() > 10);
         assert!(schema["parameters"]["properties"]["command"].is_object());
         Ok(())

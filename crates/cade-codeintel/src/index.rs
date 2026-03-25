@@ -12,9 +12,9 @@ use rusqlite::{Connection, params};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
+use crate::Result;
 use crate::languages::{Language, SymbolKind, detect_language, get_grammar};
 use crate::symbol::{IndexStats, Symbol};
-use crate::Result;
 
 // -- Type alias for the shared DB handle (mirrors cade-server)
 pub type Db = Arc<Mutex<Connection>>;
@@ -25,7 +25,8 @@ pub type Db = Arc<Mutex<Connection>>;
 /// Safe to call multiple times (idempotent).
 pub fn ensure_schema(db: &Db) -> Result<()> {
     let conn = db.lock().expect("db lock poisoned");
-    conn.execute_batch(r#"
+    conn.execute_batch(
+        r#"
         CREATE TABLE IF NOT EXISTS symbols (
             id           TEXT PRIMARY KEY,
             repo_root    TEXT NOT NULL,
@@ -66,7 +67,8 @@ pub fn ensure_schema(db: &Db) -> Result<()> {
             indexed_at INTEGER NOT NULL,
             PRIMARY KEY (repo_root, file_path)
         );
-    "#)?;
+    "#,
+    )?;
     Ok(())
 }
 
@@ -86,16 +88,24 @@ pub async fn index_repository(repo_root: &Path, db: &Db) -> Result<IndexStats> {
         .into_iter()
         .filter_entry(|e| {
             let name = e.file_name().to_string_lossy();
-            !matches!(name.as_ref(), "target" | "node_modules" | ".git" | ".svn" | "vendor" | "__pycache__")
+            !matches!(
+                name.as_ref(),
+                "target" | "node_modules" | ".git" | ".svn" | "vendor" | "__pycache__"
+            )
         });
 
     for entry in walker.filter_map(|e| e.ok()) {
-        if !entry.file_type().is_file() { continue; }
+        if !entry.file_type().is_file() {
+            continue;
+        }
         let path = entry.path();
         let lang = detect_language(path);
-        if lang == Language::Unknown { continue; }
+        if lang == Language::Unknown {
+            continue;
+        }
 
-        let rel_path = path.strip_prefix(repo_root)
+        let rel_path = path
+            .strip_prefix(repo_root)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| path.to_string_lossy().to_string());
 
@@ -126,7 +136,9 @@ pub async fn index_repository(repo_root: &Path, db: &Db) -> Result<IndexStats> {
     stats.duration_ms = t0.elapsed().as_millis();
     tracing::info!(
         "Indexed {} files ({} symbols) in {}ms",
-        stats.files_indexed, stats.symbols_added, stats.duration_ms
+        stats.files_indexed,
+        stats.symbols_added,
+        stats.duration_ms
     );
     Ok(stats)
 }
@@ -138,14 +150,19 @@ pub async fn update_files(changed: &[PathBuf], repo_root: &Path, db: &Db) -> Res
 
     for path in changed {
         let lang = detect_language(path);
-        if lang == Language::Unknown { continue; }
+        if lang == Language::Unknown {
+            continue;
+        }
 
-        let rel_path = path.strip_prefix(repo_root)
+        let rel_path = path
+            .strip_prefix(repo_root)
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| path.to_string_lossy().to_string());
 
         if path.exists() {
-            let Ok(content) = std::fs::read_to_string(path) else { continue };
+            let Ok(content) = std::fs::read_to_string(path) else {
+                continue;
+            };
             let hash = compute_hash(&content);
             let symbols = extract_symbols(&content, lang, &repo_root_str, &rel_path);
             replace_file_symbols(db, &repo_root_str, &rel_path, symbols)?;
@@ -162,18 +179,19 @@ pub async fn update_files(changed: &[PathBuf], repo_root: &Path, db: &Db) -> Res
 
 // region:    --- Symbol extraction
 
-fn extract_symbols(
-    content: &str,
-    lang: Language,
-    repo_root: &str,
-    rel_path: &str,
-) -> Vec<Symbol> {
-    let Some(grammar) = get_grammar(lang) else { return vec![] };
+fn extract_symbols(content: &str, lang: Language, repo_root: &str, rel_path: &str) -> Vec<Symbol> {
+    let Some(grammar) = get_grammar(lang) else {
+        return vec![];
+    };
 
     let mut parser = tree_sitter::Parser::new();
-    if parser.set_language(&grammar).is_err() { return vec![]; }
+    if parser.set_language(&grammar).is_err() {
+        return vec![];
+    }
 
-    let Some(tree) = parser.parse(content, None) else { return vec![] };
+    let Some(tree) = parser.parse(content, None) else {
+        return vec![];
+    };
     let root = tree.root_node();
     let source_bytes = content.as_bytes();
     let now = chrono::Utc::now().timestamp();
@@ -194,43 +212,55 @@ fn extract_from_node(
     let kind_opt = node_to_symbol_kind(node.kind(), lang);
 
     if let Some(kind) = kind_opt
-        && let Some(name) = extract_name(node, source) {
-            let start = node.start_position().row as u32 + 1;
-            let end   = node.end_position().row as u32 + 1;
-            let doc   = extract_doc_comment(node, source);
-            let sig   = extract_signature(node, source);
+        && let Some(name) = extract_name(node, source)
+    {
+        let start = node.start_position().row as u32 + 1;
+        let end = node.end_position().row as u32 + 1;
+        let doc = extract_doc_comment(node, source);
+        let sig = extract_signature(node, source);
 
-            symbols.push(Symbol {
-                id:          format!("sym-{}", Uuid::new_v4()),
-                repo_root:   repo_root.to_string(),
-                file_path:   rel_path.to_string(),
-                name:        name.clone(),
-                kind:        kind.as_str().to_string(),
-                language:    lang.as_str().to_string(),
-                line_start:  start,
-                line_end:    end,
-                parent_name: parent_name.map(String::from),
-                signature:   sig,
-                doc_comment: doc,
-                indexed_at:  now,
-            });
+        symbols.push(Symbol {
+            id: format!("sym-{}", Uuid::new_v4()),
+            repo_root: repo_root.to_string(),
+            file_path: rel_path.to_string(),
+            name: name.clone(),
+            kind: kind.as_str().to_string(),
+            language: lang.as_str().to_string(),
+            line_start: start,
+            line_end: end,
+            parent_name: parent_name.map(String::from),
+            signature: sig,
+            doc_comment: doc,
+            indexed_at: now,
+        });
 
-            // Recurse into children with this symbol as parent
-            let mut cursor = node.walk();
-            for child in node.children(&mut cursor) {
-                symbols.extend(extract_from_node(
-                    &child, source, lang, repo_root, rel_path,
-                    Some(&name), now,
-                ));
-            }
-            return symbols;
+        // Recurse into children with this symbol as parent
+        let mut cursor = node.walk();
+        for child in node.children(&mut cursor) {
+            symbols.extend(extract_from_node(
+                &child,
+                source,
+                lang,
+                repo_root,
+                rel_path,
+                Some(&name),
+                now,
+            ));
         }
+        return symbols;
+    }
 
     // No symbol at this node — recurse into children
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         symbols.extend(extract_from_node(
-            &child, source, lang, repo_root, rel_path, parent_name, now,
+            &child,
+            source,
+            lang,
+            repo_root,
+            rel_path,
+            parent_name,
+            now,
         ));
     }
     symbols
@@ -239,26 +269,26 @@ fn extract_from_node(
 fn node_to_symbol_kind(ts_kind: &str, lang: Language) -> Option<SymbolKind> {
     match (ts_kind, lang) {
         // Rust
-        ("function_item", Language::Rust)     => Some(SymbolKind::Function),
-        ("impl_item", Language::Rust)         => None, // too noisy
-        ("struct_item", Language::Rust)       => Some(SymbolKind::Struct),
-        ("enum_item", Language::Rust)         => Some(SymbolKind::Enum),
-        ("trait_item", Language::Rust)        => Some(SymbolKind::Trait),
-        ("type_item", Language::Rust)         => Some(SymbolKind::Type),
-        ("const_item", Language::Rust)        => Some(SymbolKind::Const),
-        ("mod_item", Language::Rust)          => Some(SymbolKind::Module),
+        ("function_item", Language::Rust) => Some(SymbolKind::Function),
+        ("impl_item", Language::Rust) => None, // too noisy
+        ("struct_item", Language::Rust) => Some(SymbolKind::Struct),
+        ("enum_item", Language::Rust) => Some(SymbolKind::Enum),
+        ("trait_item", Language::Rust) => Some(SymbolKind::Trait),
+        ("type_item", Language::Rust) => Some(SymbolKind::Type),
+        ("const_item", Language::Rust) => Some(SymbolKind::Const),
+        ("mod_item", Language::Rust) => Some(SymbolKind::Module),
         // Python
         ("function_definition", Language::Python) => Some(SymbolKind::Function),
-        ("class_definition", Language::Python)    => Some(SymbolKind::Class),
+        ("class_definition", Language::Python) => Some(SymbolKind::Class),
         // TypeScript / JavaScript
-        ("function_declaration", _)           => Some(SymbolKind::Function),
-        ("class_declaration", _)              => Some(SymbolKind::Class),
-        ("interface_declaration", _)          => Some(SymbolKind::Interface),
-        ("type_alias_declaration", _)         => Some(SymbolKind::Type),
-        ("method_definition", _)              => Some(SymbolKind::Method),
+        ("function_declaration", _) => Some(SymbolKind::Function),
+        ("class_declaration", _) => Some(SymbolKind::Class),
+        ("interface_declaration", _) => Some(SymbolKind::Interface),
+        ("type_alias_declaration", _) => Some(SymbolKind::Type),
+        ("method_definition", _) => Some(SymbolKind::Method),
         // Go
-        ("method_declaration", Language::Go)   => Some(SymbolKind::Method),
-        ("type_declaration", Language::Go)     => Some(SymbolKind::Type),
+        ("method_declaration", Language::Go) => Some(SymbolKind::Method),
+        ("type_declaration", Language::Go) => Some(SymbolKind::Type),
         _ => None,
     }
 }
@@ -279,7 +309,12 @@ fn extract_doc_comment(node: &tree_sitter::Node, source: &[u8]) -> Option<String
     let prev = node.prev_named_sibling()?;
     if prev.kind().contains("comment") || prev.kind().contains("doc") {
         let text = prev.utf8_text(source).ok()?;
-        return Some(text.trim_start_matches('/').trim_start_matches('*').trim().to_string());
+        return Some(
+            text.trim_start_matches('/')
+                .trim_start_matches('*')
+                .trim()
+                .to_string(),
+        );
     }
     None
 }
@@ -304,15 +339,22 @@ fn extract_signature(node: &tree_sitter::Node, source: &[u8]) -> Option<String> 
 
 fn needs_reindex(db: &Db, repo_root: &str, file_path: &str, new_hash: &str) -> bool {
     let conn = db.lock().expect("db lock poisoned");
-    let stored: Option<String> = conn.query_row(
-        "SELECT file_hash FROM symbol_index_files WHERE repo_root = ?1 AND file_path = ?2",
-        params![repo_root, file_path],
-        |r| r.get(0),
-    ).ok();
+    let stored: Option<String> = conn
+        .query_row(
+            "SELECT file_hash FROM symbol_index_files WHERE repo_root = ?1 AND file_path = ?2",
+            params![repo_root, file_path],
+            |r| r.get(0),
+        )
+        .ok();
     stored.as_deref() != Some(new_hash)
 }
 
-fn replace_file_symbols(db: &Db, repo_root: &str, file_path: &str, symbols: Vec<Symbol>) -> Result<()> {
+fn replace_file_symbols(
+    db: &Db,
+    repo_root: &str,
+    file_path: &str,
+    symbols: Vec<Symbol>,
+) -> Result<()> {
     let conn = db.lock().expect("db lock poisoned");
     conn.execute(
         "DELETE FROM symbols WHERE repo_root = ?1 AND file_path = ?2",

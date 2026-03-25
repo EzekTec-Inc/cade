@@ -7,11 +7,11 @@ use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ProviderRow {
-    pub name:     String,
-    pub kind:     String,          // "anthropic" | "openai" | "gemini" | "ollama" | "openai-compatible"
-    pub api_key:  Option<String>,
+    pub name: String,
+    pub kind: String, // "anthropic" | "openai" | "gemini" | "ollama" | "openai-compatible"
+    pub api_key: Option<String>,
     pub base_url: Option<String>,
-    pub enabled:  bool,
+    pub enabled: bool,
 }
 
 /// Thread-safe SQLite handle
@@ -19,9 +19,10 @@ pub type Db = Arc<Mutex<Connection>>;
 
 pub fn open(path: &str) -> Result<Db> {
     if let Some(parent) = std::path::Path::new(path).parent()
-        && !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)?;
-        }
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)?;
+    }
     let conn = Connection::open(path)
         .map_err(|e| crate::server::error::Error::custom(format!("open SQLite at {path}: {e}")))?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
@@ -38,8 +39,9 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     // Note: autoindices for PRIMARY KEY have sql=NULL — exclude them with sql IS NOT NULL.
     // A user-defined UNIQUE constraint generates an autoindex whose sql is also NULL,
     // so we check the index name pattern instead.
-    let has_unique: bool = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master
+    let has_unique: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master
          WHERE tbl_name='memory_blocks'
          AND (
            (type='index' AND sql IS NOT NULL
@@ -47,13 +49,16 @@ fn run_migrations(conn: &Connection) -> Result<()> {
            OR
            (type='table' AND sql LIKE '%UNIQUE%agent_id%label%')
          )",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
 
     if !has_unique {
         tracing::info!("Running migration: adding UNIQUE(agent_id, label) to memory_blocks");
-        conn.execute_batch(r#"
+        conn.execute_batch(
+            r#"
             BEGIN;
             CREATE TABLE IF NOT EXISTS memory_blocks_new (
                 id         TEXT PRIMARY KEY,
@@ -74,26 +79,29 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             DROP TABLE memory_blocks;
             ALTER TABLE memory_blocks_new RENAME TO memory_blocks;
             COMMIT;
-        "#)?;
+        "#,
+        )?;
         tracing::info!("Migration complete: memory_blocks UNIQUE constraint added");
     }
 
     // Migration 3: add `max_chars` column to memory_blocks if missing.
-    let has_max_chars: bool = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('memory_blocks') WHERE name='max_chars'",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
+    let has_max_chars: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('memory_blocks') WHERE name='max_chars'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
     if !has_max_chars {
         tracing::info!("Running migration: adding max_chars column to memory_blocks");
-        conn.execute_batch(
-            "ALTER TABLE memory_blocks ADD COLUMN max_chars INTEGER;"
-        )?;
+        conn.execute_batch("ALTER TABLE memory_blocks ADD COLUMN max_chars INTEGER;")?;
         tracing::info!("Migration complete: memory_blocks.max_chars added");
     }
 
     // Migration 4: create memory_history table if it doesn't exist.
-    conn.execute_batch(r#"
+    conn.execute_batch(
+        r#"
         CREATE TABLE IF NOT EXISTS memory_history (
             id         TEXT PRIMARY KEY,
             block_id   TEXT NOT NULL,
@@ -102,51 +110,62 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_memory_history_block_id
             ON memory_history(block_id, updated_at DESC);
-    "#)?;
+    "#,
+    )?;
 
     // Migration 2: add `description` column to memory_blocks if missing.
     // SQLite supports ADD COLUMN directly (no table rebuild needed).
-    let has_description: bool = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('memory_blocks') WHERE name='description'",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
+    let has_description: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('memory_blocks') WHERE name='description'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
 
     if !has_description {
         tracing::info!("Running migration: adding description column to memory_blocks");
         conn.execute_batch(
-            "ALTER TABLE memory_blocks ADD COLUMN description TEXT NOT NULL DEFAULT '';"
+            "ALTER TABLE memory_blocks ADD COLUMN description TEXT NOT NULL DEFAULT '';",
         )?;
         tracing::info!("Migration complete: memory_blocks.description added");
     }
 
     // Migration 3: add conversation_id column to messages + index.
-    let has_conv_col: bool = conn.query_row(
-        "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='conversation_id'",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
+    let has_conv_col: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='conversation_id'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
 
     if !has_conv_col {
         tracing::info!("Running migration: adding conversation_id to messages");
         conn.execute_batch(
             "ALTER TABLE messages ADD COLUMN conversation_id TEXT;
              CREATE INDEX IF NOT EXISTS idx_messages_conv
-               ON messages(agent_id, conversation_id);"
+               ON messages(agent_id, conversation_id);",
         )?;
         tracing::info!("Migration complete: messages.conversation_id added");
     }
 
     // Migration 5: Shared Memory Blocks
-    let has_shared_memory: bool = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='shared_memory_blocks'",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
+    let has_shared_memory: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='shared_memory_blocks'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
 
     if !has_shared_memory {
         tracing::info!("Running migration: implement Shared Memory schema");
-        conn.execute_batch(r#"
+        conn.execute_batch(
+            r#"
             BEGIN;
             CREATE TABLE shared_memory_blocks (
                 id          TEXT PRIMARY KEY,
@@ -170,7 +189,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             INSERT INTO agent_memory_blocks (agent_id, block_id)
                 SELECT agent_id, id FROM memory_blocks;
             COMMIT;
-        "#)?;
+        "#,
+        )?;
         tracing::info!("Migration complete: Shared Memory schema implemented");
     }
 
@@ -190,11 +210,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     );
 
     // Migration 6: Archival Memory (FTS5)
-    let has_fts: bool = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts'",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
+    let has_fts: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='messages_fts'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
 
     if !has_fts {
         tracing::info!("Running migration: implement FTS5 Archival Memory");
@@ -222,7 +245,10 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             COMMIT;
         "#);
         if let Err(e) = res {
-            tracing::error!("FTS5 migration failed: {}. SQLite may not have FTS5 extension enabled.", e);
+            tracing::error!(
+                "FTS5 migration failed: {}. SQLite may not have FTS5 extension enabled.",
+                e
+            );
         } else {
             tracing::info!("Migration complete: FTS5 Archival Memory implemented");
         }
@@ -234,15 +260,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     // and continues), so deleting them loses no recoverable data.
     {
         let mut stmt = conn.prepare(
-            "SELECT name, api_key FROM providers WHERE api_key IS NOT NULL AND api_key != ''"
+            "SELECT name, api_key FROM providers WHERE api_key IS NOT NULL AND api_key != ''",
         )?;
-        let stale: Vec<String> = stmt.query_map([], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?
-        .filter_map(|r| r.ok())
-        .filter(|(_, encrypted)| crate::server::crypto::decrypt(encrypted).is_err())
-        .map(|(name, _)| name)
-        .collect();
+        let stale: Vec<String> = stmt
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .filter_map(|r| r.ok())
+            .filter(|(_, encrypted)| crate::server::crypto::decrypt(encrypted).is_err())
+            .map(|(name, _)| name)
+            .collect();
 
         if !stale.is_empty() {
             tracing::info!(
@@ -258,15 +283,19 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     // Migration 9: Archival Memory
-    let has_archival: bool = conn.query_row(
-        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='archival_memory'",
-        [],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
+    let has_archival: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='archival_memory'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
 
     if !has_archival {
         tracing::info!("Running migration: implement FTS5 Archival Memory table");
-        let res = conn.execute_batch(r#"
+        let res = conn.execute_batch(
+            r#"
             BEGIN;
             CREATE VIRTUAL TABLE archival_memory USING fts5(
                 id UNINDEXED,
@@ -276,7 +305,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
                 created_at UNINDEXED
             );
             COMMIT;
-        "#);
+        "#,
+        );
         if let Err(e) = res {
             tracing::error!("FTS5 archival_memory migration failed: {}", e);
         } else {
@@ -286,22 +316,30 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     // Migration 10: Conversation branching + checkpoints
     {
-        let has_branch_id: bool = conn.query_row(
-            "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='branch_id'",
-            [], |r| r.get::<_, i64>(0),
-        ).unwrap_or(0) > 0;
+        let has_branch_id: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='branch_id'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
         if !has_branch_id {
             tracing::info!("Migration 10a: adding branch_id / parent_id to messages");
             let _ = conn.execute_batch(
                 "ALTER TABLE messages ADD COLUMN parent_id TEXT;
                  ALTER TABLE messages ADD COLUMN branch_id TEXT NOT NULL DEFAULT 'main';
-                 CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(agent_id, branch_id);"
+                 CREATE INDEX IF NOT EXISTS idx_messages_branch ON messages(agent_id, branch_id);",
             );
         }
-        let has_checkpoints: bool = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='checkpoints'",
-            [], |r| r.get::<_, i64>(0),
-        ).unwrap_or(0) > 0;
+        let has_checkpoints: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='checkpoints'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
         if !has_checkpoints {
             tracing::info!("Migration 10b: creating checkpoints table");
             let _ = conn.execute_batch(r#"
@@ -326,10 +364,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     // Migration 11: Artifact store
     {
-        let has_artifacts: bool = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='artifacts'",
-            [], |r| r.get::<_, i64>(0),
-        ).unwrap_or(0) > 0;
+        let has_artifacts: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='artifacts'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
         if !has_artifacts {
             tracing::info!("Migration 11: creating artifacts table");
             let _ = conn.execute_batch(r#"
@@ -356,10 +398,14 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     // Migration 12: Tool execution log
     {
-        let has_te: bool = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tool_executions'",
-            [], |r| r.get::<_, i64>(0),
-        ).unwrap_or(0) > 0;
+        let has_te: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='tool_executions'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
         if !has_te {
             tracing::info!("Migration 12: creating tool_executions table");
             let _ = conn.execute_batch(r#"
@@ -386,13 +432,18 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     // Migration 13: Eval harness
     {
-        let has_eval: bool = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='eval_tasks'",
-            [], |r| r.get::<_, i64>(0),
-        ).unwrap_or(0) > 0;
+        let has_eval: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='eval_tasks'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
         if !has_eval {
             tracing::info!("Migration 13: creating eval tables");
-            let _ = conn.execute_batch(r#"
+            let _ = conn.execute_batch(
+                r#"
                 CREATE TABLE IF NOT EXISTS eval_tasks (
                     id            TEXT PRIMARY KEY,
                     name          TEXT NOT NULL,
@@ -421,7 +472,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
                 );
                 CREATE INDEX IF NOT EXISTS idx_eval_runs_task  ON eval_runs(task_id);
                 CREATE INDEX IF NOT EXISTS idx_eval_runs_model ON eval_runs(model);
-            "#);
+            "#,
+            );
         }
     }
 
@@ -434,18 +486,38 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         if !has_type {
             tracing::info!("Migration 14: adding memory_type and provenance fields");
             let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'generic'", []);
-            let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0", []);
-            let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN source_msg_id TEXT", []);
-            let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN source_te_id TEXT", []);
-            let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'", []);
-            let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN expires_at INTEGER", []);
+            let _ = conn.execute(
+                "ALTER TABLE shared_memory_blocks ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0",
+                [],
+            );
+            let _ = conn.execute(
+                "ALTER TABLE shared_memory_blocks ADD COLUMN source_msg_id TEXT",
+                [],
+            );
+            let _ = conn.execute(
+                "ALTER TABLE shared_memory_blocks ADD COLUMN source_te_id TEXT",
+                [],
+            );
+            let _ = conn.execute(
+                "ALTER TABLE shared_memory_blocks ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
+                [],
+            );
+            let _ = conn.execute(
+                "ALTER TABLE shared_memory_blocks ADD COLUMN expires_at INTEGER",
+                [],
+            );
         }
-        let has_evidence: bool = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_evidence'",
-            [], |r| r.get::<_, i64>(0),
-        ).unwrap_or(0) > 0;
+        let has_evidence: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='memory_evidence'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
         if !has_evidence {
-            let _ = conn.execute_batch(r#"
+            let _ = conn.execute_batch(
+                r#"
                 CREATE TABLE IF NOT EXISTS memory_evidence (
                     id         TEXT PRIMARY KEY,
                     block_id   TEXT NOT NULL,
@@ -457,16 +529,21 @@ fn run_migrations(conn: &Connection) -> Result<()> {
                     FOREIGN KEY (block_id) REFERENCES shared_memory_blocks(id) ON DELETE CASCADE
                 );
                 CREATE INDEX IF NOT EXISTS idx_evidence_block ON memory_evidence(block_id);
-            "#);
+            "#,
+            );
         }
     }
 
     // Migration 15: Reflection log
     {
-        let has_reflection: bool = conn.query_row(
-            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='reflection_log'",
-            [], |r| r.get::<_, i64>(0),
-        ).unwrap_or(0) > 0;
+        let has_reflection: bool = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='reflection_log'",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or(0)
+            > 0;
         if !has_reflection {
             tracing::info!("Migration 15: creating reflection_log table");
             let _ = conn.execute_batch(r#"
@@ -660,7 +737,14 @@ pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
     conn.execute(
         "INSERT INTO agents (id, name, model, description, system_prompt, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![row.id, row.name, row.model, row.description, row.system_prompt, now_ts()],
+        params![
+            row.id,
+            row.name,
+            row.model,
+            row.description,
+            row.system_prompt,
+            now_ts()
+        ],
     )?;
     Ok(())
 }
@@ -668,17 +752,17 @@ pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
 pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
     let conn = db.lock().expect("db lock poisoned");
     let mut stmt = conn.prepare(
-        "SELECT id, name, model, description, system_prompt, created_at FROM agents WHERE id = ?1"
+        "SELECT id, name, model, description, system_prompt, created_at FROM agents WHERE id = ?1",
     )?;
     let mut rows = stmt.query(params![id])?;
     if let Some(row) = rows.next()? {
         Ok(Some(AgentRow {
-            id:            row.get(0)?,
-            name:          row.get(1)?,
-            model:         row.get(2)?,
-            description:   row.get(3)?,
+            id: row.get(0)?,
+            name: row.get(1)?,
+            model: row.get(2)?,
+            description: row.get(3)?,
             system_prompt: row.get(4)?,
-            created_at:    row.get(5)?,
+            created_at: row.get(5)?,
         }))
     } else {
         Ok(None)
@@ -692,12 +776,12 @@ pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(AgentRow {
-            id:            row.get(0)?,
-            name:          row.get(1)?,
-            model:         row.get(2)?,
-            description:   row.get(3)?,
+            id: row.get(0)?,
+            name: row.get(1)?,
+            model: row.get(2)?,
+            description: row.get(3)?,
             system_prompt: row.get(4)?,
-            created_at:    row.get(5)?,
+            created_at: row.get(5)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -752,9 +836,7 @@ pub fn attach_tools_to_agent(db: &Db, agent_id: &str, tool_ids: &[String]) -> Re
 /// Return tool IDs associated with an agent (if any; falls back to all tools).
 pub fn get_agent_tool_ids(db: &Db, agent_id: &str) -> Result<Vec<String>> {
     let conn = db.lock().expect("db lock poisoned");
-    let mut stmt = conn.prepare(
-        "SELECT tool_id FROM agent_tools WHERE agent_id = ?1"
-    )?;
+    let mut stmt = conn.prepare("SELECT tool_id FROM agent_tools WHERE agent_id = ?1")?;
     let rows = stmt.query_map(params![agent_id], |r| r.get::<_, String>(0))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
@@ -766,7 +848,7 @@ pub fn get_agent_tools_with_names(db: &Db, agent_id: &str) -> Result<Vec<(String
         "SELECT at.tool_id, t.name FROM agent_tools at
          JOIN tools t ON t.id = at.tool_id
          WHERE at.agent_id = ?1
-         ORDER BY t.name"
+         ORDER BY t.name",
     )?;
     let rows = stmt.query_map(params![agent_id], |r| {
         Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
@@ -788,9 +870,9 @@ pub fn detach_all_tools_from_agent(db: &Db, agent_id: &str) -> Result<usize> {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ConversationRow {
-    pub id:         String,
-    pub agent_id:   String,
-    pub title:      String,
+    pub id: String,
+    pub agent_id: String,
+    pub title: String,
     pub created_at: i64,
     pub updated_at: i64,
     pub message_count: i64,
@@ -805,8 +887,14 @@ pub fn create_conversation(db: &Db, agent_id: &str, title: &str) -> Result<Conve
          VALUES (?1, ?2, ?3, ?4, ?5)",
         params![id, agent_id, title, ts, ts],
     )?;
-    Ok(ConversationRow { id, agent_id: agent_id.to_string(), title: title.to_string(),
-                         created_at: ts, updated_at: ts, message_count: 0 })
+    Ok(ConversationRow {
+        id,
+        agent_id: agent_id.to_string(),
+        title: title.to_string(),
+        created_at: ts,
+        updated_at: ts,
+        message_count: 0,
+    })
 }
 
 pub fn get_conversation(db: &Db, conv_id: &str) -> Result<Option<ConversationRow>> {
@@ -817,16 +905,16 @@ pub fn get_conversation(db: &Db, conv_id: &str) -> Result<Option<ConversationRow
          FROM conversations c
          LEFT JOIN messages m ON m.conversation_id = c.id
          WHERE c.id = ?1
-         GROUP BY c.id"
+         GROUP BY c.id",
     )?;
     let mut rows = stmt.query(params![conv_id])?;
     if let Some(r) = rows.next()? {
         Ok(Some(ConversationRow {
-            id:            r.get(0)?,
-            agent_id:      r.get(1)?,
-            title:         r.get(2)?,
-            created_at:    r.get(3)?,
-            updated_at:    r.get(4)?,
+            id: r.get(0)?,
+            agent_id: r.get(1)?,
+            title: r.get(2)?,
+            created_at: r.get(3)?,
+            updated_at: r.get(4)?,
             message_count: r.get(5)?,
         }))
     } else {
@@ -843,15 +931,15 @@ pub fn list_conversations(db: &Db, agent_id: &str) -> Result<Vec<ConversationRow
          LEFT JOIN messages m ON m.conversation_id = c.id
          WHERE c.agent_id = ?1
          GROUP BY c.id
-         ORDER BY c.updated_at DESC"
+         ORDER BY c.updated_at DESC",
     )?;
     let rows = stmt.query_map(params![agent_id], |r| {
         Ok(ConversationRow {
-            id:            r.get(0)?,
-            agent_id:      r.get(1)?,
-            title:         r.get(2)?,
-            created_at:    r.get(3)?,
-            updated_at:    r.get(4)?,
+            id: r.get(0)?,
+            agent_id: r.get(1)?,
+            title: r.get(2)?,
+            created_at: r.get(3)?,
+            updated_at: r.get(4)?,
             message_count: r.get(5)?,
         })
     })?;
@@ -864,7 +952,8 @@ pub fn delete_conversation(db: &Db, conv_id: &str) -> Result<bool> {
     let n = conn.execute("DELETE FROM conversations WHERE id = ?1", params![conv_id])?;
     // Also clean up orphaned messages (fallback for rows without FK enforcement)
     let _ = conn.execute(
-        "DELETE FROM messages WHERE conversation_id = ?1", params![conv_id]
+        "DELETE FROM messages WHERE conversation_id = ?1",
+        params![conv_id],
     );
     Ok(n > 0)
 }
@@ -893,12 +982,12 @@ pub fn touch_conversation(db: &Db, conv_id: &str) -> Result<()> {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RunRow {
-    pub id:              String,
-    pub agent_id:        String,
+    pub id: String,
+    pub agent_id: String,
     pub conversation_id: Option<String>,
-    pub status:          String, // "running" | "completed" | "failed"
-    pub created_at:      i64,
-    pub updated_at:      i64,
+    pub status: String, // "running" | "completed" | "failed"
+    pub created_at: i64,
+    pub updated_at: i64,
 }
 
 pub fn create_run(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<RunRow> {
@@ -911,9 +1000,12 @@ pub fn create_run(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Res
         params![id, agent_id, conversation_id, ts, ts],
     )?;
     Ok(RunRow {
-        id, agent_id: agent_id.to_string(),
+        id,
+        agent_id: agent_id.to_string(),
         conversation_id: conversation_id.map(String::from),
-        status: "running".to_string(), created_at: ts, updated_at: ts,
+        status: "running".to_string(),
+        created_at: ts,
+        updated_at: ts,
     })
 }
 
@@ -921,19 +1013,21 @@ pub fn get_run(db: &Db, run_id: &str) -> Result<Option<RunRow>> {
     let conn = db.lock().expect("db lock poisoned");
     let mut stmt = conn.prepare(
         "SELECT id, agent_id, conversation_id, status, created_at, updated_at
-         FROM runs WHERE id = ?1"
+         FROM runs WHERE id = ?1",
     )?;
     let mut rows = stmt.query(params![run_id])?;
     if let Some(r) = rows.next()? {
         Ok(Some(RunRow {
-            id:              r.get(0)?,
-            agent_id:        r.get(1)?,
+            id: r.get(0)?,
+            agent_id: r.get(1)?,
             conversation_id: r.get(2)?,
-            status:          r.get(3)?,
-            created_at:      r.get(4)?,
-            updated_at:      r.get(5)?,
+            status: r.get(3)?,
+            created_at: r.get(4)?,
+            updated_at: r.get(5)?,
         }))
-    } else { Ok(None) }
+    } else {
+        Ok(None)
+    }
 }
 
 pub fn finish_run(db: &Db, run_id: &str, status: &str) -> Result<()> {
@@ -950,11 +1044,13 @@ pub fn finish_run(db: &Db, run_id: &str, status: &str) -> Result<()> {
 pub fn append_run_event(db: &Db, run_id: &str, data: &str) -> Result<i64> {
     let conn = db.lock().expect("db lock poisoned");
     // Find current max seq_id for this run
-    let max_seq: i64 = conn.query_row(
-        "SELECT COALESCE(MAX(seq_id), -1) FROM run_events WHERE run_id = ?1",
-        params![run_id],
-        |r| r.get(0),
-    ).unwrap_or(-1);
+    let max_seq: i64 = conn
+        .query_row(
+            "SELECT COALESCE(MAX(seq_id), -1) FROM run_events WHERE run_id = ?1",
+            params![run_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(-1);
     let next_seq = max_seq + 1;
     conn.execute(
         "INSERT INTO run_events (run_id, seq_id, data) VALUES (?1, ?2, ?3)",
@@ -969,7 +1065,7 @@ pub fn run_events_after(db: &Db, run_id: &str, after_seq: i64) -> Result<Vec<(i6
     let mut stmt = conn.prepare(
         "SELECT seq_id, data FROM run_events
          WHERE run_id = ?1 AND seq_id > ?2
-         ORDER BY seq_id ASC"
+         ORDER BY seq_id ASC",
     )?;
     let rows = stmt.query_map(params![run_id, after_seq], |r| {
         Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?))
@@ -981,16 +1077,20 @@ pub fn run_events_after(db: &Db, run_id: &str, after_seq: i64) -> Result<Vec<(i6
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MessageRow {
-    pub id:              String,
-    pub agent_id:        String,
+    pub id: String,
+    pub agent_id: String,
     pub conversation_id: Option<String>,
-    pub role:            String,
-    pub content:         Value,
+    pub role: String,
+    pub content: Value,
 }
 
-pub fn last_assistant_message(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<Option<MessageRow>> {
+pub fn last_assistant_message(
+    db: &Db,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+) -> Result<Option<MessageRow>> {
     let conn = db.lock().expect("db lock poisoned");
-    
+
     let sql = if conversation_id.is_some() {
         "SELECT id, agent_id, conversation_id, role, content FROM messages
          WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'assistant'
@@ -1029,8 +1129,12 @@ pub fn insert_message(db: &Db, row: &MessageRow) -> Result<()> {
         "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         params![
-            row.id, row.agent_id, row.conversation_id,
-            row.role, row.content.to_string(), now_ts()
+            row.id,
+            row.agent_id,
+            row.conversation_id,
+            row.role,
+            row.content.to_string(),
+            now_ts()
         ],
     )?;
     Ok(())
@@ -1085,13 +1189,15 @@ pub fn list_messages_page(
     )?;
     let mut result: Vec<MessageRow> = rows
         .filter_map(|r| r.ok())
-        .map(|(id, agent_id, conversation_id, role, content)| MessageRow {
-            id,
-            agent_id,
-            conversation_id,
-            role,
-            content: serde_json::from_str(&content).unwrap_or(Value::String(content)),
-        })
+        .map(
+            |(id, agent_id, conversation_id, role, content)| MessageRow {
+                id,
+                agent_id,
+                conversation_id,
+                role,
+                content: serde_json::from_str(&content).unwrap_or(Value::String(content)),
+            },
+        )
         .collect();
     // list_messages historically returned oldest-first; keep that invariant here
     result.reverse();
@@ -1120,17 +1226,21 @@ pub fn upsert_memory_block(
     let conn = db.lock().expect("db lock poisoned");
 
     // Fetch existing block linked to this agent with this label
-    let existing: Option<(String, String, Option<usize>)> = conn.query_row(
-        "SELECT b.id, b.value, b.max_chars FROM shared_memory_blocks b
+    let existing: Option<(String, String, Option<usize>)> = conn
+        .query_row(
+            "SELECT b.id, b.value, b.max_chars FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
          WHERE amb.agent_id = ?1 AND b.label = ?2",
-        params![agent_id, label],
-        |r| Ok((
-            r.get::<_, String>(0)?,
-            r.get::<_, String>(1)?,
-            r.get::<_, Option<i64>>(2)?.map(|n| n as usize),
-        )),
-    ).optional()?;
+            params![agent_id, label],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<i64>>(2)?.map(|n| n as usize),
+                ))
+            },
+        )
+        .optional()?;
 
     // Effective limit: prefer caller-supplied, else stored, else none.
     let effective_limit = max_chars.or_else(|| existing.as_ref().and_then(|(_, _, mc)| *mc));
@@ -1151,11 +1261,13 @@ pub fn upsert_memory_block(
 
     let ts = now_ts();
     // Get the agent's current turn counter so we can stamp last_turn on the block.
-    let current_turn: i64 = conn.query_row(
-        "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
-        params![agent_id],
-        |r| r.get(0),
-    ).unwrap_or(0);
+    let current_turn: i64 = conn
+        .query_row(
+            "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
+            params![agent_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
 
     if let Some((block_id, old_value, _)) = existing {
         // Snapshot old value into history (skip if unchanged)
@@ -1183,7 +1295,14 @@ pub fn upsert_memory_block(
                      last_turn = ?5,
                      tier = CASE WHEN tier = 'pinned' THEN 'pinned' ELSE 'short' END
                  WHERE id = ?6",
-                params![final_value, desc, max_chars.map(|n| n as i64), ts, current_turn, block_id],
+                params![
+                    final_value,
+                    desc,
+                    max_chars.map(|n| n as i64),
+                    ts,
+                    current_turn,
+                    block_id
+                ],
             )?;
         } else {
             conn.execute(
@@ -1240,7 +1359,7 @@ pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String,
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
-         WHERE amb.agent_id = ?1 ORDER BY b.label"
+         WHERE amb.agent_id = ?1 ORDER BY b.label",
     )?;
     let rows = stmt.query_map(params![agent_id], |row| {
         Ok((
@@ -1254,12 +1373,15 @@ pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String,
 
 /// Returns (label, value, description, updated_at) ordered by updated_at DESC (most recent first).
 /// Used by build_context to apply the memory budget with recency priority.
-pub fn get_memory_blocks_with_ts(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String, i64)>> {
+pub fn get_memory_blocks_with_ts(
+    db: &Db,
+    agent_id: &str,
+) -> Result<Vec<(String, String, String, i64)>> {
     let conn = db.lock().expect("db lock poisoned");
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.updated_at FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
-         WHERE amb.agent_id = ?1 ORDER BY b.updated_at DESC"
+         WHERE amb.agent_id = ?1 ORDER BY b.updated_at DESC",
     )?;
     let rows = stmt.query_map(params![agent_id], |row| {
         Ok((
@@ -1282,28 +1404,37 @@ pub fn increment_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
         "UPDATE agents SET memory_turn_counter = memory_turn_counter + 1 WHERE id = ?1",
         params![agent_id],
     )?;
-    let n: i64 = conn.query_row(
-        "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
-        params![agent_id],
-        |r| r.get(0),
-    ).unwrap_or(0);
+    let n: i64 = conn
+        .query_row(
+            "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
+            params![agent_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
     Ok(n)
 }
 
 /// Read the current turn counter without incrementing.
 pub fn get_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
     let conn = db.lock().expect("db lock poisoned");
-    let n: i64 = conn.query_row(
-        "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
-        params![agent_id],
-        |r| r.get(0),
-    ).unwrap_or(0);
+    let n: i64 = conn
+        .query_row(
+            "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
+            params![agent_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
     Ok(n)
 }
 
 /// Promote 'short' blocks idle for >= threshold turns to 'long'.
 /// 'pinned' blocks are never promoted. Returns number of blocks promoted.
-pub fn promote_stale_blocks(db: &Db, agent_id: &str, current_turn: i64, threshold: i64) -> Result<u64> {
+pub fn promote_stale_blocks(
+    db: &Db,
+    agent_id: &str,
+    current_turn: i64,
+    threshold: i64,
+) -> Result<u64> {
     let conn = db.lock().expect("db lock poisoned");
     let n = conn.execute(
         "UPDATE shared_memory_blocks SET tier = 'long'
@@ -1319,21 +1450,25 @@ pub fn promote_stale_blocks(db: &Db, agent_id: &str, current_turn: i64, threshol
 
 /// Fetch pinned + short-term blocks, pinned first then short by last_turn DESC.
 /// Returns (label, value, description, tier, last_turn).
-pub fn get_active_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String, String, i64)>> {
+pub fn get_active_blocks(
+    db: &Db,
+    agent_id: &str,
+) -> Result<Vec<(String, String, String, String, i64)>> {
     let conn = db.lock().expect("db lock poisoned");
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.tier, b.last_turn
          FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
          WHERE amb.agent_id = ?1 AND b.tier IN ('pinned', 'short')
-         ORDER BY CASE b.tier WHEN 'pinned' THEN 0 ELSE 1 END ASC, b.last_turn DESC"
+         ORDER BY CASE b.tier WHEN 'pinned' THEN 0 ELSE 1 END ASC, b.last_turn DESC",
     )?;
     let rows = stmt.query_map(params![agent_id], |row| {
         Ok((
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2).unwrap_or_default(),
-            row.get::<_, String>(3).unwrap_or_else(|_| "short".to_string()),
+            row.get::<_, String>(3)
+                .unwrap_or_else(|_| "short".to_string()),
             row.get::<_, i64>(4).unwrap_or(0),
         ))
     })?;
@@ -1342,14 +1477,18 @@ pub fn get_active_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String,
 
 /// Fetch long-term blocks: label + first 80 chars of value, ordered by last_turn DESC.
 /// Returns (label, excerpt, turns_idle) where turns_idle = current_turn - last_turn.
-pub fn get_long_term_excerpts(db: &Db, agent_id: &str, current_turn: i64) -> Result<Vec<(String, String, i64)>> {
+pub fn get_long_term_excerpts(
+    db: &Db,
+    agent_id: &str,
+    current_turn: i64,
+) -> Result<Vec<(String, String, i64)>> {
     let conn = db.lock().expect("db lock poisoned");
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.last_turn
          FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
          WHERE amb.agent_id = ?1 AND b.tier = 'long'
-         ORDER BY b.last_turn DESC"
+         ORDER BY b.last_turn DESC",
     )?;
     let rows = stmt.query_map(params![agent_id], |row| {
         let label: String = row.get(0)?;
@@ -1357,21 +1496,36 @@ pub fn get_long_term_excerpts(db: &Db, agent_id: &str, current_turn: i64) -> Res
         let last_turn: i64 = row.get(2).unwrap_or(0);
         // Take first 80 chars as excerpt
         let excerpt: String = value.chars().take(80).collect();
-        let excerpt = if value.chars().count() > 80 { format!("{excerpt}…") } else { excerpt };
+        let excerpt = if value.chars().count() > 80 {
+            format!("{excerpt}…")
+        } else {
+            excerpt
+        };
         Ok((label, excerpt, last_turn))
     })?;
     let rows: Vec<(String, String, i64)> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows.into_iter().map(|(l, e, lt)| (l, e, current_turn - lt)).collect())
+    Ok(rows
+        .into_iter()
+        .map(|(l, e, lt)| (l, e, current_turn - lt))
+        .collect())
 }
 
 /// Explicitly set a block's tier and optionally reset last_turn to current_turn.
-pub fn set_memory_tier(db: &Db, agent_id: &str, label: &str, tier: &str, reset_turn: bool) -> Result<bool> {
+pub fn set_memory_tier(
+    db: &Db,
+    agent_id: &str,
+    label: &str,
+    tier: &str,
+    reset_turn: bool,
+) -> Result<bool> {
     let conn = db.lock().expect("db lock poisoned");
-    let current_turn: i64 = conn.query_row(
-        "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
-        params![agent_id],
-        |r| r.get(0),
-    ).unwrap_or(0);
+    let current_turn: i64 = conn
+        .query_row(
+            "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
+            params![agent_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0);
     let n = if reset_turn {
         conn.execute(
             "UPDATE shared_memory_blocks SET tier = ?1, last_turn = ?2
@@ -1394,7 +1548,10 @@ pub fn set_memory_tier(db: &Db, agent_id: &str, label: &str, tier: &str, reset_t
 
 /// Returns (label, value, description, tier) for all blocks, ordered by tier priority then label.
 /// Used by the API get_memory endpoint to expose tier information.
-pub fn get_memory_blocks_full(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String, String)>> {
+pub fn get_memory_blocks_full(
+    db: &Db,
+    agent_id: &str,
+) -> Result<Vec<(String, String, String, String)>> {
     let conn = db.lock().expect("db lock poisoned");
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.tier
@@ -1408,26 +1565,36 @@ pub fn get_memory_blocks_full(db: &Db, agent_id: &str) -> Result<Vec<(String, St
             row.get::<_, String>(0)?,
             row.get::<_, String>(1)?,
             row.get::<_, String>(2).unwrap_or_default(),
-            row.get::<_, String>(3).unwrap_or_else(|_| "short".to_string()),
+            row.get::<_, String>(3)
+                .unwrap_or_else(|_| "short".to_string()),
         ))
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// Returns the last N revisions of a memory block: (id, value, updated_at).
-pub fn get_memory_history(db: &Db, agent_id: &str, label: &str, limit: usize) -> Result<Vec<(String, String, i64)>> {
+pub fn get_memory_history(
+    db: &Db,
+    agent_id: &str,
+    label: &str,
+    limit: usize,
+) -> Result<Vec<(String, String, i64)>> {
     let conn = db.lock().expect("db lock poisoned");
-    let block_id: Option<String> = conn.query_row(
-        "SELECT b.id FROM shared_memory_blocks b
+    let block_id: Option<String> = conn
+        .query_row(
+            "SELECT b.id FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
          WHERE amb.agent_id = ?1 AND b.label = ?2",
-        params![agent_id, label],
-        |r| r.get(0),
-    ).optional()?;
-    let Some(block_id) = block_id else { return Ok(vec![]); };
+            params![agent_id, label],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(block_id) = block_id else {
+        return Ok(vec![]);
+    };
     let mut stmt = conn.prepare(
         "SELECT id, value, updated_at FROM memory_history
-         WHERE block_id = ?1 ORDER BY updated_at DESC LIMIT ?2"
+         WHERE block_id = ?1 ORDER BY updated_at DESC LIMIT ?2",
     )?;
     let rows = stmt.query_map(params![block_id, limit as i64], |row| {
         Ok((
@@ -1440,22 +1607,35 @@ pub fn get_memory_history(db: &Db, agent_id: &str, label: &str, limit: usize) ->
 }
 
 /// Restore a memory block to a specific history revision.
-pub fn restore_memory_from_history(db: &Db, agent_id: &str, label: &str, hist_id: &str) -> Result<bool> {
+pub fn restore_memory_from_history(
+    db: &Db,
+    agent_id: &str,
+    label: &str,
+    hist_id: &str,
+) -> Result<bool> {
     let conn = db.lock().expect("db lock poisoned");
-    let block_id: Option<String> = conn.query_row(
-        "SELECT b.id FROM shared_memory_blocks b
+    let block_id: Option<String> = conn
+        .query_row(
+            "SELECT b.id FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
          WHERE amb.agent_id = ?1 AND b.label = ?2",
-        params![agent_id, label],
-        |r| r.get(0),
-    ).optional()?;
-    let Some(block_id) = block_id else { return Ok(false); };
-    let hist_value: Option<String> = conn.query_row(
-        "SELECT value FROM memory_history WHERE id = ?1 AND block_id = ?2",
-        params![hist_id, block_id],
-        |r| r.get(0),
-    ).optional()?;
-    let Some(hist_value) = hist_value else { return Ok(false); };
+            params![agent_id, label],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(block_id) = block_id else {
+        return Ok(false);
+    };
+    let hist_value: Option<String> = conn
+        .query_row(
+            "SELECT value FROM memory_history WHERE id = ?1 AND block_id = ?2",
+            params![hist_id, block_id],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let Some(hist_value) = hist_value else {
+        return Ok(false);
+    };
     conn.execute(
         "UPDATE shared_memory_blocks SET value = ?1, updated_at = ?2 WHERE id = ?3",
         params![hist_value, now_ts(), block_id],
@@ -1501,7 +1681,8 @@ pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
 pub fn get_tool_id_by_name(db: &Db, name: &str) -> Option<String> {
     let conn = db.lock().expect("db lock poisoned");
     let mut stmt = conn.prepare("SELECT id FROM tools WHERE name = ?1").ok()?;
-    stmt.query_row(params![name], |r| r.get::<_, String>(0)).ok()
+    stmt.query_row(params![name], |r| r.get::<_, String>(0))
+        .ok()
 }
 
 /// Delete all messages for an agent (or a specific conversation).
@@ -1526,15 +1707,15 @@ pub fn clear_messages(db: &Db, agent_id: &str, conversation_id: Option<&str>) ->
 /// A ranked search result from FTS5 message search.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MessageSearchResult {
-    pub id:              String,
-    pub agent_id:        String,
+    pub id: String,
+    pub agent_id: String,
     pub conversation_id: Option<String>,
-    pub role:            String,
-    pub content:         Value,
+    pub role: String,
+    pub content: Value,
     /// BM25 relevance score (lower = more relevant in SQLite FTS5).
-    pub score:           f64,
+    pub score: f64,
     /// Context snippet with match highlighted by `**` markers.
-    pub snippet:         String,
+    pub snippet: String,
 }
 
 /// Search messages using FTS5 with BM25 ranking and context snippets.
@@ -1583,16 +1764,16 @@ pub fn search_messages(
 
     let mapper = |r: &rusqlite::Row| {
         let content_str: String = r.get(4)?;
-        let content = serde_json::from_str(&content_str)
-            .unwrap_or(serde_json::Value::String(content_str));
+        let content =
+            serde_json::from_str(&content_str).unwrap_or(serde_json::Value::String(content_str));
         Ok(MessageSearchResult {
-            id:              r.get(0)?,
-            agent_id:        r.get(1)?,
+            id: r.get(0)?,
+            agent_id: r.get(1)?,
             conversation_id: r.get(2)?,
-            role:            r.get(3)?,
+            role: r.get(3)?,
             content,
-            score:           r.get::<_, f64>(5).unwrap_or(0.0),
-            snippet:         r.get::<_, String>(6).unwrap_or_default(),
+            score: r.get::<_, f64>(5).unwrap_or(0.0),
+            snippet: r.get::<_, String>(6).unwrap_or_default(),
         })
     };
 
@@ -1628,13 +1809,10 @@ pub fn search_memory(
            AND (LOWER(b.label) LIKE LOWER(?2) ESCAPE '\\'
                 OR LOWER(b.value) LIKE LOWER(?2) ESCAPE '\\')
          ORDER BY b.updated_at DESC
-         LIMIT 10"
+         LIMIT 10",
     )?;
     let rows = stmt.query_map(params![agent_id, pattern], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            row.get::<_, String>(1)?,
-        ))
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
     })?;
 
     let q_lower = query.to_lowercase();
@@ -1645,15 +1823,17 @@ pub fn search_memory(
             let val_lower = value.to_lowercase();
             let snippet = if let Some(pos) = val_lower.find(&q_lower) {
                 let start = pos.saturating_sub(80);
-                let end   = (pos + q_lower.len() + 80).min(value.len());
+                let end = (pos + q_lower.len() + 80).min(value.len());
                 let prefix = if start > 0 { "…" } else { "" };
                 let suffix = if end < value.len() { "…" } else { "" };
                 // Find char boundaries
-                let s = value.char_indices()
+                let s = value
+                    .char_indices()
                     .map(|(i, _)| i)
                     .find(|&i| i >= start)
                     .unwrap_or(start);
-                let e = value.char_indices()
+                let e = value
+                    .char_indices()
                     .map(|(i, _)| i)
                     .find(|&i| i >= end)
                     .unwrap_or(end);
@@ -1687,7 +1867,7 @@ pub fn insert_archival_memory(
     let conn = db.lock().expect("db lock poisoned");
     let id = uuid::Uuid::new_v4().to_string();
     let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
-    
+
     conn.execute(
         "INSERT INTO archival_memory (id, agent_id, content, tags, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -1704,18 +1884,18 @@ pub fn search_archival_memory(
     limit: usize,
 ) -> Result<Vec<ArchivalRecord>> {
     let conn = db.lock().expect("db lock poisoned");
-    
+
     // FTS5 requires queries to be properly quoted to avoid syntax errors
     let fts_query = format!("\"{}\"", query.replace('\"', "\"\""));
-    
+
     let mut stmt = conn.prepare(
         "SELECT id, content, tags, created_at
          FROM archival_memory
          WHERE archival_memory MATCH ?2 AND agent_id = ?1
          ORDER BY bm25(archival_memory)
-         LIMIT ?3"
+         LIMIT ?3",
     )?;
-    
+
     let rows = stmt.query_map(params![agent_id, fts_query, limit], |row| {
         Ok((
             row.get::<_, String>(0)?,
@@ -1724,7 +1904,7 @@ pub fn search_archival_memory(
             row.get::<_, i64>(3)?,
         ))
     })?;
-    
+
     let mut results = Vec::new();
     for row in rows.filter_map(|r| r.ok()) {
         let (id, content, tags_str, created_at) = row;
@@ -1736,7 +1916,7 @@ pub fn search_archival_memory(
             created_at,
         });
     }
-    
+
     Ok(results)
 }
 
@@ -1758,7 +1938,8 @@ pub fn pending_tool_results(
             }
             "assistant" => {
                 if let Some(arr) = msg.content["tool_calls"].as_array() {
-                    let non_empty: Vec<_> = arr.iter()
+                    let non_empty: Vec<_> = arr
+                        .iter()
                         .filter(|tc| tc.get("id").and_then(|v| v.as_str()).is_some())
                         .collect();
                     if !non_empty.is_empty() {
@@ -1779,7 +1960,7 @@ pub fn pending_tool_results(
 pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
     let conn = db.lock().expect("db lock poisoned");
     let mut stmt = conn.prepare(
-        "SELECT id, name, description, source_code, json_schema, tags FROM tools ORDER BY name"
+        "SELECT id, name, description, source_code, json_schema, tags FROM tools ORDER BY name",
     )?;
     let rows = stmt.query_map([], |row| {
         Ok((
@@ -1793,14 +1974,16 @@ pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
     })?;
     Ok(rows
         .filter_map(|r| r.ok())
-        .map(|(id, name, description, source_code, schema_str, tags_str)| ToolRow {
-            id,
-            name,
-            description,
-            source_code,
-            json_schema: schema_str.and_then(|s| serde_json::from_str(&s).ok()),
-            tags: serde_json::from_str(&tags_str).unwrap_or_default(),
-        })
+        .map(
+            |(id, name, description, source_code, schema_str, tags_str)| ToolRow {
+                id,
+                name,
+                description,
+                source_code,
+                json_schema: schema_str.and_then(|s| serde_json::from_str(&s).ok()),
+                tags: serde_json::from_str(&tags_str).unwrap_or_default(),
+            },
+        )
         .collect())
 }
 
@@ -1808,7 +1991,7 @@ pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
 
 pub fn upsert_provider(db: &Db, row: &ProviderRow) -> Result<()> {
     let conn = db.lock().expect("db lock poisoned");
-    
+
     // SEC-02: Encrypt API key at rest
     let encrypted_key = match &row.api_key {
         Some(k) if !k.is_empty() => Some(crate::server::crypto::encrypt(k)?),
@@ -1837,12 +2020,11 @@ pub fn upsert_provider(db: &Db, row: &ProviderRow) -> Result<()> {
 
 pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
     let conn = db.lock().expect("db lock poisoned");
-    let mut stmt = conn.prepare(
-        "SELECT name, kind, api_key, base_url, enabled FROM providers ORDER BY name"
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT name, kind, api_key, base_url, enabled FROM providers ORDER BY name")?;
     let mut providers = Vec::new();
     let mut rows = stmt.query([])?;
-    
+
     while let Some(r) = rows.next()? {
         let name: String = r.get(0)?;
         let kind: String = r.get(1)?;
@@ -1880,7 +2062,7 @@ pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
             enabled,
         });
     }
-    
+
     Ok(providers)
 }
 
@@ -1898,13 +2080,13 @@ pub fn delete_provider(db: &Db, name: &str) -> Result<bool> {
 #[allow(clippy::too_many_arguments)]
 pub fn upsert_memory_block_typed(
     db: &Db,
-    agent_id:    &str,
-    label:       &str,
-    value:       &str,
+    agent_id: &str,
+    label: &str,
+    value: &str,
     description: Option<&str>,
-    max_chars:   Option<usize>,
+    max_chars: Option<usize>,
     memory_type: Option<&str>,
-    confidence:  Option<f64>,
+    confidence: Option<f64>,
 ) -> Result<()> {
     // Core upsert first
     upsert_memory_block(db, agent_id, label, value, description, max_chars)?;
@@ -1930,24 +2112,26 @@ pub fn upsert_memory_block_typed(
 
 /// Insert a memory evidence entry for a block.
 pub fn insert_memory_evidence(
-    db:        &Db,
-    agent_id:  &str,
-    label:     &str,
-    kind:      &str,
+    db: &Db,
+    agent_id: &str,
+    label: &str,
+    kind: &str,
     reference: &str,
-    excerpt:   Option<&str>,
+    excerpt: Option<&str>,
     confidence: f64,
 ) -> Result<String> {
     let conn = db.lock().expect("db lock poisoned");
 
     // Find the block_id
-    let block_id: Option<String> = conn.query_row(
-        "SELECT b.id FROM shared_memory_blocks b
+    let block_id: Option<String> = conn
+        .query_row(
+            "SELECT b.id FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
          WHERE amb.agent_id = ?1 AND b.label = ?2 LIMIT 1",
-        params![agent_id, label],
-        |r| r.get(0),
-    ).optional()?;
+            params![agent_id, label],
+            |r| r.get(0),
+        )
+        .optional()?;
 
     let Some(block_id) = block_id else {
         return Err(crate::server::Error::custom(format!(
@@ -1977,7 +2161,7 @@ pub fn list_memory_evidence(
          JOIN shared_memory_blocks b ON b.id = e.block_id
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
          WHERE amb.agent_id = ?1 AND b.label = ?2
-         ORDER BY e.created_at DESC LIMIT 20"
+         ORDER BY e.created_at DESC LIMIT 20",
     )?;
     let rows = stmt.query_map(params![agent_id, label], |r| {
         Ok((
@@ -1995,14 +2179,14 @@ pub fn list_memory_evidence(
 /// Insert a reflection log entry.
 #[allow(clippy::too_many_arguments)]
 pub fn insert_reflection_log(
-    db:             &Db,
-    id:             &str,
-    agent_id:       &str,
-    trigger:        &str,
+    db: &Db,
+    id: &str,
+    agent_id: &str,
+    trigger: &str,
     blocks_created: usize,
     blocks_updated: usize,
-    summary:        &str,
-    duration_ms:    u128,
+    summary: &str,
+    duration_ms: u128,
 ) -> Result<()> {
     let conn = db.lock().expect("db lock poisoned");
     conn.execute(
@@ -2010,9 +2194,14 @@ pub fn insert_reflection_log(
          (id, agent_id, trigger, blocks_created, blocks_updated, summary, duration_ms, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
         params![
-            id, agent_id, trigger,
-            blocks_created as i64, blocks_updated as i64,
-            summary, duration_ms as i64, now_ts()
+            id,
+            agent_id,
+            trigger,
+            blocks_created as i64,
+            blocks_updated as i64,
+            summary,
+            duration_ms as i64,
+            now_ts()
         ],
     )?;
     Ok(())
@@ -2023,7 +2212,7 @@ pub fn list_reflection_log(db: &Db, agent_id: &str) -> Result<Vec<serde_json::Va
     let conn = db.lock().expect("db lock poisoned");
     let mut stmt = conn.prepare(
         "SELECT id, trigger, blocks_created, blocks_updated, summary, duration_ms, created_at
-         FROM reflection_log WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 50"
+         FROM reflection_log WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 50",
     )?;
     let rows = stmt.query_map(params![agent_id], |r| {
         Ok(serde_json::json!({
@@ -2066,25 +2255,39 @@ mod tests {
         let agent2 = "agent-2";
 
         // Create agents
-        create_agent(&db, &AgentRow {
-            id: agent1.to_string(), name: "A1".to_string(), model: "m".to_string(),
-            description: None, system_prompt: None, created_at: None,
-        })?;
-        create_agent(&db, &AgentRow {
-            id: agent2.to_string(), name: "A2".to_string(), model: "m".to_string(),
-            description: None, system_prompt: None, created_at: None,
-        })?;
+        create_agent(
+            &db,
+            &AgentRow {
+                id: agent1.to_string(),
+                name: "A1".to_string(),
+                model: "m".to_string(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+            },
+        )?;
+        create_agent(
+            &db,
+            &AgentRow {
+                id: agent2.to_string(),
+                name: "A2".to_string(),
+                model: "m".to_string(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+            },
+        )?;
 
         // 1. Agent 1 creates a block
         upsert_memory_block(&db, agent1, "shared_fact", "Initial value", None, None)?;
-        
+
         // Find the block ID
         let block_id: String = {
             let conn = db.lock().unwrap(); // Keep this one unwrap() as it's a Mutex poison error which is fine, or use lock().map_err(|e| e.to_string())?
             conn.query_row(
                 "SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?1",
                 params![agent1],
-                |r| r.get(0)
+                |r| r.get(0),
             )?
         };
 
@@ -2112,30 +2315,61 @@ mod tests {
         let db = setup_mem_db()?;
         let agent_id = "agent-fts";
 
-        create_agent(&db, &AgentRow {
-            id: agent_id.to_string(), name: "A".to_string(), model: "m".to_string(),
-            description: None, system_prompt: None, created_at: None,
-        })?;
+        create_agent(
+            &db,
+            &AgentRow {
+                id: agent_id.to_string(),
+                name: "A".to_string(),
+                model: "m".to_string(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+            },
+        )?;
 
-        insert_message(&db, &MessageRow {
-            id: "m1".to_string(), agent_id: agent_id.to_string(), conversation_id: None,
-            role: "user".to_string(), content: json!("Rust is a systems programming language")
-        })?;
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m1".to_string(),
+                agent_id: agent_id.to_string(),
+                conversation_id: None,
+                role: "user".to_string(),
+                content: json!("Rust is a systems programming language"),
+            },
+        )?;
 
-        insert_message(&db, &MessageRow {
-            id: "m2".to_string(), agent_id: agent_id.to_string(), conversation_id: None,
-            role: "assistant".to_string(), content: json!("I agree, Rust is safe and fast.")
-        })?;
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m2".to_string(),
+                agent_id: agent_id.to_string(),
+                conversation_id: None,
+                role: "assistant".to_string(),
+                content: json!("I agree, Rust is safe and fast."),
+            },
+        )?;
 
         // Search for "systems"
         let res = search_messages(&db, agent_id, "systems", None)?;
         assert_eq!(res.len(), 1);
-        assert!(res[0].content.as_str().ok_or("not string")?.contains("systems"));
+        assert!(
+            res[0]
+                .content
+                .as_str()
+                .ok_or("not string")?
+                .contains("systems")
+        );
 
         // Search for "safe"
         let res2 = search_messages(&db, agent_id, "safe", None)?;
         assert_eq!(res2.len(), 1);
-        assert!(res2[0].content.as_str().ok_or("not string")?.contains("fast"));
+        assert!(
+            res2[0]
+                .content
+                .as_str()
+                .ok_or("not string")?
+                .contains("fast")
+        );
 
         Ok(())
     }
@@ -2170,9 +2404,7 @@ mod tests {
         )?;
 
         // Verify 3 rows before migration
-        let count: i64 = conn.query_row(
-            "SELECT COUNT(*) FROM providers", [], |r| r.get(0),
-        )?;
+        let count: i64 = conn.query_row("SELECT COUNT(*) FROM providers", [], |r| r.get(0))?;
         assert_eq!(count, 3);
 
         // Run migrations — migration 8 should remove 'stale'

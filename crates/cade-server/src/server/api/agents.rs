@@ -109,10 +109,7 @@ pub async fn create_agent(
     // of every prompt with schemas for tools that may not even be running.
     if !body.tool_ids.is_empty() {
         let _ = sqlite::attach_tools_to_agent(&state.db, &id, &body.tool_ids);
-        tracing::info!(
-            "Wired {} tool(s) to new agent {id}",
-            body.tool_ids.len()
-        );
+        tracing::info!("Wired {} tool(s) to new agent {id}", body.tool_ids.len());
     }
 
     // Handle memory blocks
@@ -616,14 +613,17 @@ pub async fn search_archival_memory_handler(
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let query = params.get("q").map(String::as_str).unwrap_or("");
-    let limit = params.get("limit").and_then(|s| s.parse::<usize>().ok()).unwrap_or(10);
-    
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(10);
+
     if query.is_empty() {
         return Ok(Json(json!({ "results": [] })));
     }
 
     let records = sqlite::search_archival_memory(&state.db, &agent_id, query, limit)
         .map_err(|e| server_err(e.to_string()))?;
-    
+
     Ok(Json(json!({ "results": records })))
 }

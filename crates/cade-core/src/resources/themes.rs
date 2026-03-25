@@ -19,44 +19,46 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum ThemeColor {
-    Hex(String),       // "#rrggbb" or variable name or ""
-    Index(u8),         // 0-255 palette index
+    Hex(String), // "#rrggbb" or variable name or ""
+    Index(u8),   // 0-255 palette index
 }
 
 impl Default for ThemeColor {
-    fn default() -> Self { Self::Hex(String::new()) }
+    fn default() -> Self {
+        Self::Hex(String::new())
+    }
 }
 
 /// Full set of color tokens for a theme (51 tokens matching pi's schema).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ThemeTokens {
     // -- Core UI
-    pub accent:         ThemeColor,
-    pub border:         ThemeColor,
+    pub accent: ThemeColor,
+    pub border: ThemeColor,
     #[serde(rename = "borderAccent")]
-    pub border_accent:  ThemeColor,
+    pub border_accent: ThemeColor,
     #[serde(rename = "borderMuted")]
-    pub border_muted:   ThemeColor,
-    pub success:        ThemeColor,
-    pub error:          ThemeColor,
-    pub warning:        ThemeColor,
-    pub muted:          ThemeColor,
-    pub dim:            ThemeColor,
-    pub text:           ThemeColor,
+    pub border_muted: ThemeColor,
+    pub success: ThemeColor,
+    pub error: ThemeColor,
+    pub warning: ThemeColor,
+    pub muted: ThemeColor,
+    pub dim: ThemeColor,
+    pub text: ThemeColor,
     #[serde(rename = "thinkingText")]
-    pub thinking_text:  ThemeColor,
+    pub thinking_text: ThemeColor,
 
     // -- Backgrounds & content
     #[serde(rename = "selectedBg")]
-    pub selected_bg:       ThemeColor,
+    pub selected_bg: ThemeColor,
     #[serde(rename = "userMessageBg")]
-    pub user_message_bg:   ThemeColor,
+    pub user_message_bg: ThemeColor,
     #[serde(rename = "userMessageText")]
     pub user_message_text: ThemeColor,
     #[serde(rename = "customMessageBg")]
-    pub custom_message_bg:    ThemeColor,
+    pub custom_message_bg: ThemeColor,
     #[serde(rename = "customMessageText")]
-    pub custom_message_text:  ThemeColor,
+    pub custom_message_text: ThemeColor,
     #[serde(rename = "customMessageLabel")]
     pub custom_message_label: ThemeColor,
     #[serde(rename = "toolPendingBg")]
@@ -64,37 +66,37 @@ pub struct ThemeTokens {
     #[serde(rename = "toolSuccessBg")]
     pub tool_success_bg: ThemeColor,
     #[serde(rename = "toolErrorBg")]
-    pub tool_error_bg:   ThemeColor,
+    pub tool_error_bg: ThemeColor,
     #[serde(rename = "toolTitle")]
-    pub tool_title:      ThemeColor,
+    pub tool_title: ThemeColor,
     #[serde(rename = "toolOutput")]
-    pub tool_output:     ThemeColor,
+    pub tool_output: ThemeColor,
 
     // -- Markdown
     #[serde(rename = "mdHeading")]
-    pub md_heading:         ThemeColor,
+    pub md_heading: ThemeColor,
     #[serde(rename = "mdLink")]
-    pub md_link:            ThemeColor,
+    pub md_link: ThemeColor,
     #[serde(rename = "mdLinkUrl")]
-    pub md_link_url:        ThemeColor,
+    pub md_link_url: ThemeColor,
     #[serde(rename = "mdCode")]
-    pub md_code:            ThemeColor,
+    pub md_code: ThemeColor,
     #[serde(rename = "mdCodeBlock")]
-    pub md_code_block:      ThemeColor,
+    pub md_code_block: ThemeColor,
     #[serde(rename = "mdCodeBlockBorder")]
     pub md_code_block_border: ThemeColor,
     #[serde(rename = "mdQuote")]
-    pub md_quote:           ThemeColor,
+    pub md_quote: ThemeColor,
     #[serde(rename = "mdQuoteBorder")]
-    pub md_quote_border:    ThemeColor,
+    pub md_quote_border: ThemeColor,
     #[serde(rename = "mdHr")]
-    pub md_hr:              ThemeColor,
+    pub md_hr: ThemeColor,
     #[serde(rename = "mdListBullet")]
-    pub md_list_bullet:     ThemeColor,
+    pub md_list_bullet: ThemeColor,
 
     // -- Diffs
     #[serde(rename = "toolDiffAdded")]
-    pub tool_diff_added:   ThemeColor,
+    pub tool_diff_added: ThemeColor,
     #[serde(rename = "toolDiffRemoved")]
     pub tool_diff_removed: ThemeColor,
     #[serde(rename = "toolDiffContext")]
@@ -102,37 +104,37 @@ pub struct ThemeTokens {
 
     // -- Syntax
     #[serde(rename = "syntaxComment")]
-    pub syntax_comment:     ThemeColor,
+    pub syntax_comment: ThemeColor,
     #[serde(rename = "syntaxKeyword")]
-    pub syntax_keyword:     ThemeColor,
+    pub syntax_keyword: ThemeColor,
     #[serde(rename = "syntaxFunction")]
-    pub syntax_function:    ThemeColor,
+    pub syntax_function: ThemeColor,
     #[serde(rename = "syntaxVariable")]
-    pub syntax_variable:    ThemeColor,
+    pub syntax_variable: ThemeColor,
     #[serde(rename = "syntaxString")]
-    pub syntax_string:      ThemeColor,
+    pub syntax_string: ThemeColor,
     #[serde(rename = "syntaxNumber")]
-    pub syntax_number:      ThemeColor,
+    pub syntax_number: ThemeColor,
     #[serde(rename = "syntaxType")]
-    pub syntax_type:        ThemeColor,
+    pub syntax_type: ThemeColor,
     #[serde(rename = "syntaxOperator")]
-    pub syntax_operator:    ThemeColor,
+    pub syntax_operator: ThemeColor,
     #[serde(rename = "syntaxPunctuation")]
     pub syntax_punctuation: ThemeColor,
 
     // -- Thinking levels
     #[serde(rename = "thinkingOff")]
-    pub thinking_off:    ThemeColor,
+    pub thinking_off: ThemeColor,
     #[serde(rename = "thinkingMinimal")]
     pub thinking_minimal: ThemeColor,
     #[serde(rename = "thinkingLow")]
-    pub thinking_low:    ThemeColor,
+    pub thinking_low: ThemeColor,
     #[serde(rename = "thinkingMedium")]
     pub thinking_medium: ThemeColor,
     #[serde(rename = "thinkingHigh")]
-    pub thinking_high:   ThemeColor,
+    pub thinking_high: ThemeColor,
     #[serde(rename = "thinkingXhigh")]
-    pub thinking_xhigh:  ThemeColor,
+    pub thinking_xhigh: ThemeColor,
 
     // -- Bash mode
     #[serde(rename = "bashMode")]
@@ -142,10 +144,10 @@ pub struct ThemeTokens {
 /// A loaded theme ready for use.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Theme {
-    pub name:   String,
+    pub name: String,
     /// Optional variable aliases (referenced by name in `colors`).
     #[serde(default)]
-    pub vars:   HashMap<String, ThemeColor>,
+    pub vars: HashMap<String, ThemeColor>,
     pub colors: ThemeTokens,
     /// Source file path (not serialized).
     #[serde(skip)]
@@ -192,8 +194,12 @@ fn load_themes_from_dir(
     themes: &mut Vec<Theme>,
     seen: &mut std::collections::HashSet<String>,
 ) {
-    if !dir.exists() { return; }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    if !dir.exists() {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("json") {
@@ -221,7 +227,9 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn make_dir() -> TempDir { tempfile::tempdir().expect("tempdir") }
+    fn make_dir() -> TempDir {
+        tempfile::tempdir().expect("tempdir")
+    }
 
     #[test]
     fn test_discover_themes_empty() {
@@ -244,8 +252,8 @@ mod tests {
         // A valid theme must have all required token fields.
         // We use serde_json::to_string of a Theme with default colors.
         let theme = Theme {
-            name:   "mytheme".to_string(),
-            vars:   Default::default(),
+            name: "mytheme".to_string(),
+            vars: Default::default(),
             colors: ThemeTokens::default(),
             source: PathBuf::new(),
         };

@@ -23,8 +23,8 @@ use cade_core::tool_ids::*;
 use crate::agent::client::CadeClient;
 use crate::backends::{ExecutionBackend, LocalBackend};
 use crate::mcp::McpManager;
-use crate::tools::{dispatch, memory};
 use crate::tools::git_checkpoint;
+use crate::tools::{dispatch, memory};
 
 // region:    --- Types
 
@@ -32,9 +32,9 @@ use crate::tools::git_checkpoint;
 #[derive(Debug, Clone)]
 pub struct RuntimeToolResult {
     pub tool_call_id: String,
-    pub tool_name:    String,
-    pub output:       String,
-    pub is_error:     bool,
+    pub tool_name: String,
+    pub output: String,
+    pub is_error: bool,
 }
 
 // endregion: --- Types
@@ -45,26 +45,26 @@ pub struct RuntimeToolResult {
 ///
 /// Create once per session and reuse across turns.
 pub struct ToolRuntime {
-    pub client:          Arc<CadeClient>,
-    pub mcp:             Arc<McpManager>,
-    pub agent_id:        String,
-    pub cwd:             PathBuf,
+    pub client: Arc<CadeClient>,
+    pub mcp: Arc<McpManager>,
+    pub agent_id: String,
+    pub cwd: PathBuf,
     /// Active conversation ID — used for tool execution logging context.
     pub conversation_id: Option<String>,
     /// When true, each tool execution is logged to the server asynchronously.
-    pub log_executions:  bool,
+    pub log_executions: bool,
     /// Pluggable execution backend (local / docker / ssh / readonly).
-    pub backend:         Arc<dyn ExecutionBackend>,
+    pub backend: Arc<dyn ExecutionBackend>,
 }
 
 impl ToolRuntime {
     // -- Constructor
 
     pub fn new(
-        client:   Arc<CadeClient>,
-        mcp:      Arc<McpManager>,
+        client: Arc<CadeClient>,
+        mcp: Arc<McpManager>,
         agent_id: String,
-        cwd:      PathBuf,
+        cwd: PathBuf,
     ) -> Self {
         Self {
             client,
@@ -72,8 +72,8 @@ impl ToolRuntime {
             agent_id,
             cwd,
             conversation_id: None,
-            log_executions:  false,
-            backend:         Arc::new(LocalBackend),
+            log_executions: false,
+            backend: Arc::new(LocalBackend),
         }
     }
 
@@ -81,13 +81,13 @@ impl ToolRuntime {
     pub fn from_refs(client: &CadeClient, mcp: &McpManager, agent_id: &str, cwd: PathBuf) -> Self {
         let _ = mcp;
         Self {
-            client:          Arc::new(client.clone()),
-            mcp:             Arc::new(McpManager::empty()),
-            agent_id:        agent_id.to_string(),
+            client: Arc::new(client.clone()),
+            mcp: Arc::new(McpManager::empty()),
+            agent_id: agent_id.to_string(),
             cwd,
             conversation_id: None,
-            log_executions:  false,
-            backend:         Arc::new(LocalBackend),
+            log_executions: false,
+            backend: Arc::new(LocalBackend),
         }
     }
 
@@ -123,8 +123,8 @@ impl ToolRuntime {
     ) -> Option<RuntimeToolResult> {
         // Normalise Gemini / Codex aliases back to canonical IDs.
         let canonical_owned: String = {
-            use cade_core::toolsets::adapter::ToolSurfaceAdapter;
             use cade_core::toolsets::Toolset;
+            use cade_core::toolsets::adapter::ToolSurfaceAdapter;
             let ga = ToolSurfaceAdapter::for_toolset(Toolset::Gemini);
             ga.to_canonical(tool_name).to_string()
         };
@@ -133,8 +133,8 @@ impl ToolRuntime {
         let t0 = std::time::Instant::now();
         let (output, is_error) = match canonical {
             // -- Memory tools (intercepted; use REST client)
-            UPDATE_MEMORY       => self.handle_update_memory(args).await,
-            MEMORY_APPLY_PATCH  => self.handle_memory_apply_patch(args).await,
+            UPDATE_MEMORY => self.handle_update_memory(args).await,
+            MEMORY_APPLY_PATCH => self.handle_memory_apply_patch(args).await,
             ARCHIVAL_MEMORY_INSERT => {
                 memory::ArchivalMemoryInsertTool::run(&self.client, &self.agent_id, args)
                     .await
@@ -150,52 +150,53 @@ impl ToolRuntime {
                     .await
                     .map_or_else(|e| (format!("Failed: {e}"), false), |o| (o, false))
             }
-            SEARCH_MEMORY => {
-                memory::SearchMemoryTool::run(&self.client, &self.agent_id, args)
-                    .await
-                    .map_or_else(|e| (format!("Failed: {e}"), false), |o| (o, false))
-            }
+            SEARCH_MEMORY => memory::SearchMemoryTool::run(&self.client, &self.agent_id, args)
+                .await
+                .map_or_else(|e| (format!("Failed: {e}"), false), |o| (o, false)),
 
             // -- Skill tools (intercepted; use local skill discovery)
-            LOAD_SKILL         => self.handle_load_skill(args),
-            RUN_SKILL_SCRIPT   => self.handle_run_skill_script(args).await,
-            LOAD_SKILL_REF     => self.handle_load_skill_ref(args),
-            INSTALL_SKILL      => self.handle_install_skill(args).await,
+            LOAD_SKILL => self.handle_load_skill(args),
+            RUN_SKILL_SCRIPT => self.handle_run_skill_script(args).await,
+            LOAD_SKILL_REF => self.handle_load_skill_ref(args),
+            INSTALL_SKILL => self.handle_install_skill(args).await,
 
             // -- Checkpoints
-            CREATE_CHECKPOINT  => self.handle_create_checkpoint(args).await,
-            LIST_CHECKPOINTS   => self.handle_list_checkpoints().await,
+            CREATE_CHECKPOINT => self.handle_create_checkpoint(args).await,
+            LIST_CHECKPOINTS => self.handle_list_checkpoints().await,
             RESTORE_CHECKPOINT => self.handle_restore_checkpoint(args).await,
 
             // -- Artifacts
             STORE_ARTIFACT => self.handle_store_artifact(args).await,
 
             // -- Typed memory / provenance / reflection
-            UPDATE_MEMORY_TYPED  => self.handle_update_memory_typed(args).await,
+            UPDATE_MEMORY_TYPED => self.handle_update_memory_typed(args).await,
             LINK_MEMORY_EVIDENCE => self.handle_link_memory_evidence(args).await,
-            REFLECT              => self.handle_reflect(args).await,
+            REFLECT => self.handle_reflect(args).await,
 
             // -- Code intelligence (Phase 3)
-            SYMBOL_SEARCH    => {
+            SYMBOL_SEARCH => {
                 crate::tools::codeintel::SymbolSearchTool::run(&self.client, &self.cwd, args)
-                    .await.map_or_else(|e| (e.to_string(), true), |o| (o, false))
+                    .await
+                    .map_or_else(|e| (e.to_string(), true), |o| (o, false))
             }
-            FIND_REFERENCES  => {
-                crate::tools::codeintel::FindReferencesTool::run(&self.client, args)
-                    .await.map_or_else(|e| (e.to_string(), true), |o| (o, false))
-            }
-            GOTO_DEFINITION  => {
-                crate::tools::codeintel::GotoDefinitionTool::run(&self.client, args)
-                    .await.map_or_else(|e| (e.to_string(), true), |o| (o, false))
-            }
-            GET_REPO_MAP     => {
+            FIND_REFERENCES => crate::tools::codeintel::FindReferencesTool::run(&self.client, args)
+                .await
+                .map_or_else(|e| (e.to_string(), true), |o| (o, false)),
+            GOTO_DEFINITION => crate::tools::codeintel::GotoDefinitionTool::run(&self.client, args)
+                .await
+                .map_or_else(|e| (e.to_string(), true), |o| (o, false)),
+            GET_REPO_MAP => {
                 crate::tools::codeintel::GetRepoMapTool::run(&self.client, &self.cwd, args)
-                    .await.map_or_else(|e| (e.to_string(), true), |o| (o, false))
+                    .await
+                    .map_or_else(|e| (e.to_string(), true), |o| (o, false))
             }
-            INDEX_REPOSITORY => {
-                crate::tools::codeintel::IndexRepositoryTool::run(&self.client, &self.agent_id, args)
-                    .await.map_or_else(|e| (e.to_string(), true), |o| (o, false))
-            }
+            INDEX_REPOSITORY => crate::tools::codeintel::IndexRepositoryTool::run(
+                &self.client,
+                &self.agent_id,
+                args,
+            )
+            .await
+            .map_or_else(|e| (e.to_string(), true), |o| (o, false)),
 
             // -- Interactive tools — not handled here
             RUN_SUBAGENT | ASK_USER_QUESTION | ENTER_PLAN_MODE | EXIT_PLAN_MODE => {
@@ -203,29 +204,20 @@ impl ToolRuntime {
             }
 
             // -- Web tools (Phase 6)
-            WEB_SEARCH => {
-                cade_web::WebSearchTool::run(args)
-                    .await.map_or_else(|e| (e.to_string(), true), |o| (o, false))
-            }
-            FETCH_DOC  => {
-                cade_web::FetchDocTool::run(args)
-                    .await.map_or_else(|e| (e.to_string(), true), |o| (o, false))
-            }
-            BROWSER_SCREENSHOT => {
-                crate::tools::desktop::DesktopCaptureTool::run(args)
-                    .await.map_or_else(|e| (e.to_string(), true), |o| (o, false))
-            }
+            WEB_SEARCH => cade_web::WebSearchTool::run(args)
+                .await
+                .map_or_else(|e| (e.to_string(), true), |o| (o, false)),
+            FETCH_DOC => cade_web::FetchDocTool::run(args)
+                .await
+                .map_or_else(|e| (e.to_string(), true), |o| (o, false)),
+            BROWSER_SCREENSHOT => crate::tools::desktop::DesktopCaptureTool::run(args)
+                .await
+                .map_or_else(|e| (e.to_string(), true), |o| (o, false)),
 
             // -- Bash + filesystem tools routed through execution backend
-            BASH if !self.is_local_backend() => {
-                self.handle_bash_via_backend(args).await
-            }
-            READ_FILE if !self.is_local_backend() => {
-                self.handle_read_via_backend(args).await
-            }
-            WRITE_FILE if !self.is_local_backend() => {
-                self.handle_write_via_backend(args).await
-            }
+            BASH if !self.is_local_backend() => self.handle_bash_via_backend(args).await,
+            READ_FILE if !self.is_local_backend() => self.handle_read_via_backend(args).await,
+            WRITE_FILE if !self.is_local_backend() => self.handle_write_via_backend(args).await,
 
             // -- Everything else: native Rust tools + MCP
             _ => {
@@ -241,7 +233,11 @@ impl ToolRuntime {
                 self.agent_id.clone(),
                 tool_name.to_string(),
                 serde_json::to_string(args).unwrap_or_default(),
-                if output.len() > 1024 { format!("{}…", &output[..1024]) } else { output.clone() },
+                if output.len() > 1024 {
+                    format!("{}…", &output[..1024])
+                } else {
+                    output.clone()
+                },
                 is_error,
                 duration_ms,
             );
@@ -270,7 +266,8 @@ impl ToolRuntime {
         }
 
         let final_value = if operation == "append" {
-            let existing = self.client
+            let existing = self
+                .client
                 .get_memory(&self.agent_id)
                 .await
                 .unwrap_or_default()
@@ -278,12 +275,20 @@ impl ToolRuntime {
                 .find(|b| b.label == label)
                 .map(|b| b.value)
                 .unwrap_or_default();
-            if existing.is_empty() { value } else { format!("{existing}\n{value}") }
+            if existing.is_empty() {
+                value
+            } else {
+                format!("{existing}\n{value}")
+            }
         } else {
             value
         };
 
-        match self.client.upsert_memory(&self.agent_id, &label, &final_value, description.as_deref()).await {
+        match self
+            .client
+            .upsert_memory(&self.agent_id, &label, &final_value, description.as_deref())
+            .await
+        {
             Ok(_) => (format!("Memory block '{label}' updated"), false),
             Err(e) => {
                 let err_str = e.to_string();
@@ -292,9 +297,15 @@ impl ToolRuntime {
                     let trimmed = auto_trim_to_limit(&final_value, limit);
                     let orig = final_value.chars().count();
                     let kept = trimmed.chars().count();
-                    match self.client.upsert_memory(&self.agent_id, &label, &trimmed, description.as_deref()).await {
+                    match self
+                        .client
+                        .upsert_memory(&self.agent_id, &label, &trimmed, description.as_deref())
+                        .await
+                    {
                         Ok(_) => (
-                            format!("Memory block '{label}' updated (auto-trimmed from {orig} to {kept} chars to fit the {limit}-char limit)."),
+                            format!(
+                                "Memory block '{label}' updated (auto-trimmed from {orig} to {kept} chars to fit the {limit}-char limit)."
+                            ),
                             false,
                         ),
                         Err(e2) => (format!("Failed after auto-trim: {e2}"), true),
@@ -316,7 +327,8 @@ impl ToolRuntime {
         }
 
         // Get current value
-        let current = self.client
+        let current = self
+            .client
             .get_memory(&self.agent_id)
             .await
             .unwrap_or_default()
@@ -328,8 +340,15 @@ impl ToolRuntime {
         // Apply unified diff patch
         match apply_unified_diff(&current, &patch) {
             Ok(new_value) => {
-                match self.client.upsert_memory(&self.agent_id, &label, &new_value, description.as_deref()).await {
-                    Ok(_) => (format!("Memory block '{label}' patched successfully"), false),
+                match self
+                    .client
+                    .upsert_memory(&self.agent_id, &label, &new_value, description.as_deref())
+                    .await
+                {
+                    Ok(_) => (
+                        format!("Memory block '{label}' patched successfully"),
+                        false,
+                    ),
                     Err(e) => (format!("Failed to save patched memory: {e}"), true),
                 }
             }
@@ -349,7 +368,10 @@ impl ToolRuntime {
         let skills = discover_all_skills(&self.cwd, Some(&self.agent_id), None);
         match skills.into_iter().find(|s| s.id == id) {
             Some(s) => (s.to_context_block(), false),
-            None    => (format!("Skill '{id}' not found. Use /skills to list available skills."), true),
+            None => (
+                format!("Skill '{id}' not found. Use /skills to list available skills."),
+                true,
+            ),
         }
     }
 
@@ -383,11 +405,18 @@ impl ToolRuntime {
         let script = args["script"].as_str().unwrap_or("").trim().to_string();
         let script_args: Vec<String> = args["args"]
             .as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
 
         if skill_id.is_empty() || script.is_empty() {
-            return ("Error: 'skill_id' and 'script' are required".to_string(), true);
+            return (
+                "Error: 'skill_id' and 'script' are required".to_string(),
+                true,
+            );
         }
 
         let skills = discover_all_skills(&self.cwd, Some(&self.agent_id), None);
@@ -397,8 +426,15 @@ impl ToolRuntime {
 
         let Some(sk) = skill.scripts.iter().find(|s| s.name == script).cloned() else {
             let available: Vec<&str> = skill.scripts.iter().map(|s| s.name.as_str()).collect();
-            let list = if available.is_empty() { "none".to_string() } else { available.join(", ") };
-            return (format!("Script '{script}' not found in skill '{skill_id}'. Available: {list}"), true);
+            let list = if available.is_empty() {
+                "none".to_string()
+            } else {
+                available.join(", ")
+            };
+            return (
+                format!("Script '{script}' not found in skill '{skill_id}'. Available: {list}"),
+                true,
+            );
         };
 
         let mut cmd = tokio::process::Command::new(&sk.path);
@@ -408,7 +444,11 @@ impl ToolRuntime {
             Ok(out) => {
                 let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                 let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                let combined = if stderr.is_empty() { stdout } else { format!("{stdout}\n[stderr]\n{stderr}") };
+                let combined = if stderr.is_empty() {
+                    stdout
+                } else {
+                    format!("{stdout}\n[stderr]\n{stderr}")
+                };
                 let is_err = !out.status.success();
                 (combined, is_err)
             }
@@ -418,24 +458,38 @@ impl ToolRuntime {
     // region:    --- Checkpoint handlers
 
     async fn handle_create_checkpoint(&self, args: &Value) -> (String, bool) {
-        let label       = args["label"].as_str().unwrap_or("checkpoint").trim().to_string();
+        let label = args["label"]
+            .as_str()
+            .unwrap_or("checkpoint")
+            .trim()
+            .to_string();
         let description = args["description"].as_str().map(String::from);
 
         // 1. Attempt a git stash
         let git_cp = git_checkpoint::create_git_checkpoint(&label, &self.cwd).await;
-        let stash_ref   = git_cp.as_ref().and_then(|g| g.stash_ref.as_deref()).map(String::from);
-        let commit_hash = git_cp.as_ref().and_then(|g| g.commit_hash.as_deref()).map(String::from);
+        let stash_ref = git_cp
+            .as_ref()
+            .and_then(|g| g.stash_ref.as_deref())
+            .map(String::from);
+        let commit_hash = git_cp
+            .as_ref()
+            .and_then(|g| g.commit_hash.as_deref())
+            .map(String::from);
 
         // 2. Create server-side checkpoint record
         let conv_id = self.conversation_id.as_deref();
-        match self.client.create_checkpoint(
-            &self.agent_id,
-            Some(&label),
-            description.as_deref(),
-            conv_id,
-            stash_ref.as_deref(),
-            commit_hash.as_deref(),
-        ).await {
+        match self
+            .client
+            .create_checkpoint(
+                &self.agent_id,
+                Some(&label),
+                description.as_deref(),
+                conv_id,
+                stash_ref.as_deref(),
+                commit_hash.as_deref(),
+            )
+            .await
+        {
             Ok(cp_id) => {
                 let mut msg = format!("Checkpoint '{label}' created. ID: {cp_id}");
                 if let Some(s) = &stash_ref {
@@ -456,11 +510,13 @@ impl ToolRuntime {
             Ok(list) => {
                 let mut out = format!("{} checkpoint(s):\n", list.len());
                 for cp in &list {
-                    let id    = cp["id"].as_str().unwrap_or("?");
+                    let id = cp["id"].as_str().unwrap_or("?");
                     let label = cp["label"].as_str().unwrap_or("(unlabelled)");
-                    let ts    = cp["created_at"].as_i64().unwrap_or(0);
-                    let dt    = chrono::DateTime::from_timestamp(ts, 0)
-                        .map(|d: chrono::DateTime<chrono::Utc>| d.format("%Y-%m-%d %H:%M").to_string())
+                    let ts = cp["created_at"].as_i64().unwrap_or(0);
+                    let dt = chrono::DateTime::from_timestamp(ts, 0)
+                        .map(|d: chrono::DateTime<chrono::Utc>| {
+                            d.format("%Y-%m-%d %H:%M").to_string()
+                        })
                         .unwrap_or_default();
                     out.push_str(&format!("  {id}  [{label}]  {dt}\n"));
                 }
@@ -471,7 +527,11 @@ impl ToolRuntime {
     }
 
     async fn handle_restore_checkpoint(&self, args: &Value) -> (String, bool) {
-        let cp_id = args["checkpoint_id"].as_str().unwrap_or("").trim().to_string();
+        let cp_id = args["checkpoint_id"]
+            .as_str()
+            .unwrap_or("")
+            .trim()
+            .to_string();
         if cp_id.is_empty() {
             return ("Error: 'checkpoint_id' is required".to_string(), true);
         }
@@ -485,9 +545,10 @@ impl ToolRuntime {
         // Apply git stash if there is one
         let stash_ref = cp["git_stash_ref"].as_str().unwrap_or("").to_string();
         if !stash_ref.is_empty()
-            && let Err(e) = git_checkpoint::restore_git_checkpoint(&stash_ref, &self.cwd).await {
-                return (format!("Git restore failed: {e}"), true);
-            }
+            && let Err(e) = git_checkpoint::restore_git_checkpoint(&stash_ref, &self.cwd).await
+        {
+            return (format!("Git restore failed: {e}"), true);
+        }
 
         // Mark checkpoint as restored on server
         if let Err(e) = self.client.restore_checkpoint(&self.agent_id, &cp_id).await {
@@ -495,7 +556,10 @@ impl ToolRuntime {
         }
 
         let label = cp["label"].as_str().unwrap_or("?");
-        (format!("Restored to checkpoint '{label}' ({cp_id})."), false)
+        (
+            format!("Restored to checkpoint '{label}' ({cp_id})."),
+            false,
+        )
     }
 
     // endregion: --- Checkpoint handlers
@@ -503,24 +567,32 @@ impl ToolRuntime {
     // region:    --- Artifact handlers
 
     async fn handle_store_artifact(&self, args: &Value) -> (String, bool) {
-        let kind    = args["kind"].as_str().unwrap_or("other");
+        let kind = args["kind"].as_str().unwrap_or("other");
         let content = args["content"].as_str().unwrap_or("");
-        let label   = args["label"].as_str().unwrap_or("");
+        let label = args["label"].as_str().unwrap_or("");
 
         if content.is_empty() {
             return ("Error: 'content' is required".to_string(), true);
         }
 
-        match self.client.store_artifact(
-            &self.agent_id,
-            kind,
-            "text/plain",
-            Some(content),
-            None,
-            None,
-        ).await {
+        match self
+            .client
+            .store_artifact(
+                &self.agent_id,
+                kind,
+                "text/plain",
+                Some(content),
+                None,
+                None,
+            )
+            .await
+        {
             Ok(art_id) => {
-                let label_str = if label.is_empty() { String::new() } else { format!(" '{label}'") };
+                let label_str = if label.is_empty() {
+                    String::new()
+                } else {
+                    format!(" '{label}'")
+                };
                 (format!("Artifact{label_str} stored. ID: {art_id}"), false)
             }
             Err(e) => (format!("Failed to store artifact: {e}"), true),
@@ -536,19 +608,27 @@ impl ToolRuntime {
     }
 
     async fn handle_bash_via_backend(&self, args: &Value) -> (String, bool) {
-        let command      = args["command"].as_str().unwrap_or("").to_string();
+        let command = args["command"].as_str().unwrap_or("").to_string();
         let timeout_secs = args["timeout"].as_u64().unwrap_or(120);
 
         // Safety check even through non-local backends
-        if !self.backend.is_writable()
-            && cade_core::permissions::bash_command_is_write(&command)
-        {
-            return (format!("Blocked: read-only backend refuses write command: {}", &command[..80.min(command.len())]), true);
+        if !self.backend.is_writable() && cade_core::permissions::bash_command_is_write(&command) {
+            return (
+                format!(
+                    "Blocked: read-only backend refuses write command: {}",
+                    &command[..80.min(command.len())]
+                ),
+                true,
+            );
         }
 
-        match self.backend.exec_bash(&command, &self.cwd, timeout_secs).await {
-            Ok(out)  => (out.combined(), out.exit_code != 0),
-            Err(e)   => (format!("Backend exec failed: {e}"), true),
+        match self
+            .backend
+            .exec_bash(&command, &self.cwd, timeout_secs)
+            .await
+        {
+            Ok(out) => (out.combined(), out.exit_code != 0),
+            Err(e) => (format!("Backend exec failed: {e}"), true),
         }
     }
 
@@ -561,12 +641,18 @@ impl ToolRuntime {
         match self.backend.read_file(path).await {
             Ok(content) => {
                 let offset = args["offset"].as_u64().unwrap_or(0) as usize;
-                let limit  = args["limit"].as_u64().unwrap_or(0) as usize;
+                let limit = args["limit"].as_u64().unwrap_or(0) as usize;
                 let lines: Vec<&str> = content.lines().collect();
                 let total = lines.len();
-                let end = if limit > 0 { (offset + limit).min(total) } else { total };
+                let end = if limit > 0 {
+                    (offset + limit).min(total)
+                } else {
+                    total
+                };
                 let selected = &lines[offset.min(total)..end];
-                let numbered: String = selected.iter().enumerate()
+                let numbered: String = selected
+                    .iter()
+                    .enumerate()
                     .map(|(i, l)| format!("{:>4}→{}\n", offset + i + 1, l))
                     .collect();
                 (format!("{numbered}[{total} lines total]"), false)
@@ -580,13 +666,16 @@ impl ToolRuntime {
             return ("Error: backend is read-only".to_string(), true);
         }
         let path_str = args["path"].as_str().unwrap_or("").trim().to_string();
-        let content  = args["content"].as_str().unwrap_or("").to_string();
+        let content = args["content"].as_str().unwrap_or("").to_string();
         if path_str.is_empty() {
             return ("Error: 'path' is required".to_string(), true);
         }
         let path = std::path::Path::new(&path_str);
         match self.backend.write_file(path, &content).await {
-            Ok(()) => (format!("Written {} bytes to {path_str}", content.len()), false),
+            Ok(()) => (
+                format!("Written {} bytes to {path_str}", content.len()),
+                false,
+            ),
             Err(e) => (format!("Write failed: {e}"), true),
         }
     }
@@ -596,40 +685,69 @@ impl ToolRuntime {
     // region:    --- Typed memory / provenance / reflection handlers
 
     async fn handle_update_memory_typed(&self, args: &Value) -> (String, bool) {
-        let label       = args["label"].as_str().unwrap_or("").trim().to_string();
-        let value       = args["value"].as_str().unwrap_or("").to_string();
+        let label = args["label"].as_str().unwrap_or("").trim().to_string();
+        let value = args["value"].as_str().unwrap_or("").to_string();
         let memory_type = args["memory_type"].as_str().unwrap_or("generic");
-        let confidence  = args["confidence"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0);
-        let tags: Vec<String> = args["tags"].as_array()
-            .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        let confidence = args["confidence"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0);
+        let tags: Vec<String> = args["tags"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default();
 
         if label.is_empty() || value.is_empty() {
             return ("Error: 'label' and 'value' are required".to_string(), true);
         }
 
-        match self.client.upsert_typed_memory(
-            &self.agent_id, &label, &value, memory_type, confidence, &tags, None,
-        ).await {
-            Ok(_) => (format!("Memory block '{label}' stored as [{memory_type}] (confidence: {:.0}%)", confidence * 100.0), false),
+        match self
+            .client
+            .upsert_typed_memory(
+                &self.agent_id,
+                &label,
+                &value,
+                memory_type,
+                confidence,
+                &tags,
+                None,
+            )
+            .await
+        {
+            Ok(_) => (
+                format!(
+                    "Memory block '{label}' stored as [{memory_type}] (confidence: {:.0}%)",
+                    confidence * 100.0
+                ),
+                false,
+            ),
             Err(e) => (format!("Failed to store typed memory: {e}"), true),
         }
     }
 
     async fn handle_link_memory_evidence(&self, args: &Value) -> (String, bool) {
-        let label     = args["label"].as_str().unwrap_or("").trim().to_string();
-        let kind      = args["kind"].as_str().unwrap_or("user_assertion");
+        let label = args["label"].as_str().unwrap_or("").trim().to_string();
+        let kind = args["kind"].as_str().unwrap_or("user_assertion");
         let reference = args["reference"].as_str().unwrap_or("").trim().to_string();
-        let excerpt   = args["excerpt"].as_str().map(String::from);
+        let excerpt = args["excerpt"].as_str().map(String::from);
 
         if label.is_empty() || reference.is_empty() {
-            return ("Error: 'label' and 'reference' are required".to_string(), true);
+            return (
+                "Error: 'label' and 'reference' are required".to_string(),
+                true,
+            );
         }
 
-        match self.client.add_memory_evidence(
-            &self.agent_id, &label, kind, &reference, excerpt.as_deref(),
-        ).await {
-            Ok(_) => (format!("Evidence linked to '{label}': [{kind}] {reference}"), false),
+        match self
+            .client
+            .add_memory_evidence(&self.agent_id, &label, kind, &reference, excerpt.as_deref())
+            .await
+        {
+            Ok(_) => (
+                format!("Evidence linked to '{label}': [{kind}] {reference}"),
+                false,
+            ),
             Err(e) => (format!("Failed to link evidence: {e}"), true),
         }
     }
@@ -637,9 +755,13 @@ impl ToolRuntime {
     async fn handle_reflect(&self, args: &Value) -> (String, bool) {
         let focus = args["focus"].as_str().map(String::from);
 
-        match self.client.trigger_reflect(&self.agent_id, focus.as_deref()).await {
+        match self
+            .client
+            .trigger_reflect(&self.agent_id, focus.as_deref())
+            .await
+        {
             Ok(summary) => (format!("Reflection complete: {summary}"), false),
-            Err(e)      => (format!("Reflection failed: {e}"), true),
+            Err(e) => (format!("Reflection failed: {e}"), true),
         }
     }
 
@@ -658,16 +780,31 @@ impl ToolRuntime {
             return (format!("Skill '{skill_id}' not found"), true);
         };
 
-        let Some(r) = skill.references.iter().find(|r| {
-            r.name == doc || r.path.file_name().and_then(|n| n.to_str()).unwrap_or("") == doc
-        }).cloned() else {
+        let Some(r) = skill
+            .references
+            .iter()
+            .find(|r| {
+                r.name == doc || r.path.file_name().and_then(|n| n.to_str()).unwrap_or("") == doc
+            })
+            .cloned()
+        else {
             let available: Vec<&str> = skill.references.iter().map(|r| r.name.as_str()).collect();
-            let list = if available.is_empty() { "none".to_string() } else { available.join(", ") };
-            return (format!("Reference '{doc}' not found in skill '{skill_id}'. Available: {list}"), true);
+            let list = if available.is_empty() {
+                "none".to_string()
+            } else {
+                available.join(", ")
+            };
+            return (
+                format!("Reference '{doc}' not found in skill '{skill_id}'. Available: {list}"),
+                true,
+            );
         };
 
         match std::fs::read_to_string(&r.path) {
-            Ok(content) => (format!("# Reference: {doc} (skill: {skill_id})\n\n{content}"), false),
+            Ok(content) => (
+                format!("# Reference: {doc} (skill: {skill_id})\n\n{content}"),
+                false,
+            ),
             Err(e) => (format!("Failed to read reference '{doc}': {e}"), true),
         }
     }
@@ -682,18 +819,22 @@ impl ToolRuntime {
 /// Trim `value` to at most `limit` chars, keeping the newest (tail) content.
 pub fn auto_trim_to_limit(value: &str, limit: usize) -> String {
     let count = value.chars().count();
-    if count <= limit { return value.to_string(); }
+    if count <= limit {
+        return value.to_string();
+    }
     const NOTE: &str = "[...older content auto-trimmed to fit memory limit...]\n";
     let note_len = NOTE.chars().count();
     let keep = limit.saturating_sub(note_len);
-    if keep == 0 { return value.chars().take(limit).collect(); }
+    if keep == 0 {
+        return value.chars().take(limit).collect();
+    }
     let tail: String = value.chars().skip(count.saturating_sub(keep)).collect();
     format!("{NOTE}{tail}")
 }
 
 /// Extract the numeric upper limit from an "exceeds character limit (A > B)" error string.
 pub fn parse_limit_from_error(error: &str) -> Option<usize> {
-    let open  = error.find('(')?;
+    let open = error.find('(')?;
     let close = error[open..].find(')')? + open;
     let inner = &error[open + 1..close];
     inner.split('>').nth(1)?.trim().parse().ok()
@@ -712,14 +853,15 @@ fn apply_unified_diff(original: &str, patch: &str) -> crate::Result<String> {
         if line.starts_with("---") || line.starts_with("+++") || line.starts_with("@@") {
             // Parse hunk header to find position
             if let Some(hdr) = line.strip_prefix("@@")
-                && let Some(hunk_start) = parse_hunk_start(hdr) {
-                    // Copy original lines up to the hunk start
-                    let target = hunk_start.saturating_sub(1);
-                    while orig_idx < target && orig_idx < orig_lines.len() {
-                        result.push(orig_lines[orig_idx]);
-                        orig_idx += 1;
-                    }
+                && let Some(hunk_start) = parse_hunk_start(hdr)
+            {
+                // Copy original lines up to the hunk start
+                let target = hunk_start.saturating_sub(1);
+                while orig_idx < target && orig_idx < orig_lines.len() {
+                    result.push(orig_lines[orig_idx]);
+                    orig_idx += 1;
                 }
+            }
         } else if let Some(add) = line.strip_prefix('+') {
             result.push(add);
         } else if let Some(_del) = line.strip_prefix('-') {

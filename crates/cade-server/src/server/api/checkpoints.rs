@@ -14,27 +14,27 @@ use crate::server::state::AppState;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize)]
 pub struct CheckpointRow {
-    pub id:              String,
-    pub agent_id:        String,
+    pub id: String,
+    pub agent_id: String,
     pub conversation_id: Option<String>,
-    pub branch_id:       String,
-    pub label:           Option<String>,
-    pub description:     Option<String>,
-    pub created_at:      i64,
-    pub git_stash_ref:   Option<String>,
+    pub branch_id: String,
+    pub label: Option<String>,
+    pub description: Option<String>,
+    pub created_at: i64,
+    pub git_stash_ref: Option<String>,
     pub git_commit_hash: Option<String>,
-    pub parent_id:       Option<String>,
+    pub parent_id: Option<String>,
 }
 
 #[derive(Deserialize)]
 pub struct CreateCheckpointBody {
-    pub label:           Option<String>,
-    pub description:     Option<String>,
+    pub label: Option<String>,
+    pub description: Option<String>,
     pub conversation_id: Option<String>,
-    pub branch_id:       Option<String>,
-    pub git_stash_ref:   Option<String>,
+    pub branch_id: Option<String>,
+    pub git_stash_ref: Option<String>,
     pub git_commit_hash: Option<String>,
-    pub parent_id:       Option<String>,
+    pub parent_id: Option<String>,
 }
 
 // endregion: --- Types
@@ -69,25 +69,29 @@ pub async fn list_checkpoints(
     Path(agent_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let conn = state.db.lock().expect("db lock poisoned");
-    let mut stmt = conn.prepare(
-        "SELECT id, agent_id, conversation_id, branch_id, label, description, created_at,
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, agent_id, conversation_id, branch_id, label, description, created_at,
                 git_stash_ref, git_commit_hash, parent_id
-         FROM checkpoints WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 200"
-    ).map_err(db_err)?;
-    let rows: Vec<Value> = stmt.query_map(rusqlite::params![agent_id], |r| {
-        Ok(json!({
-            "id":              r.get::<_, String>(0)?,
-            "agent_id":        r.get::<_, String>(1)?,
-            "conversation_id": r.get::<_, Option<String>>(2)?,
-            "branch_id":       r.get::<_, String>(3)?,
-            "label":           r.get::<_, Option<String>>(4)?,
-            "description":     r.get::<_, Option<String>>(5)?,
-            "created_at":      r.get::<_, i64>(6)?,
-            "git_stash_ref":   r.get::<_, Option<String>>(7)?,
-            "git_commit_hash": r.get::<_, Option<String>>(8)?,
-            "parent_id":       r.get::<_, Option<String>>(9)?,
-        }))
-    }).map_err(db_err)?
+         FROM checkpoints WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 200",
+        )
+        .map_err(db_err)?;
+    let rows: Vec<Value> = stmt
+        .query_map(rusqlite::params![agent_id], |r| {
+            Ok(json!({
+                "id":              r.get::<_, String>(0)?,
+                "agent_id":        r.get::<_, String>(1)?,
+                "conversation_id": r.get::<_, Option<String>>(2)?,
+                "branch_id":       r.get::<_, String>(3)?,
+                "label":           r.get::<_, Option<String>>(4)?,
+                "description":     r.get::<_, Option<String>>(5)?,
+                "created_at":      r.get::<_, i64>(6)?,
+                "git_stash_ref":   r.get::<_, Option<String>>(7)?,
+                "git_commit_hash": r.get::<_, Option<String>>(8)?,
+                "parent_id":       r.get::<_, Option<String>>(9)?,
+            }))
+        })
+        .map_err(db_err)?
         .filter_map(|r| r.ok())
         .collect();
     Ok(Json(json!(rows)))
@@ -99,20 +103,29 @@ pub async fn get_checkpoint_handler(
     Path((agent_id, cp_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let conn = state.db.lock().expect("db lock poisoned");
-    let row = conn.query_row(
-        "SELECT id, agent_id, conversation_id, branch_id, label, description, created_at,
+    let row = conn
+        .query_row(
+            "SELECT id, agent_id, conversation_id, branch_id, label, description, created_at,
                 git_stash_ref, git_commit_hash, parent_id
          FROM checkpoints WHERE id = ?1 AND agent_id = ?2",
-        rusqlite::params![cp_id, agent_id],
-        |r| Ok(json!({
-            "id":              r.get::<_, String>(0)?,
-            "conversation_id": r.get::<_, Option<String>>(2)?,
-            "branch_id":       r.get::<_, String>(3)?,
-            "label":           r.get::<_, Option<String>>(4)?,
-            "description":     r.get::<_, Option<String>>(5)?,
-            "created_at":      r.get::<_, i64>(6)?,
-        }))
-    ).map_err(|_| (StatusCode::NOT_FOUND, Json(json!({ "detail": "Checkpoint not found" }))))?;
+            rusqlite::params![cp_id, agent_id],
+            |r| {
+                Ok(json!({
+                    "id":              r.get::<_, String>(0)?,
+                    "conversation_id": r.get::<_, Option<String>>(2)?,
+                    "branch_id":       r.get::<_, String>(3)?,
+                    "label":           r.get::<_, Option<String>>(4)?,
+                    "description":     r.get::<_, Option<String>>(5)?,
+                    "created_at":      r.get::<_, i64>(6)?,
+                }))
+            },
+        )
+        .map_err(|_| {
+            (
+                StatusCode::NOT_FOUND,
+                Json(json!({ "detail": "Checkpoint not found" })),
+            )
+        })?;
     Ok(Json(row))
 }
 
@@ -122,10 +135,12 @@ pub async fn delete_checkpoint_handler(
     Path((agent_id, cp_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let conn = state.db.lock().expect("db lock poisoned");
-    let n = conn.execute(
-        "DELETE FROM checkpoints WHERE id = ?1 AND agent_id = ?2",
-        rusqlite::params![cp_id, agent_id],
-    ).map_err(db_err)?;
+    let n = conn
+        .execute(
+            "DELETE FROM checkpoints WHERE id = ?1 AND agent_id = ?2",
+            rusqlite::params![cp_id, agent_id],
+        )
+        .map_err(db_err)?;
     Ok(Json(json!({ "deleted": n > 0 })))
 }
 
@@ -137,15 +152,23 @@ pub async fn restore_checkpoint_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let conn = state.db.lock().expect("db lock poisoned");
     // Verify checkpoint exists
-    let exists: bool = conn.query_row(
-        "SELECT COUNT(*) FROM checkpoints WHERE id = ?1 AND agent_id = ?2",
-        rusqlite::params![cp_id, agent_id],
-        |r| r.get::<_, i64>(0),
-    ).unwrap_or(0) > 0;
+    let exists: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM checkpoints WHERE id = ?1 AND agent_id = ?2",
+            rusqlite::params![cp_id, agent_id],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
     if !exists {
-        return Err((StatusCode::NOT_FOUND, Json(json!({ "detail": "Checkpoint not found" }))));
+        return Err((
+            StatusCode::NOT_FOUND,
+            Json(json!({ "detail": "Checkpoint not found" })),
+        ));
     }
-    Ok(Json(json!({ "checkpoint_id": cp_id, "status": "restore_requested" })))
+    Ok(Json(
+        json!({ "checkpoint_id": cp_id, "status": "restore_requested" }),
+    ))
 }
 
 // endregion: --- Handlers
@@ -160,7 +183,10 @@ fn unix_ts() -> i64 {
 }
 
 fn db_err(e: rusqlite::Error) -> (StatusCode, Json<Value>) {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "detail": e.to_string() })))
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "detail": e.to_string() })),
+    )
 }
 
 // endregion: --- Support

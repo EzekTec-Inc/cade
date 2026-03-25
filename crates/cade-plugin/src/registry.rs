@@ -6,7 +6,6 @@ use std::sync::Arc;
 use serde_json::Value;
 use tokio::process::Command;
 
-
 use crate::manifest::PluginManifest;
 
 // region:    --- Types
@@ -14,9 +13,9 @@ use crate::manifest::PluginManifest;
 /// A resolved plugin tool ready for dispatch.
 #[derive(Debug, Clone)]
 pub struct ResolvedPluginTool {
-    pub name:        String,
-    pub schema:      Value,
-    pub handler:     Option<PathBuf>,  // executable script
+    pub name: String,
+    pub schema: Value,
+    pub handler: Option<PathBuf>, // executable script
     pub plugin_name: String,
 }
 
@@ -29,9 +28,9 @@ pub struct PluginRegistry {
 
 struct LoadedPlugin {
     manifest: PluginManifest,
-    root:     PathBuf,
+    root: PathBuf,
     #[allow(dead_code)]
-    tools:    Vec<Arc<ResolvedPluginTool>>,
+    tools: Vec<Arc<ResolvedPluginTool>>,
 }
 
 // endregion: --- Types
@@ -43,21 +42,29 @@ impl PluginRegistry {
 
     /// Create an empty registry.
     pub fn empty() -> Self {
-        Self { plugins: Vec::new(), tool_map: HashMap::new() }
+        Self {
+            plugins: Vec::new(),
+            tool_map: HashMap::new(),
+        }
     }
 
     /// Discover and load all plugins from the given search directories.
     pub fn discover(search_dirs: &[PathBuf]) -> Self {
         let mut registry = Self::empty();
         for dir in search_dirs {
-            if !dir.exists() { continue; }
-            let Ok(entries) = std::fs::read_dir(dir) else { continue };
+            if !dir.exists() {
+                continue;
+            }
+            let Ok(entries) = std::fs::read_dir(dir) else {
+                continue;
+            };
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.is_dir()
-                    && let Err(e) = registry.load_plugin(&path) {
-                        tracing::warn!("Failed to load plugin at {}: {e}", path.display());
-                    }
+                    && let Err(e) = registry.load_plugin(&path)
+                {
+                    tracing::warn!("Failed to load plugin at {}: {e}", path.display());
+                }
             }
         }
         registry
@@ -70,18 +77,32 @@ impl PluginRegistry {
         // Load tool schemas from tools/ directory
         let tools_dir = root.join("tools");
         if tools_dir.exists() {
-            let Ok(entries) = std::fs::read_dir(&tools_dir) else { return Ok(()); };
+            let Ok(entries) = std::fs::read_dir(&tools_dir) else {
+                return Ok(());
+            };
             for entry in entries.flatten() {
                 let p = entry.path();
-                if p.extension().and_then(|e| e.to_str()) != Some("json") { continue; }
-                let Ok(content) = std::fs::read_to_string(&p) else { continue };
-                let Ok(schema) = serde_json::from_str::<Value>(&content) else { continue };
-                let Some(name) = schema["name"].as_str().map(String::from) else { continue };
+                if p.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+                let Ok(content) = std::fs::read_to_string(&p) else {
+                    continue;
+                };
+                let Ok(schema) = serde_json::from_str::<Value>(&content) else {
+                    continue;
+                };
+                let Some(name) = schema["name"].as_str().map(String::from) else {
+                    continue;
+                };
 
                 // Look for a matching handler script
-                let handler = manifest.tools.iter()
+                let handler = manifest
+                    .tools
+                    .iter()
                     .find(|t| {
-                        t.schema.file_stem().and_then(|n| n.to_str())
+                        t.schema
+                            .file_stem()
+                            .and_then(|n| n.to_str())
                             .map(|stem| stem == name)
                             .unwrap_or(false)
                     })
@@ -109,7 +130,9 @@ impl PluginRegistry {
 
     // -- Accessors
 
-    pub fn is_empty(&self) -> bool { self.plugins.is_empty() }
+    pub fn is_empty(&self) -> bool {
+        self.plugins.is_empty()
+    }
 
     /// All tool JSON schemas contributed by loaded plugins.
     pub fn all_tool_schemas(&self) -> Vec<Value> {
@@ -123,28 +146,49 @@ impl PluginRegistry {
 
     /// All skills directories from loaded plugins.
     pub fn all_skill_dirs(&self) -> Vec<PathBuf> {
-        self.plugins.iter()
-            .flat_map(|p| p.manifest.skills.iter().map(|s| {
-                if s.is_absolute() { s.clone() } else { p.root.join(s) }
-            }))
+        self.plugins
+            .iter()
+            .flat_map(|p| {
+                p.manifest.skills.iter().map(|s| {
+                    if s.is_absolute() {
+                        s.clone()
+                    } else {
+                        p.root.join(s)
+                    }
+                })
+            })
             .collect()
     }
 
     /// All prompt template directories/files from loaded plugins.
     pub fn all_prompt_paths(&self) -> Vec<PathBuf> {
-        self.plugins.iter()
-            .flat_map(|p| p.manifest.prompts.iter().map(|s| {
-                if s.is_absolute() { s.clone() } else { p.root.join(s) }
-            }))
+        self.plugins
+            .iter()
+            .flat_map(|p| {
+                p.manifest.prompts.iter().map(|s| {
+                    if s.is_absolute() {
+                        s.clone()
+                    } else {
+                        p.root.join(s)
+                    }
+                })
+            })
             .collect()
     }
 
     /// All theme directories/files from loaded plugins.
     pub fn all_theme_paths(&self) -> Vec<PathBuf> {
-        self.plugins.iter()
-            .flat_map(|p| p.manifest.themes.iter().map(|s| {
-                if s.is_absolute() { s.clone() } else { p.root.join(s) }
-            }))
+        self.plugins
+            .iter()
+            .flat_map(|p| {
+                p.manifest.themes.iter().map(|s| {
+                    if s.is_absolute() {
+                        s.clone()
+                    } else {
+                        p.root.join(s)
+                    }
+                })
+            })
             .collect()
     }
 
@@ -174,7 +218,7 @@ async fn execute_plugin_handler(script: &Path, stdin_data: &str) -> (String, boo
         .stderr(std::process::Stdio::piped())
         .spawn()
     {
-        Ok(c)  => c,
+        Ok(c) => c,
         Err(e) => return (format!("Failed to spawn plugin handler: {e}"), true),
     };
 
@@ -188,7 +232,11 @@ async fn execute_plugin_handler(script: &Path, stdin_data: &str) -> (String, boo
             let stdout = String::from_utf8_lossy(&out.stdout).to_string();
             let stderr = String::from_utf8_lossy(&out.stderr).to_string();
             let is_error = !out.status.success();
-            let output = if stderr.is_empty() { stdout } else { format!("{stdout}\n{stderr}") };
+            let output = if stderr.is_empty() {
+                stdout
+            } else {
+                format!("{stdout}\n{stderr}")
+            };
             (output, is_error)
         }
     }

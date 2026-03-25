@@ -14,11 +14,11 @@ use uuid::Uuid;
 
 #[derive(serde::Deserialize)]
 pub struct CreateArtifactBody {
-    pub kind:         String,          // 'screenshot'|'diff'|'log'|'test_report'|'pdf'|'fetched_doc'
-    pub content_type: String,          // MIME type
-    pub data_text:    Option<String>,  // text artifacts
-    pub metadata:     Option<Value>,   // arbitrary metadata
-    pub run_id:       Option<String>,
+    pub kind: String, // 'screenshot'|'diff'|'log'|'test_report'|'pdf'|'fetched_doc'
+    pub content_type: String, // MIME type
+    pub data_text: Option<String>, // text artifacts
+    pub metadata: Option<Value>, // arbitrary metadata
+    pub run_id: Option<String>,
     pub tool_call_id: Option<String>,
 }
 
@@ -34,7 +34,8 @@ pub async fn create_artifact(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let id = format!("art-{}", Uuid::new_v4());
     let now = unix_ts();
-    let metadata_json = body.metadata
+    let metadata_json = body
+        .metadata
         .as_ref()
         .map(|m| serde_json::to_string(m).unwrap_or_default())
         .unwrap_or_else(|| "{}".to_string());
@@ -59,20 +60,24 @@ pub async fn list_artifacts(
     Path(agent_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let conn = state.db.lock().expect("db lock poisoned");
-    let mut stmt = conn.prepare(
-        "SELECT id, kind, content_type, size_bytes, created_at, run_id
-         FROM artifacts WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 500"
-    ).map_err(db_err)?;
-    let rows: Vec<Value> = stmt.query_map(rusqlite::params![agent_id], |r| {
-        Ok(json!({
-            "id":           r.get::<_, String>(0)?,
-            "kind":         r.get::<_, String>(1)?,
-            "content_type": r.get::<_, String>(2)?,
-            "size_bytes":   r.get::<_, i64>(3)?,
-            "created_at":   r.get::<_, i64>(4)?,
-            "run_id":       r.get::<_, Option<String>>(5)?,
-        }))
-    }).map_err(db_err)?
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, kind, content_type, size_bytes, created_at, run_id
+         FROM artifacts WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 500",
+        )
+        .map_err(db_err)?;
+    let rows: Vec<Value> = stmt
+        .query_map(rusqlite::params![agent_id], |r| {
+            Ok(json!({
+                "id":           r.get::<_, String>(0)?,
+                "kind":         r.get::<_, String>(1)?,
+                "content_type": r.get::<_, String>(2)?,
+                "size_bytes":   r.get::<_, i64>(3)?,
+                "created_at":   r.get::<_, i64>(4)?,
+                "run_id":       r.get::<_, Option<String>>(5)?,
+            }))
+        })
+        .map_err(db_err)?
         .filter_map(|r| r.ok())
         .collect();
     Ok(Json(json!(rows)))
@@ -107,10 +112,12 @@ pub async fn delete_artifact_handler(
     Path((agent_id, art_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let conn = state.db.lock().expect("db lock poisoned");
-    let n = conn.execute(
-        "DELETE FROM artifacts WHERE id = ?1 AND agent_id = ?2",
-        rusqlite::params![art_id, agent_id],
-    ).map_err(db_err)?;
+    let n = conn
+        .execute(
+            "DELETE FROM artifacts WHERE id = ?1 AND agent_id = ?2",
+            rusqlite::params![art_id, agent_id],
+        )
+        .map_err(db_err)?;
     Ok(Json(json!({ "deleted": n > 0 })))
 }
 
@@ -126,7 +133,10 @@ fn unix_ts() -> i64 {
 }
 
 fn db_err(e: rusqlite::Error) -> (StatusCode, Json<Value>) {
-    (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "detail": e.to_string() })))
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "detail": e.to_string() })),
+    )
 }
 
 // endregion: --- Support

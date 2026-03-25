@@ -165,7 +165,7 @@ fn r04_auto_trim_noop_when_value_fits() {
 // ── R05 — parse_limit_from_error extracts correct limit ──────────────────────
 
 fn parse_limit_from_memory_error(error: &str) -> Option<usize> {
-    let open  = error.find('(')?;
+    let open = error.find('(')?;
     let close = error[open..].find(')')? + open;
     let inner = &error[open + 1..close];
     inner.split('>').nth(1)?.trim().parse().ok()
@@ -173,8 +173,7 @@ fn parse_limit_from_memory_error(error: &str) -> Option<usize> {
 
 #[test]
 fn r05_parse_limit_extracts_number() {
-    let msg =
-        "Memory block 'project' exceeds character limit (5200 > 5000). Please edit or summarize to fit.";
+    let msg = "Memory block 'project' exceeds character limit (5200 > 5000). Please edit or summarize to fit.";
     let limit = parse_limit_from_memory_error(msg);
     assert_eq!(
         limit,
@@ -248,7 +247,9 @@ fn r08_memory_write_tools_in_meta_names() {
     }
     // Codex uses memory_apply_patch instead of update_memory
     assert!(
-        Toolset::Codex.meta_tool_names().contains(&"memory_apply_patch"),
+        Toolset::Codex
+            .meta_tool_names()
+            .contains(&"memory_apply_patch"),
         "'memory_apply_patch' missing from Codex meta_tool_names"
     );
 }

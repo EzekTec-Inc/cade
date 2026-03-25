@@ -98,7 +98,9 @@ fn load_from_dir(
     if !dir.exists() {
         return;
     }
-    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in entries.flatten() {
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("md") {
@@ -112,10 +114,17 @@ fn load_from_dir(
         if seen.contains(&name) {
             continue;
         }
-        let Ok(raw) = std::fs::read_to_string(&path) else { continue };
+        let Ok(raw) = std::fs::read_to_string(&path) else {
+            continue;
+        };
         let (description, content) = parse_prompt_file(&raw);
         seen.insert(name.clone());
-        templates.push(PromptTemplate { name, description, content, source: path });
+        templates.push(PromptTemplate {
+            name,
+            description,
+            content,
+            source: path,
+        });
     }
 }
 
@@ -128,8 +137,8 @@ fn parse_prompt_file(raw: &str) -> (String, String) {
     {
         let fm = &after[..end];
         let body = &after[end + 3..];
-        let description = extract_fm_field(fm, "description")
-            .unwrap_or_else(|| first_nonempty_line(body));
+        let description =
+            extract_fm_field(fm, "description").unwrap_or_else(|| first_nonempty_line(body));
         return (description, body.trim_start().to_string());
     }
     // No frontmatter — use first non-empty line as description
@@ -140,7 +149,13 @@ fn parse_prompt_file(raw: &str) -> (String, String) {
 fn extract_fm_field(fm: &str, key: &str) -> Option<String> {
     fm.lines()
         .find(|l| l.trim_start().starts_with(&format!("{key}:")))
-        .map(|l| l.split_once(':').map(|x| x.1).unwrap_or("").trim().to_string())
+        .map(|l| {
+            l.split_once(':')
+                .map(|x| x.1)
+                .unwrap_or("")
+                .trim()
+                .to_string()
+        })
         .filter(|s| !s.is_empty())
 }
 
@@ -164,7 +179,12 @@ fn replace_slice_refs(s: &str, args: &[&str]) -> String {
         let replacement = if parts.len() == 2 {
             let n: usize = parts[0].parse::<usize>().unwrap_or(1).saturating_sub(1);
             let l: usize = parts[1].parse().unwrap_or(0);
-            args.iter().skip(n).take(l).copied().collect::<Vec<_>>().join(" ")
+            args.iter()
+                .skip(n)
+                .take(l)
+                .copied()
+                .collect::<Vec<_>>()
+                .join(" ")
         } else {
             String::new()
         };
@@ -202,7 +222,9 @@ mod tests {
     use std::fs;
     use tempfile::TempDir;
 
-    fn make_dir() -> TempDir { tempfile::tempdir().expect("tempdir") }
+    fn make_dir() -> TempDir {
+        tempfile::tempdir().expect("tempdir")
+    }
 
     #[test]
     fn test_discover_prompts_empty() {

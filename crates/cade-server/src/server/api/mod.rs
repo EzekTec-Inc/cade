@@ -2,17 +2,17 @@
 
 pub mod agents;
 pub mod artifacts;
-pub mod codeintel;
-pub mod memory_evidence;
-pub mod tool_executions;
 pub mod auth;
 pub mod checkpoints;
+pub mod codeintel;
 pub mod evals;
 pub mod health;
+pub mod memory_evidence;
 pub mod messages;
 pub mod models;
 pub mod providers;
 pub mod runs;
+pub mod tool_executions;
 pub mod tools;
 
 use crate::server::{rate_limit::rate_limit_middleware, state::AppState};
@@ -51,7 +51,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/health", get(health::get_health))
         .route("/v1/config", get(health::get_config))
         // Real context-window stats (D2)
-        .route("/v1/agents/:id/context", get(messages::get_context_stats_handler))
+        .route(
+            "/v1/agents/:id/context",
+            get(messages::get_context_stats_handler),
+        )
         // Agents
         .route(
             "/v1/agents",
@@ -105,8 +108,14 @@ pub fn router(state: AppState) -> Router {
             "/v1/agents/:id/memory/:label/why",
             get(memory_evidence::memory_why),
         )
-        .route("/v1/agents/:id/reflect",    post(memory_evidence::trigger_reflect))
-        .route("/v1/agents/:id/reflection", get(memory_evidence::list_reflection))
+        .route(
+            "/v1/agents/:id/reflect",
+            post(memory_evidence::trigger_reflect),
+        )
+        .route(
+            "/v1/agents/:id/reflection",
+            get(memory_evidence::list_reflection),
+        )
         // Conversations
         .route(
             "/v1/agents/:id/conversations",
@@ -120,24 +129,54 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/runs/:run_id", get(runs::get_run))
         .route("/v1/runs/:run_id/stream", get(runs::stream_run))
         // Tool execution log
-        .route("/v1/agents/:id/tool_executions", post(tool_executions::log_tool_execution))
+        .route(
+            "/v1/agents/:id/tool_executions",
+            post(tool_executions::log_tool_execution),
+        )
         // Code intelligence
-        .route("/v1/symbols",                    get(codeintel::symbol_search))
-        .route("/v1/symbols/:name/definition",   get(codeintel::goto_definition))
-        .route("/v1/symbols/:name/refs",         get(codeintel::find_references))
-        .route("/v1/repo-map",                   get(codeintel::get_repo_map))
-        .route("/v1/agents/:id/index",           post(codeintel::index_repository))
+        .route("/v1/symbols", get(codeintel::symbol_search))
+        .route(
+            "/v1/symbols/:name/definition",
+            get(codeintel::goto_definition),
+        )
+        .route("/v1/symbols/:name/refs", get(codeintel::find_references))
+        .route("/v1/repo-map", get(codeintel::get_repo_map))
+        .route("/v1/agents/:id/index", post(codeintel::index_repository))
         // Checkpoints
-        .route("/v1/agents/:id/checkpoints", post(checkpoints::create_checkpoint).get(checkpoints::list_checkpoints))
-        .route("/v1/agents/:id/checkpoints/:cp_id", get(checkpoints::get_checkpoint_handler).delete(checkpoints::delete_checkpoint_handler))
-        .route("/v1/agents/:id/checkpoints/:cp_id/restore", post(checkpoints::restore_checkpoint_handler))
+        .route(
+            "/v1/agents/:id/checkpoints",
+            post(checkpoints::create_checkpoint).get(checkpoints::list_checkpoints),
+        )
+        .route(
+            "/v1/agents/:id/checkpoints/:cp_id",
+            get(checkpoints::get_checkpoint_handler).delete(checkpoints::delete_checkpoint_handler),
+        )
+        .route(
+            "/v1/agents/:id/checkpoints/:cp_id/restore",
+            post(checkpoints::restore_checkpoint_handler),
+        )
         // Artifacts
-        .route("/v1/agents/:id/artifacts", post(artifacts::create_artifact).get(artifacts::list_artifacts))
-        .route("/v1/agents/:id/artifacts/:art_id", get(artifacts::get_artifact_handler).delete(artifacts::delete_artifact_handler))
+        .route(
+            "/v1/agents/:id/artifacts",
+            post(artifacts::create_artifact).get(artifacts::list_artifacts),
+        )
+        .route(
+            "/v1/agents/:id/artifacts/:art_id",
+            get(artifacts::get_artifact_handler).delete(artifacts::delete_artifact_handler),
+        )
         // Evals
-        .route("/v1/evals/tasks", post(evals::create_eval_task).get(evals::list_eval_tasks))
-        .route("/v1/evals/runs", post(evals::create_eval_run_handler).get(evals::list_eval_runs))
-        .route("/v1/evals/runs/:id", get(evals::get_eval_run).patch(evals::update_eval_run_handler))
+        .route(
+            "/v1/evals/tasks",
+            post(evals::create_eval_task).get(evals::list_eval_tasks),
+        )
+        .route(
+            "/v1/evals/runs",
+            post(evals::create_eval_run_handler).get(evals::list_eval_runs),
+        )
+        .route(
+            "/v1/evals/runs/:id",
+            get(evals::get_eval_run).patch(evals::update_eval_run_handler),
+        )
         // Tools
         .route("/v1/tools", post(tools::create_tool).get(tools::list_tools))
         // Models

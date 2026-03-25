@@ -16,23 +16,23 @@ pub use error::{Error, Result};
 pub mod app;
 pub mod autocomplete;
 pub mod colors;
-pub mod session_tree;
 pub mod component;
 pub mod editor;
 pub mod markdown;
 pub mod menu;
 pub mod question;
+pub mod session_tree;
 pub mod skills;
 
 pub use app::{RenderLine, TuiApp, cycle_mode, cycle_mode_back, truncate_str};
-pub use colors::ThemeColors;
-pub use session_tree::{TreeAction, show_session_tree};
 pub use autocomplete::{
     AutocompleteProvider, Completion, FileAutocompleteProvider, SlashCommandDef,
     SlashCommandProvider,
 };
+pub use colors::ThemeColors;
 pub use component::{Component, RenderedLine};
 pub use editor::Editor;
 pub use question::{Question, QuestionAnswer, QuestionOption, QuestionWidget};
+pub use session_tree::{TreeAction, show_session_tree};
 
 // endregion: --- Modules

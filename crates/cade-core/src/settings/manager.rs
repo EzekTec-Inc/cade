@@ -144,7 +144,6 @@ pub struct GlobalSettings {
     pub store_api_key: bool,
 
     // -- Resource system (Phase 1)
-
     /// Installed packages (npm:, git:, or local path).
     #[serde(default)]
     pub packages: Vec<crate::resources::packages::PackageSource>,
@@ -162,7 +161,6 @@ pub struct GlobalSettings {
     pub extra_context_files: Vec<std::path::PathBuf>,
 
     // -- Execution backend (Phase 6)
-
     /// Where to run bash commands and file operations.
     #[serde(default)]
     pub execution: ExecutionProfile,
@@ -192,9 +190,9 @@ pub enum ExecutionBackendKind {
 impl ExecutionBackendKind {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Local    => "local",
-            Self::Docker   => "docker",
-            Self::Ssh      => "ssh",
+            Self::Local => "local",
+            Self::Docker => "docker",
+            Self::Ssh => "ssh",
             Self::ReadOnly => "readonly",
         }
     }
@@ -204,11 +202,13 @@ impl std::str::FromStr for ExecutionBackendKind {
     type Err = String;
     fn from_str(s: &str) -> core::result::Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
-            "local"    => Ok(Self::Local),
-            "docker"   => Ok(Self::Docker),
-            "ssh"      => Ok(Self::Ssh),
+            "local" => Ok(Self::Local),
+            "docker" => Ok(Self::Docker),
+            "ssh" => Ok(Self::Ssh),
             "readonly" | "read-only" | "read_only" => Ok(Self::ReadOnly),
-            other => Err(format!("Unknown backend '{other}'. Valid: local, docker, ssh, readonly")),
+            other => Err(format!(
+                "Unknown backend '{other}'. Valid: local, docker, ssh, readonly"
+            )),
         }
     }
 }
@@ -259,6 +259,9 @@ pub struct ProjectSettings {
     /// Project-scoped MCP servers (same key as global = project wins).
     #[serde(default, rename = "mcpServers")]
     pub mcp_servers: std::collections::HashMap<String, McpServerConfig>,
+    /// Whether to automatically create a checkpoint before destructive edits
+    #[serde(default = "default_true")]
+    pub auto_checkpoint: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -501,7 +504,10 @@ mod tests {
 
         // Local override wins for proj-server
         assert_eq!(
-            servers.get("proj-server").ok_or("Should find server")?.command,
+            servers
+                .get("proj-server")
+                .ok_or("Should find server")?
+                .command,
             "/bin/local-proj"
         );
         // Local-only server is present
@@ -566,7 +572,8 @@ mod tests {
         assert_eq!(
             mgr.pinned_agents()
                 .iter()
-                .find(|p| p.id == "a1").ok_or("Should find agent")?
+                .find(|p| p.id == "a1")
+                .ok_or("Should find agent")?
                 .name,
             "Agent One Updated"
         );
@@ -669,6 +676,14 @@ impl SettingsManager {
             project,
             local,
         })
+    }
+
+    /// Reload settings from disk (useful for hot-reloading).
+    pub fn reload(&mut self) -> Result<()> {
+        self.global = Self::load_json(&self.global_path).unwrap_or_default();
+        self.project = Self::load_json(&self.project_path).unwrap_or_default();
+        self.local = Self::load_json(&self.local_path).unwrap_or_default();
+        Ok(())
     }
 
     /// Merged MCP servers: local > project > global (same key = higher priority wins).
@@ -819,6 +834,9 @@ impl SettingsManager {
     }
     pub fn local(&self) -> &LocalSettings {
         &self.local
+    }
+    pub fn project(&self) -> &ProjectSettings {
+        &self.project
     }
 
     /// Remove the API key from global settings and persist.

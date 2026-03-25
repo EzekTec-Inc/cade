@@ -17,21 +17,23 @@ pub struct LocalBackend;
 
 #[async_trait]
 impl ExecutionBackend for LocalBackend {
-    async fn exec_bash(&self, command: &str, cwd: &Path, timeout_secs: u64) -> crate::Result<BashOutput> {
+    async fn exec_bash(
+        &self,
+        command: &str,
+        cwd: &Path,
+        timeout_secs: u64,
+    ) -> crate::Result<BashOutput> {
         use std::process::Stdio;
-        let mut child = tokio::time::timeout(
-            Duration::from_secs(timeout_secs),
-            async {
-                let mut cmd = Command::new("bash");
-                cade_core::agent_env::apply_agent_env(&mut cmd);
-                cmd.arg("-c")
-                    .arg(command)
-                    .current_dir(cwd)
-                    .stdout(Stdio::piped())
-                    .stderr(Stdio::piped())
-                    .spawn()
-            },
-        )
+        let mut child = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
+            let mut cmd = Command::new("bash");
+            cade_core::agent_env::apply_agent_env(&mut cmd);
+            cmd.arg("-c")
+                .arg(command)
+                .current_dir(cwd)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+        })
         .await
         .map_err(|_| crate::Error::custom(format!("timed out after {timeout_secs}s")))?
         .map_err(|e| crate::Error::custom(format!("spawn bash: {e}")))?;
@@ -46,11 +48,15 @@ impl ExecutionBackend for LocalBackend {
 
         tokio::spawn(async move {
             let mut reader = BufReader::new(stdout_h).lines();
-            while let Ok(Some(line)) = reader.next_line().await { let _ = tx_out.send((false, line)); }
+            while let Ok(Some(line)) = reader.next_line().await {
+                let _ = tx_out.send((false, line));
+            }
         });
         tokio::spawn(async move {
             let mut reader = BufReader::new(stderr_h).lines();
-            while let Ok(Some(line)) = reader.next_line().await { let _ = tx_err.send((true, line)); }
+            while let Ok(Some(line)) = reader.next_line().await {
+                let _ = tx_err.send((true, line));
+            }
         });
 
         let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
@@ -59,8 +65,13 @@ impl ExecutionBackend for LocalBackend {
         loop {
             match tokio::time::timeout_at(deadline, rx.recv()).await {
                 Ok(Some((is_err, line))) => {
-                    if is_err { out.stderr.push_str(&line); out.stderr.push('\n'); }
-                    else      { out.stdout.push_str(&line); out.stdout.push('\n'); }
+                    if is_err {
+                        out.stderr.push_str(&line);
+                        out.stderr.push('\n');
+                    } else {
+                        out.stdout.push_str(&line);
+                        out.stdout.push('\n');
+                    }
                 }
                 Ok(None) => break,
                 Err(_) => {
@@ -71,7 +82,10 @@ impl ExecutionBackend for LocalBackend {
             }
         }
 
-        let status = child.wait().await.map_err(|e| crate::Error::custom(format!("{e}")))?;
+        let status = child
+            .wait()
+            .await
+            .map_err(|e| crate::Error::custom(format!("{e}")))?;
         out.exit_code = status.code().unwrap_or(-1);
         Ok(out)
     }
@@ -105,16 +119,18 @@ impl ExecutionBackend for LocalBackend {
         while let Ok(Some(e)) = rd.next_entry().await {
             let meta = e.metadata().await.ok();
             entries.push(DirEntry {
-                path:   e.path(),
+                path: e.path(),
                 is_dir: meta.as_ref().map(|m| m.is_dir()).unwrap_or(false),
-                size:   meta.map(|m| m.len()),
+                size: meta.map(|m| m.len()),
             });
         }
         entries.sort_by(|a, b| a.path.cmp(&b.path));
         Ok(entries)
     }
 
-    fn name(&self) -> &'static str { "local" }
+    fn name(&self) -> &'static str {
+        "local"
+    }
 }
 
 // endregion: --- LocalBackend
@@ -155,9 +171,9 @@ mod tests {
     #[tokio::test]
     async fn test_local_write_read_roundtrip() -> crate::Result<()> {
         // -- Setup & Fixtures
-        let b   = LocalBackend;
+        let b = LocalBackend;
         let dir = tempfile::tempdir().unwrap();
-        let f   = dir.path().join("test.txt");
+        let f = dir.path().join("test.txt");
 
         // -- Exec
         b.write_file(&f, "hello roundtrip").await?;

@@ -67,9 +67,12 @@ pub async fn run_headless(
 
     // UserPromptSubmit hook — can block the turn entirely.
     if !hooks.is_empty()
-        && let HookOutcome::Block { reason } = hooks.user_prompt_submit(prompt).await {
-            return Err(crate::Error::custom(format!("Prompt blocked by hook: {reason}")));
-        }
+        && let HookOutcome::Block { reason } = hooks.user_prompt_submit(prompt).await
+    {
+        return Err(crate::Error::custom(format!(
+            "Prompt blocked by hook: {reason}"
+        )));
+    }
 
     let t0 = std::time::Instant::now();
     let mut final_output = String::new();
@@ -104,10 +107,10 @@ pub async fn run_headless(
     if !hooks.is_empty()
         && let HookOutcome::Block { reason } =
             hooks.stop("end_turn", prompt, &final_output, None).await
-        {
-            final_output.push_str("\n\n");
-            final_output.push_str(&format!("[Stop hook: {reason}]"));
-        }
+    {
+        final_output.push_str("\n\n");
+        final_output.push_str(&format!("[Stop hook: {reason}]"));
+    }
 
     stats.duration_ms = t0.elapsed().as_millis();
     Ok((final_output.trim().to_string(), stats))
@@ -139,16 +142,17 @@ pub async fn run_headless_stream_json(
 
     // UserPromptSubmit hook — can block the turn entirely.
     if !hooks.is_empty()
-        && let HookOutcome::Block { reason } = hooks.user_prompt_submit(prompt).await {
-            emit(json!({
-                "type":     "result",
-                "subtype":  "error",
-                "is_error": true,
-                "error":    format!("Prompt blocked by hook: {reason}"),
-                "agent_id": agent_id,
-            }));
-            return;
-        }
+        && let HookOutcome::Block { reason } = hooks.user_prompt_submit(prompt).await
+    {
+        emit(json!({
+            "type":     "result",
+            "subtype":  "error",
+            "is_error": true,
+            "error":    format!("Prompt blocked by hook: {reason}"),
+            "agent_id": agent_id,
+        }));
+        return;
+    }
 
     let mut final_output = String::new();
     let mut stats = HeadlessStats::default();
@@ -213,10 +217,10 @@ pub async fn run_headless_stream_json(
     if !hooks.is_empty()
         && let HookOutcome::Block { reason } =
             hooks.stop("end_turn", prompt, &final_output, None).await
-        {
-            final_output.push_str("\n\n");
-            final_output.push_str(&format!("[Stop hook: {reason}]"));
-        }
+    {
+        final_output.push_str("\n\n");
+        final_output.push_str(&format!("[Stop hook: {reason}]"));
+    }
 
     emit(json!({
         "type":       "result",
@@ -254,27 +258,46 @@ async fn run_one_tool(
 
     // -- PreToolUse hook — can block execution
     if !hooks.is_empty()
-        && let HookOutcome::Block { reason } = hooks.pre_tool_use(&tool_name, &args).await {
-            let msg = format!("Blocked by hook: {reason}");
-            tracing::warn!("{msg}");
-            return (call_id, msg, true);
-        }
+        && let HookOutcome::Block { reason } = hooks.pre_tool_use(&tool_name, &args).await
+    {
+        let msg = format!("Blocked by hook: {reason}");
+        tracing::warn!("{msg}");
+        return (call_id, msg, true);
+    }
 
     // -- Unified dispatch via ToolRuntime (memory, skills, checkpoints, native tools)
     let cwd = std::env::current_dir().unwrap_or_default();
-    let runtime = ToolRuntime::new(std::sync::Arc::new(client.clone()), std::sync::Arc::clone(mcp), agent_id.to_string(), cwd);
+    let runtime = ToolRuntime::new(
+        std::sync::Arc::new(client.clone()),
+        std::sync::Arc::clone(mcp),
+        agent_id.to_string(),
+        cwd,
+    );
     if let Some(result) = runtime.execute(call_id.clone(), &tool_name, &args).await {
         return finalize_tool_result(
-            hooks, call_id, tool_name, args, result.output, result.is_error,
-        ).await;
+            hooks,
+            call_id,
+            tool_name,
+            args,
+            result.output,
+            result.is_error,
+        )
+        .await;
     }
 
     // -- Fallback: interactive-only tools (run_subagent, ask_user_question) — dispatch natively
     tracing::info!("Executing tool: {tool_name}");
     let result = dispatch(call_id.clone(), &tool_name, &args, mcp).await;
-    finalize_tool_result(hooks, call_id, tool_name, args, result.output, result.is_error).await
+    finalize_tool_result(
+        hooks,
+        call_id,
+        tool_name,
+        args,
+        result.output,
+        result.is_error,
+    )
+    .await
 }
-
 
 /// Apply PostToolUse / PostToolUseFailure hooks for a completed tool.
 async fn finalize_tool_result(

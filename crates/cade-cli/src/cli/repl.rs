@@ -103,6 +103,7 @@ enum SlashCmd {
     Cost,
     /// Create a checkpoint of the current working-tree state.
     Checkpoint(Option<String>),
+    Undo,
     /// Browse and restore checkpoints (session tree).
     Tree,
     /// Fork a new conversation from a checkpoint.
@@ -175,6 +176,7 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         "copy" => Some(SlashCmd::Copy),
         "export" => Some(SlashCmd::Export(arg)),
         "checkpoint" | "cp" => Some(SlashCmd::Checkpoint(arg)),
+        "undo" => Some(SlashCmd::Undo),
         "tree" | "session-tree" => Some(SlashCmd::Tree),
         "fork" => Some(SlashCmd::Fork(arg)),
         "artifacts" => Some(SlashCmd::Artifacts),
@@ -726,6 +728,8 @@ pub struct Repl {
     /// Set to `true` once the working_set reminder has been injected so it
     /// fires at most once per session.
     working_set_notified: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// `true` if an auto-checkpoint has been taken for the current turn.
+    turn_checkpoint_taken: bool,
 }
 
 impl Repl {
@@ -769,7 +773,9 @@ impl Repl {
             settings,
             session,
             prompts: {
-                let agent_dir = dirs::home_dir().map(|h| h.join(".cade")).unwrap_or_default();
+                let agent_dir = dirs::home_dir()
+                    .map(|h| h.join(".cade"))
+                    .unwrap_or_default();
                 cade_core::resources::discover_prompts(&cwd, &agent_dir)
             },
             exec_backend,
@@ -805,6 +811,7 @@ impl Repl {
             pending_turn_images: Vec::new(),
             write_tool_calls: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             working_set_notified: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            turn_checkpoint_taken: false,
         }
     }
 
@@ -821,12 +828,32 @@ impl Repl {
         self.conversation_id.lock().expect("lock poisoned").clone()
     }
 
-    /// Reload MCP servers from current settings and re-register tools.
+    /// Reload MCP servers, hooks, and permissions from current settings.
     /// Called from the tick-loop watcher poll and from `/mcp reload`.
-    async fn do_mcp_reload(&mut self) {
-        self.tui_dim("  ↺ MCP settings changed — reloading servers…".to_string());
-        let new_configs = self.settings.lock().expect("lock poisoned").merged_mcp_servers();
-        let summary = self.mcp.reload(&new_configs).await;
+    async fn do_settings_reload(&mut self) {
+        self.tui_dim(
+            "  ↺ Settings changed — reloading MCP servers, hooks, and permissions…".to_string(),
+        );
+
+        // 1. Reload raw settings from disk
+        let _ = self.settings.lock().expect("lock poisoned").reload();
+
+        // 2. Extract merged config slices
+        let (new_mcp, new_hooks, new_perms) = {
+            let guard = self.settings.lock().expect("lock poisoned");
+            (
+                guard.merged_mcp_servers(),
+                guard.merged_hooks(),
+                guard.permission_settings().clone(),
+            )
+        };
+
+        // 3. Apply new hooks and permissions
+        self.hooks = cade_core::hooks::HookEngine::new(new_hooks, self.cwd.clone());
+        self.permissions.reload_from_settings(&new_perms);
+
+        // 4. Reload MCP servers
+        let summary = self.mcp.reload(&new_mcp).await;
 
         if !summary.stopped.is_empty() {
             self.tui_dim(format!("  stopped: {}", summary.stopped.join(", ")));
@@ -841,7 +868,7 @@ impl Repl {
         }
 
         let msg = format!(
-            "  ↺ MCP reloaded — {} started, {} stopped, {} kept{}",
+            "  ↺ Settings reloaded — {} MCP started, {} stopped, {} kept{}",
             summary.started.len(),
             summary.stopped.len(),
             summary.kept.len(),
@@ -920,7 +947,11 @@ impl Repl {
                 let mut results = self.background_results.lock().expect("lock poisoned");
                 for r in results.drain(..) {
                     let msg = format!("  ✓ Subagent '{}' finished:\n{}", r.subagent, r.result);
-                    let _ = self.app.lock().expect("lock poisoned").push(RenderLine::SystemMsg(msg));
+                    let _ = self
+                        .app
+                        .lock()
+                        .expect("lock poisoned")
+                        .push(RenderLine::SystemMsg(msg));
                     let notify = format!(
                         "[Background subagent '{}' completed (task ID: {})]:\n{}",
                         r.subagent, r.task_id, r.result
@@ -950,7 +981,7 @@ impl Repl {
                 mcp_changed = true;
             }
             if mcp_changed {
-                self.do_mcp_reload().await;
+                self.do_settings_reload().await;
             }
 
             // Check for skill file changes (live watcher) — reload if signalled
@@ -1102,7 +1133,10 @@ impl Repl {
                 let args_str = parts.get(1).copied().unwrap_or("");
                 if let Some(tmpl) = self.prompts.iter().find(|t| t.name == name) {
                     let expanded = cade_core::resources::expand_template(&tmpl.content, args_str);
-                    self.tui_dim(format!("  Expanded /{name} template ({} chars)", expanded.len()));
+                    self.tui_dim(format!(
+                        "  Expanded /{name} template ({} chars)",
+                        expanded.len()
+                    ));
                     expanded
                 } else {
                     input
@@ -1126,10 +1160,12 @@ impl Repl {
                         let in_tok = self.session_input_tokens.load(Ordering::SeqCst);
                         let out_tok = self.session_output_tokens.load(Ordering::SeqCst);
                         if in_tok > 0 || out_tok > 0 {
-                            let _ = self.app.lock().expect("lock poisoned").push(RenderLine::SystemMsg(format!(
-                                "  Session tokens — in: {in_tok}  out: {out_tok}  total: {}",
-                                in_tok + out_tok
-                            )));
+                            let _ = self.app.lock().expect("lock poisoned").push(
+                                RenderLine::SystemMsg(format!(
+                                    "  Session tokens — in: {in_tok}  out: {out_tok}  total: {}",
+                                    in_tok + out_tok
+                                )),
+                            );
                         }
                         let _ = self
                             .app
@@ -1176,7 +1212,11 @@ impl Repl {
                     }
                     SlashCmd::Agent => {
                         let msg = format!("  Agent: {} ({})", self.agent_name(), self.agent_id());
-                        let _ = self.app.lock().expect("lock poisoned").push(RenderLine::SystemMsg(msg));
+                        let _ = self
+                            .app
+                            .lock()
+                            .expect("lock poisoned")
+                            .push(RenderLine::SystemMsg(msg));
                     }
                     SlashCmd::Info => {
                         let msg = format!(
@@ -1189,7 +1229,11 @@ impl Repl {
                             self.cwd.display(),
                             env!("CARGO_PKG_VERSION")
                         );
-                        let _ = self.app.lock().expect("lock poisoned").push(RenderLine::SystemMsg(msg));
+                        let _ = self
+                            .app
+                            .lock()
+                            .expect("lock poisoned")
+                            .push(RenderLine::SystemMsg(msg));
                     }
                     SlashCmd::Yolo => {
                         self.permissions.set_mode(PermissionMode::BypassPermissions);
@@ -1197,16 +1241,20 @@ impl Repl {
                             .lock()
                             .expect("lock poisoned")
                             .update_mode(PermissionMode::BypassPermissions);
-                        let _ = self.app.lock().expect("lock poisoned").push(RenderLine::SystemMsg(
-                            "⚡ Permission mode: bypassPermissions — all tools auto-approved"
-                                .to_string(),
-                        ));
+                        let _ =
+                            self.app
+                                .lock()
+                                .expect("lock poisoned")
+                                .push(RenderLine::SystemMsg(
+                                "⚡ Permission mode: bypassPermissions — all tools auto-approved"
+                                    .to_string(),
+                            ));
                     }
                     SlashCmd::Mcp => {
                         // Support "/mcp reload" subcommand
                         let sub = input.trim().strip_prefix("/mcp").unwrap_or("").trim();
                         if sub == "reload" {
-                            self.do_mcp_reload().await;
+                            self.do_settings_reload().await;
                             continue;
                         }
 
@@ -1240,14 +1288,18 @@ impl Repl {
                                     crate::ui::truncate_str(&tool_list, 60),
                                 ]);
                             }
-                            let _ = self.app.lock().expect("lock poisoned").push(RenderLine::Table {
-                                headers: vec![
-                                    "Server".to_string(),
-                                    "Count".to_string(),
-                                    "Tools".to_string(),
-                                ],
-                                rows,
-                            });
+                            let _ =
+                                self.app
+                                    .lock()
+                                    .expect("lock poisoned")
+                                    .push(RenderLine::Table {
+                                        headers: vec![
+                                            "Server".to_string(),
+                                            "Count".to_string(),
+                                            "Tools".to_string(),
+                                        ],
+                                        rows,
+                                    });
                         }
                     }
                     SlashCmd::Link => {
@@ -1662,7 +1714,7 @@ impl Repl {
                             let t_tot = stats["turns_total"].as_u64().unwrap_or(0);
                             let t_omit = stats["turns_omitted"].as_u64().unwrap_or(0);
                             let c_used = stats["chars_used"].as_u64().unwrap_or(0);
-                            let c_bud  = stats["message_budget_chars"].as_u64().unwrap_or(0);
+                            let c_bud = stats["message_budget_chars"].as_u64().unwrap_or(0);
                             let consol = stats["needs_consolidation"].as_bool().unwrap_or(false);
                             let pct_c = if c_bud > 0 {
                                 format!("{:.0}%", 100.0 * c_used as f64 / c_bud as f64)
@@ -1693,9 +1745,8 @@ impl Repl {
                             } else {
                                 "none pending"
                             };
-                            let _ = app.push(RenderLine::DimMsg(format!(
-                                "  Consolidation: {consol_str}"
-                            )));
+                            let _ = app
+                                .push(RenderLine::DimMsg(format!("  Consolidation: {consol_str}")));
                             let _ = app.push(RenderLine::Blank);
                         }
                     }
@@ -1849,9 +1900,11 @@ impl Repl {
                         self.tui_dim(format!("  Switching model → {m}…"));
                         match self.client.patch_agent_model(&self.agent_id(), &m).await {
                             Ok(new_model) => {
-                                *self.current_model.lock().expect("lock poisoned") = new_model.clone();
+                                *self.current_model.lock().expect("lock poisoned") =
+                                    new_model.clone();
                                 if new_toolset != old_toolset {
-                                    *self.current_toolset.lock().expect("lock poisoned") = new_toolset;
+                                    *self.current_toolset.lock().expect("lock poisoned") =
+                                        new_toolset;
                                     self.spawn_tool_reregister();
                                     self.tui_hdr(format!(
                                         "  Toolset → {}",
@@ -2064,33 +2117,86 @@ impl Repl {
                     }
 
                     // -- Checkpoints
-
                     SlashCmd::Checkpoint(label_arg) => {
                         let agent_id = self.agent_id();
-                        let label    = label_arg.as_deref().unwrap_or("manual");
+                        let label = label_arg.as_deref().unwrap_or("manual");
                         self.tui_dim(format!("  Creating checkpoint '{label}'…"));
 
                         // Git stash if dirty
                         use cade_agent::tools::git_checkpoint;
                         let git_cp = git_checkpoint::create_git_checkpoint(label, &self.cwd).await;
-                        let stash  = git_cp.as_ref().and_then(|g| g.stash_ref.as_deref()).map(String::from);
-                        let commit = git_cp.as_ref().and_then(|g| g.commit_hash.as_deref()).map(String::from);
+                        let stash = git_cp
+                            .as_ref()
+                            .and_then(|g| g.stash_ref.as_deref())
+                            .map(String::from);
+                        let commit = git_cp
+                            .as_ref()
+                            .and_then(|g| g.commit_hash.as_deref())
+                            .map(String::from);
                         let conv_id = self.conversation_id();
 
-                        match self.client.create_checkpoint(
-                            &agent_id,
-                            Some(label),
-                            None,
-                            conv_id.as_deref(),
-                            stash.as_deref(),
-                            commit.as_deref(),
-                        ).await {
+                        match self
+                            .client
+                            .create_checkpoint(
+                                &agent_id,
+                                Some(label),
+                                None,
+                                conv_id.as_deref(),
+                                stash.as_deref(),
+                                commit.as_deref(),
+                            )
+                            .await
+                        {
                             Ok(cp_id) => {
                                 let mut msg = format!("  ✓ Checkpoint '{label}' — ID: {cp_id}");
-                                if stash.is_some() { msg.push_str("  (git stashed)"); }
+                                if stash.is_some() {
+                                    msg.push_str("  (git stashed)");
+                                }
                                 self.tui_ok(msg);
                             }
                             Err(e) => self.tui_err(format!("  ✗ Checkpoint failed: {e}")),
+                        }
+                    }
+
+                    // -- Undo
+                    SlashCmd::Undo => {
+                        let agent_id = self.agent_id();
+                        match self.client.list_checkpoints(&agent_id).await {
+                            Err(e) => self.tui_err(format!("  ✗ list_checkpoints: {e}")),
+                            Ok(checkpoints) if checkpoints.is_empty() => {
+                                self.tui_dim("  No checkpoints available to undo.".to_string());
+                            }
+                            Ok(checkpoints) => {
+                                if let Some(last_cp) = checkpoints.last() {
+                                    let checkpoint_id =
+                                        last_cp["id"].as_str().unwrap_or("").to_string();
+                                    let stash_ref =
+                                        last_cp["git_stash_ref"].as_str().map(String::from);
+
+                                    self.tui_dim(format!(
+                                        "  Restoring checkpoint {checkpoint_id}…"
+                                    ));
+
+                                    if let Some(s) = stash_ref {
+                                        use cade_agent::tools::git_checkpoint;
+                                        match git_checkpoint::restore_git_checkpoint(&s, &self.cwd)
+                                            .await
+                                        {
+                                            Ok(()) => {
+                                                self.tui_ok(format!("  ✓ Git stash applied: {s}"))
+                                            }
+                                            Err(e) => self.tui_err(format!("  ✗ Git restore: {e}")),
+                                        }
+                                    }
+                                    let _ = self
+                                        .client
+                                        .restore_checkpoint(&agent_id, &checkpoint_id)
+                                        .await;
+                                    self.tui_ok(format!(
+                                        "  ✓ Restored to checkpoint {checkpoint_id}"
+                                    ));
+                                }
+                            }
                         }
                     }
 
@@ -2099,37 +2205,52 @@ impl Repl {
                         match self.client.list_checkpoints(&agent_id).await {
                             Err(e) => self.tui_err(format!("  ✗ list_checkpoints: {e}")),
                             Ok(checkpoints) if checkpoints.is_empty() => {
-                                self.tui_dim("  No checkpoints yet. Use /checkpoint [label] to create one.".to_string());
+                                self.tui_dim(
+                                    "  No checkpoints yet. Use /checkpoint [label] to create one."
+                                        .to_string(),
+                                );
                             }
                             Ok(checkpoints) => {
                                 // Show the fullscreen tree browser
                                 let action = {
                                     let mut app = self.app.lock().expect("lock poisoned");
-                                    cade_tui::show_session_tree(
-                                        &mut app.terminal,
-                                        &checkpoints,
-                                    )?
+                                    cade_tui::show_session_tree(&mut app.terminal, &checkpoints)?
                                 };
                                 match action {
                                     cade_tui::TreeAction::Cancel => {
                                         self.tui_dim("  /tree cancelled".to_string());
                                     }
                                     cade_tui::TreeAction::Restore { checkpoint_id } => {
-                                        self.tui_dim(format!("  Restoring checkpoint {checkpoint_id}…"));
+                                        self.tui_dim(format!(
+                                            "  Restoring checkpoint {checkpoint_id}…"
+                                        ));
                                         // Find git stash ref in the checkpoint list
-                                        let stash_ref = checkpoints.iter()
+                                        let stash_ref = checkpoints
+                                            .iter()
                                             .find(|cp| cp["id"].as_str() == Some(&checkpoint_id))
                                             .and_then(|cp| cp["git_stash_ref"].as_str())
                                             .map(String::from);
                                         if let Some(s) = stash_ref {
                                             use cade_agent::tools::git_checkpoint;
-                                            match git_checkpoint::restore_git_checkpoint(&s, &self.cwd).await {
-                                                Ok(()) => self.tui_ok(format!("  ✓ Git stash applied: {s}")),
-                                                Err(e) => self.tui_err(format!("  ✗ Git restore: {e}")),
+                                            match git_checkpoint::restore_git_checkpoint(
+                                                &s, &self.cwd,
+                                            )
+                                            .await
+                                            {
+                                                Ok(()) => self
+                                                    .tui_ok(format!("  ✓ Git stash applied: {s}")),
+                                                Err(e) => {
+                                                    self.tui_err(format!("  ✗ Git restore: {e}"))
+                                                }
                                             }
                                         }
-                                        let _ = self.client.restore_checkpoint(&agent_id, &checkpoint_id).await;
-                                        self.tui_ok(format!("  ✓ Restored to checkpoint {checkpoint_id}"));
+                                        let _ = self
+                                            .client
+                                            .restore_checkpoint(&agent_id, &checkpoint_id)
+                                            .await;
+                                        self.tui_ok(format!(
+                                            "  ✓ Restored to checkpoint {checkpoint_id}"
+                                        ));
                                     }
                                 }
                             }
@@ -2138,29 +2259,44 @@ impl Repl {
 
                     SlashCmd::Fork(label_arg) => {
                         let agent_id = self.agent_id();
-                        let label    = label_arg.as_deref().unwrap_or("fork");
+                        let label = label_arg.as_deref().unwrap_or("fork");
                         self.tui_dim(format!("  Creating fork point '{label}'…"));
                         use cade_agent::tools::git_checkpoint;
                         let git_cp = git_checkpoint::create_git_checkpoint(label, &self.cwd).await;
-                        let stash  = git_cp.as_ref().and_then(|g| g.stash_ref.as_deref()).map(String::from);
-                        let commit = git_cp.as_ref().and_then(|g| g.commit_hash.as_deref()).map(String::from);
+                        let stash = git_cp
+                            .as_ref()
+                            .and_then(|g| g.stash_ref.as_deref())
+                            .map(String::from);
+                        let commit = git_cp
+                            .as_ref()
+                            .and_then(|g| g.commit_hash.as_deref())
+                            .map(String::from);
 
                         // Create a checkpoint as the fork anchor
-                        match self.client.create_checkpoint(
-                            &agent_id, Some(label), Some("fork anchor"),
-                            self.conversation_id().as_deref(),
-                            stash.as_deref(), commit.as_deref(),
-                        ).await {
+                        match self
+                            .client
+                            .create_checkpoint(
+                                &agent_id,
+                                Some(label),
+                                Some("fork anchor"),
+                                self.conversation_id().as_deref(),
+                                stash.as_deref(),
+                                commit.as_deref(),
+                            )
+                            .await
+                        {
                             Ok(cp_id) => {
                                 // Start a new conversation from this point
                                 match self.client.create_conversation(&agent_id, "").await {
                                     Ok(conv) => {
                                         let cid = conv["id"].as_str().unwrap_or("").to_string();
-                                        *self.conversation_id.lock().expect("lock poisoned") = Some(cid.clone());
+                                        *self.conversation_id.lock().expect("lock poisoned") =
+                                            Some(cid.clone());
                                         if let Ok(mut s) = self.session.lock() {
                                             let _ = s.set_conversation(Some(cid.clone()));
                                         }
-                                        self.first_turn.store(true, std::sync::atomic::Ordering::SeqCst);
+                                        self.first_turn
+                                            .store(true, std::sync::atomic::Ordering::SeqCst);
                                         self.tui_ok(format!(
                                             "  ✓ Forked from checkpoint {cp_id}  →  new conversation {}",
                                             &cid[..cid.len().min(16)]
@@ -2178,13 +2314,17 @@ impl Repl {
                         match backend_arg {
                             None => {
                                 self.tui_hdr(format!("  Execution backend: {current}"));
-                                self.tui_dim("  Available: local, docker, ssh, readonly".to_string());
-                                self.tui_dim("  Change: /backend local|docker|ssh|readonly".to_string());
+                                self.tui_dim(
+                                    "  Available: local, docker, ssh, readonly".to_string(),
+                                );
+                                self.tui_dim(
+                                    "  Change: /backend local|docker|ssh|readonly".to_string(),
+                                );
                                 self.tui_dim("  Or set in ~/.cade/settings.json: { \"execution\": { \"backend\": \"docker\" } }".to_string());
                             }
                             Some(new_backend) => {
                                 use cade_core::settings::ExecutionBackendKind;
-                                
+
                                 match new_backend.parse::<ExecutionBackendKind>() {
                                     Err(e) => self.tui_err(format!("  ✗ {e}")),
                                     Ok(kind) => {
@@ -2196,15 +2336,22 @@ impl Repl {
                                             p.backend = kind;
                                             p
                                         };
-                                        let new_b = cade_agent::backends::backend_from_profile(&profile);
+                                        let new_b =
+                                            cade_agent::backends::backend_from_profile(&profile);
                                         let name = new_b.name();
                                         self.exec_backend = std::sync::Arc::from(new_b);
                                         self.tui_ok(format!("  ✓ Switched to {name} backend"));
                                         if name == "docker" {
-                                            let docker_image = profile.docker_image.as_deref().unwrap_or("ubuntu:22.04");
+                                            let docker_image = profile
+                                                .docker_image
+                                                .as_deref()
+                                                .unwrap_or("ubuntu:22.04");
                                             self.tui_dim(format!("  Image: {docker_image}  (set execution.docker_image in settings to change)"));
                                         } else if name == "ssh" {
-                                            let host = profile.ssh_host.as_deref().unwrap_or("(not configured)");
+                                            let host = profile
+                                                .ssh_host
+                                                .as_deref()
+                                                .unwrap_or("(not configured)");
                                             self.tui_dim(format!("  Host: {host}  (set execution.ssh_host in settings)"));
                                         }
                                     }
@@ -2220,7 +2367,7 @@ impl Repl {
                         self.tui_dim(format!("  Reflecting on conversation history{focus_msg}…"));
                         match self.client.trigger_reflect(&agent_id, focus).await {
                             Ok(summary) => self.tui_ok(format!("  ✓ {summary}")),
-                            Err(e)      => self.tui_err(format!("  ✗ Reflect failed: {e}")),
+                            Err(e) => self.tui_err(format!("  ✗ Reflect failed: {e}")),
                         }
                     }
 
@@ -2234,14 +2381,17 @@ impl Repl {
                             Ok(arts) => {
                                 self.tui_hdr(format!("  Artifacts ({}):", arts.len()));
                                 for a in arts.iter().take(20) {
-                                    let id   = a["id"].as_str().unwrap_or("?");
+                                    let id = a["id"].as_str().unwrap_or("?");
                                     let kind = a["kind"].as_str().unwrap_or("?");
                                     let size = a["size_bytes"].as_i64().unwrap_or(0);
-                                    let ts   = a["created_at"].as_i64().unwrap_or(0);
-                                    let dt   = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+                                    let ts = a["created_at"].as_i64().unwrap_or(0);
+                                    let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
                                         .map(|d| d.format("%m-%d %H:%M").to_string())
                                         .unwrap_or_default();
-                                    self.tui_dim(format!("    {kind:<12}  {size:>6}B  {dt}  {}", &id[..12.min(id.len())]));
+                                    self.tui_dim(format!(
+                                        "    {kind:<12}  {size:>6}B  {dt}  {}",
+                                        &id[..12.min(id.len())]
+                                    ));
                                 }
                             }
                         }
@@ -2252,7 +2402,8 @@ impl Repl {
                         match self.client.create_conversation(&agent_id, "").await {
                             Ok(conv) => {
                                 let cid = conv["id"].as_str().unwrap_or("").to_string();
-                                *self.conversation_id.lock().expect("lock poisoned") = Some(cid.clone());
+                                *self.conversation_id.lock().expect("lock poisoned") =
+                                    Some(cid.clone());
                                 if let Ok(mut s) = self.session.lock() {
                                     let _ = s.set_conversation(Some(cid.clone()));
                                 }
@@ -2357,9 +2508,12 @@ impl Repl {
                                 if let Ok(mut s) = self.session.lock() {
                                     let _ = s.set_agent(a.id.clone(), Some(a.name.clone()));
                                 }
-                                let _ = self.app.lock().expect("lock poisoned").push(RenderLine::SystemMsg(
-                                    format!("  ✓ New agent: {} ({})", a.name, a.id),
-                                ));
+                                let _ = self.app.lock().expect("lock poisoned").push(
+                                    RenderLine::SystemMsg(format!(
+                                        "  ✓ New agent: {} ({})",
+                                        a.name, a.id
+                                    )),
+                                );
 
                                 // S5: copy inherited blocks to new agent
                                 if copy_memory {
@@ -2375,11 +2529,11 @@ impl Repl {
                                             .await;
                                     }
                                     let n = inherit_blocks.len();
-                                    let _ = self.app.lock().expect("lock poisoned").push(RenderLine::SystemMsg(
-                                        format!(
+                                    let _ = self.app.lock().expect("lock poisoned").push(
+                                        RenderLine::SystemMsg(format!(
                                             "  ✓ Copied {n} memory block(s) from previous agent"
-                                        ),
-                                    ));
+                                        )),
+                                    );
                                 }
 
                                 // Attach native + MCP tools in background
@@ -2424,27 +2578,32 @@ impl Repl {
                         match self.client.list_conversations(&agent_id).await {
                             Ok(convs) => {
                                 if convs.is_empty() {
-                                    let _ = self.app.lock().expect("lock poisoned").push(RenderLine::DimMsg(
-                                        "  No saved conversations yet. Use /new to start one."
-                                            .to_string(),
-                                    ));
+                                    let _ =
+                                        self.app
+                                            .lock()
+                                            .expect("lock poisoned")
+                                            .push(RenderLine::DimMsg(
+                                            "  No saved conversations yet. Use /new to start one."
+                                                .to_string(),
+                                        ));
                                 } else if let Some(picked) = self
                                     .conversation_picker(Arc::clone(&self.app), &convs, &agent_id)
                                     .await?
                                 {
                                     let cid = picked["id"].as_str().unwrap_or("").to_string();
-                                    *self.conversation_id.lock().expect("lock poisoned") = Some(cid.clone());
+                                    *self.conversation_id.lock().expect("lock poisoned") =
+                                        Some(cid.clone());
                                     if let Ok(mut s) = self.session.lock() {
                                         let _ = s.set_conversation(Some(cid));
                                     }
                                     self.first_turn
                                         .store(false, std::sync::atomic::Ordering::SeqCst);
-                                    let _ = self.app.lock().expect("lock poisoned").push(RenderLine::SuccessMsg(
-                                        format!(
+                                    let _ = self.app.lock().expect("lock poisoned").push(
+                                        RenderLine::SuccessMsg(format!(
                                             "  ✓ Switched to: {}",
                                             picked["title"].as_str().unwrap_or("(untitled)")
-                                        ),
-                                    ));
+                                        )),
+                                    );
                                 }
                                 let _ = self.app.lock().expect("lock poisoned").draw();
                             }
@@ -2482,8 +2641,10 @@ impl Repl {
                                 {
                                     match result {
                                         AgentPickerResult::Switch(a) => {
-                                            *self.agent_id.lock().expect("lock poisoned") = a.id.clone();
-                                            *self.agent_name.lock().expect("lock poisoned") = a.name.clone();
+                                            *self.agent_id.lock().expect("lock poisoned") =
+                                                a.id.clone();
+                                            *self.agent_name.lock().expect("lock poisoned") =
+                                                a.name.clone();
                                             if let Ok(mut s) = self.settings.lock() {
                                                 let _ = s.set_last_agent(&a.id);
                                             }
@@ -2499,8 +2660,10 @@ impl Repl {
                                         {
                                             Ok(_) => {
                                                 if agent.id == self.agent_id() {
-                                                    *self.agent_name.lock().expect("lock poisoned") =
-                                                        new_name.clone();
+                                                    *self
+                                                        .agent_name
+                                                        .lock()
+                                                        .expect("lock poisoned") = new_name.clone();
                                                 }
                                                 self.tui_ok(format!(
                                                     "  ✓ Renamed '{}' → '{new_name}'",
@@ -2530,9 +2693,15 @@ impl Repl {
                                                 match self.client.list_agents().await {
                                                     Ok(remaining) if !remaining.is_empty() => {
                                                         let first = &remaining[0];
-                                                        *self.agent_id.lock().expect("lock poisoned") =
+                                                        *self
+                                                            .agent_id
+                                                            .lock()
+                                                            .expect("lock poisoned") =
                                                             first.id.clone();
-                                                        *self.agent_name.lock().expect("lock poisoned") =
+                                                        *self
+                                                            .agent_name
+                                                            .lock()
+                                                            .expect("lock poisoned") =
                                                             first.name.clone();
                                                         if let Ok(mut s) = self.settings.lock() {
                                                             let _ = s.set_last_agent(&first.id);
@@ -2679,7 +2848,8 @@ impl Repl {
                             match client.create_agent(req).await {
                                 Ok(sub) => {
                                     let perm = PermissionManager::default();
-                                    let mcp_empty = std::sync::Arc::new(cade_agent::mcp::McpManager::empty());
+                                    let mcp_empty =
+                                        std::sync::Arc::new(cade_agent::mcp::McpManager::empty());
                                     let result = run_headless(
                                         &client,
                                         &sub.id,
@@ -2849,13 +3019,18 @@ impl Repl {
                                 let id = self.agent_id();
                                 match self.client.list_memory_history(&id, label, 5).await {
                                     Ok(revs) if revs.is_empty() => {
-                                        let _ =
-                                            self.app.lock().expect("lock poisoned").push(RenderLine::SystemMsg(
-                                                format!("  [{label}] no history recorded yet"),
-                                            ));
+                                        let _ = self.app.lock().expect("lock poisoned").push(
+                                            RenderLine::SystemMsg(format!(
+                                                "  [{label}] no history recorded yet"
+                                            )),
+                                        );
                                     }
                                     Ok(revs) => {
-                                        let _ = self.app.lock().expect("lock poisoned").push(RenderLine::Blank);
+                                        let _ = self
+                                            .app
+                                            .lock()
+                                            .expect("lock poisoned")
+                                            .push(RenderLine::Blank);
                                         for (i, rev) in revs.iter().enumerate() {
                                             let rev_id = rev["id"].as_str().unwrap_or("");
                                             let ts = rev["updated_at"].as_i64().unwrap_or(0);
@@ -2872,13 +3047,17 @@ impl Repl {
                                                     "      {preview}{ellipsis}"
                                                 )),
                                             );
-                                            let _ =
-                                                self.app.lock().expect("lock poisoned").push(RenderLine::Blank);
+                                            let _ = self
+                                                .app
+                                                .lock()
+                                                .expect("lock poisoned")
+                                                .push(RenderLine::Blank);
                                         }
-                                        let _ =
-                                            self.app.lock().expect("lock poisoned").push(RenderLine::SystemMsg(
-                                                format!("  Use: /memory restore {label} <id>"),
-                                            ));
+                                        let _ = self.app.lock().expect("lock poisoned").push(
+                                            RenderLine::SystemMsg(format!(
+                                                "  Use: /memory restore {label} <id>"
+                                            )),
+                                        );
                                     }
                                     Err(e) => {
                                         let _ = self
@@ -2990,7 +3169,9 @@ impl Repl {
                                                 label = b.label,
                                             ));
                                         }
-                                        if shown == 0 { self.tui_dim("  (none)".to_string()); }
+                                        if shown == 0 {
+                                            self.tui_dim("  (none)".to_string());
+                                        }
                                     }
                                     Err(e) => self.tui_err(e.to_string()),
                                 }
@@ -3001,23 +3182,44 @@ impl Repl {
                                 let id = self.agent_id();
                                 match self.client.get_memory(&id).await {
                                     Ok(blocks) => {
-                                        let empty_blocks: Vec<_> = blocks.iter()
+                                        let empty_blocks: Vec<_> = blocks
+                                            .iter()
                                             .filter(|b| b.value.trim().is_empty())
                                             .collect();
-                                        let long_blocks: Vec<_> = blocks.iter()
+                                        let long_blocks: Vec<_> = blocks
+                                            .iter()
                                             .filter(|b| b.tier.as_deref() == Some("long"))
                                             .collect();
-                                        self.tui_hdr(format!("  Memory audit — {} total blocks:", blocks.len()));
+                                        self.tui_hdr(format!(
+                                            "  Memory audit — {} total blocks:",
+                                            blocks.len()
+                                        ));
                                         if !empty_blocks.is_empty() {
-                                            self.tui_dim(format!("  ⚠  {} empty block(s): {}", empty_blocks.len(),
-                                                empty_blocks.iter().map(|b| b.label.as_str()).collect::<Vec<_>>().join(", ")));
+                                            self.tui_dim(format!(
+                                                "  ⚠  {} empty block(s): {}",
+                                                empty_blocks.len(),
+                                                empty_blocks
+                                                    .iter()
+                                                    .map(|b| b.label.as_str())
+                                                    .collect::<Vec<_>>()
+                                                    .join(", ")
+                                            ));
                                         }
                                         if !long_blocks.is_empty() {
-                                            self.tui_dim(format!("  ○  {} archived block(s): {}", long_blocks.len(),
-                                                long_blocks.iter().map(|b| b.label.as_str()).collect::<Vec<_>>().join(", ")));
+                                            self.tui_dim(format!(
+                                                "  ○  {} archived block(s): {}",
+                                                long_blocks.len(),
+                                                long_blocks
+                                                    .iter()
+                                                    .map(|b| b.label.as_str())
+                                                    .collect::<Vec<_>>()
+                                                    .join(", ")
+                                            ));
                                         }
                                         if empty_blocks.is_empty() && long_blocks.is_empty() {
-                                            self.tui_ok("  ✓ All blocks active and populated.".to_string());
+                                            self.tui_ok(
+                                                "  ✓ All blocks active and populated.".to_string(),
+                                            );
                                         }
                                         self.tui_dim("  Use /reflect to trigger automatic extraction from conversation.".to_string());
                                     }
@@ -3031,7 +3233,7 @@ impl Repl {
                                 self.tui_dim("  Triggering reflection…".to_string());
                                 match self.client.trigger_reflect(&id, None).await {
                                     Ok(summary) => self.tui_ok(format!("  {summary}")),
-                                    Err(e)      => self.tui_err(format!("  ✗ {e}")),
+                                    Err(e) => self.tui_err(format!("  ✗ {e}")),
                                 }
                             }
 
@@ -3357,7 +3559,8 @@ impl Repl {
                                                  Use load_skill(id) to load any skill's full content.]"
                                     );
                                     self.agent_turn(&mut stdout, &notify).await?;
-                                    let _ = self.app.lock().expect("lock poisoned").commit_streaming();
+                                    let _ =
+                                        self.app.lock().expect("lock poisoned").commit_streaming();
                                 }
                             }
 
@@ -3388,11 +3591,17 @@ impl Repl {
                                         match std::fs::remove_dir_all(&skill_dir) {
                                             Ok(_) => {
                                                 // Remove from in-memory list
-                                                self.skills.lock().expect("lock poisoned").retain(|s| s.id != id);
+                                                self.skills
+                                                    .lock()
+                                                    .expect("lock poisoned")
+                                                    .retain(|s| s.id != id);
                                                 // Update memory
                                                 let agent_id = self.agent_id();
-                                                let skills_snap =
-                                                    self.skills.lock().expect("lock poisoned").clone();
+                                                let skills_snap = self
+                                                    .skills
+                                                    .lock()
+                                                    .expect("lock poisoned")
+                                                    .clone();
                                                 let listing =
                                                     cade_core::skills::skills_listing(&skills_snap);
                                                 let _ = self
@@ -3551,7 +3760,11 @@ impl Repl {
                                         r.arg_display()
                                     ));
                                 }
-                                let _ = self.app.lock().expect("lock poisoned").push(RenderLine::Blank);
+                                let _ = self
+                                    .app
+                                    .lock()
+                                    .expect("lock poisoned")
+                                    .push(RenderLine::Blank);
                             }
                             if !deny.is_empty() {
                                 self.tui_err(format!("  Deny rules ({}):", deny.len()));
@@ -3812,8 +4025,14 @@ impl Repl {
             // Steering runs after a cancelled turn.
             // Follow-up takes priority — if both are set (edge case), run
             // follow-up first; steering is re-queued on the next iteration.
-            if let Some(follow) = self.queued_followup.lock().expect("lock poisoned").pop_front() {
-                self.app.lock().expect("lock poisoned").queued_count = self.queued_followup.lock().expect("lock poisoned").len();
+            if let Some(follow) = self
+                .queued_followup
+                .lock()
+                .expect("lock poisoned")
+                .pop_front()
+            {
+                self.app.lock().expect("lock poisoned").queued_count =
+                    self.queued_followup.lock().expect("lock poisoned").len();
                 pending_input = Some(follow);
             } else if let Some(steer) = self.queued_steering.lock().expect("lock poisoned").take() {
                 pending_input = Some(steer);
@@ -3937,6 +4156,7 @@ impl Repl {
     }
 
     async fn agent_turn(&mut self, stdout: &mut io::Stdout, input: &str) -> Result<()> {
+        self.turn_checkpoint_taken = false;
         use std::sync::atomic::Ordering;
 
         let turn_start = std::time::Instant::now();
@@ -4321,15 +4541,18 @@ impl Repl {
         if self.write_tool_calls.load(Ordering::SeqCst) >= WORKING_SET_WRITE_THRESHOLD
             && !self.working_set_notified.load(Ordering::SeqCst)
         {
-            self.working_set_notified
-                .store(true, Ordering::SeqCst);
+            self.working_set_notified.store(true, Ordering::SeqCst);
             if let Err(e) = self.inject_working_set_reminder(stdout).await {
                 tracing::debug!("working_set reminder failed: {e}");
             }
         }
 
         // Blank line after every agent turn for visual block separation.
-        let _ = self.app.lock().expect("lock poisoned").push(RenderLine::Blank);
+        let _ = self
+            .app
+            .lock()
+            .expect("lock poisoned")
+            .push(RenderLine::Blank);
 
         // -- Stop thinking animation
         tick_handle.abort();
@@ -4364,7 +4587,10 @@ impl Repl {
                 secs, in_delta, out_delta
             )
         };
-        self.app.lock().expect("lock poisoned").set_last_status(Some(summary));
+        self.app
+            .lock()
+            .expect("lock poisoned")
+            .set_last_status(Some(summary));
         let _ = self.app.lock().expect("lock poisoned").draw();
 
         Ok(())
@@ -4489,7 +4715,10 @@ impl Repl {
                         if let Some(text) = msg.reasoning_text() {
                             in_reasoning = true;
                             reasoning_buf.lock().expect("lock poisoned").push_str(text);
-                            app_arc.lock().expect("lock poisoned").push_reasoning_chunk(text);
+                            app_arc
+                                .lock()
+                                .expect("lock poisoned")
+                                .push_reasoning_chunk(text);
                         }
                     }
                     "assistant_message" => {
@@ -4719,7 +4948,11 @@ impl Repl {
                             if let Some(text) = msg.assistant_text()
                                 && !text.is_empty()
                             {
-                                let _ = self.app.lock().expect("lock poisoned").push_streaming_chunk(text);
+                                let _ = self
+                                    .app
+                                    .lock()
+                                    .expect("lock poisoned")
+                                    .push_streaming_chunk(text);
                             }
                         }
                         let _ = self.app.lock().expect("lock poisoned").commit_streaming();
@@ -4755,7 +4988,11 @@ impl Repl {
 
         // Post-stream diagnostics: finish reason, truncation heuristics, context usage.
         {
-            let text = self.last_assistant_text.lock().expect("lock poisoned").clone();
+            let text = self
+                .last_assistant_text
+                .lock()
+                .expect("lock poisoned")
+                .clone();
             let trimmed = text.trim_end();
             let looks_truncated = !trimmed.is_empty()
                 && (trimmed.ends_with(':')
@@ -4771,12 +5008,13 @@ impl Repl {
             let mut suppress_truncation_hint = false;
 
             if let Some(reason) = finish_reason_value.as_deref()
-                && let Some((msg, category)) = finish_reason_hint(reason) {
-                    if matches!(category, FinishReasonCategory::OutputLimit) {
-                        suppress_truncation_hint = true;
-                    }
-                    hints.push(msg);
+                && let Some((msg, category)) = finish_reason_hint(reason)
+            {
+                if matches!(category, FinishReasonCategory::OutputLimit) {
+                    suppress_truncation_hint = true;
                 }
+                hints.push(msg);
+            }
 
             if looks_truncated && !suppress_truncation_hint {
                 hints.push(
@@ -4786,11 +5024,12 @@ impl Repl {
 
             let context_pct_opt = { self.app.lock().expect("lock poisoned").context_pct };
             if let Some(pct) = context_pct_opt
-                && pct >= 95 {
-                    hints.push(format!(
+                && pct >= 95
+            {
+                hints.push(format!(
                         "⚠ Context window is {pct}% full — CADE summarized or trimmed older turns. Consider /new or ask for a shorter reply."
                     ));
-                }
+            }
             for msg in hints {
                 self.tui_dim(msg);
             }
@@ -4833,8 +5072,13 @@ impl Repl {
 
         // C3: Track file-write/edit/bash tool calls for the working_set reminder.
         const WRITE_TOOL_NAMES: &[&str] = &[
-            "bash", "write_file", "edit_file", "apply_patch",
-            "WriteFileGemini", "Replace", "RunShellCommand",
+            "bash",
+            "write_file",
+            "edit_file",
+            "apply_patch",
+            "WriteFileGemini",
+            "Replace",
+            "RunShellCommand",
         ];
         let wc = tool_calls
             .iter()
@@ -4858,9 +5102,13 @@ impl Repl {
             // `reprompt_done` guards against infinite loops — we only inject once.
             if assistant_msg.trim().is_empty() && !reprompt_done {
                 tracing::warn!("Empty agent response after tool return — injecting re-prompt");
-                let _ = self.app.lock().expect("lock poisoned").push(RenderLine::SystemMsg(
-                    "  ⎿  (no response after tool — re-prompting)".to_string(),
-                ));
+                let _ = self
+                    .app
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(RenderLine::SystemMsg(
+                        "  ⎿  (no response after tool — re-prompting)".to_string(),
+                    ));
                 self.cancel_turn
                     .store(false, std::sync::atomic::Ordering::SeqCst);
                 let follow = self
@@ -4875,10 +5123,8 @@ impl Repl {
                         bar_text.clone(),
                     )
                     .await?;
-                Box::pin(
-                    self.dispatch_tool_calls(stdout, follow, user_input, bar_text, true),
-                )
-                .await?;
+                Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text, true))
+                    .await?;
                 return Ok(());
             }
 
@@ -4898,9 +5144,13 @@ impl Repl {
                 )
                 .await;
             if let cade_core::hooks::HookOutcome::Block { reason } = stop_outcome {
-                let _ = self.app.lock().expect("lock poisoned").push(RenderLine::SystemMsg(format!(
-                    "  ⎿  Hook continuing: {reason}"
-                )));
+                let _ = self
+                    .app
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(RenderLine::SystemMsg(format!(
+                        "  ⎿  Hook continuing: {reason}"
+                    )));
                 // Clear any stale cancel flag before the hook-continuation stream_turn.
                 self.cancel_turn
                     .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -4963,20 +5213,28 @@ impl Repl {
             let native_result = self.try_native_intercept(call_id, tool_name, args).await;
             if let Some(result) = native_result {
                 // Show tool call header for native intercepts
-                let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolCall {
-                    name: tool_name.to_string(),
-                    preview: String::new(),
-                });
+                let _ = self
+                    .app
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(RenderLine::ToolCall {
+                        name: tool_name.to_string(),
+                        preview: String::new(),
+                    });
                 preflight.push(ToolPreflightResult::Blocked(result?));
                 continue;
             }
             // Show tool call header
             {
                 let preview = Self::tool_preview(tool_name, args);
-                let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolCall {
-                    name: tool_name.to_string(),
-                    preview,
-                });
+                let _ = self
+                    .app
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(RenderLine::ToolCall {
+                        name: tool_name.to_string(),
+                        preview,
+                    });
             }
             let pf = self
                 .preflight_tool(stdout, call_id, tool_name, args)
@@ -5019,13 +5277,68 @@ impl Repl {
             }
         }
 
+        // Auto-checkpoint (Phase 2): if there are pending write operations, take a checkpoint.
+        if !write_indices.is_empty() && !self.turn_checkpoint_taken {
+            let auto_enabled = self
+                .settings
+                .lock()
+                .expect("lock poisoned")
+                .project()
+                .auto_checkpoint;
+            if auto_enabled {
+                self.tui_dim("  📦 Creating pre-edit auto-checkpoint...".to_string());
+
+                // Attempt to create checkpoint
+                let agent_id = self.agent_id();
+                let conv_id = self.conversation_id();
+
+                use cade_agent::tools::git_checkpoint;
+                let git_cp = git_checkpoint::create_git_checkpoint("auto", &self.cwd).await;
+                let stash = git_cp.as_ref().and_then(|g| g.stash_ref.as_deref());
+                let commit = git_cp.as_ref().and_then(|g| g.commit_hash.as_deref());
+
+                match self
+                    .client
+                    .create_checkpoint(
+                        &agent_id,
+                        Some("auto"),
+                        Some("Created automatically prior to destructive tool execution"),
+                        conv_id.as_deref(),
+                        stash,
+                        commit,
+                    )
+                    .await
+                {
+                    Ok(id) => {
+                        let msg = if stash.is_some() {
+                            format!(
+                                "  ✓ Auto-checkpoint & stash saved (ID: {})",
+                                &id[..8.min(id.len())]
+                            )
+                        } else {
+                            format!("  ✓ Auto-checkpoint saved (ID: {})", &id[..8.min(id.len())])
+                        };
+                        self.tui_ok(msg);
+                        self.turn_checkpoint_taken = true;
+                    }
+                    Err(e) => {
+                        self.tui_err(format!("  ⚠ Auto-checkpoint failed: {e}"));
+                    }
+                }
+            }
+        }
+
         // Snapshot reasoning/assistant buffers for hook payloads.
         let pr = {
             let s = self.last_reasoning.lock().expect("lock poisoned").clone();
             if s.is_empty() { None } else { Some(s) }
         };
         let pa = {
-            let s = self.last_assistant_text.lock().expect("lock poisoned").clone();
+            let s = self
+                .last_assistant_text
+                .lock()
+                .expect("lock poisoned")
+                .clone();
             if s.is_empty() { None } else { Some(s) }
         };
 
@@ -5043,12 +5356,16 @@ impl Repl {
         );
 
         // Execute read-only tools in parallel.
-        let runtime = std::sync::Arc::new(cade_agent::tools::ToolRuntime::new(
-            std::sync::Arc::new(self.client.clone()),
-            std::sync::Arc::clone(&self.mcp),
-            self.agent_id(),
-            self.cwd.clone(),
-        ).with_conversation(self.conversation_id()).with_backend(std::sync::Arc::clone(&self.exec_backend)));
+        let runtime = std::sync::Arc::new(
+            cade_agent::tools::ToolRuntime::new(
+                std::sync::Arc::new(self.client.clone()),
+                std::sync::Arc::clone(&self.mcp),
+                self.agent_id(),
+                self.cwd.clone(),
+            )
+            .with_conversation(self.conversation_id())
+            .with_backend(std::sync::Arc::clone(&self.exec_backend)),
+        );
 
         if !read_indices.is_empty() {
             let mut handles = Vec::new();
@@ -5168,14 +5485,7 @@ impl Repl {
                 .await?;
         }
 
-        Box::pin(self.dispatch_tool_calls(
-            stdout,
-            follow,
-            user_input,
-            bar_text,
-            false,
-        ))
-        .await?;
+        Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text, false)).await?;
 
         Ok(())
     }
@@ -5274,10 +5584,14 @@ impl Repl {
         // Permission check — plan mode / deny rules
         if self.permissions.is_blocked(tool_name, args) {
             let msg = self.permissions.block_reason(tool_name, args);
-            let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolResult {
-                is_error: true,
-                content: msg.clone(),
-            });
+            let _ = self
+                .app
+                .lock()
+                .expect("lock poisoned")
+                .push(RenderLine::ToolResult {
+                    is_error: true,
+                    content: msg.clone(),
+                });
             self.cancel_turn
                 .store(false, std::sync::atomic::Ordering::SeqCst);
             return Ok(ToolPreflightResult::Blocked(
@@ -5295,10 +5609,14 @@ impl Repl {
             if let cade_core::hooks::HookOutcome::Block { reason } =
                 self.hooks.permission_request(tool_name, args).await
             {
-                let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolResult {
-                    is_error: true,
-                    content: format!("Hook denied: {reason}"),
-                });
+                let _ = self
+                    .app
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(RenderLine::ToolResult {
+                        is_error: true,
+                        content: format!("Hook denied: {reason}"),
+                    });
                 self.cancel_turn
                     .store(false, std::sync::atomic::Ordering::SeqCst);
                 return Ok(ToolPreflightResult::Blocked(
@@ -5317,10 +5635,14 @@ impl Repl {
                     stats.reviewed += 1;
                 }
                 let msg = format!("Tool '{tool_name}' denied by user");
-                let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolResult {
-                    is_error: true,
-                    content: msg.clone(),
-                });
+                let _ = self
+                    .app
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(RenderLine::ToolResult {
+                        is_error: true,
+                        content: msg.clone(),
+                    });
                 self.cancel_turn
                     .store(false, std::sync::atomic::Ordering::SeqCst);
                 return Ok(ToolPreflightResult::Blocked(
@@ -5354,10 +5676,14 @@ impl Repl {
         if let cade_core::hooks::HookOutcome::Block { reason } =
             self.hooks.pre_tool_use(tool_name, args).await
         {
-            let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolResult {
-                is_error: true,
-                content: format!("Hook blocked: {reason}"),
-            });
+            let _ = self
+                .app
+                .lock()
+                .expect("lock poisoned")
+                .push(RenderLine::ToolResult {
+                    is_error: true,
+                    content: format!("Hook blocked: {reason}"),
+                });
             self.cancel_turn
                 .store(false, std::sync::atomic::Ordering::SeqCst);
             return Ok(ToolPreflightResult::Blocked(
@@ -5398,7 +5724,10 @@ impl Repl {
                     .append_live_output_line(live_idx, line);
             })
             .await;
-            let _ = app.lock().expect("lock poisoned").finish_live_output(live_idx);
+            let _ = app
+                .lock()
+                .expect("lock poisoned")
+                .finish_live_output(live_idx);
 
             let (output, is_error) = match run_result {
                 Ok(out) => (out, false),
@@ -5493,10 +5822,13 @@ impl Repl {
                 _ => (false, format!("{} lines", result.output.lines().count())),
             }
         };
-        let _ = app.lock().expect("lock poisoned").push(RenderLine::ToolResult {
-            is_error: is_err,
-            content,
-        });
+        let _ = app
+            .lock()
+            .expect("lock poisoned")
+            .push(RenderLine::ToolResult {
+                is_error: is_err,
+                content,
+            });
         result
     }
 
@@ -5565,10 +5897,14 @@ impl Repl {
             }
         };
         // Show tool call header.
-        let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolCall {
-            name: tool_name.to_string(),
-            preview: preview.clone(),
-        });
+        let _ = self
+            .app
+            .lock()
+            .expect("lock poisoned")
+            .push(RenderLine::ToolCall {
+                name: tool_name.to_string(),
+                preview: preview.clone(),
+            });
 
         // Native tool intercepts (handled without going through generic dispatch)
         if tool_name == "EnterPlanMode" {
@@ -5599,7 +5935,12 @@ impl Repl {
             return self.handle_update_memory(call_id, args).await;
         }
         if tool_name == "archival_memory_insert" {
-            let res = cade_agent::tools::memory::ArchivalMemoryInsertTool::run(&self.client, &self.agent_id.lock().unwrap(), args).await;
+            let res = cade_agent::tools::memory::ArchivalMemoryInsertTool::run(
+                &self.client,
+                &self.agent_id.lock().unwrap(),
+                args,
+            )
+            .await;
             return Ok(cade_agent::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -5608,7 +5949,12 @@ impl Repl {
             });
         }
         if tool_name == "archival_memory_search" {
-            let res = cade_agent::tools::memory::ArchivalMemorySearchTool::run(&self.client, &self.agent_id.lock().unwrap(), args).await;
+            let res = cade_agent::tools::memory::ArchivalMemorySearchTool::run(
+                &self.client,
+                &self.agent_id.lock().unwrap(),
+                args,
+            )
+            .await;
             return Ok(cade_agent::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -5617,7 +5963,12 @@ impl Repl {
             });
         }
         if tool_name == "conversation_search" {
-            let res = cade_agent::tools::memory::ConversationSearchTool::run(&self.client, &self.agent_id.lock().unwrap(), args).await;
+            let res = cade_agent::tools::memory::ConversationSearchTool::run(
+                &self.client,
+                &self.agent_id.lock().unwrap(),
+                args,
+            )
+            .await;
             return Ok(cade_agent::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -5626,7 +5977,12 @@ impl Repl {
             });
         }
         if tool_name == "search_memory" {
-            let res = cade_agent::tools::memory::SearchMemoryTool::run(&self.client, &self.agent_id.lock().unwrap(), args).await;
+            let res = cade_agent::tools::memory::SearchMemoryTool::run(
+                &self.client,
+                &self.agent_id.lock().unwrap(),
+                args,
+            )
+            .await;
             return Ok(cade_agent::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: tool_name.to_string(),
@@ -5659,10 +6015,14 @@ impl Repl {
         // Permission check — plan mode / deny rules
         if self.permissions.is_blocked(tool_name, args) {
             let msg = self.permissions.block_reason(tool_name, args);
-            let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolResult {
-                is_error: true,
-                content: msg.clone(),
-            });
+            let _ = self
+                .app
+                .lock()
+                .expect("lock poisoned")
+                .push(RenderLine::ToolResult {
+                    is_error: true,
+                    content: msg.clone(),
+                });
             // Clear any stale cancel flag so the subsequent stream_turn is not
             // immediately aborted if cancel_turn was left true by a prior
             // cancelled loop iteration in dispatch_tool_calls.
@@ -5681,10 +6041,14 @@ impl Repl {
             if let cade_core::hooks::HookOutcome::Block { reason } =
                 self.hooks.permission_request(tool_name, args).await
             {
-                let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolResult {
-                    is_error: true,
-                    content: format!("Hook denied: {reason}"),
-                });
+                let _ = self
+                    .app
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(RenderLine::ToolResult {
+                        is_error: true,
+                        content: format!("Hook denied: {reason}"),
+                    });
                 // Clear any stale cancel flag — a SIGINT that arrived during hook
                 // execution must not abort the subsequent stream_turn.
                 self.cancel_turn
@@ -5704,10 +6068,14 @@ impl Repl {
                     stats.reviewed += 1;
                 }
                 let msg = format!("Tool '{tool_name}' denied by user");
-                let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolResult {
-                    is_error: true,
-                    content: msg.clone(),
-                });
+                let _ = self
+                    .app
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(RenderLine::ToolResult {
+                        is_error: true,
+                        content: msg.clone(),
+                    });
                 // prompt_approval clears cancel_turn in its own branches, but a SIGINT
                 // that fired between prompt_approval's clear and this return point would
                 // leave cancel_turn=true and abort the next stream_turn immediately.
@@ -5762,10 +6130,14 @@ impl Repl {
         if let cade_core::hooks::HookOutcome::Block { reason } =
             self.hooks.pre_tool_use(tool_name, args).await
         {
-            let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolResult {
-                is_error: true,
-                content: format!("Hook blocked: {reason}"),
-            });
+            let _ = self
+                .app
+                .lock()
+                .expect("lock poisoned")
+                .push(RenderLine::ToolResult {
+                    is_error: true,
+                    content: format!("Hook blocked: {reason}"),
+                });
             // Clear any stale cancel flag — same rationale as the denial path above.
             self.cancel_turn
                 .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -5794,7 +6166,11 @@ impl Repl {
             })
             .await;
 
-            let _ = self.app.lock().expect("lock poisoned").finish_live_output(live_idx);
+            let _ = self
+                .app
+                .lock()
+                .expect("lock poisoned")
+                .finish_live_output(live_idx);
 
             let (output, is_error) = match run_result {
                 Ok(out) => (out, false),
@@ -5814,7 +6190,11 @@ impl Repl {
                 if s.is_empty() { None } else { Some(s) }
             };
             let pa = {
-                let s = self.last_assistant_text.lock().expect("lock poisoned").clone();
+                let s = self
+                    .last_assistant_text
+                    .lock()
+                    .expect("lock poisoned")
+                    .clone();
                 if s.is_empty() { None } else { Some(s) }
             };
             if result.is_error {
@@ -5874,7 +6254,11 @@ impl Repl {
             if s.is_empty() { None } else { Some(s) }
         };
         let pa = {
-            let s = self.last_assistant_text.lock().expect("lock poisoned").clone();
+            let s = self
+                .last_assistant_text
+                .lock()
+                .expect("lock poisoned")
+                .clone();
             if s.is_empty() { None } else { Some(s) }
         };
         if result.is_error {
@@ -5916,10 +6300,14 @@ impl Repl {
                 _ => (false, format!("{} lines", result.output.lines().count())),
             }
         };
-        let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolResult {
-            is_error: is_err,
-            content,
-        });
+        let _ = self
+            .app
+            .lock()
+            .expect("lock poisoned")
+            .push(RenderLine::ToolResult {
+                is_error: is_err,
+                content,
+            });
 
         Ok(result)
     }
@@ -5931,7 +6319,7 @@ impl Repl {
     ///   1. Yes — run once
     ///   2. Yes, don't ask again — session-allow + run
     ///   3. No — deny
-///      Generate a diff preview for file-mutation tools shown before the approval prompt.
+    ///      Generate a diff preview for file-mutation tools shown before the approval prompt.
     fn build_diff_preview(tool_name: &str, args: &serde_json::Value) -> Option<Vec<RenderLine>> {
         match tool_name {
             "edit_file" => {
@@ -6143,7 +6531,7 @@ impl Repl {
     /// Extract the numeric upper limit from an "exceeds character limit (A > B)"
     /// error string produced by `upsert_memory_block`.
     fn parse_limit_from_memory_error(error: &str) -> Option<usize> {
-        let open  = error.find('(')?;
+        let open = error.find('(')?;
         let close = error[open..].find(')')? + open;
         let inner = &error[open + 1..close]; // "A > B"
         inner.split('>').nth(1)?.trim().parse().ok()
@@ -6156,10 +6544,7 @@ impl Repl {
     ///
     /// Only fires when the block is actually empty so the model is not nagged
     /// when it has already been diligently updating its own memory.
-    async fn inject_working_set_reminder(
-        &mut self,
-        stdout: &mut io::Stdout,
-    ) -> Result<()> {
+    async fn inject_working_set_reminder(&mut self, stdout: &mut io::Stdout) -> Result<()> {
         let agent_id = self.agent_id();
 
         // Fetch the current working_set value — one async call, performed once
@@ -6189,7 +6574,8 @@ impl Repl {
 
         tracing::debug!(
             "Injecting working_set reminder (write_tool_calls={})",
-            self.write_tool_calls.load(std::sync::atomic::Ordering::SeqCst)
+            self.write_tool_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
         );
 
         // Send as an ephemeral user message so it is not stored in the
@@ -6276,11 +6662,10 @@ impl Repl {
                 // D1: when the block is over its char limit, auto-trim to fit
                 // rather than returning an opaque error the model often ignores.
                 if err_str.contains("exceeds character limit") {
-                    let limit = Self::parse_limit_from_memory_error(&err_str)
-                        .unwrap_or(2_000);
+                    let limit = Self::parse_limit_from_memory_error(&err_str).unwrap_or(2_000);
                     let trimmed = Self::auto_trim_to_limit(&final_value, limit);
                     let original_len = final_value.chars().count();
-                    let trimmed_len  = trimmed.chars().count();
+                    let trimmed_len = trimmed.chars().count();
                     match self
                         .client
                         .upsert_memory(&agent_id, &label, &trimmed, description)
@@ -6456,10 +6841,14 @@ impl Repl {
             Ok(q) => q,
             Err(e) => {
                 let msg = format!("Invalid ask_user_question args: {e}");
-                let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolResult {
-                    is_error: true,
-                    content: msg.clone(),
-                });
+                let _ = self
+                    .app
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(RenderLine::ToolResult {
+                        is_error: true,
+                        content: msg.clone(),
+                    });
                 return Ok(cade_agent::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: "ask_user_question".to_string(),
@@ -6506,9 +6895,9 @@ impl Repl {
                 app.ask_question_async(q)?
             };
 
-            let qa = rx
-                .await
-                .map_err(|e| crate::Error::custom(format!("ask_user_question channel dropped: {e}")))?;
+            let qa = rx.await.map_err(|e| {
+                crate::Error::custom(format!("ask_user_question channel dropped: {e}"))
+            })?;
 
             self.last_modal_close_ms.store(
                 std::time::SystemTime::now()
@@ -6525,10 +6914,14 @@ impl Repl {
                     self.cancel_turn
                         .store(false, std::sync::atomic::Ordering::SeqCst);
                     let msg = "User cancelled the question prompt.".to_string();
-                    let _ = self.app.lock().expect("lock poisoned").push(RenderLine::ToolResult {
-                        is_error: true,
-                        content: msg.clone(),
-                    });
+                    let _ = self
+                        .app
+                        .lock()
+                        .expect("lock poisoned")
+                        .push(RenderLine::ToolResult {
+                            is_error: true,
+                            content: msg.clone(),
+                        });
                     return Ok(cade_agent::tools::ToolResult {
                         tool_call_id: call_id.to_string(),
                         tool_name: "ask_user_question".to_string(),
@@ -8061,17 +8454,24 @@ impl Repl {
                 {
                     let label = format!("subagent:{}:{}", bg_st_label, bg_task_id);
                     let summary_value = if result.chars().count() > 1500 {
-                        let _ = bg_client.insert_archival_memory(&bg_parent_id, &result, &[
-                            "subagent".to_string(),
-                            bg_task_id.clone()
-                        ]).await;
-                        
+                        let _ = bg_client
+                            .insert_archival_memory(
+                                &bg_parent_id,
+                                &result,
+                                &["subagent".to_string(), bg_task_id.clone()],
+                            )
+                            .await;
+
                         let end = result
                             .char_indices()
                             .nth(500)
                             .map(|(i, _)| i)
                             .unwrap_or(result.len());
-                        format!("Subagent completed. Full output is stored in Archival Memory. To view it, use archival_memory_search with query 'subagent {}'. Summary preview: {}…", bg_task_id, &result[..end])
+                        format!(
+                            "Subagent completed. Full output is stored in Archival Memory. To view it, use archival_memory_search with query 'subagent {}'. Summary preview: {}…",
+                            bg_task_id,
+                            &result[..end]
+                        )
                     } else {
                         result.clone()
                     };
@@ -8121,17 +8521,25 @@ impl Repl {
             {
                 let label = format!("subagent:{}:{}", subagent_type, task_id_c);
                 let summary_value = if output.chars().count() > 1500 {
-                    let _ = self.client.insert_archival_memory(&parent_agent_id, &output, &[
-                        "subagent".to_string(),
-                        task_id_c.clone()
-                    ]).await;
-                    
+                    let _ = self
+                        .client
+                        .insert_archival_memory(
+                            &parent_agent_id,
+                            &output,
+                            &["subagent".to_string(), task_id_c.clone()],
+                        )
+                        .await;
+
                     let end = output
                         .char_indices()
                         .nth(500)
                         .map(|(i, _)| i)
                         .unwrap_or(output.len());
-                    format!("Subagent completed. Full output is stored in Archival Memory. To view it, use archival_memory_search with query 'subagent {}'. Summary preview: {}…", task_id_c, &output[..end])
+                    format!(
+                        "Subagent completed. Full output is stored in Archival Memory. To view it, use archival_memory_search with query 'subagent {}'. Summary preview: {}…",
+                        task_id_c,
+                        &output[..end]
+                    )
                 } else {
                     output.clone()
                 };
@@ -8201,7 +8609,11 @@ impl Repl {
     }
     /// Push a blank line to the TUI.
     fn tui_blank(&self) {
-        let _ = self.app.lock().expect("lock poisoned").push(crate::ui::RenderLine::Blank);
+        let _ = self
+            .app
+            .lock()
+            .expect("lock poisoned")
+            .push(crate::ui::RenderLine::Blank);
     }
 
     #[allow(dead_code)]
@@ -8222,10 +8634,7 @@ enum FinishReasonCategory {
 }
 
 fn finish_reason_hint(reason: &str) -> Option<(String, FinishReasonCategory)> {
-    let normalized = reason
-        .trim()
-        .to_ascii_lowercase()
-        .replace(['-', ' '], "_");
+    let normalized = reason.trim().to_ascii_lowercase().replace(['-', ' '], "_");
 
     if normalized.contains("max_token")
         || normalized == "length"

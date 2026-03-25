@@ -721,7 +721,9 @@ pub async fn install_skill_from_url(url: &str, target_dir: &Path) -> Result<Skil
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-')
     {
-        return Err(Error::custom(format!("Invalid skill ID derived from URL: {skill_id}")));
+        return Err(Error::custom(format!(
+            "Invalid skill ID derived from URL: {skill_id}"
+        )));
     }
 
     let skill_dir = target_dir.join(&skill_id);
@@ -792,8 +794,7 @@ mod tests {
             content,
             SkillScope::Project,
             PathBuf::from("/fake/SKILL.MD"),
-        )
-        ?;
+        )?;
         assert_eq!(skill.id, "test-skill");
         assert_eq!(skill.name, "Test Skill");
         assert_eq!(skill.description, "A test");
@@ -988,8 +989,7 @@ mod tests {
         fs::write(
             skill_dir.join("SKILL.MD"),
             "---\nname: My Skill\ndescription: Test\n---\nBody",
-        )
-        ?;
+        )?;
 
         let skills = discover_skills_in(dir.path(), SkillScope::Project);
         assert_eq!(skills.len(), 1);
@@ -1019,8 +1019,7 @@ mod tests {
         fs::write(
             global_dir.join("SKILL.MD"),
             "---\nname: Global Version\ndescription: global\n---\nGlobal body",
-        )
-        ?;
+        )?;
 
         // Project skill with same ID
         let proj_dir = dir.path().join(".skills").join("shared");
@@ -1028,11 +1027,13 @@ mod tests {
         fs::write(
             proj_dir.join("SKILL.MD"),
             "---\nname: Project Version\ndescription: project\n---\nProject body",
-        )
-        ?;
+        )?;
 
         let skills = discover_all_skills(dir.path(), None, Some(cade_home.path()));
-        let shared = skills.iter().find(|s| s.id == "shared").ok_or("Should find skill")?;
+        let shared = skills
+            .iter()
+            .find(|s| s.id == "shared")
+            .ok_or("Should find skill")?;
         assert_eq!(shared.name, "Project Version"); // project scope wins
         assert_eq!(shared.scope, SkillScope::Project);
 

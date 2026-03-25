@@ -1,11 +1,10 @@
-
 use cade_ai::{CompletionRequest, LlmMessage};
 
 use crate::server::{state::AppState, storage::sqlite};
 
 // region:    --- Tunables
 
-const MAX_HISTORY_CHARS:  usize = 18_000;
+const MAX_HISTORY_CHARS: usize = 18_000;
 const REFLECTION_MAX_TOKENS: u32 = 1_000;
 const MIN_MESSAGES_FOR_REFLECTION: usize = 6;
 
@@ -17,8 +16,8 @@ const MIN_MESSAGES_FOR_REFLECTION: usize = 6;
 pub struct ReflectionResult {
     pub blocks_created: usize,
     pub blocks_updated: usize,
-    pub summary:        String,
-    pub duration_ms:    u128,
+    pub summary: String,
+    pub duration_ms: u128,
 }
 
 /// Run a reflection pass over an agent's recent conversation.
@@ -26,18 +25,17 @@ pub struct ReflectionResult {
 /// `focus` is an optional hint (e.g. "project conventions") that steers the
 /// LLM toward specific knowledge categories.
 pub async fn reflect_agent(
-    state:      &AppState,
-    agent_id:   &str,
-    conv_id:    Option<&str>,
-    focus:      Option<&str>,
-    trigger:    &str,
+    state: &AppState,
+    agent_id: &str,
+    conv_id: Option<&str>,
+    focus: Option<&str>,
+    trigger: &str,
 ) -> ReflectionResult {
     let t0 = std::time::Instant::now();
     let mut result = ReflectionResult::default();
 
     // -- 1. Fetch recent messages
-    let rows = sqlite::list_messages_page(&state.db, agent_id, conv_id, 200, 0)
-        .unwrap_or_default();
+    let rows = sqlite::list_messages_page(&state.db, agent_id, conv_id, 200, 0).unwrap_or_default();
 
     if rows.len() < MIN_MESSAGES_FOR_REFLECTION {
         result.summary = "Not enough conversation history to reflect on yet.".to_string();
@@ -48,17 +46,27 @@ pub async fn reflect_agent(
     let mut history_text = String::new();
     for row in &rows {
         let role = &row.role;
-        if !matches!(role.as_str(), "user" | "assistant") { continue; }
+        if !matches!(role.as_str(), "user" | "assistant") {
+            continue;
+        }
         let text = row.content["content"]
             .as_str()
             .map(String::from)
             .unwrap_or_else(|| {
                 let raw = row.content.to_string();
-                if raw.len() > 300 { format!("{}…", &raw[..300]) } else { raw }
+                if raw.len() > 300 {
+                    format!("{}…", &raw[..300])
+                } else {
+                    raw
+                }
             });
-        if text.trim().is_empty() { continue; }
+        if text.trim().is_empty() {
+            continue;
+        }
         history_text.push_str(&format!("[{role}] {}\n", text.trim()));
-        if history_text.len() >= MAX_HISTORY_CHARS { break; }
+        if history_text.len() >= MAX_HISTORY_CHARS {
+            break;
+        }
     }
 
     if history_text.trim().is_empty() {
@@ -76,7 +84,9 @@ pub async fn reflect_agent(
     };
 
     // -- 4. Build reflection prompt
-    let focus_section = focus.map(|f| format!("\n\nFocus especially on: {f}")).unwrap_or_default();
+    let focus_section = focus
+        .map(|f| format!("\n\nFocus especially on: {f}"))
+        .unwrap_or_default();
     let prompt = format!(
         "You are a memory extraction assistant for a stateful coding agent.\n\
          Analyse this conversation and extract NEW knowledge to persist.\n\
@@ -96,13 +106,16 @@ pub async fn reflect_agent(
 
     // -- 5. Call LLM
     let req = CompletionRequest {
-        model:            get_agent_model(state, agent_id),
-        messages:         vec![LlmMessage {
-            role: "user".to_string(), content: prompt,
-            tool_call_id: None, tool_calls: None, images: None,
+        model: get_agent_model(state, agent_id),
+        messages: vec![LlmMessage {
+            role: "user".to_string(),
+            content: prompt,
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
         }],
-        tools:            vec![],
-        max_tokens:       REFLECTION_MAX_TOKENS,
+        tools: vec![],
+        max_tokens: REFLECTION_MAX_TOKENS,
         reasoning_effort: None,
     };
 
@@ -119,14 +132,20 @@ pub async fn reflect_agent(
     let mut extracted: Vec<(String, String, String)> = Vec::new();
     for line in llm_output.lines() {
         let line = line.trim();
-        if !line.starts_with('{') { continue; }
+        if !line.starts_with('{') {
+            continue;
+        }
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(line) {
             let label = v["label"].as_str().unwrap_or("").trim().to_lowercase();
             let value = v["value"].as_str().unwrap_or("").trim().to_string();
             let mtype = v["type"].as_str().unwrap_or("generic").to_string();
-            if label.is_empty() || value.is_empty() { continue; }
+            if label.is_empty() || value.is_empty() {
+                continue;
+            }
             // Validate label format: only alphanumeric + underscore
-            if !label.chars().all(|c| c.is_alphanumeric() || c == '_') { continue; }
+            if !label.chars().all(|c| c.is_alphanumeric() || c == '_') {
+                continue;
+            }
             extracted.push((label, value, mtype));
         }
     }
@@ -134,15 +153,21 @@ pub async fn reflect_agent(
     for (label, value, memory_type) in &extracted {
         let is_new = !existing.iter().any(|(l, _, _)| l == label);
         match sqlite::upsert_memory_block_typed(
-            &state.db, agent_id, label, value,
+            &state.db,
+            agent_id,
+            label,
+            value,
             Some(&format!("Extracted by reflection ({trigger})")),
             None,
             Some(memory_type.as_str()),
             Some(0.9),
         ) {
             Ok(_) => {
-                if is_new { result.blocks_created += 1; }
-                else      { result.blocks_updated += 1; }
+                if is_new {
+                    result.blocks_created += 1;
+                } else {
+                    result.blocks_updated += 1;
+                }
             }
             Err(e) => tracing::warn!("reflect_agent: upsert '{label}': {e}"),
         }
@@ -154,7 +179,11 @@ pub async fn reflect_agent(
         format!(
             "Extracted {} fact(s): {}",
             extracted.len(),
-            extracted.iter().map(|(l, _, _)| l.as_str()).collect::<Vec<_>>().join(", ")
+            extracted
+                .iter()
+                .map(|(l, _, _)| l.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
         )
     };
 
@@ -163,9 +192,14 @@ pub async fn reflect_agent(
     result.duration_ms = duration_ms;
     let log_id = format!("rl-{}", uuid::Uuid::new_v4());
     let _ = sqlite::insert_reflection_log(
-        &state.db, &log_id, agent_id, trigger,
-        result.blocks_created, result.blocks_updated,
-        &result.summary, duration_ms,
+        &state.db,
+        &log_id,
+        agent_id,
+        trigger,
+        result.blocks_created,
+        result.blocks_updated,
+        &result.summary,
+        duration_ms,
     );
 
     result

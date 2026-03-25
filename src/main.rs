@@ -236,7 +236,6 @@ async fn push_env_providers_to_server(client: &CadeClient) {
     }
 }
 
-
 /// Register all CADE tools on the server and attach them to the given agent.
 pub async fn register_and_attach(client: &CadeClient, agent_id: &str, toolset: Toolset) {
     register_and_attach_filtered(client, agent_id, toolset, None).await;
@@ -274,7 +273,9 @@ async fn register_cade_tools_filtered(
     // schemas_for_toolset and schemas_for_names imported at top-level
     // When no filter, use normal registration path
     let Some(names) = filter else {
-        return register_cade_tools(client, toolset).await.map_err(Error::Agent);
+        return register_cade_tools(client, toolset)
+            .await
+            .map_err(Error::Agent);
     };
     let schemas = if names.is_empty() {
         // Empty filter → no tools (analysis-only mode)
@@ -323,7 +324,12 @@ async fn resolve_agent_and_conversation(
     agent_dir: &std::path::Path,
     session: &mut SessionStore,
     settings: &mut SettingsManager,
-) -> Result<(agent::client::AgentState, Vec<Skill>, Option<String>, String)> {
+) -> Result<(
+    agent::client::AgentState,
+    Vec<Skill>,
+    Option<String>,
+    String,
+)> {
     // Build system prompt: base + any context files (AGENTS.md, CLAUDE.md, CADE.md)
     let context_files = cade_core::resources::context_files::discover_context_files(cwd, agent_dir);
     let context_block = cade_core::resources::context_files::build_context_block(&context_files);
@@ -333,10 +339,21 @@ async fn resolve_agent_and_conversation(
         format!("{BASE_SYSTEM_PROMPT}{context_block}")
     };
     if !context_files.is_empty() {
-        let names: Vec<String> = context_files.iter()
-            .map(|f| f.path.file_name().and_then(|n| n.to_str()).unwrap_or("?").to_string())
+        let names: Vec<String> = context_files
+            .iter()
+            .map(|f| {
+                f.path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?")
+                    .to_string()
+            })
             .collect();
-        tracing::info!("Loaded {} context file(s): {}", context_files.len(), names.join(", "));
+        tracing::info!(
+            "Loaded {} context file(s): {}",
+            context_files.len(),
+            names.join(", ")
+        );
     }
 
     let make_req = |model: String, desc: &str| {
@@ -401,19 +418,25 @@ async fn resolve_agent_and_conversation(
             .filter(|a| a.name.to_lowercase().contains(&q))
             .collect();
         match matched.len() {
-            0 => return Err(Error::custom(format!("No agent matching --name '{name_query}'"))),
+            0 => {
+                return Err(Error::custom(format!(
+                    "No agent matching --name '{name_query}'"
+                )));
+            }
             1 => client
                 .get_agent(&matched[0].id)
                 .await
                 .map_err(|e| Error::custom(format!("get agent {}: {e}", matched[0].id)))?,
-            n => return Err(Error::custom(format!(
-            "{n} agents match '{name_query}': {}",
-                matched
-                    .iter()
-                    .map(|a| format!("{} ({})", a.name, a.id))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))),
+            n => {
+                return Err(Error::custom(format!(
+                    "{n} agents match '{name_query}': {}",
+                    matched
+                        .iter()
+                        .map(|a| format!("{} ({})", a.name, a.id))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )));
+            }
         }
     } else if let Some(last_id) = session.session.agent_id.clone() {
         match client.get_agent(&last_id).await {
@@ -547,7 +570,12 @@ async fn resolve_agent_and_conversation(
         // Use saved conversation_id (--continue or resume from session)
         session.session.conversation_id.clone()
     };
-    Ok((agent, loaded_skills, conversation_id, effective_system_prompt))
+    Ok((
+        agent,
+        loaded_skills,
+        conversation_id,
+        effective_system_prompt,
+    ))
 }
 
 async fn auto_start_server(base_url: &str) -> Result<()> {
@@ -582,7 +610,9 @@ async fn auto_start_server(base_url: &str) -> Result<()> {
                 "Warning: Failed to create /tmp/cade-server.log. Server output will go to stderr."
             );
         }
-        let _child = cmd.spawn().map_err(|e| Error::custom(format!("auto-start cade-server: {e}")))?;
+        let _child = cmd
+            .spawn()
+            .map_err(|e| Error::custom(format!("auto-start cade-server: {e}")))?;
 
         let client = CadeClient::new(base_url.to_string(), "".to_string())
             .map_err(|e| Error::custom(format!("create health-check client: {e}")))?;
@@ -606,7 +636,7 @@ async fn auto_start_server(base_url: &str) -> Result<()> {
     } else {
         Err(Error::custom(
             "Cannot connect to CADE server at {base_url}.\n\
-             Start cade-server first: ./target/release/cade-server"
+             Start cade-server first: ./target/release/cade-server",
         ))
     }
 }
@@ -641,7 +671,8 @@ async fn main() -> Result<()> {
     let cwd = std::env::current_dir().map_err(|e| Error::custom(format!("get cwd: {e}")))?;
 
     // Agent config directory: $CADE_AGENT_DIR or ~/.cade
-    let agent_dir: std::path::PathBuf = std::env::var("CADE_AGENT_DIR").ok()
+    let agent_dir: std::path::PathBuf = std::env::var("CADE_AGENT_DIR")
+        .ok()
         .map(std::path::PathBuf::from)
         .or_else(|| {
             let home: Option<std::path::PathBuf> = dirs::home_dir();
@@ -650,16 +681,26 @@ async fn main() -> Result<()> {
         .unwrap_or_else(|| cwd.join(".cade"));
 
     // Settings + session
-    let mut settings = SettingsManager::new(&cwd).map_err(|e| Error::custom(format!("load settings: {e}")))?;
+    let mut settings =
+        SettingsManager::new(&cwd).map_err(|e| Error::custom(format!("load settings: {e}")))?;
 
     // -- Package subcommand (runs before server connection, no server needed)
     let is_eval_subcommand = matches!(&args.package, Some(PackageSubcommand::Eval { .. }));
     if let Some(PackageSubcommand::Package { action }) = args.package.take() {
         match action {
-            PackageAction::Install { source, project_local } => {
-                cade::cli::package::cmd_install(&source, project_local, &mut settings, &cwd, &agent_dir)
-                    .await
-                    .map_err(|e| Error::custom(format!("package install: {e}")))?;
+            PackageAction::Install {
+                source,
+                project_local,
+            } => {
+                cade::cli::package::cmd_install(
+                    &source,
+                    project_local,
+                    &mut settings,
+                    &cwd,
+                    &agent_dir,
+                )
+                .await
+                .map_err(|e| Error::custom(format!("package install: {e}")))?;
             }
             PackageAction::Remove { source } => {
                 cade::cli::package::cmd_remove(&source, &agent_dir)
@@ -681,12 +722,13 @@ async fn main() -> Result<()> {
     let mut session = SessionStore::load(&cwd);
 
     // API credentials
-    let api_key = settings
-        .api_key()
-        .ok_or_else(|| Error::custom("No CADE_API_KEY. Set via env var or ~/.cade/settings.json"))?;
+    let api_key = settings.api_key().ok_or_else(|| {
+        Error::custom("No CADE_API_KEY. Set via env var or ~/.cade/settings.json")
+    })?;
     let base_url = settings.base_url();
 
-    let client = CadeClient::new(base_url.clone(), api_key).map_err(|e| Error::custom(format!("create CADE server: {e}")))?;
+    let client = CadeClient::new(base_url.clone(), api_key)
+        .map_err(|e| Error::custom(format!("create CADE server: {e}")))?;
 
     if !client.health().await.unwrap_or(false) {
         auto_start_server(&base_url).await?;
@@ -796,18 +838,19 @@ async fn main() -> Result<()> {
     let skills_block = skills_listing(&initial_loaded_skills);
 
     // Agent resolution — helper closure avoids repeating the create logic
-    let (agent, loaded_skills, conversation_id, effective_system_prompt) = resolve_agent_and_conversation(
-        &client,
-        &args,
-        &default_model,
-        toolset,
-        &skills_block,
-        &cwd,
-        &agent_dir,
-        &mut session,
-        &mut settings,
-    )
-    .await?;
+    let (agent, loaded_skills, conversation_id, effective_system_prompt) =
+        resolve_agent_and_conversation(
+            &client,
+            &args,
+            &default_model,
+            toolset,
+            &skills_block,
+            &cwd,
+            &agent_dir,
+            &mut session,
+            &mut settings,
+        )
+        .await?;
 
     // -- MCP server startup
     let mcp_configs = settings.merged_mcp_servers();
@@ -960,14 +1003,17 @@ async fn main() -> Result<()> {
                         .await;
                 }
             }
-            
+
             // Ensure core blocks are pinned so they are never auto-archived.
             // working_set intentionally stays as short-tier (it should age out
             // when stale); session_summary is managed by the Sleeptime task.
             if matches!(block.label.as_str(), "persona" | "human" | "project")
-                && block.tier.as_deref() != Some("pinned") {
-                    let _ = client.set_memory_tier(&agent.id, &block.label, "pinned").await;
-                }
+                && block.tier.as_deref() != Some("pinned")
+            {
+                let _ = client
+                    .set_memory_tier(&agent.id, &block.label, "pinned")
+                    .await;
+            }
         }
     }
 
@@ -1005,15 +1051,19 @@ async fn main() -> Result<()> {
                         .map_err(|e| Error::custom(format!("eval show: {e}")))?;
                 }
                 EvalAction::Run { task, model } => {
-                    let result = cade::cli::eval::cmd_run(
-                        &client, &task, model.as_deref(), &cwd,
-                    ).await.map_err(|e| Error::custom(format!("eval run: {e}")))?;
+                    let result = cade::cli::eval::cmd_run(&client, &task, model.as_deref(), &cwd)
+                        .await
+                        .map_err(|e| Error::custom(format!("eval run: {e}")))?;
                     result.print_summary();
                 }
-                EvalAction::Bench { dir, model, concurrency } => {
-                    cade::cli::eval::cmd_bench(
-                        &client, &dir, model.as_deref(), concurrency, &cwd,
-                    ).await.map_err(|e| Error::custom(format!("eval bench: {e}")))?;
+                EvalAction::Bench {
+                    dir,
+                    model,
+                    concurrency,
+                } => {
+                    cade::cli::eval::cmd_bench(&client, &dir, model.as_deref(), concurrency, &cwd)
+                        .await
+                        .map_err(|e| Error::custom(format!("eval bench: {e}")))?;
                 }
             }
         }
@@ -1024,9 +1074,9 @@ async fn main() -> Result<()> {
     if args.mode.as_deref() == Some("rpc") {
         let session_opts = cade_sdk::session::SessionOptions {
             server_url: base_url.clone(),
-            api_key:    settings.api_key().unwrap_or_default(),
-            agent_id:   Some(agent.id.clone()),
-            cwd:        cwd.clone(),
+            api_key: settings.api_key().unwrap_or_default(),
+            agent_id: Some(agent.id.clone()),
+            cwd: cwd.clone(),
             ..Default::default()
         };
         match cade_sdk::session::AgentSession::create(session_opts).await {
@@ -1230,7 +1280,8 @@ async fn main() -> Result<()> {
             ThemeColors::light()
         } else {
             let discovered = discover_themes(&cwd, &agent_dir);
-            discovered.iter()
+            discovered
+                .iter()
                 .find(|t| t.name == theme_name)
                 .map(ThemeColors::from_theme)
                 .unwrap_or_else(ThemeColors::dark)

@@ -12,8 +12,8 @@ use crate::Result;
 
 #[derive(Debug, Clone)]
 pub struct SearchResult {
-    pub title:   String,
-    pub url:     String,
+    pub title: String,
+    pub url: String,
     pub snippet: String,
 }
 
@@ -34,9 +34,10 @@ impl SearchResult {
 /// DuckDuckGo instant answers otherwise.
 pub async fn web_search(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
     if let Ok(key) = std::env::var("BRAVE_SEARCH_API_KEY")
-        && !key.trim().is_empty() {
-            return brave_search(query, limit, &key).await;
-        }
+        && !key.trim().is_empty()
+    {
+        return brave_search(query, limit, &key).await;
+    }
     ddg_search(query, limit).await
 }
 
@@ -74,14 +75,19 @@ async fn brave_search(query: &str, limit: usize, api_key: &str) -> Result<Vec<Se
 
     if let Some(items) = body["web"]["results"].as_array() {
         for item in items.iter().take(limit) {
-            let title   = item["title"].as_str().unwrap_or("").to_string();
+            let title = item["title"].as_str().unwrap_or("").to_string();
             let url_str = item["url"].as_str().unwrap_or("").to_string();
-            let snippet = item["description"].as_str()
+            let snippet = item["description"]
+                .as_str()
                 .or_else(|| item["snippet"].as_str())
                 .unwrap_or("")
                 .to_string();
             if !url_str.is_empty() {
-                results.push(SearchResult { title, url: url_str, snippet });
+                results.push(SearchResult {
+                    title,
+                    url: url_str,
+                    snippet,
+                });
             }
         }
     }
@@ -115,13 +121,13 @@ async fn ddg_search(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
 
     // Abstract (top result if present)
     let abstract_text = body["AbstractText"].as_str().unwrap_or("");
-    let abstract_url  = body["AbstractURL"].as_str().unwrap_or("");
-    let abstract_src  = body["AbstractSource"].as_str().unwrap_or("DuckDuckGo");
+    let abstract_url = body["AbstractURL"].as_str().unwrap_or("");
+    let abstract_src = body["AbstractSource"].as_str().unwrap_or("DuckDuckGo");
 
     if !abstract_text.is_empty() && !abstract_url.is_empty() {
         results.push(SearchResult {
-            title:   format!("{abstract_src}: {query}"),
-            url:     abstract_url.to_string(),
+            title: format!("{abstract_src}: {query}"),
+            url: abstract_url.to_string(),
             snippet: abstract_text.to_string(),
         });
     }
@@ -129,8 +135,8 @@ async fn ddg_search(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
     // Answer (instant calculation, definition, etc.)
     if let Some(answer) = body["Answer"].as_str().filter(|s| !s.is_empty()) {
         results.push(SearchResult {
-            title:   format!("Instant answer for: {query}"),
-            url:     format!("https://duckduckgo.com/?q={}", urlencoding::encode(query)),
+            title: format!("Instant answer for: {query}"),
+            url: format!("https://duckduckgo.com/?q={}", urlencoding::encode(query)),
             snippet: answer.to_string(),
         });
     }
@@ -139,12 +145,16 @@ async fn ddg_search(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
     if let Some(topics) = body["RelatedTopics"].as_array() {
         for topic in topics.iter().take(limit.saturating_sub(results.len())) {
             // Skip groupings (sub-arrays)
-            if topic["Topics"].is_array() { continue; }
+            if topic["Topics"].is_array() {
+                continue;
+            }
 
             let text = topic["Text"].as_str().unwrap_or("").to_string();
             let url_str = topic["FirstURL"].as_str().unwrap_or("").to_string();
 
-            if text.is_empty() || url_str.is_empty() { continue; }
+            if text.is_empty() || url_str.is_empty() {
+                continue;
+            }
 
             // Extract title as the first sentence
             let title = text.split('.').next().unwrap_or(&text).to_string();
@@ -154,18 +164,25 @@ async fn ddg_search(query: &str, limit: usize) -> Result<Vec<SearchResult>> {
                 text.clone()
             };
 
-            results.push(SearchResult { title, url: url_str, snippet });
-            if results.len() >= limit { break; }
+            results.push(SearchResult {
+                title,
+                url: url_str,
+                snippet,
+            });
+            if results.len() >= limit {
+                break;
+            }
         }
     }
 
     // If DDG returned nothing useful, add a search engine link
     if results.is_empty() {
         results.push(SearchResult {
-            title:   format!("Web search: {query}"),
-            url:     format!("https://duckduckgo.com/?q={}", urlencoding::encode(query)),
+            title: format!("Web search: {query}"),
+            url: format!("https://duckduckgo.com/?q={}", urlencoding::encode(query)),
             snippet: "No instant answer found. Visit the URL to search DuckDuckGo directly.\n\
-                 Tip: Set BRAVE_SEARCH_API_KEY for richer search results.".to_string(),
+                 Tip: Set BRAVE_SEARCH_API_KEY for richer search results."
+                .to_string(),
         });
     }
 
@@ -184,8 +201,8 @@ mod tests {
     fn test_search_result_context_block() {
         // -- Setup & Fixtures
         let result = SearchResult {
-            title:   "Rust Programming Language".to_string(),
-            url:     "https://www.rust-lang.org".to_string(),
+            title: "Rust Programming Language".to_string(),
+            url: "https://www.rust-lang.org".to_string(),
             snippet: "A language empowering everyone to build reliable software.".to_string(),
         };
 

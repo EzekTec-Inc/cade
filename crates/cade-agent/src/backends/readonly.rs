@@ -17,16 +17,24 @@ pub struct ReadOnlyBackend<B: ExecutionBackend> {
 }
 
 impl<B: ExecutionBackend> ReadOnlyBackend<B> {
-    pub fn new(inner: B) -> Self { Self { inner } }
+    pub fn new(inner: B) -> Self {
+        Self { inner }
+    }
 }
 
 #[async_trait]
 impl<B: ExecutionBackend + 'static> ExecutionBackend for ReadOnlyBackend<B> {
-    async fn exec_bash(&self, command: &str, cwd: &Path, timeout_secs: u64) -> crate::Result<BashOutput> {
+    async fn exec_bash(
+        &self,
+        command: &str,
+        cwd: &Path,
+        timeout_secs: u64,
+    ) -> crate::Result<BashOutput> {
         // Allow reads / inspection; block writes / network ops
         if cade_core::permissions::bash_command_is_write(command) {
             return Err(crate::Error::custom(format!(
-                "Read-only backend: blocked write command: {}", truncate(command, 80)
+                "Read-only backend: blocked write command: {}",
+                truncate(command, 80)
             )));
         }
         self.inner.exec_bash(command, cwd, timeout_secs).await
@@ -37,7 +45,9 @@ impl<B: ExecutionBackend + 'static> ExecutionBackend for ReadOnlyBackend<B> {
     }
 
     async fn write_file(&self, _path: &Path, _content: &str) -> crate::Result<()> {
-        Err(crate::Error::custom("Read-only backend: write_file is not permitted"))
+        Err(crate::Error::custom(
+            "Read-only backend: write_file is not permitted",
+        ))
     }
 
     async fn path_exists(&self, path: &Path) -> bool {
@@ -48,8 +58,12 @@ impl<B: ExecutionBackend + 'static> ExecutionBackend for ReadOnlyBackend<B> {
         self.inner.list_dir(path).await
     }
 
-    fn is_writable(&self) -> bool { false }
-    fn name(&self) -> &'static str { "readonly" }
+    fn is_writable(&self) -> bool {
+        false
+    }
+    fn name(&self) -> &'static str {
+        "readonly"
+    }
 }
 
 // endregion: --- ReadOnlyBackend
@@ -72,9 +86,9 @@ mod tests {
     #[tokio::test]
     async fn test_readonly_blocks_write_file() {
         // -- Setup & Fixtures
-        let b   = ReadOnlyBackend::new(LocalBackend);
+        let b = ReadOnlyBackend::new(LocalBackend);
         let dir = tempfile::tempdir().unwrap();
-        let f   = dir.path().join("out.txt");
+        let f = dir.path().join("out.txt");
 
         // -- Exec
         let result = b.write_file(&f, "hello").await;
@@ -87,9 +101,9 @@ mod tests {
     #[tokio::test]
     async fn test_readonly_allows_read_file() -> crate::Result<()> {
         // -- Setup & Fixtures
-        let b   = ReadOnlyBackend::new(LocalBackend);
+        let b = ReadOnlyBackend::new(LocalBackend);
         let dir = tempfile::tempdir().unwrap();
-        let f   = dir.path().join("test.txt");
+        let f = dir.path().join("test.txt");
         std::fs::write(&f, "readable").unwrap();
 
         // -- Exec

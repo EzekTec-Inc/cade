@@ -60,7 +60,9 @@ fn ensure_within_root(root: &Path, raw_path: &str) -> Result<()> {
     let mut non_existent = Vec::new();
 
     while !current.exists() {
-        let Some(parent) = current.parent() else { break };
+        let Some(parent) = current.parent() else {
+            break;
+        };
         if let Some(name) = current.file_name() {
             non_existent.push(name.to_os_string());
         }
@@ -100,7 +102,8 @@ impl ReadTool {
         let offset = args["offset"].as_u64().unwrap_or(0) as usize;
         let limit = args["limit"].as_u64().unwrap_or(0) as usize;
 
-        let content = std::fs::read_to_string(path).map_err(|e| crate::Error::custom(format!("read {path}: {e}")))?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| crate::Error::custom(format!("read {path}: {e}")))?;
 
         let lines: Vec<&str> = content.lines().collect();
         let total = lines.len();
@@ -158,10 +161,12 @@ impl WriteTool {
         if let Some(parent) = Path::new(path).parent()
             && !parent.as_os_str().is_empty()
         {
-            std::fs::create_dir_all(parent).map_err(|e| crate::Error::custom(format!("create dirs for {path}: {e}")))?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| crate::Error::custom(format!("create dirs for {path}: {e}")))?;
         }
 
-        std::fs::write(path, content).map_err(|e| crate::Error::custom(format!("write {path}: {e}")))?;
+        std::fs::write(path, content)
+            .map_err(|e| crate::Error::custom(format!("write {path}: {e}")))?;
 
         Ok(format!("Written {} bytes to {path}", content.len()))
     }
@@ -202,7 +207,8 @@ impl EditTool {
             .ok_or_else(|| crate::Error::custom("edit_file: missing 'new_string'".to_string()))?;
         let replace_all = args["replace_all"].as_bool().unwrap_or(false);
 
-        let content = std::fs::read_to_string(path).map_err(|e| crate::Error::custom(format!("read {path}: {e}")))?;
+        let content = std::fs::read_to_string(path)
+            .map_err(|e| crate::Error::custom(format!("read {path}: {e}")))?;
 
         let count = content.matches(old_string).count();
         if count == 0 {
@@ -221,7 +227,8 @@ impl EditTool {
             content.replacen(old_string, new_string, 1)
         };
 
-        std::fs::write(path, &new_content).map_err(|e| crate::Error::custom(format!("write {path}: {e}")))?;
+        std::fs::write(path, &new_content)
+            .map_err(|e| crate::Error::custom(format!("write {path}: {e}")))?;
 
         Ok(format!("Replaced {count} occurrence(s) in {path}"))
     }
@@ -272,7 +279,9 @@ fn validate_patch_paths(patch_str: &str) -> Result<()> {
 
         // Disallow absolute paths and any `..` segment (path traversal).
         if p.starts_with('/') {
-            return Err(crate::Error::custom(format!("apply_patch: absolute paths are not allowed in patch: '{p}'")));
+            return Err(crate::Error::custom(format!(
+                "apply_patch: absolute paths are not allowed in patch: '{p}'"
+            )));
         }
         if p.len() >= 3 {
             let bytes = p.as_bytes();
@@ -301,11 +310,12 @@ impl ApplyPatchTool {
 
         // Write patch to a tempfile then apply with `patch -p1`
         use std::io::Write;
-        let mut tmp_file = tempfile::NamedTempFile::new()
-            .map_err(|e| crate::Error::custom(format!("apply_patch: failed to create tempfile: {e}")))?;
-        tmp_file
-            .write_all(patch_str.as_bytes())
-            .map_err(|e| crate::Error::custom(format!("apply_patch: failed to write tempfile: {e}")))?;
+        let mut tmp_file = tempfile::NamedTempFile::new().map_err(|e| {
+            crate::Error::custom(format!("apply_patch: failed to create tempfile: {e}"))
+        })?;
+        tmp_file.write_all(patch_str.as_bytes()).map_err(|e| {
+            crate::Error::custom(format!("apply_patch: failed to write tempfile: {e}"))
+        })?;
         tmp_file.flush()?;
 
         let mut cmd = tokio::process::Command::new("patch");
@@ -314,7 +324,11 @@ impl ApplyPatchTool {
             .args(["-p1", "--input", tmp_file.path().to_str().unwrap_or("")])
             .output()
             .await
-            .map_err(|e| crate::Error::custom(format!("apply_patch: failed to run `patch` command (is it installed?): {e}")))?;
+            .map_err(|e| {
+                crate::Error::custom(format!(
+                    "apply_patch: failed to run `patch` command (is it installed?): {e}"
+                ))
+            })?;
 
         let _ = tmp_file.close();
 
@@ -326,7 +340,9 @@ impl ApplyPatchTool {
         } else {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let stdout = String::from_utf8_lossy(&output.stdout);
-            Err(crate::Error::custom(format!("patch failed:\n{stdout}{stderr}")))
+            Err(crate::Error::custom(format!(
+                "patch failed:\n{stdout}{stderr}"
+            )))
         }
     }
 

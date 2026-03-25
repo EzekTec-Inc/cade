@@ -1,7 +1,7 @@
 // region:    --- Modules
 
-use cade::{Error, Result};
 use axum::http::{HeaderValue, Method, Request};
+use cade::{Error, Result};
 use clap::Parser;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -57,8 +57,7 @@ async fn main() -> Result<()> {
         config.db_path
     );
 
-    let db = open_db(&config.db_path)
-        .map_err(|e| Error::custom(e.to_string()))?;
+    let db = open_db(&config.db_path).map_err(|e| Error::custom(e.to_string()))?;
 
     // C6: Ensure codeintel schema exists at startup
     if let Err(e) = cade_codeintel::ensure_schema(&db) {
@@ -143,7 +142,8 @@ async fn main() -> Result<()> {
             for (agent_id, conv_id) in pending {
                 tracing::info!(
                     "Sleeptime consolidation triggered for agent {} (conv={:?})",
-                    agent_id, conv_id
+                    agent_id,
+                    conv_id
                 );
                 let state_c = state_bg.clone();
                 tokio::spawn(async move {
@@ -172,11 +172,15 @@ async fn main() -> Result<()> {
             // H-03: Restrict CORS to localhost origins only (not permissive/open)
             CorsLayer::new()
                 .allow_origin([
-                    "http://localhost".parse::<HeaderValue>().expect("valid header"),
+                    "http://localhost"
+                        .parse::<HeaderValue>()
+                        .expect("valid header"),
                     format!("http://localhost:{}", config.addr.port())
                         .parse::<HeaderValue>()
                         .expect("valid header"),
-                    "http://127.0.0.1".parse::<HeaderValue>().expect("valid header"),
+                    "http://127.0.0.1"
+                        .parse::<HeaderValue>()
+                        .expect("valid header"),
                     format!("http://127.0.0.1:{}", config.addr.port())
                         .parse::<HeaderValue>()
                         .expect("valid header"),
@@ -249,7 +253,7 @@ impl LlmProvider for RouterAdapter {
             model: bare_model,
             ..req.clone()
         };
-        
+
         provider.stream(&routed).await
     }
 }

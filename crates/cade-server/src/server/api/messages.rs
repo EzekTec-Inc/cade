@@ -419,26 +419,21 @@ async fn build_context(
     //     char budget allows.  The most-recent turn is ALWAYS included — it
     //     carries the current user request the model must respond to.
     //  4. Reverse back to oldest-first and flatten into the message list.
-    let all_rows = sqlite::list_messages_page(
-        &state.db,
-        agent_id,
-        conversation_id,
-        MAX_ROWS_SAFETY_CAP,
-        0,
-    )
-    .unwrap_or_default();
+    let all_rows =
+        sqlite::list_messages_page(&state.db, agent_id, conversation_id, MAX_ROWS_SAFETY_CAP, 0)
+            .unwrap_or_default();
 
     // Convert DB rows to LlmMessages (oldest-first).
-    let all_llm_msgs: Vec<LlmMessage> = all_rows
-        .iter()
-        .flat_map(db_row_to_llm)
-        .collect();
+    let all_llm_msgs: Vec<LlmMessage> = all_rows.iter().flat_map(db_row_to_llm).collect();
 
     // Group into logical turns.
     let turns = group_into_turns(&all_llm_msgs);
 
     // Deduct the already-assembled system-prompt size from the message budget.
-    let system_chars = messages.first().map(|m| m.content.chars().count()).unwrap_or(0);
+    let system_chars = messages
+        .first()
+        .map(|m| m.content.chars().count())
+        .unwrap_or(0);
     let message_budget = context_char_budget.saturating_sub(system_chars);
 
     let mut selected: Vec<&[LlmMessage]> = Vec::new();
@@ -488,9 +483,11 @@ async fn build_context(
         // Signal the Sleeptime consolidation task.  After 60 s of inactivity
         // it will summarise the dropped turns into the `session_summary` block.
         let mut activity = state.agent_activity.write().await;
-        let entry = activity
-            .entry(agent_id.to_string())
-            .or_insert((chrono::Utc::now().timestamp(), true, conversation_id.map(String::from)));
+        let entry = activity.entry(agent_id.to_string()).or_insert((
+            chrono::Utc::now().timestamp(),
+            true,
+            conversation_id.map(String::from),
+        ));
         entry.1 = true; // needs_consolidation = true
         if conversation_id.is_some() {
             entry.2 = conversation_id.map(String::from);
@@ -525,7 +522,10 @@ async fn build_context(
     // Ensure the conversation begins with a user turn (all providers require this).
     while messages.len() > 2 && messages[1].role != "user" {
         let has_tool_calls = messages[1].role == "assistant"
-            && messages[1].tool_calls.as_ref().is_some_and(|tc| !tc.is_empty());
+            && messages[1]
+                .tool_calls
+                .as_ref()
+                .is_some_and(|tc| !tc.is_empty());
         if has_tool_calls {
             messages.remove(1);
             while messages.len() > 1 && messages[1].role == "tool" {
@@ -632,8 +632,7 @@ async fn compute_context_stats(
 
     // ── Same budget formula as build_context ────────────────────────────────
     let window_tokens = catalogue::context_window_for_model(&agent.model);
-    let output_reserve =
-        ((window_tokens as f64) * OUTPUT_RESERVE_FRACTION).round() as usize;
+    let output_reserve = ((window_tokens as f64) * OUTPUT_RESERVE_FRACTION).round() as usize;
     let input_budget_tokens = (window_tokens as usize).saturating_sub(output_reserve);
     let agent_tool_count = sqlite::get_agent_tool_ids(&state.db, agent_id)
         .unwrap_or_default()
@@ -648,19 +647,11 @@ async fn compute_context_stats(
     };
 
     // ── Load and group messages (same as build_context) ─────────────────────
-    let all_rows = sqlite::list_messages_page(
-        &state.db,
-        agent_id,
-        conversation_id,
-        MAX_ROWS_SAFETY_CAP,
-        0,
-    )
-    .unwrap_or_default();
+    let all_rows =
+        sqlite::list_messages_page(&state.db, agent_id, conversation_id, MAX_ROWS_SAFETY_CAP, 0)
+            .unwrap_or_default();
 
-    let all_llm_msgs: Vec<LlmMessage> = all_rows
-        .iter()
-        .flat_map(db_row_to_llm)
-        .collect();
+    let all_llm_msgs: Vec<LlmMessage> = all_rows.iter().flat_map(db_row_to_llm).collect();
 
     let turns = group_into_turns(&all_llm_msgs);
     let total_turns = turns.len();
@@ -680,8 +671,8 @@ async fn compute_context_stats(
 
     // ── Turn selection (same walk as build_context) ──────────────────────────
     let mut turns_included = 0usize;
-    let mut turns_omitted  = 0usize;
-    let mut chars_used     = 0usize;
+    let mut turns_omitted = 0usize;
+    let mut chars_used = 0usize;
 
     for turn in turns.iter().rev() {
         let turn_chars: usize = turn
@@ -1238,94 +1229,95 @@ pub async fn stream_message(
         })
     };
 
-    let sse_stream = futures::StreamExt::map(llm_stream, move |chunk: cade_ai::Result<StreamChunk>| {
-        // Persist each event to run_events so the stream is resumable
-        let emit = |data: Value| -> Event {
-            if let Some(rid) = &run_id_clone
-                && let Ok(seq) = sqlite::append_run_event(&db_clone, rid, &data.to_string())
-            {
-                let mut d = data.clone();
-                if let Some(obj) = d.as_object_mut() {
-                    obj.insert("run_id".to_string(), serde_json::Value::String(rid.clone()));
-                    obj.insert("seq_id".to_string(), serde_json::Value::Number(seq.into()));
-                }
-                return Event::default().data(d.to_string());
-            }
-            Event::default().data(data.to_string())
-        };
-
-        let event = match chunk {
-            Ok(StreamChunk::Reasoning(text)) => {
-                emit(json!({ "message_type": "reasoning_message", "reasoning": text }))
-            }
-            Ok(StreamChunk::Text(text)) => {
-                if let Ok(mut g) = acc_clone.lock() {
-                    g.0.push_str(&text);
-                }
-                emit(json!({ "message_type": "assistant_message", "content": text }))
-            }
-            Ok(StreamChunk::ToolCall(tc)) => {
-                if let Ok(mut g) = acc_clone.lock()
-                    && let Ok(v) = serde_json::to_value(&tc)
+    let sse_stream =
+        futures::StreamExt::map(llm_stream, move |chunk: cade_ai::Result<StreamChunk>| {
+            // Persist each event to run_events so the stream is resumable
+            let emit = |data: Value| -> Event {
+                if let Some(rid) = &run_id_clone
+                    && let Ok(seq) = sqlite::append_run_event(&db_clone, rid, &data.to_string())
                 {
-                    g.1.push(v);
-                }
-                emit(json!({
-                    "message_type": "tool_call_message",
-                    "tool_call": { "id": tc.id, "name": tc.name, "arguments": tc.arguments }
-                }))
-            }
-            Ok(StreamChunk::Usage(u)) => {
-                if let Ok(mut acc) = usage_acc2.lock() {
-                    acc.input_tokens += u.input_tokens;
-                    acc.output_tokens += u.output_tokens;
-                }
-                // Emit usage_statistics event for client-side display
-                emit(json!({
-                    "message_type":      "usage_statistics",
-                    "input_tokens":      u.input_tokens,
-                    "output_tokens":     u.output_tokens,
-                    "cache_read_tokens":  u.cache_read_tokens,
-                    "cache_write_tokens": u.cache_write_tokens,
-                    "model":             u.model,
-                }))
-            }
-            Ok(StreamChunk::FinishReason(reason)) => emit(json!({
-                "message_type": "finish_reason",
-                "reason": reason,
-            })),
-            Ok(StreamChunk::Done) => {
-                if let Ok(g) = acc_clone.lock() {
-                    // Skip persisting empty assistant responses — they clutter
-                    // the conversation and produce invalid turn ordering on
-                    // next context load (e.g. Gemini consecutive-user-turn 400).
-                    if !g.0.is_empty() || !g.1.is_empty() {
-                        persist(
-                            &state_clone,
-                            &agent_id_clone,
-                            conv_id_clone.as_deref(),
-                            "assistant",
-                            json!({
-                                "content": g.0,
-                                "tool_calls": g.1
-                            }),
-                        );
+                    let mut d = data.clone();
+                    if let Some(obj) = d.as_object_mut() {
+                        obj.insert("run_id".to_string(), serde_json::Value::String(rid.clone()));
+                        obj.insert("seq_id".to_string(), serde_json::Value::Number(seq.into()));
                     }
+                    return Event::default().data(d.to_string());
                 }
-                if let Some(rid) = &run_id_clone {
-                    let _ = sqlite::finish_run(&db_clone, rid, "completed");
+                Event::default().data(data.to_string())
+            };
+
+            let event = match chunk {
+                Ok(StreamChunk::Reasoning(text)) => {
+                    emit(json!({ "message_type": "reasoning_message", "reasoning": text }))
                 }
-                Event::default().data("[DONE]")
-            }
-            Err(e) => {
-                if let Some(rid) = &run_id_clone {
-                    let _ = sqlite::finish_run(&db_clone, rid, "failed");
+                Ok(StreamChunk::Text(text)) => {
+                    if let Ok(mut g) = acc_clone.lock() {
+                        g.0.push_str(&text);
+                    }
+                    emit(json!({ "message_type": "assistant_message", "content": text }))
                 }
-                Event::default().data(json!({ "error": e.to_string() }).to_string())
-            }
-        };
-        Ok::<Event, std::convert::Infallible>(event)
-    });
+                Ok(StreamChunk::ToolCall(tc)) => {
+                    if let Ok(mut g) = acc_clone.lock()
+                        && let Ok(v) = serde_json::to_value(&tc)
+                    {
+                        g.1.push(v);
+                    }
+                    emit(json!({
+                        "message_type": "tool_call_message",
+                        "tool_call": { "id": tc.id, "name": tc.name, "arguments": tc.arguments }
+                    }))
+                }
+                Ok(StreamChunk::Usage(u)) => {
+                    if let Ok(mut acc) = usage_acc2.lock() {
+                        acc.input_tokens += u.input_tokens;
+                        acc.output_tokens += u.output_tokens;
+                    }
+                    // Emit usage_statistics event for client-side display
+                    emit(json!({
+                        "message_type":      "usage_statistics",
+                        "input_tokens":      u.input_tokens,
+                        "output_tokens":     u.output_tokens,
+                        "cache_read_tokens":  u.cache_read_tokens,
+                        "cache_write_tokens": u.cache_write_tokens,
+                        "model":             u.model,
+                    }))
+                }
+                Ok(StreamChunk::FinishReason(reason)) => emit(json!({
+                    "message_type": "finish_reason",
+                    "reason": reason,
+                })),
+                Ok(StreamChunk::Done) => {
+                    if let Ok(g) = acc_clone.lock() {
+                        // Skip persisting empty assistant responses — they clutter
+                        // the conversation and produce invalid turn ordering on
+                        // next context load (e.g. Gemini consecutive-user-turn 400).
+                        if !g.0.is_empty() || !g.1.is_empty() {
+                            persist(
+                                &state_clone,
+                                &agent_id_clone,
+                                conv_id_clone.as_deref(),
+                                "assistant",
+                                json!({
+                                    "content": g.0,
+                                    "tool_calls": g.1
+                                }),
+                            );
+                        }
+                    }
+                    if let Some(rid) = &run_id_clone {
+                        let _ = sqlite::finish_run(&db_clone, rid, "completed");
+                    }
+                    Event::default().data("[DONE]")
+                }
+                Err(e) => {
+                    if let Some(rid) = &run_id_clone {
+                        let _ = sqlite::finish_run(&db_clone, rid, "failed");
+                    }
+                    Event::default().data(json!({ "error": e.to_string() }).to_string())
+                }
+            };
+            Ok::<Event, std::convert::Infallible>(event)
+        });
 
     drop(acc);
     drop(usage_acc);
@@ -1428,9 +1420,9 @@ mod tests {
         // user → assistant (with tool call) → tool result → assistant response
         let msgs = vec![
             user("do the thing"),
-            assistant(""),        // assistant triggers tool
+            assistant(""), // assistant triggers tool
             tool_result("tc1", "ok"),
-            assistant("done"),    // assistant responds after tool
+            assistant("done"), // assistant responds after tool
         ];
         let turns = group_into_turns(&msgs);
         // All four messages are in one turn (only one user message)
@@ -1491,16 +1483,28 @@ mod tests {
         let half = chars / 2;
         let rest = chars - half; // absorbs odd remainders
         vec![
-            LlmMessage { role: "user".to_string(),      content: "x".repeat(half), tool_call_id: None, tool_calls: None, images: None },
-            LlmMessage { role: "assistant".to_string(), content: "x".repeat(rest), tool_call_id: None, tool_calls: None, images: None },
+            LlmMessage {
+                role: "user".to_string(),
+                content: "x".repeat(half),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+            },
+            LlmMessage {
+                role: "assistant".to_string(),
+                content: "x".repeat(rest),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+            },
         ]
     }
 
     /// Simulate the turn-selection loop from `build_context`.
     fn select_turns(turns: &[Vec<LlmMessage>], budget: usize) -> (usize, usize) {
         let mut included = 0;
-        let mut omitted  = 0;
-        let mut used     = 0usize;
+        let mut omitted = 0;
+        let mut used = 0usize;
         for turn in turns.iter().rev() {
             let chars: usize = turn.iter().map(|m| m.content.chars().count()).sum();
             if included == 0 || used + chars <= budget {
@@ -1519,7 +1523,7 @@ mod tests {
         let turns: Vec<Vec<LlmMessage>> = (0..5).map(|_| make_turn_of_size(100)).collect();
         let (included, omitted) = select_turns(&turns, 10_000);
         assert_eq!(included, 5);
-        assert_eq!(omitted,  0);
+        assert_eq!(omitted, 0);
     }
 
     #[test]
@@ -1528,7 +1532,7 @@ mod tests {
         let turns: Vec<Vec<LlmMessage>> = (0..10).map(|_| make_turn_of_size(200)).collect();
         let (included, omitted) = select_turns(&turns, 600);
         assert_eq!(included, 3, "exactly 3 turns of 200 chars fit in 600");
-        assert_eq!(omitted,  7);
+        assert_eq!(omitted, 7);
     }
 
     #[test]
@@ -1537,7 +1541,7 @@ mod tests {
         let turns = vec![make_turn_of_size(5_000)];
         let (included, omitted) = select_turns(&turns, 1_000);
         assert_eq!(included, 1, "most-recent turn must always be included");
-        assert_eq!(omitted,  0);
+        assert_eq!(omitted, 0);
     }
 
     #[test]
@@ -1547,7 +1551,7 @@ mod tests {
         let turns: Vec<Vec<LlmMessage>> = (0..100).map(|_| make_turn_of_size(300)).collect();
         let (included, omitted) = select_turns(&turns, 9_000);
         assert_eq!(included, 30);
-        assert_eq!(omitted,  70);
+        assert_eq!(omitted, 70);
     }
 
     #[test]
@@ -1555,7 +1559,7 @@ mod tests {
         let turns = vec![make_turn_of_size(50)];
         let (included, omitted) = select_turns(&turns, 100);
         assert_eq!(included, 1);
-        assert_eq!(omitted,  0);
+        assert_eq!(omitted, 0);
     }
 
     #[test]
@@ -1578,8 +1582,11 @@ mod tests {
 
         let (included, omitted) = select_turns(&turns, budget);
         // Only the most recent (small) turn fits.
-        assert_eq!(included, 1, "big turn must be dropped as a whole (budget {budget}, big={big_chars})");
-        assert_eq!(omitted,  1);
+        assert_eq!(
+            included, 1,
+            "big turn must be dropped as a whole (budget {budget}, big={big_chars})"
+        );
+        assert_eq!(omitted, 1);
     }
 
     // ── ALWAYS_INCLUDE_TOOL_NAMES ─────────────────────────────────────────────
@@ -1606,11 +1613,21 @@ mod tests {
     // ── Constants sanity ─────────────────────────────────────────────────────
 
     #[test]
+    #[allow(clippy::assertions_on_constants)]
     fn constants_are_sane() {
         assert!(MAX_ROWS_SAFETY_CAP > 100, "safety cap too small");
-        assert!(RECENT_WINDOW >= 10, "recent window too small for useful tool-usage detection");
-        assert!(PINNED_BUDGET >= 5_000, "pinned budget too small for typical memory blocks");
-        assert!(SHORT_BUDGET > PINNED_BUDGET, "short budget should exceed pinned budget");
+        assert!(
+            RECENT_WINDOW >= 10,
+            "recent window too small for useful tool-usage detection"
+        );
+        assert!(
+            PINNED_BUDGET >= 5_000,
+            "pinned budget too small for typical memory blocks"
+        );
+        assert!(
+            SHORT_BUDGET > PINNED_BUDGET,
+            "short budget should exceed pinned budget"
+        );
         assert!(MIN_CONTEXT_CHARS < MAX_CONTEXT_CHARS);
         assert!(OUTPUT_RESERVE_FRACTION > 0.0 && OUTPUT_RESERVE_FRACTION < 0.5);
     }

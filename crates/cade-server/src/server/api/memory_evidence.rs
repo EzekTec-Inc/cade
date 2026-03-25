@@ -6,7 +6,7 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-use crate::server::{state::AppState, storage::sqlite, reflection};
+use crate::server::{reflection, state::AppState, storage::sqlite};
 
 // region:    --- Evidence endpoints
 
@@ -15,19 +15,26 @@ pub async fn list_evidence(
     State(state): State<AppState>,
     Path((agent_id, label)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let rows = sqlite::list_memory_evidence(&state.db, &agent_id, &label)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "detail": e.to_string() }))))?;
+    let rows = sqlite::list_memory_evidence(&state.db, &agent_id, &label).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "detail": e.to_string() })),
+        )
+    })?;
 
-    let items: Vec<Value> = rows.iter().map(|(id, kind, reference, excerpt, confidence, created_at)| {
-        json!({
-            "id":         id,
-            "kind":       kind,
-            "reference":  reference,
-            "excerpt":    excerpt,
-            "confidence": confidence,
-            "created_at": created_at,
+    let items: Vec<Value> = rows
+        .iter()
+        .map(|(id, kind, reference, excerpt, confidence, created_at)| {
+            json!({
+                "id":         id,
+                "kind":       kind,
+                "reference":  reference,
+                "excerpt":    excerpt,
+                "confidence": confidence,
+                "created_at": created_at,
+            })
         })
-    }).collect();
+        .collect();
 
     Ok(Json(json!(items)))
 }
@@ -38,14 +45,26 @@ pub async fn add_evidence(
     Path((agent_id, label)): Path<(String, String)>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let kind      = body["kind"].as_str().ok_or((StatusCode::BAD_REQUEST, Json(json!({ "detail": "kind required" }))))?;
-    let reference = body["reference"].as_str().ok_or((StatusCode::BAD_REQUEST, Json(json!({ "detail": "reference required" }))))?;
-    let excerpt   = body["excerpt"].as_str();
+    let kind = body["kind"].as_str().ok_or((
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "detail": "kind required" })),
+    ))?;
+    let reference = body["reference"].as_str().ok_or((
+        StatusCode::BAD_REQUEST,
+        Json(json!({ "detail": "reference required" })),
+    ))?;
+    let excerpt = body["excerpt"].as_str();
     let confidence = body["confidence"].as_f64().unwrap_or(1.0);
 
     let id = sqlite::insert_memory_evidence(
-        &state.db, &agent_id, &label, kind, reference, excerpt, confidence
-    ).map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "detail": e.to_string() }))))?;
+        &state.db, &agent_id, &label, kind, reference, excerpt, confidence,
+    )
+    .map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "detail": e.to_string() })),
+        )
+    })?;
 
     Ok(Json(json!({ "id": id })))
 }
@@ -56,19 +75,26 @@ pub async fn memory_why(
     State(state): State<AppState>,
     Path((agent_id, label)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let evidence = sqlite::list_memory_evidence(&state.db, &agent_id, &label)
-        .unwrap_or_default();
+    let evidence = sqlite::list_memory_evidence(&state.db, &agent_id, &label).unwrap_or_default();
 
-    let blocks = sqlite::get_memory_blocks_full(&state.db, &agent_id)
-        .unwrap_or_default();
+    let blocks = sqlite::get_memory_blocks_full(&state.db, &agent_id).unwrap_or_default();
     let block = blocks.iter().find(|(l, _, _, _)| l == &label);
-    let value = block.map(|(_, v, _, _)| v.as_str()).unwrap_or("(not found)");
+    let value = block
+        .map(|(_, v, _, _)| v.as_str())
+        .unwrap_or("(not found)");
     let memory_type = block.map(|(_, _, _, _)| "").unwrap_or("generic");
 
     let summary = if evidence.is_empty() {
-        format!("Block '{label}' ({memory_type}) = \"{}\"\nNo explicit evidence linked. May have been set manually or by the agent during a session.", truncate(value, 200))
+        format!(
+            "Block '{label}' ({memory_type}) = \"{}\"\nNo explicit evidence linked. May have been set manually or by the agent during a session.",
+            truncate(value, 200)
+        )
     } else {
-        let mut s = format!("Block '{label}' = \"{}\"\n\nEvidence ({} source(s)):\n", truncate(value, 200), evidence.len());
+        let mut s = format!(
+            "Block '{label}' = \"{}\"\n\nEvidence ({} source(s)):\n",
+            truncate(value, 200),
+            evidence.len()
+        );
         for (_, kind, reference, excerpt, confidence, _) in &evidence {
             s.push_str(&format!(
                 "  • [{kind}] {reference}  (confidence: {confidence:.0}%)\n",
@@ -94,16 +120,11 @@ pub async fn trigger_reflect(
     Path(agent_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let focus   = body["focus"].as_str().map(String::from);
+    let focus = body["focus"].as_str().map(String::from);
     let trigger = body["trigger"].as_str().unwrap_or("manual");
 
-    let result = reflection::reflect_agent(
-        &state,
-        &agent_id,
-        None,
-        focus.as_deref(),
-        trigger,
-    ).await;
+    let result =
+        reflection::reflect_agent(&state, &agent_id, None, focus.as_deref(), trigger).await;
 
     Ok(Json(json!({
         "blocks_created": result.blocks_created,
@@ -118,8 +139,12 @@ pub async fn list_reflection(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let rows = sqlite::list_reflection_log(&state.db, &agent_id)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "detail": e.to_string() }))))?;
+    let rows = sqlite::list_reflection_log(&state.db, &agent_id).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({ "detail": e.to_string() })),
+        )
+    })?;
     Ok(Json(json!(rows)))
 }
 
@@ -128,7 +153,9 @@ pub async fn list_reflection(
 // region:    --- Support
 
 fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max { return s; }
+    if s.len() <= max {
+        return s;
+    }
     &s[..s.ceil_char_boundary(max)]
 }
 

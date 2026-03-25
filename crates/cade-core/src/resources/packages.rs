@@ -15,7 +15,11 @@ pub enum PackageSource {
     /// npm package spec, e.g. `"@foo/cade-tools"` or `"@foo/cade-tools@1.0.0"`.
     Npm { spec: String },
     /// Git repository URL with optional ref.
-    Git { url: String, #[serde(skip_serializing_if = "Option::is_none")] rev: Option<String> },
+    Git {
+        url: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rev: Option<String>,
+    },
     /// Absolute path on the local filesystem.
     Local { path: PathBuf },
 }
@@ -34,15 +38,23 @@ impl PackageSource {
     /// Parse a source string from the CLI (`npm:...`, `git:...`, or path).
     pub fn parse(s: &str) -> crate::Result<Self> {
         if let Some(spec) = s.strip_prefix("npm:") {
-            return Ok(Self::Npm { spec: spec.to_string() });
+            return Ok(Self::Npm {
+                spec: spec.to_string(),
+            });
         }
         if let Some(rest) = s.strip_prefix("git:") {
             let (url, rev) = split_rev(rest);
-            return Ok(Self::Git { url: url.to_string(), rev });
+            return Ok(Self::Git {
+                url: url.to_string(),
+                rev,
+            });
         }
         if s.starts_with("https://") || s.starts_with("http://") || s.starts_with("ssh://") {
             let (url, rev) = split_rev(s);
-            return Ok(Self::Git { url: url.to_string(), rev });
+            return Ok(Self::Git {
+                url: url.to_string(),
+                rev,
+            });
         }
         // Local path
         let path = PathBuf::from(s);
@@ -52,9 +64,7 @@ impl PackageSource {
     /// Derive a stable on-disk directory name for this source.
     pub fn dir_name(&self) -> String {
         match self {
-            Self::Npm { spec } => {
-                spec.replace(['@', '/', ':'], "_")
-            }
+            Self::Npm { spec } => spec.replace(['@', '/', ':'], "_"),
             Self::Git { url, rev } => {
                 let base = url
                     .trim_start_matches("https://")
@@ -67,12 +77,11 @@ impl PackageSource {
                     None => base,
                 }
             }
-            Self::Local { path } => {
-                path.file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("local")
-                    .to_string()
-            }
+            Self::Local { path } => path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("local")
+                .to_string(),
         }
     }
 }
@@ -117,7 +126,7 @@ pub struct PackageManifest {
 /// Derive the installation root for a package given its scope and agent dir.
 pub fn package_root(source: &PackageSource, scope: PackageScope, agent_dir: &Path) -> PathBuf {
     let base = match scope {
-        PackageScope::Global  => agent_dir.join("packages"),
+        PackageScope::Global => agent_dir.join("packages"),
         PackageScope::Project => {
             // Caller should set cwd-relative .cade/packages; we don't have cwd here.
             // Return agent_dir-relative as fallback.
@@ -158,21 +167,21 @@ fn auto_discover_manifest(root: &Path) -> PackageManifest {
         .to_string();
 
     for (dir, field) in &[
-        ("skills",   "skills"),
-        ("prompts",  "prompts"),
-        ("themes",   "themes"),
-        ("subagents","subagents"),
-        ("tools",    "tools"),
+        ("skills", "skills"),
+        ("prompts", "prompts"),
+        ("themes", "themes"),
+        ("subagents", "subagents"),
+        ("tools", "tools"),
     ] {
         let p = root.join(dir);
         if p.exists() {
             let paths = vec![p];
             match *field {
-                "skills"    => m.skills    = paths,
-                "prompts"   => m.prompts   = paths,
-                "themes"    => m.themes    = paths,
+                "skills" => m.skills = paths,
+                "prompts" => m.prompts = paths,
+                "themes" => m.themes = paths,
                 "subagents" => m.subagents = paths,
-                "tools"     => m.tools     = paths,
+                "tools" => m.tools = paths,
                 _ => {}
             }
         }
@@ -213,7 +222,12 @@ mod tests {
         let src = PackageSource::parse("npm:@foo/bar@1.0.0").unwrap();
 
         // -- Check
-        assert_eq!(src, PackageSource::Npm { spec: "@foo/bar@1.0.0".to_string() });
+        assert_eq!(
+            src,
+            PackageSource::Npm {
+                spec: "@foo/bar@1.0.0".to_string()
+            }
+        );
     }
 
     #[test]
@@ -222,10 +236,13 @@ mod tests {
         let src = PackageSource::parse("git:github.com/user/repo@v1").unwrap();
 
         // -- Check
-        assert_eq!(src, PackageSource::Git {
-            url: "github.com/user/repo".to_string(),
-            rev: Some("v1".to_string()),
-        });
+        assert_eq!(
+            src,
+            PackageSource::Git {
+                url: "github.com/user/repo".to_string(),
+                rev: Some("v1".to_string()),
+            }
+        );
     }
 
     #[test]
@@ -234,13 +251,20 @@ mod tests {
         let src = PackageSource::parse("/home/user/my-package").unwrap();
 
         // -- Check
-        assert_eq!(src, PackageSource::Local { path: PathBuf::from("/home/user/my-package") });
+        assert_eq!(
+            src,
+            PackageSource::Local {
+                path: PathBuf::from("/home/user/my-package")
+            }
+        );
     }
 
     #[test]
     fn test_package_source_display() {
         // -- Setup & Fixtures
-        let src = PackageSource::Npm { spec: "@foo/bar".to_string() };
+        let src = PackageSource::Npm {
+            spec: "@foo/bar".to_string(),
+        };
 
         // -- Check
         assert_eq!(src.display_string(), "npm:@foo/bar");
@@ -249,7 +273,9 @@ mod tests {
     #[test]
     fn test_package_source_dir_name_npm() {
         // -- Setup & Fixtures
-        let src = PackageSource::Npm { spec: "@foo/cade-tools".to_string() };
+        let src = PackageSource::Npm {
+            spec: "@foo/cade-tools".to_string(),
+        };
 
         // -- Check
         let name = src.dir_name();

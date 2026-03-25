@@ -290,7 +290,13 @@ mod tests {
     fn grep_schema_valid() -> Result<()> {
         let schema = GrepTool::schema();
         assert_eq!(schema["name"], "grep");
-        assert!(schema["description"].as_str().ok_or("Should be a string")?.len() > 10);
+        assert!(
+            schema["description"]
+                .as_str()
+                .ok_or("Should be a string")?
+                .len()
+                > 10
+        );
         assert!(schema["parameters"]["properties"]["pattern"].is_object());
 
         Ok(())
@@ -311,8 +317,8 @@ impl GlobTool {
         let search_path = args["path"].as_str().unwrap_or(".");
         let limit = args["limit"].as_u64().unwrap_or(500) as usize;
 
-        let glob =
-            Glob::new(pattern).map_err(|e| crate::Error::custom(format!("Invalid glob '{pattern}': {e}")))?;
+        let glob = Glob::new(pattern)
+            .map_err(|e| crate::Error::custom(format!("Invalid glob '{pattern}': {e}")))?;
         let mut builder = GlobSetBuilder::new();
         builder.add(glob);
         let globset = builder.build().map_err(crate::Error::custom_from_err)?;

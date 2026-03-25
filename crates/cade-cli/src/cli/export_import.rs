@@ -139,7 +139,8 @@ pub async fn import_agent_from_file(client: &CadeClient, input_path: &str) -> Re
             .map_err(|e| crate::Error::custom(format!("read import file {input_path}: {e}")))?
     };
 
-    let payload: Value = serde_json::from_str(&content).map_err(|e| crate::Error::custom(format!("parse export JSON: {e}")))?;
+    let payload: Value = serde_json::from_str(&content)
+        .map_err(|e| crate::Error::custom(format!("parse export JSON: {e}")))?;
 
     import_agent(client, &payload).await
 }
@@ -148,7 +149,9 @@ pub async fn import_agent_from_file(client: &CadeClient, input_path: &str) -> Re
 pub async fn import_agent(client: &CadeClient, payload: &Value) -> Result<String> {
     let version = payload["cade_export_version"].as_u64().unwrap_or(0);
     if version != 1 {
-        return Err(crate::Error::custom(format!("Unsupported export version: {version} (expected 1)")));
+        return Err(crate::Error::custom(format!(
+            "Unsupported export version: {version} (expected 1)"
+        )));
     }
 
     let agent_data = &payload["agent"];
@@ -226,14 +229,19 @@ pub async fn resolve_agent_id(client: &CadeClient, name_or_id: &str) -> Result<S
         return Ok(name_or_id.to_string());
     }
     // Fall back to name search
-    let all = client.list_agents().await.map_err(|e| crate::Error::custom(format!("list agents: {e}")))?;
+    let all = client
+        .list_agents()
+        .await
+        .map_err(|e| crate::Error::custom(format!("list agents: {e}")))?;
     let q = name_or_id.to_lowercase();
     let matched: Vec<_> = all
         .iter()
         .filter(|a| a.name.to_lowercase().contains(&q))
         .collect();
     match matched.len() {
-        0 => Err(crate::Error::custom(format!("No agent found matching '{name_or_id}'"))),
+        0 => Err(crate::Error::custom(format!(
+            "No agent found matching '{name_or_id}'"
+        ))),
         1 => Ok(matched[0].id.clone()),
         n => Err(crate::Error::custom(format!(
             "{n} agents match '{name_or_id}': {}",

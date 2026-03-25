@@ -407,10 +407,11 @@ impl Editor {
         for entry in &self.paste_buffers {
             let marker = format!("[paste #{} +", entry.id);
             if let Some(start) = self.input.find(&marker)
-                && let Some(end) = self.input[start..].find(']') {
-                    self.input
-                        .replace_range(start..start + end + 1, &entry.text);
-                }
+                && let Some(end) = self.input[start..].find(']')
+            {
+                self.input
+                    .replace_range(start..start + end + 1, &entry.text);
+            }
         }
         self.paste_buffers.clear();
         self.cursor_pos = self.cursor_pos.min(self.input.len());
@@ -444,10 +445,11 @@ impl Editor {
         for entry in &self.paste_images {
             let placeholder = format!("[image #{}:", entry.id);
             if let Some(start) = self.input.find(&placeholder)
-                && let Some(end) = self.input[start..].find(']') {
-                    self.input.drain(start..start + end + 1);
-                    self.cursor_pos = self.cursor_pos.min(self.input.len());
-                }
+                && let Some(end) = self.input[start..].find(']')
+            {
+                self.input.drain(start..start + end + 1);
+                self.cursor_pos = self.cursor_pos.min(self.input.len());
+            }
         }
         std::mem::take(&mut self.paste_images)
     }

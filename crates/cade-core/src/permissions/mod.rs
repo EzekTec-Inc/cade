@@ -156,7 +156,9 @@ impl std::str::FromStr for PermissionMode {
             "acceptEdits" => Ok(Self::AcceptEdits),
             "plan" => Ok(Self::Plan),
             "bypassPermissions" => Ok(Self::BypassPermissions),
-            other => Err(crate::Error::custom(format!("unknown permission mode: {other}"))),
+            other => Err(crate::Error::custom(format!(
+                "unknown permission mode: {other}"
+            ))),
         }
     }
 }
@@ -190,7 +192,7 @@ const READONLY_CMDS: &[&str] = &[
     "whoami", "groups", "hostname", "uptime", // process / network observation
     "ps", "pgrep", "top", "htop", "lsof", "netstat", "ss", "ip", "ifconfig", "ping",
     // git — read-only subcommands handled separately
-    "git", // build inspection
+    "git",   // build inspection
     "cargo", // package observation
     "dpkg", "apt", "snap", "pip", "npm", "yarn",
 ];
@@ -234,6 +236,27 @@ const READONLY_CARGO: &[&str] = &[
     "info",
     "audit",
 ];
+
+/// Returns true if the given path or command contains globally protected patterns
+/// (.git/, .env, .ssh/) that should never be written to by the agent.
+pub fn path_is_protected(path_or_cmd: &str) -> bool {
+    let p = path_or_cmd.to_lowercase();
+    // Normalize delimiters for boundary checking
+    let norm = p.replace(
+        |c: char| c.is_whitespace() || c == '=' || c == '"' || c == '\'' || c == '>',
+        "/",
+    );
+
+    norm.contains("/.git/")
+        || norm.starts_with(".git/")
+        || norm == ".git"
+        || norm.contains("/.ssh/")
+        || norm.starts_with(".ssh/")
+        || norm == ".ssh"
+        || norm.contains("/.env")
+        || norm.starts_with(".env")
+        || norm == ".env"
+}
 
 /// Returns true if a bash `command` string would mutate the file system or
 /// system state, making it inappropriate for plan mode.
@@ -711,6 +734,43 @@ mod tests {
     }
 
     #[test]
+    fn path_is_protected_checks() {
+        assert!(path_is_protected(".git/config"));
+        assert!(path_is_protected("echo 'foo' > .env"));
+        assert!(path_is_protected("echo 'foo' > .env.local"));
+        assert!(path_is_protected("rm -rf .ssh/id_rsa"));
+        assert!(path_is_protected("cat .git/HEAD"));
+        assert!(!path_is_protected("src/main.rs"));
+        assert!(!path_is_protected("git status"));
+    }
+
+    #[test]
+    fn manager_granular_path_protection() {
+        let mgr = PermissionManager::new(PermissionMode::BypassPermissions); // YOLO mode
+
+        // Write to .env should be blocked
+        let args = json!({"path": ".env"});
+        assert!(mgr.is_blocked("write_file", &args));
+        assert!(!mgr.auto_approve("write_file", &args));
+
+        // Write to .git should be blocked
+        let args = json!({"path": ".git/config"});
+        assert!(mgr.is_blocked("edit_file", &args));
+
+        // Read from .env should NOT be blocked (unless Plan mode? No, plan mode allows read)
+        let args = json!({"path": ".env"});
+        assert!(!mgr.is_blocked("read_file", &args));
+
+        // Bash write to .ssh should be blocked
+        let args = json!({"command": "echo 'key' > ~/.ssh/authorized_keys"});
+        assert!(mgr.is_blocked("bash", &args));
+
+        // Bash read from .git should NOT be blocked
+        let args = json!({"command": "cat .git/HEAD"});
+        assert!(!mgr.is_blocked("bash", &args));
+    }
+
+    #[test]
     fn non_suspicious_commands() {
         assert!(!bash_command_is_suspicious("ls -la"));
         assert!(!bash_command_is_suspicious("cargo test"));
@@ -936,6 +996,23 @@ impl PermissionManager {
         }
     }
 
+    /// Clear all rules, then load new ones from the given settings.
+    /// Note: This resets any session-level allow rules.
+    pub fn reload_from_settings(&self, settings: &crate::settings::manager::PermissionSettings) {
+        self.allow_rules.lock().unwrap().clear();
+        self.deny_rules.lock().unwrap().clear();
+        for raw in &settings.allow {
+            if let Some(rule) = PermissionRule::parse(raw) {
+                self.add_allow_rule(rule);
+            }
+        }
+        for raw in &settings.deny {
+            if let Some(rule) = PermissionRule::parse(raw) {
+                self.add_deny_rule(rule);
+            }
+        }
+    }
+
     pub fn allow_rules(&self) -> Vec<PermissionRule> {
         self.allow_rules.lock().unwrap().clone()
     }
@@ -952,6 +1029,23 @@ impl PermissionManager {
     pub fn auto_approve(&self, tool_name: &str, args: &serde_json::Value) -> bool {
         let arg = tool_first_arg(tool_name, args);
         let arg_ref = arg.as_deref();
+
+        if let Some(arg_str) = arg_ref
+            && path_is_protected(arg_str)
+        {
+            if WRITE_TOOLS.contains(&tool_name) {
+                return false;
+            }
+            if matches!(
+                tool_name,
+                "bash" | "shell" | "run_command" | "execute_command"
+            ) {
+                let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                if bash_command_is_write(cmd) {
+                    return false;
+                }
+            }
+        }
 
         // Explicit deny wins over everything
         if self
@@ -1026,6 +1120,24 @@ impl PermissionManager {
         let arg = tool_first_arg(tool_name, args);
         let arg_ref = arg.as_deref();
 
+        // 0. Granular path protections (block always, regardless of mode)
+        if let Some(arg_str) = arg_ref
+            && path_is_protected(arg_str)
+        {
+            if WRITE_TOOLS.contains(&tool_name) {
+                return true;
+            }
+            if matches!(
+                tool_name,
+                "bash" | "shell" | "run_command" | "execute_command"
+            ) {
+                let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                if bash_command_is_write(cmd) {
+                    return true;
+                }
+            }
+        }
+
         // Explicit deny rules block regardless of mode
         if self
             .deny_rules
@@ -1062,6 +1174,26 @@ impl PermissionManager {
     pub fn block_reason(&self, tool_name: &str, args: &serde_json::Value) -> String {
         let arg = tool_first_arg(tool_name, args);
         let arg_ref = arg.as_deref();
+
+        // Check granular path protections first
+        if let Some(arg_str) = arg_ref
+            && path_is_protected(arg_str)
+        {
+            let is_write = if WRITE_TOOLS.contains(&tool_name) {
+                true
+            } else if matches!(
+                tool_name,
+                "bash" | "shell" | "run_command" | "execute_command"
+            ) {
+                let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                bash_command_is_write(cmd)
+            } else {
+                false
+            };
+            if is_write {
+                return "security: protected path access denied (.git, .env, .ssh)".to_string();
+            }
+        }
 
         // Check deny rule first
         if let Some(rule) = self

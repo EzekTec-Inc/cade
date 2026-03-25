@@ -512,9 +512,7 @@ mod tests {
         use cade_core::tool_ids::*;
         // -- Exec
         let schemas = all_meta_schemas();
-        let names: Vec<&str> = schemas.iter()
-            .filter_map(|s| s["name"].as_str())
-            .collect();
+        let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
 
         // -- Check — every canonical meta tool ID should be present
         for id in META_TOOL_IDS {
