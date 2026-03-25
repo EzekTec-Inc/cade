@@ -116,19 +116,23 @@ impl AskUserQuestionTool {
         for (qi, item) in arr.iter().enumerate() {
             let question = item["question"]
                 .as_str()
-                .ok_or_else(|| crate::Error::custom(format!("questions[{qi}].question must be a string")))?
+                .ok_or_else(|| {
+                    crate::Error::custom(format!("questions[{qi}].question must be a string"))
+                })?
                 .to_string();
 
             let header = item["header"]
                 .as_str()
-                .ok_or_else(|| crate::Error::custom(format!("questions[{qi}].header must be a string")))?
+                .ok_or_else(|| {
+                    crate::Error::custom(format!("questions[{qi}].header must be a string"))
+                })?
                 .to_string();
 
             let multi_select = item["multiSelect"].as_bool().unwrap_or(false);
 
-            let opts_arr = item["options"]
-                .as_array()
-                .ok_or_else(|| crate::Error::custom(format!("questions[{qi}].options must be an array")))?;
+            let opts_arr = item["options"].as_array().ok_or_else(|| {
+                crate::Error::custom(format!("questions[{qi}].options must be an array"))
+            })?;
 
             if opts_arr.len() < 2 || opts_arr.len() > 4 {
                 return Err(crate::Error::custom(format!(
@@ -141,12 +145,18 @@ impl AskUserQuestionTool {
             for (oi, opt) in opts_arr.iter().enumerate() {
                 let label = opt["label"]
                     .as_str()
-                    .ok_or_else(|| crate::Error::custom(format!("questions[{qi}].options[{oi}].label must be a string")))?
+                    .ok_or_else(|| {
+                        crate::Error::custom(format!(
+                            "questions[{qi}].options[{oi}].label must be a string"
+                        ))
+                    })?
                     .to_string();
                 let description = opt["description"]
                     .as_str()
                     .ok_or_else(|| {
-                        crate::Error::custom(format!("questions[{qi}].options[{oi}].description must be a string"))
+                        crate::Error::custom(format!(
+                            "questions[{qi}].options[{oi}].description must be a string"
+                        ))
                     })?
                     .to_string();
                 options.push(AskOption { label, description });
