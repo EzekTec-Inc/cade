@@ -1206,7 +1206,31 @@ impl Repl {
                         };
                         let _ = self.app.lock().expect("lock poisoned").draw();
                         if let Some(cmd) = chosen {
-                            pending_input = Some(cmd);
+                            // If it's a tool hint (no slash) or a command that needs arguments,
+                            // insert it into the editor instead of executing immediately.
+                            let needs_args = !cmd.starts_with('/')
+                                || cmd.contains(' ')
+                                || [
+                                    "/delete",
+                                    "/checkpoint",
+                                    "/fork",
+                                    "/approve-always",
+                                    "/deny-always",
+                                    "/remember",
+                                    "/disconnect",
+                                    "/search",
+                                    "/export",
+                                    "/rename",
+                                    "/connect",
+                                ]
+                                .contains(&cmd.as_str());
+
+                            if needs_args {
+                                let mut app = self.app.lock().expect("lock poisoned");
+                                app.editor.insert_str(&format!("{cmd} "));
+                            } else {
+                                pending_input = Some(cmd);
+                            }
                         }
                         continue;
                     }

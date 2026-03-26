@@ -1280,3 +1280,21 @@ git revert HEAD
 - `src/main.rs`
 
 **Gate:** `cargo test --workspace` must pass, and the compiled binary should start and behave as expected.
+
+## 2026-03-26T12:00:00Z — Add streamable HTTP capability to cade-server
+
+**Summary:** Investigated and verified feasibility of streaming HTTP via Axum/reqwest without buffering. Creating plan to implement an endpoint for streaming large artifacts/proxying external HTTP.
+
+**Files to modify:**
+- `crates/cade-server/Cargo.toml` (enable reqwest stream feature, add tokio-util)
+- `crates/cade-server/src/server/api/mod.rs` (register route)
+- `crates/cade-server/src/server/api/proxy.rs` (new file for stream handler)
+
+**Reason:** Improve memory efficiency when serving or fetching large payloads by utilizing `axum::body::Body::from_stream` instead of buffering.
+
+**Previous behavior:** Did not support streaming generic HTTP bodies through the server API (only LLM SSE streaming was supported).
+
+**New behavior:** Support a `/api/v1/stream` endpoint that streams remote HTTP responses chunk-by-chunk to the client.
+
+**Rollback steps:** Revert `Cargo.toml` additions, delete `proxy.rs`, remove route from `mod.rs`.
+- Updated `README.md` to document the new `/v1/stream` API endpoint.

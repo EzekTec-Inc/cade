@@ -431,6 +431,7 @@ cade
 | `GET/POST` | `/v1/tools` | List / register tools |
 | `GET` | `/v1/models` | List available models |
 | `GET/POST/DELETE` | `/v1/providers` | List / add / remove LLM providers |
+| `GET` | `/v1/stream` | Stream HTTP from a remote URL |
 
 ---
 

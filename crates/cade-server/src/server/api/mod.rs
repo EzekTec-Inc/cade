@@ -11,6 +11,7 @@ pub mod memory_evidence;
 pub mod messages;
 pub mod models;
 pub mod providers;
+pub mod proxy;
 pub mod runs;
 pub mod tool_executions;
 pub mod tools;
@@ -181,6 +182,8 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/tools", post(tools::create_tool).get(tools::list_tools))
         // Models
         .route("/v1/models", get(models::list_models))
+        // Stream
+        .route("/v1/stream", get(proxy::stream_http_handler))
         // Providers
         .route(
             "/v1/providers",
