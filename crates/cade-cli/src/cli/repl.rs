@@ -8641,11 +8641,11 @@ impl Repl {
             Ok(messages) => {
                 let mut out = String::new();
                 for msg in messages {
-                    if let Some(text) = msg.assistant_text() {
-                        if !text.is_empty() {
-                            out.push_str(text);
-                            out.push('\n');
-                        }
+                    if let Some(text) = msg.assistant_text()
+                        && !text.is_empty()
+                    {
+                        out.push_str(text);
+                        out.push('\n');
                     }
                 }
                 

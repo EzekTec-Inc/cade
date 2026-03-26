@@ -861,11 +861,11 @@ impl ToolRuntime {
                 // Ensure we get all tool outputs if it used tools
                 let mut out = String::new();
                 for msg in messages {
-                    if let Some(text) = msg.assistant_text() {
-                        if !text.is_empty() {
-                            out.push_str(text);
-                            out.push('\n');
-                        }
+                    if let Some(text) = msg.assistant_text()
+                        && !text.is_empty()
+                    {
+                        out.push_str(text);
+                        out.push('\n');
                     }
                 }
                 if out.trim().is_empty() {
