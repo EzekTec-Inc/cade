@@ -42,7 +42,7 @@ ANTHROPIC_API_KEY=sk-ant-... ./target/debug/cade-server
 
 ## Project Structure
 
-CADE is a Cargo workspace with six crates. See [ARCHITECTURE.md](ARCHITECTURE.md)
+CADE is a Cargo workspace with twelve crates. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for full details.
 
 ```

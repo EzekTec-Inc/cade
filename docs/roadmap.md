@@ -30,6 +30,7 @@
 - [x] Per-agent rate limiting
 - [x] Provider hot-reload via `/connect`
 - [x] Live model listing from all providers
+- [x] Streamable HTTP capability (`/v1/stream`)
 
 ### Security
 - [x] Opt-in filesystem sandbox (`CADE_FS_ROOT`)
@@ -40,7 +41,7 @@
 - [x] 0600 permissions on settings files
 
 ### Architecture
-- [x] Cargo workspace split (6 crates)
+- [x] Cargo workspace split (12 crates)
 - [x] LLM providers extracted to `cade-ai`
 - [x] Clean acyclic dependency graph
 - [x] Dead legacy code removed (~25K lines)

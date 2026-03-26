@@ -21,12 +21,18 @@ CADE/
 │   └── bin/
 │       └── cade-server.rs  # `cade-server` entry point
 ├── crates/
-│   ├── cade-core/          # Shared types (no crate deps)
-│   ├── cade-ai/            # LLM providers & model catalogue (no crate deps)
-│   ├── cade-desktop/       # Desktop extensions (no crate deps)
+│   ├── cade-agent/         # Client, tools, subagents
+│   ├── cade-ai/            # LLM providers & model catalogue
+│   ├── cade-cli/           # CLI orchestrator, headless mode
+│   ├── cade-codeintel/     # Code intelligence tools
+│   ├── cade-core/          # Shared types, toolsets, hooks
+│   ├── cade-desktop/       # Desktop extensions (xcap, xdotool)
+│   ├── cade-mcp/           # MCP client integration
+│   ├── cade-plugin/        # WASM/dylib plugin system
+│   ├── cade-sdk/           # Developer SDK
 │   ├── cade-server/        # HTTP API + SQLite storage
-│   ├── cade-agent/         # Client, tools, MCP, subagents
-│   └── cade-cli/           # TUI, REPL, headless mode
+│   ├── cade-tui/           # Ratatui rendering engine
+│   └── cade-web/           # Web scraping and HTTP tools
 └── tests/                  # Integration tests
 ```
 

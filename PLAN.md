@@ -1298,3 +1298,20 @@ git revert HEAD
 
 **Rollback steps:** Revert `Cargo.toml` additions, delete `proxy.rs`, remove route from `mod.rs`.
 - Updated `README.md` to document the new `/v1/stream` API endpoint.
+
+## 2026-03-26T12:05:00Z — Documentation accuracy sweep
+
+**Summary:** Investigated all documentation files to ascertain accuracy and brought them up to date regarding the crate count and the newly added streamable HTTP feature.
+
+**Files modified:**
+- `ARCHITECTURE.md` (updated tree to list all 12 crates)
+- `docs/roadmap.md` (fixed workspace split count to 12 crates, added streamable HTTP feature)
+- `CONTRIBUTING.md` (fixed workspace split count to 12 crates)
+
+**Reason:** Maintain consistent and correct documentation for the CADE workspace.
+
+**Previous behavior:** Docs incorrectly referenced 6 crates when the workspace has 12.
+
+**New behavior:** Documentation is fully aligned with the current state.
+
+**Rollback steps:** git reset --hard HEAD
