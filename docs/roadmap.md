@@ -60,7 +60,7 @@
 
 ### Medium Term
 - [x] **Plugin system**: Dynamic tool loading via shared libraries or WASM
-- [ ] **Multi-agent collaboration**: Named agents with message passing
+- [x] **Multi-agent collaboration**: Named agents with message passing
 - [ ] **Web UI**: Browser-based interface alongside the terminal
 - [ ] **Windows/macOS support**: Cross-platform desktop extensions
 - [x] **Session replay**: Re-watch recorded coding sessions
