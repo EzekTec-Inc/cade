@@ -42,6 +42,8 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_run_skill_script(),
         schema_load_skill_ref(),
         schema_run_subagent(),
+        schema_list_agents(),
+        schema_message_agent(),
         schema_create_checkpoint(),
         schema_list_checkpoints(),
         schema_restore_checkpoint(),
@@ -306,6 +308,39 @@ fn schema_run_subagent() -> Value {
                 }
             },
             "required": ["subagent_type", "prompt"]
+        }
+    })
+}
+
+fn schema_list_agents() -> Value {
+    json!({
+        "name": "list_agents",
+        "description": "List all active agents on the server to discover colleagues you can collaborate with. Returns their names, IDs, and descriptions.",
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": []
+        }
+    })
+}
+
+fn schema_message_agent() -> Value {
+    json!({
+        "name": "message_agent",
+        "description": "Send a message to another named agent (colleague) and wait for their response. Useful for delegating specialized tasks or asking for review.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "The name or ID of the target agent"
+                },
+                "message": {
+                    "type": "string",
+                    "description": "The message/task description to send to the agent"
+                }
+            },
+            "required": ["target", "message"]
         }
     })
 }

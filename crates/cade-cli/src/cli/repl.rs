@@ -5549,6 +5549,7 @@ impl Repl {
             }
             "run_subagent" => Some(self.handle_run_subagent(call_id, args).await),
             "ask_user_question" => Some(self.handle_ask_user_question(call_id, args).await),
+            "message_agent" => Some(self.handle_message_agent(call_id, args).await),
             _ => None,
         }
     }
@@ -6031,6 +6032,9 @@ impl Repl {
         }
         if tool_name == "run_subagent" {
             return self.handle_run_subagent(call_id, args).await;
+        }
+        if tool_name == "message_agent" {
+            return self.handle_message_agent(call_id, args).await;
         }
         if tool_name == "ask_user_question" {
             return self.handle_ask_user_question(call_id, args).await;
@@ -8587,6 +8591,78 @@ impl Repl {
                 tool_name: "run_subagent".to_string(),
                 output: final_output,
                 is_error,
+            })
+        }
+    }
+
+    async fn handle_message_agent(
+        &self,
+        call_id: &str,
+        args: &serde_json::Value,
+    ) -> Result<cade_agent::tools::ToolResult> {
+        let target = args["target"].as_str().unwrap_or("").trim().to_string();
+        let message = args["message"].as_str().unwrap_or("").to_string();
+
+        if target.is_empty() || message.is_empty() {
+            return Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "message_agent".to_string(),
+                output: "error: 'target' and 'message' are required".to_string(),
+                is_error: true,
+            });
+        }
+
+        self.tui_ok(format!("  → Messaging agent [{target}]..."));
+
+        let target_id = match self.client.list_agents().await {
+            Ok(agents) => {
+                if let Some(agent) = agents.iter().find(|a| a.id == target || a.name == target) {
+                    agent.id.clone()
+                } else {
+                    return Ok(cade_agent::tools::ToolResult {
+                        tool_call_id: call_id.to_string(),
+                        tool_name: "message_agent".to_string(),
+                        output: format!("Error: Agent '{target}' not found"),
+                        is_error: true,
+                    });
+                }
+            }
+            Err(e) => return Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "message_agent".to_string(),
+                output: format!("Failed to query agents: {e}"),
+                is_error: true,
+            }),
+        };
+
+        let res = self.client.stream_message(&target_id, &message, |_| {}).await;
+
+        match res {
+            Ok(messages) => {
+                let mut out = String::new();
+                for msg in messages {
+                    if let Some(text) = msg.assistant_text() {
+                        if !text.is_empty() {
+                            out.push_str(text);
+                            out.push('\n');
+                        }
+                    }
+                }
+                
+                self.tui_ok(format!("  ✓ Agent [{target}] responded"));
+                
+                Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "message_agent".to_string(),
+                    output: out.trim().to_string(),
+                    is_error: false,
+                })
+            }
+            Err(e) => Ok(cade_agent::tools::ToolResult {
+                tool_call_id: call_id.to_string(),
+                tool_name: "message_agent".to_string(),
+                output: format!("Failed to message agent: {e}"),
+                is_error: true,
             })
         }
     }

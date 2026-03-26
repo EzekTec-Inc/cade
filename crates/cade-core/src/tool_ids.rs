@@ -60,6 +60,8 @@ pub const LOAD_SKILL_REF: &str = "load_skill_ref";
 // region:    --- Meta tools (subagents)
 
 pub const RUN_SUBAGENT: &str = "run_subagent";
+pub const LIST_AGENTS: &str = "list_agents";
+pub const MESSAGE_AGENT: &str = "message_agent";
 
 // endregion: --- Meta tools (subagents)
 
@@ -132,6 +134,8 @@ pub const META_TOOL_IDS: &[&str] = &[
     RUN_SKILL_SCRIPT,
     LOAD_SKILL_REF,
     RUN_SUBAGENT,
+    LIST_AGENTS,
+    MESSAGE_AGENT,
     CREATE_CHECKPOINT,
     LIST_CHECKPOINTS,
     RESTORE_CHECKPOINT,

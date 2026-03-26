@@ -203,6 +203,10 @@ impl ToolRuntime {
                 return None;
             }
 
+            // -- Meta tools (agents)
+            LIST_AGENTS => self.handle_list_agents().await,
+            MESSAGE_AGENT => self.handle_message_agent(args).await,
+
             // -- Web tools (Phase 6)
             WEB_SEARCH => cade_web::WebSearchTool::run(args)
                 .await
@@ -810,6 +814,71 @@ impl ToolRuntime {
     }
 
     // endregion: --- Skill handlers
+
+    // region:    --- Agent handlers
+
+    async fn handle_list_agents(&self) -> (String, bool) {
+        match self.client.list_agents().await {
+            Ok(agents) => {
+                if agents.is_empty() {
+                    return ("No other agents found.".to_string(), false);
+                }
+                let mut out = String::from("Available agents:\n");
+                for agent in agents {
+                    let name = &agent.name;
+                    let id = &agent.id;
+                    let desc = agent.description.as_deref().unwrap_or("No description");
+                    out.push_str(&format!("- {name} ({id}): {desc}\n"));
+                }
+                (out.trim().to_string(), false)
+            }
+            Err(e) => (format!("Failed to list agents: {e}"), true),
+        }
+    }
+
+    async fn handle_message_agent(&self, args: &Value) -> (String, bool) {
+        let target = args["target"].as_str().unwrap_or("").trim().to_string();
+        let message = args["message"].as_str().unwrap_or("").to_string();
+
+        if target.is_empty() || message.is_empty() {
+            return ("Error: 'target' and 'message' are required".to_string(), true);
+        }
+
+        // Try to resolve target to an agent ID
+        let target_id = match self.client.list_agents().await {
+            Ok(agents) => {
+                if let Some(agent) = agents.iter().find(|a| a.id == target || a.name == target) {
+                    agent.id.clone()
+                } else {
+                    return (format!("Error: Agent '{target}' not found"), true);
+                }
+            }
+            Err(e) => return (format!("Failed to query agents: {e}"), true),
+        };
+
+        match self.client.stream_message(&target_id, &message, |_| {}).await {
+            Ok(messages) => {
+                // Ensure we get all tool outputs if it used tools
+                let mut out = String::new();
+                for msg in messages {
+                    if let Some(text) = msg.assistant_text() {
+                        if !text.is_empty() {
+                            out.push_str(text);
+                            out.push('\n');
+                        }
+                    }
+                }
+                if out.trim().is_empty() {
+                    ("Target agent returned an empty response".to_string(), false)
+                } else {
+                    (out.trim().to_string(), false)
+                }
+            }
+            Err(e) => (format!("Failed to message agent: {e}"), true),
+        }
+    }
+
+    // endregion: --- Agent handlers
 }
 
 // endregion: --- ToolRuntime
