@@ -252,12 +252,13 @@ pub async fn register_and_attach_filtered(
     tool_filter: Option<&[String]>,
 ) {
     // Register all meta tools (memory, skills, subagents) via the centralised registry.
-    cade_agent::tools::register_meta_tools(client).await;
+    let meta_ids = cade_agent::tools::register_meta_tools(client).await;
     let tools = register_cade_tools_filtered(client, toolset, tool_filter)
         .await
         .unwrap_or_default();
-    let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
-    tracing::info!("Registered {} tools", tools.len());
+    let mut ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
+    ids.extend(meta_ids);
+    tracing::info!("Registered {} native tools", tools.len());
     if !ids.is_empty()
         && let Err(e) = client.attach_agent_tools(agent_id, &ids).await
     {

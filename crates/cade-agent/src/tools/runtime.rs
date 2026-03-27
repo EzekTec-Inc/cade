@@ -865,7 +865,6 @@ impl ToolRuntime {
                         && !text.is_empty()
                     {
                         out.push_str(text);
-                        out.push('\n');
                     }
                 }
                 if out.trim().is_empty() {

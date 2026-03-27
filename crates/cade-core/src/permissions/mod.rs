@@ -175,6 +175,7 @@ const WRITE_TOOLS: &[&str] = &[
     "move_file",
     "rename_file",
     "patch_file",
+    "apply_patch",       // Codex toolset file patching
     "apply_diff",
     "desktop_control",   // sends input / clicks
     "send_notification", // side-effect
@@ -247,15 +248,33 @@ pub fn path_is_protected(path_or_cmd: &str) -> bool {
         "/",
     );
 
-    norm.contains("/.git/")
-        || norm.starts_with(".git/")
-        || norm == ".git"
-        || norm.contains("/.ssh/")
-        || norm.starts_with(".ssh/")
-        || norm == ".ssh"
-        || norm.contains("/.env")
-        || norm.starts_with(".env")
-        || norm == ".env"
+    // Strip leading "./" and "../" sequences so relative paths like
+    // "./.git" or "../.env" are correctly caught by starts_with checks.
+    let stripped = {
+        let mut s = norm.as_str();
+        loop {
+            if let Some(rest) = s.strip_prefix("./") {
+                s = rest;
+            } else if let Some(rest) = s.strip_prefix("../") {
+                s = rest;
+            } else {
+                break s;
+            }
+        }
+    };
+
+    stripped.contains("/.git/")
+        || stripped.starts_with(".git/")
+        || stripped == ".git"
+        || stripped.contains("/.ssh/")
+        || stripped.starts_with(".ssh/")
+        || stripped == ".ssh"
+        || stripped.contains("/.env")
+        || stripped.starts_with(".env")
+        || stripped == ".env"
+        || stripped.contains("/.cade-db")
+        || stripped.starts_with(".cade-db")
+        || stripped == ".cade-db"
 }
 
 /// Returns true if a bash `command` string would mutate the file system or
@@ -742,6 +761,15 @@ mod tests {
         assert!(path_is_protected("cat .git/HEAD"));
         assert!(!path_is_protected("src/main.rs"));
         assert!(!path_is_protected("git status"));
+        // Relative-path bypass regression tests
+        assert!(path_is_protected("./.git"));
+        assert!(path_is_protected("./.git/config"));
+        assert!(path_is_protected("./.ssh"));
+        assert!(path_is_protected("./.ssh/id_rsa"));
+        assert!(path_is_protected("./.env"));
+        assert!(path_is_protected("../.env"));
+        assert!(path_is_protected("../../.git"));
+        assert!(path_is_protected("./.cade-db.key"));
     }
 
     #[test]
@@ -857,6 +885,7 @@ mod tests {
         assert!(mgr.is_blocked("edit_file", &args));
         assert!(mgr.is_blocked("delete_file", &args));
         assert!(mgr.is_blocked("desktop_control", &json!({})));
+        assert!(mgr.is_blocked("apply_patch", &args));
     }
 
     #[test]

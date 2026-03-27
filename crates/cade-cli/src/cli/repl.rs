@@ -8645,16 +8645,22 @@ impl Repl {
                         && !text.is_empty()
                     {
                         out.push_str(text);
-                        out.push('\n');
                     }
                 }
                 
+                let output = out.trim();
+                let final_output = if output.is_empty() {
+                    "Target agent returned an empty response".to_string()
+                } else {
+                    output.to_string()
+                };
+
                 self.tui_ok(format!("  ✓ Agent [{target}] responded"));
                 
                 Ok(cade_agent::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: "message_agent".to_string(),
-                    output: out.trim().to_string(),
+                    output: final_output,
                     is_error: false,
                 })
             }
