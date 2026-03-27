@@ -2528,17 +2528,54 @@ fn render_line_to_text(
             out.push(Line::from(spans));
         }
         RenderLine::UserMessage(text) => {
-            let sep = "─".repeat(width);
-            out.push(Line::from(Span::styled(
-                sep,
-                Style::default().fg(RC::DarkGray),
-            )));
+            // Labeled separator: "──── you ──────────────────"
+            // Replaces the plain full-width rule with a turn-attribution marker.
+            const YOU_LABEL: &str = " you ";
+            const LEFT_W: usize = 4;
+            let label_w = YOU_LABEL.chars().count();
+            let right_w = width.saturating_sub(LEFT_W + label_w);
+            let sep_line: Vec<Span<'static>> = vec![
+                Span::styled(
+                    "─".repeat(LEFT_W),
+                    Style::default().fg(RC::DarkGray),
+                ),
+                Span::styled(
+                    YOU_LABEL,
+                    Style::default().fg(colors.dim).add_modifier(Modifier::DIM),
+                ),
+                Span::styled(
+                    "─".repeat(right_w),
+                    Style::default().fg(RC::DarkGray),
+                ),
+            ];
+            out.push(Line::from(sep_line));
             out.extend(crate::markdown::parse_markdown_lines(text));
         }
         RenderLine::AssistantText(text) => {
+            // One leading blank for visual separation from the preceding line
+            // (tool result, user message, etc.).  No trailing blank — ToolCall
+            // already prepends its own blank, which would otherwise produce a
+            // distracting double-gap.  The ● prefix matches the streaming
+            // render_assistant_lines path so there is no visual pop on commit.
             out.push(Line::from(""));
-            out.extend(crate::markdown::parse_markdown_lines(text));
-            out.push(Line::from(""));
+            let md_lines = crate::markdown::parse_markdown_lines(text);
+            if md_lines.is_empty() {
+                out.push(Line::from(Span::styled(
+                    "● ",
+                    Style::default().fg(colors.tool_title),
+                )));
+            } else {
+                for (i, ml) in md_lines.into_iter().enumerate() {
+                    if i == 0 {
+                        let mut spans =
+                            vec![Span::styled("● ", Style::default().fg(colors.tool_title))];
+                        spans.extend(ml.spans.into_iter());
+                        out.push(Line::from(spans));
+                    } else {
+                        out.push(ml);
+                    }
+                }
+            }
         }
         RenderLine::ToolCall { name, preview } => {
             // Blank spacer before each tool group.
@@ -2886,6 +2923,9 @@ fn render_assistant_lines(
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
+    // Leading blank matches the committed AssistantText renderer so the
+    // viewport does not shift by one row when streaming commits.
+    out.push(Line::from(""));
     let md_lines = crate::markdown::parse_markdown_lines(text);
     if md_lines.is_empty() {
         out.push(Line::from(Span::styled(
@@ -2896,7 +2936,6 @@ fn render_assistant_lines(
     }
     for (i, ml) in md_lines.into_iter().enumerate() {
         if i == 0 {
-            // Prepend "● " (purple dot) to the first line of the response.
             let mut spans = vec![Span::styled("● ", Style::default().fg(colors.tool_title))];
             spans.extend(ml.spans.into_iter());
             out.push(Line::from(spans));

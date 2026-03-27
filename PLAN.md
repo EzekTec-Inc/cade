@@ -1450,3 +1450,71 @@ git checkout HEAD -- crates/cade-cli/src/cli/repl.rs crates/cade-core/src/tool_i
 ```
 git checkout HEAD -- crates/cade-cli/src/cli/repl.rs
 ```
+
+---
+
+## 2026-03-27T01:00:00Z — UI investigation & evolution: Ctrl+O, blank lines, visual consistency
+
+### Investigation results
+
+**Ctrl+O** — Working correctly in both states:
+- Idle input state: `handle_key_input` arm toggles `expand_all`, falls through to `Ok(None)`, outer loop calls `draw()`.
+- Agent-turn state: tick task toggles `expand_all` and calls `draw()` explicitly.
+- Applies correctly to `ToolResult` (3 → 20 line limit), `LiveOutput`, and `Reasoning` blocks.
+
+**Blank lines** — No artificial padding exists:
+- Scroll management uses `follow=true` / `scroll=0` (follow-bottom pointer), never blank-line padding. ✅
+- Two genuine rendering issues were found and fixed (see below).
+
+### Issues fixed
+
+**Issue 1 — Double blank gaps between AI response and next tool call**
+Every committed `AssistantText` emitted a *trailing* blank line, and every `ToolCall` also emits a *leading* blank line. Their combination produced a visible double-blank gap in the middle of conversations. Fixed by removing the trailing blank from `AssistantText`.
+
+**Issue 2 — 1-row visual pop on streaming commit**
+The streaming renderer (`render_assistant_lines`) had no leading blank; the committed `AssistantText` renderer had one. When the stream committed, content shifted up by one row and the `●` prefix marker disappeared. Fixed by adding the same leading blank to `render_assistant_lines`.
+
+### UI evolution changes
+
+**Files modified:** `crates/cade-tui/src/app.rs`
+
+1. **`AssistantText` renderer** (committed AI response):
+   - Added `● ` prefix to the first content line — matches streaming appearance exactly, no visual pop on commit.
+   - Kept one leading blank (separation from above).
+   - Removed trailing blank — eliminates double-blank gaps when followed by a `ToolCall`.
+
+2. **`render_assistant_lines`** (live streaming):
+   - Added leading blank to match the committed renderer — viewport row count is now identical before and after commit, eliminating the 1-row jump.
+
+3. **`UserMessage` renderer**:
+   - Replaced the plain full-width `────────────────────` separator with a turn-attribution separator `──── you ──────────────────` (labeled with a dim "you" marker) — makes it immediately clear which turn is the user's without adding any lines.
+
+**Previous visual pattern (excerpt):**
+```
+  ⎿  tool output
+
+                           ← double blank (AssistantText trailing + ToolCall leading)
+● next_tool(...)
+  ⎿  result
+
+──────────────────────────  ← anonymous separator
+user message
+```
+
+**New visual pattern:**
+```
+  ⎿  tool output
+                            ← single blank (ToolCall leading only)
+● next_tool(...)
+  ⎿  result
+
+──── you ──────────────────  ← labeled separator
+user message
+```
+
+**Verification:** `cargo check -p cade-tui -p cade-cli` — 0 errors, 0 warnings. `cargo test -p cade-tui --lib` — 10/10 passed.
+
+**Rollback steps:**
+```
+git checkout HEAD -- crates/cade-tui/src/app.rs
+```
