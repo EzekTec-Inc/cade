@@ -144,6 +144,8 @@ pub const META_TOOL_IDS: &[&str] = &[
     LINK_MEMORY_EVIDENCE,
     REFLECT,
     BROWSER_SCREENSHOT,
+    WEB_SEARCH,
+    FETCH_DOC,
 ];
 
 // endregion: --- Support

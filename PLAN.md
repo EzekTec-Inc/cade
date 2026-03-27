@@ -1374,3 +1374,79 @@ The subagent review claimed `sed -i` was permitted in Plan mode. Investigation c
 **Gate:** `cargo test -p cade-core` — 160/160 passed.
 
 **Rollback:** `git checkout crates/cade-core/src/permissions/mod.rs`
+
+---
+
+## 2026-03-27T00:00:00Z — Fix: "Unknown tool" for install_skill, fetch_doc, and all meta/web tools in interactive TUI mode
+
+**Summary:** Fixed a refactor regression where the interactive TUI's tool dispatch path bypassed `ToolRuntime`, causing `install_skill`, `fetch_doc`, `web_search`, and all other meta/web/checkpoint/codeintel tools to fail with "Unknown tool: '{name}'" in every interactive session.
+
+**Root cause:**  
+During an earlier refactor that introduced parallel read-tool execution, `dispatch_tool_calls` was rewritten to use a new `run_tool_inner` static helper. The `ToolRuntime` instance was constructed in `dispatch_tool_calls` but its Arc clone was stored as `_rt_c` (underscore = unused) and never passed to `run_tool_inner`. As a result, `run_tool_inner` called `dispatch()` directly — which only knows about native (bash, read_file, write_file, edit_file, grep, glob, desktop_*) and MCP tools. The old `execute_tool` function, which did have all the meta-tool intercepts, became dead code (defined but never called). The headless path was unaffected because it already called `ToolRuntime::execute()` correctly.
+
+**Secondary issue:** `WEB_SEARCH` ("web_search") and `FETCH_DOC` ("fetch_doc") were declared as constants in `tool_ids.rs` but were missing from the `META_TOOL_IDS` slice. `BROWSER_SCREENSHOT` was present. This meant the `test_schema_names_match_tool_ids` test didn't enforce schema coverage for those two tools.
+
+**Files modified:**
+- `MODIFIED` `crates/cade-cli/src/cli/repl.rs`
+  - `run_tool_inner`: added `runtime: &std::sync::Arc<cade_agent::tools::ToolRuntime>` parameter.
+  - `run_tool_inner` body: replaced the direct `dispatch()` "Standard dispatch path" block with a `runtime.execute()` call first; the `Ok(None)` branch falls through to `dispatch()` for any truly interactive-only tools (a safety net — those are already handled by `try_native_intercept` before reaching `run_tool_inner`).
+  - Parallel read loop: renamed `_rt_c` → `rt_c` and passed `&rt_c` as the new `runtime` argument.
+  - Sequential write loop: passed `&runtime` as the new `runtime` argument.
+- `MODIFIED` `crates/cade-core/src/tool_ids.rs`
+  - Added `WEB_SEARCH` and `FETCH_DOC` to `META_TOOL_IDS`.
+
+**Affected tools (now work in interactive TUI):**
+- `install_skill`, `load_skill`, `run_skill_script`, `load_skill_ref`
+- `fetch_doc`, `web_search`, `browser_screenshot`
+- `update_memory`, `memory_apply_patch`, `archival_memory_insert`, `archival_memory_search`, `conversation_search`, `search_memory`
+- `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, `store_artifact`
+- `update_memory_typed`, `link_memory_evidence`, `reflect`
+- `symbol_search`, `find_references`, `goto_definition`, `get_repo_map`, `index_repository`
+- `list_agents`, `message_agent`
+
+**Note:** The dead `execute_tool` function in `repl.rs` (which has meta-tool intercepts but is never called) is left in place pending explicit cleanup approval.
+
+**Previous behavior:** All tools listed above returned "Unknown tool: '{name}'" in interactive TUI mode. Headless mode (`cade --prompt`) was unaffected.
+
+**New behavior:** All tools listed above execute correctly in interactive TUI mode via `ToolRuntime::execute()`, matching headless behaviour.
+
+**Verification:** `cargo check -p cade-cli` and `cargo check -p cade-agent` pass with no errors or new warnings.
+
+**Rollback steps:**
+```
+git checkout HEAD -- crates/cade-cli/src/cli/repl.rs crates/cade-core/src/tool_ids.rs
+```
+
+---
+
+## 2026-03-27T00:30:00Z — Cleanup: remove dead code left by execute_tool removal
+
+**Summary:** Removed all dead code that became unreachable after the `execute_tool` function was deleted in the previous session.
+
+**Files modified:**
+- `MODIFIED` `crates/cade-cli/src/cli/repl.rs`
+
+**Deletions (535 lines total):**
+
+| Lines (pre-cleanup) | Content removed |
+|---|---|
+| 15–16 | Top-level `use cade_agent::tools::bash::BashTool` and `use cade_agent::tools::dispatch` (both shadowed by local `use` declarations inside `run_tool_inner`; were only needed by `execute_tool`) |
+| 6088–6117 | `// ── Memory-block size helpers` section comment + `auto_trim_to_limit` fn + `parse_limit_from_memory_error` fn + trailing section divider (all called only from the dead `handle_update_memory`) |
+| 6169–6401 | `handle_update_memory` + `handle_memory_apply_patch` (Repl impl methods called only from the dead `execute_tool`) |
+| 6547–6816 | `handle_load_skill` + `handle_install_skill` + `handle_run_skill_script` + `handle_load_skill_ref` (Repl impl methods called only from the dead `execute_tool`) |
+
+**Functions kept (still live):**
+- `inject_working_set_reminder` — called at line 4569 in the main REPL loop
+- `handle_ask_user_question` — called at line 5553 in `try_native_intercept`
+- All other Repl impl methods
+
+**Previous behavior:** `cargo check -p cade-cli` produced 3 warnings (2 unused imports + 1 "multiple associated items never used" grouping 8 dead methods).
+
+**New behavior:** `cargo check -p cade-cli` produces 0 warnings, 0 errors.
+
+**Verification:** `cargo check -p cade-cli` — `Finished` with no warnings.
+
+**Rollback steps:**
+```
+git checkout HEAD -- crates/cade-cli/src/cli/repl.rs
+```
