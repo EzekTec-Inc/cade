@@ -739,14 +739,41 @@ pub async fn install_skill_from_url(url: &str, target_dir: &Path) -> Result<Skil
 
     // Fetch content
     let client = reqwest::Client::new();
-    let content = client
+    let response = client
         .get(&raw_url)
         .header("User-Agent", "CADE-agent")
         .send()
         .await?
-        .error_for_status()?
-        .text()
-        .await?;
+        .error_for_status()?;
+
+    // Check content-type — reject obvious non-markdown responses
+    let ct = response
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_lowercase();
+    if ct.contains("text/html") || ct.contains("application/json") {
+        return Err(Error::custom(format!(
+            "URL returned {ct} instead of skill markdown content. \
+             The URL should serve raw SKILL.MD content (text/plain or text/markdown)."
+        )));
+    }
+
+    let content = response.text().await?;
+
+    // Validate content looks like a SKILL.MD file (frontmatter or markdown)
+    let trimmed_content = content.trim();
+    if trimmed_content.starts_with("<!DOCTYPE")
+        || trimmed_content.starts_with("<html")
+        || trimmed_content.starts_with("{\"")
+    {
+        return Err(Error::custom(
+            "Response body looks like HTML or JSON, not a valid SKILL.MD file. \
+             The URL should serve raw markdown content."
+                .to_string(),
+        ));
+    }
 
     // Write
     std::fs::create_dir_all(&skill_dir)?;

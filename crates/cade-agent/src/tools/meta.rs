@@ -209,13 +209,13 @@ fn schema_load_skill() -> Value {
 fn schema_install_skill() -> Value {
     json!({
         "name": "install_skill",
-        "description": "Download and install a skill from a GitHub URL or direct SKILL.MD URL. Use when the user asks to install a skill.",
+        "description": "Download and install a skill from any URL that serves a SKILL.MD file. Accepts GitHub tree/blob URLs, skill registry URLs (e.g. https://agentskill.sh/@user/skill), or any direct URL to a SKILL.MD file. Use when the user asks to install a skill or pastes a skill install prompt.",
         "parameters": {
             "type": "object",
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "GitHub tree URL or direct SKILL.MD URL to install"
+                    "description": "URL to install the skill from — GitHub URL, skill registry URL, or direct SKILL.MD URL"
                 },
                 "scope": {
                     "type": "string",
