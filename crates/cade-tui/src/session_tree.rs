@@ -6,14 +6,14 @@
 ///   - Press Enter to select one (returns the checkpoint ID for restore)
 ///   - Press 'n' to start a new conversation from this point
 ///   - Press Esc / 'q' to cancel
-use crate::Result;
-use crossterm::event::{self, Event, KeyCode};
+use crate::{Result, colors::ThemeColors, overlay};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, List, ListItem, ListState, Paragraph},
 };
 use serde_json::Value;
 
@@ -39,6 +39,7 @@ pub enum TreeAction {
 pub fn show_session_tree(
     terminal: &mut DefaultTerminal,
     checkpoints: &[Value],
+    colors: &ThemeColors,
 ) -> Result<TreeAction> {
     if checkpoints.is_empty() {
         return Ok(TreeAction::Cancel);
@@ -48,11 +49,11 @@ pub fn show_session_tree(
     list_state.select(Some(0));
 
     loop {
-        terminal.draw(|f| draw_tree(f, checkpoints, &mut list_state))?;
+        terminal.draw(|f| draw_tree(f, checkpoints, &mut list_state, colors))?;
 
         if let Ok(evt) = event::read() {
             match evt {
-                Event::Key(k) => match (k.code, k.modifiers) {
+                Event::Key(k) if k.kind == KeyEventKind::Press => match (k.code, k.modifiers) {
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => {
                         return Ok(TreeAction::Cancel);
                     }
@@ -92,31 +93,25 @@ pub fn show_session_tree(
 
 // region:    --- Drawing
 
-fn draw_tree(frame: &mut Frame, checkpoints: &[Value], list_state: &mut ListState) {
+fn draw_tree(
+    frame: &mut Frame,
+    checkpoints: &[Value],
+    list_state: &mut ListState,
+    colors: &ThemeColors,
+) {
     let area = frame.area();
-
-    // Background
-    frame.render_widget(ratatui::widgets::Clear, area);
+    let inner = overlay::render_overlay_shell(frame, area, "Session Checkpoints", colors);
 
     let [header_area, list_area, footer_area] = Layout::vertical([
-        Constraint::Length(3),
-        Constraint::Min(1),
         Constraint::Length(2),
+        Constraint::Min(1),
+        Constraint::Length(1),
     ])
-    .areas(area);
+    .areas(inner);
 
     // -- Header
-    let header = Paragraph::new("  Session Checkpoints")
-        .style(
-            Style::default()
-                .fg(Color::Rgb(100, 180, 255))
-                .add_modifier(Modifier::BOLD),
-        )
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(Color::Rgb(60, 70, 90))),
-        );
+    let header = Paragraph::new(" Browse checkpoints and restore a saved working state")
+        .style(overlay::overlay_muted_style(colors));
     frame.render_widget(header, header_area);
 
     // -- Checkpoint list
@@ -151,7 +146,7 @@ fn draw_tree(frame: &mut Frame, checkpoints: &[Value], list_state: &mut ListStat
                     label.to_string(),
                     if list_state.selected() == Some(i) {
                         Style::default()
-                            .fg(Color::Rgb(100, 180, 255))
+                            .fg(colors.overlay_selected_fg)
                             .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::White)
@@ -159,12 +154,12 @@ fn draw_tree(frame: &mut Frame, checkpoints: &[Value], list_state: &mut ListStat
                 ),
                 Span::styled(
                     format!("  {dt}"),
-                    Style::default().fg(Color::Rgb(100, 108, 128)),
+                    overlay::overlay_muted_style(colors),
                 ),
-                Span::styled(git_str, Style::default().fg(Color::Rgb(80, 88, 110))),
+                Span::styled(git_str, Style::default().fg(colors.dim)),
                 Span::styled(
                     format!("  ({})", &id[..8.min(id.len())]),
-                    Style::default().fg(Color::Rgb(60, 70, 90)),
+                    Style::default().fg(colors.overlay_border),
                 ),
             ]);
             ListItem::new(line)
@@ -172,19 +167,18 @@ fn draw_tree(frame: &mut Frame, checkpoints: &[Value], list_state: &mut ListStat
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().borders(Borders::NONE))
-        .highlight_style(
-            Style::default()
-                .bg(Color::Rgb(28, 32, 48))
-                .fg(Color::Rgb(100, 180, 255)),
-        )
+        .block(Block::default().style(Style::default().bg(colors.overlay_bg)))
+        .highlight_style(overlay::overlay_selected_style(colors))
         .highlight_symbol("▶ ");
     frame.render_stateful_widget(list, list_area, list_state);
 
     // -- Footer
-    let footer = Paragraph::new("  ↑↓ / jk  navigate    Enter  restore    Esc / q  cancel")
-        .style(Style::default().fg(Color::Rgb(100, 108, 128)));
-    frame.render_widget(footer, footer_area);
+    overlay::render_overlay_hint(
+        frame,
+        footer_area,
+        "↑↓ / jk navigate · Enter restore · Esc / q cancel",
+        colors,
+    );
 }
 
 // endregion: --- Drawing

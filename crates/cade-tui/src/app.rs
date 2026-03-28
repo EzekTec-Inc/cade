@@ -25,7 +25,7 @@ use std::time::Instant;
 use crate::Result;
 use crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyModifiers,
+    EnableFocusChange, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
     KeyboardEnhancementFlags, MouseEventKind, PopKeyboardEnhancementFlags,
     PushKeyboardEnhancementFlags,
 };
@@ -41,7 +41,7 @@ use unicode_width::UnicodeWidthStr;
 
 use crate::autocomplete::FileAutocompleteProvider;
 use crate::colors::ThemeColors;
-use crate::editor::{Editor, ImageEntry};
+use crate::editor::{Editor, ImageEntry, InputMode};
 use cade_core::permissions::PermissionMode;
 
 // -- Constants
@@ -59,6 +59,10 @@ const DOTS: &[&str] = &["⠁", "⠂", "⠄", "⠐", "⠠", "⠐", "⠄", "⠂"];
 /// R-01: minimum interval between consecutive draws during high-frequency
 /// updates (streaming tokens, live bash output).  ~60 FPS target.
 const DRAW_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
+/// Responsive layout breakpoint for showing the right sidebar.
+const SIDEBAR_BREAKPOINT: u16 = 110;
+/// Target width for the informational sidebar on wide terminals.
+const SIDEBAR_WIDTH: u16 = 30;
 
 // -- Skills overlay
 
@@ -142,6 +146,22 @@ pub struct ThinkingState {
     pub started: Instant,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ToastLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+pub struct Toast {
+    pub message: String,
+    pub level: ToastLevel,
+    pub created_at: Instant,
+    pub ttl: std::time::Duration,
+}
+
 // -- ActiveQuestionState
 #[derive(Debug, Clone)]
 pub struct ActiveQuestionDrawState {
@@ -206,6 +226,10 @@ pub struct TuiApp {
     /// When true, snap to bottom on new content; disabled by manual scroll.
     pub follow: bool,
     pub expand_all: bool,
+    /// Per-item expansion overrides keyed by stable timeline identity.
+    expanded_items: std::collections::HashSet<TimelineKey>,
+    /// Currently focused timeline item for per-item actions/navigation.
+    selected_timeline: Option<TimelineKey>,
     pub active_question: Option<ActiveQuestionState>,
     pub active_plan: Option<PlanState>,
 
@@ -263,6 +287,9 @@ pub struct TuiApp {
     /// Number of follow-up messages currently queued (typed during a running turn).
     /// Shown as a badge in the status row so the user knows their input was accepted.
     pub queued_count: usize,
+
+    /// Transient toast notification shown in the corner of the UI.
+    pub toast: Option<Toast>,
 
     // -- Skills overlay
 
@@ -326,6 +353,8 @@ impl TuiApp {
             scroll: 0,
             follow: true,
             expand_all: false,
+            expanded_items: std::collections::HashSet::new(),
+            selected_timeline: None,
             active_question: None,
             active_plan: None,
             streaming_text: String::new(),
@@ -350,6 +379,7 @@ impl TuiApp {
             footer_extra: None,
             pending_lines: 0,
             queued_count: 0,
+            toast: None,
             draw_dirty: false,
             last_draw_at: Instant::now(),
             colors,
@@ -397,16 +427,16 @@ impl TuiApp {
     /// that the ToolCall header appears at the top of the viewport when the
     /// corresponding ToolResult is pushed.
     fn rows_from_last_tool_call(&self) -> usize {
-        let w = self.term_width.max(20) as usize;
         let cw = self.term_width.max(20);
         let mut total: u16 = 0;
-        for rl in self.lines.iter().rev() {
-            let mut text_lines: Vec<ratatui::text::Line<'static>> = Vec::new();
-            render_line_to_text(rl, w, self.expand_all, &mut text_lines, &self.colors);
-            for tl in &text_lines {
-                total = total.saturating_add(count_wrapped_rows(tl, cw));
-            }
-            if matches!(rl, RenderLine::ToolCall { .. }) {
+        for entry in build_timeline_entries(&self.lines).into_iter().rev() {
+            total = total.saturating_add(entry.visual_rows_with_state(
+                cw,
+                self.expand_all,
+                &self.expanded_items,
+                &self.colors,
+            ));
+            if entry.is_tool_call() {
                 return total as usize;
             }
         }
@@ -530,14 +560,276 @@ impl TuiApp {
         self.copy_mode = !self.copy_mode;
         if self.copy_mode {
             let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
+            self.show_toast("Copy mode enabled", ToastLevel::Info);
         } else {
             let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
+            self.show_toast("Copy mode disabled", ToastLevel::Info);
         }
+    }
+
+    pub fn show_toast(&mut self, message: impl Into<String>, level: ToastLevel) {
+        self.toast = Some(Toast {
+            message: message.into(),
+            level,
+            created_at: Instant::now(),
+            ttl: std::time::Duration::from_secs(3),
+        });
+    }
+
+    fn focus_next_timeline_item(&mut self) {
+        let entries = build_timeline_entries(&self.lines);
+        let focusable: Vec<_> = entries.into_iter().filter(|e| e.is_focusable()).collect();
+        if focusable.is_empty() {
+            self.selected_timeline = None;
+            return;
+        }
+        let next = if let Some(current) = self.selected_timeline {
+            focusable
+                .iter()
+                .position(|e| e.key == current)
+                .map(|i| (i + 1) % focusable.len())
+                .unwrap_or(0)
+        } else {
+            0
+        };
+        self.selected_timeline = Some(focusable[next].key);
+        self.ensure_selected_timeline_visible();
+    }
+
+    fn focus_next_timeline_matching(&mut self, target: TimelineJumpTarget) {
+        let entries = build_timeline_entries(&self.lines);
+        if entries.is_empty() {
+            self.selected_timeline = None;
+            return;
+        }
+        let start_idx = self
+            .selected_timeline
+            .and_then(|current| entries.iter().position(|e| e.key == current));
+
+        let found = if let Some(idx) = start_idx {
+            (1..=entries.len())
+                .map(|off| (idx + off) % entries.len())
+                .find(|&i| entries[i].is_focusable() && entries[i].matches_jump_target(target))
+        } else {
+            (0..entries.len())
+                .find(|&i| entries[i].is_focusable() && entries[i].matches_jump_target(target))
+        };
+
+        if let Some(i) = found {
+            self.selected_timeline = Some(entries[i].key);
+            self.ensure_selected_timeline_visible();
+            let label = match target {
+                TimelineJumpTarget::Assistant => "assistant block",
+                TimelineJumpTarget::Tool => "tool block",
+                TimelineJumpTarget::Error => "error block",
+            };
+            self.show_toast(format!("Focused next {label}"), ToastLevel::Info);
+        } else {
+            let label = match target {
+                TimelineJumpTarget::Assistant => "assistant",
+                TimelineJumpTarget::Tool => "tool",
+                TimelineJumpTarget::Error => "error",
+            };
+            self.show_toast(format!("No {label} blocks found"), ToastLevel::Info);
+        }
+    }
+
+    fn focus_prev_timeline_item(&mut self) {
+        let entries = build_timeline_entries(&self.lines);
+        let focusable: Vec<_> = entries.into_iter().filter(|e| e.is_focusable()).collect();
+        if focusable.is_empty() {
+            self.selected_timeline = None;
+            return;
+        }
+        let prev = if let Some(current) = self.selected_timeline {
+            focusable
+                .iter()
+                .position(|e| e.key == current)
+                .map(|i| if i == 0 { focusable.len() - 1 } else { i - 1 })
+                .unwrap_or(focusable.len() - 1)
+        } else {
+            focusable.len() - 1
+        };
+        self.selected_timeline = Some(focusable[prev].key);
+        self.ensure_selected_timeline_visible();
+    }
+
+    fn toggle_selected_timeline_expansion(&mut self) -> bool {
+        let Some(key) = self.selected_timeline else {
+            return false;
+        };
+        let entries = build_timeline_entries(&self.lines);
+        let Some(entry) = entries.iter().find(|e| e.key == key) else {
+            return false;
+        };
+        if !entry.is_expandable() {
+            self.show_toast("Selected block is not expandable", ToastLevel::Info);
+            return true;
+        }
+        let expanded = timeline_key_expanded(self.expand_all, &self.expanded_items, &key);
+        if expanded {
+            self.expanded_items.remove(&key);
+            if self.expand_all {
+                self.expand_all = false;
+            }
+            self.show_toast("Collapsed selected block", ToastLevel::Info);
+        } else {
+            self.expanded_items.insert(key);
+            self.show_toast("Expanded selected block", ToastLevel::Info);
+        }
+        self.ensure_selected_timeline_visible();
+        true
+    }
+
+    fn selected_timeline_item_text(&self) -> Option<String> {
+        let key = self.selected_timeline?;
+        let (term_w, _) = crossterm::terminal::size().ok().unwrap_or((self.term_width, 24));
+        let main_w = main_content_width(term_w);
+        let entries = build_timeline_entries(&self.lines);
+        let entry = entries.iter().find(|e| e.key == key)?;
+        let mut rendered = Vec::new();
+        entry.render_with_state(
+            main_w as usize,
+            self.expand_all,
+            &self.expanded_items,
+            None,
+            &mut rendered,
+            &self.colors,
+        );
+        let text = rendered
+            .into_iter()
+            .map(|line| {
+                line.spans
+                    .into_iter()
+                    .map(|s| s.content.into_owned())
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(text)
+    }
+
+    fn copy_selected_timeline_item_to_clipboard(&mut self) -> bool {
+        let Some(text) = self.selected_timeline_item_text() else {
+            self.show_toast("No block selected", ToastLevel::Info);
+            return false;
+        };
+        let Ok(mut cb) = arboard::Clipboard::new() else {
+            self.show_toast("Clipboard unavailable", ToastLevel::Error);
+            return true;
+        };
+        if cb.set_text(text).is_ok() {
+            self.show_toast("Copied selected block", ToastLevel::Success);
+        } else {
+            self.show_toast("Failed to copy selected block", ToastLevel::Error);
+        }
+        true
+    }
+
+    fn ensure_selected_timeline_visible(&mut self) {
+        let Some(target_key) = self.selected_timeline else {
+            return;
+        };
+        let Some((content_w, visible_rows)) = self.current_messages_viewport_metrics() else {
+            return;
+        };
+        if visible_rows == 0 {
+            return;
+        }
+
+        let entries = build_timeline_entries(&self.lines);
+        let mut start_row: u16 = 0;
+        let mut selected_range: Option<(u16, u16)> = None;
+        let mut total_rows: u16 = 0;
+        for entry in &entries {
+            let rows = entry.visual_rows_with_state(
+                content_w,
+                self.expand_all,
+                &self.expanded_items,
+                &self.colors,
+            );
+            if entry.key == target_key {
+                selected_range = Some((start_row, start_row.saturating_add(rows)));
+            }
+            start_row = start_row.saturating_add(rows);
+            total_rows = total_rows.saturating_add(rows);
+        }
+        let Some((sel_start, sel_end)) = selected_range else {
+            return;
+        };
+
+        let max_skip = total_rows.saturating_sub(visible_rows);
+        let current_up = (self.scroll as u16).min(max_skip);
+        let visible_start = max_skip.saturating_sub(current_up);
+        let visible_end = visible_start.saturating_add(visible_rows);
+
+        let desired_start = if sel_start < visible_start {
+            sel_start
+        } else if sel_end > visible_end {
+            sel_end.saturating_sub(visible_rows)
+        } else {
+            return;
+        };
+
+        self.follow = false;
+        self.scroll = max_skip.saturating_sub(desired_start) as usize;
+    }
+
+    fn current_messages_viewport_metrics(&self) -> Option<(u16, u16)> {
+        let (term_w, term_h) = crossterm::terminal::size().ok().unwrap_or((self.term_width, 24));
+        let main_w = main_content_width(term_w);
+        let available_w = main_w.saturating_sub(2).max(1);
+        let (badge_text, _) = input_mode_badge(self.editor.detect_mode(), &self.colors);
+        let input_prefix_w = badge_text.chars().count() as u16 + 1 + 2;
+        let mut input_rows = calc_input_rows(&self.editor.input, available_w, input_prefix_w)
+            .clamp(1, MAX_INPUT_ROWS);
+        let inline_h = self
+            .active_question
+            .as_ref()
+            .map(|aq| question_height(&aq.draw_state, term_h))
+            .unwrap_or(0);
+        if inline_h > 0 {
+            input_rows = inline_h;
+        }
+        let footer_extra_h: u16 = if self.footer_extra.is_some() || self.selected_timeline.is_some() {
+            1
+        } else {
+            0
+        };
+        let bottom_rows = FIXED_ROWS + input_rows + footer_extra_h;
+        if term_h <= bottom_rows + 1 {
+            return None;
+        }
+        let content_height = term_h - bottom_rows;
+        let plan_h = self
+            .active_plan
+            .as_ref()
+            .filter(|p| p.is_visible)
+            .map(|p| (p.steps.len() as u16 + 2).min(10).max(4))
+            .unwrap_or(0);
+        let mut messages_h = content_height.saturating_sub(plan_h);
+        if !self.header_lines.is_empty() {
+            let mut header_text: Vec<Line<'static>> = Vec::new();
+            for entry in build_timeline_entries(&self.header_lines) {
+                entry.render_into(main_w as usize, false, &mut header_text, &self.colors);
+            }
+            let header_h: u16 = header_text
+                .iter()
+                .map(|l| count_wrapped_rows(l, main_w))
+                .sum::<u16>()
+                .min(messages_h / 3)
+                .max(1);
+            messages_h = messages_h.saturating_sub(header_h);
+        }
+        let visible = messages_h.saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT);
+        Some((main_w, visible))
     }
 
     /// Clear all content (e.g. /clear).
     pub fn clear_content(&mut self) -> Result<()> {
         self.lines.clear();
+        self.expanded_items.clear();
+        self.selected_timeline = None;
         self.discard_streaming();
         self.scroll = 0;
         self.follow = true;
@@ -695,6 +987,7 @@ impl TuiApp {
             scroll = 0;
         }
         let input = self.editor.input.clone();
+        let input_mode = self.editor.detect_mode();
         let cursor_pos = self.editor.cursor_pos;
         let mode = self.mode;
         let agent_name = self.agent_name.clone();
@@ -706,6 +999,7 @@ impl TuiApp {
             .and_then(|ts| ts.text.lock().ok().map(|g| g.clone()));
         let thinking_elapsed = self.thinking.as_ref().map(|ts| ts.started.elapsed());
         let expand_all = self.expand_all;
+        let expanded_items = self.expanded_items.clone();
         let active_question = self.active_question.as_ref().map(|s| s.draw_state.clone());
         let pending_lines = self.pending_lines;
         let queued_count = self.queued_count;
@@ -716,6 +1010,16 @@ impl TuiApp {
         let footer_extra = self.footer_extra.clone();
         let reasoning_effort = self.reasoning_effort.clone();
         let active_plan_snap = self.active_plan.clone();
+        let selected_timeline = self.selected_timeline;
+        if self
+            .toast
+            .as_ref()
+            .is_some_and(|t| t.created_at.elapsed() >= t.ttl)
+        {
+            self.toast = None;
+        }
+        let toast = self.toast.clone();
+        let copy_mode = self.copy_mode;
         let colors = self.colors.clone();
 
         // V-04: capture max_skip returned by render_frame to clamp self.scroll.
@@ -738,6 +1042,7 @@ impl TuiApp {
                 expand_all,
                 &input,
                 cursor_pos,
+                input_mode,
                 mode,
                 &agent_name,
                 &model,
@@ -754,6 +1059,10 @@ impl TuiApp {
                 footer_extra.as_deref(),
                 reasoning_effort.as_deref(),
                 active_plan_snap.as_ref(),
+                copy_mode,
+                toast.as_ref(),
+                selected_timeline.as_ref(),
+                &expanded_items,
                 &colors,
             );
         })?;
@@ -1288,7 +1597,7 @@ impl TuiApp {
                 continue;
             }
             match event::read()? {
-                Event::Key(k) => {
+                Event::Key(k) if k.kind == KeyEventKind::Press => {
                     if self.active_question.is_some() {
                         self.handle_question_key(k);
                     } else if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
@@ -1457,13 +1766,23 @@ impl TuiApp {
                 return Ok(Some(None));
             }
 
-            // -- Cancel / clear
+            // -- Cancel / clear / copy selected block
+            (KeyCode::Char('C') | KeyCode::Char('c'), m)
+                if m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+            {
+                self.copy_selected_timeline_item_to_clipboard();
+            }
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                 self.editor.clear();
                 return Ok(Some(Some(String::new())));
             }
             (KeyCode::Esc, _) => {
-                self.editor.clear();
+                if self.editor.input.is_empty() && self.selected_timeline.is_some() {
+                    self.selected_timeline = None;
+                    self.show_toast("Timeline selection cleared", ToastLevel::Info);
+                } else {
+                    self.editor.clear();
+                }
             }
 
             // -- Edit shortcuts
@@ -1512,9 +1831,11 @@ impl TuiApp {
             // row do we switch to history navigation.
             (KeyCode::Up, _) => {
                 let available_w = self.term_width.saturating_sub(2).max(1);
-                let text_w = (available_w.saturating_sub(2).max(1)) as usize;
+                let (badge_text, _) = input_mode_badge(self.editor.detect_mode(), &self.colors);
+                let input_prefix_w = badge_text.chars().count() as u16 + 1 + 2;
                 let before = &self.editor.input[..self.editor.cursor_pos];
-                let (cur_row, cur_col) = calc_visual_cursor(before, available_w);
+                let (cur_row, cur_col) =
+                    calc_visual_cursor(before, available_w, input_prefix_w);
 
                 if cur_row == 0 {
                     // Already on the first visual row → history navigation
@@ -1536,7 +1857,8 @@ impl TuiApp {
                     // Rebuild visual-row byte-offset map
                     let new_pos = find_cursor_at_visual_row_col(
                         &self.editor.input,
-                        text_w,
+                        available_w,
+                        input_prefix_w,
                         target_row,
                         cur_col,
                     );
@@ -1545,13 +1867,16 @@ impl TuiApp {
             }
             (KeyCode::Down, _) => {
                 let available_w = self.term_width.saturating_sub(2).max(1);
-                let text_w = (available_w.saturating_sub(2).max(1)) as usize;
+                let (badge_text, _) = input_mode_badge(self.editor.detect_mode(), &self.colors);
+                let input_prefix_w = badge_text.chars().count() as u16 + 1 + 2;
                 let total_rows = {
-                    let (tr, _) = calc_visual_cursor(&self.editor.input, available_w);
+                    let (tr, _) =
+                        calc_visual_cursor(&self.editor.input, available_w, input_prefix_w);
                     tr
                 };
                 let before = &self.editor.input[..self.editor.cursor_pos];
-                let (cur_row, cur_col) = calc_visual_cursor(before, available_w);
+                let (cur_row, cur_col) =
+                    calc_visual_cursor(before, available_w, input_prefix_w);
 
                 if cur_row >= total_rows {
                     // Already on the last visual row → history navigation
@@ -1570,7 +1895,8 @@ impl TuiApp {
                     let target_row = cur_row + 1;
                     let new_pos = find_cursor_at_visual_row_col(
                         &self.editor.input,
-                        text_w,
+                        available_w,
+                        input_prefix_w,
                         target_row,
                         cur_col,
                     );
@@ -1578,8 +1904,24 @@ impl TuiApp {
                 }
             }
 
-            // -- Content scroll
-            // Shift+K = up 10 rows,  Shift+J = down 10 rows
+            // -- Timeline navigation / content scroll
+            // Ctrl+Shift+K/J navigates between timeline blocks.
+            // Shift+K/J scrolls the conversation by 10 rows.
+            (KeyCode::Char('K'), m) if m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
+                self.focus_prev_timeline_item();
+            }
+            (KeyCode::Char('J'), m) if m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
+                self.focus_next_timeline_item();
+            }
+            (KeyCode::Char('a'), m) if m == KeyModifiers::ALT => {
+                self.focus_next_timeline_matching(TimelineJumpTarget::Assistant);
+            }
+            (KeyCode::Char('t'), m) if m == KeyModifiers::ALT => {
+                self.focus_next_timeline_matching(TimelineJumpTarget::Tool);
+            }
+            (KeyCode::Char('e'), m) if m == KeyModifiers::ALT => {
+                self.focus_next_timeline_matching(TimelineJumpTarget::Error);
+            }
             (KeyCode::Char('K'), _) => {
                 self.follow = false;
                 self.scroll = self.scroll.saturating_add(10);
@@ -1613,7 +1955,17 @@ impl TuiApp {
 
             // -- Expand/Collapse Tool Outputs
             (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
-                self.expand_all = !self.expand_all;
+                if !self.toggle_selected_timeline_expansion() {
+                    self.expand_all = !self.expand_all;
+                    self.show_toast(
+                        if self.expand_all {
+                            "Expanded all blocks"
+                        } else {
+                            "Collapsed all blocks"
+                        },
+                        ToastLevel::Info,
+                    );
+                }
             }
 
             // -- Image / clipboard paste
@@ -1853,6 +2205,15 @@ fn count_wrapped_segment(text: &str, content_w: u16) -> u16 {
 // -- Frame renderer
 
 #[allow(clippy::too_many_arguments)]
+fn main_content_width(term_w: u16) -> u16 {
+    if term_w >= SIDEBAR_BREAKPOINT {
+        let sidebar_w = SIDEBAR_WIDTH.min(term_w.saturating_sub(24));
+        term_w.saturating_sub(sidebar_w)
+    } else {
+        term_w
+    }
+}
+
 fn render_frame(
     frame: &mut Frame,
     lines: &[RenderLine],
@@ -1861,6 +2222,7 @@ fn render_frame(
     expand_all: bool,
     input: &str,
     cursor_pos: usize,
+    input_mode: InputMode,
     mode: PermissionMode,
     agent_name: &str,
     model: &str,
@@ -1877,17 +2239,34 @@ fn render_frame(
     footer_extra: Option<&str>,
     reasoning_effort: Option<&str>,
     active_plan: Option<&PlanState>,
+    copy_mode: bool,
+    toast: Option<&Toast>,
+    selected_timeline: Option<&TimelineKey>,
+    expanded_items: &std::collections::HashSet<TimelineKey>,
     colors: &ThemeColors,
 ) -> u16 {
     // returns max_skip for V-04 scroll clamping
     let area = frame.area();
-    let w = area.width as usize;
+    let (main_area, sidebar_area) = if area.width >= SIDEBAR_BREAKPOINT {
+        let sidebar_w = SIDEBAR_WIDTH.min(area.width.saturating_sub(24));
+        let split = Layout::horizontal([
+            Constraint::Min(24),
+            Constraint::Length(sidebar_w),
+        ])
+        .split(area);
+        (split[0], Some(split[1]))
+    } else {
+        (area, None)
+    };
+    let w = main_area.width as usize;
 
-    let available_w = area.width.saturating_sub(2).max(1);
-    let mut input_rows = calc_input_rows(input, available_w).clamp(1, MAX_INPUT_ROWS);
+    let (input_badge, _input_badge_color) = input_mode_badge(input_mode, colors);
+    let input_prefix_w = input_badge.chars().count() as u16 + 1 + 2;
+    let available_w = main_area.width.saturating_sub(2).max(1);
+    let mut input_rows = calc_input_rows(input, available_w, input_prefix_w).clamp(1, MAX_INPUT_ROWS);
 
     let inline_h = active_question
-        .map(|aq| question_height(aq, area.height))
+        .map(|aq| question_height(aq, main_area.height))
         .unwrap_or(0);
 
     if inline_h > 0 {
@@ -1895,15 +2274,20 @@ fn render_frame(
     }
 
     // A-02: footer_extra adds one row below the normal footer when present.
-    let footer_extra_h: u16 = if footer_extra.is_some() { 1 } else { 0 };
+    let has_selected_info = selected_timeline.is_some();
+    let footer_extra_h: u16 = if footer_extra.is_some() || has_selected_info {
+        1
+    } else {
+        0
+    };
     let bottom_rows = FIXED_ROWS + input_rows + footer_extra_h;
 
-    if area.height <= bottom_rows + 1 {
-        frame.render_widget(Paragraph::new("Terminal too small"), area);
+    if main_area.height <= bottom_rows + 1 {
+        frame.render_widget(Paragraph::new("Terminal too small"), main_area);
         return 0;
     }
 
-    let content_height = area.height - bottom_rows;
+    let content_height = main_area.height - bottom_rows;
 
     let plan_h = if let Some(plan) = active_plan {
         if plan.is_visible {
@@ -1928,7 +2312,7 @@ fn render_frame(
             Constraint::Length(1),              // [6] bottom separator
             Constraint::Length(1),              // [7] footer
         ])
-        .split(area)
+        .split(main_area)
     } else {
         // No question: same 6-slot layout, pad with two dummy zero-height slots
         // so all index references below are uniform (we only use 0,3..7 in this branch).
@@ -1942,15 +2326,15 @@ fn render_frame(
             Constraint::Length(1),              // [6] bottom separator
             Constraint::Length(1),              // [7] footer
         ])
-        .split(area)
+        .split(main_area)
     };
 
     // -- A-02: Header strip — pinned above the scrollable messages pane
-    let content_w = area.width.saturating_sub(0).max(1);
+    let content_w = main_area.width.max(1);
     let (header_area_opt, messages_area) = {
         let mut header_text: Vec<Line<'static>> = Vec::new();
-        for rl in header_lines {
-            render_line_to_text(rl, w, false, &mut header_text, colors);
+        for entry in build_timeline_entries(header_lines) {
+            entry.render_into(w, false, &mut header_text, colors);
         }
         if header_text.is_empty() {
             (None, chunks[0])
@@ -1974,34 +2358,38 @@ fn render_frame(
     let _ = header_area_opt; // used above for rendering
 
     // -- Content area
-    let mut text_lines: Vec<Line<'static>> = Vec::new();
-    for rl in lines {
-        render_line_to_text(rl, w, expand_all, &mut text_lines, colors);
-    }
-    if let Some(s) = streaming {
-        render_assistant_lines(s, w, &mut text_lines, colors);
-    }
-
-    // Count visual rows (word-wrap at content width, matching ratatui's WordWrapper).
-    let total_visual: u16 = text_lines
-        .iter()
-        .map(|l| count_wrapped_rows(l, content_w))
-        .sum();
-
-    // V-04 / A-02: use messages_area height (excludes pinned header).
-    let messages_h = messages_area.height;
-    let visible = messages_h.saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT);
-    let max_skip = total_visual.saturating_sub(visible);
-    let effective_up = (scroll as u16).min(max_skip);
-    let para_scroll = max_skip - effective_up;
-
-    frame.render_widget(
-        Paragraph::new(text_lines)
-            .block(Block::new().padding(Padding::vertical(1)))
-            .wrap(Wrap { trim: false })
-            .scroll((para_scroll, 0)),
-        messages_area,
+    let timeline_entries = build_timeline_entries(lines);
+    let selected_info = selected_timeline.and_then(|key| {
+        timeline_entries
+            .iter()
+            .find(|entry| entry.key == *key)
+            .map(|entry| entry.selection_info())
+    });
+    let mut prepared = prepare_timeline_entries(
+        &timeline_entries,
+        w,
+        expand_all,
+        expanded_items,
+        selected_timeline,
+        colors,
     );
+    if let Some(s) = streaming {
+        let next_index = timeline_entries.last().map(|e| e.key.index + 1).unwrap_or(0);
+        let streaming_entry = TimelineEntry::streaming(next_index, s);
+        let mut lines = Vec::new();
+        streaming_entry.render_with_state(
+            w,
+            expand_all,
+            expanded_items,
+            selected_timeline,
+            &mut lines,
+            colors,
+        );
+        let rows = lines.iter().map(|l| count_wrapped_rows(l, content_w)).sum();
+        prepared.push(PreparedTimelineEntry { lines, rows });
+    }
+
+    let max_skip = render_timeline_viewport(frame, messages_area, &prepared, scroll);
 
     // -- A-01: File picker overlay
     if let Some(pk) = picker {
@@ -2079,6 +2467,17 @@ fn render_frame(
         status_text
     };
 
+    let status_text = if let Some(info) = &selected_info {
+        format!(
+            "{status_text}  · selected {} #{} — {}",
+            info.kind_label,
+            info.index,
+            info.actions
+        )
+    } else {
+        status_text
+    };
+
     frame.render_widget(
         Paragraph::new(Span::styled(status_text, status_style)),
         chunks[3],
@@ -2106,7 +2505,7 @@ fn render_frame(
     } else {
         mode_color
     };
-    let sep = "─".repeat(area.width as usize);
+    let sep = "─".repeat(main_area.width as usize);
     frame.render_widget(
         Paragraph::new(Span::styled(
             sep.clone(),
@@ -2123,9 +2522,10 @@ fn render_frame(
     if let Some(aq) = active_question {
         render_question_inline(frame, aq, chunks[5], chunks[5], colors);
     } else {
+        let (badge_text, badge_color) = input_mode_badge(input_mode, colors);
+        let cont_prefix = format!("{}  ", " ".repeat(badge_text.chars().count() + 1));
         // Build one ratatui Line per logical line so wrapping is correct and the
-        // "> " prefix only appears on the first line.  Subsequent lines get a
-        // "  " (2-space) indent so text columns align with the first line.
+        // input-mode badge is shown only on the first line.
         let input_placeholder = if queued_count > 0 {
             format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
         } else {
@@ -2133,19 +2533,41 @@ fn render_frame(
         };
         let input_paragraph: Vec<Line<'static>> = if input.is_empty() {
             vec![Line::from(vec![
-                Span::styled("> ", Style::default().fg(RC::White)),
-                Span::styled(input_placeholder, Style::default().fg(RC::DarkGray)),
+                Span::styled(
+                    badge_text.to_string(),
+                    Style::default()
+                        .fg(colors.badge_fg)
+                        .bg(badge_color)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" "),
+                Span::styled("> ", Style::default().fg(colors.dim)),
+                Span::styled(input_placeholder, Style::default().fg(colors.muted)),
             ])]
         } else {
             input
                 .split('\n')
                 .enumerate()
                 .map(|(i, seg)| {
-                    let prefix = if i == 0 { "> " } else { "  " };
-                    Line::from(vec![
-                        Span::styled(prefix, Style::default().fg(colors.dim)),
-                        Span::styled(seg.to_string(), Style::default().fg(RC::White)),
-                    ])
+                    if i == 0 {
+                        Line::from(vec![
+                            Span::styled(
+                                badge_text.to_string(),
+                                Style::default()
+                                    .fg(colors.badge_fg)
+                                    .bg(badge_color)
+                                    .add_modifier(Modifier::BOLD),
+                            ),
+                            Span::raw(" "),
+                            Span::styled("> ", Style::default().fg(colors.dim)),
+                            Span::styled(seg.to_string(), Style::default().fg(RC::White)),
+                        ])
+                    } else {
+                        Line::from(vec![
+                            Span::styled(cont_prefix.clone(), Style::default().fg(colors.dim)),
+                            Span::styled(seg.to_string(), Style::default().fg(RC::White)),
+                        ])
+                    }
                 })
                 .collect()
         };
@@ -2156,7 +2578,7 @@ fn render_frame(
 
         // Cursor position
         let before = &input[..cursor_pos.min(input.len())];
-        let (vis_row, vis_col) = calc_visual_cursor(before, available_w);
+        let (vis_row, vis_col) = calc_visual_cursor(before, available_w, input_prefix_w);
         let cx = (chunks[5].x + vis_col).min(chunks[5].x + chunks[5].width.saturating_sub(1));
         let cy = (chunks[5].y + vis_row).min(chunks[5].y + chunks[5].height.saturating_sub(1));
         frame.set_cursor_position((cx, cy));
@@ -2164,19 +2586,30 @@ fn render_frame(
 
     // -- Footer
     let (left_label, left_glyph, left_color) = mode_footer_left(mode, colors);
-    let right_agent = agent_name.to_string();
-    let right_model = format!(" [{}]", truncate_str(model, 30));
-    let right_reasoning = reasoning_effort
-        .map(|r| format!(" [{r}]"))
-        .unwrap_or_default();
-    // Context % with severity color: gray < 80%, amber 80-89%, red ≥ 90%
+    let sidebar_open = sidebar_area.is_some();
+    let right_agent = if sidebar_open {
+        String::new()
+    } else {
+        agent_name.to_string()
+    };
+    let right_model = if sidebar_open {
+        String::new()
+    } else {
+        format!(" [{}]", truncate_str(model, 30))
+    };
+    let right_reasoning = if sidebar_open {
+        String::new()
+    } else {
+        reasoning_effort
+            .map(|r| format!(" [{r}]"))
+            .unwrap_or_default()
+    };
     let (right_ctx, right_ctx_color) = match context_pct {
         Some(p) if p >= 90 => (format!(" {p}%"), colors.error),
         Some(p) if p >= 80 => (format!(" {p}%"), colors.warning),
         Some(p) => (format!(" {p}%"), colors.muted),
         None => (String::new(), colors.muted),
     };
-    // CWD segment — shown in the centre of the footer in dark gray
     let mid_cwd = format!("  {cwd}  ");
 
     let left_base_len: u16 = left_label.chars().count() as u16
@@ -2204,15 +2637,19 @@ fn render_frame(
     }
     footer.push(Span::raw(" ".repeat(pad)));
     footer.push(Span::styled(mid_cwd, Style::default().fg(colors.muted)));
-    footer.push(Span::styled(
-        right_agent,
-        Style::default().fg(colors.thinking_minimal),
-    ));
-    footer.push(Span::styled(right_model, Style::default().fg(RC::DarkGray)));
+    if !right_agent.is_empty() {
+        footer.push(Span::styled(
+            right_agent,
+            Style::default().fg(colors.thinking_minimal),
+        ));
+    }
+    if !right_model.is_empty() {
+        footer.push(Span::styled(right_model, Style::default().fg(colors.dim)));
+    }
     if !right_reasoning.is_empty() {
         footer.push(Span::styled(
             right_reasoning,
-            Style::default().fg(RC::LightYellow),
+            Style::default().fg(colors.warning),
         ));
     }
     if !right_ctx.is_empty() {
@@ -2224,8 +2661,20 @@ fn render_frame(
 
     frame.render_widget(Paragraph::new(Line::from(footer)), chunks[7]);
 
-    // -- A-02: Footer extra row
-    if let Some(extra) = footer_extra {
+    // -- A-02: Footer extra row / selected-block action bar
+    let action_bar_text = selected_info.as_ref().map(|info| {
+        format!(
+            "selected {} #{} — {}  |  {}",
+            info.kind_label, info.index, info.summary, info.actions
+        )
+    });
+    let extra_text = match (action_bar_text.as_deref(), footer_extra) {
+        (Some(action), Some(extra)) => Some(format!("{action}  ·  {extra}")),
+        (Some(action), None) => Some(action.to_string()),
+        (None, Some(extra)) => Some(extra.to_string()),
+        (None, None) => None,
+    };
+    if let Some(extra) = extra_text {
         let extra_rect = ratatui::layout::Rect {
             x: chunks[7].x,
             y: chunks[7].y + 1,
@@ -2234,11 +2683,36 @@ fn render_frame(
         };
         frame.render_widget(
             Paragraph::new(Span::styled(
-                extra.to_string(),
+                truncate_str(&extra, extra_rect.width.saturating_sub(1) as usize),
                 Style::default().fg(colors.dim),
             )),
             extra_rect,
         );
+    }
+
+    if let Some(sidebar) = sidebar_area {
+        render_sidebar(
+            frame,
+            sidebar,
+            mode,
+            input_mode,
+            agent_name,
+            model,
+            reasoning_effort,
+            cwd,
+            context_pct,
+            queued_count,
+            thinking_text,
+            thinking_elapsed,
+            active_plan,
+            copy_mode,
+            selected_info.as_ref(),
+            colors,
+        );
+    }
+
+    if let Some(toast) = toast {
+        render_toast(frame, main_area, toast, colors);
     }
 
     if let Some(plan) = active_plan
@@ -2477,484 +2951,1336 @@ fn render_question_inline(
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body_area);
 }
 
+// -- Timeline adapter
+
+/// Transitional rendering adapter for the conversation viewport.
+///
+/// Today the TUI still stores committed content as [`RenderLine`] values and
+/// streams assistant text separately.  `TimelineItem` introduces the first
+/// structural layer above that flat representation so rendering, row
+/// measurement, and future per-item behavior can move away from the monolithic
+/// `RenderLine -> Paragraph` path incrementally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+enum TimelineItemKind {
+    Separator,
+    Blank,
+    ContextGridRow,
+    User,
+    Assistant,
+    ToolCall,
+    ToolResult,
+    LiveOutput,
+    Reasoning,
+    System,
+    Success,
+    InfoHeader,
+    Dim,
+    Pair,
+    Error,
+    QuestionResult,
+    Table,
+    StreamingAssistant,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct TimelineKey {
+    index: usize,
+    kind: TimelineItemKind,
+    streaming: bool,
+}
+
+struct TimelineEntry<'a> {
+    key: TimelineKey,
+    item: TimelineItem<'a>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TimelineJumpTarget {
+    Assistant,
+    Tool,
+    Error,
+}
+
+#[derive(Debug, Clone)]
+struct TimelineSelectionInfo {
+    index: usize,
+    kind_label: &'static str,
+    summary: String,
+    actions: &'static str,
+}
+
+struct PreparedTimelineEntry {
+    lines: Vec<Line<'static>>,
+    rows: u16,
+}
+
+enum TimelineItem<'a> {
+    Separator,
+    Blank,
+    ContextGridRow {
+        cells: &'a [(char, u8)],
+        label: &'a str,
+    },
+    User(&'a str),
+    Assistant(&'a str),
+    ToolCall { name: &'a str, preview: &'a str },
+    ToolResult { is_error: bool, content: &'a str },
+    LiveOutput {
+        lines: &'a [String],
+        max_visible: usize,
+        done: bool,
+    },
+    Reasoning { words: usize, content: &'a str },
+    System(&'a str),
+    Success(&'a str),
+    InfoHeader(&'a str),
+    Dim(&'a str),
+    Pair { label: &'a str, value: &'a str },
+    Error(&'a str),
+    QuestionResult { header: &'a str, answer: &'a str },
+    Table {
+        headers: &'a [String],
+        rows: &'a [Vec<String>],
+    },
+    StreamingAssistant(&'a str),
+}
+
+impl<'a> TimelineItem<'a> {
+    fn kind(&self) -> TimelineItemKind {
+        match self {
+            Self::Separator => TimelineItemKind::Separator,
+            Self::Blank => TimelineItemKind::Blank,
+            Self::ContextGridRow { .. } => TimelineItemKind::ContextGridRow,
+            Self::User(_) => TimelineItemKind::User,
+            Self::Assistant(_) => TimelineItemKind::Assistant,
+            Self::ToolCall { .. } => TimelineItemKind::ToolCall,
+            Self::ToolResult { .. } => TimelineItemKind::ToolResult,
+            Self::LiveOutput { .. } => TimelineItemKind::LiveOutput,
+            Self::Reasoning { .. } => TimelineItemKind::Reasoning,
+            Self::System(_) => TimelineItemKind::System,
+            Self::Success(_) => TimelineItemKind::Success,
+            Self::InfoHeader(_) => TimelineItemKind::InfoHeader,
+            Self::Dim(_) => TimelineItemKind::Dim,
+            Self::Pair { .. } => TimelineItemKind::Pair,
+            Self::Error(_) => TimelineItemKind::Error,
+            Self::QuestionResult { .. } => TimelineItemKind::QuestionResult,
+            Self::Table { .. } => TimelineItemKind::Table,
+            Self::StreamingAssistant(_) => TimelineItemKind::StreamingAssistant,
+        }
+    }
+
+    fn from_render_line(line: &'a RenderLine) -> Self {
+        match line {
+            RenderLine::Separator => Self::Separator,
+            RenderLine::Blank => Self::Blank,
+            RenderLine::ContextGridRow { cells, label } => Self::ContextGridRow { cells, label },
+            RenderLine::UserMessage(text) => Self::User(text),
+            RenderLine::AssistantText(text) => Self::Assistant(text),
+            RenderLine::ToolCall { name, preview } => Self::ToolCall { name, preview },
+            RenderLine::ToolResult { is_error, content } => Self::ToolResult {
+                is_error: *is_error,
+                content,
+            },
+            RenderLine::LiveOutput {
+                lines,
+                max_visible,
+                done,
+            } => Self::LiveOutput {
+                lines,
+                max_visible: *max_visible,
+                done: *done,
+            },
+            RenderLine::Reasoning { words, content } => Self::Reasoning {
+                words: *words,
+                content,
+            },
+            RenderLine::SystemMsg(text) => Self::System(text),
+            RenderLine::SuccessMsg(text) => Self::Success(text),
+            RenderLine::InfoHeader(text) => Self::InfoHeader(text),
+            RenderLine::DimMsg(text) => Self::Dim(text),
+            RenderLine::Pair { label, value } => Self::Pair { label, value },
+            RenderLine::ErrorMsg(text) => Self::Error(text),
+            RenderLine::QuestionResult { header, answer } => {
+                Self::QuestionResult { header, answer }
+            }
+            RenderLine::Table { headers, rows } => Self::Table { headers, rows },
+        }
+    }
+
+    fn render_into(
+        &self,
+        width: usize,
+        expand_all: bool,
+        out: &mut Vec<Line<'static>>,
+        colors: &ThemeColors,
+    ) {
+        match self {
+            Self::Separator => render_separator_item(width, out),
+            Self::Blank => render_blank_item(out),
+            Self::ContextGridRow { cells, label } => {
+                render_context_grid_row_item(cells, label, out, colors)
+            }
+            Self::User(text) => render_user_message_item(text, width, out, colors),
+            Self::Assistant(text) => render_assistant_item(text, out, colors),
+            Self::ToolCall { name, preview } => {
+                render_tool_call_item(name, preview, width, expand_all, out, colors)
+            }
+            Self::ToolResult { is_error, content } => {
+                render_tool_result_item(*is_error, content, width, expand_all, out, colors)
+            }
+            Self::LiveOutput {
+                lines,
+                max_visible,
+                done,
+            } => render_live_output_item(lines, *max_visible, *done, width, expand_all, out, colors),
+            Self::Reasoning { words, content } => {
+                render_reasoning_item(*words, content, width, expand_all, out, colors)
+            }
+            Self::System(text) => render_system_item(text, out, colors),
+            Self::Success(text) => render_success_item(text, out, colors),
+            Self::InfoHeader(text) => render_info_header_item(text, out, colors),
+            Self::Dim(text) => render_dim_item(text, out, colors),
+            Self::Pair { label, value } => render_pair_item(label, value, out, colors),
+            Self::Error(text) => render_error_item(text, out, colors),
+            Self::QuestionResult { header, answer } => {
+                render_question_result_item(header, answer, out, colors)
+            }
+            Self::Table { headers, rows } => render_table_item(headers, rows, out, colors),
+            Self::StreamingAssistant(text) => render_streaming_assistant_item(text, out, colors),
+        }
+    }
+
+    fn visual_rows(&self, content_w: u16, expand_all: bool, colors: &ThemeColors) -> u16 {
+        let mut lines = Vec::new();
+        self.render_into(content_w as usize, expand_all, &mut lines, colors);
+        lines.iter().map(|l| count_wrapped_rows(l, content_w)).sum()
+    }
+
+    fn kind_label(&self) -> &'static str {
+        match self {
+            Self::Separator => "separator",
+            Self::Blank => "blank",
+            Self::ContextGridRow { .. } => "context",
+            Self::User(_) => "user",
+            Self::Assistant(_) => "assistant",
+            Self::ToolCall { .. } => "tool call",
+            Self::ToolResult { is_error, .. } => {
+                if *is_error { "tool error" } else { "tool result" }
+            }
+            Self::LiveOutput { .. } => "live output",
+            Self::Reasoning { .. } => "thinking",
+            Self::System(_) => "system",
+            Self::Success(_) => "success",
+            Self::InfoHeader(_) => "section",
+            Self::Dim(_) => "hint",
+            Self::Pair { .. } => "pair",
+            Self::Error(_) => "error",
+            Self::QuestionResult { .. } => "decision",
+            Self::Table { .. } => "table",
+            Self::StreamingAssistant(_) => "streaming",
+        }
+    }
+
+    fn action_hint(&self) -> &'static str {
+        match self {
+            Self::Assistant(_)
+            | Self::StreamingAssistant(_)
+            | Self::ToolResult { .. }
+            | Self::LiveOutput { .. }
+            | Self::Reasoning { .. } => "Ctrl+O expand · Ctrl+Shift+C copy · Esc clear",
+            Self::ToolCall { .. }
+            | Self::User(_)
+            | Self::System(_)
+            | Self::Success(_)
+            | Self::InfoHeader(_)
+            | Self::Dim(_)
+            | Self::Pair { .. }
+            | Self::Error(_)
+            | Self::QuestionResult { .. }
+            | Self::Table { .. } => "Ctrl+Shift+C copy · Esc clear",
+            Self::Separator | Self::Blank | Self::ContextGridRow { .. } => "Esc clear",
+        }
+    }
+
+    fn summary(&self) -> String {
+        match self {
+            Self::Separator => "separator".to_string(),
+            Self::Blank => "blank".to_string(),
+            Self::ContextGridRow { label, .. } => truncate_str(label, 32),
+            Self::User(text)
+            | Self::Assistant(text)
+            | Self::System(text)
+            | Self::Success(text)
+            | Self::InfoHeader(text)
+            | Self::Dim(text)
+            | Self::Error(text)
+            | Self::StreamingAssistant(text) => truncate_str(first_line(text), 40),
+            Self::ToolCall { name, preview } => {
+                let display = display_tool_name(name);
+                if preview.is_empty() {
+                    display
+                } else {
+                    truncate_str(&format!("{display}({preview})"), 40)
+                }
+            }
+            Self::ToolResult { is_error, content } => {
+                let prefix = if *is_error { "error: " } else { "ok: " };
+                truncate_str(&format!("{prefix}{}", first_line(content)), 40)
+            }
+            Self::LiveOutput { lines, done, .. } => {
+                let state = if *done { "done" } else { "running" };
+                format!("{state} · {} line(s)", lines.len())
+            }
+            Self::Reasoning { words, .. } => format!("{words} words"),
+            Self::Pair { label, value } => truncate_str(&format!("{label}: {value}"), 40),
+            Self::QuestionResult { header, answer } => {
+                truncate_str(&format!("{header}: {answer}"), 40)
+            }
+            Self::Table { headers, rows } => {
+                format!("{} cols · {} rows", headers.len(), rows.len())
+            }
+        }
+    }
+}
+
+impl<'a> TimelineEntry<'a> {
+    fn from_render_line(index: usize, line: &'a RenderLine) -> Self {
+        let item = TimelineItem::from_render_line(line);
+        Self {
+            key: TimelineKey {
+                index,
+                kind: item.kind(),
+                streaming: false,
+            },
+            item,
+        }
+    }
+
+    fn streaming(index: usize, text: &'a str) -> Self {
+        let item = TimelineItem::StreamingAssistant(text);
+        Self {
+            key: TimelineKey {
+                index,
+                kind: item.kind(),
+                streaming: true,
+            },
+            item,
+        }
+    }
+
+    fn is_focusable(&self) -> bool {
+        !matches!(
+            self.key.kind,
+            TimelineItemKind::Blank | TimelineItemKind::Separator | TimelineItemKind::ContextGridRow
+        )
+    }
+
+    fn matches_jump_target(&self, target: TimelineJumpTarget) -> bool {
+        match target {
+            TimelineJumpTarget::Assistant => matches!(
+                self.key.kind,
+                TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant
+            ),
+            TimelineJumpTarget::Tool => matches!(
+                self.key.kind,
+                TimelineItemKind::ToolCall
+                    | TimelineItemKind::ToolResult
+                    | TimelineItemKind::LiveOutput
+            ),
+            TimelineJumpTarget::Error => match &self.item {
+                TimelineItem::Error(_) => true,
+                TimelineItem::ToolResult { is_error, .. } => *is_error,
+                _ => false,
+            },
+        }
+    }
+
+    fn is_expandable(&self) -> bool {
+        matches!(
+            self.key.kind,
+            TimelineItemKind::ToolResult
+                | TimelineItemKind::LiveOutput
+                | TimelineItemKind::Reasoning
+                | TimelineItemKind::Assistant
+                | TimelineItemKind::StreamingAssistant
+        )
+    }
+
+    fn is_expanded(
+        &self,
+        expand_all: bool,
+        expanded_items: &std::collections::HashSet<TimelineKey>,
+    ) -> bool {
+        timeline_key_expanded(expand_all, expanded_items, &self.key)
+    }
+
+    fn render_into(
+        &self,
+        width: usize,
+        expand_all: bool,
+        out: &mut Vec<Line<'static>>,
+        colors: &ThemeColors,
+    ) {
+        self.item.render_into(width, expand_all, out, colors)
+    }
+
+    fn render_with_state(
+        &self,
+        width: usize,
+        expand_all: bool,
+        expanded_items: &std::collections::HashSet<TimelineKey>,
+        selected_timeline: Option<&TimelineKey>,
+        out: &mut Vec<Line<'static>>,
+        colors: &ThemeColors,
+    ) {
+        let start = out.len();
+        self.item
+            .render_into(width, self.is_expanded(expand_all, expanded_items), out, colors);
+        if selected_timeline == Some(&self.key) {
+            highlight_rendered_item(&mut out[start..], colors);
+        }
+    }
+
+    fn visual_rows_with_state(
+        &self,
+        content_w: u16,
+        expand_all: bool,
+        expanded_items: &std::collections::HashSet<TimelineKey>,
+        colors: &ThemeColors,
+    ) -> u16 {
+        self.item.visual_rows(
+            content_w,
+            self.is_expanded(expand_all, expanded_items),
+            colors,
+        )
+    }
+
+    fn is_tool_call(&self) -> bool {
+        self.key.kind == TimelineItemKind::ToolCall
+    }
+
+    fn selection_info(&self) -> TimelineSelectionInfo {
+        TimelineSelectionInfo {
+            index: self.key.index,
+            kind_label: self.item.kind_label(),
+            summary: self.item.summary(),
+            actions: self.item.action_hint(),
+        }
+    }
+}
+
+fn build_timeline_entries<'a>(lines: &'a [RenderLine]) -> Vec<TimelineEntry<'a>> {
+    lines
+        .iter()
+        .enumerate()
+        .map(|(idx, line)| TimelineEntry::from_render_line(idx, line))
+        .collect()
+}
+
+fn prepare_timeline_entries(
+    entries: &[TimelineEntry<'_>],
+    width: usize,
+    expand_all: bool,
+    expanded_items: &std::collections::HashSet<TimelineKey>,
+    selected_timeline: Option<&TimelineKey>,
+    colors: &ThemeColors,
+) -> Vec<PreparedTimelineEntry> {
+    entries
+        .iter()
+        .map(|entry| {
+            let mut lines = Vec::new();
+            entry.render_with_state(
+                width,
+                expand_all,
+                expanded_items,
+                selected_timeline,
+                &mut lines,
+                colors,
+            );
+            let rows = lines.iter().map(|l| count_wrapped_rows(l, width as u16)).sum();
+            PreparedTimelineEntry { lines, rows }
+        })
+        .collect()
+}
+
+fn render_timeline_viewport(
+    frame: &mut Frame,
+    area: Rect,
+    prepared: &[PreparedTimelineEntry],
+    scroll: usize,
+) -> u16 {
+    // Clear the full messages area so no stale content leaks between frames.
+    frame.render_widget(ratatui::widgets::Clear, area);
+
+    let total_visual: u16 = prepared.iter().map(|p| p.rows as u32).sum::<u32>().min(u16::MAX as u32) as u16;
+    let visible = area.height.saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT);
+    let max_skip = total_visual.saturating_sub(visible);
+    let effective_up = (scroll as u16).min(max_skip);
+    let visible_start = max_skip.saturating_sub(effective_up);
+    let visible_end = visible_start.saturating_add(visible);
+
+    let inner = Rect {
+        x: area.x,
+        y: area.y + CONTENT_PAD_TOP,
+        width: area.width,
+        height: area.height.saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT),
+    };
+
+    let mut item_start: u16 = 0;
+    for item in prepared {
+        let item_end = item_start.saturating_add(item.rows);
+        if item_end <= visible_start {
+            item_start = item_end;
+            continue;
+        }
+        if item_start >= visible_end {
+            break;
+        }
+
+        let clip_top = visible_start.saturating_sub(item_start);
+        let render_start = item_start.max(visible_start);
+        let render_end = item_end.min(visible_end);
+        let render_height = render_end.saturating_sub(render_start);
+        if render_height > 0 {
+            let rect = Rect {
+                x: inner.x,
+                y: inner.y + render_start.saturating_sub(visible_start),
+                width: inner.width,
+                height: render_height,
+            };
+            frame.render_widget(
+                Paragraph::new(item.lines.clone())
+                    .wrap(Wrap { trim: false })
+                    .scroll((clip_top, 0)),
+                rect,
+            );
+        }
+
+        item_start = item_end;
+    }
+
+    max_skip
+}
+
+fn timeline_key_expanded(
+    expand_all: bool,
+    expanded_items: &std::collections::HashSet<TimelineKey>,
+    key: &TimelineKey,
+) -> bool {
+    expand_all || expanded_items.contains(key)
+}
+
+fn highlight_rendered_item(lines: &mut [Line<'static>], colors: &ThemeColors) {
+    for line in lines {
+        for span in &mut line.spans {
+            span.style = span.style.patch(Style::default().bg(colors.selected_bg));
+        }
+    }
+}
+
 // -- Line renderers
 
-fn render_line_to_text(
-    rl: &RenderLine,
+fn render_separator_item(width: usize, out: &mut Vec<Line<'static>>) {
+    out.push(Line::from(Span::styled(
+        "─".repeat(width),
+        Style::default().fg(RC::DarkGray),
+    )));
+}
+
+fn render_blank_item(out: &mut Vec<Line<'static>>) {
+    out.push(Line::from(""));
+}
+
+fn render_context_grid_row_item(
+    cells: &[(char, u8)],
+    label: &str,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
+    const CAT_COLORS: &[RC] = &[
+        RC::Rgb(136, 136, 136),
+        RC::Rgb(8, 145, 178),
+        RC::Rgb(8, 145, 178),
+        RC::Rgb(215, 119, 87),
+        RC::Rgb(255, 193, 7),
+        RC::Rgb(147, 51, 234),
+        RC::Rgb(25, 25, 25),
+        RC::Rgb(70, 70, 70),
+    ];
+    let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+    for (i, (ch, cat)) in cells.iter().enumerate() {
+        let color = CAT_COLORS
+            .get(*cat as usize)
+            .copied()
+            .unwrap_or(RC::DarkGray);
+        spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
+        if i < cells.len().saturating_sub(1) {
+            spans.push(Span::raw(" "));
+        }
+    }
+    spans.push(Span::raw("   "));
+    if !label.is_empty() {
+        spans.push(Span::styled(
+            label.to_string(),
+            Style::default().fg(colors.muted),
+        ));
+    }
+    out.push(Line::from(spans));
+}
+
+fn render_user_message_item(
+    text: &str,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
+    const YOU_LABEL: &str = " you ";
+    const LEFT_W: usize = 4;
+    let label_w = YOU_LABEL.chars().count();
+    let right_w = width.saturating_sub(LEFT_W + label_w);
+    let sep_line: Vec<Span<'static>> = vec![
+        Span::styled("─".repeat(LEFT_W), Style::default().fg(RC::DarkGray)),
+        Span::styled(
+            YOU_LABEL,
+            Style::default().fg(colors.dim).add_modifier(Modifier::DIM),
+        ),
+        Span::styled("─".repeat(right_w), Style::default().fg(RC::DarkGray)),
+    ];
+    out.push(Line::from(sep_line));
+    out.extend(crate::markdown::parse_markdown_lines_with_theme(text, colors));
+}
+
+fn render_assistant_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+    out.push(Line::from(""));
+    let md_lines = crate::markdown::parse_markdown_lines_with_theme(text, colors);
+    if md_lines.is_empty() {
+        out.push(Line::from(vec![
+            Span::styled("▌ ", Style::default().fg(colors.assistant_accent)),
+            Span::styled("● ", Style::default().fg(colors.assistant_accent)),
+        ]));
+    } else {
+        for (i, ml) in md_lines.into_iter().enumerate() {
+            let mut spans = vec![Span::styled(
+                if i == 0 { "▌ " } else { "│ " },
+                Style::default().fg(colors.assistant_accent),
+            )];
+            if i == 0 {
+                spans.push(Span::styled(
+                    "● ",
+                    Style::default().fg(colors.assistant_accent),
+                ));
+            } else {
+                spans.push(Span::raw("  "));
+            }
+            spans.extend(ml.spans.into_iter());
+            out.push(Line::from(spans));
+        }
+    }
+}
+
+fn render_streaming_assistant_item(
+    text: &str,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
+    render_assistant_item(text, out, colors);
+}
+
+fn render_tool_call_item(
+    name: &str,
+    preview: &str,
     width: usize,
     expand_all: bool,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
-    match rl {
-        RenderLine::Separator => {
-            out.push(Line::from(Span::styled(
-                "─".repeat(width),
-                Style::default().fg(RC::DarkGray),
-            )));
-        }
-        RenderLine::Blank => {
-            out.push(Line::from(""));
-        }
-        RenderLine::ContextGridRow { cells, label } => {
-            const CAT_COLORS: &[RC] = &[
-                RC::Rgb(136, 136, 136), // 0 system   — gray
-                RC::Rgb(8, 145, 178),   // 1 tools    — blue
-                RC::Rgb(8, 145, 178),   // 2 mcp      — blue
-                RC::Rgb(215, 119, 87),  // 3 memory   — orange
-                RC::Rgb(255, 193, 7),   // 4 skills   — yellow
-                RC::Rgb(147, 51, 234),  // 5 messages — purple
-                RC::Rgb(25, 25, 25),    // 6 free     — near-black
-                RC::Rgb(70, 70, 70),    // 7 buffer   — dark gray
-            ];
-            let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
-            for (i, (ch, cat)) in cells.iter().enumerate() {
-                let color = CAT_COLORS
-                    .get(*cat as usize)
-                    .copied()
-                    .unwrap_or(RC::DarkGray);
-                spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
-                if i < cells.len().saturating_sub(1) {
-                    spans.push(Span::raw(" "));
-                }
-            }
-            spans.push(Span::raw("   "));
-            if !label.is_empty() {
+    out.push(Line::from(""));
+    let display = display_tool_name(name);
+    let name_style = Style::default()
+        .add_modifier(Modifier::BOLD)
+        .fg(colors.tool_title);
+    let budget = width.saturating_sub(display.len() + 14);
+    let args_span = if preview.is_empty() {
+        Span::styled(")", Style::default().fg(colors.dim))
+    } else if expand_all || preview.len() < budget {
+        Span::styled(format!("{})", preview), Style::default().fg(colors.dim))
+    } else {
+        let truncated = truncate_str(preview, budget.saturating_sub(1));
+        Span::styled(format!("{truncated}…)"), Style::default().fg(colors.dim))
+    };
+    let spans: Vec<Span<'static>> = vec![
+        Span::styled("┌ ", Style::default().fg(colors.border)),
+        Span::styled(
+            " TOOL ",
+            Style::default()
+                .fg(colors.tool_title)
+                .bg(colors.tool_pending_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(format!("{display}("), name_style),
+        args_span,
+    ];
+    out.push(Line::from(spans));
+}
+
+fn render_tool_result_item(
+    is_error: bool,
+    content: &str,
+    width: usize,
+    expand_all: bool,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
+    let color = if is_error {
+        colors.diff_removed
+    } else {
+        colors.diff_added
+    };
+    let badge_bg = if is_error {
+        colors.tool_error_bg
+    } else {
+        colors.tool_success_bg
+    };
+    let inner_w = width.saturating_sub(11);
+    let lns: Vec<&str> = content.lines().collect();
+    if lns.is_empty() {
+        out.push(Line::from(vec![
+            Span::styled("│ ", Style::default().fg(colors.border)),
+            Span::styled(
+                if is_error { " ERR " } else { " OK " },
+                Style::default().fg(color).bg(badge_bg).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                "(no output)",
+                Style::default().fg(color).add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+    } else {
+        use ansi_to_tui::IntoText;
+        let show_limit = if expand_all { 20 } else { 3 };
+        let show = lns.len().min(show_limit);
+
+        for (i, ln) in lns.iter().take(show).enumerate() {
+            let mut spans = Vec::new();
+            if i == 0 {
+                spans.push(Span::styled("│ ", Style::default().fg(colors.border)));
                 spans.push(Span::styled(
-                    label.clone(),
-                    Style::default().fg(colors.muted),
+                    if is_error { " ERR " } else { " OK " },
+                    Style::default().fg(color).bg(badge_bg).add_modifier(Modifier::BOLD),
                 ));
+                spans.push(Span::raw(" "));
+            } else {
+                spans.push(Span::styled("│      ", Style::default().fg(colors.border)));
             }
+
+            let parsed_text = ln
+                .into_text()
+                .unwrap_or_else(|_| ratatui::text::Text::raw(ln.to_string()));
+            let parsed_spans: Vec<Span> = parsed_text
+                .lines
+                .into_iter()
+                .flat_map(|line| line.spans)
+                .collect();
+
+            if parsed_spans.iter().all(|s| s.style == Style::default()) {
+                let text_content = parsed_spans
+                    .into_iter()
+                    .map(|s| s.content)
+                    .collect::<String>();
+                let mut style = Style::default().fg(color);
+                if i == 0 {
+                    style = style.add_modifier(Modifier::BOLD);
+                }
+                spans.push(Span::styled(truncate_str(&text_content, inner_w), style));
+            } else {
+                let mut remaining = inner_w;
+                for mut s in parsed_spans {
+                    let len = s.content.chars().count();
+                    if len > remaining {
+                        let truncated = s.content.chars().take(remaining).collect::<String>();
+                        s.content = std::borrow::Cow::Owned(truncated);
+                        spans.push(s);
+                        break;
+                    } else {
+                        spans.push(s);
+                        remaining -= len;
+                    }
+                }
+            }
+
             out.push(Line::from(spans));
         }
-        RenderLine::UserMessage(text) => {
-            // Labeled separator: "──── you ──────────────────"
-            // Replaces the plain full-width rule with a turn-attribution marker.
-            const YOU_LABEL: &str = " you ";
-            const LEFT_W: usize = 4;
-            let label_w = YOU_LABEL.chars().count();
-            let right_w = width.saturating_sub(LEFT_W + label_w);
-            let sep_line: Vec<Span<'static>> = vec![
-                Span::styled(
-                    "─".repeat(LEFT_W),
-                    Style::default().fg(RC::DarkGray),
-                ),
-                Span::styled(
-                    YOU_LABEL,
-                    Style::default().fg(colors.dim).add_modifier(Modifier::DIM),
-                ),
-                Span::styled(
-                    "─".repeat(right_w),
-                    Style::default().fg(RC::DarkGray),
-                ),
-            ];
-            out.push(Line::from(sep_line));
-            out.extend(crate::markdown::parse_markdown_lines(text));
-        }
-        RenderLine::AssistantText(text) => {
-            // One leading blank for visual separation from the preceding line
-            // (tool result, user message, etc.).  No trailing blank — ToolCall
-            // already prepends its own blank, which would otherwise produce a
-            // distracting double-gap.  The ● prefix matches the streaming
-            // render_assistant_lines path so there is no visual pop on commit.
-            out.push(Line::from(""));
-            let md_lines = crate::markdown::parse_markdown_lines(text);
-            if md_lines.is_empty() {
-                out.push(Line::from(Span::styled(
-                    "● ",
-                    Style::default().fg(colors.tool_title),
-                )));
+
+        let remaining = lns.len().saturating_sub(show);
+        if remaining > 0 {
+            let hint = if expand_all {
+                format!("… +{remaining} lines")
             } else {
-                for (i, ml) in md_lines.into_iter().enumerate() {
-                    if i == 0 {
-                        let mut spans =
-                            vec![Span::styled("● ", Style::default().fg(colors.tool_title))];
-                        spans.extend(ml.spans.into_iter());
-                        out.push(Line::from(spans));
-                    } else {
-                        out.push(ml);
-                    }
-                }
-            }
-        }
-        RenderLine::ToolCall { name, preview } => {
-            // Blank spacer before each tool group.
-            out.push(Line::from(""));
-            let display = display_tool_name(name);
-            let name_style = Style::default()
-                .add_modifier(Modifier::BOLD)
-                .fg(colors.thinking_minimal);
-            // Budget: width minus "● " (2) + name len + "()" (2) + a little breathing room.
-            let budget = width.saturating_sub(display.len() + 6);
-            let dot_color = RC::Rgb(100, 207, 180); // teal — distinct from assistant purple
-            // Format: ● Name(args)  — matches Claude Code style (no space before paren).
-            let args_span = if preview.is_empty() {
-                Span::styled(")", Style::default().fg(RC::DarkGray))
-            } else if expand_all || preview.len() < budget {
-                Span::styled(format!("{})", preview), Style::default().fg(RC::DarkGray))
-            } else {
-                let truncated = truncate_str(preview, budget.saturating_sub(1));
-                Span::styled(format!("{truncated}…)"), Style::default().fg(RC::DarkGray))
+                format!("… +{remaining} lines (ctrl+o to expand)")
             };
-            let spans: Vec<Span<'static>> = vec![
-                Span::styled("● ", Style::default().fg(dot_color)),
-                Span::styled(format!("{display}("), name_style),
-                args_span,
-            ];
-            out.push(Line::from(spans));
-        }
-        RenderLine::ToolResult { is_error, content } => {
-            let color = if *is_error {
-                colors.diff_removed
-            } else {
-                colors.diff_added
-            };
-            let inner_w = width.saturating_sub(5);
-            let lns: Vec<&str> = content.lines().collect();
-            // Collapsed: show up to 3 lines; Expanded (ctrl+o): show up to 20.
-            // Format matches Claude Code: first line prefixed with ⎿, subsequent
-            // lines indented, trailing "… +N lines (ctrl+o to expand)" hint.
-            if lns.is_empty() {
-                out.push(Line::from(vec![
-                    Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
-                    Span::styled(
-                        "(no output)",
-                        Style::default().fg(color).add_modifier(Modifier::ITALIC),
-                    ),
-                ]));
-            } else {
-                use ansi_to_tui::IntoText;
-                let show_limit = if expand_all { 20 } else { 3 };
-                let show = lns.len().min(show_limit);
-
-                for (i, ln) in lns.iter().take(show).enumerate() {
-                    let mut spans = Vec::new();
-                    if i == 0 {
-                        spans.push(Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)));
-                    } else {
-                        spans.push(Span::raw("     "));
-                    }
-
-                    // Parse ANSI colors. fallback to raw text if parse fails.
-                    let parsed_text = ln
-                        .into_text()
-                        .unwrap_or_else(|_| ratatui::text::Text::raw(ln.to_string()));
-                    let parsed_spans: Vec<Span> = parsed_text
-                        .lines
-                        .into_iter()
-                        .flat_map(|line| line.spans)
-                        .collect();
-
-                    // Apply default color if no ANSI styles are present, otherwise preserve them.
-                    if parsed_spans.iter().all(|s| s.style == Style::default()) {
-                        let text_content = parsed_spans
-                            .into_iter()
-                            .map(|s| s.content)
-                            .collect::<String>();
-                        let mut style = Style::default().fg(color);
-                        if i == 0 {
-                            style = style.add_modifier(Modifier::BOLD);
-                        }
-                        spans.push(Span::styled(truncate_str(&text_content, inner_w), style));
-                    } else {
-                        // Apply truncation logic across spans
-                        let mut remaining = inner_w;
-                        for mut s in parsed_spans {
-                            let len = s.content.chars().count();
-                            if len > remaining {
-                                let truncated =
-                                    s.content.chars().take(remaining).collect::<String>();
-                                s.content = std::borrow::Cow::Owned(truncated);
-                                spans.push(s);
-                                break;
-                            } else {
-                                spans.push(s);
-                                remaining -= len;
-                            }
-                        }
-                    }
-
-                    out.push(Line::from(spans));
-                }
-
-                // Truncation hint
-                let remaining = lns.len().saturating_sub(show);
-                if remaining > 0 {
-                    let hint = if expand_all {
-                        format!("… +{remaining} lines")
-                    } else {
-                        format!("… +{remaining} lines (ctrl+o to expand)")
-                    };
-                    out.push(Line::from(vec![
-                        Span::raw("     "),
-                        Span::styled(
-                            hint,
-                            Style::default()
-                                .fg(RC::DarkGray)
-                                .add_modifier(Modifier::ITALIC),
-                        ),
-                    ]));
-                }
-            }
-        }
-        RenderLine::LiveOutput {
-            lines,
-            max_visible,
-            done: _,
-        } => {
-            let inner_w = width.saturating_sub(5);
-            let color = colors.diff_added; // same green as successful ToolResult
-
-            if lines.is_empty() {
-                // Nothing arrived yet — show a placeholder so the entry is
-                // visible immediately as the command starts.
-                out.push(Line::from(vec![
-                    Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)),
-                    Span::styled(
-                        "(starting…)",
-                        Style::default()
-                            .fg(RC::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    ),
-                ]));
-            } else {
-                use ansi_to_tui::IntoText;
-                let visible = if expand_all {
-                    lines.len()
-                } else {
-                    lines.len().min(*max_visible)
-                };
-                let hidden = lines.len().saturating_sub(visible);
-
-                // Collapsed header — shows how many earlier lines are hidden.
-                if hidden > 0 {
-                    let hint = format!("... ({hidden} earlier lines, ctrl+o to expand)");
-                    out.push(Line::from(Span::styled(
-                        hint,
-                        Style::default()
-                            .fg(RC::DarkGray)
-                            .add_modifier(Modifier::ITALIC),
-                    )));
-                }
-
-                // Tail lines — most recent `visible` lines.
-                let start = lines.len() - visible;
-                for (i, ln) in lines[start..].iter().enumerate() {
-                    let mut spans = Vec::new();
-                    if i == 0 && hidden == 0 {
-                        spans.push(Span::styled("  ⎿  ", Style::default().fg(RC::DarkGray)));
-                    } else {
-                        spans.push(Span::raw("     "));
-                    }
-
-                    let parsed_text = ln
-                        .into_text()
-                        .unwrap_or_else(|_| ratatui::text::Text::raw(ln.to_string()));
-                    let parsed_spans: Vec<Span> = parsed_text
-                        .lines
-                        .into_iter()
-                        .flat_map(|line| line.spans)
-                        .collect();
-
-                    if parsed_spans.iter().all(|s| s.style == Style::default()) {
-                        let text_content = parsed_spans
-                            .into_iter()
-                            .map(|s| s.content)
-                            .collect::<String>();
-                        let mut style = Style::default().fg(color);
-                        if i == 0 && hidden == 0 {
-                            style = style.add_modifier(Modifier::BOLD);
-                        }
-                        spans.push(Span::styled(truncate_str(&text_content, inner_w), style));
-                    } else {
-                        let mut remaining = inner_w;
-                        for mut s in parsed_spans {
-                            let len = s.content.chars().count();
-                            if len > remaining {
-                                let truncated =
-                                    s.content.chars().take(remaining).collect::<String>();
-                                s.content = std::borrow::Cow::Owned(truncated);
-                                spans.push(s);
-                                break;
-                            } else {
-                                spans.push(s);
-                                remaining -= len;
-                            }
-                        }
-                    }
-
-                    out.push(Line::from(spans));
-                }
-            }
-        }
-        RenderLine::Reasoning { words: _, content } => {
-            out.push(Line::from(Span::styled(
-                "💭 Thinking…".to_string(),
-                Style::default()
-                    .fg(RC::DarkGray)
-                    .add_modifier(Modifier::ITALIC),
-            )));
-            if expand_all {
-                let inner_w = width.saturating_sub(5);
-                for ln in content.lines() {
-                    out.push(Line::from(vec![
-                        Span::raw("   "),
-                        Span::styled(
-                            truncate_str(ln, inner_w),
-                            Style::default()
-                                .fg(RC::DarkGray)
-                                .add_modifier(Modifier::ITALIC),
-                        ),
-                    ]));
-                }
-            }
-        }
-        RenderLine::SystemMsg(text) => {
-            for ln in text.lines() {
-                out.push(Line::from(Span::styled(
-                    ln.to_string(),
-                    Style::default().fg(RC::Gray),
-                )));
-            }
-        }
-        RenderLine::SuccessMsg(text) => {
-            for ln in text.lines() {
-                out.push(Line::from(Span::styled(
-                    ln.to_string(),
-                    Style::default().fg(RC::Green),
-                )));
-            }
-        }
-        RenderLine::InfoHeader(text) => {
-            for ln in text.lines() {
-                out.push(Line::from(Span::styled(
-                    ln.to_string(),
-                    Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD),
-                )));
-            }
-        }
-        RenderLine::DimMsg(text) => {
-            for ln in text.lines() {
-                out.push(Line::from(Span::styled(
-                    ln.to_string(),
-                    Style::default()
-                        .fg(RC::DarkGray)
-                        .add_modifier(Modifier::DIM),
-                )));
-            }
-        }
-        RenderLine::Pair { label, value } => {
             out.push(Line::from(vec![
-                Span::styled(format!("  {label:<24}"), Style::default().fg(RC::DarkGray)),
-                Span::styled(value.clone(), Style::default().fg(RC::White)),
-            ]));
-        }
-        RenderLine::ErrorMsg(text) => {
-            for ln in text.lines() {
-                out.push(Line::from(Span::styled(
-                    format!("  ✗ {ln}"),
-                    Style::default().fg(RC::Red),
-                )));
-            }
-        }
-        RenderLine::QuestionResult { header, answer } => {
-            out.push(Line::from(vec![
+                Span::styled("└────── ", Style::default().fg(colors.border)),
                 Span::styled(
-                    "● ",
-                    Style::default().fg(RC::Green).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    format!("{header}: "),
-                    Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(answer.clone(), Style::default().fg(RC::White)),
-            ]));
-        }
-        RenderLine::Table { headers, rows } => {
-            if rows.is_empty() {
-                return;
-            }
-            let n_cols = headers.len();
-            let mut widths = vec![0; n_cols];
-            for (i, h) in headers.iter().enumerate() {
-                widths[i] = h.len();
-            }
-            for row in rows {
-                for (i, cell) in row.iter().enumerate() {
-                    if i < n_cols {
-                        widths[i] = widths[i].max(cell.len());
-                    }
-                }
-            }
-
-            // Draw header
-            let mut header_spans = Vec::new();
-            for (i, h) in headers.iter().enumerate() {
-                header_spans.push(Span::styled(
-                    format!("  {:<width$}  ", h, width = widths[i]),
+                    hint,
                     Style::default()
-                        .fg(RC::Cyan)
-                        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-                ));
-            }
-            out.push(Line::from(header_spans));
-
-            // Draw rows
-            for row in rows {
-                let mut row_spans = Vec::new();
-                for (i, cell) in row.iter().enumerate() {
-                    if i < n_cols {
-                        row_spans.push(Span::styled(
-                            format!("  {:<width$}  ", cell, width = widths[i]),
-                            Style::default().fg(RC::Gray),
-                        ));
-                    }
-                }
-                out.push(Line::from(row_spans));
-            }
-            out.push(Line::from(""));
+                        .fg(colors.dim)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
         }
     }
 }
 
-fn render_assistant_lines(
-    text: &str,
-    _width: usize,
+fn render_reasoning_item(
+    words: usize,
+    content: &str,
+    width: usize,
+    expand_all: bool,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
-    // Leading blank matches the committed AssistantText renderer so the
-    // viewport does not shift by one row when streaming commits.
     out.push(Line::from(""));
-    let md_lines = crate::markdown::parse_markdown_lines(text);
-    if md_lines.is_empty() {
-        out.push(Line::from(Span::styled(
-            "● ",
-            Style::default().fg(colors.tool_title),
-        )));
-        return;
-    }
-    for (i, ml) in md_lines.into_iter().enumerate() {
-        if i == 0 {
-            let mut spans = vec![Span::styled("● ", Style::default().fg(colors.tool_title))];
-            spans.extend(ml.spans.into_iter());
-            out.push(Line::from(spans));
-        } else {
-            out.push(ml);
+    out.push(Line::from(vec![
+        Span::styled("╭ ", Style::default().fg(colors.border_muted)),
+        Span::styled(
+            " THINKING ",
+            Style::default()
+                .fg(colors.badge_fg)
+                .bg(colors.reasoning_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(format!("{words} words"), Style::default().fg(colors.muted)),
+        Span::styled(
+            if expand_all {
+                " · expanded"
+            } else {
+                " · ctrl+o to expand"
+            },
+            Style::default().fg(colors.dim),
+        ),
+    ]));
+    if expand_all {
+        let inner_w = width.saturating_sub(4);
+        for ln in content.lines() {
+            out.push(Line::from(vec![
+                Span::styled("│ ", Style::default().fg(colors.border_muted)),
+                Span::styled(
+                    truncate_str(ln, inner_w),
+                    Style::default()
+                        .fg(colors.thinking_text)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
         }
     }
+}
+
+fn render_live_output_item(
+    lines: &[String],
+    max_visible: usize,
+    _done: bool,
+    width: usize,
+    expand_all: bool,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
+    let inner_w = width.saturating_sub(11);
+    let color = colors.diff_added;
+
+    if lines.is_empty() {
+        out.push(Line::from(vec![
+            Span::styled("│ ", Style::default().fg(colors.border)),
+            Span::styled(
+                " LIVE ",
+                Style::default()
+                    .fg(color)
+                    .bg(colors.tool_pending_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(
+                "(starting…)",
+                Style::default()
+                    .fg(colors.dim)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+        return;
+    }
+
+    use ansi_to_tui::IntoText;
+    let visible = if expand_all {
+        lines.len()
+    } else {
+        lines.len().min(max_visible)
+    };
+    let hidden = lines.len().saturating_sub(visible);
+
+    if hidden > 0 {
+        let hint = format!("… {hidden} earlier lines (ctrl+o to expand)");
+        out.push(Line::from(vec![
+            Span::styled("│ ", Style::default().fg(colors.border)),
+            Span::styled(
+                hint,
+                Style::default()
+                    .fg(colors.dim)
+                    .add_modifier(Modifier::ITALIC),
+            ),
+        ]));
+    }
+
+    let start = lines.len() - visible;
+    for (i, ln) in lines[start..].iter().enumerate() {
+        let mut spans = Vec::new();
+        if i == 0 && hidden == 0 {
+            spans.push(Span::styled("│ ", Style::default().fg(colors.border)));
+            spans.push(Span::styled(
+                " LIVE ",
+                Style::default()
+                    .fg(color)
+                    .bg(colors.tool_pending_bg)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            spans.push(Span::raw(" "));
+        } else {
+            spans.push(Span::styled("│      ", Style::default().fg(colors.border)));
+        }
+
+        let parsed_text = ln
+            .into_text()
+            .unwrap_or_else(|_| ratatui::text::Text::raw(ln.to_string()));
+        let parsed_spans: Vec<Span> = parsed_text
+            .lines
+            .into_iter()
+            .flat_map(|line| line.spans)
+            .collect();
+
+        if parsed_spans.iter().all(|s| s.style == Style::default()) {
+            let text_content = parsed_spans
+                .into_iter()
+                .map(|s| s.content)
+                .collect::<String>();
+            let mut style = Style::default().fg(color);
+            if i == 0 && hidden == 0 {
+                style = style.add_modifier(Modifier::BOLD);
+            }
+            spans.push(Span::styled(truncate_str(&text_content, inner_w), style));
+        } else {
+            let mut remaining = inner_w;
+            for mut s in parsed_spans {
+                let len = s.content.chars().count();
+                if len > remaining {
+                    let truncated = s.content.chars().take(remaining).collect::<String>();
+                    s.content = std::borrow::Cow::Owned(truncated);
+                    spans.push(s);
+                    break;
+                } else {
+                    spans.push(s);
+                    remaining -= len;
+                }
+            }
+        }
+
+        out.push(Line::from(spans));
+    }
+}
+
+fn render_system_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+    for (i, ln) in text.lines().enumerate() {
+        out.push(Line::from(vec![
+            Span::styled(
+                if i == 0 { " INFO " } else { "      " },
+                Style::default()
+                    .fg(colors.overlay_title)
+                    .bg(colors.custom_message_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(ln.to_string(), Style::default().fg(colors.muted)),
+        ]));
+    }
+}
+
+fn render_success_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+    for (i, ln) in text.lines().enumerate() {
+        out.push(Line::from(vec![
+            Span::styled(
+                if i == 0 { " OK " } else { "    " },
+                Style::default()
+                    .fg(colors.success)
+                    .bg(colors.tool_success_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(ln.to_string(), Style::default().fg(colors.success)),
+        ]));
+    }
+}
+
+fn render_info_header_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+    for ln in text.lines() {
+        out.push(Line::from(Span::styled(
+            ln.to_string(),
+            Style::default()
+                .fg(colors.overlay_title)
+                .add_modifier(Modifier::BOLD),
+        )));
+    }
+}
+
+fn render_dim_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+    for ln in text.lines() {
+        out.push(Line::from(Span::styled(
+            ln.to_string(),
+            Style::default()
+                .fg(colors.dim)
+                .add_modifier(Modifier::DIM),
+        )));
+    }
+}
+
+fn render_pair_item(label: &str, value: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+    out.push(Line::from(vec![
+        Span::styled(format!("  {label:<24}"), Style::default().fg(colors.dim)),
+        Span::styled(value.to_string(), Style::default().fg(colors.text)),
+    ]));
+}
+
+fn render_error_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+    for (i, ln) in text.lines().enumerate() {
+        out.push(Line::from(vec![
+            Span::styled(
+                if i == 0 { " ERR " } else { "     " },
+                Style::default()
+                    .fg(colors.error)
+                    .bg(colors.tool_error_bg)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled(ln.to_string(), Style::default().fg(colors.error)),
+        ]));
+    }
+}
+
+fn render_question_result_item(
+    header: &str,
+    answer: &str,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
+    out.push(Line::from(vec![
+        Span::styled(
+            " DONE ",
+            Style::default()
+                .fg(colors.success)
+                .bg(colors.tool_success_bg)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::raw(" "),
+        Span::styled(
+            format!("{header}: "),
+            Style::default()
+                .fg(colors.overlay_title)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(answer.to_string(), Style::default().fg(colors.text)),
+    ]));
+}
+
+fn render_table_item(
+    headers: &[String],
+    rows: &[Vec<String>],
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
+    if rows.is_empty() {
+        return;
+    }
+    let n_cols = headers.len();
+    let mut widths = vec![0; n_cols];
+    for (i, h) in headers.iter().enumerate() {
+        widths[i] = h.len();
+    }
+    for row in rows {
+        for (i, cell) in row.iter().enumerate() {
+            if i < n_cols {
+                widths[i] = widths[i].max(cell.len());
+            }
+        }
+    }
+
+    let mut header_spans = Vec::new();
+    for (i, h) in headers.iter().enumerate() {
+        header_spans.push(Span::styled(
+            format!("  {:<width$}  ", h, width = widths[i]),
+            Style::default()
+                .fg(colors.overlay_title)
+                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        ));
+    }
+    out.push(Line::from(header_spans));
+
+    for row in rows {
+        let mut row_spans = Vec::new();
+        for (i, cell) in row.iter().enumerate() {
+            if i < n_cols {
+                row_spans.push(Span::styled(
+                    format!("  {:<width$}  ", cell, width = widths[i]),
+                    Style::default().fg(colors.text),
+                ));
+            }
+        }
+        out.push(Line::from(row_spans));
+    }
+    out.push(Line::from(""));
+}
+
+fn render_sidebar(
+    frame: &mut Frame,
+    area: Rect,
+    mode: PermissionMode,
+    input_mode: InputMode,
+    agent_name: &str,
+    model: &str,
+    reasoning_effort: Option<&str>,
+    cwd: &str,
+    context_pct: Option<u8>,
+    queued_count: usize,
+    thinking_text: Option<&str>,
+    thinking_elapsed: Option<std::time::Duration>,
+    active_plan: Option<&PlanState>,
+    copy_mode: bool,
+    selected_info: Option<&TimelineSelectionInfo>,
+    colors: &ThemeColors,
+) {
+    let inner = Block::default()
+        .borders(Borders::LEFT)
+        .border_style(Style::default().fg(colors.border))
+        .padding(Padding::new(1, 1, 0, 0))
+        .inner(area);
+    frame.render_widget(
+        Block::default()
+            .borders(Borders::LEFT)
+            .border_style(Style::default().fg(colors.border)),
+        area,
+    );
+
+    let (input_badge, _) = input_mode_badge(input_mode, colors);
+    let mode_name = format!("{mode}");
+    let context_text = context_pct
+        .map(|p| format!("{p}%"))
+        .unwrap_or_else(|| "—".to_string());
+    let think_text = if let Some(elapsed) = thinking_elapsed {
+        let secs = elapsed.as_secs();
+        format!(
+            "{} · {}s",
+            thinking_text.unwrap_or("thinking…"),
+            secs.max(1)
+        )
+    } else if queued_count > 0 {
+        format!("idle · {queued_count} queued")
+    } else {
+        "idle".to_string()
+    };
+    let plan_summary = if let Some(plan) = active_plan {
+        let done = plan.steps.iter().filter(|s| s.is_done).count();
+        let total = plan.steps.len();
+        if total > 0 {
+            format!("{done}/{total} complete")
+        } else {
+            "none".to_string()
+        }
+    } else {
+        "none".to_string()
+    };
+    let selected_kind = selected_info
+        .map(|s| s.kind_label.to_string())
+        .unwrap_or_else(|| "none".to_string());
+    let selected_summary = selected_info
+        .map(|s| truncate_str(&s.summary, 18))
+        .unwrap_or_else(|| "none".to_string());
+    let selected_actions = selected_info
+        .map(|s| truncate_str(s.actions, 28))
+        .unwrap_or_else(|| "Ctrl+Shift+J/K focus blocks".to_string());
+
+    let lines = vec![
+        Line::from(Span::styled(
+            " Session ",
+            Style::default()
+                .fg(colors.overlay_title)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled(" agent   ", Style::default().fg(colors.muted)),
+            Span::styled(truncate_str(agent_name, 22), Style::default().fg(colors.text)),
+        ]),
+        Line::from(vec![
+            Span::styled(" model   ", Style::default().fg(colors.muted)),
+            Span::styled(truncate_str(model, 22), Style::default().fg(colors.text)),
+        ]),
+        Line::from(vec![
+            Span::styled(" cwd     ", Style::default().fg(colors.muted)),
+            Span::styled(truncate_str(cwd, 22), Style::default().fg(colors.text)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Status ",
+            Style::default()
+                .fg(colors.overlay_title)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled(" mode    ", Style::default().fg(colors.muted)),
+            Span::styled(mode_name, Style::default().fg(mode_sep_color(mode, colors))),
+        ]),
+        Line::from(vec![
+            Span::styled(" input   ", Style::default().fg(colors.muted)),
+            Span::styled(input_badge, Style::default().fg(colors.badge_fg).bg(colors.badge_bg)),
+        ]),
+        Line::from(vec![
+            Span::styled(" context ", Style::default().fg(colors.muted)),
+            Span::styled(context_text, Style::default().fg(context_severity_color(context_pct, colors))),
+        ]),
+        Line::from(vec![
+            Span::styled(" queue   ", Style::default().fg(colors.muted)),
+            Span::styled(queued_count.to_string(), Style::default().fg(colors.text)),
+        ]),
+        Line::from(vec![
+            Span::styled(" copy    ", Style::default().fg(colors.muted)),
+            Span::styled(if copy_mode { "ON" } else { "OFF" }, Style::default().fg(if copy_mode { colors.success } else { colors.dim })),
+        ]),
+        Line::from(vec![
+            Span::styled(" focus   ", Style::default().fg(colors.muted)),
+            Span::styled(selected_kind, Style::default().fg(colors.text)),
+        ]),
+        if let Some(reason) = reasoning_effort {
+            Line::from(vec![
+                Span::styled(" reason  ", Style::default().fg(colors.muted)),
+                Span::styled(reason.to_string(), Style::default().fg(colors.warning)),
+            ])
+        } else {
+            Line::from(vec![
+                Span::styled(" reason  ", Style::default().fg(colors.muted)),
+                Span::styled("default", Style::default().fg(colors.warning)),
+            ])
+        },
+        Line::from(""),
+        Line::from(Span::styled(
+            " Activity ",
+            Style::default()
+                .fg(colors.overlay_title)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(
+            truncate_str(&think_text, 26),
+            Style::default().fg(colors.thinking_text),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Selected ",
+            Style::default()
+                .fg(colors.overlay_title)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled(" block   ", Style::default().fg(colors.muted)),
+            Span::styled(selected_summary, Style::default().fg(colors.text)),
+        ]),
+        Line::from(vec![
+            Span::styled(" action  ", Style::default().fg(colors.muted)),
+            Span::styled(selected_actions, Style::default().fg(colors.muted)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Plan ",
+            Style::default()
+                .fg(colors.overlay_title)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(vec![
+            Span::styled(" todos   ", Style::default().fg(colors.muted)),
+            Span::styled(plan_summary, Style::default().fg(colors.text)),
+        ]),
+        Line::from(""),
+        Line::from(Span::styled(
+            " Keys ",
+            Style::default()
+                .fg(colors.overlay_title)
+                .add_modifier(Modifier::BOLD),
+        )),
+        Line::from(Span::styled(" Ctrl+O expand blocks", Style::default().fg(colors.muted))),
+        Line::from(Span::styled(" Ctrl+Shift+J next block", Style::default().fg(colors.muted))),
+        Line::from(Span::styled(" Ctrl+Shift+K prev block", Style::default().fg(colors.muted))),
+        Line::from(Span::styled(" Alt+A/T/E jump kinds", Style::default().fg(colors.muted))),
+        Line::from(Span::styled(" Ctrl+Shift+C copy block", Style::default().fg(colors.muted))),
+        Line::from(Span::styled(" Shift+J follow output", Style::default().fg(colors.muted))),
+        Line::from(Span::styled(" /help commands", Style::default().fg(colors.muted))),
+    ];
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+}
+
+fn render_toast(frame: &mut Frame, main_area: Rect, toast: &Toast, colors: &ThemeColors) {
+    let width = (toast.message.chars().count() as u16 + 6)
+        .clamp(20, main_area.width.saturating_sub(2).max(20));
+    let rect = Rect {
+        x: main_area.x + main_area.width.saturating_sub(width),
+        y: main_area.y,
+        width,
+        height: 3,
+    };
+    let (fg, border) = match toast.level {
+        ToastLevel::Info => (colors.text, colors.accent),
+        ToastLevel::Success => (colors.text, colors.success),
+        ToastLevel::Warning => (colors.text, colors.warning),
+        ToastLevel::Error => (colors.text, colors.error),
+    };
+    frame.render_widget(ratatui::widgets::Clear, rect);
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(truncate_str(&toast.message, rect.width.saturating_sub(4) as usize), Style::default().fg(fg)),
+        ]))
+        .block(
+            Block::default()
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(border))
+                .style(Style::default().bg(colors.overlay_bg)),
+        ),
+        rect,
+    );
+}
+
+fn context_severity_color(context_pct: Option<u8>, colors: &ThemeColors) -> RC {
+    match context_pct {
+        Some(p) if p >= 90 => colors.error,
+        Some(p) if p >= 80 => colors.warning,
+        Some(_) => colors.muted,
+        None => colors.dim,
+    }
+}
+
+fn first_line(text: &str) -> &str {
+    text.lines().next().unwrap_or("")
 }
 
 // -- Input helpers (ported from input.rs)
 
-fn calc_input_rows(buf: &str, available_width: u16) -> u16 {
-    // available_width is the inner width of the input chunk (border already
-    // subtracted by the caller).  Each logical line is rendered as its own
-    // ratatui Line with a 2-char prefix ("> " or "  "), so every logical line
-    // has an effective text width of (available_width - 2).  We count the
-    // number of visual rows that ratatui will produce for each logical line.
+fn input_mode_badge(mode: InputMode, colors: &ThemeColors) -> (&'static str, RC) {
+    match mode {
+        InputMode::Regular => (" CHAT ", colors.badge_bg),
+        InputMode::BashCommand { silent: false } => (" SHELL ", colors.warning),
+        InputMode::BashCommand { silent: true } => (" LOCAL ", colors.border_muted),
+        InputMode::SlashCommand => (" COMMAND ", colors.assistant_accent),
+    }
+}
+
+fn calc_input_rows(buf: &str, available_width: u16, prefix_width: u16) -> u16 {
     let w = available_width.max(1) as usize;
-    let text_w = w.saturating_sub(2).max(1); // width after "  " / "> " prefix
+    let first_row_capacity = w.saturating_sub(prefix_width as usize).max(1);
     if buf.is_empty() {
         return 1;
     }
@@ -2963,31 +4289,33 @@ fn calc_input_rows(buf: &str, available_width: u16) -> u16 {
         let chars = seg.chars().count();
         let rows = if chars == 0 {
             1
+        } else if chars <= first_row_capacity {
+            1
         } else {
-            chars.div_ceil(text_w) as u16
+            1 + (chars - first_row_capacity).div_ceil(w) as u16
         };
         total += rows;
     }
     total.clamp(1, MAX_INPUT_ROWS)
 }
 
-fn calc_visual_cursor(before_cursor: &str, available_width: u16) -> (u16, u16) {
+fn calc_visual_cursor(before_cursor: &str, available_width: u16, prefix_width: u16) -> (u16, u16) {
     // Mirror exactly how render_frame builds the Paragraph:
     //   • Each logical line (split on '\n') is its own ratatui Line.
-    //   • Every line has a 2-char prefix (">" / "  ").
+    //   • The first visual row starts after the input-mode badge + "> " prefix.
     //   • The paragraph uses Wrap { trim: false }, meaning it wraps exactly
     //     at the available_width boundary. Wrapped lines do NOT get the prefix
     //     so they start at column 0.
     let w = available_width.max(1) as usize;
 
     let mut vis_row: u16 = 0;
-    let mut vis_col: u16 = 2; // starts after the "  " / "> " prefix
+    let mut vis_col: u16 = prefix_width;
 
     for (li, seg) in before_cursor.split('\n').enumerate() {
         if li > 0 {
             // Crossed a \n: start a new logical line → new visual row, prefix col
             vis_row += 1;
-            vis_col = 2;
+            vis_col = prefix_width;
         }
         // Walk through the segment, wrapping when we exceed available width
         let mut chars_on_row = vis_col as usize;
@@ -3004,7 +4332,7 @@ fn calc_visual_cursor(before_cursor: &str, available_width: u16) -> (u16, u16) {
         }
         // After processing all chars of this segment, vis_col is already set
         // correctly for the end of the segment.  If the segment was empty
-        // (bare \n), vis_col stays at 2 (just the prefix).
+        // (bare \n), vis_col stays at prefix_width (just the prefix).
     }
 
     (vis_row, vis_col)
@@ -3017,18 +4345,20 @@ fn calc_visual_cursor(before_cursor: &str, available_width: u16) -> (u16, u16) {
 /// Used by the Up/Down cursor-movement logic.
 fn find_cursor_at_visual_row_col(
     buf: &str,
-    text_w: usize,
+    available_width: u16,
+    prefix_width: u16,
     target_row: u16,
     target_col: u16,
 ) -> usize {
+    let text_w = available_width.max(1) as usize;
     let mut vis_row: u16 = 0;
-    let mut chars_on_row: usize = 2; // starts with a 2-char prefix
+    let mut chars_on_row: usize = prefix_width as usize;
     let mut byte_offset: usize = 0;
 
     for (li, seg) in buf.split('\n').enumerate() {
         if li > 0 {
             vis_row += 1;
-            chars_on_row = 2;
+            chars_on_row = prefix_width as usize;
             byte_offset += 1; // the '\n' byte
         }
         if vis_row > target_row {
@@ -3285,6 +4615,131 @@ mod tests {
         assert_eq!(count_wrapped_segment("123456789012345678901", 10), 3);
         assert_eq!(count_wrapped_segment("a 12345678901", 10), 3);
         assert_eq!(count_wrapped_segment("a 12345678901 ", 10), 3);
+    }
+
+    #[test]
+    fn test_timeline_item_tool_call_measurement_smoke() {
+        let line = RenderLine::ToolCall {
+            name: "bash".to_string(),
+            preview: "cargo test --workspace".to_string(),
+        };
+        let item = TimelineItem::from_render_line(&line);
+        assert_eq!(item.kind(), TimelineItemKind::ToolCall);
+        assert!(item.visual_rows(80, false, &ThemeColors::dark()) >= 1);
+    }
+
+    #[test]
+    fn test_timeline_item_maps_assistant_variant() {
+        let line = RenderLine::AssistantText("hello".to_string());
+        let item = TimelineItem::from_render_line(&line);
+        assert!(matches!(item, TimelineItem::Assistant("hello")));
+    }
+
+    #[test]
+    fn test_timeline_item_maps_system_variant() {
+        let line = RenderLine::SystemMsg("info".to_string());
+        let item = TimelineItem::from_render_line(&line);
+        assert!(matches!(item, TimelineItem::System("info")));
+    }
+
+    #[test]
+    fn test_timeline_entry_keys_are_stable() {
+        let lines = vec![
+            RenderLine::UserMessage("hello".to_string()),
+            RenderLine::ToolCall {
+                name: "bash".to_string(),
+                preview: "cargo test".to_string(),
+            },
+            RenderLine::ToolResult {
+                is_error: false,
+                content: "ok".to_string(),
+            },
+        ];
+        let entries = build_timeline_entries(&lines);
+        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[0].key.index, 0);
+        assert_eq!(entries[0].key.kind, TimelineItemKind::User);
+        assert!(!entries[0].key.streaming);
+        assert_eq!(entries[1].key.index, 1);
+        assert_eq!(entries[1].key.kind, TimelineItemKind::ToolCall);
+        assert_eq!(entries[2].key.kind, TimelineItemKind::ToolResult);
+
+        let stream = TimelineEntry::streaming(entries.len(), "partial");
+        assert_eq!(stream.key.index, 3);
+        assert_eq!(stream.key.kind, TimelineItemKind::StreamingAssistant);
+        assert!(stream.key.streaming);
+    }
+
+    #[test]
+    fn test_per_item_expansion_state_changes_measurement() {
+        let line = RenderLine::Reasoning {
+            words: 3,
+            content: "one\ntwo\nthree".to_string(),
+        };
+        let entry = TimelineEntry::from_render_line(0, &line);
+        let colors = ThemeColors::dark();
+        let expanded: std::collections::HashSet<TimelineKey> = std::collections::HashSet::new();
+        let collapsed_rows = entry.visual_rows_with_state(80, false, &expanded, &colors);
+
+        let mut expanded = std::collections::HashSet::new();
+        expanded.insert(entry.key);
+        assert!(timeline_key_expanded(false, &expanded, &entry.key));
+        let expanded_rows = entry.visual_rows_with_state(80, false, &expanded, &colors);
+        assert!(expanded_rows > collapsed_rows);
+    }
+
+    #[test]
+    fn test_prepare_timeline_entries_row_sum() {
+        let lines = vec![
+            RenderLine::UserMessage("hello".to_string()),
+            RenderLine::AssistantText("world".to_string()),
+            RenderLine::SystemMsg("info".to_string()),
+        ];
+        let entries = build_timeline_entries(&lines);
+        let colors = ThemeColors::dark();
+        let expanded = std::collections::HashSet::new();
+        let prepared = prepare_timeline_entries(&entries, 80, false, &expanded, None, &colors);
+        assert_eq!(prepared.len(), 3);
+        let total: u16 = prepared.iter().map(|p| p.rows).sum();
+        assert!(total >= 3, "at least 1 row per item; got {total}");
+    }
+
+    #[test]
+    fn test_timeline_selection_info() {
+        let line = RenderLine::AssistantText("hello world".to_string());
+        let entry = TimelineEntry::from_render_line(0, &line);
+        let info = entry.selection_info();
+        assert_eq!(info.kind_label, "assistant");
+        assert_eq!(info.index, 0);
+        assert!(!info.summary.is_empty());
+        assert!(info.actions.contains("copy"));
+    }
+
+    #[test]
+    fn test_timeline_jump_target_matching() {
+        let assistant_line = RenderLine::AssistantText("reply".to_string());
+        let tool_line = RenderLine::ToolCall {
+            name: "bash".to_string(),
+            preview: "ls".to_string(),
+        };
+        let error_line = RenderLine::ToolResult {
+            is_error: true,
+            content: "fail".to_string(),
+        };
+
+        let assistant_entry = TimelineEntry::from_render_line(0, &assistant_line);
+        let tool_entry = TimelineEntry::from_render_line(1, &tool_line);
+        let error_entry = TimelineEntry::from_render_line(2, &error_line);
+
+        assert!(assistant_entry.matches_jump_target(TimelineJumpTarget::Assistant));
+        assert!(!assistant_entry.matches_jump_target(TimelineJumpTarget::Tool));
+        assert!(!assistant_entry.matches_jump_target(TimelineJumpTarget::Error));
+
+        assert!(tool_entry.matches_jump_target(TimelineJumpTarget::Tool));
+        assert!(!tool_entry.matches_jump_target(TimelineJumpTarget::Assistant));
+
+        assert!(error_entry.matches_jump_target(TimelineJumpTarget::Error));
+        assert!(error_entry.matches_jump_target(TimelineJumpTarget::Tool));
     }
 }
 

@@ -8,5 +8,6 @@ pub use error::{Error, Result};
 
 pub mod cli;
 pub mod ui;
+pub mod support;
 
 // endregion: --- Modules

@@ -7,22 +7,7 @@ use cade_agent::mcp::McpManager;
 use cade_agent::tools::{ToolRuntime, dispatch};
 use cade_core::hooks::{HookEngine, HookOutcome};
 use cade_core::permissions::PermissionManager;
-
-/// Strip control characters that could act as ANSI/terminal escape sequences
-/// when printed in headless mode. Newlines and tabs are preserved; other
-/// bytes in the 0x00–0x1F and 0x7F range are dropped.
-fn sanitize_for_terminal(s: &str) -> String {
-    s.chars()
-        .filter(|&ch| {
-            let c = ch as u32;
-            if ch == '\n' || ch == '\t' {
-                true
-            } else {
-                !(c <= 0x1F || c == 0x7F)
-            }
-        })
-        .collect()
-}
+use crate::support::text::sanitize_for_terminal;
 
 // -- Headless run statistics
 

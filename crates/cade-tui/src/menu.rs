@@ -2,14 +2,14 @@
 ///
 /// Renders a navigable list of all slash commands grouped by category.
 /// Returns the selected command string (e.g. "/agents") or None if cancelled.
-use crate::Result;
-use crossterm::event::{self, Event, KeyCode};
+use crate::{Result, colors::ThemeColors, overlay};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     DefaultTerminal,
     layout::{Constraint, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, List, ListItem, ListState, Paragraph},
+    widgets::{Block, List, ListItem, ListState, Paragraph},
 };
 
 // -- Command catalogue
@@ -368,7 +368,10 @@ fn prev_cmd(items: &[MenuItem], pos: usize) -> usize {
 
 /// Present the full-screen command browser. Returns the selected command
 /// string (e.g. `"/agents"`) or `None` if the user cancels.
-pub fn show_command_menu(terminal: &mut DefaultTerminal) -> Result<Option<String>> {
+pub fn show_command_menu(
+    terminal: &mut DefaultTerminal,
+    colors: &ThemeColors,
+) -> Result<Option<String>> {
     let items = build_flat_items();
     let mut sel = first_cmd_idx(&items);
 
@@ -379,12 +382,7 @@ pub fn show_command_menu(terminal: &mut DefaultTerminal) -> Result<Option<String
             .map(|(i, item)| match item {
                 MenuItem::Header(name) => ListItem::new(Line::from(vec![
                     Span::raw("  "),
-                    Span::styled(
-                        name.clone(),
-                        Style::default()
-                            .fg(Color::Yellow)
-                            .add_modifier(Modifier::BOLD),
-                    ),
+                    Span::styled(name.clone(), overlay::overlay_section_style(colors)),
                 ])),
                 MenuItem::Cmd { cmd, desc } => {
                     let is_sel = i == sel;
@@ -392,9 +390,9 @@ pub fn show_command_menu(terminal: &mut DefaultTerminal) -> Result<Option<String
                         Span::styled(
                             if is_sel { "  ▶ " } else { "    " }.to_string(),
                             Style::default().fg(if is_sel {
-                                Color::Green
+                                colors.overlay_selected_fg
                             } else {
-                                Color::DarkGray
+                                colors.overlay_hint
                             }),
                         ),
                         Span::styled(
@@ -403,7 +401,7 @@ pub fn show_command_menu(terminal: &mut DefaultTerminal) -> Result<Option<String
                                 .fg(if is_sel {
                                     Color::White
                                 } else {
-                                    Color::Rgb(160, 160, 230)
+                                    colors.overlay_selected_fg
                                 })
                                 .add_modifier(if is_sel {
                                     Modifier::BOLD
@@ -411,51 +409,59 @@ pub fn show_command_menu(terminal: &mut DefaultTerminal) -> Result<Option<String
                                     Modifier::empty()
                                 }),
                         ),
-                        Span::styled(desc.clone(), Style::default().fg(Color::DarkGray)),
+                        Span::styled(desc.clone(), overlay::overlay_muted_style(colors)),
                     ]))
                 }
             })
             .collect();
 
         let detail = if let Some(MenuItem::Cmd { cmd, desc }) = items.get(sel) {
-            format!("  {cmd}  —  {desc}")
+            Some((cmd.clone(), desc.clone()))
         } else {
-            String::new()
+            None
         };
 
         let mut ls = ListState::default().with_selected(Some(sel));
         terminal.draw(|f| {
             let area = f.area();
-            let chunks = Layout::vertical([
+            let inner = overlay::render_overlay_shell(
+                f,
+                area,
+                "CADE Commands  ↑↓/jk navigate · Enter run · Esc close",
+                colors,
+            );
+            let [list_area, detail_area, hint_area] = Layout::vertical([
                 Constraint::Fill(1),
                 Constraint::Length(1),
                 Constraint::Length(1),
             ])
-            .split(area);
+            .areas(inner);
 
-            let block = Block::default()
-                .borders(Borders::ALL)
-                .title(" CADE Commands  ↑↓/jk navigate · Enter run · Esc close ")
-                .border_style(Style::default().fg(Color::Cyan));
-            let list = List::new(list_items).block(block);
-            f.render_stateful_widget(list, chunks[0], &mut ls);
-            f.render_widget(
-                Paragraph::new(Span::styled(detail, Style::default().fg(Color::White))),
-                chunks[1],
-            );
-            f.render_widget(
-                Paragraph::new(Span::styled(
-                    "  Enter to run · Esc to close",
-                    Style::default().fg(Color::DarkGray),
-                )),
-                chunks[2],
-            );
+            let list = List::new(list_items)
+                .block(Block::default().style(Style::default().bg(colors.overlay_bg)))
+                .highlight_style(overlay::overlay_selected_style(colors));
+            f.render_stateful_widget(list, list_area, &mut ls);
+            let detail_line = if let Some((cmd, desc)) = &detail {
+                Line::from(vec![
+                    Span::raw(" "),
+                    Span::styled(cmd.clone(), overlay::overlay_badge_style(colors)),
+                    Span::raw(" "),
+                    Span::styled(desc.clone(), Style::default().fg(Color::White)),
+                ])
+            } else {
+                Line::from("")
+            };
+            f.render_widget(Paragraph::new(detail_line), detail_area);
+            overlay::render_overlay_hint(f, hint_area, "Enter to run · Esc to close", colors);
         })?;
 
         if !event::poll(std::time::Duration::from_millis(200))? {
             continue;
         }
         if let Event::Key(k) = event::read()? {
+            if k.kind != KeyEventKind::Press {
+                continue;
+            }
             match k.code {
                 KeyCode::Esc | KeyCode::Char('q') => return Ok(None),
                 KeyCode::Enter => {

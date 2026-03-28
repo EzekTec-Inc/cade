@@ -42,6 +42,19 @@ pub struct ThemeColors {
     pub custom_message_label: RC,
     pub selected_bg: RC,
 
+    // -- Modern UI surfaces
+    pub overlay_bg: RC,
+    pub overlay_border: RC,
+    pub overlay_title: RC,
+    pub overlay_section: RC,
+    pub overlay_hint: RC,
+    pub overlay_selected_bg: RC,
+    pub overlay_selected_fg: RC,
+    pub badge_bg: RC,
+    pub badge_fg: RC,
+    pub assistant_accent: RC,
+    pub reasoning_bg: RC,
+
     // -- Diffs
     pub diff_added: RC,
     pub diff_removed: RC,
@@ -113,6 +126,18 @@ impl ThemeColors {
             custom_message_label: RC::Rgb(100, 180, 255),
             selected_bg: RC::Rgb(38, 42, 60),
 
+            overlay_bg: RC::Rgb(10, 10, 18),
+            overlay_border: RC::Rgb(60, 70, 90),
+            overlay_title: RC::Rgb(100, 180, 255),
+            overlay_section: RC::Rgb(240, 180, 60),
+            overlay_hint: RC::Rgb(100, 108, 128),
+            overlay_selected_bg: RC::Rgb(28, 32, 48),
+            overlay_selected_fg: RC::Rgb(100, 180, 255),
+            badge_bg: RC::Rgb(28, 32, 48),
+            badge_fg: RC::Rgb(100, 180, 255),
+            assistant_accent: RC::Rgb(100, 180, 255),
+            reasoning_bg: RC::Rgb(18, 22, 32),
+
             diff_added: RC::Rgb(80, 200, 120),
             diff_removed: RC::Rgb(220, 80, 80),
             diff_context: RC::Rgb(100, 108, 128),
@@ -175,6 +200,18 @@ impl ThemeColors {
             custom_message_text: RC::Reset,
             custom_message_label: RC::Rgb(0, 100, 200),
             selected_bg: RC::Rgb(220, 228, 248),
+
+            overlay_bg: RC::Rgb(250, 252, 255),
+            overlay_border: RC::Rgb(180, 190, 210),
+            overlay_title: RC::Rgb(0, 100, 200),
+            overlay_section: RC::Rgb(160, 100, 0),
+            overlay_hint: RC::Rgb(100, 110, 130),
+            overlay_selected_bg: RC::Rgb(220, 228, 248),
+            overlay_selected_fg: RC::Rgb(0, 100, 200),
+            badge_bg: RC::Rgb(230, 236, 250),
+            badge_fg: RC::Rgb(0, 100, 200),
+            assistant_accent: RC::Rgb(0, 100, 200),
+            reasoning_bg: RC::Rgb(238, 242, 250),
 
             diff_added: RC::Rgb(0, 140, 60),
             diff_removed: RC::Rgb(180, 30, 30),
@@ -245,6 +282,19 @@ impl ThemeColors {
         base.thinking_high = resolve(&t.thinking_high);
         base.thinking_xhigh = resolve(&t.thinking_xhigh);
         base.bash_mode = resolve(&t.bash_mode);
+
+        // TUI-only derived surfaces not present in the external theme schema.
+        base.overlay_bg = base.custom_message_bg;
+        base.overlay_border = base.border;
+        base.overlay_title = base.accent;
+        base.overlay_section = base.md_heading;
+        base.overlay_hint = base.muted;
+        base.overlay_selected_bg = base.selected_bg;
+        base.overlay_selected_fg = base.accent;
+        base.badge_bg = base.selected_bg;
+        base.badge_fg = base.accent;
+        base.assistant_accent = base.tool_title;
+        base.reasoning_bg = base.tool_pending_bg;
         base
     }
 }

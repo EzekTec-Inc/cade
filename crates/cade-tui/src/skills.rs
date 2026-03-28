@@ -1,6 +1,6 @@
-use crate::Result;
+use crate::{Result, colors::ThemeColors, overlay};
 use cade_core::skills::Skill;
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout, Rect},
@@ -23,6 +23,7 @@ enum SkillsMode {
 pub fn show_skills_manager(
     terminal: &mut DefaultTerminal,
     skills: Vec<Skill>,
+    colors: &ThemeColors,
 ) -> Result<Option<SkillsAction>> {
     let mut mode = SkillsMode::List;
     let mut cursor = 0;
@@ -59,20 +60,17 @@ pub fn show_skills_manager(
     loop {
         terminal.draw(|f| {
             let area = f.area();
-            f.render_widget(
-                Paragraph::new("").style(Style::default().bg(RC::Rgb(10, 10, 18))),
-                area,
-            );
+            let inner_shell = overlay::render_overlay_shell(f, area, "Skills", colors);
             let inner = Rect {
-                x: area.x + 1,
-                y: area.y + 1,
-                width: area.width.saturating_sub(2),
-                height: area.height.saturating_sub(3),
+                x: inner_shell.x,
+                y: inner_shell.y,
+                width: inner_shell.width,
+                height: inner_shell.height.saturating_sub(1),
             };
             let hint_area = Rect {
-                x: area.x + 2,
-                y: area.y + area.height.saturating_sub(2),
-                width: area.width.saturating_sub(4),
+                x: inner_shell.x,
+                y: inner_shell.y + inner_shell.height.saturating_sub(1),
+                width: inner_shell.width,
                 height: 1,
             };
 
@@ -82,11 +80,13 @@ pub fn show_skills_manager(
                         Paragraph::new(Line::from(vec![
                             Span::styled(
                                 "  ◆ Skills  ",
-                                Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(colors.overlay_title)
+                                    .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(
                                 format!("({} loaded)", skills.len()),
-                                Style::default().fg(RC::DarkGray),
+                                overlay::overlay_muted_style(colors),
                             ),
                         ])),
                         Rect {
@@ -102,12 +102,12 @@ pub fn show_skills_manager(
                             Paragraph::new(vec![
                                 Line::from(Span::styled(
                                     "  No skills found.",
-                                    Style::default().fg(RC::DarkGray),
+                                    overlay::overlay_muted_style(colors),
                                 )),
                                 Line::from(""),
                                 Line::from(Span::styled(
                                     "  /skills create <name>  to scaffold your first skill",
-                                    Style::default().fg(RC::DarkGray),
+                                    overlay::overlay_muted_style(colors),
                                 )),
                             ]),
                             Rect {
@@ -117,7 +117,7 @@ pub fn show_skills_manager(
                                 height: 3,
                             },
                         );
-                        render_hint(f, "Esc close", hint_area);
+                        render_hint(f, "Esc close", hint_area, colors);
                         return;
                     }
 
@@ -139,16 +139,16 @@ pub fn show_skills_manager(
                         if let Some(skill) = skills.get(idx) {
                             let is_sel = idx == cursor;
                             let bg = if is_sel {
-                                RC::Rgb(30, 30, 45)
+                                colors.overlay_selected_bg
                             } else {
-                                RC::Rgb(15, 15, 22)
+                                colors.overlay_bg
                             };
 
                             let mut block = Block::default().style(Style::default().bg(bg));
                             if is_sel {
-                                block = block
-                                    .borders(Borders::LEFT)
-                                    .border_style(Style::default().fg(RC::Green));
+                                block = block.borders(Borders::LEFT).border_style(
+                                    Style::default().fg(colors.overlay_selected_fg),
+                                );
                             } else {
                                 block = block.padding(ratatui::widgets::Padding::new(1, 0, 0, 0));
                             }
@@ -159,21 +159,21 @@ pub fn show_skills_manager(
                                     Span::styled(
                                         format!("  {}  ", skill.name),
                                         Style::default()
-                                            .fg(if is_sel { RC::White } else { RC::Gray })
+                                            .fg(if is_sel { RC::White } else { colors.text })
                                             .add_modifier(Modifier::BOLD),
                                     ),
                                     Span::styled(
                                         format!("[{}] ", skill.id),
-                                        Style::default().fg(RC::DarkGray),
+                                        overlay::overlay_muted_style(colors),
                                     ),
                                     Span::styled(
                                         format!("({})", skill.scope),
-                                        Style::default().fg(RC::Magenta),
+                                        Style::default().fg(colors.badge_fg),
                                     ),
                                 ]),
                                 Line::from(Span::styled(
                                     format!("  {}", skill.description),
-                                    Style::default().fg(RC::Gray),
+                                    Style::default().fg(colors.text),
                                 )),
                                 Line::from(Span::styled(
                                     format!(
@@ -181,7 +181,7 @@ pub fn show_skills_manager(
                                         skill.tags.join(", "),
                                         skill.triggers.join(", ")
                                     ),
-                                    Style::default().fg(RC::DarkGray),
+                                    overlay::overlay_muted_style(colors),
                                 )),
                                 Line::from(""), // spacer
                             ])
@@ -193,6 +193,7 @@ pub fn show_skills_manager(
                         f,
                         "Enter view · e edit · ↑↓ navigate · Esc close",
                         hint_area,
+                        colors,
                     );
                 }
                 SkillsMode::Detail | SkillsMode::Edit => {
@@ -222,19 +223,21 @@ pub fn show_skills_manager(
                         Paragraph::new(Line::from(vec![
                             Span::styled(
                                 format!("  ◆ Skill {mode_str}: {}  ", skill.name),
-                                Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD),
+                                Style::default()
+                                    .fg(colors.overlay_title)
+                                    .add_modifier(Modifier::BOLD),
                             ),
                             Span::styled(
                                 format!("[{}] ", skill.id),
-                                Style::default().fg(RC::DarkGray),
+                                overlay::overlay_muted_style(colors),
                             ),
                             Span::styled(
                                 format!("({})", skill.scope),
-                                Style::default().fg(RC::Magenta),
+                                overlay::overlay_badge_style(colors),
                             ),
                             Span::styled(
                                 msg,
-                                Style::default().fg(if dirty { RC::Yellow } else { RC::Green }),
+                                Style::default().fg(if dirty { colors.warning } else { colors.success }),
                             ),
                         ])),
                         title_area,
@@ -273,15 +276,15 @@ pub fn show_skills_manager(
                         };
                         let val_style = if is_active {
                             Style::default()
-                                .fg(RC::White)
+                                .fg(colors.text)
                                 .add_modifier(Modifier::UNDERLINED)
                         } else {
-                            Style::default().fg(RC::Gray)
+                            Style::default().fg(colors.text)
                         };
                         lines.push(Line::from(vec![
                             Span::styled(
                                 format!("  {:<10} ", label),
-                                Style::default().fg(RC::DarkGray),
+                                overlay::overlay_muted_style(colors),
                             ),
                             if is_active {
                                 let before = &val[..field_pos.min(val.len())];
@@ -306,7 +309,7 @@ pub fn show_skills_manager(
                     f.render_widget(
                         Paragraph::new(Line::from(vec![Span::styled(
                             "  Body:",
-                            Style::default().fg(RC::DarkGray),
+                            overlay::overlay_muted_style(colors),
                         )])),
                         Rect {
                             x: inner.x,
@@ -343,14 +346,20 @@ pub fn show_skills_manager(
                                     Span::raw("    "),
                                     Span::styled(
                                         format!("{before}\x1b[7m{cursor_char}\x1b[27m{after}"),
-                                        Style::default().fg(RC::White),
+                                        Style::default().fg(colors.text),
                                     ),
                                 ]));
                             } else {
-                                body_lines.push(Line::from(format!("    {line}")));
+                                body_lines.push(Line::from(Span::styled(
+                                    format!("    {line}"),
+                                    Style::default().fg(colors.text),
+                                )));
                             }
                         } else {
-                            body_lines.push(Line::from(format!("    {line}")));
+                            body_lines.push(Line::from(Span::styled(
+                                format!("    {line}"),
+                                Style::default().fg(colors.text),
+                            )));
                         }
                     }
 
@@ -376,9 +385,14 @@ pub fn show_skills_manager(
                     );
 
                     if is_edit {
-                        render_hint(f, "Tab next field · Ctrl+S save · Esc cancel", hint_area);
+                        render_hint(
+                            f,
+                            "Tab next field · Ctrl+S save · Esc cancel",
+                            hint_area,
+                            colors,
+                        );
                     } else {
-                        render_hint(f, "e edit · ↑↓ scroll · Esc back", hint_area);
+                        render_hint(f, "e edit · ↑↓ scroll · Esc back", hint_area, colors);
                     }
                 }
             }
@@ -388,6 +402,9 @@ pub fn show_skills_manager(
             continue;
         }
         if let Event::Key(key) = event::read()? {
+            if key.kind != KeyEventKind::Press {
+                continue;
+            }
             message = None;
             match mode {
                 SkillsMode::List => match (key.code, key.modifiers) {
@@ -530,9 +547,6 @@ pub fn show_skills_manager(
     }
 }
 
-fn render_hint(frame: &mut Frame, hint: &str, hint_area: Rect) {
-    frame.render_widget(
-        Paragraph::new(Span::styled(hint, Style::default().fg(RC::DarkGray))),
-        hint_area,
-    );
+fn render_hint(frame: &mut Frame, hint: &str, hint_area: Rect, colors: &ThemeColors) {
+    overlay::render_overlay_hint(frame, hint_area, hint, colors);
 }

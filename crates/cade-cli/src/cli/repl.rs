@@ -5,7 +5,7 @@ use std::io;
 
 use std::sync::{Arc, Mutex};
 
-use crate::ui::{RenderLine, TuiApp, cycle_mode, cycle_mode_back};
+use crate::ui::{RenderLine, ToastLevel, TuiApp, cycle_mode, cycle_mode_back};
 use cade_agent::agent::session::SessionStore;
 use cade_agent::agent::{
     CadeClient,
@@ -646,6 +646,8 @@ enum ToolPreflightResult {
 
 // -- Repl
 
+use crate::support::text::{finish_reason_hint, truncate, FinishReasonCategory};
+
 pub struct Repl {
     client: CadeClient,
     /// Shared-mutable so /new and /agents can hot-swap the agent mid-session
@@ -1200,7 +1202,8 @@ impl Repl {
                         // Open full-screen command browser
                         let chosen = {
                             let mut app = self.app.lock().expect("lock poisoned");
-                            crate::ui::menu::show_command_menu(&mut app.terminal)?
+                            let colors = app.colors.clone();
+                            crate::ui::menu::show_command_menu(&mut app.terminal, &colors)?
                         };
                         let _ = self.app.lock().expect("lock poisoned").draw();
                         if let Some(cmd) = chosen {
@@ -1369,6 +1372,10 @@ impl Repl {
                         self.streaming_enabled.store(!current, Ordering::SeqCst);
                         let label = if !current { "on" } else { "off" };
                         self.tui_hdr(format!("  Streaming: {label}"));
+                        self.app
+                            .lock()
+                            .expect("lock poisoned")
+                            .show_toast(format!("Streaming {label}"), ToastLevel::Info);
                     }
                     SlashCmd::Usage => {
                         use std::sync::atomic::Ordering;
@@ -1847,24 +1854,36 @@ impl Repl {
                     }
                     SlashCmd::Plan => {
                         self.permissions.set_mode(PermissionMode::Plan);
-                        if let Ok(mut app) = self.app.lock()
-                            && let Some(plan) = &mut app.active_plan
-                        {
-                            plan.is_visible = true;
+                        if let Ok(mut app) = self.app.lock() {
+                            if let Some(plan) = &mut app.active_plan {
+                                plan.is_visible = true;
+                            }
+                            app.show_toast("Plan mode enabled", ToastLevel::Info);
                         }
                         self.tui_hdr("📖 Permission mode: plan (read-only) — write/exec tools blocked. Use /default to resume.");
                     }
                     SlashCmd::Todos => {
                         if let Ok(mut app) = self.app.lock() {
                             let mut has_plan = false;
+                            let mut now_visible = false;
                             if let Some(plan) = &mut app.active_plan {
                                 plan.is_visible = !plan.is_visible;
+                                now_visible = plan.is_visible;
                                 has_plan = true;
                             }
                             if !has_plan {
                                 let _ = app.push(crate::ui::RenderLine::SystemMsg(
                                     "No active plan. Ask the agent to create one.".to_string(),
                                 ));
+                            } else {
+                                app.show_toast(
+                                    if now_visible {
+                                        "Plan panel shown"
+                                    } else {
+                                        "Plan panel hidden"
+                                    },
+                                    ToastLevel::Info,
+                                );
                             }
                             app.draw_dirty = true;
                             let _ = app.draw();
@@ -1872,6 +1891,10 @@ impl Repl {
                     }
                     SlashCmd::Default => {
                         self.permissions.set_mode(PermissionMode::Default);
+                        self.app
+                            .lock()
+                            .expect("lock poisoned")
+                            .show_toast("Permission mode: default", ToastLevel::Success);
                         self.tui_ok("✅ Permission mode: default — tools require approval");
                     }
                     SlashCmd::Mode(arg) => {
@@ -1883,18 +1906,34 @@ impl Repl {
                             Some(name) => match name.to_lowercase().as_str() {
                                 "default" | "normal" => {
                                     self.permissions.set_mode(PermissionMode::Default);
+                                    self.app.lock().expect("lock poisoned").show_toast(
+                                        "Permission mode: default",
+                                        ToastLevel::Success,
+                                    );
                                     self.tui_ok("✅ Permission mode: default");
                                 }
                                 "plan" | "readonly" | "read-only" => {
                                     self.permissions.set_mode(PermissionMode::Plan);
+                                    self.app.lock().expect("lock poisoned").show_toast(
+                                        "Permission mode: plan",
+                                        ToastLevel::Info,
+                                    );
                                     self.tui_hdr("📖 Permission mode: plan (read-only). Use /default to resume.");
                                 }
                                 "yolo" | "bypass" | "bypasspermissions" => {
                                     self.permissions.set_mode(PermissionMode::BypassPermissions);
+                                    self.app.lock().expect("lock poisoned").show_toast(
+                                        "Permission mode: bypass",
+                                        ToastLevel::Warning,
+                                    );
                                     self.tui_sys("⚡ Permission mode: bypassPermissions");
                                 }
                                 "acceptedits" | "accept-edits" | "edits" => {
                                     self.permissions.set_mode(PermissionMode::AcceptEdits);
+                                    self.app.lock().expect("lock poisoned").show_toast(
+                                        "Permission mode: acceptEdits",
+                                        ToastLevel::Success,
+                                    );
                                     self.tui_ok("📝 Permission mode: acceptEdits — file edits auto-approved");
                                 }
                                 other => {
@@ -1934,7 +1973,14 @@ impl Repl {
                                     ));
                                 }
                                 self.tui_ok(format!("  ✓ Model: {new_model}"));
-                                let _ = self.app.lock().expect("lock poisoned").draw();
+                                {
+                                    let mut app = self.app.lock().expect("lock poisoned");
+                                    app.show_toast(
+                                        format!("Model → {new_model}"),
+                                        ToastLevel::Success,
+                                    );
+                                    let _ = app.draw();
+                                }
                             }
                             Err(e) => self.tui_err(e.to_string()),
                         }
@@ -1961,7 +2007,14 @@ impl Repl {
                         } else {
                             let effort = if r == "none" { None } else { Some(r.clone()) };
                             *self.reasoning_effort.lock().expect("lock poisoned") = effort.clone();
-                            self.app.lock().expect("lock poisoned").reasoning_effort = effort;
+                            {
+                                let mut app = self.app.lock().expect("lock poisoned");
+                                app.reasoning_effort = effort;
+                                app.show_toast(
+                                    format!("Reasoning → {r}"),
+                                    ToastLevel::Success,
+                                );
+                            }
                             self.tui_ok(format!("  ✓ Reasoning effort: {r}"));
                         }
                     }
@@ -2133,7 +2186,13 @@ impl Repl {
                         )
                         .await
                         {
-                            Ok(_) => self.tui_ok(format!("  ✓ Exported → {out_path}")),
+                            Ok(_) => {
+                                self.app.lock().expect("lock poisoned").show_toast(
+                                    format!("Exported → {out_path}"),
+                                    ToastLevel::Success,
+                                );
+                                self.tui_ok(format!("  ✓ Exported → {out_path}"))
+                            }
                             Err(e) => self.tui_err(format!("  ✗ Export failed: {e}")),
                         }
                     }
@@ -2174,6 +2233,10 @@ impl Repl {
                                 if stash.is_some() {
                                     msg.push_str("  (git stashed)");
                                 }
+                                self.app.lock().expect("lock poisoned").show_toast(
+                                    format!("Checkpoint '{label}' created"),
+                                    ToastLevel::Success,
+                                );
                                 self.tui_ok(msg);
                             }
                             Err(e) => self.tui_err(format!("  ✗ Checkpoint failed: {e}")),
@@ -2236,10 +2299,19 @@ impl Repl {
                                 // Show the fullscreen tree browser
                                 let action = {
                                     let mut app = self.app.lock().expect("lock poisoned");
-                                    cade_tui::show_session_tree(&mut app.terminal, &checkpoints)?
+                                    let colors = app.colors.clone();
+                                    cade_tui::show_session_tree(
+                                        &mut app.terminal,
+                                        &checkpoints,
+                                        &colors,
+                                    )?
                                 };
                                 match action {
                                     cade_tui::TreeAction::Cancel => {
+                                        self.app
+                                            .lock()
+                                            .expect("lock poisoned")
+                                            .show_toast("Checkpoint browser closed", ToastLevel::Info);
                                         self.tui_dim("  /tree cancelled".to_string());
                                     }
                                     cade_tui::TreeAction::Restore { checkpoint_id } => {
@@ -2270,6 +2342,10 @@ impl Repl {
                                             .client
                                             .restore_checkpoint(&agent_id, &checkpoint_id)
                                             .await;
+                                        self.app.lock().expect("lock poisoned").show_toast(
+                                            format!("Restored checkpoint {checkpoint_id}"),
+                                            ToastLevel::Success,
+                                        );
                                         self.tui_ok(format!(
                                             "  ✓ Restored to checkpoint {checkpoint_id}"
                                         ));
@@ -2644,7 +2720,13 @@ impl Repl {
                         let name = self.agent_name();
                         if let Ok(mut s) = self.settings.lock() {
                             match s.pin_agent(&id, &name) {
-                                Ok(_) => self.tui_ok(format!("  ✓ Pinned: {name} ({id})")),
+                                Ok(_) => {
+                                    self.app.lock().expect("lock poisoned").show_toast(
+                                        format!("Pinned agent: {name}"),
+                                        ToastLevel::Success,
+                                    );
+                                    self.tui_ok(format!("  ✓ Pinned: {name} ({id})"))
+                                }
                                 Err(e) => self.tui_err(format!("Pin failed: {e}")),
                             }
                         }
@@ -3437,9 +3519,11 @@ impl Repl {
 
                                     let chosen = {
                                         let mut app = self.app.lock().expect("lock poisoned");
+                                        let colors = app.colors.clone();
                                         crate::ui::skills::show_skills_manager(
                                             &mut app.terminal,
                                             sorted,
+                                            &colors,
                                         )?
                                     };
                                     let _ = self.app.lock().expect("lock poisoned").draw();
@@ -4264,7 +4348,7 @@ impl Repl {
         let tick_modal_close_ms = self.last_modal_close_ms.clone();
         let tick_permissions = self.permissions.clone();
         let tick_handle = tokio::spawn(async move {
-            use crossterm::event::{Event, EventStream, KeyCode, KeyModifiers};
+            use crossterm::event::{Event, EventStream, KeyCode, KeyEventKind, KeyModifiers};
             use futures::StreamExt;
             let mut reader = EventStream::new();
             loop {
@@ -4297,7 +4381,7 @@ impl Repl {
                         // For key events targeting an active question modal we MUST
                         // not drop the event if the lock is momentarily held — retry
                         // until we get it so the oneshot sender is always delivered.
-                        let needs_question_key = matches!(&evt, Event::Key(_));
+                        let needs_question_key = matches!(&evt, Event::Key(crossterm::event::KeyEvent { kind: KeyEventKind::Press, .. }));
 
                         if needs_question_key {
                             if let Event::Key(k) = evt {
@@ -6437,7 +6521,7 @@ impl Repl {
         convs: &[serde_json::Value],
         agent_id: &str,
     ) -> Result<Option<serde_json::Value>> {
-        use crossterm::event::{self, Event, KeyModifiers};
+        use crossterm::event::{self, Event, KeyEventKind, KeyModifiers};
         use ratatui::{
             style::{Color as RC, Modifier, Style},
             text::{Line, Span},
@@ -6503,6 +6587,7 @@ impl Repl {
                 continue;
             }
             if let Event::Key(k) = event::read()? {
+                if k.kind != KeyEventKind::Press { continue; }
                 match (k.code, k.modifiers) {
                     (KeyCode::Char('q') | KeyCode::Esc, _) => break,
                     (KeyCode::Up | KeyCode::Char('k'), _) => {
@@ -6589,7 +6674,7 @@ impl Repl {
         app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
         agents: &mut [AgentState],
     ) -> Result<Option<AgentPickerResult>> {
-        use crossterm::event::{self, Event, KeyCode};
+        use crossterm::event::{self, Event, KeyCode, KeyEventKind};
         use ratatui::{
             style::{Color as RC, Modifier, Style},
             text::{Line, Span},
@@ -6690,6 +6775,7 @@ impl Repl {
                 continue;
             }
             if let Ok(Event::Key(key)) = event::read() {
+                if key.kind != KeyEventKind::Press { continue; }
                 match (key.code, key.modifiers) {
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
 
@@ -6811,7 +6897,7 @@ impl Repl {
         &self,
         app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
     ) -> Result<Option<String>> {
-        use crossterm::event::{self, Event, KeyCode};
+        use crossterm::event::{self, Event, KeyCode, KeyEventKind};
         use ratatui::{
             layout::{Constraint, Direction, Layout},
             style::{Color as RC, Modifier, Style},
@@ -7102,6 +7188,7 @@ impl Repl {
                 continue;
             }
             if let Ok(Event::Key(key)) = event::read() {
+                if key.kind != KeyEventKind::Press { continue; }
                 match (key.code, key.modifiers) {
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
 
@@ -7188,7 +7275,7 @@ impl Repl {
         &self,
         app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
     ) -> Result<Option<String>> {
-        use crossterm::event::{self, Event, KeyCode};
+        use crossterm::event::{self, Event, KeyCode, KeyEventKind};
         use ratatui::{
             layout::{Constraint, Direction, Layout},
             style::{Color as RC, Modifier, Style},
@@ -7296,6 +7383,7 @@ impl Repl {
                 continue;
             }
             if let Ok(Event::Key(key)) = event::read() {
+                if key.kind != KeyEventKind::Press { continue; }
                 match (key.code, key.modifiers) {
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
                     (KeyCode::Enter, _) => {
@@ -7740,45 +7828,6 @@ impl Repl {
         self.tui_err(format!("Error: {msg}"));
         Ok(())
     }
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    super::truncate(s, max)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum FinishReasonCategory {
-    OutputLimit,
-    Safety,
-}
-
-fn finish_reason_hint(reason: &str) -> Option<(String, FinishReasonCategory)> {
-    let normalized = reason.trim().to_ascii_lowercase().replace(['-', ' '], "_");
-
-    if normalized.contains("max_token")
-        || normalized == "length"
-        || normalized == "max_output_tokens"
-    {
-        return Some((
-            format!(
-                "⚠ Model stopped early ({reason}) — hit its output token limit. Ask it to continue or request a shorter reply."
-            ),
-            FinishReasonCategory::OutputLimit,
-        ));
-    }
-    if normalized.contains("content_filter")
-        || normalized.contains("safety")
-        || normalized.contains("blocked")
-        || normalized.contains("recitation")
-    {
-        return Some((
-            format!(
-                "⚠ Provider blocked the response ({reason}). Rephrase or strip sensitive content."
-            ),
-            FinishReasonCategory::Safety,
-        ));
-    }
-    None
 }
 
 /// Returns (icon, label, hint) for the current permission mode.

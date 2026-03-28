@@ -30,26 +30,11 @@ use cli::{Args, EvalAction, PackageAction, PackageSubcommand, Repl};
 use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
 use skills::{Skill, discover_all_skills, skills_listing};
+use cade::support::text::sanitize_for_terminal;
 
 // endregion: --- Modules
 
 const SKILLS_DIR: &str = ".skills";
-
-/// Strip control characters that could act as ANSI/terminal escape sequences
-/// when printed in headless mode. Newlines and tabs are preserved; other
-/// bytes in the 0x00–0x1F and 0x7F range are dropped.
-fn sanitize_for_terminal(s: &str) -> String {
-    s.chars()
-        .filter(|&ch| {
-            let c = ch as u32;
-            if ch == '\n' || ch == '\t' {
-                true
-            } else {
-                !(c <= 0x1F || c == 0x7F)
-            }
-        })
-        .collect()
-}
 
 /// Base system prompt — behavioral instructions for the agent.
 /// This is separate from the `persona` memory block (which holds identity/style).
@@ -113,47 +98,8 @@ in your prompt).\n\
   Use `conversation_search` or `search_memory` first.\n\
 ";
 
-/// Default memory block labels and their seed values.
-/// (label, initial_value, description, max_chars, tier)
-///
-/// Tier is "pinned" for blocks that must always be visible in every prompt,
-/// and "short" for blocks that can age out normally.
-const DEFAULT_MEMORY_BLOCKS: &[(&str, &str, &str, usize, &str)] = &[
-    (
-        "persona",
-        "I prefer terse, accurate responses — I lead with action and skip preamble. \
-         I explore before modifying, verify after editing, and update memory proactively. \
-         I never introduce myself unprompted; I address the task directly.",
-        "Who I am, what I value, and how I approach working with people",
-        2_000,
-        "pinned",
-    ),
-    (
-        "human",
-        "",
-        "What I know about the person I'm working with — their name, preferences, and working style",
-        3_000,
-        "pinned",
-    ),
-    (
-        "project",
-        "",
-        "Current project context, tech stack, conventions, and ongoing work",
-        5_000,
-        "pinned",
-    ),
-    (
-        "working_set",
-        "",
-        "Active task, files currently being edited, recent changes, and immediate next steps. \
-         Update this after every significant code change so it survives context rotation.",
-        3_000,
-        "short",
-    ),
-];
-
 async fn seed_default_memory(client: &CadeClient, agent_id: &str) {
-    for (label, value, description, max_chars, tier) in DEFAULT_MEMORY_BLOCKS {
+    for (label, value, description, max_chars, tier) in cade::DEFAULT_MEMORY_BLOCKS {
         if let Err(e) = client
             .upsert_memory_with_limit(agent_id, label, value, Some(description), Some(*max_chars))
             .await
@@ -998,7 +944,7 @@ async fn main() -> Result<()> {
                 let v = block.value.trim_start();
                 let needs_migration = v.starts_with("CADE is") || v.starts_with("I am CADE");
                 if needs_migration {
-                    let (_, new_val, new_desc, _, _) = DEFAULT_MEMORY_BLOCKS[0]; // persona entry
+                    let (_, new_val, new_desc, _, _) = cade::DEFAULT_MEMORY_BLOCKS[0]; // persona entry
                     let _ = client
                         .upsert_memory(&agent.id, "persona", new_val, Some(new_desc))
                         .await;

@@ -1,3 +1,4 @@
+use crate::colors::ThemeColors;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Color as RC, Modifier, Style},
@@ -44,11 +45,18 @@ const INDENT: &str = "  ";
 const CODE_INDENT: &str = "    ";
 
 /// Style for the dim code-block border lines (┌── / └──).
-fn code_border_style() -> Style {
-    Style::default().fg(RC::Rgb(60, 60, 60))
+fn code_border_style(colors: &ThemeColors) -> Style {
+    Style::default().fg(colors.md_code_block_border)
 }
 
 pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
+    parse_markdown_lines_with_theme(text, &ThemeColors::dark())
+}
+
+pub fn parse_markdown_lines_with_theme(
+    text: &str,
+    colors: &ThemeColors,
+) -> Vec<Line<'static>> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -82,7 +90,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                 if blockquote {
                     prefix_spans.push(Span::styled(
                         format!("{INDENT}▎ "),
-                        Style::default().fg(RC::Rgb(80, 140, 200)),
+                        Style::default().fg(colors.md_quote_border),
                     ));
                 }
                 prefix_spans.append(spans);
@@ -110,15 +118,15 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
 
                     let style = match level {
                         HeadingLevel::H1 => Style::default()
-                            .fg(RC::Rgb(100, 220, 255))
+                            .fg(colors.md_heading)
                             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
                         HeadingLevel::H2 => Style::default()
-                            .fg(RC::Rgb(100, 210, 240))
+                            .fg(colors.md_heading)
                             .add_modifier(Modifier::BOLD),
                         HeadingLevel::H3 => Style::default()
-                            .fg(RC::Rgb(120, 200, 230))
+                            .fg(colors.md_heading)
                             .add_modifier(Modifier::BOLD),
-                        _ => Style::default().fg(RC::Cyan),
+                        _ => Style::default().fg(colors.md_heading),
                     };
                     style_stack.push(style);
 
@@ -162,7 +170,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                     } else {
                         format!("{INDENT}┌── {} ──────────────────────────", current_lang)
                     };
-                    lines.push(Line::from(Span::styled(label, code_border_style())));
+                    lines.push(Line::from(Span::styled(label, code_border_style(colors))));
                 }
                 Tag::List(start) => {
                     // Blank line before a top-level list.
@@ -181,7 +189,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                             current_spans.push(Span::styled(
                                 format!("{count}. "),
                                 Style::default()
-                                    .fg(RC::Rgb(180, 180, 255))
+                                    .fg(colors.md_link)
                                     .add_modifier(Modifier::BOLD),
                             ));
                             *count += 1;
@@ -189,7 +197,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                             current_spans.push(Span::raw(format!("{INDENT}  {indent_padding}")));
                             current_spans.push(Span::styled(
                                 "• ",
-                                Style::default().fg(RC::Rgb(100, 207, 180)),
+                                Style::default().fg(colors.md_list_bullet),
                             ));
                         }
                     }
@@ -207,7 +215,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .fg(RC::Rgb(255, 255, 255))
+                        .fg(colors.text)
                         .add_modifier(Modifier::BOLD);
                     style_stack.push(s);
                 }
@@ -238,7 +246,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .fg(RC::Rgb(100, 160, 255))
+                        .fg(colors.md_link)
                         .add_modifier(Modifier::UNDERLINED);
                     style_stack.push(s);
                 }
@@ -264,7 +272,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                     // Bottom border
                     lines.push(Line::from(Span::styled(
                         format!("{INDENT}└─────────────────────────────────"),
-                        code_border_style(),
+                        code_border_style(colors),
                     )));
                     in_code_block = false;
                     current_lang.clear();
@@ -285,7 +293,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                 }
                 TagEnd::Table => {
                     in_table = false;
-                    lines.extend(render_table_data(&table_rows));
+                    lines.extend(render_table_data(&table_rows, colors));
                     table_rows.clear();
                     last_was_block_end = true;
                 }
@@ -315,7 +323,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
 
                             let mut spans = vec![Span::styled(
                                 format!("{INDENT}{CODE_INDENT}"),
-                                code_border_style(),
+                                code_border_style(colors),
                             )];
 
                             let highlighted =
@@ -348,8 +356,8 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                 } else {
                     // Inline code: bright on a subtle background via reversed dim
                     let style = Style::default()
-                        .fg(RC::Rgb(230, 180, 80))
-                        .bg(RC::Rgb(40, 36, 30));
+                        .fg(colors.md_code)
+                        .bg(colors.reasoning_bg);
                     current_spans.push(Span::styled(format!(" {text} "), style));
                 }
             }
@@ -373,7 +381,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     format!("{INDENT}{}", "─".repeat(40)),
-                    Style::default().fg(RC::Rgb(60, 60, 60)),
+                    Style::default().fg(colors.md_hr),
                 )));
                 lines.push(Line::from(""));
                 last_was_block_end = true;
@@ -387,7 +395,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
     lines
 }
 
-fn render_table_data(data: &[Vec<String>]) -> Vec<Line<'static>> {
+fn render_table_data(data: &[Vec<String>], colors: &ThemeColors) -> Vec<Line<'static>> {
     if data.is_empty() {
         return vec![];
     }
@@ -405,7 +413,7 @@ fn render_table_data(data: &[Vec<String>]) -> Vec<Line<'static>> {
         }
     }
 
-    let border_style = Style::default().fg(RC::Rgb(60, 60, 60));
+    let border_style = Style::default().fg(colors.md_code_block_border);
     let mut lines = Vec::new();
 
     for (row_idx, row) in data.iter().enumerate() {
@@ -413,7 +421,7 @@ fn render_table_data(data: &[Vec<String>]) -> Vec<Line<'static>> {
         for (i, cell) in row.iter().take(num_cols).enumerate() {
             let style = if row_idx == 0 {
                 Style::default()
-                    .fg(RC::Rgb(100, 210, 240))
+                    .fg(colors.md_heading)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()

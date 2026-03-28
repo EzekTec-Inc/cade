@@ -20,11 +20,12 @@ pub mod component;
 pub mod editor;
 pub mod markdown;
 pub mod menu;
+pub mod overlay;
 pub mod question;
 pub mod session_tree;
 pub mod skills;
 
-pub use app::{RenderLine, TuiApp, cycle_mode, cycle_mode_back, truncate_str};
+pub use app::{RenderLine, ToastLevel, TuiApp, cycle_mode, cycle_mode_back, truncate_str};
 pub use autocomplete::{
     AutocompleteProvider, Completion, FileAutocompleteProvider, SlashCommandDef,
     SlashCommandProvider,

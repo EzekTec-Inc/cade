@@ -34,7 +34,7 @@ Complete keyboard shortcuts for the CADE terminal UI, organised by category.
 | **Ctrl+D** | Exit CADE *(only when input field is empty)* |
 | **↑** | Previous history entry *(or move cursor up one visual row)* |
 | **↓** | Next history entry *(or move cursor down one visual row)* |
-| **Esc** | Clear input field |
+| **Esc** | Clear input field *(or clear timeline selection if input is empty and a block is focused)* |
 
 ---
 
@@ -69,7 +69,13 @@ While the picker overlay is open:
 |-----|--------|
 | **Shift+K** | Scroll conversation up (10 rows) |
 | **Shift+J** | Scroll conversation down (10 rows) |
-| **Ctrl+O** | Toggle expand / collapse all tool outputs |
+| **Ctrl+Shift+K** | Focus previous timeline block |
+| **Ctrl+Shift+J** | Focus next timeline block |
+| **Alt+A** | Jump to the next assistant block |
+| **Alt+T** | Jump to the next tool-related block |
+| **Alt+E** | Jump to the next error block |
+| **Ctrl+Shift+C** | Copy the focused timeline block to the system clipboard |
+| **Ctrl+O** | Toggle expand / collapse the focused block *(or all blocks if none is focused)* |
 
 ---
 
