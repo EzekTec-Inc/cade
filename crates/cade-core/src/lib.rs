@@ -7,6 +7,7 @@ mod error;
 pub use error::{Error, Result};
 
 pub mod agent_env;
+pub mod capabilities;
 pub mod hooks;
 pub mod permissions;
 pub mod resources;

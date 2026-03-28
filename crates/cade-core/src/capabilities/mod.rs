@@ -1,0 +1,305 @@
+/// Capability packs — each represents an optional subsystem that can be
+/// enabled or disabled at runtime (and eventually at compile time via features).
+///
+/// The default profile is `Full` for backward compatibility. Future releases
+/// will shift the default toward `Pro` or `Core` once the gating is proven.
+
+use std::collections::HashSet;
+
+// region:    --- Capability
+
+/// A single optional capability that can be toggled on or off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Capability {
+    /// Subagents, agent messaging, reflection, artifacts, evidence
+    Agentic,
+    /// Tree-sitter indexing, symbol search, references, repo map
+    CodeIntel,
+    /// Screenshots, window list, desktop control, notifications
+    Desktop,
+    /// System tray icon
+    Tray,
+    /// Web search, fetch docs, browser screenshot
+    Web,
+    /// MCP server management and external tool schemas
+    Mcp,
+    /// Clipboard image paste (arboard + image crate)
+    ClipboardImages,
+    /// Syntax highlighting in TUI (syntect)
+    SyntaxHighlighting,
+    /// Advanced memory admin (tier manipulation, evidence, typed memory)
+    AdvancedMemory,
+    /// SDK / RPC / plugin embedding
+    Integration,
+}
+
+impl Capability {
+    /// All known capabilities.
+    pub const ALL: &[Capability] = &[
+        Capability::Agentic,
+        Capability::CodeIntel,
+        Capability::Desktop,
+        Capability::Tray,
+        Capability::Web,
+        Capability::Mcp,
+        Capability::ClipboardImages,
+        Capability::SyntaxHighlighting,
+        Capability::AdvancedMemory,
+        Capability::Integration,
+    ];
+
+    /// Human-readable name for display and settings.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Capability::Agentic => "agentic",
+            Capability::CodeIntel => "codeintel",
+            Capability::Desktop => "desktop",
+            Capability::Tray => "tray",
+            Capability::Web => "web",
+            Capability::Mcp => "mcp",
+            Capability::ClipboardImages => "clipboard-images",
+            Capability::SyntaxHighlighting => "syntax-highlighting",
+            Capability::AdvancedMemory => "advanced-memory",
+            Capability::Integration => "integration",
+        }
+    }
+
+    /// Parse from string (case-insensitive).
+    pub fn from_name(name: &str) -> Option<Capability> {
+        match name.to_lowercase().replace('_', "-").as_str() {
+            "agentic" => Some(Capability::Agentic),
+            "codeintel" | "code-intel" => Some(Capability::CodeIntel),
+            "desktop" => Some(Capability::Desktop),
+            "tray" => Some(Capability::Tray),
+            "web" => Some(Capability::Web),
+            "mcp" => Some(Capability::Mcp),
+            "clipboard-images" => Some(Capability::ClipboardImages),
+            "syntax-highlighting" => Some(Capability::SyntaxHighlighting),
+            "advanced-memory" => Some(Capability::AdvancedMemory),
+            "integration" => Some(Capability::Integration),
+            _ => None,
+        }
+    }
+}
+
+// endregion: --- Capability
+
+// region:    --- CapabilitySet
+
+/// An immutable set of enabled capabilities, resolved from a profile +
+/// user overrides.
+#[derive(Debug, Clone)]
+pub struct CapabilitySet {
+    enabled: HashSet<Capability>,
+}
+
+impl CapabilitySet {
+    /// Create from an explicit set.
+    pub fn from_iter(caps: impl IntoIterator<Item = Capability>) -> Self {
+        Self {
+            enabled: caps.into_iter().collect(),
+        }
+    }
+
+    /// All capabilities enabled.
+    pub fn full() -> Self {
+        Self::from_iter(Capability::ALL.iter().copied())
+    }
+
+    /// Empty — only core (non-optional) tools.
+    pub fn core() -> Self {
+        Self {
+            enabled: HashSet::new(),
+        }
+    }
+
+    pub fn is_enabled(&self, cap: Capability) -> bool {
+        self.enabled.contains(&cap)
+    }
+
+    pub fn enable(&mut self, cap: Capability) {
+        self.enabled.insert(cap);
+    }
+
+    pub fn disable(&mut self, cap: Capability) {
+        self.enabled.remove(&cap);
+    }
+
+    pub fn enabled_list(&self) -> Vec<Capability> {
+        let mut v: Vec<Capability> = self.enabled.iter().copied().collect();
+        v.sort_by_key(|c| c.name());
+        v
+    }
+
+    pub fn len(&self) -> usize {
+        self.enabled.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.enabled.is_empty()
+    }
+}
+
+impl Default for CapabilitySet {
+    /// Default = full (backward compatible).
+    fn default() -> Self {
+        Self::full()
+    }
+}
+
+// endregion: --- CapabilitySet
+
+// region:    --- Profile
+
+/// Pre-defined capability profiles.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Profile {
+    /// Minimal: core coding tools + memory + checkpoints only.
+    Core,
+    /// Core + agentic + codeintel.
+    Pro,
+    /// Everything enabled.
+    Full,
+}
+
+impl Profile {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Profile::Core => "core",
+            Profile::Pro => "pro",
+            Profile::Full => "full",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Option<Profile> {
+        match name.to_lowercase().as_str() {
+            "core" | "lean" => Some(Profile::Core),
+            "pro" => Some(Profile::Pro),
+            "full" => Some(Profile::Full),
+            _ => None,
+        }
+    }
+
+    /// Resolve the capability set for this profile.
+    pub fn capabilities(&self) -> CapabilitySet {
+        match self {
+            Profile::Core => CapabilitySet::core(),
+            Profile::Pro => CapabilitySet::from_iter([
+                Capability::Agentic,
+                Capability::CodeIntel,
+            ]),
+            Profile::Full => CapabilitySet::full(),
+        }
+    }
+}
+
+impl Default for Profile {
+    /// Default profile is Full (backward compatible).
+    fn default() -> Self {
+        Profile::Full
+    }
+}
+
+// endregion: --- Profile
+
+// region:    --- Resolve
+
+/// Resolve the effective capability set from a profile + optional user
+/// overrides (enable/disable lists).
+pub fn resolve_capabilities(
+    profile: Profile,
+    enable: &[String],
+    disable: &[String],
+) -> CapabilitySet {
+    let mut caps = profile.capabilities();
+    for name in enable {
+        if let Some(cap) = Capability::from_name(name) {
+            caps.enable(cap);
+        }
+    }
+    for name in disable {
+        if let Some(cap) = Capability::from_name(name) {
+            caps.disable(cap);
+        }
+    }
+    caps
+}
+
+// endregion: --- Resolve
+
+// region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn core_profile_has_no_optional_caps() {
+        let caps = Profile::Core.capabilities();
+        assert!(caps.is_empty());
+        assert!(!caps.is_enabled(Capability::Desktop));
+        assert!(!caps.is_enabled(Capability::Agentic));
+    }
+
+    #[test]
+    fn pro_profile_has_agentic_and_codeintel() {
+        let caps = Profile::Pro.capabilities();
+        assert!(caps.is_enabled(Capability::Agentic));
+        assert!(caps.is_enabled(Capability::CodeIntel));
+        assert!(!caps.is_enabled(Capability::Desktop));
+        assert!(!caps.is_enabled(Capability::Web));
+        assert!(!caps.is_enabled(Capability::Mcp));
+    }
+
+    #[test]
+    fn full_profile_has_everything() {
+        let caps = Profile::Full.capabilities();
+        for cap in Capability::ALL {
+            assert!(caps.is_enabled(*cap), "Full should enable {:?}", cap);
+        }
+    }
+
+    #[test]
+    fn resolve_with_overrides() {
+        let caps = resolve_capabilities(
+            Profile::Core,
+            &["web".to_string(), "desktop".to_string()],
+            &[],
+        );
+        assert!(caps.is_enabled(Capability::Web));
+        assert!(caps.is_enabled(Capability::Desktop));
+        assert!(!caps.is_enabled(Capability::Agentic));
+    }
+
+    #[test]
+    fn resolve_disable_overrides_profile() {
+        let caps = resolve_capabilities(
+            Profile::Full,
+            &[],
+            &["desktop".to_string(), "tray".to_string()],
+        );
+        assert!(!caps.is_enabled(Capability::Desktop));
+        assert!(!caps.is_enabled(Capability::Tray));
+        assert!(caps.is_enabled(Capability::Agentic));
+    }
+
+    #[test]
+    fn capability_roundtrip_names() {
+        for cap in Capability::ALL {
+            let name = cap.name();
+            let parsed = Capability::from_name(name);
+            assert_eq!(parsed, Some(*cap), "roundtrip failed for {name}");
+        }
+    }
+
+    #[test]
+    fn profile_roundtrip_names() {
+        for p in [Profile::Core, Profile::Pro, Profile::Full] {
+            let name = p.name();
+            let parsed = Profile::from_name(name);
+            assert_eq!(parsed, Some(p), "roundtrip failed for {name}");
+        }
+    }
+}
+
+// endregion: --- Tests

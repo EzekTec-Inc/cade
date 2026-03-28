@@ -164,6 +164,18 @@ pub struct GlobalSettings {
     /// Where to run bash commands and file operations.
     #[serde(default)]
     pub execution: ExecutionProfile,
+
+    // -- Capability profile
+    /// Capability profile name: "core", "pro", or "full".
+    /// Default is "full" for backward compatibility.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile: Option<String>,
+    /// Extra capabilities to enable on top of the profile.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enable_capabilities: Vec<String>,
+    /// Capabilities to disable (overrides profile).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disable_capabilities: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -827,6 +839,21 @@ impl SettingsManager {
     /// Returns the active execution profile.
     pub fn execution_profile(&self) -> &ExecutionProfile {
         &self.global.execution
+    }
+
+    /// Resolve the effective capability set from settings.
+    pub fn resolve_capabilities(&self) -> crate::capabilities::CapabilitySet {
+        let profile = self
+            .global
+            .profile
+            .as_deref()
+            .and_then(crate::capabilities::Profile::from_name)
+            .unwrap_or_default();
+        crate::capabilities::resolve_capabilities(
+            profile,
+            &self.global.enable_capabilities,
+            &self.global.disable_capabilities,
+        )
     }
     /// Persist global settings to disk.
     pub fn save_global(&self) -> Result<()> {
