@@ -6,12 +6,18 @@ edition     = "2024"
 [lib]
 doctest     = false
 
+[features]
+default = ["desktop", "web", "mcp"]
+desktop = ["dep:cade-desktop"]
+web     = ["dep:cade-web"]
+mcp     = ["dep:cade-mcp"]
+
 [dependencies]
 # -- Workspace crates
 cade-core.path    = "../cade-core"
-cade-desktop.path = "../cade-desktop"
-cade-mcp.path     = "../cade-mcp"
-cade-web.path     = "../cade-web"
+cade-desktop = { path = "../cade-desktop", optional = true }
+cade-mcp     = { path = "../cade-mcp", optional = true }
+cade-web     = { path = "../cade-web", optional = true }
 # -- Error handling
 # -- Others
 derive_more.workspace  = true

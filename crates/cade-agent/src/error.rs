@@ -16,6 +16,7 @@ pub enum Error {
     #[from]
     Reqwest(reqwest::Error),
     #[from]
+    #[cfg(feature = "desktop")]
     Desktop(cade_desktop::Error),
 }
 

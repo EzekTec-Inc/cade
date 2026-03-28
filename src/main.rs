@@ -4,6 +4,7 @@
 // Re-use modules declared in lib.rs
 use cade::agent;
 use cade::cli;
+#[cfg(feature = "desktop")]
 use cade::desktop;
 use cade::hooks::HookEngine;
 use cade::mcp::McpManager;
@@ -414,6 +415,7 @@ async fn main() -> Result<()> {
     }
 
     // Tray
+    #[cfg(feature = "desktop")]
     if args.tray {
         match desktop::spawn_tray() {
             Ok(_) => tracing::info!("System tray started"),
@@ -467,6 +469,7 @@ async fn main() -> Result<()> {
     }
 
     // -- RPC mode: JSON-RPC over stdin/stdout for embedding CADE in other processes
+    #[cfg(feature = "integration")]
     if args.mode.as_deref() == Some("rpc") {
         let session_opts = cade_sdk::session::SessionOptions {
             server_url: base_url.clone(),

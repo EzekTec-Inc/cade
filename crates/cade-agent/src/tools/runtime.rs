@@ -208,12 +208,15 @@ impl ToolRuntime {
             MESSAGE_AGENT => self.handle_message_agent(args).await,
 
             // -- Web tools (Phase 6)
+            #[cfg(feature = "web")]
             WEB_SEARCH => cade_web::WebSearchTool::run(args)
                 .await
                 .map_or_else(|e| (e.to_string(), true), |o| (o, false)),
+            #[cfg(feature = "web")]
             FETCH_DOC => cade_web::FetchDocTool::run(args)
                 .await
                 .map_or_else(|e| (e.to_string(), true), |o| (o, false)),
+            #[cfg(feature = "desktop")]
             BROWSER_SCREENSHOT => crate::tools::desktop::DesktopCaptureTool::run(args)
                 .await
                 .map_or_else(|e| (e.to_string(), true), |o| (o, false)),

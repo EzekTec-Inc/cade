@@ -113,15 +113,25 @@ path = "src/main.rs"
 name = "cade-server"
 path = "src/bin/cade-server.rs"
 
+[features]
+default     = ["full"]
+full        = ["desktop", "web", "mcp", "integration"]
+pro         = []
+lean        = []
+desktop     = ["cade-agent/desktop", "dep:cade-desktop"]
+web         = ["cade-agent/web"]
+mcp         = ["cade-agent/mcp"]
+integration = ["dep:cade-sdk"]
+
 [dependencies]
 # -- Workspace crates
 cade-core    = { path = "crates/cade-core" }
 cade-ai      = { path = "crates/cade-ai" }
 cade-server  = { path = "crates/cade-server" }
-cade-desktop = { path = "crates/cade-desktop" }
-cade-agent   = { path = "crates/cade-agent" }
+cade-desktop = { path = "crates/cade-desktop", optional = true }
+cade-agent   = { path = "crates/cade-agent", default-features = false }
 cade-cli     = { path = "crates/cade-cli" }
-cade-sdk     = { path = "crates/cade-sdk" }
+cade-sdk     = { path = "crates/cade-sdk", optional = true }
 cade-codeintel = { path = "crates/cade-codeintel" }
 # -- Shared by both binaries
 derive_more.workspace  = true

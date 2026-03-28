@@ -30,7 +30,7 @@ pub async fn register_meta_tools(client: &CadeClient) -> Vec<String> {
 
 /// All meta-tool JSON schemas in a single list.
 pub fn all_meta_schemas() -> Vec<Value> {
-    vec![
+    let mut schemas = vec![
         schema_update_memory(),
         schema_memory_apply_patch(),
         schema_archival_memory_insert(),
@@ -51,17 +51,24 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_update_memory_typed(),
         schema_link_memory_evidence(),
         schema_reflect(),
-        // Phase 6: web tools
-        cade_web::WebSearchTool::schema(),
-        cade_web::FetchDocTool::schema(),
-        cade_web::BrowserScreenshotTool::schema(),
-        // Phase 3: code intelligence
-        crate::tools::codeintel::SymbolSearchTool::schema(),
-        crate::tools::codeintel::FindReferencesTool::schema(),
-        crate::tools::codeintel::GotoDefinitionTool::schema(),
-        crate::tools::codeintel::GetRepoMapTool::schema(),
-        crate::tools::codeintel::IndexRepositoryTool::schema(),
-    ]
+    ];
+
+    // Phase 6: web tools (optional)
+    #[cfg(feature = "web")]
+    {
+        schemas.push(cade_web::WebSearchTool::schema());
+        schemas.push(cade_web::FetchDocTool::schema());
+        schemas.push(cade_web::BrowserScreenshotTool::schema());
+    }
+
+    // Phase 3: code intelligence (always compiled for now — gated at catalog level)
+    schemas.push(crate::tools::codeintel::SymbolSearchTool::schema());
+    schemas.push(crate::tools::codeintel::FindReferencesTool::schema());
+    schemas.push(crate::tools::codeintel::GotoDefinitionTool::schema());
+    schemas.push(crate::tools::codeintel::GetRepoMapTool::schema());
+    schemas.push(crate::tools::codeintel::IndexRepositoryTool::schema());
+
+    schemas
 }
 
 // endregion: --- Public API

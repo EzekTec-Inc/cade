@@ -45,6 +45,7 @@ pub use cade_core::settings;
 pub use cade_core::skills;
 pub use cade_core::toolsets;
 
+#[cfg(feature = "desktop")]
 pub use cade_desktop::desktop;
 
 pub use cade_server::server;

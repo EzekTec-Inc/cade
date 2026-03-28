@@ -4,11 +4,12 @@ use serde_json::Value;
 use super::{
     ask::AskUserQuestionTool,
     bash::BashTool,
-    desktop::{DesktopCaptureTool, DesktopControlTool, DesktopListWindowsTool, DesktopNotifyTool},
     fs::{ApplyPatchTool, EditTool, ReadTool, WriteTool},
     plan::{EnterPlanModeTool, ExitPlanModeTool, TodoWriteTool, UpdatePlanTool, WriteTodosTool},
     search::{GlobTool, GrepTool},
 };
+#[cfg(feature = "desktop")]
+use super::desktop::{DesktopCaptureTool, DesktopControlTool, DesktopListWindowsTool, DesktopNotifyTool};
 use crate::mcp::McpManager;
 use cade_core::toolsets::Toolset;
 
@@ -74,9 +75,13 @@ async fn run_native_tool(name: &str, args: &Value) -> Option<Result<String>> {
         "ExitPlanMode" => Ok("Plan mode exited. Normal operation resumed.".to_string()),
         "TodoWrite" | "UpdatePlan" | "WriteTodos" => TodoWriteTool::run(args).await,
         // Desktop extensions
+        #[cfg(feature = "desktop")]
         "desktop_screenshot"   => DesktopCaptureTool::run(args).await,
+        #[cfg(feature = "desktop")]
         "desktop_list_windows" => DesktopListWindowsTool::run(args).await,
+        #[cfg(feature = "desktop")]
         "desktop_control"      => DesktopControlTool::run(args).await,
+        #[cfg(feature = "desktop")]
         "desktop_notify"       => DesktopNotifyTool::run(args).await,
         _other => return None,
     })
@@ -91,12 +96,15 @@ fn rename_schema(mut schema: Value, new_name: &str) -> Value {
 
 /// All tool JSON schemas for a given toolset.
 pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
+    #[cfg(feature = "desktop")]
     let desktop = vec![
         DesktopCaptureTool::schema(),
         DesktopListWindowsTool::schema(),
         DesktopControlTool::schema(),
         DesktopNotifyTool::schema(),
     ];
+    #[cfg(not(feature = "desktop"))]
+    let desktop: Vec<Value> = vec![];
     let mut schemas = match toolset {
         Toolset::Codex => vec![
             BashTool::schema(),
