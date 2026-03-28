@@ -2,6 +2,7 @@ pub mod ui_push;
 pub mod format;
 pub mod pickers;
 pub mod tool_intercepts;
+pub mod capability_gate;
 pub mod commands_providers;
 pub mod turn_loop;
 
@@ -690,6 +691,8 @@ pub struct Repl {
     pub(crate) conversation_id: Arc<Mutex<Option<String>>>,
     /// MCP server manager — routes tool calls with `{server}__` prefix.
     pub(crate) mcp: std::sync::Arc<cade_agent::mcp::McpManager>,
+    /// Active capability set — controls which tools and commands are available.
+    pub(crate) capabilities: cade_core::capabilities::CapabilitySet,
     /// Semaphore limiting concurrent subagent LLM calls.
     /// Capacity is read from CADE_MAX_SUBAGENTS at startup (default: 4).
     pub(crate) subagent_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
@@ -818,6 +821,7 @@ impl Repl {
             write_tool_calls: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             working_set_notified: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             turn_checkpoint_taken: false,
+            capabilities: cade_core::capabilities::CapabilitySet::default(),
         }
     }
 
