@@ -358,7 +358,7 @@ async fn main() -> Result<()> {
 
     // --link: (re-)attach native + MCP tools to agent, then continue
     if args.link {
-        register_and_attach(&client, &agent.id, toolset).await;
+        register_and_attach_with_caps(&client, &agent.id, toolset, &capabilities).await;
         if !mcp.is_empty().await {
             use agent::tools::register_mcp_tools;
             let mcp_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas().await)

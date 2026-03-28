@@ -25,6 +25,7 @@ impl Repl {
     }
 
     /// Check if any of the listed capabilities is enabled.
+    #[allow(dead_code)]
     pub(crate) fn require_any_capability(&self, caps: &[Capability], command: &str) -> bool {
         if caps.iter().any(|c| self.capabilities.is_enabled(*c)) {
             return false;
@@ -41,6 +42,7 @@ impl Repl {
 
 /// Returns a filtered list of slash-command help entries based on capabilities.
 /// Each entry is (command, description, required_capability).
+#[allow(dead_code)]
 pub(crate) fn visible_commands(caps: &CapabilitySet) -> Vec<(&'static str, &'static str)> {
     let mut cmds = vec![
         // Core — always visible

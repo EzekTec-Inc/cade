@@ -1210,11 +1210,15 @@ impl Repl {
                         continue;
                     }
                     SlashCmd::Help => {
-                        // Open full-screen command browser
+                        // Open full-screen command browser (filtered by capabilities)
                         let chosen = {
                             let mut app = self.app.lock().expect("lock poisoned");
                             let colors = app.colors.clone();
-                            crate::ui::menu::show_command_menu(&mut app.terminal, &colors)?
+                            crate::ui::menu::show_command_menu_with_caps(
+                                &mut app.terminal,
+                                &colors,
+                                Some(&self.capabilities),
+                            )?
                         };
                         let _ = self.app.lock().expect("lock poisoned").draw();
                         if let Some(cmd) = chosen {

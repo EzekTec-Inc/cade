@@ -8,7 +8,7 @@ use cade::skills::Skill;
 use cade::{Result, Error};
 use cade_agent::agent::client::{CreateAgentRequest, MemoryBlock};
 use crate::bootstrap::prompt::build_system_prompt;
-use crate::bootstrap::tools::register_and_attach_filtered;
+use crate::bootstrap::tools::register_and_attach_with_caps_filtered;
 use crate::bootstrap::memory::seed_default_memory;
 use cade::skills::{discover_all_skills, skills_listing};
 use cade_core::capabilities::CapabilitySet;
@@ -93,7 +93,7 @@ pub async fn resolve_agent_and_conversation(
             ))
             .await
             .map_err(|e| Error::custom(format!("create agent: {e}")))?;
-        register_and_attach_filtered(client, &a.id, toolset, tool_filter.as_deref()).await;
+        register_and_attach_with_caps_filtered(client, &a.id, toolset, capabilities, tool_filter.as_deref()).await;
         seed_default_memory(client, &a.id).await;
         session
             .set_agent(a.id.clone(), Some(a.name.clone()))
@@ -148,7 +148,7 @@ pub async fn resolve_agent_and_conversation(
                     .create_agent(make_req(default_model.to_string(), "CADE coding agent"))
                     .await
                     .map_err(|e| Error::custom(format!("create agent: {e}")))?;
-                register_and_attach_filtered(client, &a.id, toolset, tool_filter.as_deref()).await;
+                register_and_attach_with_caps_filtered(client, &a.id, toolset, capabilities, tool_filter.as_deref()).await;
                 seed_default_memory(client, &a.id).await;
                 session.set_agent(a.id.clone(), Some(a.name.clone()))?;
                 settings.set_last_agent(&a.id)?;
@@ -164,7 +164,7 @@ pub async fn resolve_agent_and_conversation(
             ))
             .await
             .map_err(|e| Error::custom(format!("create agent: {e}")))?;
-        register_and_attach_filtered(client, &a.id, toolset, tool_filter.as_deref()).await;
+        register_and_attach_with_caps_filtered(client, &a.id, toolset, capabilities, tool_filter.as_deref()).await;
         seed_default_memory(client, &a.id).await;
         session.set_agent(a.id.clone(), Some(a.name.clone()))?;
         settings.set_last_agent(&a.id)?;

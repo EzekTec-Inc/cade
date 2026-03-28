@@ -319,19 +319,46 @@ enum MenuItem {
     Cmd { cmd: String, desc: String },
 }
 
-fn build_flat_items() -> Vec<MenuItem> {
+/// Commands that require specific capabilities.
+/// Unlisted commands are always shown.
+fn cmd_required_capability(cmd: &str) -> Option<cade_core::capabilities::Capability> {
+    use cade_core::capabilities::Capability;
+    match cmd {
+        "/agents" | "/subagents" | "/reflect" | "/artifacts" => Some(Capability::Agentic),
+        "/mcp" => Some(Capability::Mcp),
+        "web_search" | "fetch_doc" => Some(Capability::Web),
+        "index_repository" => Some(Capability::CodeIntel),
+        _ => None,
+    }
+}
+
+fn build_flat_items_filtered(caps: Option<&cade_core::capabilities::CapabilitySet>) -> Vec<MenuItem> {
     let mut out = Vec::new();
     for section in SECTIONS {
-        out.push(MenuItem::Header(section.name.to_string()));
+        let mut section_items = Vec::new();
         for entry in section.items {
-            out.push(MenuItem::Cmd {
-                cmd: entry.cmd.to_string(),
-                desc: entry.desc.to_string(),
-            });
+            let visible = match caps {
+                None => true,
+                Some(cs) => match cmd_required_capability(entry.cmd) {
+                    None => true,
+                    Some(cap) => cs.is_enabled(cap),
+                },
+            };
+            if visible {
+                section_items.push(MenuItem::Cmd {
+                    cmd: entry.cmd.to_string(),
+                    desc: entry.desc.to_string(),
+                });
+            }
+        }
+        if !section_items.is_empty() {
+            out.push(MenuItem::Header(section.name.to_string()));
+            out.extend(section_items);
         }
     }
     out
 }
+
 
 fn first_cmd_idx(items: &[MenuItem]) -> usize {
     items
@@ -372,7 +399,16 @@ pub fn show_command_menu(
     terminal: &mut DefaultTerminal,
     colors: &ThemeColors,
 ) -> Result<Option<String>> {
-    let items = build_flat_items();
+    show_command_menu_with_caps(terminal, colors, None)
+}
+
+/// Present the full-screen command browser, filtered by capabilities.
+pub fn show_command_menu_with_caps(
+    terminal: &mut DefaultTerminal,
+    colors: &ThemeColors,
+    caps: Option<&cade_core::capabilities::CapabilitySet>,
+) -> Result<Option<String>> {
+    let items = build_flat_items_filtered(caps);
     let mut sel = first_cmd_idx(&items);
 
     loop {

@@ -60,6 +60,7 @@ async fn main() -> Result<()> {
     let db = open_db(&config.db_path).map_err(|e| Error::custom(e.to_string()))?;
 
     // C6: Ensure codeintel schema exists at startup
+    #[cfg(feature = "codeintel")]
     if let Err(e) = cade_codeintel::ensure_schema(&db) {
         tracing::warn!("Failed to initialize codeintel schema: {e}");
     }
