@@ -2,6 +2,7 @@
 
 pub mod ask;
 pub mod bash;
+pub mod catalog;
 pub mod codeintel;
 pub mod desktop;
 pub mod fs;
