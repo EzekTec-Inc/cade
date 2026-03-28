@@ -203,6 +203,35 @@ async fn main() -> Result<()> {
         }
     }
 
+    // -- Capability profile resolution
+    // CLI flag > env var > settings file > default (Full)
+    let capabilities = {
+        use cade_core::capabilities::{Profile, resolve_capabilities};
+        let profile = args
+            .profile
+            .as_deref()
+            .and_then(Profile::from_name)
+            .unwrap_or_else(|| {
+                settings
+                    .global()
+                    .profile
+                    .as_deref()
+                    .and_then(Profile::from_name)
+                    .unwrap_or_default()
+            });
+        let caps = resolve_capabilities(
+            profile,
+            &settings.global().enable_capabilities,
+            &settings.global().disable_capabilities,
+        );
+        tracing::info!(
+            "Profile: {} ({} capabilities)",
+            profile.name(),
+            caps.len()
+        );
+        caps
+    };
+
     // Skills — multi-scope discovery: project > agent > global
     let skills_dir = args
         .skills
@@ -246,6 +275,7 @@ async fn main() -> Result<()> {
             &agent_dir,
             &mut session,
             &mut settings,
+            &capabilities,
         )
         .await?;
 
@@ -722,6 +752,7 @@ async fn main() -> Result<()> {
         mcp,
         theme_colors,
         exec_backend,
+        capabilities,
     );
     // --continue: mark first turn as already done so env context isn't re-injected
     if args.continue_last {

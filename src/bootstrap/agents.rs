@@ -7,10 +7,11 @@ use cade::settings::SettingsManager;
 use cade::skills::Skill;
 use cade::{Result, Error};
 use cade_agent::agent::client::{CreateAgentRequest, MemoryBlock};
-use crate::bootstrap::prompt::BASE_SYSTEM_PROMPT;
+use crate::bootstrap::prompt::build_system_prompt;
 use crate::bootstrap::tools::register_and_attach_filtered;
 use crate::bootstrap::memory::seed_default_memory;
 use cade::skills::{discover_all_skills, skills_listing};
+use cade_core::capabilities::CapabilitySet;
 
 pub async fn resolve_agent_and_conversation(
     client: &CadeClient,
@@ -22,6 +23,7 @@ pub async fn resolve_agent_and_conversation(
     agent_dir: &std::path::Path,
     session: &mut SessionStore,
     settings: &mut SettingsManager,
+    capabilities: &CapabilitySet,
 ) -> Result<(
     agent::client::AgentState,
     Vec<Skill>,
@@ -31,10 +33,11 @@ pub async fn resolve_agent_and_conversation(
     // Build system prompt: base + any context files (AGENTS.md, CLAUDE.md, CADE.md)
     let context_files = cade_core::resources::context_files::discover_context_files(cwd, agent_dir);
     let context_block = cade_core::resources::context_files::build_context_block(&context_files);
+    let base_prompt = build_system_prompt(capabilities);
     let effective_system_prompt = if context_block.is_empty() {
-        BASE_SYSTEM_PROMPT.to_string()
+        base_prompt
     } else {
-        format!("{BASE_SYSTEM_PROMPT}{context_block}")
+        format!("{base_prompt}{context_block}")
     };
     if !context_files.is_empty() {
         let names: Vec<String> = context_files

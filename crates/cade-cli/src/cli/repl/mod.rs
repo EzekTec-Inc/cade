@@ -760,6 +760,7 @@ impl Repl {
         mcp: std::sync::Arc<cade_agent::mcp::McpManager>,
         theme: cade_tui::ThemeColors,
         exec_backend: std::sync::Arc<dyn cade_agent::backends::ExecutionBackend>,
+        capabilities: cade_core::capabilities::CapabilitySet,
     ) -> Self {
         let perm_mode = permissions.mode();
         let agent_name_clone = agent_name.clone();
@@ -821,7 +822,7 @@ impl Repl {
             write_tool_calls: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
             working_set_notified: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             turn_checkpoint_taken: false,
-            capabilities: cade_core::capabilities::CapabilitySet::default(),
+            capabilities,
         }
     }
 
@@ -1286,6 +1287,9 @@ impl Repl {
                             ));
                     }
                     SlashCmd::Mcp => {
+                        if self.require_capability(cade_core::capabilities::Capability::Mcp, "/mcp") {
+                            continue;
+                        }
                         // Support "/mcp reload" subcommand
                         let sub = input.trim().strip_prefix("/mcp").unwrap_or("").trim();
                         if sub == "reload" {
@@ -1908,46 +1912,56 @@ impl Repl {
                         self.tui_ok("✅ Permission mode: default — tools require approval");
                     }
                     SlashCmd::Mode(arg) => {
+                        use crate::cli::repl::format::parse_mode_label;
                         match arg.as_deref() {
                             None | Some("") => {
                                 let (icon, label, hint) = mode_display(self.permissions.mode());
                                 self.tui_sys(format!("{icon} Current mode: {label}  {hint}"));
                             }
-                            Some(name) => match name.to_lowercase().as_str() {
-                                "default" | "normal" => {
-                                    self.permissions.set_mode(PermissionMode::Default);
-                                    self.app.lock().expect("lock poisoned").show_toast(
-                                        "Permission mode: default",
-                                        ToastLevel::Success,
-                                    );
-                                    self.tui_ok("✅ Permission mode: default");
-                                }
-                                "plan" | "readonly" | "read-only" => {
-                                    self.permissions.set_mode(PermissionMode::Plan);
-                                    self.app.lock().expect("lock poisoned").show_toast(
-                                        "Permission mode: plan",
-                                        ToastLevel::Info,
-                                    );
-                                    self.tui_hdr("📖 Permission mode: plan (read-only). Use /default to resume.");
-                                }
-                                "yolo" | "bypass" | "bypasspermissions" => {
-                                    self.permissions.set_mode(PermissionMode::BypassPermissions);
-                                    self.app.lock().expect("lock poisoned").show_toast(
-                                        "Permission mode: bypass",
-                                        ToastLevel::Warning,
-                                    );
-                                    self.tui_sys("⚡ Permission mode: bypassPermissions");
-                                }
-                                "acceptedits" | "accept-edits" | "edits" => {
-                                    self.permissions.set_mode(PermissionMode::AcceptEdits);
-                                    self.app.lock().expect("lock poisoned").show_toast(
-                                        "Permission mode: acceptEdits",
-                                        ToastLevel::Success,
-                                    );
-                                    self.tui_ok("📝 Permission mode: acceptEdits — file edits auto-approved");
-                                }
-                                other => {
-                                    self.tui_err(format!("Unknown mode '{other}'. Valid: default | plan | yolo | acceptEdits"));
+                            Some(name) => {
+                                let resolved = parse_mode_label(name);
+                                match resolved {
+                                    Some("default") => {
+                                        self.permissions.set_mode(PermissionMode::Default);
+                                        let (icon, label, _) = mode_display(PermissionMode::Default);
+                                        self.app.lock().expect("lock poisoned").show_toast(
+                                            format!("{icon} {label}"),
+                                            ToastLevel::Success,
+                                        );
+                                        self.tui_ok(format!("{icon} Permission mode: {label}"));
+                                    }
+                                    Some("plan") => {
+                                        self.permissions.set_mode(PermissionMode::Plan);
+                                        let (icon, label, hint) = mode_display(PermissionMode::Plan);
+                                        self.app.lock().expect("lock poisoned").show_toast(
+                                            format!("{icon} {label}"),
+                                            ToastLevel::Info,
+                                        );
+                                        self.tui_hdr(format!("{icon} Permission mode: {label} {hint}"));
+                                    }
+                                    Some("yolo") => {
+                                        self.permissions.set_mode(PermissionMode::BypassPermissions);
+                                        let (icon, label, _) = mode_display(PermissionMode::BypassPermissions);
+                                        self.app.lock().expect("lock poisoned").show_toast(
+                                            format!("{icon} {label}"),
+                                            ToastLevel::Warning,
+                                        );
+                                        self.tui_sys(format!("{icon} Permission mode: {label}"));
+                                    }
+                                    Some("acceptEdits") => {
+                                        self.permissions.set_mode(PermissionMode::AcceptEdits);
+                                        let (icon, label, _) = mode_display(PermissionMode::AcceptEdits);
+                                        self.app.lock().expect("lock poisoned").show_toast(
+                                            format!("{icon} {label}"),
+                                            ToastLevel::Success,
+                                        );
+                                        self.tui_ok(format!("{icon} Permission mode: {label}"));
+                                    }
+                                    _ => {
+                                        self.tui_err(format!(
+                                            "Unknown mode '{name}'. Valid: safe | edit-freely | plan | full-access (or: default | acceptEdits | yolo)"
+                                        ));
+                                    }
                                 }
                             },
                         }
@@ -2469,6 +2483,9 @@ impl Repl {
                     }
 
                     SlashCmd::Reflect(focus_arg) => {
+                        if self.require_capability(cade_core::capabilities::Capability::Agentic, "/reflect") {
+                            continue;
+                        }
                         let agent_id = self.agent_id();
                         let focus = focus_arg.as_deref();
                         let focus_msg = focus.map(|f| format!(" (focus: {f})")).unwrap_or_default();
@@ -2480,6 +2497,9 @@ impl Repl {
                     }
 
                     SlashCmd::Artifacts => {
+                        if self.require_capability(cade_core::capabilities::Capability::Agentic, "/artifacts") {
+                            continue;
+                        }
                         let agent_id = self.agent_id();
                         match self.client.list_artifacts(&agent_id).await {
                             Err(e) => self.tui_err(format!("  ✗ list_artifacts: {e}")),
@@ -2743,6 +2763,9 @@ impl Repl {
                     }
 
                     SlashCmd::Agents => {
+                        if self.require_capability(cade_core::capabilities::Capability::Agentic, "/agents") {
+                            continue;
+                        }
                         self.tui_dim("  Fetching agents…");
                         match self.client.list_agents().await {
                             Ok(agents) if agents.is_empty() => {

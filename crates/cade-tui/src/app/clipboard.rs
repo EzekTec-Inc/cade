@@ -6,19 +6,34 @@ impl TuiApp {
             self.show_toast("No block selected", ToastLevel::Info);
             return false;
         };
-        let Ok(mut cb) = arboard::Clipboard::new() else {
-            self.show_toast("Clipboard unavailable", ToastLevel::Error);
-            return true;
-        };
-        if cb.set_text(text).is_ok() {
-            self.show_toast("Copied selected block", ToastLevel::Success);
-        } else {
-            self.show_toast("Failed to copy selected block", ToastLevel::Error);
+        #[cfg(not(feature = "clipboard-images"))]
+        {
+            let _ = text;
+            self.show_toast("Clipboard support not compiled", ToastLevel::Error);
+            return false;
         }
-        true
+        #[cfg(feature = "clipboard-images")]
+        {
+            let Ok(mut cb) = arboard::Clipboard::new() else {
+                self.show_toast("Clipboard unavailable", ToastLevel::Error);
+                return true;
+            };
+            if cb.set_text(text).is_ok() {
+                self.show_toast("Copied selected block", ToastLevel::Success);
+            } else {
+                self.show_toast("Failed to copy selected block", ToastLevel::Error);
+            }
+            true
+        }
     }
 
 
+    #[cfg(not(feature = "clipboard-images"))]
+    pub(crate) fn try_paste_image_file_path(&mut self, _text: &str) -> bool {
+        false
+    }
+
+    #[cfg(feature = "clipboard-images")]
     pub(crate) fn try_paste_image_file_path(&mut self, text: &str) -> bool {
         // Must be a single line — multi-line pastes are never a bare file path.
         if text.contains('\n') {
@@ -86,6 +101,12 @@ impl TuiApp {
     ///
     /// Returns `true` if an image was found and inserted; `false` otherwise
     /// (caller may fall back to a text paste notification or ignore the event).
+    #[cfg(not(feature = "clipboard-images"))]
+    pub(crate) fn try_paste_clipboard_image(&mut self) -> bool {
+        false
+    }
+
+    #[cfg(feature = "clipboard-images")]
     pub(crate) fn try_paste_clipboard_image(&mut self) -> bool {
         // -- Read RGBA data from the clipboard
         let img_data = {

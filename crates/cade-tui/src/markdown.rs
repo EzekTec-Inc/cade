@@ -5,14 +5,22 @@ use ratatui::{
     text::{Line, Span},
 };
 use std::sync::LazyLock;
+
+#[cfg(feature = "syntax-highlighting")]
 use syntect::easy::HighlightLines;
+#[cfg(feature = "syntax-highlighting")]
 use syntect::highlighting::{Style as SyntectStyle, ThemeSet};
+#[cfg(feature = "syntax-highlighting")]
 use syntect::parsing::SyntaxSet;
+#[cfg(feature = "syntax-highlighting")]
 use syntect::util::LinesWithEndings;
 
+#[cfg(feature = "syntax-highlighting")]
 static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+#[cfg(feature = "syntax-highlighting")]
 static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
+#[cfg(feature = "syntax-highlighting")]
 fn syntect_to_tui_style(style: SyntectStyle) -> Style {
     let mut s = Style::default().fg(RC::Rgb(
         style.foreground.r,
@@ -71,7 +79,10 @@ pub fn parse_markdown_lines_with_theme(
     let mut in_blockquote = false;
     let mut in_code_block = false;
     let mut current_lang = String::new();
+    #[cfg(feature = "syntax-highlighting")]
     let mut highlighter: Option<HighlightLines<'static>> = None;
+    #[cfg(not(feature = "syntax-highlighting"))]
+    let mut highlighter: Option<()> = None;
 
     let mut list_depth: usize = 0;
     let mut list_counters: Vec<Option<u64>> = Vec::new();
@@ -158,11 +169,14 @@ pub fn parse_markdown_lines_with_theme(
                         current_lang.clear();
                     }
 
-                    let syntax = SYNTAX_SET
-                        .find_syntax_by_token(&current_lang)
-                        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
-                    let theme = &THEME_SET.themes["base16-ocean.dark"];
-                    highlighter = Some(HighlightLines::new(syntax, theme));
+                    #[cfg(feature = "syntax-highlighting")]
+                    {
+                        let syntax = SYNTAX_SET
+                            .find_syntax_by_token(&current_lang)
+                            .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
+                        let theme = &THEME_SET.themes["base16-ocean.dark"];
+                        highlighter = Some(HighlightLines::new(syntax, theme));
+                    }
 
                     // Top border with optional language label
                     let label = if current_lang.is_empty() {
@@ -312,6 +326,7 @@ pub fn parse_markdown_lines_with_theme(
                 if in_table {
                     current_cell.push_str(&text);
                 } else if in_code_block {
+                    #[cfg(feature = "syntax-highlighting")]
                     if let Some(ref mut h) = highlighter {
                         let line_iter = LinesWithEndings::from(&text);
                         let mut first = true;
@@ -342,6 +357,22 @@ pub fn parse_markdown_lines_with_theme(
                             current_spans.extend(spans);
                         }
                         if text.ends_with('\n') {
+                            push_line(&mut lines, &mut current_spans, in_blockquote);
+                        }
+                    }
+                    #[cfg(not(feature = "syntax-highlighting"))]
+                    {
+                        // Plain rendering without syntax highlighting
+                        let _ = &highlighter; // suppress unused warning
+                        for raw_line in text.lines() {
+                            current_spans.push(Span::styled(
+                                format!("{INDENT}{CODE_INDENT}"),
+                                code_border_style(colors),
+                            ));
+                            current_spans.push(Span::styled(
+                                raw_line.to_string(),
+                                Style::default().fg(colors.text),
+                            ));
                             push_line(&mut lines, &mut current_spans, in_blockquote);
                         }
                     }
