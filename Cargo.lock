@@ -703,7 +703,6 @@ dependencies = [
  "derive_more 2.1.1",
  "dirs",
  "dotenvy",
- "ratatui",
  "serde_json",
  "tokio",
  "tokio-stream",
@@ -765,10 +764,6 @@ dependencies = [
 name = "cade-cli"
 version = "0.2.0"
 dependencies = [
- "arboard",
- "async-trait",
- "atty",
- "base64",
  "cade-agent",
  "cade-ai",
  "cade-core",
@@ -780,19 +775,13 @@ dependencies = [
  "dirs",
  "futures",
  "ignore",
- "image",
  "notify",
- "pulldown-cmark",
  "ratatui",
- "regex",
- "reqwest",
  "serde",
  "serde_json",
  "tempfile",
  "tokio",
- "tokio-stream",
  "tracing",
- "unicode-width 0.2.0",
  "uuid",
  "walkdir",
 ]
