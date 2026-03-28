@@ -514,4 +514,44 @@ configuration hardening options, and reporting guidance.
 
 ---
 
+## Capability Profiles
+
+CADE supports three capability profiles that control which tools and features
+are available at runtime. The default is **full** (all features enabled).
+
+| Profile | Includes | Use when |
+|---------|----------|----------|
+| **core** | Coding tools, memory, checkpoints | You want a lean, focused assistant |
+| **pro** | Core + subagents + code intelligence | Serious coding on large repositories |
+| **full** | Everything (desktop, web, MCP, SDK…) | You want maximum power (default) |
+
+### Selecting a profile
+
+```bash
+# CLI flag
+cade --profile pro
+
+# Environment variable
+export CADE_PROFILE=pro
+
+# Settings file (~/.cade/settings.json)
+{
+  "profile": "pro",
+  "enable_capabilities": ["web"],    // add individual capabilities
+  "disable_capabilities": ["tray"]   // remove individual capabilities
+}
+```
+
+### Build profiles
+
+CADE can also be compiled with a reduced feature set for smaller binaries:
+
+```bash
+cargo build --release                                     # full (default)
+cargo build --release --no-default-features --features pro   # no desktop/web/mcp/sdk
+cargo build --release --no-default-features --features lean  # minimal core only
+```
+
+---
+
 Built by [EzekTec Inc.](https://github.com/EzekTec-Inc) · Apache-2.0 / MIT

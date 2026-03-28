@@ -75,6 +75,11 @@ pub struct Args {
     #[arg(long = "tray")]
     pub tray: bool,
 
+    /// Capability profile: core, pro, or full (default: full).
+    /// Controls which tools and features are available.
+    #[arg(long = "profile", env = "CADE_PROFILE")]
+    pub profile: Option<String>,
+
     /// Custom skills directory
     #[arg(long = "skills")]
     pub skills: Option<String>,

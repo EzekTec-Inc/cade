@@ -193,3 +193,39 @@ input events and thinking animations on a separate loop.
 - Settings files created with 0600 permissions
 
 See [SECURITY.md](SECURITY.md) for full details.
+
+## Capability System
+
+CADE organizes optional features into **capability packs** controlled by
+**profiles**.
+
+### Capabilities
+
+| Capability | Description |
+|---|---|
+| `agentic` | Subagents, agent messaging, reflection, artifacts |
+| `codeintel` | Tree-sitter indexing, symbol search, references |
+| `desktop` | Screenshots, window control, notifications, tray |
+| `web` | Web search, fetch docs, browser screenshot |
+| `mcp` | MCP server management and external tools |
+| `clipboard-images` | Image paste from clipboard |
+| `syntax-highlighting` | Syntax highlighting in TUI |
+| `advanced-memory` | Typed memory, evidence linking |
+| `integration` | SDK, RPC, plugin embedding |
+
+### Profiles
+
+- **Core** — coding tools + memory + checkpoints
+- **Pro** — Core + agentic + codeintel
+- **Full** — everything (default)
+
+### Resolution
+
+Effective capabilities = profile baseline + `enable_capabilities` - `disable_capabilities`.
+
+### Key files
+
+- `crates/cade-core/src/capabilities/mod.rs` — `Capability`, `CapabilitySet`, `Profile`
+- `crates/cade-agent/src/tools/catalog.rs` — capability-aware tool filtering
+- `crates/cade-cli/src/cli/repl/capability_gate.rs` — command gating helpers
+- `src/bootstrap/tools.rs` — `register_and_attach_with_caps()`
