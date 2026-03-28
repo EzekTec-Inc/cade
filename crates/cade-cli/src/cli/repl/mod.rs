@@ -1,3 +1,6 @@
+pub mod ui_push;
+pub mod format;
+
 use crate::Result;
 use crossterm::event::KeyCode;
 use serde_json::json;
@@ -203,7 +206,7 @@ struct ModelStats {
 /// All session-level statistics accumulated by the REPL.
 /// Wrapped in `Arc<Mutex<...>>` so it can be updated from stream closures.
 #[derive(Debug)]
-struct SessionStats {
+pub(crate) struct SessionStats {
     started_at: std::time::Instant,
     /// Total milliseconds the agent was actively thinking / streaming.
     agent_active_ms: u64,
@@ -647,89 +650,90 @@ enum ToolPreflightResult {
 // -- Repl
 
 use crate::support::text::{finish_reason_hint, truncate, FinishReasonCategory};
+use crate::cli::repl::format::mode_display;
 
 pub struct Repl {
-    client: CadeClient,
+    pub(crate) client: CadeClient,
     /// Shared-mutable so /new and /agents can hot-swap the agent mid-session
-    agent_id: Arc<Mutex<String>>,
-    agent_name: Arc<Mutex<String>>,
-    permissions: PermissionManager,
-    current_model: Arc<Mutex<String>>,
-    reasoning_effort: Arc<Mutex<Option<String>>>,
-    settings: Arc<Mutex<SettingsManager>>,
-    session: Arc<Mutex<SessionStore>>,
+    pub(crate) agent_id: Arc<Mutex<String>>,
+    pub(crate) agent_name: Arc<Mutex<String>>,
+    pub(crate) permissions: PermissionManager,
+    pub(crate) current_model: Arc<Mutex<String>>,
+    pub(crate) reasoning_effort: Arc<Mutex<Option<String>>>,
+    pub(crate) settings: Arc<Mutex<SettingsManager>>,
+    pub(crate) session: Arc<Mutex<SessionStore>>,
     /// Working directory (for /init context)
-    cwd: std::path::PathBuf,
+    pub(crate) cwd: std::path::PathBuf,
     /// Currently loaded skills
-    skills: Arc<Mutex<Vec<Skill>>>,
+    pub(crate) skills: Arc<Mutex<Vec<Skill>>>,
     /// Loaded prompt templates (for /template_name expansion)
-    prompts: Vec<cade_core::resources::PromptTemplate>,
+    pub(crate) prompts: Vec<cade_core::resources::PromptTemplate>,
     /// Active execution backend (local / docker / ssh / readonly).
-    exec_backend: std::sync::Arc<dyn cade_agent::backends::ExecutionBackend>,
+    pub(crate) exec_backend: std::sync::Arc<dyn cade_agent::backends::ExecutionBackend>,
     /// Directory from which skills are discovered
-    skills_dir: std::path::PathBuf,
+    pub(crate) skills_dir: std::path::PathBuf,
     /// Completed background subagent results waiting to be shown
-    background_results: Arc<Mutex<Vec<BackgroundResult>>>,
+    pub(crate) background_results: Arc<Mutex<Vec<BackgroundResult>>>,
     /// Active toolset — switches with /model
-    current_toolset: Arc<Mutex<Toolset>>,
+    pub(crate) current_toolset: Arc<Mutex<Toolset>>,
     /// Hook engine — fires user-defined scripts at lifecycle events
-    hooks: cade_core::hooks::HookEngine,
+    pub(crate) hooks: cade_core::hooks::HookEngine,
     /// `true` until the first real user message is sent this session.
     /// Used to inject the environment context block (OS, cwd, git) on turn 1.
-    first_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) first_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Set to `true` by a SIGINT handler while a turn is running.
     /// `stream_turn()` checks this flag and aborts the SSE stream early.
-    cancel_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) cancel_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Active conversation ID — None means the default (legacy) conversation.
-    conversation_id: Arc<Mutex<Option<String>>>,
+    pub(crate) conversation_id: Arc<Mutex<Option<String>>>,
     /// MCP server manager — routes tool calls with `{server}__` prefix.
-    mcp: std::sync::Arc<cade_agent::mcp::McpManager>,
+    pub(crate) mcp: std::sync::Arc<cade_agent::mcp::McpManager>,
     /// Semaphore limiting concurrent subagent LLM calls.
     /// Capacity is read from CADE_MAX_SUBAGENTS at startup (default: 4).
-    subagent_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
+    pub(crate) subagent_semaphore: std::sync::Arc<tokio::sync::Semaphore>,
     /// Receives a signal whenever a SKILL.MD file changes on disk.
     /// The REPL polls this each loop iteration and triggers a reload.
-    skill_reload_rx: tokio::sync::mpsc::Receiver<()>,
+    pub(crate) skill_reload_rx: tokio::sync::mpsc::Receiver<()>,
     /// Receives a signal whenever a CADE settings file changes on disk.
     /// The REPL polls this each loop iteration and triggers an MCP reload.
-    mcp_reload_rx: tokio::sync::mpsc::Receiver<()>,
+    pub(crate) mcp_reload_rx: tokio::sync::mpsc::Receiver<()>,
     /// Whether SSE token streaming is enabled (toggled by /stream).
-    streaming_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) streaming_enabled: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Cumulative token usage for the session (input, output).
-    session_input_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
-    session_output_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub(crate) session_input_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    pub(crate) session_output_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Rich session statistics (per-model token breakdown, tool calls, timing).
-    session_stats: std::sync::Arc<std::sync::Mutex<SessionStats>>,
+    pub(crate) session_stats: std::sync::Arc<std::sync::Mutex<SessionStats>>,
     /// Fullscreen ratatui TUI — single render path for all output + input.
-    app: Arc<Mutex<TuiApp>>,
+    pub(crate) app: Arc<Mutex<TuiApp>>,
     /// I-01: steering message typed during a turn (Enter key) — cancel current
     /// turn and run this message as the very next turn.
-    queued_steering: Arc<Mutex<Option<String>>>,
+    pub(crate) queued_steering: Arc<Mutex<Option<String>>>,
     /// I-01: follow-up messages typed during a turn (Enter / Alt+Enter) — run
     /// in submission order after the current turn completes, without interrupting.
     /// VecDeque allows multiple messages to be queued while the agent is busy.
-    queued_followup: Arc<Mutex<std::collections::VecDeque<String>>>,
+    pub(crate) queued_followup: Arc<Mutex<std::collections::VecDeque<String>>>,
     /// Buffered reasoning text from the most recent turn (for hook payloads).
-    last_reasoning: Arc<Mutex<String>>,
+    pub(crate) last_reasoning: Arc<Mutex<String>>,
     /// Buffered assistant text from the most recent turn (for hook payloads).
-    last_assistant_text: Arc<Mutex<String>>,
+    pub(crate) last_assistant_text: Arc<Mutex<String>>,
     /// Millisecond timestamp of the last time a blocking question modal closed
     /// (`blocking_question_active` transitioned true → false).
     /// The I-01 Enter handler ignores Enter events within 300 ms of a modal
     /// close to prevent the confirmation Enter from cancelling the subsequent
     /// stream_turn — mirrors the 200 ms Esc grace period.
-    last_modal_close_ms: Arc<std::sync::atomic::AtomicU64>,
+    pub(crate) last_modal_close_ms: Arc<std::sync::atomic::AtomicU64>,
     /// Images staged by `agent_turn_with_images` for the current turn.
     /// Consumed (and cleared) by the first `send_message*` call inside `agent_turn`.
-    pending_turn_images: Vec<serde_json::Value>,
+    pub(crate) pending_turn_images: Vec<serde_json::Value>,
     /// Cumulative count of file-write / edit / bash tool calls this session.
     /// Used to trigger the one-time `working_set` reminder (C3).
-    write_tool_calls: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    pub(crate) write_tool_calls: std::sync::Arc<std::sync::atomic::AtomicU32>,
     /// Set to `true` once the working_set reminder has been injected so it
     /// fires at most once per session.
-    working_set_notified: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    pub(crate) working_set_notified: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// `true` if an auto-checkpoint has been taken for the current turn.
-    turn_checkpoint_taken: bool,
+    pub(crate) turn_checkpoint_taken: bool,
 }
 
 impl Repl {
@@ -7774,68 +7778,5 @@ impl Repl {
         }
     }
 
-    /// Push a success line (green) to the TUI.
-    fn tui_ok(&self, msg: impl Into<String>) {
-        let _ = self
-            .app
-            .lock()
-            .expect("lock poisoned")
-            .push(crate::ui::RenderLine::SuccessMsg(msg.into()));
-    }
-    /// Push an error line (red) to the TUI.
-    fn tui_err(&self, msg: impl Into<String>) {
-        let _ = self
-            .app
-            .lock()
-            .expect("lock poisoned")
-            .push(crate::ui::RenderLine::ErrorMsg(msg.into()));
-    }
-    /// Push a section header (cyan bold) to the TUI.
-    fn tui_hdr(&self, msg: impl Into<String>) {
-        let _ = self
-            .app
-            .lock()
-            .expect("lock poisoned")
-            .push(crate::ui::RenderLine::InfoHeader(msg.into()));
-    }
-    /// Push a dim hint / secondary text to the TUI.
-    fn tui_dim(&self, msg: impl Into<String>) {
-        let _ = self
-            .app
-            .lock()
-            .expect("lock poisoned")
-            .push(crate::ui::RenderLine::DimMsg(msg.into()));
-    }
-    /// Push a plain system message (gray) to the TUI.
-    fn tui_sys(&self, msg: impl Into<String>) {
-        let _ = self
-            .app
-            .lock()
-            .expect("lock poisoned")
-            .push(crate::ui::RenderLine::SystemMsg(msg.into()));
-    }
-    /// Push a blank line to the TUI.
-    fn tui_blank(&self) {
-        let _ = self
-            .app
-            .lock()
-            .expect("lock poisoned")
-            .push(crate::ui::RenderLine::Blank);
-    }
-
-    #[allow(dead_code)]
-    fn print_error(&self, _stdout: &mut io::Stdout, msg: &str) -> Result<()> {
-        self.tui_err(format!("Error: {msg}"));
-        Ok(())
-    }
 }
 
-/// Returns (icon, label, hint) for the current permission mode.
-fn mode_display(mode: PermissionMode) -> (&'static str, &'static str, &'static str) {
-    match mode {
-        PermissionMode::Plan => ("📖", "plan (read-only)", "— Use /default to resume"),
-        PermissionMode::BypassPermissions => ("⚡", "yolo", "— All tools auto-approved"),
-        PermissionMode::AcceptEdits => ("📝", "acceptEdits", "— File edits auto-approved"),
-        PermissionMode::Default => ("✅", "default", "— Tools require approval"),
-    }
-}
