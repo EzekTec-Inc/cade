@@ -59,3 +59,23 @@ in your prompt).\n\
 - **NEVER hallucinate**: If you do not see something in your current context, DO NOT guess. \
   Use `conversation_search` or `search_memory` first.\n\
 ";
+/// Build the effective system prompt, omitting sections for capabilities
+/// that are not enabled.  When `caps` enables everything (Profile::Full),
+/// the output is identical to the static BASE_SYSTEM_PROMPT.
+pub fn build_system_prompt(caps: &cade_core::capabilities::CapabilitySet) -> String {
+    use cade_core::capabilities::Capability;
+
+    let mut prompt = String::from(BASE_SYSTEM_PROMPT);
+
+    // Append capability-specific guidance only when enabled
+    if !caps.is_enabled(Capability::Agentic) {
+        // Remove subagent/agent references from the prompt to avoid confusing the model
+        prompt = prompt.replace(
+            "- **Subagents (`run_subagent`)**: Delegate complex or token-heavy tasks (like deep codebase \
+exploration, large file rewrites, or code review) to subagents to keep your active context clean.\n",
+            "",
+        );
+    }
+
+    prompt
+}
