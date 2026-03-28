@@ -123,3 +123,43 @@ cargo build --release
 3. Register schema in `crates/cade-agent/src/tools/manager.rs`
 4. Add to `dispatch()` match in manager.rs
 5. Add to the appropriate `Toolset` in `crates/cade-core/src/toolsets/mod.rs`
+
+## Capability System
+
+### Adding a new capability
+
+1. Add variant to `Capability` enum in `crates/cade-core/src/capabilities/mod.rs`
+2. Update `Capability::ALL`, `name()`, and `from_name()`
+3. Add to relevant `Profile` presets in `Profile::capabilities()`
+4. Classify tools in `crates/cade-agent/src/tools/catalog.rs`:
+   - `meta_tool_capability()` for meta tools
+   - `native_tool_capability()` for native tools
+5. Optionally gate commands in `crates/cade-cli/src/cli/repl/capability_gate.rs`
+
+### Build profiles
+
+The workspace supports compile-time feature gating:
+
+```bash
+cargo build --features full                          # default — everything
+cargo build --no-default-features --features pro     # no desktop/web/mcp/sdk
+cargo build --no-default-features --features lean    # minimal core only
+```
+
+Feature flags are defined in:
+- `Cargo.toml` (root) — `full`, `pro`, `lean`, `desktop`, `web`, `mcp`, `integration`
+- `crates/cade-agent/Cargo.toml` — `desktop`, `web`, `mcp`
+
+When adding a new optional dependency, place it behind a feature flag in the
+owning crate and wire it through the root Cargo.toml.
+
+### Root package topology
+
+The root package (`src/`) owns both binaries (`cade` and `cade-server`).
+It re-exports workspace crates via `src/lib.rs` so binaries can use
+`cade::agent`, `cade::server`, etc.
+
+This means **both binaries share the same dependency set**. Server-only deps
+(axum, tower-http, cade-ai) are compiled even for the `cade` client binary.
+A future improvement would split binaries into separate crates, but the
+current layout works and the release build uses LTO to eliminate dead code.
