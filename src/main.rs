@@ -279,9 +279,13 @@ async fn main() -> Result<()> {
         )
         .await?;
 
-    // -- MCP server startup
+    // -- MCP server startup (skipped when Mcp capability is off)
     let mcp_configs = settings.merged_mcp_servers();
-    let mcp: std::sync::Arc<McpManager> = if mcp_configs.is_empty() {
+    let mcp_enabled = capabilities.is_enabled(cade_core::capabilities::Capability::Mcp);
+    let mcp: std::sync::Arc<McpManager> = if mcp_configs.is_empty() || !mcp_enabled {
+        if !mcp_configs.is_empty() && !mcp_enabled {
+            tracing::info!("Skipping {} MCP server(s) — Mcp capability not enabled", mcp_configs.len());
+        }
         std::sync::Arc::new(McpManager::empty())
     } else {
         println!("Starting {} MCP server(s)…", mcp_configs.len());
