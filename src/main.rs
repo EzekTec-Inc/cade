@@ -584,6 +584,7 @@ async fn main() -> Result<()> {
             &permissions,
             &mcp,
             &hook_engine,
+            None,
         );
         let result = if timeout_secs > 0 {
             match tokio::time::timeout(std::time::Duration::from_secs(timeout_secs), run).await {

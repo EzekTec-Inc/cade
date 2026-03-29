@@ -2998,6 +2998,7 @@ impl Repl {
                                         &perm,
                                         &mcp_empty,
                                         &hooks,
+                                        None,
                                     )
                                     .await;
                                     let _ = client.delete_agent(&sub.id).await;
@@ -3793,6 +3794,9 @@ impl Repl {
                     }
 
                     SlashCmd::Subagents => {
+                        if self.require_capability(cade_core::capabilities::Capability::Agentic, "/subagents") {
+                            continue;
+                        }
                         let all = discover_all_subagents(&self.cwd);
                         self.tui_blank();
                         self.tui_hdr(format!("  Available subagents ({}):", all.len()));

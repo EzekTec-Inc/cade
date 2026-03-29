@@ -100,6 +100,37 @@ impl Repl {
                 .collect()
         };
 
+        let app_arc = self.app.clone();
+        let live_idx = if !background {
+            let mut app = app_arc.lock().expect("lock poisoned");
+            app.push_silent(crate::ui::RenderLine::SystemMsg(format!(
+                "  [Subagent: {}]",
+                subagent_type
+            )));
+            Some(app.begin_live_output(12))
+        } else {
+            None
+        };
+
+        let buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        
+        let on_output: Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>> = if let Some(idx) = live_idx {
+            let app_arc = app_arc.clone();
+            let buffer = buffer.clone();
+            Some(std::sync::Arc::new(move |chunk: &str| {
+                let mut buf = buffer.lock().unwrap();
+                buf.push_str(chunk);
+                while let Some(pos) = buf.find('\n') {
+                    let line = buf[..pos].to_string();
+                    buf.replace_range(..=pos, "");
+                    let _ = app_arc.lock().expect("lock poisoned").append_live_output_line(idx, line);
+                }
+            }))
+        } else {
+            // For background subagents, we just buffer silently or ignore
+            Some(std::sync::Arc::new(|_| {}))
+        };
+
         let run_task = {
             let subagent_type_c = subagent_type.clone();
             let task_id_c = task_id.clone();
@@ -145,6 +176,7 @@ impl Repl {
                     &permissions,
                     &mcp_ref,
                     &hooks,
+                    on_output,
                 )
                 .await;
 
@@ -230,6 +262,16 @@ impl Repl {
             let _permit = self.subagent_semaphore.acquire().await;
             let (output, is_error) = run_task.await;
             drop(_permit);
+
+            // Finish live output and push any remaining buffer
+            if let Some(idx) = live_idx {
+                let mut buf = buffer.lock().unwrap();
+                if !buf.is_empty() {
+                    let _ = app_arc.lock().expect("lock poisoned").append_live_output_line(idx, buf.clone());
+                    buf.clear();
+                }
+                let _ = app_arc.lock().expect("lock poisoned").finish_live_output(idx);
+            }
 
             // SubagentStop hook — can block (exit 2 continues the agent)
             let hook_outcome = self

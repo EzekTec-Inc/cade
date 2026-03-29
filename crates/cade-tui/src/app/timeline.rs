@@ -1149,7 +1149,7 @@ pub(crate) fn render_sidebar(
         .map(|s| s.kind_label.to_string())
         .unwrap_or_else(|| "none".to_string());
     let selected_summary = selected_info
-        .map(|s| truncate_str(&s.summary, 18))
+        .map(|s| truncate_str(&s.summary, 28))
         .unwrap_or_else(|| "none".to_string());
     let selected_actions = selected_info
         .map(|s| truncate_str(s.actions, 28))
@@ -1164,15 +1164,15 @@ pub(crate) fn render_sidebar(
         )),
         Line::from(vec![
             Span::styled(" agent   ", Style::default().fg(colors.muted)),
-            Span::styled(truncate_str(agent_name, 22), Style::default().fg(colors.text)),
+            Span::styled(truncate_str(agent_name, 28), Style::default().fg(colors.text)),
         ]),
         Line::from(vec![
             Span::styled(" model   ", Style::default().fg(colors.muted)),
-            Span::styled(truncate_str(model, 22), Style::default().fg(colors.text)),
+            Span::styled(truncate_str(model, 28), Style::default().fg(colors.text)),
         ]),
         Line::from(vec![
             Span::styled(" cwd     ", Style::default().fg(colors.muted)),
-            Span::styled(truncate_str(cwd, 22), Style::default().fg(colors.text)),
+            Span::styled(truncate_str(cwd, 28), Style::default().fg(colors.text)),
         ]),
         Line::from(""),
         Line::from(Span::styled(
@@ -1224,7 +1224,7 @@ pub(crate) fn render_sidebar(
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            truncate_str(&think_text, 26),
+            truncate_str(&think_text, 36),
             Style::default().fg(colors.thinking_text),
         )),
         Line::from(""),

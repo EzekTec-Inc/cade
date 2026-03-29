@@ -47,6 +47,7 @@ pub async fn run_headless(
     permissions: &PermissionManager,
     mcp: &std::sync::Arc<McpManager>,
     hooks: &HookEngine,
+    on_output: Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>>,
 ) -> Result<(String, HeadlessStats)> {
     tracing::debug!("headless: agent={agent_id}");
 
@@ -67,9 +68,13 @@ pub async fn run_headless(
     let messages = client
         .stream_message(agent_id, prompt, |msg| {
             if let Some(text) = msg.assistant_text() {
-                let safe = sanitize_for_terminal(text);
-                print!("{safe}");
-                let _ = std::io::Write::flush(&mut std::io::stdout());
+                if let Some(ref cb) = on_output {
+                    cb(text);
+                } else {
+                    let safe = sanitize_for_terminal(text);
+                    print!("{safe}");
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
+                }
             }
         })
         .await?;
@@ -85,6 +90,7 @@ pub async fn run_headless(
         mcp,
         &mut stats,
         hooks,
+        &on_output,
     )
     .await?;
 
@@ -337,6 +343,7 @@ async fn process_tool_calls(
     mcp: &std::sync::Arc<McpManager>,
     stats: &mut HeadlessStats,
     hooks: &HookEngine,
+    on_output: &Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>>,
 ) -> Result<()> {
     let tool_calls: Vec<(String, String, serde_json::Value)> =
         messages.iter().filter_map(|m| m.as_tool_call()).collect();
@@ -367,11 +374,16 @@ async fn process_tool_calls(
             )
             .await;
 
+            let on_out_clone = on_output.clone();
             let follow = client
-                .stream_tool_return(agent_id, &cid, &out, is_err, |msg| {
+                .stream_tool_return(agent_id, &cid, &out, is_err, move |msg| {
                     if let Some(text) = msg.assistant_text() {
-                        print!("{text}");
-                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                        if let Some(ref cb) = on_out_clone {
+                            cb(text);
+                        } else {
+                            print!("{text}");
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
+                        }
                     }
                 })
                 .await?;
@@ -388,6 +400,7 @@ async fn process_tool_calls(
                 mcp,
                 stats,
                 hooks,
+                on_output,
             ))
             .await?;
         }
@@ -444,11 +457,16 @@ async fn process_tool_calls(
             let is_last = i == result_count - 1 && sequential_remainder.is_empty();
             if is_last {
                 // Last result — triggers LLM response
+                let on_out_clone = on_output.clone();
                 let follow = client
-                    .stream_tool_return(agent_id, &call_id, &out, is_err, |msg| {
+                    .stream_tool_return(agent_id, &call_id, &out, is_err, move |msg| {
                         if let Some(text) = msg.assistant_text() {
-                            print!("{text}");
-                            let _ = std::io::Write::flush(&mut std::io::stdout());
+                            if let Some(ref cb) = on_out_clone {
+                                cb(text);
+                            } else {
+                                print!("{text}");
+                                let _ = std::io::Write::flush(&mut std::io::stdout());
+                            }
                         }
                     })
                     .await?;
@@ -475,11 +493,16 @@ async fn process_tool_calls(
             )
             .await;
 
+            let on_out_clone = on_output.clone();
             let follow = client
-                .stream_tool_return(agent_id, &cid, &out, is_err, |msg| {
+                .stream_tool_return(agent_id, &cid, &out, is_err, move |msg| {
                     if let Some(text) = msg.assistant_text() {
-                        print!("{text}");
-                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                        if let Some(ref cb) = on_out_clone {
+                            cb(text);
+                        } else {
+                            print!("{text}");
+                            let _ = std::io::Write::flush(&mut std::io::stdout());
+                        }
                     }
                 })
                 .await?;
@@ -498,6 +521,7 @@ async fn process_tool_calls(
             mcp,
             stats,
             hooks,
+            on_output,
         ))
         .await?;
     }

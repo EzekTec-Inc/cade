@@ -66,7 +66,7 @@ const DRAW_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(
 /// Responsive layout breakpoint for showing the right sidebar.
 const SIDEBAR_BREAKPOINT: u16 = 110;
 /// Target width for the informational sidebar on wide terminals.
-const SIDEBAR_WIDTH: u16 = 30;
+const SIDEBAR_WIDTH: u16 = 40;
 
 // -- Skills overlay
 
