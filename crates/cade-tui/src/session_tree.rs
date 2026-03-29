@@ -24,6 +24,8 @@ use serde_json::Value;
 pub enum TreeAction {
     /// Restore working tree to this checkpoint.
     Restore { checkpoint_id: String },
+    /// Delete this checkpoint.
+    Delete { checkpoint_id: String },
     /// Cancel — do nothing.
     Cancel,
 }
@@ -64,6 +66,16 @@ pub fn show_session_tree(
                             let id = cp["id"].as_str().unwrap_or("").to_string();
                             if !id.is_empty() {
                                 return Ok(TreeAction::Restore { checkpoint_id: id });
+                            }
+                        }
+                    }
+                    (KeyCode::Char('d'), _) | (KeyCode::Delete, _) => {
+                        if let Some(idx) = list_state.selected()
+                            && let Some(cp) = checkpoints.get(idx)
+                        {
+                            let id = cp["id"].as_str().unwrap_or("").to_string();
+                            if !id.is_empty() {
+                                return Ok(TreeAction::Delete { checkpoint_id: id });
                             }
                         }
                     }
@@ -176,7 +188,7 @@ fn draw_tree(
     overlay::render_overlay_hint(
         frame,
         footer_area,
-        "↑↓ / jk navigate · Enter restore · Esc / q cancel",
+        "↑↓ / jk navigate · Enter restore · d delete · Esc / q cancel",
         colors,
     );
 }

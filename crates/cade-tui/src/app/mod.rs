@@ -122,6 +122,7 @@ pub enum RenderLine {
     ContextGridRow {
         cells: Vec<(char, u8)>,
         label: String,
+        label_color: Option<u8>,
     },
 }
 

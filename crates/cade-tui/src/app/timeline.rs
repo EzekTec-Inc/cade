@@ -69,6 +69,7 @@ pub(crate) enum TimelineItem<'a> {
     ContextGridRow {
         cells: &'a [(char, u8)],
         label: &'a str,
+        label_color: Option<u8>,
     },
     User(&'a str),
     Assistant(&'a str),
@@ -122,7 +123,7 @@ impl<'a> TimelineItem<'a> {
         match line {
             RenderLine::Separator => Self::Separator,
             RenderLine::Blank => Self::Blank,
-            RenderLine::ContextGridRow { cells, label } => Self::ContextGridRow { cells, label },
+            RenderLine::ContextGridRow { cells, label, label_color } => Self::ContextGridRow { cells, label, label_color: *label_color },
             RenderLine::UserMessage(text) => Self::User(text),
             RenderLine::AssistantText(text) => Self::Assistant(text),
             RenderLine::ToolCall { name, preview } => Self::ToolCall { name, preview },
@@ -166,8 +167,8 @@ impl<'a> TimelineItem<'a> {
         match self {
             Self::Separator => render_separator_item(width, out),
             Self::Blank => render_blank_item(out),
-            Self::ContextGridRow { cells, label } => {
-                render_context_grid_row_item(cells, label, out, colors)
+            Self::ContextGridRow { cells, label, label_color } => {
+                render_context_grid_row_item(cells, label, *label_color, out, colors)
             }
             Self::User(text) => render_user_message_item(text, width, out, colors),
             Self::Assistant(text) => render_assistant_item(text, out, colors),
@@ -540,9 +541,10 @@ fn render_blank_item(out: &mut Vec<Line<'static>>) {
     out.push(Line::from(""));
 }
 
-fn render_context_grid_row_item(
+pub(crate) fn render_context_grid_row_item(
     cells: &[(char, u8)],
     label: &str,
+    label_color: Option<u8>,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
@@ -569,10 +571,22 @@ fn render_context_grid_row_item(
     }
     spans.push(Span::raw("   "));
     if !label.is_empty() {
-        spans.push(Span::styled(
-            label.to_string(),
-            Style::default().fg(colors.muted),
-        ));
+        if let Some(c_idx) = label_color {
+            let color = CAT_COLORS
+                .get(c_idx as usize)
+                .copied()
+                .unwrap_or(colors.muted);
+            let mut chars = label.chars();
+            if let Some(icon) = chars.next() {
+                let rest: String = chars.collect();
+                spans.push(Span::styled(icon.to_string(), Style::default().fg(color)));
+                spans.push(Span::styled(rest, Style::default().fg(colors.muted)));
+            } else {
+                spans.push(Span::styled(label.to_string(), Style::default().fg(colors.muted)));
+            }
+        } else {
+            spans.push(Span::styled(label.to_string(), Style::default().fg(colors.muted)));
+        }
     }
     out.push(Line::from(spans));
 }

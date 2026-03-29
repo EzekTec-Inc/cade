@@ -66,6 +66,24 @@ pub async fn restore_git_checkpoint(stash_ref: &str, cwd: &Path) -> Result<()> {
     }
 }
 
+/// Delete a git checkpoint by dropping the stash ref.
+///
+/// Returns an error message on failure; Ok(()) if dropped cleanly or
+/// if `stash_ref` is None (no-op).
+pub async fn delete_git_checkpoint(stash_ref: &str, cwd: &Path) -> Result<()> {
+    if stash_ref.is_empty() {
+        return Ok(());
+    }
+    let out = run_git(cwd, &["stash", "drop", stash_ref]).await;
+    match out {
+        Some((exit, _, stderr)) if exit != 0 => Err(crate::Error::custom(format!(
+            "git stash drop failed: {stderr}"
+        ))),
+        None => Err(crate::Error::custom("git not found or failed to run")),
+        _ => Ok(()),
+    }
+}
+
 /// Get the current HEAD commit hash, if inside a git repo.
 pub async fn current_git_hash(cwd: &Path) -> Option<String> {
     let (exit, stdout, _) = run_git(cwd, &["rev-parse", "HEAD"]).await?;
