@@ -7,10 +7,12 @@ edition     = "2024"
 doctest     = false
 
 [features]
-default = ["desktop", "web", "mcp"]
+default = ["desktop", "web", "mcp", "backend-docker", "backend-ssh"]
 desktop = ["dep:cade-desktop"]
 web     = ["dep:cade-web"]
 mcp     = ["dep:cade-mcp"]
+backend-docker = []
+backend-ssh = []
 
 [dependencies]
 # -- Workspace crates

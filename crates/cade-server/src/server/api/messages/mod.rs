@@ -35,10 +35,6 @@ Do not include filler phrases like 'Understood' or 'I will adhere to the rules'.
 /// actually called within this window, saving prompt tokens on sessions that do not
 /// use desktop features.
 pub(crate) const RECENT_WINDOW: usize = 40;
-/// Safety cap on the number of DB rows fetched per `build_context` call.
-/// Budget-based turn selection keeps far fewer rows in practice; this cap guards
-/// against pathologically large conversations on resource-constrained hosts.
-pub(crate) const MAX_ROWS_SAFETY_CAP: usize = 2_000;
 /// Tool names that must always appear in the tool-schema list even when extended
 /// tools are pruned on long conversations.  These are the agent's primary
 /// mechanism for recovering archived context and must never be silently dropped.
@@ -886,7 +882,6 @@ mod tests {
     #[test]
     #[allow(clippy::assertions_on_constants)]
     fn constants_are_sane() {
-        assert!(MAX_ROWS_SAFETY_CAP > 100, "safety cap too small");
         assert!(
             RECENT_WINDOW >= 10,
             "recent window too small for useful tool-usage detection"

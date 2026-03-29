@@ -565,6 +565,25 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         }
     }
 
+    // Migration 9: add char_count to messages if missing
+    let has_char_count: bool = conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('messages') WHERE name='char_count'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0)
+        > 0;
+
+    if !has_char_count {
+        tracing::info!("Running migration: adding char_count column to messages");
+        conn.execute_batch(
+            r#"
+            ALTER TABLE messages ADD COLUMN char_count INTEGER NOT NULL DEFAULT 0;
+            "#,
+        )?;
+    }
+
     Ok(())
 }
 
@@ -614,6 +633,7 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             role            TEXT NOT NULL,
             content         TEXT NOT NULL,
             created_at      INTEGER NOT NULL,
+            char_count      INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
         );
 

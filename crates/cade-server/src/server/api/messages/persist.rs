@@ -90,13 +90,31 @@ pub(crate) fn persist(
     role: &str,
     content: Value,
 ) {
-    let row = MessageRow {
+    let mut row = MessageRow {
         id: new_msg_id(),
         agent_id: agent_id.to_string(),
         conversation_id: conversation_id.map(String::from),
         role: role.to_string(),
         content,
+        char_count: 0,
     };
+    
+    // Calculate char count identical to context builder
+    let llm_msgs = db_row_to_llm(&row);
+    let char_count: usize = llm_msgs
+        .iter()
+        .map(|m| {
+            m.content.chars().count()
+                + m.tool_calls
+                    .as_deref()
+                    .unwrap_or_default()
+                    .iter()
+                    .map(|tc| tc.arguments.to_string().len())
+                    .sum::<usize>()
+        })
+        .sum();
+    row.char_count = char_count;
+
     let _ = sqlite::insert_message(&state.db, &row);
     // Touch the conversation's updated_at so list order stays current
     if let Some(conv_id) = conversation_id {

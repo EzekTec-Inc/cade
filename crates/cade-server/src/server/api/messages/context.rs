@@ -312,15 +312,29 @@ pub(crate) async fn build_context(
     //     char budget allows.  The most-recent turn is ALWAYS included — it
     //     carries the current user request the model must respond to.
     //  4. Reverse back to oldest-first and flatten into the message list.
-    let all_rows =
-        sqlite::list_messages_page(&state.db, agent_id, conversation_id, MAX_ROWS_SAFETY_CAP, 0)
-            .unwrap_or_default();
+    let all_rows = sqlite::get_context_window(
+        &state.db,
+        agent_id,
+        conversation_id,
+        context_char_budget,
+    )
+    .unwrap_or_default();
 
     // Convert DB rows to LlmMessages (oldest-first).
     let all_llm_msgs: Vec<LlmMessage> = all_rows.iter().flat_map(db_row_to_llm).collect();
 
     // Group into logical turns.
-    let turns = group_into_turns(&all_llm_msgs);
+    let mut turns = group_into_turns(&all_llm_msgs);
+
+    // If the window cut off mid-turn, the oldest turn might not start with a user message.
+    // Drop it to ensure we never split tool_call/tool_result pairs.
+    if let Some(first_turn) = turns.first() {
+        if let Some(first_msg) = first_turn.first() {
+            if first_msg.role != "user" {
+                turns.remove(0);
+            }
+        }
+    }
 
     // Deduct the already-assembled system-prompt size from the message budget.
     let system_chars = messages
@@ -540,13 +554,24 @@ pub(crate) async fn compute_context_stats(
     };
 
     // ── Load and group messages (same as build_context) ─────────────────────
-    let all_rows =
-        sqlite::list_messages_page(&state.db, agent_id, conversation_id, MAX_ROWS_SAFETY_CAP, 0)
-            .unwrap_or_default();
+    let all_rows = sqlite::get_context_window(
+        &state.db,
+        agent_id,
+        conversation_id,
+        context_char_budget,
+    )
+    .unwrap_or_default();
 
     let all_llm_msgs: Vec<LlmMessage> = all_rows.iter().flat_map(db_row_to_llm).collect();
 
-    let turns = group_into_turns(&all_llm_msgs);
+    let mut turns = group_into_turns(&all_llm_msgs);
+    if let Some(first_turn) = turns.first() {
+        if let Some(first_msg) = first_turn.first() {
+            if first_msg.role != "user" {
+                turns.remove(0);
+            }
+        }
+    }
     let total_turns = turns.len();
 
     // System prompt and memory chars (overhead subtracted from the message budget)

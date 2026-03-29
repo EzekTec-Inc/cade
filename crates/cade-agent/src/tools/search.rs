@@ -3,23 +3,9 @@ use globset::{Glob, GlobSetBuilder};
 use regex::Regex;
 use serde_json::{Value, json};
 use std::path::Path;
-use walkdir::WalkDir;
-
-// -- Skip dirs common in Rust/JS/Python projects
-const SKIP_DIRS: &[&str] = &[
-    "target",
-    "node_modules",
-    ".git",
-    ".hg",
-    "__pycache__",
-    ".venv",
-    "dist",
-    "build",
-];
-
-fn should_skip(name: &str) -> bool {
-    SKIP_DIRS.contains(&name)
-}
+use ignore::{WalkBuilder, WalkState};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 // -- Grep
 
@@ -43,73 +29,96 @@ impl GrepTool {
         .map_err(|e| crate::Error::custom(format!("Invalid regex '{pattern}': {e}")))?;
 
         // Build extension filter from include param (e.g. "*.rs,*.toml")
-        let ext_filter: Vec<&str> = if include.is_empty() {
+        let ext_filter: Vec<String> = if include.is_empty() {
             vec![]
         } else {
-            include.split(',').map(str::trim).collect()
+            include.split(',').map(|s| s.trim().to_string()).collect()
         };
 
-        let root = Path::new(search_path);
-        let mut matches: Vec<String> = Vec::new();
-        let mut total_files = 0usize;
+        let root = search_path.to_string();
 
-        for entry in WalkDir::new(root)
-            .into_iter()
-            .filter_entry(|e| {
-                let name = e.file_name().to_str().unwrap_or("");
-                !should_skip(name)
-            })
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-        {
-            let path = entry.path();
+        let result = tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let total_files = Arc::new(AtomicUsize::new(0));
+            let re = Arc::new(re);
+            let ext_filter = Arc::new(ext_filter);
 
-            // Extension filter
-            if !ext_filter.is_empty() {
-                let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                let matches_filter = ext_filter.iter().any(|pat| {
-                    if let Some(stripped) = pat.strip_prefix('*') {
-                        fname.ends_with(stripped)
-                    } else {
-                        fname == *pat
-                    }
-                });
-                if !matches_filter {
-                    continue;
-                }
-            }
+            WalkBuilder::new(&root)
+                .hidden(false)
+                .filter_entry(|e| e.file_name() != ".git")
+                .build_parallel()
+                .run(|| {
+                    let tx = tx.clone();
+                    let total_files = Arc::clone(&total_files);
+                    let re = Arc::clone(&re);
+                    let ext_filter = Arc::clone(&ext_filter);
+                    Box::new(move |result| {
+                        if let Ok(entry) = result {
+                            if entry.file_type().map_or(false, |ft| ft.is_file()) {
+                                let path = entry.path();
 
-            total_files += 1;
-            let content = match std::fs::read_to_string(path) {
-                Ok(c) => c,
-                Err(_) => continue, // skip binary / unreadable
-            };
+                                // Extension filter
+                                if !ext_filter.is_empty() {
+                                    let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                                    let matches_filter = ext_filter.iter().any(|pat| {
+                                        if let Some(stripped) = pat.strip_prefix('*') {
+                                            fname.ends_with(stripped)
+                                        } else {
+                                            fname == *pat
+                                        }
+                                    });
+                                    if !matches_filter {
+                                        return WalkState::Continue;
+                                    }
+                                }
 
-            let lines: Vec<&str> = content.lines().collect();
-            for (i, line) in lines.iter().enumerate() {
-                if re.is_match(line) {
-                    let path_str = path.display().to_string();
-
-                    if context_lines > 0 {
-                        let start = i.saturating_sub(context_lines);
-                        let end = (i + context_lines + 1).min(lines.len());
-                        for (j, ctx_line) in lines[start..end].iter().enumerate() {
-                            let lineno = start + j + 1;
-                            let sep = if start + j == i { ':' } else { '-' };
-                            matches.push(format!("{path_str}{sep}{lineno}{sep}{ctx_line}"));
+                                total_files.fetch_add(1, Ordering::Relaxed);
+                                
+                                if let Ok(content) = std::fs::read_to_string(path) {
+                                    let lines: Vec<&str> = content.lines().collect();
+                                    let mut local_matches = Vec::new();
+                                    for (i, line) in lines.iter().enumerate() {
+                                        if re.is_match(line) {
+                                            let path_str = path.display().to_string();
+                                            if context_lines > 0 {
+                                                let start = i.saturating_sub(context_lines);
+                                                let end = (i + context_lines + 1).min(lines.len());
+                                                for (j, ctx_line) in lines[start..end].iter().enumerate() {
+                                                    let lineno = start + j + 1;
+                                                    let sep = if start + j == i { ':' } else { '-' };
+                                                    local_matches.push(format!("{path_str}{sep}{lineno}{sep}{ctx_line}"));
+                                                }
+                                                local_matches.push("--".to_string());
+                                            } else {
+                                                local_matches.push(format!("{}:{}:{}", path_str, i + 1, line));
+                                            }
+                                        }
+                                    }
+                                    if !local_matches.is_empty() {
+                                        if tx.send(local_matches).is_err() {
+                                            return WalkState::Quit;
+                                        }
+                                    }
+                                }
+                            }
                         }
-                        matches.push("--".to_string());
-                    } else {
-                        matches.push(format!("{}:{}:{}", path_str, i + 1, line));
-                    }
+                        WalkState::Continue
+                    })
+                });
 
-                    if matches.len() >= 500 {
-                        matches.push(format!("... (truncated, searched {total_files} files)"));
-                        return Ok(matches.join("\n"));
-                    }
-                }
+            drop(tx);
+            let mut matches: Vec<String> = rx.into_iter().flatten().collect();
+            let total = total_files.load(Ordering::Relaxed);
+
+            if matches.len() >= 500 {
+                matches.truncate(500);
+                matches.push(format!("... (truncated, searched {total} files)"));
             }
-        }
+
+            (matches, total)
+        }).await.map_err(|e| crate::Error::custom(format!("Task error: {e}")))?;
+
+        let (matches, total_files) = result;
 
         if matches.is_empty() {
             Ok(format!(
@@ -123,7 +132,7 @@ impl GrepTool {
     pub fn schema() -> Value {
         json!({
             "name": "grep",
-            "description": "Search file contents using a regex pattern. Returns matching lines with file:line:content format. Skips target/, node_modules/, .git/.",
+            "description": "Search file contents using a regex pattern. Returns matching lines with file:line:content format. Skips .git/ and files listed in .gitignore.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -260,9 +269,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn grep_skips_target_dir() -> Result<()> {
+    async fn grep_skips_git_dir() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let target_dir = dir.path().join("target");
+        let target_dir = dir.path().join(".git");
         fs::create_dir_all(&target_dir)?;
         fs::write(target_dir.join("build_output.txt"), "fn main")?;
         fs::write(dir.path().join("src.rs"), "fn main")?;
@@ -277,8 +286,8 @@ mod tests {
             "should find src.rs, got: {output}"
         );
         assert!(
-            !output.contains("target/"),
-            "should skip target/, got: {output}"
+            !output.contains(".git/"),
+            "should skip .git/, got: {output}"
         );
 
         Ok(())
@@ -323,33 +332,43 @@ impl GlobTool {
         builder.add(glob);
         let globset = builder.build().map_err(crate::Error::custom_from_err)?;
 
-        let root = Path::new(search_path);
-        let mut matches: Vec<(std::time::SystemTime, String)> = Vec::new();
+        let root = search_path.to_string();
 
-        for entry in WalkDir::new(root)
-            .into_iter()
-            .filter_entry(|e| {
-                let name = e.file_name().to_str().unwrap_or("");
-                !should_skip(name)
-            })
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-        {
-            let path = entry.path();
-            // Match against the path relative to root OR just the filename
-            let rel = path.strip_prefix(root).unwrap_or(path);
-            if globset.is_match(rel) || globset.is_match(path.file_name().unwrap_or_default()) {
-                let mtime = entry
-                    .metadata()
-                    .ok()
-                    .and_then(|m| m.modified().ok())
-                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                matches.push((mtime, path.display().to_string()));
-            }
-        }
+        let matches = tokio::task::spawn_blocking(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            
+            WalkBuilder::new(&root)
+                .hidden(false)
+                .filter_entry(|e| e.file_name() != ".git")
+                .build_parallel()
+                .run(|| {
+                    let tx = tx.clone();
+                    let root = Path::new(&root).to_path_buf();
+                    let globset = globset.clone();
+                    Box::new(move |result| {
+                        if let Ok(entry) = result {
+                            if entry.file_type().map_or(false, |ft| ft.is_file()) {
+                                let path = entry.path();
+                                let rel = path.strip_prefix(&root).unwrap_or(path);
+                                if globset.is_match(rel) || globset.is_match(path.file_name().unwrap_or_default()) {
+                                    let mtime = entry
+                                        .metadata()
+                                        .ok()
+                                        .and_then(|m| m.modified().ok())
+                                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                                    let _ = tx.send((mtime, path.display().to_string()));
+                                }
+                            }
+                        }
+                        WalkState::Continue
+                    })
+                });
 
-        // Sort by modification time, newest first
-        matches.sort_by(|a, b| b.0.cmp(&a.0));
+            drop(tx);
+            let mut matches: Vec<(std::time::SystemTime, String)> = rx.into_iter().collect();
+            matches.sort_by(|a, b| b.0.cmp(&a.0));
+            matches
+        }).await.map_err(|e| crate::Error::custom(format!("Task error: {e}")))?;
 
         let result: Vec<String> = matches.into_iter().map(|(_, p)| p).take(limit).collect();
 
@@ -363,7 +382,7 @@ impl GlobTool {
     pub fn schema() -> Value {
         json!({
             "name": "glob",
-            "description": "Find files matching a glob pattern (e.g. '**/*.rs'). Returns paths sorted by modification time (newest first). Skips target/, node_modules/, .git/.",
+            "description": "Find files matching a glob pattern (e.g. '**/*.rs'). Returns paths sorted by modification time (newest first). Skips .git/ and files listed in .gitignore.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -461,9 +480,9 @@ mod glob_tests {
     }
 
     #[tokio::test]
-    async fn glob_skips_node_modules() -> Result<()> {
+    async fn glob_skips_git_dir() -> Result<()> {
         let dir = tempfile::tempdir()?;
-        let nm = dir.path().join("node_modules");
+        let nm = dir.path().join(".git");
         fs::create_dir_all(&nm)?;
         fs::write(nm.join("dep.js"), "")?;
         fs::write(dir.path().join("app.js"), "")?;
@@ -475,8 +494,8 @@ mod glob_tests {
         let output = GlobTool::run(&args).await?;
         assert!(output.contains("app.js"), "got: {output}");
         assert!(
-            !output.contains("node_modules"),
-            "should skip node_modules, got: {output}"
+            !output.contains(".git/"),
+            "should skip .git/, got: {output}"
         );
 
         Ok(())

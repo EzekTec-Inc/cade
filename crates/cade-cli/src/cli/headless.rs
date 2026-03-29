@@ -266,6 +266,8 @@ async fn run_one_tool(
     );
     if let Some(result) = runtime.execute(call_id.clone(), &tool_name, &args).await {
         return finalize_tool_result(
+            client,
+            agent_id,
             hooks,
             call_id,
             tool_name,
@@ -280,6 +282,8 @@ async fn run_one_tool(
     tracing::info!("Executing tool: {tool_name}");
     let result = dispatch(call_id.clone(), &tool_name, &args, mcp).await;
     finalize_tool_result(
+        client,
+        agent_id,
         hooks,
         call_id,
         tool_name,
@@ -292,6 +296,8 @@ async fn run_one_tool(
 
 /// Apply PostToolUse / PostToolUseFailure hooks for a completed tool.
 async fn finalize_tool_result(
+    client: &CadeClient,
+    agent_id: &str,
     hooks: &HookEngine,
     call_id: String,
     tool_name: String,
@@ -299,6 +305,21 @@ async fn finalize_tool_result(
     mut output: String,
     is_error: bool,
 ) -> (String, String, bool) {
+    if !is_error {
+        match tool_name.as_str() {
+            "write_file" | "edit_file" | "apply_patch" | "Replace" | "WriteFileGemini" => {
+                let path = args["file_path"].as_str().or(args["path"].as_str()).unwrap_or("unknown");
+                let msg = format!("Recently edited: {path}\n");
+                let c = client.clone();
+                let a = agent_id.to_string();
+                tokio::spawn(async move {
+                    let _ = c.append_memory_with_limit(&a, "working_set", &msg, None, Some(3000)).await;
+                });
+            }
+            _ => {}
+        }
+    }
+
     if hooks.is_empty() {
         return (call_id, output, is_error);
     }

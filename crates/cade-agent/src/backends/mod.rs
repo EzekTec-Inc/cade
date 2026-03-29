@@ -10,14 +10,18 @@
 ///
 /// The active backend is stored in [`crate::tools::ToolRuntime`] and selected
 /// from [`cade_core::settings::ExecutionProfile`].
+#[cfg(feature = "backend-docker")]
 pub mod docker;
 pub mod local;
 pub mod readonly;
+#[cfg(feature = "backend-ssh")]
 pub mod ssh;
 
+#[cfg(feature = "backend-docker")]
 pub use docker::DockerBackend;
 pub use local::LocalBackend;
 pub use readonly::ReadOnlyBackend;
+#[cfg(feature = "backend-ssh")]
 pub use ssh::SshBackend;
 
 use std::path::{Path, PathBuf};
@@ -133,24 +137,45 @@ use cade_core::settings::ExecutionProfile;
 pub fn backend_from_profile(profile: &ExecutionProfile) -> Box<dyn ExecutionBackend> {
     use cade_core::settings::ExecutionBackendKind;
     match profile.backend {
-        ExecutionBackendKind::Docker => Box::new(DockerBackend {
-            image: profile
-                .docker_image
-                .clone()
-                .unwrap_or_else(|| "ubuntu:22.04".to_string()),
-            extra_flags: profile.docker_flags.clone(),
-        }),
-        ExecutionBackendKind::Ssh => Box::new(SshBackend {
-            host: profile.ssh_host.clone().unwrap_or_default(),
-            user: profile.ssh_user.clone().unwrap_or_else(whoami_user),
-            key_path: profile.ssh_key_path.as_ref().map(std::path::PathBuf::from),
-            port: profile.ssh_port.unwrap_or(22),
-        }),
+        ExecutionBackendKind::Docker => {
+            #[cfg(feature = "backend-docker")]
+            {
+                Box::new(DockerBackend {
+                    image: profile
+                        .docker_image
+                        .clone()
+                        .unwrap_or_else(|| "ubuntu:22.04".to_string()),
+                    extra_flags: profile.docker_flags.clone(),
+                })
+            }
+            #[cfg(not(feature = "backend-docker"))]
+            {
+                tracing::warn!("CADE was compiled without Docker backend support. Reverting to local.");
+                Box::new(LocalBackend)
+            }
+        },
+        ExecutionBackendKind::Ssh => {
+            #[cfg(feature = "backend-ssh")]
+            {
+                Box::new(SshBackend {
+                    host: profile.ssh_host.clone().unwrap_or_default(),
+                    user: profile.ssh_user.clone().unwrap_or_else(whoami_user),
+                    key_path: profile.ssh_key_path.as_ref().map(std::path::PathBuf::from),
+                    port: profile.ssh_port.unwrap_or(22),
+                })
+            }
+            #[cfg(not(feature = "backend-ssh"))]
+            {
+                tracing::warn!("CADE was compiled without SSH backend support. Reverting to local.");
+                Box::new(LocalBackend)
+            }
+        },
         ExecutionBackendKind::ReadOnly => Box::new(ReadOnlyBackend::new(LocalBackend)),
         ExecutionBackendKind::Local => Box::new(LocalBackend),
     }
 }
 
+#[cfg(feature = "backend-ssh")]
 fn whoami_user() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))

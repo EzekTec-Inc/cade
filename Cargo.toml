@@ -115,7 +115,7 @@ path = "src/bin/cade-server.rs"
 
 [features]
 default     = ["full"]
-full        = ["desktop", "web", "mcp", "integration", "codeintel"]
+full        = ["desktop", "web", "mcp", "integration", "codeintel", "backend-docker", "backend-ssh"]
 codeintel   = ["dep:cade-codeintel", "cade-server/codeintel"]
 pro         = []
 lean        = []
@@ -123,6 +123,8 @@ desktop     = ["cade-agent/desktop", "dep:cade-desktop"]
 web         = ["cade-agent/web"]
 mcp         = ["cade-agent/mcp"]
 integration = ["dep:cade-sdk"]
+backend-docker = ["cade-agent/backend-docker"]
+backend-ssh = ["cade-agent/backend-ssh"]
 
 [dependencies]
 # -- Workspace crates

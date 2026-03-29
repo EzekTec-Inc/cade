@@ -92,5 +92,6 @@ pub struct MessageRow {
     pub conversation_id: Option<String>,
     pub role: String,
     pub content: Value,
+    pub char_count: usize,
 }
 

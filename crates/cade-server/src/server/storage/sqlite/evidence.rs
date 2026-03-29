@@ -257,6 +257,7 @@ mod tests {
                 conversation_id: None,
                 role: "user".to_string(),
                 content: json!("Rust is a systems programming language"),
+                char_count: 0,
             },
         )?;
 
@@ -268,6 +269,7 @@ mod tests {
                 conversation_id: None,
                 role: "assistant".to_string(),
                 content: json!("I agree, Rust is safe and fast."),
+                char_count: 0,
             },
         )?;
 

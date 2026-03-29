@@ -83,7 +83,30 @@ impl CadeClient {
         description: Option<&str>,
         max_chars: Option<usize>,
     ) -> Result<()> {
-        let mut body = json!({ "value": value });
+        self.upsert_memory_with_options(agent_id, label, value, description, max_chars, "set").await
+    }
+
+    pub async fn append_memory_with_limit(
+        &self,
+        agent_id: &str,
+        label: &str,
+        value: &str,
+        description: Option<&str>,
+        max_chars: Option<usize>,
+    ) -> Result<()> {
+        self.upsert_memory_with_options(agent_id, label, value, description, max_chars, "append").await
+    }
+
+    pub async fn upsert_memory_with_options(
+        &self,
+        agent_id: &str,
+        label: &str,
+        value: &str,
+        description: Option<&str>,
+        max_chars: Option<usize>,
+        operation: &str,
+    ) -> Result<()> {
+        let mut body = json!({ "value": value, "operation": operation });
         if let Some(desc) = description {
             body["description"] = json!(desc);
         }

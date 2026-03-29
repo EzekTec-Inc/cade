@@ -1780,6 +1780,21 @@ impl Repl {
             },
         };
 
+        if !result.is_error {
+            match tool_name {
+                "write_file" | "edit_file" | "apply_patch" | "Replace" | "WriteFileGemini" => {
+                    let path = args["file_path"].as_str().or(args["path"].as_str()).unwrap_or("unknown");
+                    let msg = format!("Recently edited: {path}\n");
+                    let c = runtime.client.clone();
+                    let a = runtime.agent_id.clone();
+                    tokio::spawn(async move {
+                        let _ = c.append_memory_with_limit(&a, "working_set", &msg, None, Some(3000)).await;
+                    });
+                }
+                _ => {}
+            }
+        }
+
         if result.is_error {
             hooks
                 .post_tool_use_failure(
