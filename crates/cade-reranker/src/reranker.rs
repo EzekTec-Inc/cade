@@ -152,7 +152,7 @@ impl ToolReranker {
         // Convert to documents.
         let docs: Vec<ToolDocument> = candidates
             .iter()
-            .map(|s| Self::schema_to_document(s))
+            .map(Self::schema_to_document)
             .collect();
 
         let original_count = tool_schemas.len();
