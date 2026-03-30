@@ -2,7 +2,6 @@
 ///
 /// Wraps the existing `all_meta_schemas()` and `schemas_for_toolset()` functions
 /// and filters them based on the active `CapabilitySet`.
-
 use cade_core::capabilities::{Capability, CapabilitySet};
 use cade_core::toolsets::Toolset;
 use serde_json::Value;
@@ -95,8 +94,8 @@ mod tests {
         let meta = meta_schemas_for_capabilities(&caps);
         let native = native_schemas_for_capabilities(Toolset::Default, &caps);
 
-        let meta_names: Vec<&str> = meta.iter().map(|s| tool_name(s)).collect();
-        let native_names: Vec<&str> = native.iter().map(|s| tool_name(s)).collect();
+        let meta_names: Vec<&str> = meta.iter().map(tool_name).collect();
+        let native_names: Vec<&str> = native.iter().map(tool_name).collect();
 
         // Core always has memory, checkpoint, skill tools
         assert!(meta_names.contains(&"update_memory"));
@@ -116,8 +115,8 @@ mod tests {
         let meta = meta_schemas_for_capabilities(&caps);
         let native = native_schemas_for_capabilities(Toolset::Default, &caps);
 
-        let meta_names: Vec<&str> = meta.iter().map(|s| tool_name(s)).collect();
-        let native_names: Vec<&str> = native.iter().map(|s| tool_name(s)).collect();
+        let meta_names: Vec<&str> = meta.iter().map(tool_name).collect();
+        let native_names: Vec<&str> = native.iter().map(tool_name).collect();
 
         assert!(meta_names.contains(&"web_search"));
         assert!(meta_names.contains(&"symbol_search"));
@@ -131,8 +130,8 @@ mod tests {
         let meta = meta_schemas_for_capabilities(&caps);
         let native = native_schemas_for_capabilities(Toolset::Default, &caps);
 
-        let meta_names: Vec<&str> = meta.iter().map(|s| tool_name(s)).collect();
-        let native_names: Vec<&str> = native.iter().map(|s| tool_name(s)).collect();
+        let meta_names: Vec<&str> = meta.iter().map(tool_name).collect();
+        let native_names: Vec<&str> = native.iter().map(tool_name).collect();
 
         assert!(meta_names.contains(&"run_subagent"));
         assert!(meta_names.contains(&"symbol_search"));

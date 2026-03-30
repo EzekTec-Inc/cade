@@ -164,10 +164,7 @@ fn draw_tree(
                         Style::default().fg(Color::White)
                     },
                 ),
-                Span::styled(
-                    format!("  {dt}"),
-                    overlay::overlay_muted_style(colors),
-                ),
+                Span::styled(format!("  {dt}"), overlay::overlay_muted_style(colors)),
                 Span::styled(git_str, Style::default().fg(colors.dim)),
                 Span::styled(
                     format!("  ({})", &id[..8.min(id.len())]),

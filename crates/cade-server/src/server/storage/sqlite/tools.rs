@@ -333,4 +333,3 @@ pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
 }
 
 // -- Providers
-

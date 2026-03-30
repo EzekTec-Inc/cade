@@ -1,7 +1,6 @@
 use super::*;
 
 impl CadeClient {
-
     // -- Tools
 
     pub async fn create_tool(&self, req: CreateToolRequest) -> Result<ToolDef> {

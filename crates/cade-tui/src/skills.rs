@@ -146,9 +146,9 @@ pub fn show_skills_manager(
 
                             let mut block = Block::default().style(Style::default().bg(bg));
                             if is_sel {
-                                block = block.borders(Borders::LEFT).border_style(
-                                    Style::default().fg(colors.overlay_selected_fg),
-                                );
+                                block = block
+                                    .borders(Borders::LEFT)
+                                    .border_style(Style::default().fg(colors.overlay_selected_fg));
                             } else {
                                 block = block.padding(ratatui::widgets::Padding::new(1, 0, 0, 0));
                             }
@@ -237,7 +237,11 @@ pub fn show_skills_manager(
                             ),
                             Span::styled(
                                 msg,
-                                Style::default().fg(if dirty { colors.warning } else { colors.success }),
+                                Style::default().fg(if dirty {
+                                    colors.warning
+                                } else {
+                                    colors.success
+                                }),
                             ),
                         ])),
                         title_area,

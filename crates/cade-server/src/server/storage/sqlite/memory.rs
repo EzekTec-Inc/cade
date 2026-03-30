@@ -439,4 +439,3 @@ pub struct ToolRow {
     pub json_schema: Option<Value>,
     pub tags: Vec<String>,
 }
-

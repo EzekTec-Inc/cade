@@ -98,7 +98,7 @@ pub(crate) fn persist(
         content,
         char_count: 0,
     };
-    
+
     // Calculate char count identical to context builder
     let llm_msgs = db_row_to_llm(&row);
     let char_count: usize = llm_msgs
@@ -148,4 +148,3 @@ pub(crate) fn resolve_conversation(
 }
 
 // -- POST /v1/agents/:id/messages  (blocking)
-

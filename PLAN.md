@@ -1518,3 +1518,14 @@ user message
 ```
 git checkout HEAD -- crates/cade-tui/src/app.rs
 ```
+
+## 2026-03-29T08:00:00Z — Dynamic Theme Switching
+**Summary of change:** Added runtime theme application to `TuiApp` and a `/theme` command to the TUI REPL.
+**Files modified:**
+- `crates/cade-tui/src/app/mod.rs`
+- `crates/cade-cli/src/cli/repl/mod.rs`
+- `crates/cade-tui/src/menu.rs`
+**Reason:** Allow the user to change the colorscheme of CADE dynamically at runtime without restarting.
+**Previous behavior:** TUI theme was initialized on startup and could not be switched mid-session.
+**New behavior:** A new `apply_theme` method can reload UI colors instantly, and the `/theme <name>` command lets the user persist and apply it.
+**Rollback steps:** Revert `crates/cade-tui/src/app/mod.rs` to remove `apply_theme`, revert `crates/cade-cli/src/cli/repl/mod.rs` to remove the `SlashCmd::Theme` logic, and remove `/theme` from `crates/cade-tui/src/menu.rs`.

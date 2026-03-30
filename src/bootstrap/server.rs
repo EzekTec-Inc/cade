@@ -1,4 +1,4 @@
-use cade::{Result, Error};
+use cade::{Error, Result};
 use cade_agent::agent::CadeClient;
 
 pub async fn auto_start_server(base_url: &str) -> Result<()> {

@@ -193,4 +193,3 @@ pub fn get_context_window(
     result.reverse();
     Ok(result)
 }
-

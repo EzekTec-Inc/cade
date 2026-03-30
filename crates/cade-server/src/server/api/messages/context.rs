@@ -1,16 +1,16 @@
 use super::*;
-use axum::{
-    extract::{Path, State},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    Json,
-};
-use serde_json::{Value, json};
 use crate::server::{
     state::AppState,
     storage::sqlite::{self},
 };
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
 use cade_ai::{LlmMessage, catalogue};
+use serde_json::{Value, json};
 
 pub(crate) fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
     let mut result: Vec<LlmMessage> = Vec::new();
@@ -312,13 +312,9 @@ pub(crate) async fn build_context(
     //     char budget allows.  The most-recent turn is ALWAYS included — it
     //     carries the current user request the model must respond to.
     //  4. Reverse back to oldest-first and flatten into the message list.
-    let all_rows = sqlite::get_context_window(
-        &state.db,
-        agent_id,
-        conversation_id,
-        context_char_budget,
-    )
-    .unwrap_or_default();
+    let all_rows =
+        sqlite::get_context_window(&state.db, agent_id, conversation_id, context_char_budget)
+            .unwrap_or_default();
 
     // Convert DB rows to LlmMessages (oldest-first).
     let all_llm_msgs: Vec<LlmMessage> = all_rows.iter().flat_map(db_row_to_llm).collect();
@@ -328,12 +324,10 @@ pub(crate) async fn build_context(
 
     // If the window cut off mid-turn, the oldest turn might not start with a user message.
     // Drop it to ensure we never split tool_call/tool_result pairs.
-    if let Some(first_turn) = turns.first() {
-        if let Some(first_msg) = first_turn.first() {
-            if first_msg.role != "user" {
-                turns.remove(0);
-            }
-        }
+    if let Some(first_msg) = turns.first().and_then(|t| t.first())
+        && first_msg.role != "user"
+    {
+        turns.remove(0);
     }
 
     // Deduct the already-assembled system-prompt size from the message budget.
@@ -554,23 +548,17 @@ pub(crate) async fn compute_context_stats(
     };
 
     // ── Load and group messages (same as build_context) ─────────────────────
-    let all_rows = sqlite::get_context_window(
-        &state.db,
-        agent_id,
-        conversation_id,
-        context_char_budget,
-    )
-    .unwrap_or_default();
+    let all_rows =
+        sqlite::get_context_window(&state.db, agent_id, conversation_id, context_char_budget)
+            .unwrap_or_default();
 
     let all_llm_msgs: Vec<LlmMessage> = all_rows.iter().flat_map(db_row_to_llm).collect();
 
     let mut turns = group_into_turns(&all_llm_msgs);
-    if let Some(first_turn) = turns.first() {
-        if let Some(first_msg) = first_turn.first() {
-            if first_msg.role != "user" {
-                turns.remove(0);
-            }
-        }
+    if let Some(first_msg) = turns.first().and_then(|t| t.first())
+        && first_msg.role != "user"
+    {
+        turns.remove(0);
     }
     let total_turns = turns.len();
 
@@ -638,4 +626,3 @@ pub(crate) async fn compute_context_stats(
         "needs_consolidation":     needs_consolidation,
     }))
 }
-

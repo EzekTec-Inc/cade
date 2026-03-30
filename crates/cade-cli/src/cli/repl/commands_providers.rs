@@ -4,7 +4,11 @@ use std::io;
 
 impl Repl {
     /// Interactive /connect flow — guided provider setup.
-    pub(crate) async fn handle_connect(&self, preset: Option<String>, _stdout: &mut io::Stdout) -> Result<()> {
+    pub(crate) async fn handle_connect(
+        &self,
+        preset: Option<String>,
+        _stdout: &mut io::Stdout,
+    ) -> Result<()> {
         use crate::ui::question::{Question, QuestionOption};
 
         const BUILTIN: &[(&str, &str)] = &[

@@ -1,9 +1,9 @@
 use crate::Result;
 use globset::{Glob, GlobSetBuilder};
+use ignore::{WalkBuilder, WalkState};
 use regex::Regex;
 use serde_json::{Value, json};
 use std::path::Path;
-use ignore::{WalkBuilder, WalkState};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -53,52 +53,59 @@ impl GrepTool {
                     let re = Arc::clone(&re);
                     let ext_filter = Arc::clone(&ext_filter);
                     Box::new(move |result| {
-                        if let Ok(entry) = result {
-                            if entry.file_type().map_or(false, |ft| ft.is_file()) {
-                                let path = entry.path();
+                        if let Ok(entry) = result
+                            && entry.file_type().is_some_and(|ft| ft.is_file())
+                        {
+                            let path = entry.path();
 
-                                // Extension filter
-                                if !ext_filter.is_empty() {
-                                    let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                                    let matches_filter = ext_filter.iter().any(|pat| {
-                                        if let Some(stripped) = pat.strip_prefix('*') {
-                                            fname.ends_with(stripped)
+                            // Extension filter
+                            if !ext_filter.is_empty() {
+                                let fname = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                                let matches_filter = ext_filter.iter().any(|pat| {
+                                    if let Some(stripped) = pat.strip_prefix('*') {
+                                        fname.ends_with(stripped)
+                                    } else {
+                                        fname == *pat
+                                    }
+                                });
+                                if !matches_filter {
+                                    return WalkState::Continue;
+                                }
+                            }
+
+                            total_files.fetch_add(1, Ordering::Relaxed);
+
+                            if let Ok(content) = std::fs::read_to_string(path) {
+                                let lines: Vec<&str> = content.lines().collect();
+                                let mut local_matches = Vec::new();
+                                for (i, line) in lines.iter().enumerate() {
+                                    if re.is_match(line) {
+                                        let path_str = path.display().to_string();
+                                        if context_lines > 0 {
+                                            let start = i.saturating_sub(context_lines);
+                                            let end = (i + context_lines + 1).min(lines.len());
+                                            for (j, ctx_line) in
+                                                lines[start..end].iter().enumerate()
+                                            {
+                                                let lineno = start + j + 1;
+                                                let sep = if start + j == i { ':' } else { '-' };
+                                                local_matches.push(format!(
+                                                    "{path_str}{sep}{lineno}{sep}{ctx_line}"
+                                                ));
+                                            }
+                                            local_matches.push("--".to_string());
                                         } else {
-                                            fname == *pat
+                                            local_matches.push(format!(
+                                                "{}:{}:{}",
+                                                path_str,
+                                                i + 1,
+                                                line
+                                            ));
                                         }
-                                    });
-                                    if !matches_filter {
-                                        return WalkState::Continue;
                                     }
                                 }
-
-                                total_files.fetch_add(1, Ordering::Relaxed);
-                                
-                                if let Ok(content) = std::fs::read_to_string(path) {
-                                    let lines: Vec<&str> = content.lines().collect();
-                                    let mut local_matches = Vec::new();
-                                    for (i, line) in lines.iter().enumerate() {
-                                        if re.is_match(line) {
-                                            let path_str = path.display().to_string();
-                                            if context_lines > 0 {
-                                                let start = i.saturating_sub(context_lines);
-                                                let end = (i + context_lines + 1).min(lines.len());
-                                                for (j, ctx_line) in lines[start..end].iter().enumerate() {
-                                                    let lineno = start + j + 1;
-                                                    let sep = if start + j == i { ':' } else { '-' };
-                                                    local_matches.push(format!("{path_str}{sep}{lineno}{sep}{ctx_line}"));
-                                                }
-                                                local_matches.push("--".to_string());
-                                            } else {
-                                                local_matches.push(format!("{}:{}:{}", path_str, i + 1, line));
-                                            }
-                                        }
-                                    }
-                                    if !local_matches.is_empty() {
-                                        if tx.send(local_matches).is_err() {
-                                            return WalkState::Quit;
-                                        }
-                                    }
+                                if !local_matches.is_empty() && tx.send(local_matches).is_err() {
+                                    return WalkState::Quit;
                                 }
                             }
                         }
@@ -116,7 +123,9 @@ impl GrepTool {
             }
 
             (matches, total)
-        }).await.map_err(|e| crate::Error::custom(format!("Task error: {e}")))?;
+        })
+        .await
+        .map_err(|e| crate::Error::custom(format!("Task error: {e}")))?;
 
         let (matches, total_files) = result;
 
@@ -336,7 +345,7 @@ impl GlobTool {
 
         let matches = tokio::task::spawn_blocking(move || {
             let (tx, rx) = std::sync::mpsc::channel();
-            
+
             WalkBuilder::new(&root)
                 .hidden(false)
                 .filter_entry(|e| e.file_name() != ".git")
@@ -346,18 +355,20 @@ impl GlobTool {
                     let root = Path::new(&root).to_path_buf();
                     let globset = globset.clone();
                     Box::new(move |result| {
-                        if let Ok(entry) = result {
-                            if entry.file_type().map_or(false, |ft| ft.is_file()) {
-                                let path = entry.path();
-                                let rel = path.strip_prefix(&root).unwrap_or(path);
-                                if globset.is_match(rel) || globset.is_match(path.file_name().unwrap_or_default()) {
-                                    let mtime = entry
-                                        .metadata()
-                                        .ok()
-                                        .and_then(|m| m.modified().ok())
-                                        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                                    let _ = tx.send((mtime, path.display().to_string()));
-                                }
+                        if let Ok(entry) = result
+                            && entry.file_type().is_some_and(|ft| ft.is_file())
+                        {
+                            let path = entry.path();
+                            let rel = path.strip_prefix(&root).unwrap_or(path);
+                            if globset.is_match(rel)
+                                || globset.is_match(path.file_name().unwrap_or_default())
+                            {
+                                let mtime = entry
+                                    .metadata()
+                                    .ok()
+                                    .and_then(|m| m.modified().ok())
+                                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                                let _ = tx.send((mtime, path.display().to_string()));
                             }
                         }
                         WalkState::Continue
@@ -368,7 +379,9 @@ impl GlobTool {
             let mut matches: Vec<(std::time::SystemTime, String)> = rx.into_iter().collect();
             matches.sort_by(|a, b| b.0.cmp(&a.0));
             matches
-        }).await.map_err(|e| crate::Error::custom(format!("Task error: {e}")))?;
+        })
+        .await
+        .map_err(|e| crate::Error::custom(format!("Task error: {e}")))?;
 
         let result: Vec<String> = matches.into_iter().map(|(_, p)| p).take(limit).collect();
 

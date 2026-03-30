@@ -73,21 +73,36 @@ pub(crate) enum TimelineItem<'a> {
     },
     User(&'a str),
     Assistant(&'a str),
-    ToolCall { name: &'a str, preview: &'a str },
-    ToolResult { is_error: bool, content: &'a str },
+    ToolCall {
+        name: &'a str,
+        preview: &'a str,
+    },
+    ToolResult {
+        is_error: bool,
+        content: &'a str,
+    },
     LiveOutput {
         lines: &'a [String],
         max_visible: usize,
         done: bool,
     },
-    Reasoning { words: usize, content: &'a str },
+    Reasoning {
+        words: usize,
+        content: &'a str,
+    },
     System(&'a str),
     Success(&'a str),
     InfoHeader(&'a str),
     Dim(&'a str),
-    Pair { label: &'a str, value: &'a str },
+    Pair {
+        label: &'a str,
+        value: &'a str,
+    },
     Error(&'a str),
-    QuestionResult { header: &'a str, answer: &'a str },
+    QuestionResult {
+        header: &'a str,
+        answer: &'a str,
+    },
     Table {
         headers: &'a [String],
         rows: &'a [Vec<String>],
@@ -123,7 +138,15 @@ impl<'a> TimelineItem<'a> {
         match line {
             RenderLine::Separator => Self::Separator,
             RenderLine::Blank => Self::Blank,
-            RenderLine::ContextGridRow { cells, label, label_color } => Self::ContextGridRow { cells, label, label_color: *label_color },
+            RenderLine::ContextGridRow {
+                cells,
+                label,
+                label_color,
+            } => Self::ContextGridRow {
+                cells,
+                label,
+                label_color: *label_color,
+            },
             RenderLine::UserMessage(text) => Self::User(text),
             RenderLine::AssistantText(text) => Self::Assistant(text),
             RenderLine::ToolCall { name, preview } => Self::ToolCall { name, preview },
@@ -167,9 +190,11 @@ impl<'a> TimelineItem<'a> {
         match self {
             Self::Separator => render_separator_item(width, out),
             Self::Blank => render_blank_item(out),
-            Self::ContextGridRow { cells, label, label_color } => {
-                render_context_grid_row_item(cells, label, *label_color, out, colors)
-            }
+            Self::ContextGridRow {
+                cells,
+                label,
+                label_color,
+            } => render_context_grid_row_item(cells, label, *label_color, out, colors),
             Self::User(text) => render_user_message_item(text, width, out, colors),
             Self::Assistant(text) => render_assistant_item(text, out, colors),
             Self::ToolCall { name, preview } => {
@@ -182,7 +207,9 @@ impl<'a> TimelineItem<'a> {
                 lines,
                 max_visible,
                 done,
-            } => render_live_output_item(lines, *max_visible, *done, width, expand_all, out, colors),
+            } => {
+                render_live_output_item(lines, *max_visible, *done, width, expand_all, out, colors)
+            }
             Self::Reasoning { words, content } => {
                 render_reasoning_item(*words, content, width, expand_all, out, colors)
             }
@@ -200,7 +227,12 @@ impl<'a> TimelineItem<'a> {
         }
     }
 
-    pub(crate) fn visual_rows(&self, content_w: u16, expand_all: bool, colors: &ThemeColors) -> u16 {
+    pub(crate) fn visual_rows(
+        &self,
+        content_w: u16,
+        expand_all: bool,
+        colors: &ThemeColors,
+    ) -> u16 {
         let mut lines = Vec::new();
         self.render_into(content_w as usize, expand_all, &mut lines, colors);
         lines.iter().map(|l| count_wrapped_rows(l, content_w)).sum()
@@ -215,7 +247,11 @@ impl<'a> TimelineItem<'a> {
             Self::Assistant(_) => "assistant",
             Self::ToolCall { .. } => "tool call",
             Self::ToolResult { is_error, .. } => {
-                if *is_error { "tool error" } else { "tool result" }
+                if *is_error {
+                    "tool error"
+                } else {
+                    "tool result"
+                }
             }
             Self::LiveOutput { .. } => "live output",
             Self::Reasoning { .. } => "thinking",
@@ -321,7 +357,9 @@ impl<'a> TimelineEntry<'a> {
     pub(crate) fn is_focusable(&self) -> bool {
         !matches!(
             self.key.kind,
-            TimelineItemKind::Blank | TimelineItemKind::Separator | TimelineItemKind::ContextGridRow
+            TimelineItemKind::Blank
+                | TimelineItemKind::Separator
+                | TimelineItemKind::ContextGridRow
         )
     }
 
@@ -384,8 +422,12 @@ impl<'a> TimelineEntry<'a> {
         colors: &ThemeColors,
     ) {
         let start = out.len();
-        self.item
-            .render_into(width, self.is_expanded(expand_all, expanded_items), out, colors);
+        self.item.render_into(
+            width,
+            self.is_expanded(expand_all, expanded_items),
+            out,
+            colors,
+        );
         if selected_timeline == Some(&self.key) {
             highlight_rendered_item(&mut out[start..], colors);
         }
@@ -447,7 +489,10 @@ pub(crate) fn prepare_timeline_entries(
                 &mut lines,
                 colors,
             );
-            let rows = lines.iter().map(|l| count_wrapped_rows(l, width as u16)).sum();
+            let rows = lines
+                .iter()
+                .map(|l| count_wrapped_rows(l, width as u16))
+                .sum();
             PreparedTimelineEntry { lines, rows }
         })
         .collect()
@@ -462,8 +507,14 @@ pub(crate) fn render_timeline_viewport(
     // Clear the full messages area so no stale content leaks between frames.
     frame.render_widget(ratatui::widgets::Clear, area);
 
-    let total_visual: u16 = prepared.iter().map(|p| p.rows as u32).sum::<u32>().min(u16::MAX as u32) as u16;
-    let visible = area.height.saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT);
+    let total_visual: u16 = prepared
+        .iter()
+        .map(|p| p.rows as u32)
+        .sum::<u32>()
+        .min(u16::MAX as u32) as u16;
+    let visible = area
+        .height
+        .saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT);
     let max_skip = total_visual.saturating_sub(visible);
     let effective_up = (scroll as u16).min(max_skip);
     let visible_start = max_skip.saturating_sub(effective_up);
@@ -473,7 +524,9 @@ pub(crate) fn render_timeline_viewport(
         x: area.x,
         y: area.y + CONTENT_PAD_TOP,
         width: area.width,
-        height: area.height.saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT),
+        height: area
+            .height
+            .saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT),
     };
 
     let mut item_start: u16 = 0;
@@ -582,10 +635,16 @@ pub(crate) fn render_context_grid_row_item(
                 spans.push(Span::styled(icon.to_string(), Style::default().fg(color)));
                 spans.push(Span::styled(rest, Style::default().fg(colors.muted)));
             } else {
-                spans.push(Span::styled(label.to_string(), Style::default().fg(colors.muted)));
+                spans.push(Span::styled(
+                    label.to_string(),
+                    Style::default().fg(colors.muted),
+                ));
             }
         } else {
-            spans.push(Span::styled(label.to_string(), Style::default().fg(colors.muted)));
+            spans.push(Span::styled(
+                label.to_string(),
+                Style::default().fg(colors.muted),
+            ));
         }
     }
     out.push(Line::from(spans));
@@ -610,7 +669,9 @@ fn render_user_message_item(
         Span::styled("─".repeat(right_w), Style::default().fg(RC::DarkGray)),
     ];
     out.push(Line::from(sep_line));
-    out.extend(crate::markdown::parse_markdown_lines_with_theme(text, colors));
+    out.extend(crate::markdown::parse_markdown_lines_with_theme(
+        text, colors,
+    ));
 }
 
 fn render_assistant_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
@@ -641,11 +702,7 @@ fn render_assistant_item(text: &str, out: &mut Vec<Line<'static>>, colors: &Them
     }
 }
 
-fn render_streaming_assistant_item(
-    text: &str,
-    out: &mut Vec<Line<'static>>,
-    colors: &ThemeColors,
-) {
+fn render_streaming_assistant_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
     render_assistant_item(text, out, colors);
 }
 
@@ -712,7 +769,10 @@ fn render_tool_result_item(
             Span::styled("│ ", Style::default().fg(colors.border)),
             Span::styled(
                 if is_error { " ERR " } else { " OK " },
-                Style::default().fg(color).bg(badge_bg).add_modifier(Modifier::BOLD),
+                Style::default()
+                    .fg(color)
+                    .bg(badge_bg)
+                    .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled(
@@ -731,7 +791,10 @@ fn render_tool_result_item(
                 spans.push(Span::styled("│ ", Style::default().fg(colors.border)));
                 spans.push(Span::styled(
                     if is_error { " ERR " } else { " OK " },
-                    Style::default().fg(color).bg(badge_bg).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(color)
+                        .bg(badge_bg)
+                        .add_modifier(Modifier::BOLD),
                 ));
                 spans.push(Span::raw(" "));
             } else {
@@ -998,9 +1061,7 @@ fn render_dim_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColor
     for ln in text.lines() {
         out.push(Line::from(Span::styled(
             ln.to_string(),
-            Style::default()
-                .fg(colors.dim)
-                .add_modifier(Modifier::DIM),
+            Style::default().fg(colors.dim).add_modifier(Modifier::DIM),
         )));
     }
 }
@@ -1101,6 +1162,7 @@ fn render_table_item(
     out.push(Line::from(""));
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_sidebar(
     frame: &mut Frame,
     area: Rect,
@@ -1178,7 +1240,10 @@ pub(crate) fn render_sidebar(
         )),
         Line::from(vec![
             Span::styled(" agent   ", Style::default().fg(colors.muted)),
-            Span::styled(truncate_str(agent_name, 28), Style::default().fg(colors.text)),
+            Span::styled(
+                truncate_str(agent_name, 28),
+                Style::default().fg(colors.text),
+            ),
         ]),
         Line::from(vec![
             Span::styled(" model   ", Style::default().fg(colors.muted)),
@@ -1201,11 +1266,17 @@ pub(crate) fn render_sidebar(
         ]),
         Line::from(vec![
             Span::styled(" input   ", Style::default().fg(colors.muted)),
-            Span::styled(input_badge, Style::default().fg(colors.badge_fg).bg(colors.badge_bg)),
+            Span::styled(
+                input_badge,
+                Style::default().fg(colors.badge_fg).bg(colors.badge_bg),
+            ),
         ]),
         Line::from(vec![
             Span::styled(" context ", Style::default().fg(colors.muted)),
-            Span::styled(context_text, Style::default().fg(context_severity_color(context_pct, colors))),
+            Span::styled(
+                context_text,
+                Style::default().fg(context_severity_color(context_pct, colors)),
+            ),
         ]),
         Line::from(vec![
             Span::styled(" queue   ", Style::default().fg(colors.muted)),
@@ -1213,7 +1284,14 @@ pub(crate) fn render_sidebar(
         ]),
         Line::from(vec![
             Span::styled(" copy    ", Style::default().fg(colors.muted)),
-            Span::styled(if copy_mode { "ON" } else { "OFF" }, Style::default().fg(if copy_mode { colors.success } else { colors.dim })),
+            Span::styled(
+                if copy_mode { "ON" } else { "OFF" },
+                Style::default().fg(if copy_mode {
+                    colors.success
+                } else {
+                    colors.dim
+                }),
+            ),
         ]),
         Line::from(vec![
             Span::styled(" focus   ", Style::default().fg(colors.muted)),
@@ -1274,19 +1352,45 @@ pub(crate) fn render_sidebar(
                 .fg(colors.overlay_title)
                 .add_modifier(Modifier::BOLD),
         )),
-        Line::from(Span::styled(" Ctrl+O expand blocks", Style::default().fg(colors.muted))),
-        Line::from(Span::styled(" Ctrl+Shift+J next block", Style::default().fg(colors.muted))),
-        Line::from(Span::styled(" Ctrl+Shift+K prev block", Style::default().fg(colors.muted))),
-        Line::from(Span::styled(" Alt+A/T/E jump kinds", Style::default().fg(colors.muted))),
-        Line::from(Span::styled(" Ctrl+Shift+C copy block", Style::default().fg(colors.muted))),
-        Line::from(Span::styled(" Shift+J follow output", Style::default().fg(colors.muted))),
-        Line::from(Span::styled(" /help commands", Style::default().fg(colors.muted))),
+        Line::from(Span::styled(
+            " Ctrl+O expand blocks",
+            Style::default().fg(colors.muted),
+        )),
+        Line::from(Span::styled(
+            " Ctrl+Shift+J next block",
+            Style::default().fg(colors.muted),
+        )),
+        Line::from(Span::styled(
+            " Ctrl+Shift+K prev block",
+            Style::default().fg(colors.muted),
+        )),
+        Line::from(Span::styled(
+            " Alt+A/T/E jump kinds",
+            Style::default().fg(colors.muted),
+        )),
+        Line::from(Span::styled(
+            " Ctrl+Shift+C copy block",
+            Style::default().fg(colors.muted),
+        )),
+        Line::from(Span::styled(
+            " Shift+J follow output",
+            Style::default().fg(colors.muted),
+        )),
+        Line::from(Span::styled(
+            " /help commands",
+            Style::default().fg(colors.muted),
+        )),
     ];
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
 }
 
-pub(crate) fn render_toast(frame: &mut Frame, main_area: Rect, toast: &Toast, colors: &ThemeColors) {
+pub(crate) fn render_toast(
+    frame: &mut Frame,
+    main_area: Rect,
+    toast: &Toast,
+    colors: &ThemeColors,
+) {
     let width = (toast.message.chars().count() as u16 + 6)
         .clamp(20, main_area.width.saturating_sub(2).max(20));
     let rect = Rect {
@@ -1305,7 +1409,10 @@ pub(crate) fn render_toast(frame: &mut Frame, main_area: Rect, toast: &Toast, co
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::raw(" "),
-            Span::styled(truncate_str(&toast.message, rect.width.saturating_sub(4) as usize), Style::default().fg(fg)),
+            Span::styled(
+                truncate_str(&toast.message, rect.width.saturating_sub(4) as usize),
+                Style::default().fg(fg),
+            ),
         ]))
         .block(
             Block::default()
@@ -1362,7 +1469,11 @@ pub(crate) fn calc_input_rows(buf: &str, available_width: u16, prefix_width: u16
     total.clamp(1, MAX_INPUT_ROWS)
 }
 
-pub(crate) fn calc_visual_cursor(before_cursor: &str, available_width: u16, prefix_width: u16) -> (u16, u16) {
+pub(crate) fn calc_visual_cursor(
+    before_cursor: &str,
+    available_width: u16,
+    prefix_width: u16,
+) -> (u16, u16) {
     // Mirror exactly how render_frame builds the Paragraph:
     //   • Each logical line (split on '\n') is its own ratatui Line.
     //   • The first visual row starts after the input-mode badge + "> " prefix.
@@ -1460,4 +1571,3 @@ pub(crate) fn find_cursor_at_visual_row_col(
     // Clamp to end of buffer
     buf.len()
 }
-

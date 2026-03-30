@@ -1,16 +1,16 @@
-use cade_agent::agent::CadeClient;
-use cade_agent::agent;
-use cade::cli::Args;
-use cade::toolsets::Toolset;
-use cade_agent::agent::session::SessionStore;
-use cade::settings::SettingsManager;
-use cade::skills::Skill;
-use cade::{Result, Error};
-use cade_agent::agent::client::{CreateAgentRequest, MemoryBlock};
+use crate::bootstrap::memory::seed_default_memory;
 use crate::bootstrap::prompt::build_system_prompt;
 use crate::bootstrap::tools::register_and_attach_with_caps_filtered;
-use crate::bootstrap::memory::seed_default_memory;
+use cade::cli::Args;
+use cade::settings::SettingsManager;
+use cade::skills::Skill;
 use cade::skills::{discover_all_skills, skills_listing};
+use cade::toolsets::Toolset;
+use cade::{Error, Result};
+use cade_agent::agent;
+use cade_agent::agent::CadeClient;
+use cade_agent::agent::client::{CreateAgentRequest, MemoryBlock};
+use cade_agent::agent::session::SessionStore;
 use cade_core::capabilities::CapabilitySet;
 
 pub async fn resolve_agent_and_conversation(
@@ -93,7 +93,14 @@ pub async fn resolve_agent_and_conversation(
             ))
             .await
             .map_err(|e| Error::custom(format!("create agent: {e}")))?;
-        register_and_attach_with_caps_filtered(client, &a.id, toolset, capabilities, tool_filter.as_deref()).await;
+        register_and_attach_with_caps_filtered(
+            client,
+            &a.id,
+            toolset,
+            capabilities,
+            tool_filter.as_deref(),
+        )
+        .await;
         seed_default_memory(client, &a.id).await;
         session
             .set_agent(a.id.clone(), Some(a.name.clone()))
@@ -148,7 +155,14 @@ pub async fn resolve_agent_and_conversation(
                     .create_agent(make_req(default_model.to_string(), "CADE coding agent"))
                     .await
                     .map_err(|e| Error::custom(format!("create agent: {e}")))?;
-                register_and_attach_with_caps_filtered(client, &a.id, toolset, capabilities, tool_filter.as_deref()).await;
+                register_and_attach_with_caps_filtered(
+                    client,
+                    &a.id,
+                    toolset,
+                    capabilities,
+                    tool_filter.as_deref(),
+                )
+                .await;
                 seed_default_memory(client, &a.id).await;
                 session.set_agent(a.id.clone(), Some(a.name.clone()))?;
                 settings.set_last_agent(&a.id)?;
@@ -164,7 +178,14 @@ pub async fn resolve_agent_and_conversation(
             ))
             .await
             .map_err(|e| Error::custom(format!("create agent: {e}")))?;
-        register_and_attach_with_caps_filtered(client, &a.id, toolset, capabilities, tool_filter.as_deref()).await;
+        register_and_attach_with_caps_filtered(
+            client,
+            &a.id,
+            toolset,
+            capabilities,
+            tool_filter.as_deref(),
+        )
+        .await;
         seed_default_memory(client, &a.id).await;
         session.set_agent(a.id.clone(), Some(a.name.clone()))?;
         settings.set_last_agent(&a.id)?;

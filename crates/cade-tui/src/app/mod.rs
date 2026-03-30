@@ -1,5 +1,5 @@
-pub mod timeline;
 pub mod clipboard;
+pub mod timeline;
 pub(crate) use timeline::*;
 
 /// TuiApp — single-terminal, pure ratatui fullscreen rendering for CADE.
@@ -393,6 +393,12 @@ impl TuiApp {
 
     // -- Content mutation
 
+    /// Apply a new theme without re-initializing the terminal.
+    pub fn apply_theme(&mut self, colors: ThemeColors) {
+        self.colors = colors;
+        let _ = self.draw();
+    }
+
     /// Commit any in-progress streaming, push a line, and redraw.
     pub fn push(&mut self, line: RenderLine) -> Result<()> {
         self.commit_streaming_inner();
@@ -688,7 +694,9 @@ impl TuiApp {
 
     fn selected_timeline_item_text(&self) -> Option<String> {
         let key = self.selected_timeline?;
-        let (term_w, _) = crossterm::terminal::size().ok().unwrap_or((self.term_width, 24));
+        let (term_w, _) = crossterm::terminal::size()
+            .ok()
+            .unwrap_or((self.term_width, 24));
         let main_w = main_content_width(term_w);
         let entries = build_timeline_entries(&self.lines);
         let entry = entries.iter().find(|e| e.key == key)?;
@@ -764,7 +772,9 @@ impl TuiApp {
     }
 
     fn current_messages_viewport_metrics(&self) -> Option<(u16, u16)> {
-        let (term_w, term_h) = crossterm::terminal::size().ok().unwrap_or((self.term_width, 24));
+        let (term_w, term_h) = crossterm::terminal::size()
+            .ok()
+            .unwrap_or((self.term_width, 24));
         let main_w = main_content_width(term_w);
         let available_w = main_w.saturating_sub(2).max(1);
         let (badge_text, _) = input_mode_badge(self.editor.detect_mode(), &self.colors);
@@ -779,7 +789,8 @@ impl TuiApp {
         if inline_h > 0 {
             input_rows = inline_h;
         }
-        let footer_extra_h: u16 = if self.footer_extra.is_some() || self.selected_timeline.is_some() {
+        let footer_extra_h: u16 = if self.footer_extra.is_some() || self.selected_timeline.is_some()
+        {
             1
         } else {
             0
@@ -1822,8 +1833,7 @@ impl TuiApp {
                 let (badge_text, _) = input_mode_badge(self.editor.detect_mode(), &self.colors);
                 let input_prefix_w = badge_text.chars().count() as u16 + 1 + 2;
                 let before = &self.editor.input[..self.editor.cursor_pos];
-                let (cur_row, cur_col) =
-                    calc_visual_cursor(before, available_w, input_prefix_w);
+                let (cur_row, cur_col) = calc_visual_cursor(before, available_w, input_prefix_w);
 
                 if cur_row == 0 {
                     // Already on the first visual row → history navigation
@@ -1863,8 +1873,7 @@ impl TuiApp {
                     tr
                 };
                 let before = &self.editor.input[..self.editor.cursor_pos];
-                let (cur_row, cur_col) =
-                    calc_visual_cursor(before, available_w, input_prefix_w);
+                let (cur_row, cur_col) = calc_visual_cursor(before, available_w, input_prefix_w);
 
                 if cur_row >= total_rows {
                     // Already on the last visual row → history navigation
@@ -1992,7 +2001,6 @@ impl TuiApp {
         }
         Ok(None)
     }
-
 }
 
 // -- Scroll helpers
@@ -2064,6 +2072,7 @@ fn main_content_width(term_w: u16) -> u16 {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_frame(
     frame: &mut Frame,
     lines: &[RenderLine],
@@ -2099,11 +2108,8 @@ fn render_frame(
     let area = frame.area();
     let (main_area, sidebar_area) = if area.width >= SIDEBAR_BREAKPOINT {
         let sidebar_w = SIDEBAR_WIDTH.min(area.width.saturating_sub(24));
-        let split = Layout::horizontal([
-            Constraint::Min(24),
-            Constraint::Length(sidebar_w),
-        ])
-        .split(area);
+        let split =
+            Layout::horizontal([Constraint::Min(24), Constraint::Length(sidebar_w)]).split(area);
         (split[0], Some(split[1]))
     } else {
         (area, None)
@@ -2113,7 +2119,8 @@ fn render_frame(
     let (input_badge, _input_badge_color) = input_mode_badge(input_mode, colors);
     let input_prefix_w = input_badge.chars().count() as u16 + 1 + 2;
     let available_w = main_area.width.saturating_sub(2).max(1);
-    let mut input_rows = calc_input_rows(input, available_w, input_prefix_w).clamp(1, MAX_INPUT_ROWS);
+    let mut input_rows =
+        calc_input_rows(input, available_w, input_prefix_w).clamp(1, MAX_INPUT_ROWS);
 
     let inline_h = active_question
         .map(|aq| question_height(aq, main_area.height))
@@ -2224,7 +2231,10 @@ fn render_frame(
         colors,
     );
     if let Some(s) = streaming {
-        let next_index = timeline_entries.last().map(|e| e.key.index + 1).unwrap_or(0);
+        let next_index = timeline_entries
+            .last()
+            .map(|e| e.key.index + 1)
+            .unwrap_or(0);
         let streaming_entry = TimelineEntry::streaming(next_index, s);
         let mut lines = Vec::new();
         streaming_entry.render_with_state(
@@ -2320,9 +2330,7 @@ fn render_frame(
     let status_text = if let Some(info) = &selected_info {
         format!(
             "{status_text}  · selected {} #{} — {}",
-            info.kind_label,
-            info.index,
-            info.actions
+            info.kind_label, info.index, info.actions
         )
     } else {
         status_text
@@ -2981,6 +2989,21 @@ pub fn truncate_str(s: &str, max: usize) -> String {
     }
 }
 
+impl Drop for TuiApp {
+    fn drop(&mut self) {
+        if supports_keyboard_enhancement().unwrap_or(false) {
+            let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
+        }
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            DisableBracketedPaste,
+            DisableMouseCapture,
+            DisableFocusChange
+        );
+        ratatui::restore();
+    }
+}
+
 // region:    --- Tests
 
 #[cfg(test)]
@@ -3146,18 +3169,3 @@ mod tests {
 }
 
 // endregion: --- Tests
-
-impl Drop for TuiApp {
-    fn drop(&mut self) {
-        if supports_keyboard_enhancement().unwrap_or(false) {
-            let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
-        }
-        let _ = crossterm::execute!(
-            std::io::stdout(),
-            DisableBracketedPaste,
-            DisableMouseCapture,
-            DisableFocusChange
-        );
-        ratatui::restore();
-    }
-}

@@ -27,7 +27,6 @@ impl TuiApp {
         }
     }
 
-
     #[cfg(not(feature = "clipboard-images"))]
     pub(crate) fn try_paste_image_file_path(&mut self, _text: &str) -> bool {
         false

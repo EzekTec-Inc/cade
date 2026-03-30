@@ -61,10 +61,7 @@ pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
     parse_markdown_lines_with_theme(text, &ThemeColors::dark())
 }
 
-pub fn parse_markdown_lines_with_theme(
-    text: &str,
-    colors: &ThemeColors,
-) -> Vec<Line<'static>> {
+pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<Line<'static>> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -386,9 +383,7 @@ pub fn parse_markdown_lines_with_theme(
                     current_cell.push_str(&format!("`{text}`"));
                 } else {
                     // Inline code: bright on a subtle background via reversed dim
-                    let style = Style::default()
-                        .fg(colors.md_code)
-                        .bg(colors.reasoning_bg);
+                    let style = Style::default().fg(colors.md_code).bg(colors.reasoning_bg);
                     current_spans.push(Span::styled(format!(" {text} "), style));
                 }
             }

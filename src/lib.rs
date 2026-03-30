@@ -56,7 +56,7 @@ pub use cade_agent::subagents;
 pub use cade_agent::tools;
 
 pub use cade_cli::cli;
-pub use cade_cli::ui;
 pub use cade_cli::support;
+pub use cade_cli::ui;
 
 // endregion: --- Modules

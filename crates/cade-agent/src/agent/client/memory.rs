@@ -1,7 +1,6 @@
 use super::*;
 
 impl CadeClient {
-
     // -- Memory
 
     /// Fetch all memory blocks for an agent.
@@ -83,7 +82,8 @@ impl CadeClient {
         description: Option<&str>,
         max_chars: Option<usize>,
     ) -> Result<()> {
-        self.upsert_memory_with_options(agent_id, label, value, description, max_chars, "set").await
+        self.upsert_memory_with_options(agent_id, label, value, description, max_chars, "set")
+            .await
     }
 
     pub async fn append_memory_with_limit(
@@ -94,7 +94,8 @@ impl CadeClient {
         description: Option<&str>,
         max_chars: Option<usize>,
     ) -> Result<()> {
-        self.upsert_memory_with_options(agent_id, label, value, description, max_chars, "append").await
+        self.upsert_memory_with_options(agent_id, label, value, description, max_chars, "append")
+            .await
     }
 
     pub async fn upsert_memory_with_options(
@@ -323,5 +324,4 @@ impl CadeClient {
         let body: Value = resp.json().await?;
         Ok(body["messages"].as_array().cloned().unwrap_or_default())
     }
-
 }

@@ -523,6 +523,6 @@ impl CadeClient {
     }
 }
 
+pub mod extensions;
 pub mod memory;
 pub mod messages;
-pub mod extensions;

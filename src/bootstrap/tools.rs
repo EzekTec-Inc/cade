@@ -1,6 +1,6 @@
-use cade_agent::agent::CadeClient;
-use cade_agent::agent;
 use cade::toolsets::Toolset;
+use cade_agent::agent;
+use cade_agent::agent::CadeClient;
 use cade_core::capabilities::CapabilitySet;
 
 /// Capability-aware tool registration: only registers and attaches tools
@@ -11,9 +11,11 @@ pub async fn register_and_attach_with_caps(
     toolset: Toolset,
     caps: &CapabilitySet,
 ) {
-    use cade_agent::tools::catalog::{meta_schemas_for_capabilities, native_schemas_for_capabilities};
     use agent::client::CreateToolRequest;
     use cade_agent::agent::tools::build_python_stub_from_schema as bps;
+    use cade_agent::tools::catalog::{
+        meta_schemas_for_capabilities, native_schemas_for_capabilities,
+    };
 
     let meta_schemas = meta_schemas_for_capabilities(caps);
     let native_schemas = native_schemas_for_capabilities(toolset, caps);
@@ -58,6 +60,7 @@ pub async fn register_and_attach_with_caps(
         native_schemas.len()
     );
 
+    #[allow(clippy::collapsible_if)]
     if !ids.is_empty() {
         if let Err(e) = client.attach_agent_tools(agent_id, &ids).await {
             tracing::warn!("attach_agent_tools: {e}");
@@ -75,6 +78,7 @@ pub async fn register_and_attach_with_caps_filtered(
     caps: &CapabilitySet,
     tool_filter: Option<&[String]>,
 ) {
+    #[allow(clippy::redundant_guards)]
     match tool_filter {
         None => {
             // No explicit filter — use full capability-aware registration
@@ -82,8 +86,8 @@ pub async fn register_and_attach_with_caps_filtered(
         }
         Some(names) if names.is_empty() => {
             // Empty filter → meta tools only, filtered by caps
-            use cade_agent::tools::catalog::meta_schemas_for_capabilities;
             use agent::client::CreateToolRequest;
+            use cade_agent::tools::catalog::meta_schemas_for_capabilities;
             let meta_schemas = meta_schemas_for_capabilities(caps);
             let mut ids = Vec::new();
             for schema in &meta_schemas {
@@ -113,4 +117,3 @@ pub async fn register_and_attach_with_caps_filtered(
         }
     }
 }
-

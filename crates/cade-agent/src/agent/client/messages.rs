@@ -1,7 +1,6 @@
 use super::*;
 
 impl CadeClient {
-
     // -- Messages
 
     /// Send a user message and return the response messages.
@@ -573,5 +572,4 @@ impl CadeClient {
             .collect();
         Ok(msgs)
     }
-
 }

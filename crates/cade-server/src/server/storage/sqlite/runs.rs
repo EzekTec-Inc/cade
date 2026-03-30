@@ -94,4 +94,3 @@ pub struct MessageRow {
     pub content: Value,
     pub char_count: usize,
 }
-

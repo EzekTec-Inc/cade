@@ -2,12 +2,12 @@ use crate::Result;
 use futures::future::join_all;
 use serde_json::json;
 
+use crate::support::text::sanitize_for_terminal;
 use cade_agent::agent::{CadeClient, client::CadeMessage};
 use cade_agent::mcp::McpManager;
 use cade_agent::tools::{ToolRuntime, dispatch};
 use cade_core::hooks::{HookEngine, HookOutcome};
 use cade_core::permissions::PermissionManager;
-use crate::support::text::sanitize_for_terminal;
 
 // -- Headless run statistics
 
@@ -40,6 +40,7 @@ fn is_sequential_tool(name: &str) -> bool {
 
 /// Run a single headless prompt with streaming, driving the tool loop to completion.
 /// Prints streaming output to stdout. Returns the final assistant text + stats.
+#[allow(clippy::type_complexity)]
 pub async fn run_headless(
     client: &CadeClient,
     agent_id: &str,
@@ -308,12 +309,17 @@ async fn finalize_tool_result(
     if !is_error {
         match tool_name.as_str() {
             "write_file" | "edit_file" | "apply_patch" | "Replace" | "WriteFileGemini" => {
-                let path = args["file_path"].as_str().or(args["path"].as_str()).unwrap_or("unknown");
+                let path = args["file_path"]
+                    .as_str()
+                    .or(args["path"].as_str())
+                    .unwrap_or("unknown");
                 let msg = format!("Recently edited: {path}\n");
                 let c = client.clone();
                 let a = agent_id.to_string();
                 tokio::spawn(async move {
-                    let _ = c.append_memory_with_limit(&a, "working_set", &msg, None, Some(3000)).await;
+                    let _ = c
+                        .append_memory_with_limit(&a, "working_set", &msg, None, Some(3000))
+                        .await;
                 });
             }
             _ => {}
@@ -355,6 +361,7 @@ async fn finalize_tool_result(
 
 // -- Text-mode tool loop
 
+#[allow(clippy::type_complexity)]
 async fn process_tool_calls(
     client: &CadeClient,
     agent_id: &str,

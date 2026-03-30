@@ -19,16 +19,13 @@ use std::path::PathBuf;
 
 use std::sync::{Arc, Mutex};
 
-use agent::{
-    CadeClient,
-    session::SessionStore,
-};
+use agent::{CadeClient, session::SessionStore};
+use cade::support::text::sanitize_for_terminal;
 use cade::toolsets::Toolset;
 use cli::{Args, EvalAction, PackageAction, PackageSubcommand, Repl};
 use permissions::{PermissionManager, PermissionMode};
 use settings::SettingsManager;
 use skills::{discover_all_skills, skills_listing};
-use cade::support::text::sanitize_for_terminal;
 
 // endregion: --- Modules
 
@@ -36,7 +33,6 @@ const SKILLS_DIR: &str = ".skills";
 
 mod bootstrap;
 use bootstrap::*;
-
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -224,11 +220,7 @@ async fn main() -> Result<()> {
             &settings.global().enable_capabilities,
             &settings.global().disable_capabilities,
         );
-        tracing::info!(
-            "Profile: {} ({} capabilities)",
-            profile.name(),
-            caps.len()
-        );
+        tracing::info!("Profile: {} ({} capabilities)", profile.name(), caps.len());
         caps
     };
 
@@ -284,7 +276,10 @@ async fn main() -> Result<()> {
     let mcp_enabled = capabilities.is_enabled(cade_core::capabilities::Capability::Mcp);
     let mcp: std::sync::Arc<McpManager> = if mcp_configs.is_empty() || !mcp_enabled {
         if !mcp_configs.is_empty() && !mcp_enabled {
-            tracing::info!("Skipping {} MCP server(s) — Mcp capability not enabled", mcp_configs.len());
+            tracing::info!(
+                "Skipping {} MCP server(s) — Mcp capability not enabled",
+                mcp_configs.len()
+            );
         }
         std::sync::Arc::new(McpManager::empty())
     } else {

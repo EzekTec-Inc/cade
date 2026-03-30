@@ -1,11 +1,11 @@
-use super::{Repl, BackgroundResult};
+use super::{BackgroundResult, Repl};
 use crate::Result;
-use std::sync::Arc;
 use cade_agent::subagents::{discover_all_subagents, find_subagent};
-
+use std::sync::Arc;
 
 impl Repl {
     /// Handle the `run_subagent` tool call — spawn a subagent and return its result.
+    #[allow(clippy::type_complexity)]
     pub(crate) async fn handle_run_subagent(
         &self,
         call_id: &str,
@@ -113,23 +113,27 @@ impl Repl {
         };
 
         let buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
-        
-        let on_output: Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>> = if let Some(idx) = live_idx {
-            let app_arc = app_arc.clone();
-            let buffer = buffer.clone();
-            Some(std::sync::Arc::new(move |chunk: &str| {
-                let mut buf = buffer.lock().unwrap();
-                buf.push_str(chunk);
-                while let Some(pos) = buf.find('\n') {
-                    let line = buf[..pos].to_string();
-                    buf.replace_range(..=pos, "");
-                    let _ = app_arc.lock().expect("lock poisoned").append_live_output_line(idx, line);
-                }
-            }))
-        } else {
-            // For background subagents, we just buffer silently or ignore
-            Some(std::sync::Arc::new(|_| {}))
-        };
+
+        let on_output: Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>> =
+            if let Some(idx) = live_idx {
+                let app_arc = app_arc.clone();
+                let buffer = buffer.clone();
+                Some(std::sync::Arc::new(move |chunk: &str| {
+                    let mut buf = buffer.lock().unwrap();
+                    buf.push_str(chunk);
+                    while let Some(pos) = buf.find('\n') {
+                        let line = buf[..pos].to_string();
+                        buf.replace_range(..=pos, "");
+                        let _ = app_arc
+                            .lock()
+                            .expect("lock poisoned")
+                            .append_live_output_line(idx, line);
+                    }
+                }))
+            } else {
+                // For background subagents, we just buffer silently or ignore
+                Some(std::sync::Arc::new(|_| {}))
+            };
 
         let run_task = {
             let subagent_type_c = subagent_type.clone();
@@ -267,10 +271,16 @@ impl Repl {
             if let Some(idx) = live_idx {
                 let mut buf = buffer.lock().unwrap();
                 if !buf.is_empty() {
-                    let _ = app_arc.lock().expect("lock poisoned").append_live_output_line(idx, buf.clone());
+                    let _ = app_arc
+                        .lock()
+                        .expect("lock poisoned")
+                        .append_live_output_line(idx, buf.clone());
                     buf.clear();
                 }
-                let _ = app_arc.lock().expect("lock poisoned").finish_live_output(idx);
+                let _ = app_arc
+                    .lock()
+                    .expect("lock poisoned")
+                    .finish_live_output(idx);
             }
 
             // SubagentStop hook — can block (exit 2 continues the agent)
@@ -366,15 +376,20 @@ impl Repl {
                     });
                 }
             }
-            Err(e) => return Ok(cade_agent::tools::ToolResult {
-                tool_call_id: call_id.to_string(),
-                tool_name: "message_agent".to_string(),
-                output: format!("Failed to query agents: {e}"),
-                is_error: true,
-            }),
+            Err(e) => {
+                return Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: "message_agent".to_string(),
+                    output: format!("Failed to query agents: {e}"),
+                    is_error: true,
+                });
+            }
         };
 
-        let res = self.client.stream_message(&target_id, &message, |_| {}).await;
+        let res = self
+            .client
+            .stream_message(&target_id, &message, |_| {})
+            .await;
 
         match res {
             Ok(messages) => {
@@ -386,7 +401,7 @@ impl Repl {
                         out.push_str(text);
                     }
                 }
-                
+
                 let output = out.trim();
                 let final_output = if output.is_empty() {
                     "Target agent returned an empty response".to_string()
@@ -395,7 +410,7 @@ impl Repl {
                 };
 
                 self.tui_ok(format!("  ✓ Agent [{target}] responded"));
-                
+
                 Ok(cade_agent::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: "message_agent".to_string(),
@@ -408,8 +423,7 @@ impl Repl {
                 tool_name: "message_agent".to_string(),
                 output: format!("Failed to message agent: {e}"),
                 is_error: true,
-            })
+            }),
         }
     }
-
 }

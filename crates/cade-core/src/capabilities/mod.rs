@@ -1,8 +1,8 @@
-/// Capability packs — each represents an optional subsystem that can be
-/// enabled or disabled at runtime (and eventually at compile time via features).
-///
-/// The default profile is `Full` for backward compatibility. Future releases
-/// will shift the default toward `Pro` or `Core` once the gating is proven.
+//! Capability packs — each represents an optional subsystem that can be
+//! enabled or disabled at runtime (and eventually at compile time via features).
+//!
+//! The default profile is `Full` for backward compatibility. Future releases
+//! will shift the default toward `Pro` or `Core` once the gating is proven.
 
 use std::collections::HashSet;
 
@@ -95,7 +95,7 @@ pub struct CapabilitySet {
 
 impl CapabilitySet {
     /// Create from an explicit set.
-    pub fn from_iter(caps: impl IntoIterator<Item = Capability>) -> Self {
+    pub fn from_caps(caps: impl IntoIterator<Item = Capability>) -> Self {
         Self {
             enabled: caps.into_iter().collect(),
         }
@@ -103,7 +103,7 @@ impl CapabilitySet {
 
     /// All capabilities enabled.
     pub fn full() -> Self {
-        Self::from_iter(Capability::ALL.iter().copied())
+        Self::from_caps(Capability::ALL.iter().copied())
     }
 
     /// Empty — only core (non-optional) tools.
@@ -184,10 +184,7 @@ impl Profile {
     pub fn capabilities(&self) -> CapabilitySet {
         match self {
             Profile::Core => CapabilitySet::core(),
-            Profile::Pro => CapabilitySet::from_iter([
-                Capability::Agentic,
-                Capability::CodeIntel,
-            ]),
+            Profile::Pro => CapabilitySet::from_caps([Capability::Agentic, Capability::CodeIntel]),
             Profile::Full => CapabilitySet::full(),
         }
     }

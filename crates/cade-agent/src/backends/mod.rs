@@ -150,10 +150,12 @@ pub fn backend_from_profile(profile: &ExecutionProfile) -> Box<dyn ExecutionBack
             }
             #[cfg(not(feature = "backend-docker"))]
             {
-                tracing::warn!("CADE was compiled without Docker backend support. Reverting to local.");
+                tracing::warn!(
+                    "CADE was compiled without Docker backend support. Reverting to local."
+                );
                 Box::new(LocalBackend)
             }
-        },
+        }
         ExecutionBackendKind::Ssh => {
             #[cfg(feature = "backend-ssh")]
             {
@@ -166,10 +168,12 @@ pub fn backend_from_profile(profile: &ExecutionProfile) -> Box<dyn ExecutionBack
             }
             #[cfg(not(feature = "backend-ssh"))]
             {
-                tracing::warn!("CADE was compiled without SSH backend support. Reverting to local.");
+                tracing::warn!(
+                    "CADE was compiled without SSH backend support. Reverting to local."
+                );
                 Box::new(LocalBackend)
             }
-        },
+        }
         ExecutionBackendKind::ReadOnly => Box::new(ReadOnlyBackend::new(LocalBackend)),
         ExecutionBackendKind::Local => Box::new(LocalBackend),
     }

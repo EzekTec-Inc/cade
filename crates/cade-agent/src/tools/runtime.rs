@@ -844,7 +844,10 @@ impl ToolRuntime {
         let message = args["message"].as_str().unwrap_or("").to_string();
 
         if target.is_empty() || message.is_empty() {
-            return ("Error: 'target' and 'message' are required".to_string(), true);
+            return (
+                "Error: 'target' and 'message' are required".to_string(),
+                true,
+            );
         }
 
         // Try to resolve target to an agent ID
@@ -859,7 +862,11 @@ impl ToolRuntime {
             Err(e) => return (format!("Failed to query agents: {e}"), true),
         };
 
-        match self.client.stream_message(&target_id, &message, |_| {}).await {
+        match self
+            .client
+            .stream_message(&target_id, &message, |_| {})
+            .await
+        {
             Ok(messages) => {
                 // Ensure we get all tool outputs if it used tools
                 let mut out = String::new();

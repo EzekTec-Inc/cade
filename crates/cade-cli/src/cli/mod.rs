@@ -7,8 +7,8 @@ pub mod headless;
 pub mod package;
 pub mod repl;
 
+pub use crate::support::text::truncate;
 pub use args::{Args, EvalAction, PackageAction, PackageSubcommand};
 pub use repl::Repl;
-pub use crate::support::text::truncate;
 
 // endregion: --- Modules

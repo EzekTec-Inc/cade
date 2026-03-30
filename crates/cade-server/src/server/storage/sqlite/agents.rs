@@ -145,4 +145,3 @@ pub struct ConversationRow {
     pub updated_at: i64,
     pub message_count: i64,
 }
-

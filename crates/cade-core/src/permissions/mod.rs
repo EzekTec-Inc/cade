@@ -175,7 +175,7 @@ const WRITE_TOOLS: &[&str] = &[
     "move_file",
     "rename_file",
     "patch_file",
-    "apply_patch",       // Codex toolset file patching
+    "apply_patch", // Codex toolset file patching
     "apply_diff",
     "desktop_control",   // sends input / clicks
     "send_notification", // side-effect

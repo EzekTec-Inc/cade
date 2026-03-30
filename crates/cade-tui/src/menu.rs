@@ -86,6 +86,10 @@ const SECTIONS: &[Section] = &[
         name: "Model & Mode",
         items: &[
             CmdEntry {
+                cmd: "/theme",
+                desc: "Change colorscheme  (/theme [name])",
+            },
+            CmdEntry {
                 cmd: "/model",
                 desc: "Interactive model picker  (or /model provider/name)",
             },
@@ -332,7 +336,9 @@ fn cmd_required_capability(cmd: &str) -> Option<cade_core::capabilities::Capabil
     }
 }
 
-fn build_flat_items_filtered(caps: Option<&cade_core::capabilities::CapabilitySet>) -> Vec<MenuItem> {
+fn build_flat_items_filtered(
+    caps: Option<&cade_core::capabilities::CapabilitySet>,
+) -> Vec<MenuItem> {
     let mut out = Vec::new();
     for section in SECTIONS {
         let mut section_items = Vec::new();
@@ -358,7 +364,6 @@ fn build_flat_items_filtered(caps: Option<&cade_core::capabilities::CapabilitySe
     }
     out
 }
-
 
 fn first_cmd_idx(items: &[MenuItem]) -> usize {
     items

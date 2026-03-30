@@ -82,4 +82,3 @@ pub fn delete_provider(db: &Db, name: &str) -> Result<bool> {
     let n = conn.execute("DELETE FROM providers WHERE name = ?1", params![name])?;
     Ok(n > 0)
 }
-

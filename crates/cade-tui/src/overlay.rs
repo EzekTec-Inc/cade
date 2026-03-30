@@ -36,20 +36,23 @@ pub fn render_overlay_shell(
 
 /// Split the overlay interior into body + footer hint rows.
 pub fn split_overlay_body(area: Rect, footer_height: u16) -> (Rect, Rect) {
-    let [body, footer] = Layout::vertical([Constraint::Min(1), Constraint::Length(footer_height)])
-        .areas(area);
+    let [body, footer] =
+        Layout::vertical([Constraint::Min(1), Constraint::Length(footer_height)]).areas(area);
     (body, footer)
 }
 
 /// Render a dim hint/status row at the bottom of an overlay.
 pub fn render_overlay_hint(frame: &mut Frame, area: Rect, hint: &str, colors: &ThemeColors) {
     frame.render_widget(
-        Paragraph::new(Line::from(vec![Span::raw(" "), Span::styled(
-            hint.to_string(),
-            Style::default()
-                .fg(colors.overlay_hint)
-                .add_modifier(Modifier::DIM),
-        )])),
+        Paragraph::new(Line::from(vec![
+            Span::raw(" "),
+            Span::styled(
+                hint.to_string(),
+                Style::default()
+                    .fg(colors.overlay_hint)
+                    .add_modifier(Modifier::DIM),
+            ),
+        ])),
         area,
     );
 }

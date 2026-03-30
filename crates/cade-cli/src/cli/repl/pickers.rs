@@ -1,7 +1,7 @@
-use super::Repl;
 use super::AgentPickerResult;
-use cade_agent::agent::client::AgentState;
+use super::Repl;
 use crate::Result;
+use cade_agent::agent::client::AgentState;
 use crossterm::event::KeyCode;
 
 impl Repl {
@@ -81,7 +81,9 @@ impl Repl {
                 continue;
             }
             if let Event::Key(k) = event::read()? {
-                if k.kind != KeyEventKind::Press { continue; }
+                if k.kind != KeyEventKind::Press {
+                    continue;
+                }
                 match (k.code, k.modifiers) {
                     (KeyCode::Char('q') | KeyCode::Esc, _) => break,
                     (KeyCode::Up | KeyCode::Char('k'), _) => {
@@ -269,7 +271,9 @@ impl Repl {
                 continue;
             }
             if let Ok(Event::Key(key)) = event::read() {
-                if key.kind != KeyEventKind::Press { continue; }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 match (key.code, key.modifiers) {
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
 
@@ -682,7 +686,9 @@ impl Repl {
                 continue;
             }
             if let Ok(Event::Key(key)) = event::read() {
-                if key.kind != KeyEventKind::Press { continue; }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 match (key.code, key.modifiers) {
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
 
@@ -877,7 +883,9 @@ impl Repl {
                 continue;
             }
             if let Ok(Event::Key(key)) = event::read() {
-                if key.kind != KeyEventKind::Press { continue; }
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
                 match (key.code, key.modifiers) {
                     (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
                     (KeyCode::Enter, _) => {
@@ -902,5 +910,4 @@ impl Repl {
 
         Ok(result)
     }
-
 }

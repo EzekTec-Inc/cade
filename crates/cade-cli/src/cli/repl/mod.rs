@@ -1,10 +1,10 @@
-pub mod ui_push;
+pub mod capability_gate;
+pub mod commands_providers;
 pub mod format;
 pub mod pickers;
 pub mod tool_intercepts;
-pub mod capability_gate;
-pub mod commands_providers;
 pub mod turn_loop;
+pub mod ui_push;
 
 use crate::Result;
 use serde_json::json;
@@ -14,10 +14,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::ui::{RenderLine, ToastLevel, TuiApp, cycle_mode, cycle_mode_back};
 use cade_agent::agent::session::SessionStore;
-use cade_agent::agent::{
-    CadeClient,
-    client::AgentState,
-};
+use cade_agent::agent::{CadeClient, client::AgentState};
 use cade_agent::subagents::{BackgroundResult, discover_all_subagents};
 use cade_core::permissions::{PermissionManager, PermissionMode};
 use cade_core::settings::SettingsManager;
@@ -82,6 +79,7 @@ enum SlashCmd {
     Permissions,
     Hooks,
     Rename(String),
+    Theme(Option<String>),
     Toolset(Option<String>),
     Delete(Option<String>),
     Yolo,
@@ -152,6 +150,7 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         "feedback" => Some(SlashCmd::Feedback),
         "skills" => Some(SlashCmd::Skills(arg)),
         "subagents" | "agents-list" => Some(SlashCmd::Subagents),
+        "theme" => Some(SlashCmd::Theme(arg)),
         "providers" | "provider-list" => Some(SlashCmd::Providers),
         "connect" => Some(SlashCmd::Connect(arg)),
         "disconnect" => Some(SlashCmd::Disconnect(arg.unwrap_or_default())),
@@ -1291,7 +1290,8 @@ impl Repl {
                             ));
                     }
                     SlashCmd::Mcp => {
-                        if self.require_capability(cade_core::capabilities::Capability::Mcp, "/mcp") {
+                        if self.require_capability(cade_core::capabilities::Capability::Mcp, "/mcp")
+                        {
                             continue;
                         }
                         // Support "/mcp reload" subcommand
@@ -1614,7 +1614,7 @@ impl Repl {
                         } else {
                             for (i, row) in rows.iter().enumerate() {
                                 let label = right_labels.get(i).cloned().unwrap_or_default();
-                                let label_color = if i >= 3 && i <= 9 {
+                                let label_color = if (3..=9).contains(&i) {
                                     Some((i - 3) as u8)
                                 } else {
                                     None
@@ -1933,7 +1933,8 @@ impl Repl {
                                 match resolved {
                                     Some("default") => {
                                         self.permissions.set_mode(PermissionMode::Default);
-                                        let (icon, label, _) = mode_display(PermissionMode::Default);
+                                        let (icon, label, _) =
+                                            mode_display(PermissionMode::Default);
                                         self.app.lock().expect("lock poisoned").show_toast(
                                             format!("{icon} {label}"),
                                             ToastLevel::Success,
@@ -1942,16 +1943,21 @@ impl Repl {
                                     }
                                     Some("plan") => {
                                         self.permissions.set_mode(PermissionMode::Plan);
-                                        let (icon, label, hint) = mode_display(PermissionMode::Plan);
+                                        let (icon, label, hint) =
+                                            mode_display(PermissionMode::Plan);
                                         self.app.lock().expect("lock poisoned").show_toast(
                                             format!("{icon} {label}"),
                                             ToastLevel::Info,
                                         );
-                                        self.tui_hdr(format!("{icon} Permission mode: {label} {hint}"));
+                                        self.tui_hdr(format!(
+                                            "{icon} Permission mode: {label} {hint}"
+                                        ));
                                     }
                                     Some("yolo") => {
-                                        self.permissions.set_mode(PermissionMode::BypassPermissions);
-                                        let (icon, label, _) = mode_display(PermissionMode::BypassPermissions);
+                                        self.permissions
+                                            .set_mode(PermissionMode::BypassPermissions);
+                                        let (icon, label, _) =
+                                            mode_display(PermissionMode::BypassPermissions);
                                         self.app.lock().expect("lock poisoned").show_toast(
                                             format!("{icon} {label}"),
                                             ToastLevel::Warning,
@@ -1960,7 +1966,8 @@ impl Repl {
                                     }
                                     Some("acceptEdits") => {
                                         self.permissions.set_mode(PermissionMode::AcceptEdits);
-                                        let (icon, label, _) = mode_display(PermissionMode::AcceptEdits);
+                                        let (icon, label, _) =
+                                            mode_display(PermissionMode::AcceptEdits);
                                         self.app.lock().expect("lock poisoned").show_toast(
                                             format!("{icon} {label}"),
                                             ToastLevel::Success,
@@ -1973,7 +1980,7 @@ impl Repl {
                                         ));
                                     }
                                 }
-                            },
+                            }
                         }
                     }
                     // SlashCmd::New is handled below (hot-swap)
@@ -2044,10 +2051,7 @@ impl Repl {
                             {
                                 let mut app = self.app.lock().expect("lock poisoned");
                                 app.reasoning_effort = effort;
-                                app.show_toast(
-                                    format!("Reasoning → {r}"),
-                                    ToastLevel::Success,
-                                );
+                                app.show_toast(format!("Reasoning → {r}"), ToastLevel::Success);
                             }
                             self.tui_ok(format!("  ✓ Reasoning effort: {r}"));
                         }
@@ -2347,10 +2351,10 @@ impl Repl {
                                     };
                                     match action {
                                         Ok(cade_tui::TreeAction::Cancel) => {
-                                            self.app
-                                                .lock()
-                                                .expect("lock poisoned")
-                                                .show_toast("Checkpoint browser closed", ToastLevel::Info);
+                                            self.app.lock().expect("lock poisoned").show_toast(
+                                                "Checkpoint browser closed",
+                                                ToastLevel::Info,
+                                            );
                                             self.tui_dim("  /tree cancelled".to_string());
                                             break;
                                         }
@@ -2358,7 +2362,9 @@ impl Repl {
                                             // Confirm with question
                                             let title = checkpoints
                                                 .iter()
-                                                .find(|cp| cp["id"].as_str() == Some(&checkpoint_id))
+                                                .find(|cp| {
+                                                    cp["id"].as_str() == Some(&checkpoint_id)
+                                                })
                                                 .and_then(|cp| cp["label"].as_str())
                                                 .unwrap_or("(unlabelled)")
                                                 .to_string();
@@ -2381,35 +2387,54 @@ impl Repl {
                                                 progress: None,
                                             };
                                             let ans = {
-                                                let mut app = self.app.lock().expect("lock poisoned");
+                                                let mut app =
+                                                    self.app.lock().expect("lock poisoned");
                                                 let r = app.ask_question(&q);
                                                 app.scroll = 0;
                                                 let _ = app.draw();
                                                 r
                                             };
-                                            if let Ok(Some(a)) = ans {
-                                                if a.as_str().starts_with("Yes") {
-                                                    // Drop git stash if exists
-                                                    let stash_ref = checkpoints
-                                                        .iter()
-                                                        .find(|cp| cp["id"].as_str() == Some(&checkpoint_id))
-                                                        .and_then(|cp| cp["git_stash_ref"].as_str())
-                                                        .map(String::from);
-                                                    if let Some(s) = stash_ref {
-                                                        use cade_agent::tools::git_checkpoint;
-                                                        let _ = git_checkpoint::delete_git_checkpoint(&s, &self.cwd).await;
-                                                    }
-                                                    // Delete from server
-                                                    match self.client.delete_checkpoint(&agent_id, &checkpoint_id).await {
-                                                        Ok(_) => {
-                                                            self.app.lock().expect("lock poisoned").show_toast(
-                                                                format!("Deleted checkpoint {title}"),
+                                            if let Ok(Some(a)) = ans
+                                                && a.as_str().starts_with("Yes")
+                                            {
+                                                // Drop git stash if exists
+                                                let stash_ref = checkpoints
+                                                    .iter()
+                                                    .find(|cp| {
+                                                        cp["id"].as_str() == Some(&checkpoint_id)
+                                                    })
+                                                    .and_then(|cp| cp["git_stash_ref"].as_str())
+                                                    .map(String::from);
+                                                if let Some(s) = stash_ref {
+                                                    use cade_agent::tools::git_checkpoint;
+                                                    let _ = git_checkpoint::delete_git_checkpoint(
+                                                        &s, &self.cwd,
+                                                    )
+                                                    .await;
+                                                }
+                                                // Delete from server
+                                                match self
+                                                    .client
+                                                    .delete_checkpoint(&agent_id, &checkpoint_id)
+                                                    .await
+                                                {
+                                                    Ok(_) => {
+                                                        self.app
+                                                            .lock()
+                                                            .expect("lock poisoned")
+                                                            .show_toast(
+                                                                format!(
+                                                                    "Deleted checkpoint {title}"
+                                                                ),
                                                                 ToastLevel::Success,
                                                             );
-                                                            self.tui_ok(format!("  ✓ Deleted checkpoint {title}"));
-                                                        }
-                                                        Err(e) => self.tui_err(format!("  ✗ Failed to delete checkpoint: {e}")),
+                                                        self.tui_ok(format!(
+                                                            "  ✓ Deleted checkpoint {title}"
+                                                        ));
                                                     }
+                                                    Err(e) => self.tui_err(format!(
+                                                        "  ✗ Failed to delete checkpoint: {e}"
+                                                    )),
                                                 }
                                             }
                                             continue;
@@ -2421,7 +2446,9 @@ impl Repl {
                                             // Find git stash ref in the checkpoint list
                                             let stash_ref = checkpoints
                                                 .iter()
-                                                .find(|cp| cp["id"].as_str() == Some(&checkpoint_id))
+                                                .find(|cp| {
+                                                    cp["id"].as_str() == Some(&checkpoint_id)
+                                                })
                                                 .and_then(|cp| cp["git_stash_ref"].as_str())
                                                 .map(String::from);
                                             if let Some(s) = stash_ref {
@@ -2431,11 +2458,11 @@ impl Repl {
                                                 )
                                                 .await
                                                 {
-                                                    Ok(()) => self
-                                                        .tui_ok(format!("  ✓ Git stash applied: {s}")),
-                                                    Err(e) => {
-                                                        self.tui_err(format!("  ✗ Git restore: {e}"))
-                                                    }
+                                                    Ok(()) => self.tui_ok(format!(
+                                                        "  ✓ Git stash applied: {s}"
+                                                    )),
+                                                    Err(e) => self
+                                                        .tui_err(format!("  ✗ Git restore: {e}")),
                                                 }
                                             }
                                             let _ = self
@@ -2565,7 +2592,10 @@ impl Repl {
                     }
 
                     SlashCmd::Reflect(focus_arg) => {
-                        if self.require_capability(cade_core::capabilities::Capability::Agentic, "/reflect") {
+                        if self.require_capability(
+                            cade_core::capabilities::Capability::Agentic,
+                            "/reflect",
+                        ) {
                             continue;
                         }
                         let agent_id = self.agent_id();
@@ -2579,7 +2609,10 @@ impl Repl {
                     }
 
                     SlashCmd::Artifacts => {
-                        if self.require_capability(cade_core::capabilities::Capability::Agentic, "/artifacts") {
+                        if self.require_capability(
+                            cade_core::capabilities::Capability::Agentic,
+                            "/artifacts",
+                        ) {
                             continue;
                         }
                         let agent_id = self.agent_id();
@@ -2845,7 +2878,10 @@ impl Repl {
                     }
 
                     SlashCmd::Agents => {
-                        if self.require_capability(cade_core::capabilities::Capability::Agentic, "/agents") {
+                        if self.require_capability(
+                            cade_core::capabilities::Capability::Agentic,
+                            "/agents",
+                        ) {
                             continue;
                         }
                         self.tui_dim("  Fetching agents…");
@@ -3872,7 +3908,10 @@ impl Repl {
                     }
 
                     SlashCmd::Subagents => {
-                        if self.require_capability(cade_core::capabilities::Capability::Agentic, "/subagents") {
+                        if self.require_capability(
+                            cade_core::capabilities::Capability::Agentic,
+                            "/subagents",
+                        ) {
                             continue;
                         }
                         let all = discover_all_subagents(&self.cwd);
@@ -4156,6 +4195,89 @@ impl Repl {
                         }
                     }
 
+                    SlashCmd::Theme(theme_arg) => {
+                        let new_theme = if let Some(t) = theme_arg {
+                            t.trim().to_string()
+                        } else {
+                            String::new()
+                        };
+
+                        if new_theme.is_empty() {
+                            let current = self
+                                .settings
+                                .lock()
+                                .expect("lock poisoned")
+                                .global()
+                                .theme
+                                .clone()
+                                .unwrap_or_else(|| "dark".to_string());
+                            self.tui_hdr(format!("  Current theme: {current}"));
+                            self.tui_dim(
+                                "  /theme <name>  — change colorscheme (e.g. dark, light)",
+                            );
+
+                            // list available themes
+                            let agent_dir = self
+                                .settings
+                                .lock()
+                                .expect("lock poisoned")
+                                .global_path()
+                                .parent()
+                                .unwrap()
+                                .to_path_buf();
+                            let discovered =
+                                cade_core::resources::discover_themes(&self.cwd, &agent_dir);
+                            let mut names = vec!["dark".to_string(), "light".to_string()];
+                            for t in discovered {
+                                if !names.contains(&t.name) {
+                                    names.push(t.name);
+                                }
+                            }
+                            self.tui_dim(format!("  Available themes: {}", names.join(", ")));
+                        } else {
+                            let (target_theme_colors, found_name) = if new_theme == "dark" {
+                                (cade_tui::ThemeColors::dark(), "dark".to_string())
+                            } else if new_theme == "light" {
+                                (cade_tui::ThemeColors::light(), "light".to_string())
+                            } else {
+                                let agent_dir = self
+                                    .settings
+                                    .lock()
+                                    .expect("lock poisoned")
+                                    .global_path()
+                                    .parent()
+                                    .unwrap()
+                                    .to_path_buf();
+                                let discovered =
+                                    cade_core::resources::discover_themes(&self.cwd, &agent_dir);
+                                if let Some(t) = discovered.iter().find(|t| t.name == new_theme) {
+                                    (cade_tui::ThemeColors::from_theme(t), t.name.clone())
+                                } else {
+                                    (cade_tui::ThemeColors::dark(), String::new())
+                                }
+                            };
+
+                            if found_name.is_empty() {
+                                self.tui_err(format!("  ✗ Theme '{new_theme}' not found."));
+                            } else {
+                                // Apply it dynamically
+                                {
+                                    let mut app = self.app.lock().expect("lock poisoned");
+                                    app.apply_theme(target_theme_colors);
+                                }
+
+                                // Save to settings
+                                {
+                                    let mut s = self.settings.lock().expect("lock poisoned");
+                                    s.global_settings_mut().theme = Some(found_name.clone());
+                                    let _ = s.save_global();
+                                }
+
+                                self.tui_ok(format!("  ✓ Theme changed to '{found_name}'"));
+                            }
+                        }
+                    }
+
                     SlashCmd::Rename(new_name) => {
                         let id = self.agent_id();
                         let new_name = new_name.trim().to_string();
@@ -4269,6 +4391,4 @@ impl Repl {
 
         Ok(())
     }
-
 }
-

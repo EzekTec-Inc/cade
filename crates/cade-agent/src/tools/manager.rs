@@ -1,6 +1,10 @@
 use crate::Result;
 use serde_json::Value;
 
+#[cfg(feature = "desktop")]
+use super::desktop::{
+    DesktopCaptureTool, DesktopControlTool, DesktopListWindowsTool, DesktopNotifyTool,
+};
 use super::{
     ask::AskUserQuestionTool,
     bash::BashTool,
@@ -8,8 +12,6 @@ use super::{
     plan::{EnterPlanModeTool, ExitPlanModeTool, TodoWriteTool, UpdatePlanTool, WriteTodosTool},
     search::{GlobTool, GrepTool},
 };
-#[cfg(feature = "desktop")]
-use super::desktop::{DesktopCaptureTool, DesktopControlTool, DesktopListWindowsTool, DesktopNotifyTool};
 use crate::mcp::McpManager;
 use cade_core::toolsets::Toolset;
 

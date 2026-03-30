@@ -1,8 +1,8 @@
-use super::{Repl, ToolPreflightResult, EMPTY_YIELD_REPROMPT};
+use super::{EMPTY_YIELD_REPROMPT, Repl, ToolPreflightResult};
 use super::{fmt_tok_short, fmt_window_tokens_short, short_mode_label};
 use crate::Result;
+use crate::support::text::{FinishReasonCategory, finish_reason_hint, truncate};
 use crate::ui::RenderLine;
-use crate::support::text::{finish_reason_hint, truncate, FinishReasonCategory};
 use cade_agent::agent::client::CadeMessage;
 use std::io;
 
@@ -1783,12 +1783,17 @@ impl Repl {
         if !result.is_error {
             match tool_name {
                 "write_file" | "edit_file" | "apply_patch" | "Replace" | "WriteFileGemini" => {
-                    let path = args["file_path"].as_str().or(args["path"].as_str()).unwrap_or("unknown");
+                    let path = args["file_path"]
+                        .as_str()
+                        .or(args["path"].as_str())
+                        .unwrap_or("unknown");
                     let msg = format!("Recently edited: {path}\n");
                     let c = runtime.client.clone();
                     let a = runtime.agent_id.clone();
                     tokio::spawn(async move {
-                        let _ = c.append_memory_with_limit(&a, "working_set", &msg, None, Some(3000)).await;
+                        let _ = c
+                            .append_memory_with_limit(&a, "working_set", &msg, None, Some(3000))
+                            .await;
                     });
                 }
                 _ => {}
@@ -1848,7 +1853,10 @@ impl Repl {
     ///   2. Yes, don't ask again — session-allow + run
     ///   3. No — deny
     ///      Generate a diff preview for file-mutation tools shown before the approval prompt.
-    pub(crate) fn build_diff_preview(tool_name: &str, args: &serde_json::Value) -> Option<Vec<RenderLine>> {
+    pub(crate) fn build_diff_preview(
+        tool_name: &str,
+        args: &serde_json::Value,
+    ) -> Option<Vec<RenderLine>> {
         match tool_name {
             "edit_file" => {
                 let path = args["path"].as_str()?;
@@ -2042,7 +2050,10 @@ impl Repl {
     ///
     /// Only fires when the block is actually empty so the model is not nagged
     /// when it has already been diligently updating its own memory.
-    pub(crate) async fn inject_working_set_reminder(&mut self, stdout: &mut io::Stdout) -> Result<()> {
+    pub(crate) async fn inject_working_set_reminder(
+        &mut self,
+        stdout: &mut io::Stdout,
+    ) -> Result<()> {
         let agent_id = self.agent_id();
 
         // Fetch the current working_set value — one async call, performed once

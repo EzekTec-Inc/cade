@@ -4,9 +4,21 @@ use cade_core::permissions::PermissionMode;
 /// Uses user-friendly names while keeping internal mode values unchanged.
 pub(crate) fn mode_display(mode: PermissionMode) -> (&'static str, &'static str, &'static str) {
     match mode {
-        PermissionMode::Plan => ("📖", "Plan only", "— Read-only, no modifications. Use /mode default to resume."),
-        PermissionMode::BypassPermissions => ("⚡", "Full access", "— All tools auto-approved, no confirmations."),
-        PermissionMode::AcceptEdits => ("📝", "Edit freely", "— File edits auto-approved, other tools ask."),
+        PermissionMode::Plan => (
+            "📖",
+            "Plan only",
+            "— Read-only, no modifications. Use /mode default to resume.",
+        ),
+        PermissionMode::BypassPermissions => (
+            "⚡",
+            "Full access",
+            "— All tools auto-approved, no confirmations.",
+        ),
+        PermissionMode::AcceptEdits => (
+            "📝",
+            "Edit freely",
+            "— File edits auto-approved, other tools ask.",
+        ),
         PermissionMode::Default => ("✅", "Safe", "— All tool calls require your approval."),
     }
 }

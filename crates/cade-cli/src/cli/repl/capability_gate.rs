@@ -1,7 +1,7 @@
-/// Capability gating helpers for REPL commands.
-///
-/// When a command requires a capability that is not enabled, the helper
-/// prints a user-friendly hint and returns `true` (= blocked).
+//! Capability gating helpers for REPL commands.
+//!
+//! When a command requires a capability that is not enabled, the helper
+//! prints a user-friendly hint and returns `true` (= blocked).
 
 use super::Repl;
 use cade_core::capabilities::{Capability, CapabilitySet};
@@ -31,10 +31,7 @@ impl Repl {
             return false;
         }
         let names: Vec<&str> = caps.iter().map(|c| c.name()).collect();
-        self.tui_dim(format!(
-            "  {command} requires one of: {}",
-            names.join(", ")
-        ));
+        self.tui_dim(format!("  {command} requires one of: {}", names.join(", ")));
         self.tui_dim("  Enable in ~/.cade/settings.json or set \"profile\": \"full\".");
         true
     }
