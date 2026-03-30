@@ -1540,3 +1540,17 @@ git checkout HEAD -- crates/cade-tui/src/app.rs
 **Previous behavior:** No easy way to generate a matching CADE theme from Neovim.
 **New behavior:** The plugin extracts `get_hl` colors, maps them to CADE tokens, and writes `~/.cade/themes/nvim-exported.json` on `ColorScheme` events.
 **Rollback steps:** Delete `plugins/cade.nvim` and `docs/themes.md`.
+
+## 2026-03-30T15:00:00Z — Cleanup of Obsolete Planning and Test Files
+**Summary of change:** Removed `NVIM_THEME_PLAN.md`, `test_parse.rs`, and `ENHANCEMENT_PLAN.md` as they are no longer needed.
+**Files modified:**
+- `DELETED` `NVIM_THEME_PLAN.md`
+- `DELETED` `test_parse.rs`
+- `DELETED` `ENHANCEMENT_PLAN.md`
+**Reason:** 
+- `NVIM_THEME_PLAN.md`: The Neovim exporter plugin was already implemented.
+- `test_parse.rs`: Was an isolated test scratchpad.
+- `ENHANCEMENT_PLAN.md`: Investigation revealed that all three phases (Path Protections via `path_is_protected`, Auto-checkpoints via `auto_checkpoint`, and Hot-reloading via the `notify` crate) have already been fully implemented in the codebase.
+**Previous behavior:** Unnecessary obsolete documents cluttering the repository.
+**New behavior:** Clean workspace with implemented features properly documented in their respective locations.
+**Rollback steps:** Restore the deleted files from git history.
