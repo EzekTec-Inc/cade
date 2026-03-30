@@ -1586,3 +1586,37 @@ git checkout HEAD -- crates/cade-tui/src/app.rs
 - `cargo check` (full workspace) ✅
 
 **Next Phase:** Phase 2 — Wire ToolReranker into cade-server's build_context()
+
+## 2026-03-30T23:30:00Z — Phase 2 Execution Complete: Wired Reranker into cade-server
+
+**Summary:** Integrated ToolReranker into the cade-server request pipeline.
+
+**Files Modified:**
+- `crates/cade-server/src/server/state.rs` — Added `tool_reranker: Option<Arc<ToolReranker>>` to AppState (cfg-gated)
+- `crates/cade-server/src/server/mod.rs` — Re-exported `cade_reranker` under `reranker` feature
+- `crates/cade-server/src/server/api/messages/context.rs` — Added ITS block after lazy desktop pruning
+- `src/bin/cade-server.rs` — Construct ToolReranker from env config and inject into AppState
+
+**Integration Flow:**
+```
+build_context()
+  → collect all tool schemas (native + MCP)
+  → lazy prune desktop_* if unused (existing)
+  → NEW: if reranker enabled, rerank against latest user prompt  ← Phase 2
+  → return (model, messages, filtered_tool_schemas)
+```
+
+**Verification:**
+- `cargo check` (full workspace, default features) ✅
+- `cargo check` (without reranker feature) ✅
+- `cargo check -p cade-server --features reranker` ✅
+- `cargo test -p cade-reranker -p cade-server` — 44 tests pass ✅
+
+**Activation:**
+```bash
+CADE_RERANKER_ENABLED=true   # Turn on
+CADE_RERANKER_TOP_N=15       # Default
+CADE_RERANKER_BACKEND=local  # Default (ONNX)
+```
+
+**Status:** Phase 2 complete. Ready for Phase 3 (testing & evaluation).

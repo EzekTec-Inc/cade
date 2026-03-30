@@ -12,4 +12,8 @@ pub mod storage;
 
 pub use error::{Error, Result};
 
+// -- Optional re-exports for feature-gated crates
+#[cfg(feature = "reranker")]
+pub use cade_reranker;
+
 // endregion: --- Modules

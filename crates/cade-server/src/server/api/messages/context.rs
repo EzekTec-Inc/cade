@@ -495,6 +495,34 @@ pub(crate) async fn build_context(
         tool_schemas
     };
 
+    // ── Intelligent tool selection ────────────────────────────────────────────
+    //
+    // When the reranker feature is compiled in and enabled, score every tool
+    // schema against the latest user prompt and keep only the top-N most
+    // relevant ones (plus protected tools that are always included).
+    //
+    // This runs AFTER the lazy desktop_* pruning above so the candidate set
+    // is already reduced on long sessions.  On error the full set is returned
+    // (graceful fallback).
+    #[cfg(feature = "reranker")]
+    let tool_schemas: Vec<Value> = if let Some(reranker) = &state.tool_reranker {
+        if reranker.is_enabled() {
+            // Extract the latest user message as the reranking query.
+            let user_prompt = messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "user")
+                .map(|m| m.content.as_str())
+                .unwrap_or("");
+
+            reranker.rerank(user_prompt, tool_schemas).await
+        } else {
+            tool_schemas
+        }
+    } else {
+        tool_schemas
+    };
+
     Ok((agent.model, messages, tool_schemas))
 }
 
