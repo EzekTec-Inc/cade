@@ -99,12 +99,13 @@ Because CADE watches the settings and (implicitly) the active theme, updates fro
 
 1. **Documentation Snippet:** 
    Add a new section in `docs/themes.md` (or a new `docs/neovim.md`) providing a copy-pasteable Lua snippet for users who want to drop it directly into their `init.lua`.
-2. **Standalone Plugin (Optional but Recommended):**
-   Create a tiny, dedicated GitHub repository (e.g., `EzekTec-Inc/cade.nvim`) containing this Lua code. This allows users to install it via Lazy/Packer:
+2. **Standalone Plugin:**
+   Create a dedicated GitHub repository (e.g., `EzekTec-Inc/cade.nvim`) or host this Lua code inside the monorepo at `plugins/cade.nvim`. This allows users to install it via Lazy/Packer pointing to the subdirectory:
    ```lua
    {
-     "EzekTec-Inc/cade.nvim",
-     config = function()
+     "EzekTec-Inc/cade",
+     config = function(plugin)
+       vim.opt.rtp:append(plugin.dir .. "/plugins/cade.nvim")
        require("cade").setup({ auto_export = true })
      end
    }

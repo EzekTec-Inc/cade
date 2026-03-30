@@ -31,6 +31,7 @@ impl Default for ThemeColor {
 
 /// Full set of color tokens for a theme (51 tokens matching pi's schema).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
 pub struct ThemeTokens {
     // -- Core UI
     pub accent: ThemeColor,

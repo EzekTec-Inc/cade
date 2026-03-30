@@ -62,13 +62,14 @@ You can synchronize your active Neovim colorscheme dynamically with CADE using t
 
 ### Standalone Plugin
 
-The recommended way is to use `cade.nvim`, a minimal plugin that extracts colors directly from highlight groups and exports them to CADE.
+The recommended way is to use `cade.nvim`, a minimal plugin that extracts colors directly from highlight groups and exports them to CADE. Since it is hosted in the main CADE monorepo, you need to point your package manager to the `plugins/cade.nvim` directory.
 
 Using **lazy.nvim**:
 ```lua
 {
-  "EzekTec-Inc/cade.nvim",
-  config = function()
+  "EzekTec-Inc/cade",
+  config = function(plugin)
+    vim.opt.rtp:append(plugin.dir .. "/plugins/cade.nvim")
     require("cade").setup({
       auto_export = true,
       theme_name = "nvim-exported"

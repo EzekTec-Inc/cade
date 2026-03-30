@@ -11,12 +11,15 @@ A lightweight Neovim plugin that exports your active colorscheme to [CADE](https
 
 ## Installation
 
+Since this plugin is currently hosted within the main CADE monorepo, you need to configure your package manager to point to the `plugins/cade.nvim` subdirectory.
+
 Using [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-  "EzekTec-Inc/cade.nvim",
-  config = function()
+  "EzekTec-Inc/cade",
+  config = function(plugin)
+    vim.opt.rtp:append(plugin.dir .. "/plugins/cade.nvim")
     require("cade").setup({
       auto_export = true, -- Automatically export theme on ColorScheme change
       theme_name = "nvim-exported" -- The name of the exported CADE theme
@@ -29,8 +32,10 @@ Using [packer.nvim](https://github.com/wbthomason/packer.nvim):
 
 ```lua
 use {
-  "EzekTec-Inc/cade.nvim",
+  "EzekTec-Inc/cade",
   config = function()
+    local install_path = vim.fn.stdpath("data") .. "/site/pack/packer/start/cade"
+    vim.opt.rtp:append(install_path .. "/plugins/cade.nvim")
     require("cade").setup({ auto_export = true })
   end
 }
