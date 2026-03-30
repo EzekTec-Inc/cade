@@ -1554,3 +1554,35 @@ git checkout HEAD -- crates/cade-tui/src/app.rs
 **Previous behavior:** Unnecessary obsolete documents cluttering the repository.
 **New behavior:** Clean workspace with implemented features properly documented in their respective locations.
 **Rollback steps:** Restore the deleted files from git history.
+
+## 2026-03-30T23:00:00Z — Phase 1 Execution Complete: cade-reranker Crate Created
+
+**Summary:** Created the `cade-reranker` crate and wired it into the workspace.
+
+**Files Created:**
+- `crates/cade-reranker/Cargo.toml` — Crate manifest with `local` feature flag
+- `crates/cade-reranker/src/lib.rs` — Public API and re-exports
+- `crates/cade-reranker/src/error.rs` — Error types
+- `crates/cade-reranker/src/config.rs` — RerankerConfig, RerankerBackend, env var parsing
+- `crates/cade-reranker/src/reranker.rs` — Core ToolReranker with cloud backends (Cohere, Voyage, Jina)
+- `crates/cade-reranker/src/model.rs` — Local ONNX inference (ms-marco-MiniLM-L-6-v2)
+
+**Files Modified:**
+- `Cargo.toml` — Added cade-reranker to workspace members, added `reranker` feature
+- `crates/cade-server/Cargo.toml` — Added cade-reranker as optional dep with `reranker` feature
+
+**Tests:** 7 passed, 0 failed
+- config::default_config_is_disabled
+- config::protected_tools_include_essentials
+- model::default_cache_dir_exists
+- reranker::schema_to_document_basic
+- reranker::schema_to_document_no_params
+- reranker::disabled_reranker_passes_through
+- reranker::within_budget_skips_reranking
+
+**Build Verification:**
+- `cargo check -p cade-reranker` ✅
+- `cargo check -p cade-server --features reranker` ✅
+- `cargo check` (full workspace) ✅
+
+**Next Phase:** Phase 2 — Wire ToolReranker into cade-server's build_context()

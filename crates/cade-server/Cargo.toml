@@ -9,12 +9,14 @@ doctest     = false
 [features]
 default = ["codeintel"]
 codeintel = ["dep:cade-codeintel"]
+reranker  = ["dep:cade-reranker"]
 
 [dependencies]
 # -- Workspace crates
 cade-core.path       = "../cade-core"
 cade-ai.path         = "../cade-ai"
 cade-codeintel = { path = "../cade-codeintel", optional = true }
+cade-reranker  = { path = "../cade-reranker", optional = true }
 # -- Error handling
 derive_more.workspace  = true
 # -- Serialisation

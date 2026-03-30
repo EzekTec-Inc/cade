@@ -1,0 +1,35 @@
+[package]
+name        = "cade-reranker"
+version     = "0.2.0"
+edition     = "2024"
+
+[lib]
+doctest = false
+
+[dependencies]
+# -- Error handling
+derive_more.workspace = true
+# -- Serialisation
+serde.workspace      = true
+serde_json.workspace = true
+# -- Logging
+tracing.workspace    = true
+# -- Async
+tokio.workspace      = true
+# -- HTTP (for cloud reranker APIs)
+reqwest.workspace    = true
+# -- Misc
+dirs.workspace       = true
+
+# -- Local ONNX inference (optional, behind feature flag)
+ort          = { version = "2.0.0-rc.9", features = ["ndarray"], optional = true }
+tokenizers   = { version = "0.22", optional = true }
+ndarray      = { version = "0.17", optional = true }
+
+[features]
+default = ["local"]
+local   = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
+
+[lints.rust]
+unsafe_code = "forbid"
+# unused = { level = "allow", priority = -1 } # For exploratory dev.
