@@ -1529,3 +1529,14 @@ git checkout HEAD -- crates/cade-tui/src/app.rs
 **Previous behavior:** TUI theme was initialized on startup and could not be switched mid-session.
 **New behavior:** A new `apply_theme` method can reload UI colors instantly, and the `/theme <name>` command lets the user persist and apply it.
 **Rollback steps:** Revert `crates/cade-tui/src/app/mod.rs` to remove `apply_theme`, revert `crates/cade-cli/src/cli/repl/mod.rs` to remove the `SlashCmd::Theme` logic, and remove `/theme` from `crates/cade-tui/src/menu.rs`.
+
+## 2026-03-30T10:00:00Z — Neovim Theme Exporter Plugin
+**Summary of change:** Created `cade.nvim` Lua plugin to export Neovim highlight groups as CADE JSON themes. Added documentation in `docs/themes.md`.
+**Files modified:**
+- `plugins/cade.nvim/lua/cade/init.lua` (added)
+- `plugins/cade.nvim/README.md` (added)
+- `docs/themes.md` (added)
+**Reason:** To enable real-time synchronization between the active Neovim colorscheme and the CADE TUI colors.
+**Previous behavior:** No easy way to generate a matching CADE theme from Neovim.
+**New behavior:** The plugin extracts `get_hl` colors, maps them to CADE tokens, and writes `~/.cade/themes/nvim-exported.json` on `ColorScheme` events.
+**Rollback steps:** Delete `plugins/cade.nvim` and `docs/themes.md`.
