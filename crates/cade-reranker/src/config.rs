@@ -170,6 +170,87 @@ mod tests {
         assert!(tools.contains(&"read_file".to_string()));
         assert!(tools.contains(&"search_memory".to_string()));
     }
+
+    #[test]
+    fn protected_tools_include_all_memory_tools() {
+        let tools = default_protected_tools();
+        for name in &[
+            "search_memory",
+            "conversation_search",
+            "archival_memory_insert",
+            "archival_memory_search",
+            "update_memory",
+            "update_memory_typed",
+            "memory_apply_patch",
+        ] {
+            assert!(
+                tools.contains(&name.to_string()),
+                "missing protected memory tool: {name}"
+            );
+        }
+    }
+
+    #[test]
+    fn default_backend_is_local() {
+        let cfg = RerankerConfig::default();
+        assert!(
+            matches!(cfg.backend, RerankerBackend::Local { .. }),
+            "default backend should be Local"
+        );
+    }
+
+    #[test]
+    fn config_from_env_defaults() {
+        // With no CADE_RERANKER_* vars set, config_from_env should
+        // return sensible defaults.  We rely on the CI/test environment
+        // not having these vars set — if it does, the values just pass
+        // through (no crash).
+        let cfg = config_from_env();
+        // Default top_n is 15 (unless CADE_RERANKER_TOP_N is set externally).
+        assert!(cfg.top_n > 0);
+    }
+
+    #[test]
+    fn reranker_config_manual_construction() {
+        let cfg = RerankerConfig {
+            enabled: true,
+            top_n: 20,
+            backend: RerankerBackend::Cohere {
+                api_key: "sk-test".into(),
+            },
+            protected_tools: vec!["bash".into()],
+        };
+        assert!(cfg.enabled);
+        assert_eq!(cfg.top_n, 20);
+        assert!(matches!(cfg.backend, RerankerBackend::Cohere { ref api_key } if api_key == "sk-test"));
+        assert_eq!(cfg.protected_tools, vec!["bash".to_string()]);
+    }
+
+    #[test]
+    fn reranker_config_voyage_backend() {
+        let cfg = RerankerConfig {
+            enabled: true,
+            top_n: 10,
+            backend: RerankerBackend::Voyage {
+                api_key: "voy-key".into(),
+            },
+            protected_tools: default_protected_tools(),
+        };
+        assert!(matches!(cfg.backend, RerankerBackend::Voyage { ref api_key } if api_key == "voy-key"));
+    }
+
+    #[test]
+    fn reranker_config_jina_backend() {
+        let cfg = RerankerConfig {
+            enabled: true,
+            top_n: 10,
+            backend: RerankerBackend::Jina {
+                api_key: "jina-key".into(),
+            },
+            protected_tools: default_protected_tools(),
+        };
+        assert!(matches!(cfg.backend, RerankerBackend::Jina { ref api_key } if api_key == "jina-key"));
+    }
 }
 
 // endregion: --- Tests

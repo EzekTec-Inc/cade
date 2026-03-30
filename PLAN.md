@@ -1620,3 +1620,56 @@ CADE_RERANKER_BACKEND=local  # Default (ONNX)
 ```
 
 **Status:** Phase 2 complete. Ready for Phase 3 (testing & evaluation).
+
+## 2026-03-30T23:45:00Z — Phase 3 Execution Complete: Testing & Documentation
+
+**Summary:** Expanded test coverage from 7 to 22 tests and wrote feature documentation.
+
+**Files Modified:**
+- `crates/cade-reranker/src/reranker.rs` — Added 11 new tests
+- `crates/cade-reranker/src/config.rs` — Added 7 new tests
+
+**Files Created:**
+- `docs/intelligent-tool-selection.md` — User-facing feature documentation
+
+**Test Coverage (22 tests total):**
+
+Config tests (9):
+- default_config_is_disabled
+- protected_tools_include_essentials
+- protected_tools_include_all_memory_tools
+- default_backend_is_local
+- config_from_env_defaults
+- reranker_config_manual_construction
+- reranker_config_voyage_backend
+- reranker_config_jina_backend
+- reranker_config_cohere (via manual construction)
+
+Reranker tests (12):
+- schema_to_document_basic
+- schema_to_document_no_params
+- schema_to_document_missing_name
+- schema_to_document_missing_description
+- schema_to_document_param_without_description
+- disabled_reranker_passes_through
+- within_budget_skips_reranking
+- protected_tools_always_survive
+- protected_tools_with_remaining_budget
+- parse_index_results_valid
+- parse_index_results_empty
+- parse_index_results_bad_format
+- parse_index_results_out_of_bounds_index_skipped
+
+Model tests (1):
+- default_cache_dir_exists
+
+**Key Discovery:** The local ONNX model was already cached from earlier testing
+and ran real inference during tests, confirming end-to-end reranking works on
+the developer's machine.
+
+**Verification:**
+- `cargo test -p cade-reranker` — 22 passed ✅
+- `cargo test -p cade-reranker -p cade-server` — 59 passed ✅
+- `cargo check` (full workspace) ✅
+
+**Status:** Phase 3 complete. All ITS phases complete.

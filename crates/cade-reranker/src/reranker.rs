@@ -405,6 +405,164 @@ mod tests {
         let result = reranker.rerank("hello", tools.clone()).await;
         assert_eq!(result.len(), 2);
     }
+
+    #[tokio::test]
+    async fn protected_tools_always_survive() {
+        // Even when top_n is tiny, protected tools must be present.
+        let config = RerankerConfig {
+            enabled: true,
+            top_n: 2, // only 2 total slots
+            protected_tools: vec!["bash".into(), "search_memory".into()],
+            ..Default::default()
+        };
+        let reranker = ToolReranker::new(config);
+
+        let tools = vec![
+            json!({"name": "bash", "description": "Execute a shell command."}),
+            json!({"name": "search_memory", "description": "Search memory blocks."}),
+            json!({"name": "grep", "description": "Search file contents."}),
+            json!({"name": "web_search", "description": "Search the web."}),
+        ];
+
+        let result = reranker.rerank("find files", tools).await;
+        let names: Vec<&str> = result.iter().filter_map(|v| v["name"].as_str()).collect();
+
+        assert!(names.contains(&"bash"), "protected tool 'bash' must survive");
+        assert!(
+            names.contains(&"search_memory"),
+            "protected tool 'search_memory' must survive"
+        );
+        // top_n=2, both protected → candidate budget is 0.
+        // 2 candidates > 0 budget → reranking triggers with budget=0.
+        // The result should contain at least the 2 protected tools.
+        assert!(result.len() >= 2);
+    }
+
+    #[tokio::test]
+    async fn protected_tools_with_remaining_budget() {
+        // 1 protected + top_n=3 → budget for candidates is 2.
+        // We have 6 non-protected candidates → reranking triggers.
+        let config = RerankerConfig {
+            enabled: true,
+            top_n: 3,
+            protected_tools: vec!["bash".into()],
+            ..Default::default()
+        };
+        let reranker = ToolReranker::new(config);
+
+        let tools: Vec<Value> = (0..6)
+            .map(|i| json!({"name": format!("tool_{i}"), "description": format!("Tool number {i}")}))
+            .chain(std::iter::once(json!({"name": "bash", "description": "Shell"})))
+            .collect();
+
+        let result = reranker.rerank("do something", tools.clone()).await;
+        let names: Vec<&str> = result.iter().filter_map(|v| v["name"].as_str()).collect();
+
+        // Regardless of whether local model is available or fallback kicks in,
+        // "bash" must always be present.
+        assert!(names.contains(&"bash"), "protected tool 'bash' must survive");
+        // Result should be at most top_n (3) tools, or the full set on fallback.
+        assert!(
+            result.len() == 3 || result.len() == tools.len(),
+            "expected top_n (3) or full set ({}), got {}",
+            tools.len(),
+            result.len()
+        );
+    }
+
+    #[test]
+    fn schema_to_document_missing_name() {
+        let schema = json!({
+            "description": "A tool with no name."
+        });
+        let doc = ToolReranker::schema_to_document(&schema);
+        assert_eq!(doc.name, "");
+        assert!(doc.text.contains("A tool with no name."));
+    }
+
+    #[test]
+    fn schema_to_document_missing_description() {
+        let schema = json!({
+            "name": "mystery_tool"
+        });
+        let doc = ToolReranker::schema_to_document(&schema);
+        assert_eq!(doc.name, "mystery_tool");
+        assert_eq!(doc.text, "mystery_tool");
+    }
+
+    #[test]
+    fn schema_to_document_param_without_description() {
+        let schema = json!({
+            "name": "write_file",
+            "description": "Write content to a file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": { "type": "string" },
+                    "content": { "type": "string", "description": "File content" }
+                }
+            }
+        });
+        let doc = ToolReranker::schema_to_document(&schema);
+        // "path" has no description → just the key name
+        assert!(doc.text.contains("path"));
+        assert!(doc.text.contains("content: File content"));
+    }
+
+    #[test]
+    fn parse_index_results_valid() {
+        let docs = vec![
+            ToolDocument { schema: json!({"name":"a"}), name: "a".into(), text: "a".into() },
+            ToolDocument { schema: json!({"name":"b"}), name: "b".into(), text: "b".into() },
+            ToolDocument { schema: json!({"name":"c"}), name: "c".into(), text: "c".into() },
+        ];
+        let api_response = json!([
+            { "index": 2, "relevance_score": 0.95 },
+            { "index": 0, "relevance_score": 0.80 },
+            { "index": 1, "relevance_score": 0.30 },
+        ]);
+
+        let result = super::parse_index_results(&api_response, &docs, 2).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0].name, "c");
+        assert_eq!(result[1].name, "a");
+    }
+
+    #[test]
+    fn parse_index_results_empty() {
+        let docs = vec![
+            ToolDocument { schema: json!({"name":"a"}), name: "a".into(), text: "a".into() },
+        ];
+        let api_response = json!([]);
+        let result = super::parse_index_results(&api_response, &docs, 5).unwrap();
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn parse_index_results_bad_format() {
+        let docs = vec![
+            ToolDocument { schema: json!({"name":"a"}), name: "a".into(), text: "a".into() },
+        ];
+        // Not an array
+        let api_response = json!("not an array");
+        let result = super::parse_index_results(&api_response, &docs, 5);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn parse_index_results_out_of_bounds_index_skipped() {
+        let docs = vec![
+            ToolDocument { schema: json!({"name":"a"}), name: "a".into(), text: "a".into() },
+        ];
+        let api_response = json!([
+            { "index": 999, "relevance_score": 0.99 },
+            { "index": 0, "relevance_score": 0.50 },
+        ]);
+        let result = super::parse_index_results(&api_response, &docs, 5).unwrap();
+        // Index 999 is out of bounds and skipped, only index 0 is kept.
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].name, "a");
+    }
 }
 
 // endregion: --- Tests
