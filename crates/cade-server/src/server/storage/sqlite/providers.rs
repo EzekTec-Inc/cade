@@ -82,3 +82,126 @@ pub fn delete_provider(db: &Db, name: &str) -> Result<bool> {
     let n = conn.execute("DELETE FROM providers WHERE name = ?1", params![name])?;
     Ok(n > 0)
 }
+
+// region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
+
+    use super::*;
+
+    fn setup_mem_db() -> Result<Db> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        apply_schema(&conn)?;
+        run_migrations(&conn)?;
+        Ok(Arc::new(Mutex::new(conn)))
+    }
+
+    #[test]
+    fn test_upsert_and_list_providers() -> Result<()> {
+        let db = setup_mem_db()?;
+        assert!(list_providers(&db)?.is_empty());
+
+        upsert_provider(
+            &db,
+            &ProviderRow {
+                name: "ollama".into(),
+                kind: "ollama".into(),
+                api_key: None,
+                base_url: Some("http://localhost:11434".into()),
+                enabled: true,
+            },
+        )?;
+
+        let providers = list_providers(&db)?;
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].name, "ollama");
+        assert_eq!(providers[0].kind, "ollama");
+        assert!(providers[0].api_key.is_none());
+        assert_eq!(
+            providers[0].base_url,
+            Some("http://localhost:11434".into())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_upsert_provider_with_encrypted_key() -> Result<()> {
+        let db = setup_mem_db()?;
+
+        upsert_provider(
+            &db,
+            &ProviderRow {
+                name: "anthropic".into(),
+                kind: "anthropic".into(),
+                api_key: Some("sk-test-key".into()),
+                base_url: None,
+                enabled: true,
+            },
+        )?;
+
+        // The stored key should be encrypted (different from the plaintext)
+        let providers = list_providers(&db)?;
+        assert_eq!(providers.len(), 1);
+        // list_providers decrypts, so we should get the original back
+        assert_eq!(providers[0].api_key, Some("sk-test-key".into()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_upsert_provider_update() -> Result<()> {
+        let db = setup_mem_db()?;
+
+        upsert_provider(
+            &db,
+            &ProviderRow {
+                name: "test".into(),
+                kind: "openai".into(),
+                api_key: None,
+                base_url: None,
+                enabled: true,
+            },
+        )?;
+
+        // Update same name with different kind
+        upsert_provider(
+            &db,
+            &ProviderRow {
+                name: "test".into(),
+                kind: "anthropic".into(),
+                api_key: None,
+                base_url: None,
+                enabled: false,
+            },
+        )?;
+
+        let providers = list_providers(&db)?;
+        assert_eq!(providers.len(), 1);
+        assert_eq!(providers[0].kind, "anthropic");
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_provider() -> Result<()> {
+        let db = setup_mem_db()?;
+        upsert_provider(
+            &db,
+            &ProviderRow {
+                name: "test".into(),
+                kind: "ollama".into(),
+                api_key: None,
+                base_url: None,
+                enabled: true,
+            },
+        )?;
+        assert!(delete_provider(&db, "test")?);
+        assert!(list_providers(&db)?.is_empty());
+        assert!(!delete_provider(&db, "nope")?);
+        Ok(())
+    }
+}
+
+// endregion: --- Tests

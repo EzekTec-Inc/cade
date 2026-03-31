@@ -111,3 +111,109 @@ pub struct RunRow {
     pub created_at: i64,
     pub updated_at: i64,
 }
+
+// region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
+
+    use super::*;
+
+    fn setup_mem_db() -> Result<Db> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        apply_schema(&conn)?;
+        run_migrations(&conn)?;
+        Ok(Arc::new(Mutex::new(conn)))
+    }
+
+    fn make_agent(db: &Db, id: &str) -> Result<()> {
+        agents::create_agent(
+            db,
+            &AgentRow {
+                id: id.into(),
+                name: "A".into(),
+                model: "m".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+            },
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_and_get_conversation() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+        let conv = create_conversation(&db, "a1", "My Chat")?;
+        assert_eq!(conv.agent_id, "a1");
+        assert_eq!(conv.title, "My Chat");
+
+        let got = get_conversation(&db, &conv.id)?.expect("should exist");
+        assert_eq!(got.id, conv.id);
+        assert_eq!(got.title, "My Chat");
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_conversation_not_found() -> Result<()> {
+        let db = setup_mem_db()?;
+        assert!(get_conversation(&db, "nope")?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_conversations() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+        make_agent(&db, "a2")?;
+        assert!(list_conversations(&db, "a1")?.is_empty());
+        create_conversation(&db, "a1", "C1")?;
+        create_conversation(&db, "a1", "C2")?;
+        create_conversation(&db, "a2", "C3")?;
+        assert_eq!(list_conversations(&db, "a1")?.len(), 2);
+        assert_eq!(list_conversations(&db, "a2")?.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_conversation() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+        let conv = create_conversation(&db, "a1", "C1")?;
+        assert!(delete_conversation(&db, &conv.id)?);
+        assert!(get_conversation(&db, &conv.id)?.is_none());
+        assert!(!delete_conversation(&db, "nope")?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_conversation_title() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+        let conv = create_conversation(&db, "a1", "Old")?;
+        update_conversation_title(&db, &conv.id, "New")?;
+        let got = get_conversation(&db, &conv.id)?.unwrap();
+        assert_eq!(got.title, "New");
+        Ok(())
+    }
+
+    #[test]
+    fn test_touch_conversation() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+        let conv = create_conversation(&db, "a1", "C1")?;
+        let before = get_conversation(&db, &conv.id)?.unwrap().updated_at;
+        // Sleep a tiny bit so timestamp advances
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        touch_conversation(&db, &conv.id)?;
+        let after = get_conversation(&db, &conv.id)?.unwrap().updated_at;
+        assert!(after >= before);
+        Ok(())
+    }
+}
+
+// endregion: --- Tests

@@ -145,3 +145,184 @@ pub struct ConversationRow {
     pub updated_at: i64,
     pub message_count: i64,
 }
+
+// region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
+
+    use super::*;
+
+    fn setup_mem_db() -> Result<Db> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        apply_schema(&conn)?;
+        run_migrations(&conn)?;
+        Ok(Arc::new(Mutex::new(conn)))
+    }
+
+    fn test_agent(id: &str) -> AgentRow {
+        AgentRow {
+            id: id.into(),
+            name: format!("Agent {id}"),
+            model: "test-model".into(),
+            description: None,
+            system_prompt: None,
+            created_at: None,
+        }
+    }
+
+    #[test]
+    fn test_create_and_get_agent() -> Result<()> {
+        let db = setup_mem_db()?;
+        create_agent(&db, &test_agent("a1"))?;
+        let got = get_agent(&db, "a1")?.expect("agent should exist");
+        assert_eq!(got.id, "a1");
+        assert_eq!(got.name, "Agent a1");
+        assert_eq!(got.model, "test-model");
+        assert!(got.created_at.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_agent_not_found() -> Result<()> {
+        let db = setup_mem_db()?;
+        assert!(get_agent(&db, "nope")?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_agents_empty_and_populated() -> Result<()> {
+        let db = setup_mem_db()?;
+        assert!(list_agents(&db)?.is_empty());
+        create_agent(&db, &test_agent("a1"))?;
+        create_agent(&db, &test_agent("a2"))?;
+        assert_eq!(list_agents(&db)?.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_delete_agent() -> Result<()> {
+        let db = setup_mem_db()?;
+        create_agent(&db, &test_agent("a1"))?;
+        assert!(delete_agent(&db, "a1")?);
+        assert!(get_agent(&db, "a1")?.is_none());
+        assert!(!delete_agent(&db, "nope")?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_agent_model() -> Result<()> {
+        let db = setup_mem_db()?;
+        create_agent(&db, &test_agent("a1"))?;
+        assert!(update_agent_model(&db, "a1", "gpt-4o")?);
+        assert_eq!(get_agent(&db, "a1")?.unwrap().model, "gpt-4o");
+        assert!(!update_agent_model(&db, "nope", "x")?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_agent_name() -> Result<()> {
+        let db = setup_mem_db()?;
+        create_agent(&db, &test_agent("a1"))?;
+        assert!(update_agent_name(&db, "a1", "Renamed")?);
+        assert_eq!(get_agent(&db, "a1")?.unwrap().name, "Renamed");
+        assert!(!update_agent_name(&db, "nope", "x")?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_agent_system_prompt() -> Result<()> {
+        let db = setup_mem_db()?;
+        create_agent(&db, &test_agent("a1"))?;
+        assert!(update_agent_system_prompt(&db, "a1", "Be helpful")?);
+        assert_eq!(
+            get_agent(&db, "a1")?.unwrap().system_prompt,
+            Some("Be helpful".into())
+        );
+        assert!(!update_agent_system_prompt(&db, "nope", "x")?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_attach_and_get_agent_tools() -> Result<()> {
+        let db = setup_mem_db()?;
+        create_agent(&db, &test_agent("a1"))?;
+        // Create two tools via upsert_tool (from tools module, re-exported by super)
+        upsert_tool(
+            &db,
+            &ToolRow {
+                id: "t1".into(),
+                name: "bash".into(),
+                description: None,
+                source_code: None,
+                json_schema: None,
+                tags: vec![],
+            },
+        )?;
+        upsert_tool(
+            &db,
+            &ToolRow {
+                id: "t2".into(),
+                name: "grep".into(),
+                description: None,
+                source_code: None,
+                json_schema: None,
+                tags: vec![],
+            },
+        )?;
+        attach_tools_to_agent(&db, "a1", &["t1".into(), "t2".into()])?;
+        let ids = get_agent_tool_ids(&db, "a1")?;
+        assert_eq!(ids.len(), 2);
+        assert!(ids.contains(&"t1".to_string()));
+        assert!(ids.contains(&"t2".to_string()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_agent_tools_with_names() -> Result<()> {
+        let db = setup_mem_db()?;
+        create_agent(&db, &test_agent("a1"))?;
+        upsert_tool(
+            &db,
+            &ToolRow {
+                id: "t1".into(),
+                name: "bash".into(),
+                description: None,
+                source_code: None,
+                json_schema: None,
+                tags: vec![],
+            },
+        )?;
+        attach_tools_to_agent(&db, "a1", &["t1".into()])?;
+        let names = get_agent_tools_with_names(&db, "a1")?;
+        assert_eq!(names.len(), 1);
+        assert_eq!(names[0], ("t1".into(), "bash".into()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_detach_all_tools() -> Result<()> {
+        let db = setup_mem_db()?;
+        create_agent(&db, &test_agent("a1"))?;
+        upsert_tool(
+            &db,
+            &ToolRow {
+                id: "t1".into(),
+                name: "bash".into(),
+                description: None,
+                source_code: None,
+                json_schema: None,
+                tags: vec![],
+            },
+        )?;
+        attach_tools_to_agent(&db, "a1", &["t1".into()])?;
+        assert_eq!(detach_all_tools_from_agent(&db, "a1")?, 1);
+        assert!(get_agent_tool_ids(&db, "a1")?.is_empty());
+        Ok(())
+    }
+}
+
+// endregion: --- Tests

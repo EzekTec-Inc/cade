@@ -94,3 +94,95 @@ pub struct MessageRow {
     pub content: Value,
     pub char_count: usize,
 }
+
+// region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
+
+    use super::*;
+
+    fn setup_mem_db() -> Result<Db> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        apply_schema(&conn)?;
+        run_migrations(&conn)?;
+        Ok(Arc::new(Mutex::new(conn)))
+    }
+
+    fn make_agent(db: &Db, id: &str) -> Result<()> {
+        agents::create_agent(
+            db,
+            &AgentRow {
+                id: id.into(),
+                name: "A".into(),
+                model: "m".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+            },
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_and_get_run() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+        let run = create_run(&db, "a1", None)?;
+        assert_eq!(run.agent_id, "a1");
+        assert_eq!(run.status, "running");
+        assert!(run.conversation_id.is_none());
+
+        let got = get_run(&db, &run.id)?.expect("run should exist");
+        assert_eq!(got.id, run.id);
+        assert_eq!(got.status, "running");
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_run_not_found() -> Result<()> {
+        let db = setup_mem_db()?;
+        assert!(get_run(&db, "nope")?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_finish_run() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+        let run = create_run(&db, "a1", None)?;
+        finish_run(&db, &run.id, "completed")?;
+        let got = get_run(&db, &run.id)?.unwrap();
+        assert_eq!(got.status, "completed");
+        Ok(())
+    }
+
+    #[test]
+    fn test_append_and_get_run_events() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+        let run = create_run(&db, "a1", None)?;
+
+        let seq1 = append_run_event(&db, &run.id, "event one")?;
+        let seq2 = append_run_event(&db, &run.id, "event two")?;
+        let seq3 = append_run_event(&db, &run.id, "event three")?;
+        assert!(seq2 > seq1);
+        assert!(seq3 > seq2);
+
+        // Get events after seq1 (exclusive — should return seq2 and seq3)
+        let events = run_events_after(&db, &run.id, seq1)?;
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].1, "event two");
+        assert_eq!(events[1].1, "event three");
+
+        // Get all events (after seq -1 to include seq 0)
+        let all = run_events_after(&db, &run.id, -1)?;
+        assert_eq!(all.len(), 3);
+        Ok(())
+    }
+}
+
+// endregion: --- Tests

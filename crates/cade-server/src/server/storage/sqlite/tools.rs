@@ -333,3 +333,253 @@ pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
 }
 
 // -- Providers
+
+// region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
+
+    use super::*;
+    use serde_json::json;
+
+    fn setup_mem_db() -> Result<Db> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        apply_schema(&conn)?;
+        run_migrations(&conn)?;
+        Ok(Arc::new(Mutex::new(conn)))
+    }
+
+    fn make_agent(db: &Db, id: &str) -> Result<()> {
+        agents::create_agent(
+            db,
+            &AgentRow {
+                id: id.into(),
+                name: "A".into(),
+                model: "m".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+            },
+        )?;
+        Ok(())
+    }
+
+    fn make_tool(id: &str, name: &str) -> ToolRow {
+        ToolRow {
+            id: id.into(),
+            name: name.into(),
+            description: Some(format!("{name} tool")),
+            source_code: None,
+            json_schema: Some(json!({"name": name})),
+            tags: vec!["test".into()],
+        }
+    }
+
+    #[test]
+    fn test_upsert_and_list_tools() -> Result<()> {
+        let db = setup_mem_db()?;
+        assert!(list_tools(&db)?.is_empty());
+
+        upsert_tool(&db, &make_tool("t1", "bash"))?;
+        upsert_tool(&db, &make_tool("t2", "grep"))?;
+
+        let tools = list_tools(&db)?;
+        assert_eq!(tools.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_upsert_tool_update() -> Result<()> {
+        let db = setup_mem_db()?;
+        upsert_tool(&db, &make_tool("t1", "bash"))?;
+
+        // Upsert same name with updated description (conflict on name)
+        upsert_tool(
+            &db,
+            &ToolRow {
+                id: "t1-new".into(), // different id doesn't matter — conflict is on name
+                name: "bash".into(),
+                description: Some("Updated bash".into()),
+                source_code: None,
+                json_schema: None,
+                tags: vec![],
+            },
+        )?;
+
+        let tools = list_tools(&db)?;
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0].description, Some("Updated bash".into()));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_tool_id_by_name() -> Result<()> {
+        let db = setup_mem_db()?;
+        assert!(get_tool_id_by_name(&db, "bash").is_none());
+
+        upsert_tool(&db, &make_tool("t1", "bash"))?;
+        assert_eq!(get_tool_id_by_name(&db, "bash"), Some("t1".into()));
+        assert!(get_tool_id_by_name(&db, "nope").is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_clear_messages_all() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!("hello"),
+                char_count: 5,
+            },
+        )?;
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m2".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "assistant".into(),
+                content: json!("hi"),
+                char_count: 2,
+            },
+        )?;
+
+        let cleared = clear_messages(&db, "a1", None)?;
+        assert_eq!(cleared, 2);
+        assert!(list_messages(&db, "a1", None, 100)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_clear_messages_by_conversation() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m1".into(),
+                agent_id: "a1".into(),
+                conversation_id: Some("c1".into()),
+                role: "user".into(),
+                content: json!("conv1"),
+                char_count: 4,
+            },
+        )?;
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m2".into(),
+                agent_id: "a1".into(),
+                conversation_id: Some("c2".into()),
+                role: "user".into(),
+                content: json!("conv2"),
+                char_count: 4,
+            },
+        )?;
+
+        // Clear only c1
+        let cleared = clear_messages(&db, "a1", Some("c1"))?;
+        assert_eq!(cleared, 1);
+        // c2 should remain
+        let remaining = list_messages(&db, "a1", Some("c2"), 100)?;
+        assert_eq!(remaining.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_messages_fts() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!("Rust is a systems programming language"),
+                char_count: 40,
+            },
+        )?;
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m2".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!("Python is great for data science"),
+                char_count: 32,
+            },
+        )?;
+
+        let results = search_messages(&db, "a1", "Rust", None)?;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].content.as_str().unwrap().contains("Rust"));
+
+        let results = search_messages(&db, "a1", "nonexistent_term_xyz", None)?;
+        assert!(results.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_and_search_archival_memory() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        insert_archival_memory(
+            &db,
+            "a1",
+            "The quick brown fox jumps over the lazy dog",
+            &["test".into(), "fox".into()],
+        )?;
+        insert_archival_memory(
+            &db,
+            "a1",
+            "Lorem ipsum dolor sit amet",
+            &["test".into()],
+        )?;
+
+        let results = search_archival_memory(&db, "a1", "brown fox", 10)?;
+        assert_eq!(results.len(), 1);
+        assert!(results[0].content.contains("brown fox"));
+        assert!(results[0].tags.contains(&"fox".into()));
+
+        let all = search_archival_memory(&db, "a1", "test", 10)?;
+        // Both entries should be searchable
+        assert!(!all.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_tools_empty() -> Result<()> {
+        let db = setup_mem_db()?;
+        assert!(list_tools(&db)?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_pending_tool_results() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        // No pending results initially
+        let (pending, _total) = pending_tool_results(&db, "a1", None)?;
+        assert_eq!(pending, 0);
+        Ok(())
+    }
+}
+
+// endregion: --- Tests

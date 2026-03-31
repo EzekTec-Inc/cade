@@ -193,3 +193,171 @@ pub fn get_context_window(
     result.reverse();
     Ok(result)
 }
+
+// region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+    #[allow(unused)]
+    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>;
+
+    use super::*;
+    use serde_json::json;
+
+    fn setup_mem_db() -> Result<Db> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("PRAGMA foreign_keys=ON;")?;
+        apply_schema(&conn)?;
+        run_migrations(&conn)?;
+        Ok(Arc::new(Mutex::new(conn)))
+    }
+
+    fn make_agent(db: &Db, id: &str) -> Result<()> {
+        agents::create_agent(
+            db,
+            &AgentRow {
+                id: id.into(),
+                name: "A".into(),
+                model: "m".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+            },
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_insert_and_list_messages() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!("hello"),
+                char_count: 5,
+            },
+        )?;
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m2".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "assistant".into(),
+                content: json!("hi there"),
+                char_count: 8,
+            },
+        )?;
+
+        let msgs = list_messages(&db, "a1", None, 10)?;
+        assert_eq!(msgs.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_last_assistant_message() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        // No messages yet
+        let last = last_assistant_message(&db, "a1", None)?;
+        assert!(last.is_none());
+
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!("hello"),
+                char_count: 5,
+            },
+        )?;
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m2".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "assistant".into(),
+                content: json!("response"),
+                char_count: 8,
+            },
+        )?;
+
+        let last = last_assistant_message(&db, "a1", None)?;
+        assert!(last.is_some());
+        assert_eq!(last.unwrap().id, "m2");
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_messages_page() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        for i in 0..5 {
+            insert_message(
+                &db,
+                &MessageRow {
+                    id: format!("m{i}"),
+                    agent_id: "a1".into(),
+                    conversation_id: None,
+                    role: "user".into(),
+                    content: json!(format!("msg {i}")),
+                    char_count: 5,
+                },
+            )?;
+        }
+
+        let page1 = list_messages_page(&db, "a1", None, 2, 0)?;
+        assert_eq!(page1.len(), 2);
+
+        let page2 = list_messages_page(&db, "a1", None, 2, 2)?;
+        assert_eq!(page2.len(), 2);
+
+        let page3 = list_messages_page(&db, "a1", None, 2, 4)?;
+        assert_eq!(page3.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_context_window() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        // Insert messages with known char_count
+        for i in 0..10 {
+            insert_message(
+                &db,
+                &MessageRow {
+                    id: format!("m{i}"),
+                    agent_id: "a1".into(),
+                    conversation_id: None,
+                    role: if i % 2 == 0 { "user" } else { "assistant" }.into(),
+                    content: json!(format!("message number {i}")),
+                    char_count: 20,
+                },
+            )?;
+        }
+
+        // Large budget → all messages
+        let all = get_context_window(&db, "a1", None, 999_999)?;
+        assert_eq!(all.len(), 10);
+
+        // Tiny budget → only the most recent messages
+        let few = get_context_window(&db, "a1", None, 50)?;
+        assert!(few.len() < 10);
+        assert!(!few.is_empty());
+        Ok(())
+    }
+}
+
+// endregion: --- Tests
