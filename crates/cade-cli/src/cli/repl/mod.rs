@@ -279,8 +279,9 @@ impl SessionStats {
     fn compute_cost(&self) -> (f64, Vec<(String, f64)>) {
         let mut total = 0.0f64;
         let mut by_model: Vec<(String, f64)> = Vec::new();
+        let registry = cade_ai::ModelRegistry::new();
         for (model, ms) in &self.per_model {
-            let p = cade_ai::catalogue::pricing_for_model(model);
+            let p = registry.pricing_for_model(model);
             let cost = (ms.input_tokens as f64 * p.input) / 1_000_000.0
                 + (ms.output_tokens as f64 * p.output) / 1_000_000.0
                 + (ms.cache_read_tokens as f64 * p.cache_read) / 1_000_000.0

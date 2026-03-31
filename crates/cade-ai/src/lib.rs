@@ -9,8 +9,10 @@ pub mod catalogue;
 pub mod gemini;
 pub mod ollama;
 pub mod openai;
+pub mod registry;
 
 pub use catalogue::{CATALOGUE, ModelEntry};
+pub use registry::{ModelPricing, ModelRegistry};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
