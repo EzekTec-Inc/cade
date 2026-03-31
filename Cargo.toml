@@ -80,7 +80,6 @@ xcap           = "0.8.2"
 image          = "0.25"
 base64         = "0.22"
 notify-rust    = "4"
-ksni           = "0.2"
 
 # Clipboard (image paste)
 arboard        = "3"

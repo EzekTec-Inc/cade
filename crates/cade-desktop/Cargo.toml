@@ -21,9 +21,11 @@ tokio.workspace      = true
 # -- Desktop
 xcap.workspace       = true
 notify-rust.workspace = true
-ksni.workspace       = true
 base64.workspace     = true
 image.workspace      = true
+enigo = "0.6.1"
+active-win-pos-rs = "0.10.0"
+tray-icon = "0.21.3"
 
 [lints.rust]
 unsafe_code = "forbid"

@@ -1,141 +1,81 @@
 use crate::{Error, Result};
-use tokio::process::Command;
 
-/// Window and desktop control via xdotool (X11) or ydotool (Wayland)
 pub struct DesktopControl {
-    tool: ControlTool,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum ControlTool {
-    Xdotool,
-    Ydotool,
+    enigo: std::sync::Arc<tokio::sync::Mutex<enigo::Enigo>>,
 }
 
 impl DesktopControl {
     pub async fn detect() -> Self {
-        // Prefer xdotool, fall back to ydotool
-        let tool = if Self::command_exists("xdotool").await {
-            ControlTool::Xdotool
-        } else {
-            ControlTool::Ydotool
-        };
-        Self { tool }
+        Self {
+            enigo: std::sync::Arc::new(tokio::sync::Mutex::new(
+                enigo::Enigo::new(&enigo::Settings::default()).expect("Failed to initialize enigo"),
+            )),
+        }
     }
 
-    fn new_command(program: &str) -> Command {
-        let mut cmd = Command::new(program);
-        cade_core::agent_env::apply_agent_env(&mut cmd);
-        cmd
-    }
-
-    async fn command_exists(cmd: &str) -> bool {
-        Self::new_command("which")
-            .arg(cmd)
-            .output()
-            .await
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
-    /// Focus a window by title
     pub async fn focus_window(&self, title: &str) -> Result<()> {
-        match self.tool {
-            ControlTool::Xdotool => {
-                Self::new_command("xdotool")
-                    .args(["search", "--name", title, "windowactivate"])
-                    .output()
-                    .await?;
-            }
-            ControlTool::Ydotool => {
-                return Err(Error::custom(
-                    "ydotool does not support window focus by title",
-                ));
-            }
-        }
-        Ok(())
+        let windows = active_win_pos_rs::get_active_window()
+            .map_err(|e| Error::custom(format!("Failed to get active window: {e:?}")))?;
+        // `active-win-pos-rs` only gets the active window or lists them, but doesn't focus them directly.
+        // For full cross-platform window focusing, we would need to integrate platform-specific code or a different crate.
+        // As a placeholder per the plan, we'll log it or return an error.
+        Err(Error::custom(format!("Native cross-platform window focusing not fully supported yet. Title: {title}. Active window: {windows:?}")))
     }
 
-    /// Type text into the currently focused window
     pub async fn type_text(&self, text: &str) -> Result<()> {
-        match self.tool {
-            ControlTool::Xdotool => {
-                Self::new_command("xdotool")
-                    .args(["type", "--clearmodifiers", text])
-                    .output()
-                    .await?;
-            }
-            ControlTool::Ydotool => {
-                Self::new_command("ydotool")
-                    .args(["type", text])
-                    .output()
-                    .await?;
-            }
-        }
+        use enigo::Keyboard;
+        let mut enigo = self.enigo.lock().await;
+        enigo.text(text).map_err(|e| Error::custom(format!("enigo error: {e}")))?;
         Ok(())
     }
 
-    /// Send a key combination (e.g., "ctrl+s", "Return", "Escape")
     pub async fn key_press(&self, key: &str) -> Result<()> {
-        match self.tool {
-            ControlTool::Xdotool => {
-                Self::new_command("xdotool")
-                    .args(["key", key])
-                    .output()
-                    .await?;
-            }
-            ControlTool::Ydotool => {
-                Self::new_command("ydotool")
-                    .args(["key", key])
-                    .output()
-                    .await?;
-            }
-        }
+        use enigo::{Keyboard, Key, Direction};
+        let mut enigo = self.enigo.lock().await;
+        
+        let enigo_key = match key.to_lowercase().as_str() {
+            "return" | "enter" => Key::Return,
+            "escape" | "esc" => Key::Escape,
+            "backspace" => Key::Backspace,
+            "tab" => Key::Tab,
+            "space" => Key::Space,
+            "up" => Key::UpArrow,
+            "down" => Key::DownArrow,
+            "left" => Key::LeftArrow,
+            "right" => Key::RightArrow,
+            "ctrl" => Key::Control,
+            "shift" => Key::Shift,
+            "alt" => Key::Alt,
+            "meta" | "super" | "win" => Key::Meta,
+            k if k.len() == 1 => Key::Unicode(k.chars().next().unwrap()),
+            _ => return Err(Error::custom(format!("Unsupported key: {key}"))),
+        };
+
+        enigo.key(enigo_key, Direction::Click).map_err(|e| Error::custom(format!("enigo error: {e}")))?;
         Ok(())
     }
 
-    /// Move mouse cursor to absolute coordinates
     pub async fn move_mouse(&self, x: i32, y: i32) -> Result<()> {
-        match self.tool {
-            ControlTool::Xdotool => {
-                Self::new_command("xdotool")
-                    .args(["mousemove", &x.to_string(), &y.to_string()])
-                    .output()
-                    .await?;
-            }
-            ControlTool::Ydotool => {
-                Self::new_command("ydotool")
-                    .args(["mousemove", "--absolute", &x.to_string(), &y.to_string()])
-                    .output()
-                    .await?;
-            }
-        }
+        use enigo::{Mouse, Coordinate};
+        let mut enigo = self.enigo.lock().await;
+        enigo.move_mouse(x, y, Coordinate::Abs).map_err(|e| Error::custom(format!("enigo error: {e}")))?;
         Ok(())
     }
 
-    /// Click: button 1=left, 2=middle, 3=right
     pub async fn click(&self, button: u8) -> Result<()> {
-        match self.tool {
-            ControlTool::Xdotool => {
-                Self::new_command("xdotool")
-                    .args(["click", &button.to_string()])
-                    .output()
-                    .await?;
-            }
-            ControlTool::Ydotool => {
-                Self::new_command("ydotool")
-                    .args(["click", &button.to_string()])
-                    .output()
-                    .await?;
-            }
-        }
+        use enigo::{Mouse, Button, Direction};
+        let mut enigo = self.enigo.lock().await;
+        let btn = match button {
+            1 => Button::Left,
+            2 => Button::Middle,
+            3 => Button::Right,
+            _ => return Err(Error::custom(format!("Unsupported mouse button: {button}"))),
+        };
+        enigo.button(btn, Direction::Click).map_err(|e| Error::custom(format!("enigo error: {e}")))?;
         Ok(())
     }
 
     pub fn tool_name(&self) -> &'static str {
-        match self.tool {
-            ControlTool::Xdotool => "xdotool",
-            ControlTool::Ydotool => "ydotool",
-        }
+        "enigo"
     }
 }

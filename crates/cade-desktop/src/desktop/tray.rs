@@ -1,5 +1,8 @@
-use ksni::menu::StandardItem;
 use std::sync::mpsc;
+use tray_icon::{
+    Icon, TrayIconBuilder,
+    menu::{Menu, MenuEvent, MenuItem, PredefinedMenuItem},
+};
 
 /// System tray status indicator
 #[derive(Debug, Clone, Copy)]
@@ -22,68 +25,64 @@ pub enum TrayAction {
     Quit,
 }
 
+/// Create a 1x1 transparent icon for the tray
+fn create_dummy_icon() -> Icon {
+    let rgba = vec![0, 0, 0, 0];
+    Icon::from_rgba(rgba, 1, 1).unwrap()
+}
+
 /// Run the system tray in a background thread.
 /// Returns a sender to control tray state.
 pub fn spawn_tray() -> Result<mpsc::Sender<TrayMsg>, String> {
     let (tx, rx) = mpsc::channel::<TrayMsg>();
 
     std::thread::spawn(move || {
-        use ksni::*;
+        let tray_menu = Menu::new();
+        let show_i = MenuItem::new("Show CADE", true, None);
+        let quit_i = MenuItem::new("Quit", true, None);
 
-        struct CadeTray {
-            status: TrayStatus,
-        }
+        tray_menu.append_items(&[
+            &show_i,
+            &PredefinedMenuItem::separator(),
+            &quit_i,
+        ]).unwrap();
 
-        impl Tray for CadeTray {
-            fn icon_name(&self) -> String {
-                "utilities-terminal".to_string()
-            }
+        let tray_icon = TrayIconBuilder::new()
+            .with_menu(Box::new(tray_menu))
+            .with_tooltip("CADE — Idle")
+            .with_icon(create_dummy_icon())
+            .build()
+            .unwrap();
 
-            fn title(&self) -> String {
-                match self.status {
-                    TrayStatus::Idle => "CADE — Idle".to_string(),
-                    TrayStatus::Working => "CADE — Working…".to_string(),
-                    TrayStatus::AwaitingApproval => "CADE — Needs Approval!".to_string(),
-                }
-            }
+        let menu_channel = MenuEvent::receiver();
 
-            fn menu(&self) -> Vec<MenuItem<Self>> {
-                vec![
-                    MenuItem::Standard(StandardItem {
-                        label: "Show CADE".to_string(),
-                        activate: Box::new(|_| {}),
-                        ..Default::default()
-                    }),
-                    MenuItem::Separator,
-                    MenuItem::Standard(StandardItem {
-                        label: "Quit".to_string(),
-                        activate: Box::new(|_| std::process::exit(0)),
-                        ..Default::default()
-                    }),
-                ]
-            }
-        }
-
-        let tray = ksni::TrayService::new(CadeTray {
-            status: TrayStatus::Idle,
-        });
-        let handle = tray.handle();
-
-        // Spawn message handler
-        std::thread::spawn(move || {
-            for msg in rx {
+        loop {
+            // Check for commands from the main thread
+            if let Ok(msg) = rx.try_recv() {
                 match msg {
                     TrayMsg::SetStatus(status) => {
-                        handle.update(|t: &mut CadeTray| {
-                            t.status = status;
-                        });
+                        let title = match status {
+                            TrayStatus::Idle => "CADE — Idle",
+                            TrayStatus::Working => "CADE — Working…",
+                            TrayStatus::AwaitingApproval => "CADE — Needs Approval!",
+                        };
+                        let _ = tray_icon.set_tooltip(Some(title));
                     }
                     TrayMsg::Quit => break,
                 }
             }
-        });
 
-        let _ = tray.run();
+            // Check for menu clicks
+            if let Ok(event) = menu_channel.try_recv() {
+                if event.id == quit_i.id() {
+                    std::process::exit(0);
+                } else if event.id == show_i.id() {
+                    // Do nothing for now
+                }
+            }
+
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     });
 
     Ok(tx)
