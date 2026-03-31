@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-03-30T20:11:07Z — Intelligent Tool Selection, Dynamic Pricing & Zero-Panic Safety
+
+**Summary:** Completed a major architectural refactor to align the workspace with `rust10x` safety standards, implement dynamic LLM pricing, and finalize Intelligent Tool Selection (ITS).
+
+**Features & Fixes:**
+- **Dynamic Pricing Registry:** Replaced the hardcoded match block in `cade-ai::catalogue` with a new `ModelRegistry` initialized once via `std::sync::LazyLock`. Pricing rules are now loaded from `default_pricing.json` matching model prefixes natively.
+- **rust10x P0 Safety (Zero-Panic Enforcement):** 
+  - Purged 100+ instances of `.expect("db lock poisoned")` across `cade-server` and `cade-codeintel`, correctly mapping Mutex poisoning to structured 500 API responses to ensure the server never crashes.
+  - Eliminated structural `.unwrap()` usage in agent backend pipes (`local.rs`) and sub-process handlers (`docker.rs`).
+- **Intelligent Tool Selection (ITS):** Fully integrated the new `cade-reranker` crate into `cade-server` context building. Supports local ONNX (`ms-marco-MiniLM-L-6-v2`) cross-encoder inference and Cloud APIs (Cohere, Jina, Voyage) to filter down tools passed to the LLM based on user intent.
+
+**Files modified:**
+- `MODIFIED` `crates/cade-ai/src/registry.rs`, `crates/cade-ai/src/catalogue.rs`, `crates/cade-ai/src/lib.rs`
+- `ADDED` `crates/cade-ai/src/default_pricing.json`
+- `MODIFIED` `crates/cade-server/src/server/storage/sqlite/*.rs` and `crates/cade-server/src/server/api/*.rs` (Mutex lock poison error handling)
+- `MODIFIED` `crates/cade-agent/src/backends/docker.rs`, `local.rs` (Unwrap removal)
+- `MODIFIED` `crates/cade-codeintel/src/index.rs`, `query.rs`, `repomap.rs` (Mutex lock poison error handling)
+- `MODIFIED` `README.md` and `ARCHITECTURE.md` to document the new `cade-reranker` module and zero-panic/pricing architecture.
+
+**Verification:** Run `cargo check --workspace` and `cargo test --workspace` — all 170+ tests pass cleanly without regressions.
+
+---
+
 ## 2026-03-19T04:15:00Z — Finish-reason diagnostics & /debug-last command
 
 **Summary:** Surfaced provider finish reasons end-to-end, added proactive UI

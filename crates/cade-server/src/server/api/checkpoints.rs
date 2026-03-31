@@ -48,7 +48,7 @@ pub async fn create_checkpoint(
     Json(body): Json<CreateCheckpointBody>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let id = format!("cp-{}", Uuid::new_v4());
-    let conn = state.db.lock().expect("db lock poisoned");
+    let conn = state.db.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")}))))?;
     let now = unix_ts();
     conn.execute(
         "INSERT INTO checkpoints (id, agent_id, conversation_id, branch_id, label, description, created_at, git_stash_ref, git_commit_hash, parent_id)
@@ -68,7 +68,7 @@ pub async fn list_checkpoints(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let conn = state.db.lock().expect("db lock poisoned");
+    let conn = state.db.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")}))))?;
     let mut stmt = conn
         .prepare(
             "SELECT id, agent_id, conversation_id, branch_id, label, description, created_at,
@@ -102,7 +102,7 @@ pub async fn get_checkpoint_handler(
     State(state): State<AppState>,
     Path((agent_id, cp_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let conn = state.db.lock().expect("db lock poisoned");
+    let conn = state.db.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")}))))?;
     let row = conn
         .query_row(
             "SELECT id, agent_id, conversation_id, branch_id, label, description, created_at,
@@ -134,7 +134,7 @@ pub async fn delete_checkpoint_handler(
     State(state): State<AppState>,
     Path((agent_id, cp_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let conn = state.db.lock().expect("db lock poisoned");
+    let conn = state.db.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")}))))?;
     let n = conn
         .execute(
             "DELETE FROM checkpoints WHERE id = ?1 AND agent_id = ?2",
@@ -150,7 +150,7 @@ pub async fn restore_checkpoint_handler(
     State(state): State<AppState>,
     Path((agent_id, cp_id)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let conn = state.db.lock().expect("db lock poisoned");
+    let conn = state.db.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")}))))?;
     // Verify checkpoint exists
     let exists: bool = conn
         .query_row(

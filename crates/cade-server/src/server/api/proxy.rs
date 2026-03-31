@@ -48,5 +48,10 @@ pub async fn stream_http_handler(
         .status(StatusCode::OK)
         .header(header::CONTENT_TYPE, content_type)
         .body(body)
-        .unwrap()
+        .unwrap_or_else(|e| {
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("failed to build response: {e}")))
+                .unwrap()
+        })
 }

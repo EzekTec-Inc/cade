@@ -3,16 +3,22 @@ use derive_more::{Display, From};
 pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Debug, Display, From)]
-#[display("{self:?}")]
 pub enum Error {
+    #[display("{_0}")]
     #[from(String, &String, &str)]
     Custom(String),
 
+    #[display("{msg}")]
+    Provider { status: u16, msg: String },
+
     // -- Externals
+    #[display("{_0}")]
     #[from]
     Io(std::io::Error),
+    #[display("{_0}")]
     #[from]
     Reqwest(reqwest::Error),
+    #[display("{_0}")]
     #[from]
     SerdeJson(serde_json::Error),
 }

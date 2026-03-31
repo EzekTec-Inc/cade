@@ -182,8 +182,8 @@ where
 }
 
 /// Returns true if the error looks like a transient / rate-limit failure.
-/// Checks for connection errors (reqwest) and for "NNN:" prefixed status codes
-/// embedded in provider_error() formatted strings.
+/// Checks for connection errors (reqwest) and for retryable status codes
+/// in Provider errors.
 fn is_retryable_error(e: &Error) -> bool {
     // Check embedded reqwest errors
     if let Error::Reqwest(re) = e {
@@ -194,11 +194,10 @@ fn is_retryable_error(e: &Error) -> bool {
             return is_retryable_status(status);
         }
     }
-    // provider_error() formats as "Anthropic 429: ..." — scan the message
-    let msg = format!("{e:?}");
-    for code in ["429", "500", "502", "503", "504"] {
-        if msg.contains(code) {
-            return true;
+    // Check structured provider errors
+    if let Error::Provider { status, .. } = e {
+        if let Ok(status_code) = reqwest::StatusCode::from_u16(*status) {
+            return is_retryable_status(status_code);
         }
     }
     false
@@ -209,13 +208,16 @@ fn is_retryable_error(e: &Error) -> bool {
 /// All major providers (Anthropic, OpenAI, Gemini) use `{"error":{"message":"..."}}`.
 /// Falls back to the raw text if the body isn't JSON or lacks that field.
 ///
-/// Returns an `anyhow::Error` ready to propagate with `return Err(...)`.
+/// Returns a `crate::Error` ready to propagate with `return Err(...)`.
 pub fn provider_error(provider: &str, status: reqwest::StatusCode, body: &str) -> Error {
     let msg = serde_json::from_str::<serde_json::Value>(body)
         .ok()
         .and_then(|v| v["error"]["message"].as_str().map(String::from))
         .unwrap_or_else(|| body.trim().to_string());
-    Error::custom(format!("{provider} {status}: {msg}"))
+    Error::Provider {
+        status: status.as_u16(),
+        msg: format!("{provider} {status}: {msg}"),
+    }
 }
 
 /// Strip optional `provider/` prefix from a model handle.

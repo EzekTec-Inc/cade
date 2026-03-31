@@ -57,7 +57,8 @@ impl ExecutionBackend for DockerBackend {
     ) -> crate::Result<BashOutput> {
         // Warn if Docker is not available
         let docker_check = Command::new("docker").arg("info").output().await;
-        if docker_check.is_err() || !docker_check.unwrap().status.success() {
+        let is_running = docker_check.map(|out| out.status.success()).unwrap_or(false);
+        if !is_running {
             return Err(crate::Error::custom(
                 "Docker is not available. Install Docker or switch to local backend.",
             ));

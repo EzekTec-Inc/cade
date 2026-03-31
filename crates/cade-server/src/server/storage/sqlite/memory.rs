@@ -8,7 +8,7 @@ pub fn upsert_memory_block(
     description: Option<&str>,
     max_chars: Option<usize>,
 ) -> Result<()> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
 
     // Fetch existing block linked to this agent with this label
     let existing: Option<(String, String, Option<usize>)> = conn
@@ -117,7 +117,7 @@ pub fn upsert_memory_block(
 
 /// Link an existing shared memory block to an agent.
 pub fn link_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Result<()> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     conn.execute(
         "INSERT OR IGNORE INTO agent_memory_blocks (agent_id, block_id) VALUES (?1, ?2)",
         params![agent_id, block_id],
@@ -126,7 +126,7 @@ pub fn link_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Resu
 }
 
 pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     // We only remove the link, not the shared block itself (to avoid orphan issues if shared)
     // Actually, CADE docs imply it's removed from the agent's view.
     let n = conn.execute(
@@ -140,7 +140,7 @@ pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool>
 
 /// Returns (label, value, description) tuples ordered by label.
 pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String)>> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -162,7 +162,7 @@ pub fn get_memory_blocks_with_ts(
     db: &Db,
     agent_id: &str,
 ) -> Result<Vec<(String, String, String, i64)>> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.updated_at FROM shared_memory_blocks b
          JOIN agent_memory_blocks amb ON amb.block_id = b.id
@@ -184,7 +184,7 @@ pub fn get_memory_blocks_with_ts(
 /// Increment the agent's user-message turn counter and return the new value.
 /// Call once per non-tool-return message (never for tool result turns).
 pub fn increment_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     conn.execute(
         "UPDATE agents SET memory_turn_counter = memory_turn_counter + 1 WHERE id = ?1",
         params![agent_id],
@@ -201,7 +201,7 @@ pub fn increment_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
 
 /// Read the current turn counter without incrementing.
 pub fn get_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let n: i64 = conn
         .query_row(
             "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
@@ -220,7 +220,7 @@ pub fn promote_stale_blocks(
     current_turn: i64,
     threshold: i64,
 ) -> Result<u64> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let n = conn.execute(
         "UPDATE shared_memory_blocks SET tier = 'long'
          WHERE tier = 'short'
@@ -239,7 +239,7 @@ pub fn get_active_blocks(
     db: &Db,
     agent_id: &str,
 ) -> Result<Vec<(String, String, String, String, i64)>> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.tier, b.last_turn
          FROM shared_memory_blocks b
@@ -267,7 +267,7 @@ pub fn get_long_term_excerpts(
     agent_id: &str,
     current_turn: i64,
 ) -> Result<Vec<(String, String, i64)>> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.last_turn
          FROM shared_memory_blocks b
@@ -303,7 +303,7 @@ pub fn set_memory_tier(
     tier: &str,
     reset_turn: bool,
 ) -> Result<bool> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let current_turn: i64 = conn
         .query_row(
             "SELECT COALESCE(memory_turn_counter, 0) FROM agents WHERE id = ?1",
@@ -337,7 +337,7 @@ pub fn get_memory_blocks_full(
     db: &Db,
     agent_id: &str,
 ) -> Result<Vec<(String, String, String, String)>> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value, b.description, b.tier
          FROM shared_memory_blocks b
@@ -364,7 +364,7 @@ pub fn get_memory_history(
     label: &str,
     limit: usize,
 ) -> Result<Vec<(String, String, i64)>> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let block_id: Option<String> = conn
         .query_row(
             "SELECT b.id FROM shared_memory_blocks b
@@ -398,7 +398,7 @@ pub fn restore_memory_from_history(
     label: &str,
     hist_id: &str,
 ) -> Result<bool> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let block_id: Option<String> = conn
         .query_row(
             "SELECT b.id FROM shared_memory_blocks b

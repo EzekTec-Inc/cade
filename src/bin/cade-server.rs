@@ -146,10 +146,10 @@ async fn main() -> Result<()> {
             {
                 let mut activity = state_bg.agent_activity.write().await;
                 let now = chrono::Utc::now().timestamp();
-                for (agent_id, (last_active, needs_consolidation, conv_id)) in activity.iter_mut() {
-                    if *needs_consolidation && (now - *last_active) > 60 {
-                        *needs_consolidation = false;
-                        pending.push((agent_id.clone(), conv_id.clone()));
+                for (agent_id, act) in activity.iter_mut() {
+                    if act.needs_consolidation && (now - act.last_active_ts) > 60 {
+                        act.needs_consolidation = false;
+                        pending.push((agent_id.clone(), act.conversation_id.clone()));
                     }
                 }
             }

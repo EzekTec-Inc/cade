@@ -137,9 +137,13 @@ pub async fn send_message(
         let mut activity = state.agent_activity.write().await;
         let entry = activity
             .entry(agent_id.clone())
-            .or_insert((0, false, conv_id.clone()));
-        entry.0 = chrono::Utc::now().timestamp();
-        entry.2 = conv_id.clone();
+            .or_insert(crate::server::state::AgentActivity {
+                last_active_ts: 0,
+                needs_consolidation: false,
+                conversation_id: conv_id.clone(),
+            });
+        entry.last_active_ts = chrono::Utc::now().timestamp();
+        entry.conversation_id = conv_id.clone();
     }
 
     if body["role"].as_str() == Some("tool") {
@@ -350,9 +354,13 @@ pub async fn stream_message(
         let mut activity = state.agent_activity.write().await;
         let entry = activity
             .entry(agent_id.clone())
-            .or_insert((0, false, conv_id.clone()));
-        entry.0 = chrono::Utc::now().timestamp();
-        entry.2 = conv_id.clone();
+            .or_insert(crate::server::state::AgentActivity {
+                last_active_ts: 0,
+                needs_consolidation: false,
+                conversation_id: conv_id.clone(),
+            });
+        entry.last_active_ts = chrono::Utc::now().timestamp();
+        entry.conversation_id = conv_id.clone();
     }
 
     let is_tool_return = body["role"].as_str() == Some("tool");

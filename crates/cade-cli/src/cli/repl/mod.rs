@@ -233,6 +233,7 @@ pub(crate) struct SessionStats {
     lines_removed: i64,
     /// Per-model breakdown (keyed by the full model string e.g. "gemini/gemini-2.5-pro").
     per_model: std::collections::HashMap<String, ModelStats>,
+    registry: std::sync::Arc<cade_ai::ModelRegistry>,
 }
 
 impl SessionStats {
@@ -250,6 +251,7 @@ impl SessionStats {
             lines_added: 0,
             lines_removed: 0,
             per_model: std::collections::HashMap::new(),
+            registry: std::sync::Arc::new(cade_ai::ModelRegistry::new()),
         }
     }
 
@@ -279,9 +281,8 @@ impl SessionStats {
     fn compute_cost(&self) -> (f64, Vec<(String, f64)>) {
         let mut total = 0.0f64;
         let mut by_model: Vec<(String, f64)> = Vec::new();
-        let registry = cade_ai::ModelRegistry::new();
         for (model, ms) in &self.per_model {
-            let p = registry.pricing_for_model(model);
+            let p = self.registry.pricing_for_model(model);
             let cost = (ms.input_tokens as f64 * p.input) / 1_000_000.0
                 + (ms.output_tokens as f64 * p.output) / 1_000_000.0
                 + (ms.cache_read_tokens as f64 * p.cache_read) / 1_000_000.0

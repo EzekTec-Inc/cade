@@ -3,7 +3,7 @@ use derive_more::{Display, From};
 pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(Debug, Display, From)]
-#[display("{self:?}")]
+#[display("{_0}")]
 pub enum Error {
     #[from(String, &String, &str)]
     Custom(String),

@@ -9,7 +9,7 @@ use crate::symbol::{Symbol, SymbolRef};
 
 /// Full-text search over symbol names and doc comments.
 pub fn symbol_search(db: &Db, query: &str, limit: usize) -> Result<Vec<Symbol>> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
 
     // Try FTS5 first
     let fts_result = conn
@@ -56,7 +56,7 @@ pub fn symbol_search(db: &Db, query: &str, limit: usize) -> Result<Vec<Symbol>> 
 /// Find the definition of a symbol by exact name.
 /// When `from_file` is provided, symbols in the same file are preferred.
 pub fn goto_definition(db: &Db, name: &str, from_file: Option<&str>) -> Result<Option<Symbol>> {
-    let conn = db.lock().expect("db lock poisoned");
+    let conn = db.lock().map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
 
     // Prefer same-file definition
     if let Some(file) = from_file {
@@ -101,7 +101,7 @@ pub fn goto_definition(db: &Db, name: &str, from_file: Option<&str>) -> Result<O
 pub fn find_references(db: &Db, name: &str, repo_root: &str) -> Result<Vec<SymbolRef>> {
     // Get all files in the repo from the index — drop lock before filesystem I/O
     let file_paths: Vec<String> = {
-        let conn = db.lock().expect("db lock poisoned");
+        let conn = db.lock().map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
         let mut stmt =
             conn.prepare("SELECT DISTINCT file_path FROM symbols WHERE repo_root = ?1 LIMIT 500")?;
         stmt.query_map(params![repo_root], |r| r.get(0))?

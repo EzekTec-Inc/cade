@@ -36,6 +36,11 @@ A stateful, self-improving Rust CLI coding agent. CADE gives an AI agent full ac
 | `install_skill` | Install a skill from a URL or path |
 | `run_subagent` | Spawn a background subagent for parallel tasks |
 
+### Advanced Features
+- **Intelligent Tool Selection (ITS)**: Reranks and filters tools using a local ONNX cross-encoder (`ms-marco-MiniLM-L-6-v2`) or cloud APIs before passing them to the LLM.
+- **Dynamic Pricing Registry**: Real-time token cost estimation using an efficient, JSON-driven `ModelRegistry`.
+- **Zero-Panic Safety**: Enforces the `rust10x` standard (no unhandled `unwrap()`/`expect()` in production code) and SQLite WAL mode for high integrity.
+
 ---
 
 ## Quickstart

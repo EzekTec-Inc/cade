@@ -38,8 +38,8 @@ impl ExecutionBackend for LocalBackend {
         .map_err(|_| crate::Error::custom(format!("timed out after {timeout_secs}s")))?
         .map_err(|e| crate::Error::custom(format!("spawn bash: {e}")))?;
 
-        let stdout_h = child.stdout.take().expect("piped");
-        let stderr_h = child.stderr.take().expect("piped");
+        let stdout_h = child.stdout.take().ok_or_else(|| crate::Error::custom("failed to open stdout pipe"))?;
+        let stderr_h = child.stderr.take().ok_or_else(|| crate::Error::custom("failed to open stderr pipe"))?;
 
         let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<(bool, String)>();
         let tx_out = tx.clone();
