@@ -16,12 +16,13 @@ use syntect::parsing::SyntaxSet;
 use syntect::util::LinesWithEndings;
 
 #[cfg(feature = "syntax-highlighting")]
-static SYNTAX_SET: LazyLock<SyntaxSet> = LazyLock::new(SyntaxSet::load_defaults_newlines);
+pub(crate) static SYNTAX_SET: LazyLock<SyntaxSet> =
+    LazyLock::new(SyntaxSet::load_defaults_newlines);
 #[cfg(feature = "syntax-highlighting")]
-static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
+pub(crate) static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 #[cfg(feature = "syntax-highlighting")]
-fn syntect_to_tui_style(style: SyntectStyle) -> Style {
+pub(crate) fn syntect_to_tui_style(style: SyntectStyle) -> Style {
     let mut s = Style::default().fg(RC::Rgb(
         style.foreground.r,
         style.foreground.g,

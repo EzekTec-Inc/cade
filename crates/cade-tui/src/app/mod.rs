@@ -2381,13 +2381,15 @@ fn render_frame(
         render_question_inline(frame, aq, chunks[5], chunks[5], colors);
     } else {
         let (badge_text, badge_color) = input_mode_badge(input_mode, colors);
-        let cont_prefix = format!("{}  ", " ".repeat(badge_text.chars().count() + 1));
+        // Continuation prefix: pad to align with first-line content, then a dim
+        // middle-dot so the user can clearly see they are in multiline mode.
+        let cont_prefix = format!("{}  · ", " ".repeat(badge_text.chars().count() + 1));
         // Build one ratatui Line per logical line so wrapping is correct and the
         // input-mode badge is shown only on the first line.
         let input_placeholder = if queued_count > 0 {
             format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
         } else {
-            "Type a message…".to_string()
+            "Type a message or paste code…".to_string()
         };
         let input_paragraph: Vec<Line<'static>> = if input.is_empty() {
             vec![Line::from(vec![
@@ -2407,8 +2409,8 @@ fn render_frame(
                 .split('\n')
                 .enumerate()
                 .map(|(i, seg)| {
-                    if i == 0 {
-                        Line::from(vec![
+                    let mut spans = if i == 0 {
+                        vec![
                             Span::styled(
                                 badge_text.to_string(),
                                 Style::default()
@@ -2418,14 +2420,15 @@ fn render_frame(
                             ),
                             Span::raw(" "),
                             Span::styled("> ", Style::default().fg(colors.dim)),
-                            Span::styled(seg.to_string(), Style::default().fg(RC::White)),
-                        ])
+                        ]
                     } else {
-                        Line::from(vec![
-                            Span::styled(cont_prefix.clone(), Style::default().fg(colors.dim)),
-                            Span::styled(seg.to_string(), Style::default().fg(RC::White)),
-                        ])
-                    }
+                        vec![Span::styled(
+                            cont_prefix.clone(),
+                            Style::default().fg(colors.dim),
+                        )]
+                    };
+                    spans.extend(highlight_input_line(seg));
+                    Line::from(spans)
                 })
                 .collect()
         };
@@ -2975,6 +2978,78 @@ fn display_tool_name(name: &str) -> String {
         name
     };
     stripped.to_string()
+}
+
+/// Produce syntax-highlighted spans for a single line of user input text.
+///
+/// When the `syntax-highlighting` feature is enabled, this uses syntect with
+/// the "base16-ocean.dark" theme to tokenise the line. The syntax is inferred
+/// heuristically: if the text looks like it might be code (contains `{`, `(`,
+/// `<`, `;`, `fn `, `def `, `import `, etc.) we use a plain-text / generic
+/// syntax so tokens still get some colour without false positives.
+///
+/// Falls back to a single white span when the feature is absent or on error.
+fn highlight_input_line(text: &str) -> Vec<Span<'static>> {
+    #[cfg(feature = "syntax-highlighting")]
+    {
+        use crate::markdown::{SYNTAX_SET, THEME_SET, syntect_to_tui_style};
+        use syntect::easy::HighlightLines;
+
+        // Pick the best available syntax: try to detect the language from
+        // content heuristics, fall back to plain text.
+        let syntax = detect_input_syntax(text);
+        let theme = THEME_SET
+            .themes
+            .get("base16-ocean.dark")
+            .or_else(|| THEME_SET.themes.values().next());
+        if let Some(theme) = theme {
+            let mut h = HighlightLines::new(syntax, theme);
+            // highlight_line expects a line WITH a trailing newline.
+            let line_with_nl = format!("{text}\n");
+            if let Ok(ranges) = h.highlight_line(&line_with_nl, &SYNTAX_SET) {
+                return ranges
+                    .into_iter()
+                    .map(|(style, chunk)| {
+                        // Strip the trailing newline we added.
+                        let content = chunk.trim_end_matches('\n').to_string();
+                        Span::styled(content, syntect_to_tui_style(style))
+                    })
+                    .filter(|s| !s.content.is_empty())
+                    .collect();
+            }
+        }
+    }
+    // Feature disabled or error path — plain white.
+    vec![Span::styled(
+        text.to_string(),
+        Style::default().fg(RC::White),
+    )]
+}
+
+/// Heuristically choose the best syntect `SyntaxReference` for the given text.
+/// Returns a reference with a static lifetime from the global `SYNTAX_SET`.
+#[cfg(feature = "syntax-highlighting")]
+fn detect_input_syntax(text: &str) -> &'static syntect::parsing::SyntaxReference {
+    use crate::markdown::SYNTAX_SET;
+
+    // Code-like signals: brackets, common keywords, operators.
+    let code_score: usize = ["{", "}", "(", ")", ";", "=>", "->", "fn ", "def ", "class ",
+        "import ", "use ", "let ", "var ", "const ", "return ", "#include", "package "]
+        .iter()
+        .filter(|&&pat| text.contains(pat))
+        .count();
+
+    let syntax_name = if code_score >= 2 {
+        // Looks like code — use a generic "programming" syntax that gives
+        // reasonable colouring without requiring us to guess the exact language.
+        "Rust" // Rust tokenizer is broad enough to give good colours for many langs
+    } else {
+        "Plain Text"
+    };
+
+    SYNTAX_SET
+        .find_syntax_by_name(syntax_name)
+        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text())
 }
 
 pub fn truncate_str(s: &str, max: usize) -> String {
