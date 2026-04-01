@@ -232,3 +232,7 @@ fn db_err(e: rusqlite::Error) -> (StatusCode, Json<Value>) {
 }
 
 // endregion: --- Support
+
+#[cfg(test)]
+#[path = "evals_test.rs"]
+mod tests;
