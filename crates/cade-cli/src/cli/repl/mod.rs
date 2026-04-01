@@ -1226,7 +1226,7 @@ impl Repl {
                             // If it's a tool hint (no slash) or a command that needs arguments,
                             // insert it into the editor instead of executing immediately.
                             let needs_args = !cmd.starts_with('/')
-                                || cmd.contains(' ')
+                                || (cmd.contains(' ') && !["/stats model", "/skills reload"].contains(&cmd.as_str()))
                                 || [
                                     "/delete",
                                     "/checkpoint",
