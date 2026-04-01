@@ -144,9 +144,9 @@ fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd
         "resume" => Some(SlashCmd::Resume),
         "delete" | "del" | "rm-agent" => Some(SlashCmd::Delete(arg)),
         "init" => Some(SlashCmd::Init),
-        "remember" if arg.is_some() => Some(SlashCmd::Remember(arg.unwrap_or_default())),
+        "remember" => Some(SlashCmd::Remember(arg.unwrap_or_default())),
         "memory" => Some(SlashCmd::Memory),
-        "search" if arg.is_some() => Some(SlashCmd::Search(arg.unwrap_or_default())),
+        "search" => Some(SlashCmd::Search(arg.unwrap_or_default())),
         "feedback" => Some(SlashCmd::Feedback),
         "skills" => Some(SlashCmd::Skills(arg)),
         "subagents" | "agents-list" => Some(SlashCmd::Subagents),
@@ -3545,6 +3545,10 @@ impl Repl {
                     }
 
                     SlashCmd::Search(query) => {
+                        if query.is_empty() {
+                            self.tui_dim("  Usage: /search <query>");
+                            continue;
+                        }
                         // Run both searches concurrently
                         let agent_id = self.agent_id();
                         let (msg_res, mem_res) = tokio::join!(
@@ -4374,14 +4378,13 @@ impl Repl {
             // Steering runs after a cancelled turn.
             // Follow-up takes priority — if both are set (edge case), run
             // follow-up first; steering is re-queued on the next iteration.
-            if let Some(follow) = self
-                .queued_followup
-                .lock()
-                .expect("lock poisoned")
-                .pop_front()
-            {
-                self.app.lock().expect("lock poisoned").queued_count =
-                    self.queued_followup.lock().expect("lock poisoned").len();
+            let queued_msg = {
+                let mut q = self.queued_followup.lock().expect("lock poisoned");
+                q.pop_front().map(|msg| (msg, q.len()))
+            };
+
+            if let Some((follow, count)) = queued_msg {
+                self.app.lock().expect("lock poisoned").queued_count = count;
                 pending_input = Some(follow);
             } else if let Some(steer) = self.queued_steering.lock().expect("lock poisoned").take() {
                 pending_input = Some(steer);

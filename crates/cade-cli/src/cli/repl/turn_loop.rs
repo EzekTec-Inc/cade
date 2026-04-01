@@ -410,8 +410,6 @@ impl Repl {
                                                                 app.editor.input.clear();
                                                                 app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
-                                                            } else {
-                                                                tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                                                             }
                                                         }
                                                     }
