@@ -2,6 +2,44 @@
 
 ---
 
+## 2026-04-02T19:00:00Z — Input field readline alignment, Ctrl+C freeze fix, MCP improvements
+
+**Summary:** Five targeted fixes across `cade-tui`, `cade-cli`, and `cade-mcp` to resolve a terminal freeze bug, align the input field with readline/industry-standard keybindings, fix MCP error message bugs, and add remote MCP server support.
+
+**Changes:**
+
+### fix(cli): replace per-turn SIGINT registration with single lifetime watcher (`5ef81c1`)
+- **Problem:** Pressing Ctrl+C caused CADE to freeze unrecoverably. Per-turn `tokio::signal` registrations leaked kernel signal interests; after `sigint_handle.abort()` the default OS handler was gone and no live listener replaced it.
+- **Fix:** Single application-lifetime SIGINT watcher spawned in `Repl::run()`. Sets both `cancel_turn` (aborts active stream) and `shutdown_flag` (exits idle REPL loop). Shutdown guard added to REPL main loop.
+- **Files:** `crates/cade-cli/src/cli/repl/mod.rs`, `crates/cade-cli/src/cli/repl/turn_loop.rs`, `crates/cade-tui/src/app/mod.rs`
+- **Rollback:** Revert `mod.rs` shutdown_flag field + watcher spawn; restore per-turn sigint_handle in `turn_loop.rs`.
+
+### fix(mcp): interpolate variables in reconnect error messages (`6b6d15d`)
+- **Problem:** Two `Error::custom(...)` calls used bare `{var}` inside non-format string literals, emitting literal variable names instead of values.
+- **Fix:** Wrap both in `format!()`.
+- **Files:** `crates/cade-mcp/src/lib.rs`
+- **Rollback:** Replace `format!(...)` with bare string literals.
+
+### feat(cli): /theme interactive live-preview picker + bundled colorschemes (`a048eec`)
+- **Files:** `crates/cade-cli/src/cli/repl/mod.rs`, `crates/cade-cli/src/cli/repl/pickers.rs`
+
+### fix(tui): align input field with readline/industry-standard keybindings (`06d3fbd`)
+- **Previous behaviour:** Holding Backspace created N undo entries; `Ctrl+Y` was redo (non-standard); `Home`/`End` jumped to buffer edges not current line; `Ctrl+U` deleted to buffer start; `Alt+D` missing; `Ctrl+L` missing.
+- **New behaviour:** Delete coalescing (1 undo per burst); kill ring (`Ctrl+K`/`Ctrl+U` → ring, `Ctrl+Y` yanks); `Home`/`End` → current line; `Ctrl+A`/`Ctrl+E` → buffer edges; `Alt+D` → delete word forward; `Ctrl+Shift+Z` → redo; `Ctrl+L` → redraw.
+- **Files:** `crates/cade-tui/src/editor.rs`, `crates/cade-tui/src/app/mod.rs`
+- **Rollback:** Restore prior `handle_input` and `handle_key_input` match arms; remove `kill_ring` field; revert `EditorAction` enum.
+
+### feat(mcp): HTTP/SSE and Streamable HTTP transport for remote servers (`ef905e7`)
+- **Previous behaviour:** CADE only connected to local stdio MCP servers (child processes).
+- **New behaviour:** Optional `url` field on `McpServerConfig`. If set, connects over HTTP. URL path contains `/sse` → legacy SSE transport; otherwise → MCP 2025-03-26 Streamable HTTP.
+- **Zero new crates:** Only new feature flags on existing `rmcp` dep.
+- **Files:** `Cargo.toml`, `crates/cade-core/src/settings/manager.rs`, `crates/cade-mcp/Cargo.toml`, `crates/cade-mcp/src/lib.rs`
+- **Rollback:** Remove `url` field from `McpServerConfig`; revert `rmcp` feature flags; restore original `connect_server()`.
+
+**Verification:** `cargo check --workspace` passes clean. 10 editor unit tests pass.
+
+---
+
 ## 2026-03-30T20:11:07Z — Intelligent Tool Selection, Dynamic Pricing & Zero-Panic Safety
 
 **Summary:** Completed a major architectural refactor to align the workspace with `rust10x` safety standards, implement dynamic LLM pricing, and finalize Intelligent Tool Selection (ITS).
