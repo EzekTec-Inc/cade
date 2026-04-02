@@ -115,14 +115,31 @@ pub enum RenderLine {
         max_visible: usize,
         done: bool,
     },
-    /// A single row of the context-window token grid (10 rows × 20 cells).
-    /// Each cell is (symbol, category_idx) where category_idx determines color.
-    /// Categories: 0=system 1=tools 2=mcp 3=memory 4=skills 5=messages 6=free 7=buffer
-    /// Right-side label is displayed inline with the grid row.
-    ContextGridRow {
-        cells: Vec<(char, u8)>,
-        label: String,
-        label_color: Option<u8>,
+    /// Context-window usage bar chart (single timeline entry).
+    ///
+    /// Rendered as:
+    ///   header line: model · total% (used/window tokens)
+    ///   bar line:    proportional █▓▒░ segments per category
+    ///   legend lines: one row per category with token count and %
+    ///
+    /// Categories (index → glyph → label):
+    ///   0 system   █  System prompt
+    ///   1 tools    ▓  Native tools
+    ///   2 mcp      ▒  MCP tools
+    ///   3 memory   ░  Memory
+    ///   4 skills   ▪  Skills
+    ///   5 messages ■  Messages
+    ///   6 free     ·  Free
+    ///   7 buffer   ⎹  Buffer (autocompact reserve)
+    ContextBar {
+        /// Short model name (e.g. "claude-sonnet-4-5")
+        model: String,
+        /// Total context window size in tokens.
+        window: u64,
+        /// Overall used percentage 0–100.
+        pct: u8,
+        /// Per-category token counts in category order (indices 0–7).
+        category_tokens: Vec<u64>,
     },
 }
 

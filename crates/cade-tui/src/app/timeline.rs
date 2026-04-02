@@ -13,7 +13,7 @@ use super::*;
 pub(crate) enum TimelineItemKind {
     Separator,
     Blank,
-    ContextGridRow,
+    ContextBar,
     User,
     Assistant,
     ToolCall,
@@ -66,10 +66,11 @@ pub(crate) struct PreparedTimelineEntry {
 pub(crate) enum TimelineItem<'a> {
     Separator,
     Blank,
-    ContextGridRow {
-        cells: &'a [(char, u8)],
-        label: &'a str,
-        label_color: Option<u8>,
+    ContextBar {
+        model: &'a str,
+        window: u64,
+        pct: u8,
+        category_tokens: &'a [u64],
     },
     User(&'a str),
     Assistant(&'a str),
@@ -115,7 +116,7 @@ impl<'a> TimelineItem<'a> {
         match self {
             Self::Separator => TimelineItemKind::Separator,
             Self::Blank => TimelineItemKind::Blank,
-            Self::ContextGridRow { .. } => TimelineItemKind::ContextGridRow,
+            Self::ContextBar { .. } => TimelineItemKind::ContextBar,
             Self::User(_) => TimelineItemKind::User,
             Self::Assistant(_) => TimelineItemKind::Assistant,
             Self::ToolCall { .. } => TimelineItemKind::ToolCall,
@@ -138,14 +139,16 @@ impl<'a> TimelineItem<'a> {
         match line {
             RenderLine::Separator => Self::Separator,
             RenderLine::Blank => Self::Blank,
-            RenderLine::ContextGridRow {
-                cells,
-                label,
-                label_color,
-            } => Self::ContextGridRow {
-                cells,
-                label,
-                label_color: *label_color,
+            RenderLine::ContextBar {
+                model,
+                window,
+                pct,
+                category_tokens,
+            } => Self::ContextBar {
+                model,
+                window: *window,
+                pct: *pct,
+                category_tokens,
             },
             RenderLine::UserMessage(text) => Self::User(text),
             RenderLine::AssistantText(text) => Self::Assistant(text),
@@ -190,11 +193,12 @@ impl<'a> TimelineItem<'a> {
         match self {
             Self::Separator => render_separator_item(width, out),
             Self::Blank => render_blank_item(out),
-            Self::ContextGridRow {
-                cells,
-                label,
-                label_color,
-            } => render_context_grid_row_item(cells, label, *label_color, out, colors),
+            Self::ContextBar {
+                model,
+                window,
+                pct,
+                category_tokens,
+            } => render_context_bar_item(model, *window, *pct, category_tokens, width, out, colors),
             Self::User(text) => render_user_message_item(text, width, out, colors),
             Self::Assistant(text) => render_assistant_item(text, out, colors),
             Self::ToolCall { name, preview } => {
@@ -242,7 +246,7 @@ impl<'a> TimelineItem<'a> {
         match self {
             Self::Separator => "separator",
             Self::Blank => "blank",
-            Self::ContextGridRow { .. } => "context",
+            Self::ContextBar { .. } => "context",
             Self::User(_) => "user",
             Self::Assistant(_) => "assistant",
             Self::ToolCall { .. } => "tool call",
@@ -284,7 +288,7 @@ impl<'a> TimelineItem<'a> {
             | Self::Error(_)
             | Self::QuestionResult { .. }
             | Self::Table { .. } => "Ctrl+Shift+C copy · Esc clear",
-            Self::Separator | Self::Blank | Self::ContextGridRow { .. } => "Esc clear",
+            Self::Separator | Self::Blank | Self::ContextBar { .. } => "Esc clear",
         }
     }
 
@@ -292,7 +296,7 @@ impl<'a> TimelineItem<'a> {
         match self {
             Self::Separator => "separator".to_string(),
             Self::Blank => "blank".to_string(),
-            Self::ContextGridRow { label, .. } => truncate_str(label, 32),
+            Self::ContextBar { model, pct, .. } => format!("context {model} {pct}%"),
             Self::User(text)
             | Self::Assistant(text)
             | Self::System(text)
@@ -359,7 +363,7 @@ impl<'a> TimelineEntry<'a> {
             self.key.kind,
             TimelineItemKind::Blank
                 | TimelineItemKind::Separator
-                | TimelineItemKind::ContextGridRow
+                | TimelineItemKind::ContextBar
         )
     }
 
@@ -594,60 +598,131 @@ fn render_blank_item(out: &mut Vec<Line<'static>>) {
     out.push(Line::from(""));
 }
 
-pub(crate) fn render_context_grid_row_item(
-    cells: &[(char, u8)],
-    label: &str,
-    label_color: Option<u8>,
+/// Render the context-window usage bar chart.
+///
+/// Emits:
+///   Line 0: header  — "  ◆ Context  <model>  ·  <used>/<window>  (<pct>%)"
+///   Line 1: bar     — proportional segments using per-category glyphs
+///   Line 2+: legend — one row per non-zero category
+///   Last:   blank
+fn render_context_bar_item(
+    model: &str,
+    window: u64,
+    pct: u8,
+    category_tokens: &[u64],
+    width: usize,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
-    const CAT_COLORS: &[RC] = &[
-        RC::Rgb(136, 136, 136),
-        RC::Rgb(8, 145, 178),
-        RC::Rgb(8, 145, 178),
-        RC::Rgb(215, 119, 87),
-        RC::Rgb(255, 193, 7),
-        RC::Rgb(147, 51, 234),
-        RC::Rgb(25, 25, 25),
-        RC::Rgb(70, 70, 70),
+    // Per-category metadata: (glyph, color, label)
+    const CATS: &[(char, RC, &str)] = &[
+        ('█', RC::Rgb(120, 120, 120), "System prompt"),
+        ('▓', RC::Rgb(8,  145, 178), "Native tools"),
+        ('▒', RC::Rgb(0,  188, 212), "MCP tools"),
+        ('░', RC::Rgb(215, 119, 87), "Memory"),
+        ('▪', RC::Rgb(255, 193,  7), "Skills"),
+        ('■', RC::Rgb(147,  51, 234), "Messages"),
+        ('·', RC::Rgb(50,   50,  50), "Free"),
+        ('⎹', RC::Rgb(80,   80,  80), "Buffer (autocompact)"),
     ];
-    let mut spans: Vec<Span<'static>> = vec![Span::raw("  ")];
-    for (i, (ch, cat)) in cells.iter().enumerate() {
-        let color = CAT_COLORS
-            .get(*cat as usize)
-            .copied()
-            .unwrap_or(RC::DarkGray);
-        spans.push(Span::styled(ch.to_string(), Style::default().fg(color)));
-        if i < cells.len().saturating_sub(1) {
-            spans.push(Span::raw(" "));
-        }
-    }
-    spans.push(Span::raw("   "));
-    if !label.is_empty() {
-        if let Some(c_idx) = label_color {
-            let color = CAT_COLORS
-                .get(c_idx as usize)
-                .copied()
-                .unwrap_or(colors.muted);
-            let mut chars = label.chars();
-            if let Some(icon) = chars.next() {
-                let rest: String = chars.collect();
-                spans.push(Span::styled(icon.to_string(), Style::default().fg(color)));
-                spans.push(Span::styled(rest, Style::default().fg(colors.muted)));
-            } else {
-                spans.push(Span::styled(
-                    label.to_string(),
-                    Style::default().fg(colors.muted),
-                ));
-            }
+
+    let fmt_tok = |n: u64| -> String {
+        if n >= 1_000_000 {
+            format!("{:.1}M", n as f64 / 1_000_000.0)
+        } else if n >= 1_000 {
+            format!("{:.1}k", n as f64 / 1_000.0)
         } else {
-            spans.push(Span::styled(
-                label.to_string(),
-                Style::default().fg(colors.muted),
-            ));
+            n.to_string()
+        }
+    };
+
+    let total_used: u64 = category_tokens
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != 6 && *i != 7) // exclude free + buffer
+        .map(|(_, &t)| t)
+        .sum();
+
+    // -- Header line
+    out.push(Line::from(vec![
+        Span::styled("  ◆ Context  ", Style::default().fg(colors.accent).add_modifier(Modifier::BOLD)),
+        Span::styled(model.to_string(), Style::default().fg(RC::White).add_modifier(Modifier::BOLD)),
+        Span::styled("  ·  ", Style::default().fg(colors.muted)),
+        Span::styled(
+            format!("{}/{} tokens", fmt_tok(total_used), fmt_tok(window)),
+            Style::default().fg(colors.muted),
+        ),
+        Span::styled(
+            format!("  ({}%)", pct),
+            Style::default().fg(if pct >= 90 {
+                RC::Rgb(239, 68, 68)
+            } else if pct >= 75 {
+                RC::Rgb(245, 158, 11)
+            } else {
+                colors.success
+            }),
+        ),
+    ]));
+
+    // -- Bar line
+    // Reserve 2 chars indent + 2 chars margin = 4; fit bar in remaining width (min 20)
+    let bar_width = width.saturating_sub(4).max(20).min(120);
+    let mut bar_spans: Vec<Span<'static>> = vec![Span::raw("  ")];
+
+    if window == 0 {
+        bar_spans.push(Span::styled(
+            "?".repeat(bar_width),
+            Style::default().fg(colors.muted),
+        ));
+    } else {
+        let mut filled = 0usize;
+        for (i, &tok) in category_tokens.iter().enumerate() {
+            if tok == 0 {
+                continue;
+            }
+            let cells = ((tok as f64 / window as f64) * bar_width as f64).round() as usize;
+            if cells == 0 {
+                continue;
+            }
+            let (glyph, color, _) = CATS.get(i).copied().unwrap_or(('?', RC::DarkGray, ""));
+            let s: String = std::iter::repeat(glyph).take(cells).collect();
+            bar_spans.push(Span::styled(s, Style::default().fg(color)));
+            filled += cells;
+        }
+        // Pad remainder to full bar width
+        if filled < bar_width {
+            let pad: String = std::iter::repeat('·').take(bar_width - filled).collect();
+            bar_spans.push(Span::styled(pad, Style::default().fg(RC::Rgb(40, 40, 40))));
         }
     }
-    out.push(Line::from(spans));
+    out.push(Line::from(bar_spans));
+    out.push(Line::from("")); // spacer
+
+    // -- Legend lines (skip categories with 0 tokens, except Free)
+    for (i, &tok) in category_tokens.iter().enumerate() {
+        if i == 7 && tok == 0 {
+            continue; // skip empty buffer row
+        }
+        let (glyph, color, label) = CATS.get(i).copied().unwrap_or(('?', RC::DarkGray, "?"));
+        let pct_cat = if window > 0 {
+            format!("{:.1}%", 100.0 * tok as f64 / window as f64)
+        } else {
+            "  ?%".to_string()
+        };
+        out.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(glyph.to_string(), Style::default().fg(color)),
+            Span::styled(
+                format!("  {:<18}", label),
+                Style::default().fg(colors.muted),
+            ),
+            Span::styled(
+                format!("{:>7}  {:>6}", fmt_tok(tok), pct_cat),
+                Style::default().fg(colors.muted),
+            ),
+        ]));
+    }
+    out.push(Line::from(""));
 }
 
 fn render_user_message_item(
