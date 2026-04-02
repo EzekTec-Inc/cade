@@ -1,4 +1,4 @@
-use super::AgentPickerResult;
+use super::{AgentPickerResult, MemoryPickerResult};
 use super::Repl;
 use crate::Result;
 use cade_agent::agent::client::AgentState;
@@ -170,11 +170,12 @@ impl Repl {
         app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
         agents: &mut [AgentState],
     ) -> Result<Option<AgentPickerResult>> {
-        use crossterm::event::{self, Event, KeyCode, KeyEventKind};
+        use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
         use ratatui::{
+            layout::{Constraint, Direction, Layout},
             style::{Color as RC, Modifier, Style},
-            text::{Line, Span},
-            widgets::{Block, Borders, List, ListItem, ListState},
+            text::{Span},
+            widgets::{Block, Borders, Cell, Row, Table, TableState, Paragraph},
         };
         use std::collections::HashSet;
 
@@ -183,90 +184,112 @@ impl Repl {
         }
 
         let current = self.agent_id();
-        let total = agents.len();
-        let mut selected: usize = agents.iter().position(|a| a.id == current).unwrap_or(0);
         let mut marked: HashSet<usize> = HashSet::new();
-
-        let build_items = |agents: &[AgentState],
-                           sel: usize,
-                           marked: &HashSet<usize>,
-                           current: &str|
-         -> Vec<ListItem<'static>> {
-            agents
-                .iter()
-                .enumerate()
-                .map(|(i, a)| {
-                    let is_sel = i == sel;
-                    let is_marked = marked.contains(&i);
-                    let is_active = a.id == current;
-                    let short_id = if a.id.len() > 22 {
-                        a.id[..22].to_string() + "…"
-                    } else {
-                        a.id.clone()
-                    };
-                    ListItem::new(Line::from(vec![
-                        Span::styled(
-                            if is_sel { " ▶ " } else { "   " }.to_string(),
-                            Style::default().fg(if is_sel { RC::Green } else { RC::DarkGray }),
-                        ),
-                        Span::styled(
-                            if is_marked { "☑ " } else { "☐ " }.to_string(),
-                            Style::default().fg(if is_marked { RC::Yellow } else { RC::DarkGray }),
-                        ),
-                        Span::styled(
-                            format!("{:<32}", a.name),
-                            Style::default()
-                                .fg(if is_sel { RC::White } else { RC::DarkGray })
-                                .add_modifier(if is_sel {
-                                    Modifier::BOLD
-                                } else {
-                                    Modifier::empty()
-                                }),
-                        ),
-                        Span::styled(short_id, Style::default().fg(RC::DarkGray)),
-                        Span::styled(
-                            if is_active {
-                                "  ← active".to_string()
-                            } else {
-                                String::new()
-                            },
-                            Style::default().fg(RC::Cyan),
-                        ),
-                    ]))
-                })
-                .collect()
-        };
+        let mut filter_query = String::new();
+        let mut selected_filtered: usize = 0;
 
         let do_draw = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
                        agents: &[AgentState],
+                       filtered_indices: &[usize],
                        sel: usize,
                        marked: &HashSet<usize>,
+                       filter_query: &str,
                        current: &str|
          -> Result<()> {
             let mut app = app_arc.lock().expect("lock poisoned");
-            let items = build_items(agents, sel, marked, current);
+            
             let n = marked.len();
             let hint = if n == 0 {
-                " ↑↓/jk  Space mark  r rename  d delete  Enter switch  q cancel ".to_string()
+                " ↑↓  Space mark  r rename  d delete  Enter switch  Esc cancel ".to_string()
             } else {
-                format!(" [{n} marked]  d delete all  q cancel ")
+                format!(" [{n} marked]  d delete all  Esc cancel ")
             };
-            let mut ls = ListState::default().with_selected(Some(sel));
+
+            let rows: Vec<Row> = filtered_indices.iter().enumerate().map(|(i, &original_idx)| {
+                let a = &agents[original_idx];
+                let is_sel = i == sel;
+                let is_marked = marked.contains(&original_idx);
+                let is_active = a.id == current;
+                let short_id = if a.id.len() > 22 {
+                    a.id[..22].to_string() + "…"
+                } else {
+                    a.id.clone()
+                };
+                let model_str = a.model.clone().unwrap_or_else(|| "unknown".to_string());
+
+                let style = if is_sel {
+                    Style::default().bg(RC::DarkGray).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+
+                let mark_span = Span::styled(
+                    if is_marked { "☑" } else { "☐" },
+                    Style::default().fg(if is_marked { RC::Yellow } else { RC::DarkGray }),
+                );
+
+                let active_span = Span::styled(
+                    if is_active { "★ active" } else { "" },
+                    Style::default().fg(RC::Cyan),
+                );
+
+                Row::new(vec![
+                    Cell::from(mark_span),
+                    Cell::from(Span::styled(a.name.clone(), Style::default().fg(if is_sel { RC::White } else { RC::Gray }))),
+                    Cell::from(Span::styled(model_str, Style::default().fg(RC::DarkGray))),
+                    Cell::from(Span::styled(short_id, Style::default().fg(RC::DarkGray))),
+                    Cell::from(active_span),
+                ]).style(style)
+            }).collect();
+
+            let table = Table::new(
+                rows,
+                [
+                    Constraint::Length(3),
+                    Constraint::Length(30),
+                    Constraint::Length(30),
+                    Constraint::Length(25),
+                    Constraint::Min(10),
+                ],
+            )
+            .header(Row::new(vec!["M", "Name", "Model", "ID", "Status"]).style(Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)))
+            .block(Block::default().borders(Borders::ALL).title(format!(" Agents {hint}")).border_style(Style::default().fg(RC::Cyan)));
+
+            let mut ts = TableState::default().with_selected(Some(sel));
+
             app.terminal.draw(|f| {
-                let area = f.area();
-                let block = Block::default()
-                    .borders(Borders::ALL)
-                    .title(format!(" Agents {hint}"))
-                    .border_style(Style::default().fg(RC::Cyan));
-                let list = List::new(items).block(block);
-                f.render_stateful_widget(list, area, &mut ls);
+                let chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
+                    .split(f.area());
+
+                f.render_stateful_widget(table, chunks[0], &mut ts);
+
+                let filter_block = Block::default().borders(Borders::ALL).title(" Filter (Type to search) ").border_style(Style::default().fg(RC::DarkGray));
+                let filter_text = Paragraph::new(format!("> {}█", filter_query)).block(filter_block).style(Style::default().fg(RC::White));
+                f.render_widget(filter_text, chunks[1]);
             })?;
             Ok(())
         };
 
-        do_draw(&app_arc, agents, selected, &marked, &current)?;
-
         let result = loop {
+            let q = filter_query.to_lowercase();
+            let filtered_indices: Vec<usize> = agents
+                .iter()
+                .enumerate()
+                .filter(|(_, a)| {
+                    let m = a.model.as_deref().unwrap_or("");
+                    q.is_empty() || a.name.to_lowercase().contains(&q) || a.id.to_lowercase().contains(&q) || m.to_lowercase().contains(&q)
+                })
+                .map(|(i, _)| i)
+                .collect();
+
+            if selected_filtered >= filtered_indices.len() {
+                selected_filtered = filtered_indices.len().saturating_sub(1);
+            }
+
+            do_draw(&app_arc, agents, &filtered_indices, selected_filtered, &marked, &filter_query, &current)?;
+
             if !event::poll(std::time::Duration::from_millis(200))? {
                 continue;
             }
@@ -275,11 +298,24 @@ impl Repl {
                     continue;
                 }
                 match (key.code, key.modifiers) {
-                    (KeyCode::Esc, _) | (KeyCode::Char('q'), _) => break None,
+                    (KeyCode::Esc, _) => break None,
+                    
+                    // Allow Ctrl+C to also cancel
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => break None,
+
+                    (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
+                        selected_filtered = selected_filtered.saturating_sub(1);
+                    }
+                    (KeyCode::Down, _) | (KeyCode::Tab, _) => {
+                        if selected_filtered + 1 < filtered_indices.len() {
+                            selected_filtered += 1;
+                        }
+                    }
 
                     (KeyCode::Enter, _) => {
-                        if marked.is_empty() {
-                            let a = agents[selected].clone();
+                        if marked.is_empty() && !filtered_indices.is_empty() {
+                            let orig_idx = filtered_indices[selected_filtered];
+                            let a = agents[orig_idx].clone();
                             if a.id != current {
                                 break Some(AgentPickerResult::Switch(a));
                             }
@@ -287,23 +323,27 @@ impl Repl {
                     }
 
                     (KeyCode::Char(' '), _) => {
-                        if marked.contains(&selected) {
-                            marked.remove(&selected);
-                        } else {
-                            marked.insert(selected);
+                        if !filtered_indices.is_empty() {
+                            let orig_idx = filtered_indices[selected_filtered];
+                            if marked.contains(&orig_idx) {
+                                marked.remove(&orig_idx);
+                            } else {
+                                marked.insert(orig_idx);
+                            }
                         }
                     }
 
-                    (KeyCode::Char('d'), _) | (KeyCode::Delete, _) => {
+                    (KeyCode::Delete, _) => {
+                        // Deletion logic...
                         let targets: Vec<usize> = if marked.is_empty() {
-                            vec![selected]
+                            if filtered_indices.is_empty() { continue; }
+                            vec![filtered_indices[selected_filtered]]
                         } else {
                             let mut v: Vec<usize> = marked.iter().copied().collect();
                             v.sort_unstable();
                             v
                         };
-                        let names: Vec<String> =
-                            targets.iter().map(|&i| agents[i].name.clone()).collect();
+                        let names: Vec<String> = targets.iter().map(|&i| agents[i].name.clone()).collect();
                         let label = if targets.len() == 1 {
                             format!("Delete '{}'?", names[0])
                         } else {
@@ -311,22 +351,12 @@ impl Repl {
                         };
                         use crate::ui::question::{Question, QuestionOption};
                         let opts = vec![
-                            QuestionOption {
-                                label: "Yes — delete".to_string(),
-                                description: String::new(),
-                            },
-                            QuestionOption {
-                                label: "No — cancel".to_string(),
-                                description: String::new(),
-                            },
+                            QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
+                            QuestionOption { label: "No — cancel".to_string(), description: String::new() },
                         ];
                         let q = Question {
-                            header: "Confirm".to_string(),
-                            text: label.clone(),
-                            options: opts.clone(),
-                            multi_select: false,
-                            allow_other: false,
-                            progress: None,
+                            header: "Confirm".to_string(), text: label.clone(), options: opts.clone(),
+                            multi_select: false, allow_other: false, progress: None,
                         };
                         let confirmed = {
                             let mut app = app_arc.lock().expect("lock poisoned");
@@ -336,53 +366,75 @@ impl Repl {
                             matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
                         };
                         if confirmed {
-                            let to_delete: Vec<AgentState> =
-                                targets.iter().map(|&i| agents[i].clone()).collect();
-                            break Some(AgentPickerResult::DeleteMany(to_delete));
-                        }
-                    }
-
-                    (KeyCode::Char('r'), _) => {
-                        let a = agents[selected].clone();
-                        // Collect new name via QuestionWidget (allow_other = freetext)
-                        use crate::ui::question::{Question, QuestionOption};
-                        let opts = vec![QuestionOption {
-                            label: "Keep current name".to_string(),
-                            description: String::new(),
-                        }];
-                        let q = Question {
-                            header: "Rename agent".to_string(),
-                            text: format!("New name for '{}':", a.name),
-                            options: opts.clone(),
-                            multi_select: false,
-                            allow_other: true,
-                            progress: None,
-                        };
-                        let ans = {
-                            let mut app = app_arc.lock().expect("lock poisoned");
-                            app.ask_question(&q)?
-                        };
-                        if let Some(answer) = &ans {
-                            let new_name = answer.as_str();
-                            if !new_name.is_empty() && new_name != "Keep current name" {
-                                break Some(AgentPickerResult::Rename { agent: a, new_name });
+                            if targets.len() == 1 {
+                                let orig_idx = targets[0];
+                                let a = agents[orig_idx].clone();
+                                match self.client.delete_agent(&a.id).await {
+                                    Ok(_) => {
+                                        agents[orig_idx].name = format!("{} (deleted)", a.name);
+                                        marked.remove(&orig_idx);
+                                        if a.id == current {
+                                            break Some(AgentPickerResult::Switch(a));
+                                        }
+                                    }
+                                    Err(e) => {
+                                        app_arc.lock().expect("lock poisoned").show_toast(e.to_string(), crate::ui::ToastLevel::Error);
+                                    }
+                                }
+                            } else {
+                                break Some(AgentPickerResult::DeleteMany(targets.into_iter().map(|i| agents[i].clone()).collect()));
                             }
                         }
                     }
 
-                    (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
-                        selected = if selected == 0 {
-                            total - 1
+                    (KeyCode::Char('r'), KeyModifiers::NONE) if filter_query.is_empty() => {
+                        // rename only when not typing query to avoid intercepting words like "red"
+                        if !filtered_indices.is_empty() {
+                            let orig_idx = filtered_indices[selected_filtered];
+                            let a = agents[orig_idx].clone();
+                            use crate::ui::question::{Question, QuestionOption};
+                            let q = Question {
+                                header: "Rename".to_string(), text: format!("Rename '{}':", a.name),
+                                options: vec![QuestionOption { label: "Cancel".to_string(), description: String::new() }],
+                                multi_select: false, allow_other: true, progress: None,
+                            };
+                            let name = {
+                                let mut app = app_arc.lock().expect("lock poisoned");
+                                let ans = app.ask_question(&q)?;
+                                app.scroll = 0;
+                                let _ = app.draw();
+                                match ans {
+                                    Some(n) if n.as_str() != "Cancel" && !n.as_str().is_empty() => n.as_str().to_string(),
+                                    _ => String::new(),
+                                }
+                            };
+                            if !name.is_empty() {
+                                match self.client.rename_agent(&a.id, &name).await {
+                                    Ok(_) => {
+                                        agents[orig_idx].name = name.clone();
+                                        if a.id == current {
+                                            break Some(AgentPickerResult::Rename { agent: a, new_name: name });
+                                        }
+                                    }
+                                    Err(e) => {
+                                        app_arc.lock().expect("lock poisoned").show_toast(e.to_string(), crate::ui::ToastLevel::Error);
+                                    }
+                                }
+                            }
                         } else {
-                            selected - 1
-                        };
+                            filter_query.push('r');
+                        }
                     }
-                    (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
-                        selected = (selected + 1) % total;
+
+                    (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+                        filter_query.push(c);
                     }
+                    (KeyCode::Backspace, _) => {
+                        filter_query.pop();
+                    }
+
                     _ => {}
                 }
-                do_draw(&app_arc, agents, selected, &marked, &current)?;
             }
         };
 
@@ -910,4 +962,217 @@ impl Repl {
 
         Ok(result)
     }
+
+    /// `/memory` interactive picker
+    pub(crate) async fn memory_picker(
+        &self,
+        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        blocks: &mut [cade_agent::agent::client::MemoryBlock],
+    ) -> Result<Option<MemoryPickerResult>> {
+        use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+        use ratatui::{
+            layout::{Constraint, Direction, Layout},
+            style::{Color as RC, Modifier, Style},
+            text::{Span, Line},
+            widgets::{Block, Borders, Cell, Row, Table, TableState, Paragraph, Wrap},
+        };
+
+        if blocks.is_empty() {
+            return Ok(None);
+        }
+
+        let mut filter_query = String::new();
+        let mut selected_filtered: usize = 0;
+
+        let do_draw = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+                       blocks: &[cade_agent::agent::client::MemoryBlock],
+                       filtered_indices: &[usize],
+                       sel: usize,
+                       filter_query: &str|
+         -> Result<()> {
+            let mut app = app_arc.lock().expect("lock poisoned");
+            
+            let hint = " ↑↓  Enter/e Edit  p Pin/Unpin  d Delete  Esc/q cancel ".to_string();
+
+            let rows: Vec<Row> = filtered_indices.iter().enumerate().map(|(i, &original_idx)| {
+                let b = &blocks[original_idx];
+                let is_sel = i == sel;
+                
+                let style = if is_sel {
+                    Style::default().bg(RC::DarkGray).add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default()
+                };
+
+                let tier_str = b.tier.as_deref().unwrap_or("short");
+                let (tier_icon, tier_color) = match tier_str {
+                    "pinned" => ("📌 Pinned", RC::Magenta),
+                    "long" => ("○ Long", RC::DarkGray),
+                    _ => ("● Short", RC::Green),
+                };
+
+                let size = format!("{} chars", b.value.chars().count());
+                let desc = b.description.as_deref().unwrap_or("");
+
+                Row::new(vec![
+                    Cell::from(Span::styled(tier_icon, Style::default().fg(tier_color))),
+                    Cell::from(Span::styled(b.label.clone(), Style::default().fg(if is_sel { RC::White } else { RC::Cyan }))),
+                    Cell::from(Span::styled(size, Style::default().fg(RC::DarkGray))),
+                    Cell::from(Span::styled(desc.to_string(), Style::default().fg(RC::Gray))),
+                ]).style(style)
+            }).collect();
+
+            let table = Table::new(
+                rows,
+                [
+                    Constraint::Length(12),
+                    Constraint::Length(25),
+                    Constraint::Length(12),
+                    Constraint::Min(20),
+                ],
+            )
+            .header(Row::new(vec!["Tier", "Label", "Size", "Description"]).style(Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)))
+            .block(Block::default().borders(Borders::ALL).title(format!(" Memory Blocks {hint}")).border_style(Style::default().fg(RC::Cyan)));
+
+            let mut ts = TableState::default().with_selected(Some(sel));
+
+            let preview_text = if !filtered_indices.is_empty() && sel < filtered_indices.len() {
+                let b = &blocks[filtered_indices[sel]];
+                b.value.clone()
+            } else {
+                String::new()
+            };
+
+            let preview = Paragraph::new(preview_text)
+                .wrap(Wrap { trim: false })
+                .block(Block::default().borders(Borders::ALL).title(" Preview ").border_style(Style::default().fg(RC::DarkGray)));
+
+            app.terminal.draw(|f| {
+                let main_chunks = Layout::default()
+                    .direction(Direction::Vertical)
+                    .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
+                    .split(f.area());
+
+                let top_chunks = Layout::default()
+                    .direction(Direction::Horizontal)
+                    .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
+                    .split(main_chunks[0]);
+
+                f.render_stateful_widget(table, top_chunks[0], &mut ts);
+                f.render_widget(preview, top_chunks[1]);
+
+                let filter_block = Block::default().borders(Borders::ALL).title(" Filter (Type to search) ").border_style(Style::default().fg(RC::DarkGray));
+                let filter_text = Paragraph::new(format!("> {}█", filter_query)).block(filter_block).style(Style::default().fg(RC::White));
+                f.render_widget(filter_text, main_chunks[1]);
+            })?;
+            Ok(())
+        };
+
+        let result = loop {
+            let q = filter_query.to_lowercase();
+            let filtered_indices: Vec<usize> = blocks
+                .iter()
+                .enumerate()
+                .filter(|(_, b)| {
+                    let d = b.description.as_deref().unwrap_or("");
+                    q.is_empty() || b.label.to_lowercase().contains(&q) || d.to_lowercase().contains(&q)
+                })
+                .map(|(i, _)| i)
+                .collect();
+
+            if selected_filtered >= filtered_indices.len() {
+                selected_filtered = filtered_indices.len().saturating_sub(1);
+            }
+
+            do_draw(&app_arc, blocks, &filtered_indices, selected_filtered, &filter_query)?;
+
+            if !event::poll(std::time::Duration::from_millis(200))? {
+                continue;
+            }
+            if let Ok(Event::Key(key)) = event::read() {
+                if key.kind != KeyEventKind::Press {
+                    continue;
+                }
+                match (key.code, key.modifiers) {
+                    (KeyCode::Esc, _) => break None,
+                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => break None,
+
+                    (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
+                        selected_filtered = selected_filtered.saturating_sub(1);
+                    }
+                    (KeyCode::Down, _) | (KeyCode::Tab, _) => {
+                        if selected_filtered + 1 < filtered_indices.len() {
+                            selected_filtered += 1;
+                        }
+                    }
+
+                    (KeyCode::Enter, _) => {
+                        if !filtered_indices.is_empty() {
+                            let orig_idx = filtered_indices[selected_filtered];
+                            break Some(MemoryPickerResult::Edit(blocks[orig_idx].clone()));
+                        }
+                    }
+
+                    (KeyCode::Char('e'), KeyModifiers::NONE) if filter_query.is_empty() => {
+                        if !filtered_indices.is_empty() {
+                            let orig_idx = filtered_indices[selected_filtered];
+                            break Some(MemoryPickerResult::Edit(blocks[orig_idx].clone()));
+                        }
+                    }
+
+                    (KeyCode::Char('p'), KeyModifiers::NONE) if filter_query.is_empty() => {
+                        if !filtered_indices.is_empty() {
+                            let orig_idx = filtered_indices[selected_filtered];
+                            break Some(MemoryPickerResult::TogglePin(blocks[orig_idx].clone()));
+                        }
+                    }
+
+                    (KeyCode::Delete, _) | (KeyCode::Char('d'), KeyModifiers::NONE) => {
+                        let is_d = matches!(key.code, KeyCode::Char('d'));
+                        if is_d && !filter_query.is_empty() {
+                            filter_query.push('d');
+                            continue;
+                        }
+
+                        if !filtered_indices.is_empty() {
+                            let orig_idx = filtered_indices[selected_filtered];
+                            let b = &blocks[orig_idx];
+                            
+                            use crate::ui::question::{Question, QuestionOption};
+                            let q = Question {
+                                header: "Confirm".to_string(), text: format!("Delete memory block '{}'?", b.label),
+                                options: vec![
+                                    QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
+                                    QuestionOption { label: "No — cancel".to_string(), description: String::new() },
+                                ],
+                                multi_select: false, allow_other: false, progress: None,
+                            };
+                            let confirmed = {
+                                let mut app = app_arc.lock().expect("lock poisoned");
+                                let r = app.ask_question(&q)?;
+                                app.scroll = 0;
+                                let _ = app.draw();
+                                matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
+                            };
+                            if confirmed {
+                                break Some(MemoryPickerResult::Delete(b.clone()));
+                            }
+                        }
+                    }
+
+                    (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+                        filter_query.push(c);
+                    }
+                    (KeyCode::Backspace, _) => {
+                        filter_query.pop();
+                    }
+
+                    _ => {}
+                }
+            }
+        };
+
+        Ok(result)
+    }
+
 }

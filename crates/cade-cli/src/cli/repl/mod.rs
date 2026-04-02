@@ -47,6 +47,13 @@ pub(crate) enum AgentPickerResult {
     Rename { agent: AgentState, new_name: String },
 }
 
+#[derive(Debug)]
+pub(crate) enum MemoryPickerResult {
+    Edit(cade_agent::agent::client::MemoryBlock),
+    TogglePin(cade_agent::agent::client::MemoryBlock),
+    Delete(cade_agent::agent::client::MemoryBlock),
+}
+
 pub mod slash;
 pub mod stats;
 pub(crate) use slash::*;
@@ -2941,51 +2948,37 @@ impl Repl {
                             }
 
                             // /memory (list)
-                            _ => match self.client.get_memory(&self.agent_id()).await {
-                                Ok(blocks) if blocks.is_empty() => {
-                                    self.tui_dim("  (no memory blocks)");
-                                    self.tui_dim(
-                                        "  Run /init to populate, or use update_memory tool",
-                                    );
-                                }
-                                Ok(blocks) => {
-                                    self.tui_blank();
-                                    for b in &blocks {
-                                        let tier = b.tier.as_deref().unwrap_or("short");
-                                        let badge = match tier {
-                                            "pinned" => "📌 [pinned]",
-                                            "long" => "○  [long]  ",
-                                            _ => "●  [short] ",
-                                        };
-                                        self.tui_hdr(format!("  {}  {}", badge, b.label));
-                                        if let Some(desc) = &b.description
-                                            && !desc.is_empty()
-                                        {
-                                            self.tui_dim(format!("  {desc}"));
-                                        }
-                                        if tier == "long" {
-                                            self.tui_dim("  (archived — use /memory promote or search_memory to reactivate)");
-                                        } else {
-                                            self.tui_blank();
-                                            if b.value.is_empty() {
-                                                self.tui_dim("  (empty)");
-                                            } else {
-                                                let preview: String =
-                                                    b.value.chars().take(300).collect();
-                                                let ellipsis = if b.value.len() > 300 {
-                                                    "…  (/memory view to see all)"
-                                                } else {
-                                                    ""
-                                                };
-                                                self.tui_sys(format!("  {preview}{ellipsis}"));
+                            _ => {
+                                let id = self.agent_id();
+                                match self.client.get_memory(&id).await {
+                                    Ok(mut blocks) => {
+                                        loop {
+                                            match self.memory_picker(std::sync::Arc::clone(&self.app), &mut blocks).await {
+                                                Ok(Some(MemoryPickerResult::Edit(b))) => {
+                                                    pending_input = Some(format!("/memory edit {}", b.label));
+                                                    break;
+                                                }
+                                                Ok(Some(MemoryPickerResult::Delete(b))) => {
+                                                    pending_input = Some(format!("/memory delete {}", b.label));
+                                                    break;
+                                                }
+                                                Ok(Some(MemoryPickerResult::TogglePin(b))) => {
+                                                    let is_pinned = b.tier.as_deref() == Some("pinned");
+                                                    let cmd = if is_pinned { "unpin" } else { "pin" };
+                                                    pending_input = Some(format!("/memory {cmd} {}", b.label));
+                                                    break;
+                                                }
+                                                Ok(None) => break, // cancelled
+                                                Err(e) => {
+                                                    self.tui_err(e.to_string());
+                                                    break;
+                                                }
                                             }
                                         }
-                                        self.tui_blank();
                                     }
-                                    self.tui_dim("  Subcommands: pin, unpin, promote, demote, view, set, delete, edit, history, restore");
+                                    Err(e) => self.tui_err(e.to_string()),
                                 }
-                                Err(e) => self.tui_err(e.to_string()),
-                            },
+                            }
                         }
                     }
 
