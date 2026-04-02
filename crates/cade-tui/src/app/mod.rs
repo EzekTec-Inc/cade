@@ -1792,8 +1792,14 @@ impl TuiApp {
             {
                 self.copy_selected_timeline_item_to_clipboard();
             }
+            // Ctrl+C at the idle prompt: clear the input line.
+            // The application-lifetime SIGINT watcher in Repl::run handles the
+            // actual shutdown by setting shutdown_flag; we just clear the editor
+            // here so the user sees the input box cleared immediately.
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                 self.editor.clear();
+                // Return an empty string — the REPL loop will check shutdown_flag
+                // next iteration and exit cleanly via the break guard.
                 return Ok(Some(Some(String::new())));
             }
             (KeyCode::Esc, _) => {

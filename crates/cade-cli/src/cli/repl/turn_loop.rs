@@ -124,19 +124,14 @@ impl Repl {
         let in_tok_before = self.session_input_tokens.load(Ordering::SeqCst);
         let out_tok_before = self.session_output_tokens.load(Ordering::SeqCst);
 
-        // Reset cancel flag and spawn SIGINT watcher for the duration of this turn
+        // Reset cancel flag at the start of every turn so Ctrl+C presses from
+        // a previous turn don't immediately abort this one.  The application-
+        // lifetime SIGINT watcher (spawned once in Repl::run) will set this
+        // flag again if Ctrl+C is pressed during this turn.
         self.cancel_turn.store(false, Ordering::SeqCst);
-        let cancel_flag = self.cancel_turn.clone();
-        let sigint_handle = tokio::spawn(async move {
-            #[cfg(unix)]
-            {
-                use tokio::signal::unix::{SignalKind, signal};
-                if let Ok(mut sig) = signal(SignalKind::interrupt()) {
-                    sig.recv().await;
-                    cancel_flag.store(true, Ordering::SeqCst);
-                }
-            }
-        });
+        // Also clear the shutdown flag: if the user hit Ctrl+C to cancel the
+        // previous turn we don't want to exit the REPL immediately after.
+        self.shutdown_flag.store(false, Ordering::SeqCst);
 
         // On the first real turn, prefix with environment context
         let effective_input = if self
@@ -516,9 +511,6 @@ impl Repl {
         // -- Stop thinking animation
         tick_handle.abort();
         let _ = tick_handle.await;
-        // Abort the per-turn SIGINT handler so tasks do not accumulate across
-        // turns.  Dropping the JoinHandle alone would leave the task running.
-        sigint_handle.abort();
         let secs = self.app.lock().expect("lock poisoned").stop_thinking();
         // Accumulate agent-active time in session stats
         if let Ok(mut stats) = self.session_stats.lock() {

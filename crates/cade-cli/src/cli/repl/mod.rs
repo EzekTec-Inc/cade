@@ -145,6 +145,11 @@ pub struct Repl {
     /// Set to `true` by a SIGINT handler while a turn is running.
     /// `stream_turn()` checks this flag and aborts the SSE stream early.
     pub(crate) cancel_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Set to `true` when the user presses Ctrl+C while no turn is running,
+    /// signalling a clean exit from the REPL loop.  A single application-
+    /// lifetime SIGINT task writes this flag instead of spawning a new
+    /// listener each turn (which leaked signal registrations).
+    pub(crate) shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Active conversation ID — None means the default (legacy) conversation.
     pub(crate) conversation_id: Arc<Mutex<Option<String>>>,
     /// MCP server manager — routes tool calls with `{server}__` prefix.
@@ -255,6 +260,7 @@ impl Repl {
             hooks,
             first_turn: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             cancel_turn: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            shutdown_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             conversation_id: Arc::new(Mutex::new(conversation_id)),
             mcp,
             subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(cap)),
@@ -389,6 +395,43 @@ impl Repl {
     pub async fn run(mut self) -> Result<()> {
         let mut stdout = io::stdout();
 
+        // Spawn exactly ONE application-lifetime SIGINT watcher.
+        // On every Ctrl+C press it:
+        //   1. Sets `cancel_turn`  — aborts any active SSE stream.
+        //   2. Sets `shutdown_flag` — signals the idle REPL loop to exit cleanly.
+        // This replaces the per-turn tokio::signal registrations that previously
+        // leaked kernel signal interests and left no active OS handler once the
+        // turn ended, causing the process to freeze unrecoverably on Ctrl+C.
+        {
+            let cancel = self.cancel_turn.clone();
+            let shutdown = self.shutdown_flag.clone();
+            tokio::spawn(async move {
+                #[cfg(unix)]
+                {
+                    use tokio::signal::unix::{SignalKind, signal};
+                    // Loop so every Ctrl+C press is handled, not just the first.
+                    if let Ok(mut sig) = signal(SignalKind::interrupt()) {
+                        loop {
+                            sig.recv().await;
+                            use std::sync::atomic::Ordering;
+                            cancel.store(true, Ordering::SeqCst);
+                            shutdown.store(true, Ordering::SeqCst);
+                        }
+                    }
+                }
+                #[cfg(not(unix))]
+                {
+                    // Windows: use tokio's ctrl_c future.
+                    loop {
+                        let _ = tokio::signal::ctrl_c().await;
+                        use std::sync::atomic::Ordering;
+                        cancel.store(true, Ordering::SeqCst);
+                        shutdown.store(true, Ordering::SeqCst);
+                    }
+                }
+            });
+        }
+
         // Push banner + agent info into TuiApp content.
         {
             let mut app = self.app.lock().expect("lock poisoned");
@@ -472,6 +515,13 @@ impl Repl {
                 app.update_mode(self.permissions.mode());
                 app.update_model(self.current_model.lock().expect("lock poisoned").clone());
                 app.update_agent_name(self.agent_name());
+            }
+
+            // Check if the application-lifetime SIGINT handler fired while we
+            // were idle (no turn was running).  Break to exit cleanly so the
+            // TuiApp Drop impl restores the terminal.
+            if self.shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) {
+                break;
             }
 
             // Read input — either from pending (menu dispatch) or from the user.
