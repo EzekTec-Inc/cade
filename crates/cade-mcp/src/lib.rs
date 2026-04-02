@@ -361,9 +361,9 @@ impl McpManager {
                         // Schema definitely changed (tool vanished) — signal REPL
                         self.schemas_dirty
                             .store(true, std::sync::atomic::Ordering::SeqCst);
-                        return Some(Err(Error::custom(
+                        return Some(Err(Error::custom(format!(
                             "Tool '{prefixed_name}' not found after MCP server reconnect",
-                        )));
+                        ))));
                     };
 
                     // Replace old server entry with the fresh connection
@@ -420,10 +420,10 @@ impl McpManager {
             );
         }
 
-        Some(Err(Error::custom(
+        Some(Err(Error::custom(format!(
             "MCP server disabled: all {MAX_RECONNECT_ATTEMPTS} reconnect attempts failed \
              (original error: {error_msg})",
-        )))
+        ))))
     }
 
     /// Whether a tool requires user permission (mutable tools).
