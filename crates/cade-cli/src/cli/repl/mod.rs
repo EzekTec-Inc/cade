@@ -3661,21 +3661,23 @@ impl Repl {
                             String::new()
                         };
 
-                        if new_theme.is_empty() {
-                            let current = self
-                                .settings
-                                .lock()
-                                .expect("lock poisoned")
-                                .global()
-                                .theme
-                                .clone()
-                                .unwrap_or_else(|| "dark".to_string());
-                            self.tui_hdr(format!("  Current theme: {current}"));
-                            self.tui_dim(
-                                "  /theme <name>  — change colorscheme (e.g. dark, light)",
-                            );
+                        let name = if new_theme.is_empty() {
+                            match self.interactive_theme_picker(std::sync::Arc::clone(&self.app)).await? {
+                                Some(picked) => picked,
+                                None => {
+                                    self.tui_dim("  /theme cancelled");
+                                    continue;
+                                }
+                            }
+                        } else {
+                            new_theme
+                        };
 
-                            // list available themes
+                        let (target_theme_colors, found_name) = if name == "dark" {
+                            (cade_tui::ThemeColors::dark(), "dark".to_string())
+                        } else if name == "light" {
+                            (cade_tui::ThemeColors::light(), "light".to_string())
+                        } else {
                             let agent_dir = self
                                 .settings
                                 .lock()
@@ -3684,56 +3686,31 @@ impl Repl {
                                 .parent()
                                 .unwrap()
                                 .to_path_buf();
-                            let discovered =
-                                cade_core::resources::discover_themes(&self.cwd, &agent_dir);
-                            let mut names = vec!["dark".to_string(), "light".to_string()];
-                            for t in discovered {
-                                if !names.contains(&t.name) {
-                                    names.push(t.name);
-                                }
+                            let discovered = cade_core::resources::discover_themes(&self.cwd, &agent_dir);
+                            if let Some(t) = discovered.iter().find(|t| t.name == name) {
+                                (cade_tui::ThemeColors::from_theme(t), t.name.clone())
+                            } else {
+                                (cade_tui::ThemeColors::dark(), String::new())
                             }
-                            self.tui_dim(format!("  Available themes: {}", names.join(", ")));
+                        };
+
+                        if found_name.is_empty() {
+                            self.tui_err(format!("  ✗ Theme '{name}' not found."));
                         } else {
-                            let (target_theme_colors, found_name) = if new_theme == "dark" {
-                                (cade_tui::ThemeColors::dark(), "dark".to_string())
-                            } else if new_theme == "light" {
-                                (cade_tui::ThemeColors::light(), "light".to_string())
-                            } else {
-                                let agent_dir = self
-                                    .settings
-                                    .lock()
-                                    .expect("lock poisoned")
-                                    .global_path()
-                                    .parent()
-                                    .unwrap()
-                                    .to_path_buf();
-                                let discovered =
-                                    cade_core::resources::discover_themes(&self.cwd, &agent_dir);
-                                if let Some(t) = discovered.iter().find(|t| t.name == new_theme) {
-                                    (cade_tui::ThemeColors::from_theme(t), t.name.clone())
-                                } else {
-                                    (cade_tui::ThemeColors::dark(), String::new())
-                                }
-                            };
-
-                            if found_name.is_empty() {
-                                self.tui_err(format!("  ✗ Theme '{new_theme}' not found."));
-                            } else {
-                                // Apply it dynamically
-                                {
-                                    let mut app = self.app.lock().expect("lock poisoned");
-                                    app.apply_theme(target_theme_colors);
-                                }
-
-                                // Save to settings
-                                {
-                                    let mut s = self.settings.lock().expect("lock poisoned");
-                                    s.global_settings_mut().theme = Some(found_name.clone());
-                                    let _ = s.save_global();
-                                }
-
-                                self.tui_ok(format!("  ✓ Theme changed to '{found_name}'"));
+                            // Apply it dynamically
+                            {
+                                let mut app = self.app.lock().expect("lock poisoned");
+                                app.apply_theme(target_theme_colors);
                             }
+
+                            // Save to settings
+                            {
+                                let mut s = self.settings.lock().expect("lock poisoned");
+                                s.global_settings_mut().theme = Some(found_name.clone());
+                                let _ = s.save_global();
+                            }
+
+                            self.tui_ok(format!("  ✓ Theme changed to '{found_name}'"));
                         }
                     }
 
