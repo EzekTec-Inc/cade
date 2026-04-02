@@ -94,6 +94,9 @@ rmcp           = { version = "0.2", features = [
     "client",
     "transport-child-process",
     "transport-io",
+    "transport-sse-client",
+    "transport-streamable-http-client",
+    "__reqwest",
 ] }
 
 [package]

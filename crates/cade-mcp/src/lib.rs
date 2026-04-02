@@ -452,6 +452,61 @@ impl McpManager {
     // -- Internal helpers
 
     async fn connect_server(key: &str, config: &McpServerConfig) -> Result<McpServer> {
+        // -- Transport selection: URL → HTTP (SSE or Streamable), else → stdio child process
+        if let Some(url) = &config.url {
+            Self::connect_server_http(key, config, url).await
+        } else {
+            Self::connect_server_stdio(key, config).await
+        }
+    }
+
+    /// Connect via HTTP+SSE or Streamable HTTP (remote servers).
+    ///
+    /// Heuristic: if the URL path ends with `/sse` (or contains `?`) use the
+    /// legacy SSE transport (MCP pre-2025-03-26).  Everything else uses the
+    /// Streamable HTTP transport (MCP 2025-03-26).
+    async fn connect_server_http(
+        key: &str,
+        config: &McpServerConfig,
+        url: &str,
+    ) -> Result<McpServer> {
+        use rmcp::transport::{
+            SseClientTransport,
+            streamable_http_client::StreamableHttpClientWorker,
+        };
+
+        // Decide which transport to use based on the URL path.
+        let use_sse = url.contains("/sse") || url.ends_with("/sse");
+
+        let (service, peer) = if use_sse {
+            info!("MCP server '{key}': connecting via SSE → {url}");
+            let transport = SseClientTransport::<reqwest::Client>::start(url)
+                .await
+                .map_err(|e| Error::custom(format!("SSE connect to '{key}' ({url}): {e}")))?;
+            let service: RunningService<RoleClient, ()> = ()
+                .serve(transport)
+                .await
+                .map_err(|e| Error::custom(format!("SSE handshake with '{key}': {e}")))?;
+            let peer = service.peer().clone();
+            (service, peer)
+        } else {
+            info!("MCP server '{key}': connecting via Streamable HTTP → {url}");
+            let worker = StreamableHttpClientWorker::<reqwest::Client>::new_simple(url);
+            let service: RunningService<RoleClient, ()> = ()
+                .serve(worker)
+                .await
+                .map_err(|e| {
+                    Error::custom(format!("Streamable HTTP handshake with '{key}': {e}"))
+                })?;
+            let peer = service.peer().clone();
+            (service, peer)
+        };
+
+        Self::build_server_from_peer(key, config, peer, service, format!("[http] {url}")).await
+    }
+
+    /// Connect via stdio (local child process — original transport).
+    async fn connect_server_stdio(key: &str, config: &McpServerConfig) -> Result<McpServer> {
         let mut cmd = Command::new(&config.command);
         cade_core::agent_env::apply_agent_env(&mut cmd);
         cmd.args(&config.args);
@@ -474,6 +529,17 @@ impl McpManager {
             .map_err(|e| Error::custom(format!("handshake with MCP server '{key}': {e}")))?;
 
         let peer = service.peer().clone();
+        Self::build_server_from_peer(key, config, peer, service, config.command.clone()).await
+    }
+
+    /// Shared post-handshake logic: list tools, build `McpServer`.
+    async fn build_server_from_peer(
+        key: &str,
+        config: &McpServerConfig,
+        peer: rmcp::Peer<RoleClient>,
+        service: rmcp::service::RunningService<RoleClient, ()>,
+        command_display: String,
+    ) -> Result<McpServer> {
 
         // Fetch all tools (paginated)
         let raw_tools = peer
@@ -534,7 +600,7 @@ impl McpManager {
 
         Ok(McpServer {
             key: key.to_string(),
-            command: config.command.clone(),
+            command: command_display,
             tools,
             config: config.clone(),
             reconnect_attempts: 0,

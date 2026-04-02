@@ -107,6 +107,8 @@ pub struct PermissionSettings {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct McpServerConfig {
     /// Absolute path (or executable name on PATH) to the server binary.
+    /// Mutually exclusive with `url` — if `url` is set this field is ignored.
+    #[serde(default)]
     pub command: String,
     /// CLI arguments passed to the server process.
     #[serde(default)]
@@ -114,6 +116,16 @@ pub struct McpServerConfig {
     /// Extra environment variables injected into the server process.
     #[serde(default)]
     pub env: std::collections::HashMap<String, String>,
+    /// Remote MCP server URL (HTTP+SSE or Streamable HTTP transport).
+    ///
+    /// When set, CADE connects over HTTP instead of spawning a child process.
+    ///
+    /// - Legacy SSE servers (pre-2025-03-26): `http://host/sse`
+    /// - Streamable HTTP servers (MCP 2025-03-26): `http://host/mcp`
+    ///
+    /// Mutually exclusive with `command`.
+    #[serde(default)]
+    pub url: Option<String>,
     /// Tool names that mutate state (require permission prompt).
     /// If not set, ALL tools from this server require permission.
     #[serde(default)]

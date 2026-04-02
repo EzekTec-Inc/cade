@@ -20,6 +20,8 @@ tracing.workspace      = true
 tokio.workspace        = true
 # -- MCP
 rmcp.workspace         = true
+# -- HTTP (for remote MCP server transports)
+reqwest.workspace      = true
 # -- Filesystem
 notify.workspace       = true
 dirs.workspace         = true
