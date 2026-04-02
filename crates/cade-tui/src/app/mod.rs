@@ -1813,7 +1813,7 @@ impl TuiApp {
 
             // -- Edit shortcuts
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                self.editor.delete_to_start();
+                self.editor.delete_to_line_start();
             }
             (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
                 self.editor.delete_to_end();
@@ -1821,17 +1821,41 @@ impl TuiApp {
             (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
                 self.editor.delete_word_back();
             }
+            // Alt+D — delete word forward (readline standard)
+            (KeyCode::Char('d'), KeyModifiers::ALT) => {
+                self.editor.delete_word_forward();
+            }
+            // Ctrl+Y — yank from kill ring (readline standard)
+            (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
+                self.editor.yank();
+            }
             (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
                 self.editor.undo();
             }
-            (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
+            // Ctrl+Shift+Z — redo
+            (KeyCode::Char('Z'), m) if m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
                 self.editor.redo();
             }
-            (KeyCode::Home, _) | (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+            // Ctrl+A / Ctrl+E — buffer start / end (readline)
+            (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+                self.editor.move_buffer_start();
+            }
+            (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+                self.editor.move_buffer_end();
+            }
+            // Home / End — current line start / end
+            (KeyCode::Home, _) => {
                 self.editor.move_home();
             }
-            (KeyCode::End, _) | (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+            (KeyCode::End, _) => {
                 self.editor.move_end();
+            }
+            // Ctrl+L — redraw / scroll to bottom
+            (KeyCode::Char('l'), KeyModifiers::CONTROL) => {
+                self.scroll = 0;
+                self.follow = true;
+                self.pending_lines = 0;
+                let _ = self.draw();
             }
 
             // -- Cursor movement

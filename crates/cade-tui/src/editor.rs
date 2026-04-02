@@ -90,11 +90,19 @@ pub struct Editor {
     redo_stack: VecDeque<(String, usize)>,
     /// Last action performed, used for undo coalescing.
     pub last_action: EditorAction,
+
+    // -- Kill ring (readline-compatible)
+    /// Text last killed by Ctrl+K or Ctrl+U — yanked back by Ctrl+Y.
+    pub kill_ring: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EditorAction {
     TypeWord,
+    /// Consecutive backspace presses — coalesced into one undo step.
+    DeleteBack,
+    /// Consecutive forward-delete presses — coalesced into one undo step.
+    DeleteForward,
     Other,
 }
 
@@ -123,6 +131,7 @@ impl Editor {
             undo_stack: VecDeque::with_capacity(UNDO_LIMIT),
             redo_stack: VecDeque::with_capacity(UNDO_LIMIT),
             last_action: EditorAction::Other,
+            kill_ring: String::new(),
         }
     }
 
@@ -208,8 +217,11 @@ impl Editor {
         if self.cursor_pos == 0 {
             return false;
         }
-        self.snapshot();
-        self.last_action = EditorAction::Other;
+        // Coalesce consecutive backspace presses into one undo step.
+        if self.last_action != EditorAction::DeleteBack {
+            self.snapshot();
+        }
+        self.last_action = EditorAction::DeleteBack;
         let char_len = self.input[..self.cursor_pos]
             .chars()
             .last()
@@ -226,13 +238,41 @@ impl Editor {
         if self.cursor_pos >= self.input.len() {
             return false;
         }
-        self.snapshot();
-        self.last_action = EditorAction::Other;
+        // Coalesce consecutive forward-delete presses into one undo step.
+        if self.last_action != EditorAction::DeleteForward {
+            self.snapshot();
+        }
+        self.last_action = EditorAction::DeleteForward;
         self.input.remove(self.cursor_pos);
         true
     }
 
-    /// Delete from cursor to start of buffer (Ctrl+U).
+    /// Delete from cursor to start of current line (Ctrl+U — readline semantics).
+    ///
+    /// Saves the deleted text to the kill ring.
+    /// For single-line input this is identical to `delete_to_buffer_start`.
+    /// For multiline input it only deletes back to the preceding `\n`.
+    pub fn delete_to_line_start(&mut self) {
+        if self.cursor_pos == 0 {
+            return;
+        }
+        let line_start = self.input[..self.cursor_pos]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        if line_start == self.cursor_pos {
+            return;
+        }
+        self.snapshot();
+        self.last_action = EditorAction::Other;
+        let killed: String = self.input[line_start..self.cursor_pos].to_string();
+        self.kill_ring = killed;
+        self.input.drain(line_start..self.cursor_pos);
+        self.cursor_pos = line_start;
+    }
+
+    /// Delete from cursor to start of buffer (legacy / Ctrl+Shift+U if desired).
+    /// Does NOT save to kill ring.
     pub fn delete_to_start(&mut self) {
         if self.cursor_pos == 0 {
             return;
@@ -243,20 +283,32 @@ impl Editor {
         self.cursor_pos = 0;
     }
 
-    /// Delete from cursor to end of current line (Ctrl+K).
+    /// Delete from cursor to end of current line (Ctrl+K — readline semantics).
     ///
-    /// Stops at the next `\n`; if on the last line, deletes to end of buffer.
+    /// Stops at the next `\n`; if on the last line deletes to end of buffer.
+    /// Saves the deleted text to the kill ring.
     pub fn delete_to_end(&mut self) {
         let end = self.input[self.cursor_pos..]
             .find('\n')
             .map(|i| self.cursor_pos + i)
             .unwrap_or(self.input.len());
         if end == self.cursor_pos {
-            return; // nothing to delete — keep redo_stack intact
+            return;
         }
         self.snapshot();
         self.last_action = EditorAction::Other;
+        let killed: String = self.input[self.cursor_pos..end].to_string();
+        self.kill_ring = killed;
         self.input.drain(self.cursor_pos..end);
+    }
+
+    /// Yank (paste) the kill ring contents at the cursor (Ctrl+Y).
+    pub fn yank(&mut self) {
+        if self.kill_ring.is_empty() {
+            return;
+        }
+        let text = self.kill_ring.clone();
+        self.insert_str(&text);
     }
 
     /// Delete word backwards (Ctrl+W).
@@ -273,6 +325,31 @@ impl Editor {
         self.last_action = EditorAction::Other;
         self.input.drain(start..end);
         self.cursor_pos = start;
+    }
+
+    /// Delete word forwards (Alt+D — readline semantics).
+    ///
+    /// Deletes from the cursor to the end of the next word.
+    pub fn delete_word_forward(&mut self) {
+        let start = self.cursor_pos;
+        if start >= self.input.len() {
+            return;
+        }
+        let after = &self.input[start..];
+        // Skip leading whitespace, then consume the word.
+        let ws = after
+            .find(|c: char| !c.is_whitespace())
+            .unwrap_or(after.len());
+        let word_end = after[ws..]
+            .find(|c: char| c.is_whitespace())
+            .map(|i| ws + i)
+            .unwrap_or(after.len());
+        if word_end == 0 {
+            return;
+        }
+        self.snapshot();
+        self.last_action = EditorAction::Other;
+        self.input.drain(start..start + word_end);
     }
 
     // -- Cursor movement
@@ -341,13 +418,35 @@ impl Editor {
         self.cursor_pos += word_end + ws_end;
     }
 
-    /// Move cursor to the start of the buffer (Home / Ctrl+A).
+    /// Move cursor to the start of the current logical line (Home key).
+    ///
+    /// Stops at the character after the preceding `\n` (or byte 0 if on the
+    /// first line).  Use `move_buffer_start` for Ctrl+Home behaviour.
     pub fn move_home(&mut self) {
+        self.cursor_pos = self.input[..self.cursor_pos]
+            .rfind('\n')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+    }
+
+    /// Move cursor to the end of the current logical line (End key).
+    ///
+    /// Stops just before the next `\n` (or at buffer end if on the last line).
+    /// Use `move_buffer_end` for Ctrl+End behaviour.
+    pub fn move_end(&mut self) {
+        self.cursor_pos = self.input[self.cursor_pos..]
+            .find('\n')
+            .map(|i| self.cursor_pos + i)
+            .unwrap_or(self.input.len());
+    }
+
+    /// Move cursor to the very start of the buffer (Ctrl+Home / Ctrl+A).
+    pub fn move_buffer_start(&mut self) {
         self.cursor_pos = 0;
     }
 
-    /// Move cursor to the end of the buffer (End / Ctrl+E).
-    pub fn move_end(&mut self) {
+    /// Move cursor to the very end of the buffer (Ctrl+End / Ctrl+E).
+    pub fn move_buffer_end(&mut self) {
         self.cursor_pos = self.input.len();
     }
 
@@ -514,7 +613,7 @@ impl Component for Editor {
         match (key.code, key.modifiers) {
             // -- Text editing (consumed)
             (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                self.delete_to_start();
+                self.delete_to_line_start();
                 true
             }
             (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
@@ -525,19 +624,40 @@ impl Component for Editor {
                 self.delete_word_back();
                 true
             }
+            // Alt+D — delete word forward (readline standard)
+            (KeyCode::Char('d'), KeyModifiers::ALT) => {
+                self.delete_word_forward();
+                true
+            }
+            // Ctrl+Y — yank (readline standard; replaces old redo binding)
+            (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
+                self.yank();
+                true
+            }
             (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
                 self.undo();
                 true
             }
-            (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
+            // Ctrl+Shift+Z — redo (standard GUI shortcut)
+            (KeyCode::Char('Z'), m) if m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
                 self.redo();
                 true
             }
-            (KeyCode::Char('a'), KeyModifiers::CONTROL) | (KeyCode::Home, _) => {
+            // Ctrl+A / Ctrl+E — buffer start / end (readline standard)
+            (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
+                self.move_buffer_start();
+                true
+            }
+            (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+                self.move_buffer_end();
+                true
+            }
+            // Home / End — current line start / end
+            (KeyCode::Home, _) => {
                 self.move_home();
                 true
             }
-            (KeyCode::Char('e'), KeyModifiers::CONTROL) | (KeyCode::End, _) => {
+            (KeyCode::End, _) => {
                 self.move_end();
                 true
             }
@@ -657,6 +777,81 @@ mod tests {
 
         editor.undo();
         assert_eq!(editor.input, "hello world\nnewline");
+    }
+
+    #[test]
+    fn test_delete_coalescing() {
+        // Consecutive delete_back presses should produce ONE undo step.
+        let mut editor = Editor::new();
+        editor.insert_str("hello");
+        // Delete 3 chars in a row — should be one undo step.
+        editor.delete_back();
+        editor.delete_back();
+        editor.delete_back();
+        assert_eq!(editor.input, "he");
+        editor.undo();
+        // One undo restores all 3 deleted chars.
+        assert_eq!(editor.input, "hello");
+    }
+
+    #[test]
+    fn test_kill_ring_and_yank() {
+        let mut editor = Editor::new();
+        editor.insert_str("hello world");
+        editor.cursor_pos = 5; // after "hello"
+        // Ctrl+K kills " world" → kill ring
+        editor.delete_to_end();
+        assert_eq!(editor.input, "hello");
+        assert_eq!(editor.kill_ring, " world");
+        // Ctrl+Y yanks it back
+        editor.yank();
+        assert_eq!(editor.input, "hello world");
+    }
+
+    #[test]
+    fn test_delete_to_line_start() {
+        // Ctrl+U should only delete to the start of the current line.
+        let mut editor = Editor::new();
+        editor.insert_str("first\nsecond");
+        // cursor at end of "second"
+        editor.delete_to_line_start();
+        assert_eq!(editor.input, "first\n");
+        assert_eq!(editor.kill_ring, "second");
+    }
+
+    #[test]
+    fn test_home_end_current_line() {
+        // Home/End should move to current line boundaries, not buffer edges.
+        let mut editor = Editor::new();
+        editor.insert_str("line one\nline two");
+        // cursor at end of "line two" (buffer end)
+        editor.move_home();
+        // Should be at start of "line two" (byte 9)
+        assert_eq!(editor.cursor_pos, 9);
+        editor.move_end();
+        // Should be at end of "line two" (buffer end = 17)
+        assert_eq!(editor.cursor_pos, 17);
+    }
+
+    #[test]
+    fn test_ctrl_a_e_buffer_edges() {
+        // Ctrl+A/Ctrl+E should still jump to buffer start/end.
+        let mut editor = Editor::new();
+        editor.insert_str("line one\nline two");
+        editor.cursor_pos = 9; // start of second line
+        editor.move_buffer_start();
+        assert_eq!(editor.cursor_pos, 0);
+        editor.move_buffer_end();
+        assert_eq!(editor.cursor_pos, 17);
+    }
+
+    #[test]
+    fn test_delete_word_forward() {
+        let mut editor = Editor::new();
+        editor.insert_str("hello world");
+        editor.cursor_pos = 0;
+        editor.delete_word_forward();
+        assert_eq!(editor.input, " world");
     }
 }
 
