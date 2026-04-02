@@ -22,7 +22,7 @@ pub use manager::{
 };
 pub use meta::{all_meta_schemas, register_meta_tools};
 pub use plan::{
-    EnterPlanModeTool, ExitPlanModeTool, TodoWriteTool, UpdatePlanTool, WriteTodosTool,
+    EnterPlanModeTool, ExitPlanModeTool, SetPlanTool, TodoWriteTool, UpdatePlanTool,
 };
 pub use runtime::{RuntimeToolResult, ToolRuntime};
 

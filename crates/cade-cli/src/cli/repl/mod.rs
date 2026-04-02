@@ -1387,12 +1387,10 @@ impl Repl {
                     }
                     SlashCmd::Plan => {
                         self.permissions.set_mode(PermissionMode::Plan);
-                        if let Ok(mut app) = self.app.lock() {
-                            if let Some(plan) = &mut app.active_plan {
-                                plan.is_visible = true;
-                            }
-                            app.show_toast("Plan mode enabled", ToastLevel::Info);
-                        }
+                        self.app
+                            .lock()
+                            .expect("lock poisoned")
+                            .show_toast("Permission mode: plan (read-only)", ToastLevel::Info);
                         self.tui_hdr("📖 Permission mode: plan (read-only) — write/exec tools blocked. Use /default to resume.");
                     }
                     SlashCmd::Todos => {
@@ -1406,7 +1404,7 @@ impl Repl {
                             }
                             if !has_plan {
                                 let _ = app.push(crate::ui::RenderLine::SystemMsg(
-                                    "No active plan. Ask the agent to create one.".to_string(),
+                                    "No active plan. Ask the agent to use the set_plan tool.".to_string(),
                                 ));
                             } else {
                                 app.show_toast(
@@ -1421,6 +1419,14 @@ impl Repl {
                             app.draw_dirty = true;
                             let _ = app.draw();
                         }
+                    }
+                    SlashCmd::Todo => {
+                        let content = crate::ui::TuiApp::read_todo_file();
+                        let _ = self
+                            .app
+                            .lock()
+                            .expect("lock poisoned")
+                            .push(crate::ui::RenderLine::SystemMsg(content));
                     }
                     SlashCmd::Default => {
                         self.permissions.set_mode(PermissionMode::Default);

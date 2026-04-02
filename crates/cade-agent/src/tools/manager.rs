@@ -9,7 +9,7 @@ use super::{
     ask::AskUserQuestionTool,
     bash::BashTool,
     fs::{ApplyPatchTool, EditTool, ReadTool, WriteTool},
-    plan::{EnterPlanModeTool, ExitPlanModeTool, TodoWriteTool, UpdatePlanTool, WriteTodosTool},
+    plan::{EnterPlanModeTool, ExitPlanModeTool, SetPlanTool, TodoWriteTool, UpdatePlanTool},
     search::{GlobTool, GrepTool},
 };
 use crate::mcp::McpManager;
@@ -75,7 +75,10 @@ async fn run_native_tool(name: &str, args: &Value) -> Option<Result<String>> {
         "glob" | "GlobGemini" => GlobTool::run(args).await,
         "EnterPlanMode" => Ok("Plan mode entered. File modifications are now blocked. Use ExitPlanMode to resume normal operation.".to_string()),
         "ExitPlanMode" => Ok("Plan mode exited. Normal operation resumed.".to_string()),
-        "TodoWrite" | "UpdatePlan" | "WriteTodos" => TodoWriteTool::run(args).await,
+        // TodoWrite — file persistence; SetPlan/UpdatePlan are intercepted in
+        // try_native_intercept (they need TuiApp access) before reaching here.
+        // WriteTodos is kept as a backward-compat alias for TodoWrite.
+        "TodoWrite" | "WriteTodos" => TodoWriteTool::run(args).await,
         // Desktop extensions
         #[cfg(feature = "desktop")]
         "desktop_screenshot"   => DesktopCaptureTool::run(args).await,
@@ -116,6 +119,8 @@ pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
             GlobTool::schema(),
             EnterPlanModeTool::schema(),
             ExitPlanModeTool::schema(),
+            TodoWriteTool::schema(),
+            SetPlanTool::schema(),
             UpdatePlanTool::schema(),
         ],
         Toolset::Gemini => vec![
@@ -127,7 +132,9 @@ pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
             rename_schema(GlobTool::schema(), "GlobGemini"),
             EnterPlanModeTool::schema(),
             ExitPlanModeTool::schema(),
-            WriteTodosTool::schema(),
+            TodoWriteTool::schema(),
+            SetPlanTool::schema(),
+            UpdatePlanTool::schema(),
         ],
         _ => vec![
             BashTool::schema(),
@@ -139,6 +146,8 @@ pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
             EnterPlanModeTool::schema(),
             ExitPlanModeTool::schema(),
             TodoWriteTool::schema(),
+            SetPlanTool::schema(),
+            UpdatePlanTool::schema(),
         ],
     };
     schemas.extend(desktop);

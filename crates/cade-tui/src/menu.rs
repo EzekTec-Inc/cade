@@ -107,11 +107,15 @@ const SECTIONS: &[Section] = &[
             },
             CmdEntry {
                 cmd: "/plan",
-                desc: "Switch to read-only plan mode",
+                desc: "Switch to read-only plan mode (write/exec tools blocked)",
+            },
+            CmdEntry {
+                cmd: "/todo",
+                desc: "Display the agent's scratchpad (.cade-todo.md)",
             },
             CmdEntry {
                 cmd: "/todos",
-                desc: "Toggle visibility of the active plan / checklist",
+                desc: "Toggle visibility of the live plan panel (set via set_plan tool)",
             },
             CmdEntry {
                 cmd: "/default",

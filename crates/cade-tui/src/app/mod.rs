@@ -206,13 +206,6 @@ pub struct PlanState {
 use regex::Regex;
 use std::sync::OnceLock;
 
-fn plan_regex() -> &'static Regex {
-    static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| {
-        Regex::new(r"(?im)^Plan:\s*\n((?:^\d+\.\s+.*(?:\n|$))+)").expect("valid regex")
-    })
-}
-
 fn done_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"(?i)\[DONE:(\d+)\]").expect("valid regex"))
@@ -484,31 +477,12 @@ impl TuiApp {
     }
 
     fn update_plan_state(&mut self) {
-        if self.active_plan.is_none()
-            && let Some(caps) = plan_regex().captures(&self.streaming_text)
-            && let Some(plan_block) = caps.get(1)
-        {
-            let mut steps = Vec::new();
-            for line in plan_block.as_str().lines() {
-                if let Some(pos) = line.find(". ")
-                    && let Ok(id) = line[..pos].trim().parse::<usize>()
-                {
-                    steps.push(PlanStep {
-                        id,
-                        description: line[pos + 2..].trim().to_string(),
-                        is_done: false,
-                    });
-                }
-            }
-            if !steps.is_empty() {
-                self.active_plan = Some(PlanState {
-                    steps,
-                    is_visible: true,
-                });
-                self.draw_dirty = true;
-            }
-        }
-
+        // Legacy streaming-regex plan detection removed.
+        // Plans are now set explicitly via the set_plan() / update_plan_step() methods,
+        // driven by the SetPlan and UpdatePlan tool calls.
+        //
+        // [DONE:N] markers in streaming text are still honoured for backward
+        // compatibility with any in-flight conversations.
         if let Some(plan) = &mut self.active_plan {
             let mut changed = false;
             for caps in done_regex().captures_iter(&self.streaming_text) {
@@ -523,6 +497,60 @@ impl TuiApp {
             if changed {
                 self.draw_dirty = true;
             }
+        }
+    }
+
+    /// Set the plan panel steps from an explicit `set_plan` tool call.
+    /// Replaces any existing plan and makes the panel visible.
+    pub fn set_plan(&mut self, steps: Vec<String>) {
+        if steps.is_empty() {
+            self.active_plan = None;
+            return;
+        }
+        self.active_plan = Some(PlanState {
+            steps: steps
+                .into_iter()
+                .enumerate()
+                .map(|(i, desc)| PlanStep {
+                    id: i + 1,
+                    description: desc,
+                    is_done: false,
+                })
+                .collect(),
+            is_visible: true,
+        });
+        self.draw_dirty = true;
+    }
+
+    /// Mark a step done/undone from an explicit `UpdatePlan` tool call.
+    /// step_id is 1-based.  Returns false if the id is out of range.
+    pub fn update_plan_step(&mut self, step_id: usize, done: bool) -> bool {
+        if let Some(plan) = &mut self.active_plan {
+            if let Some(step) = plan.steps.iter_mut().find(|s| s.id == step_id) {
+                step.is_done = done;
+                self.draw_dirty = true;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Read `.cade-todo.md` from the current directory and return its contents,
+    /// or a message explaining it doesn't exist yet.
+    pub fn read_todo_file() -> String {
+        let path = match std::env::current_dir() {
+            Ok(d) => d.join(".cade-todo.md"),
+            Err(_) => return "Could not determine current directory.".to_string(),
+        };
+        match std::fs::read_to_string(&path) {
+            Ok(content) if content.trim().is_empty() => {
+                format!("{} exists but is empty.", path.display())
+            }
+            Ok(content) => content,
+            Err(_) => format!(
+                "No todo file found at {}.\nAsk the agent to create one with the TodoWrite tool.",
+                path.display()
+            ),
         }
     }
 
