@@ -1580,8 +1580,6 @@ impl TuiApp {
         history: &mut [String],
         hist_idx: &mut Option<usize>,
     ) -> Result<Option<String>> {
-        self.editor.input.clear();
-        self.editor.cursor_pos = 0;
         *hist_idx = None;
 
         self.draw()?;
