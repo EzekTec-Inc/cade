@@ -58,6 +58,21 @@ async fn main() -> Result<()> {
         .with_ansi(false)
         .init();
 
+    // Install a panic hook that restores the terminal before printing the
+    // panic message.  Without this, a panic while the TUI is active leaves
+    // the terminal in raw/alternate-screen mode: the message is invisible or
+    // garbled and the shell prompt is corrupted.
+    //
+    // ratatui::restore() disables raw mode and leaves the alternate screen.
+    // We capture the original hook so the panic message + backtrace are still
+    // printed normally after the terminal is restored.
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // Best-effort — ignore errors (we are already panicking).
+        ratatui::restore();
+        original_hook(info);
+    }));
+
     let _ = dotenvy::dotenv();
 
     let mut args = Args::parse();

@@ -271,18 +271,6 @@ impl Editor {
         self.cursor_pos = line_start;
     }
 
-    /// Delete from cursor to start of buffer (legacy / Ctrl+Shift+U if desired).
-    /// Does NOT save to kill ring.
-    pub fn delete_to_start(&mut self) {
-        if self.cursor_pos == 0 {
-            return;
-        }
-        self.snapshot();
-        self.last_action = EditorAction::Other;
-        self.input.drain(..self.cursor_pos);
-        self.cursor_pos = 0;
-    }
-
     /// Delete from cursor to end of current line (Ctrl+K — readline semantics).
     ///
     /// Stops at the next `\n`; if on the last line deletes to end of buffer.

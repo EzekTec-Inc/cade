@@ -108,6 +108,21 @@ pub struct ReloadSummary {
     pub failed: Vec<String>,
 }
 
+/// Return the connection identity string of an existing server, if present.
+///
+/// For remote (HTTP) servers the identity is the URL extracted from the
+/// "[http] <url>" display string stored in `McpServer::command`.
+/// For stdio servers the identity is the command binary path.
+fn existing_identity<'a>(server: &Option<&'a McpServer>) -> Option<&'a str> {
+    let s = (*server)?;
+    let cmd = s.command.as_str();
+    if let Some(url) = cmd.strip_prefix("[http] ") {
+        Some(url)
+    } else {
+        Some(cmd)
+    }
+}
+
 impl McpManager {
     /// Spawn all enabled MCP servers, handshake, and fetch their tool lists.
     /// Servers that fail to start are skipped with a warning.
@@ -175,16 +190,32 @@ impl McpManager {
         let mut new_servers: Vec<McpServer> = Vec::new();
 
         for (key, config) in &entries {
-            // Keep existing connection if the command is unchanged and server is healthy
-            if let Some(existing) = old_by_key.remove(*key)
-                && existing.command == config.command
+            // Keep existing connection if the server identity is unchanged and
+            // the server is healthy.
+            //
+            // Identity for stdio servers  = the `command` binary path.
+            // Identity for remote servers = the `url` field (stored in config).
+            // `existing.command` holds "[http] <url>" for remote servers, so we
+            // compare against `config.url` directly instead of `config.command`.
+            let identity_unchanged = if let Some(url) = &config.url {
+                existing_identity(&old_by_key.get(*key)) == Some(url.as_str())
+            } else {
+                old_by_key
+                    .get(*key)
+                    .map(|e| e.command == config.command)
+                    .unwrap_or(false)
+            };
+
+            if let Some(existing) = old_by_key.get(*key)
+                && identity_unchanged
                 && !existing.disabled
             {
+                let existing = old_by_key.remove(*key).unwrap();
                 summary.kept.push(key.to_string());
                 new_servers.push(existing);
                 continue;
             }
-            // Command changed or server was disabled — drop and restart
+            // Identity changed or server was disabled — drop and reconnect.
 
             // Start a new connection
             match Self::connect_server(key, config).await {
@@ -462,17 +493,36 @@ impl McpManager {
 
     /// Connect via HTTP+SSE or Streamable HTTP (remote servers).
     ///
-    /// Heuristic: if the URL path ends with `/sse` (or contains `?`) use the
-    /// legacy SSE transport (MCP pre-2025-03-26).  Everything else uses the
-    /// Streamable HTTP transport (MCP 2025-03-26).
+    /// Heuristic: if the URL path contains `/sse` use the legacy SSE transport
+    /// (MCP pre-2025-03-26).  Everything else uses Streamable HTTP (MCP 2025-03-26).
+    ///
+    /// When `config.auth_token` is set, it is sent as `Authorization: Bearer <token>`
+    /// on every HTTP request via a pre-configured `reqwest::Client` default header.
     async fn connect_server_http(
         key: &str,
         config: &McpServerConfig,
         url: &str,
     ) -> Result<McpServer> {
+        use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
         use rmcp::transport::{
             SseClientTransport,
-            streamable_http_client::StreamableHttpClientWorker,
+            sse_client::SseClientConfig,
+            streamable_http_client::{StreamableHttpClientTransportConfig, StreamableHttpClientWorker},
+        };
+
+        // Build a reqwest client with optional Bearer auth header.
+        let http_client = if let Some(token) = &config.auth_token {
+            let mut headers = HeaderMap::new();
+            let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .map_err(|e| Error::custom(format!("invalid auth_token for '{key}': {e}")))?;
+            value.set_sensitive(true);
+            headers.insert(AUTHORIZATION, value);
+            reqwest::Client::builder()
+                .default_headers(headers)
+                .build()
+                .map_err(|e| Error::custom(format!("build http client for '{key}': {e}")))?
+        } else {
+            reqwest::Client::default()
         };
 
         // Decide which transport to use based on the URL path.
@@ -480,9 +530,14 @@ impl McpManager {
 
         let (service, peer) = if use_sse {
             info!("MCP server '{key}': connecting via SSE → {url}");
-            let transport = SseClientTransport::<reqwest::Client>::start(url)
-                .await
-                .map_err(|e| Error::custom(format!("SSE connect to '{key}' ({url}): {e}")))?;
+            let sse_config = SseClientConfig {
+                sse_endpoint: url.into(),
+                ..Default::default()
+            };
+            let transport =
+                SseClientTransport::start_with_client(http_client, sse_config)
+                    .await
+                    .map_err(|e| Error::custom(format!("SSE connect to '{key}' ({url}): {e}")))?;
             let service: RunningService<RoleClient, ()> = ()
                 .serve(transport)
                 .await
@@ -491,7 +546,12 @@ impl McpManager {
             (service, peer)
         } else {
             info!("MCP server '{key}': connecting via Streamable HTTP → {url}");
-            let worker = StreamableHttpClientWorker::<reqwest::Client>::new_simple(url);
+            let sh_config = StreamableHttpClientTransportConfig {
+                uri: url.into(),
+                ..Default::default()
+            };
+            let worker =
+                StreamableHttpClientWorker::new(http_client, sh_config);
             let service: RunningService<RoleClient, ()> = ()
                 .serve(worker)
                 .await

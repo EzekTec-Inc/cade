@@ -799,6 +799,7 @@ dependencies = [
  "derive_more 2.1.1",
  "dirs 5.0.1",
  "dotenvy",
+ "ratatui",
  "serde_json",
  "tokio",
  "tokio-stream",

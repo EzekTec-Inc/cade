@@ -126,6 +126,13 @@ pub struct McpServerConfig {
     /// Mutually exclusive with `command`.
     #[serde(default)]
     pub url: Option<String>,
+    /// Bearer token for authenticated remote MCP servers.
+    ///
+    /// When set alongside `url`, CADE sends `Authorization: Bearer <token>`
+    /// on every HTTP request to the remote server.
+    /// Has no effect for stdio (`command`-based) servers.
+    #[serde(default)]
+    pub auth_token: Option<String>,
     /// Tool names that mutate state (require permission prompt).
     /// If not set, ALL tools from this server require permission.
     #[serde(default)]
