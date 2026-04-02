@@ -21,9 +21,9 @@ async fn test_db_lock_poisoning_yields_500() {
     assert!(db.lock().is_err(), "Lock should be poisoned");
 
     // 2. Set up AppState
-    let reqwest_client = reqwest::Client::new();
+    let _reqwest_client = reqwest::Client::new();
     let empty_path = std::path::PathBuf::new();
-    let settings = Arc::new(RwLock::new(
+    let _settings = Arc::new(RwLock::new(
         cade_core::settings::SettingsManager::new(&empty_path).unwrap(),
     ));
     let config = Arc::new(crate::server::config::ServerConfig {

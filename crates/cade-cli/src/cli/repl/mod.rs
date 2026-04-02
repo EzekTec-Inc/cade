@@ -54,6 +54,11 @@ pub(crate) enum MemoryPickerResult {
     Delete(cade_agent::agent::client::MemoryBlock),
 }
 
+pub(crate) enum SubagentPickerResult {
+    Run(String),
+    Edit(std::path::PathBuf),
+}
+
 pub mod slash;
 pub mod stats;
 pub(crate) use slash::*;
@@ -3359,16 +3364,26 @@ impl Repl {
                             continue;
                         }
                         let all = discover_all_subagents(&self.cwd);
-                        self.tui_blank();
-                        self.tui_hdr(format!("  Available subagents ({}):", all.len()));
-                        self.tui_blank();
-                        for def in &all {
-                            self.tui_sys(def.summary());
+                        match self.subagent_picker(std::sync::Arc::clone(&self.app), &all).await? {
+                            Some(SubagentPickerResult::Run(name)) => {
+                                pending_input = Some(format!("run_subagent(subagent_type=\"{name}\", prompt=\"\")"));
+                            }
+                            Some(SubagentPickerResult::Edit(path)) => {
+                                // Drop the TUI temporarily, open $EDITOR, then return
+                                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+                                self.tui_sys(format!("  Opening {} in {}...", path.display(), editor));
+                                
+                                let _ = self.app.lock().expect("lock poisoned").suspend_for(|| {
+                                    let mut cmd = std::process::Command::new(&editor);
+                                    cmd.arg(&path);
+                                    let _ = cmd.status();
+                                });
+                                self.tui_ok(format!("  ✓ Finished editing {}", path.display()));
+                            }
+                            None => {
+                                self.tui_dim("  /subagents cancelled".to_string());
+                            }
                         }
-                        self.tui_blank();
-                        self.tui_dim("  Usage: ask the agent to run_subagent(type, task)");
-                        self.tui_dim("  Custom: create .cade/agents/<name>.md in this project");
-                        self.tui_dim("  Global: create ~/.cade/agents/<name>.md");
                     }
 
                     SlashCmd::Providers => match self.client.list_providers().await {

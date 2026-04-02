@@ -904,6 +904,29 @@ impl TuiApp {
 
     // -- Config updates
 
+    /// Temporarily suspends the TUI, runs the provided closure, and then restores it.
+    pub fn suspend_for<F>(&mut self, f: F) -> Result<()>
+    where
+        F: FnOnce(),
+    {
+        crossterm::terminal::disable_raw_mode().map_err(|e| crate::Error::Custom(e.to_string()))?;
+        crossterm::execute!(
+            self.terminal.backend_mut(),
+            crossterm::terminal::LeaveAlternateScreen
+        ).map_err(|e| crate::Error::Custom(e.to_string()))?;
+
+        f();
+
+        crossterm::terminal::enable_raw_mode().map_err(|e| crate::Error::Custom(e.to_string()))?;
+        crossterm::execute!(
+            self.terminal.backend_mut(),
+            crossterm::terminal::EnterAlternateScreen
+        ).map_err(|e| crate::Error::Custom(e.to_string()))?;
+        self.terminal.clear().map_err(|e| crate::Error::Custom(e.to_string()))?;
+        self.draw()?;
+        Ok(())
+    }
+
     pub fn update_model(&mut self, model: String) {
         self.model = model;
     }
