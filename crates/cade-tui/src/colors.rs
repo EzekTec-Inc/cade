@@ -15,6 +15,7 @@ use ratatui::style::Color as RC;
 #[derive(Clone, Debug)]
 pub struct ThemeColors {
     // -- Core
+    pub source_path: Option<std::path::PathBuf>,
     pub accent: RC,
     pub border: RC,
     pub border_accent: RC,
@@ -93,6 +94,9 @@ pub struct ThemeColors {
 
     // -- Bash mode editor border
     pub bash_mode: RC,
+
+    #[cfg(feature = "syntax-highlighting")]
+    pub syntect_theme: Option<std::sync::Arc<syntect::highlighting::Theme>>,
 }
 
 impl ThemeColors {
@@ -101,6 +105,9 @@ impl ThemeColors {
     /// Dark theme (current default — all values match the previous hardcoded colors).
     pub fn dark() -> Self {
         Self {
+            source_path: None,
+            #[cfg(feature = "syntax-highlighting")]
+            syntect_theme: None,
             accent: RC::Rgb(100, 180, 255),
             border: RC::Rgb(60, 70, 90),
             border_accent: RC::Rgb(100, 180, 255),
@@ -176,6 +183,9 @@ impl ThemeColors {
     /// Light theme.
     pub fn light() -> Self {
         Self {
+            source_path: None,
+            #[cfg(feature = "syntax-highlighting")]
+            syntect_theme: None,
             accent: RC::Rgb(0, 100, 200),
             border: RC::Rgb(180, 190, 210),
             border_accent: RC::Rgb(0, 100, 200),
@@ -255,6 +265,15 @@ impl ThemeColors {
     /// Returns the dark default for any token that is missing or unresolvable.
     pub fn from_theme(theme: &cade_core::resources::themes::Theme) -> Self {
         let mut base = Self::dark();
+        base.source_path = Some(theme.source.clone());
+        
+        #[cfg(feature = "syntax-highlighting")]
+        if theme.source.extension().and_then(|e| e.to_str()) == Some("tmTheme") {
+            if let Ok(syn_theme) = syntect::highlighting::ThemeSet::get_theme(&theme.source) {
+                base.syntect_theme = Some(std::sync::Arc::new(syn_theme));
+            }
+        }
+        
         let resolve =
             |c: &cade_core::resources::themes::ThemeColor| -> RC { resolve_color(c, &theme.vars) };
         let t = &theme.colors;

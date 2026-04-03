@@ -78,7 +78,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
     let mut in_code_block = false;
     let mut current_lang = String::new();
     #[cfg(feature = "syntax-highlighting")]
-    let mut highlighter: Option<HighlightLines<'static>> = None;
+    let mut highlighter: Option<HighlightLines<'_>> = None;
     #[cfg(not(feature = "syntax-highlighting"))]
     let mut highlighter: Option<()> = None;
 
@@ -172,7 +172,8 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                         let syntax = SYNTAX_SET
                             .find_syntax_by_token(&current_lang)
                             .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
-                        let theme = &THEME_SET.themes["base16-ocean.dark"];
+                            
+                        let theme = colors.syntect_theme.as_deref().unwrap_or(&THEME_SET.themes["base16-ocean.dark"]);
                         highlighter = Some(HighlightLines::new(syntax, theme));
                     }
 

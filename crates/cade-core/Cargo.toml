@@ -28,6 +28,7 @@ regex.workspace      = true
 chrono.workspace     = true
 uuid.workspace       = true
 dotenvy.workspace    = true
+plist.workspace      = true
 # -- HTTP
 reqwest.workspace    = true
 

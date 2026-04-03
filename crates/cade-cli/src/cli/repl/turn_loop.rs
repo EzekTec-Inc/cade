@@ -103,6 +103,45 @@ impl Repl {
         format!("<environment>\n{}\n</environment>", parts.join("\n"))
     }
 
+    /// Run the Heuristic Evaluation Layer on user input before tool execution.
+    /// This delegates a high-reasoning subagent to evaluate intent, safety, and pathfinding.
+    pub(crate) async fn heuristic_evaluate(&self, input: &str) {
+        if input.trim().is_empty() {
+            return;
+        }
+
+        // Token reduction measure: We only invoke the full subagent evaluation 
+        // if the user input exceeds a certain character threshold, or contains 
+        // explicit tool/file keywords indicating a complex task.
+        let is_complex = input.len() > 100 
+            || input.contains("file") 
+            || input.contains("code") 
+            || input.contains("test")
+            || input.contains("implement");
+
+        if !is_complex {
+            self.tui_dim("  Input deemed simple: skipping full heuristic subagent evaluation to conserve tokens.");
+            return;
+        }
+
+        self.tui_dim("  Evaluating heuristic constraints (Antivirus/Pathfinding) via subagent…");
+
+        let prompt = format!(
+            "You are the Heuristic Evaluation Layer. Perform an evaluation on the current task: The user has requested to '{}'.\nExecute the following logic and then call `update_memory` on the `working_set` block to persist the evolved context:\n1. Semantic Extraction: Parse Intent, Entities, Constraints.\n2. Antivirus Heuristic: Compare against Safety Protocol. If deviating, generate a corrective warning.\n3. Pathfinding Heuristic: Analyze distance to goal and recalculate Next Steps.\n4. CoT State Update: Update `working_set` with Vision, Progress, and Directives.",
+            input
+        );
+
+        let args = serde_json::json!({
+            "subagent_type": "heuristic_evaluator",
+            "prompt": prompt,
+            "background": false
+        });
+
+        // Run the subagent tool synchronously for this turn
+        let _ = self.handle_run_subagent("heuristic_eval", &args).await;
+        self.tui_ok("  Heuristic Evaluation completed. working_set updated.");
+    }
+
     /// Send a user message and drive the tool-call loop with live SSE streaming.
     /// Thin wrapper: start a turn, optionally attaching pasted images.
     pub(crate) async fn agent_turn_with_images(
@@ -132,6 +171,9 @@ impl Repl {
         // Also clear the shutdown flag: if the user hit Ctrl+C to cancel the
         // previous turn we don't want to exit the REPL immediately after.
         self.shutdown_flag.store(false, Ordering::SeqCst);
+
+        // Run Heuristic Evaluator Layer
+        self.heuristic_evaluate(input).await;
 
         // On the first real turn, prefix with environment context
         let effective_input = if self

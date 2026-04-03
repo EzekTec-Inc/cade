@@ -176,13 +176,125 @@ pub fn discover_themes(cwd: &Path, agent_dir: &Path) -> Vec<Theme> {
     themes
 }
 
-/// Load a single theme from a JSON file.
+/// Load a single theme from a JSON or tmTheme file.
 pub fn load_theme(path: &Path) -> crate::Result<Theme> {
+    if path.extension().and_then(|e| e.to_str()) == Some("tmTheme") {
+        return load_tmtheme(path);
+    }
+    
     let content = std::fs::read_to_string(path)
         .map_err(|e| crate::Error::custom(format!("read theme {}: {e}", path.display())))?;
     let mut theme: Theme = serde_json::from_str(&content)
         .map_err(|e| crate::Error::custom(format!("parse theme {}: {e}", path.display())))?;
     theme.source = path.to_path_buf();
+    Ok(theme)
+}
+
+fn load_tmtheme(path: &Path) -> crate::Result<Theme> {
+    let plist_value = plist::Value::from_file(path)
+        .map_err(|e| crate::Error::custom(format!("parse tmTheme {}: {e}", path.display())))?;
+        
+    let dict = plist_value.into_dictionary()
+        .ok_or_else(|| crate::Error::custom("root is not a dictionary"))?;
+        
+    let name = dict.get("name")
+        .and_then(|v| v.as_string())
+        .unwrap_or("unnamed").to_string();
+        
+    let mut theme = Theme {
+        name,
+        vars: HashMap::new(),
+        colors: ThemeTokens::default(),
+        source: path.to_path_buf(),
+    };
+    
+    let settings_array = dict.get("settings")
+        .and_then(|v| v.as_array())
+        .ok_or_else(|| crate::Error::custom("missing settings array"))?;
+        
+    let mut global_settings = None;
+    let mut scopes = HashMap::new();
+    
+    for item in settings_array {
+        if let Some(item_dict) = item.as_dictionary() {
+            let item_settings = item_dict.get("settings").and_then(|v| v.as_dictionary());
+            if let Some(settings) = item_settings {
+                if let Some(scope) = item_dict.get("scope").and_then(|v| v.as_string()) {
+                    scopes.insert(scope.to_string(), settings.clone());
+                } else if global_settings.is_none() {
+                    global_settings = Some(settings.clone());
+                }
+            }
+        }
+    }
+    
+    let to_color = |v: Option<&plist::Value>| -> Option<ThemeColor> {
+        v.and_then(|val| val.as_string()).map(|s| ThemeColor::Hex(s.to_string()))
+    };
+    
+    let mut fallback_bg = ThemeColor::default();
+    let mut fallback_fg = ThemeColor::default();
+    
+    if let Some(global) = global_settings {
+        if let Some(bg) = to_color(global.get("background")) {
+            theme.colors.user_message_bg = bg.clone();
+            theme.colors.tool_pending_bg = bg.clone();
+            theme.colors.bash_mode = bg.clone();
+            fallback_bg = bg.clone();
+        }
+        if let Some(fg) = to_color(global.get("foreground")) {
+            theme.colors.text = fg.clone();
+            fallback_fg = fg.clone();
+        }
+        if let Some(sel) = to_color(global.get("selection")) {
+            theme.colors.selected_bg = sel.clone();
+            theme.colors.tool_diff_context = sel.clone();
+        }
+        if let Some(line_hl) = to_color(global.get("lineHighlight")) {
+            theme.colors.border = line_hl.clone();
+            theme.colors.dim = line_hl.clone();
+            theme.colors.muted = line_hl.clone();
+        } else {
+            theme.colors.border = fallback_bg.clone();
+            theme.colors.dim = fallback_bg.clone();
+            theme.colors.muted = fallback_bg.clone();
+        }
+    }
+    
+    let get_scope_fg = |scope_str: &str| -> Option<ThemeColor> {
+        for (scope, settings) in &scopes {
+            if scope.split(',').any(|s| s.trim().starts_with(scope_str)) {
+                return to_color(settings.get("foreground"));
+            }
+        }
+        None
+    };
+    
+    if let Some(accent) = get_scope_fg("keyword.control") {
+        theme.colors.accent = accent.clone();
+        theme.colors.tool_title = accent;
+    } else {
+        theme.colors.accent = fallback_fg.clone();
+    }
+    
+    if let Some(success) = get_scope_fg("string") {
+        theme.colors.success = success.clone();
+        theme.colors.tool_success_bg = success;
+    }
+    
+    if let Some(warning) = get_scope_fg("entity.name.function") {
+        theme.colors.warning = warning;
+    }
+    
+    if let Some(error) = get_scope_fg("invalid") {
+        theme.colors.error = error.clone();
+        theme.colors.tool_error_bg = error;
+    }
+    
+    if let Some(link) = get_scope_fg("markup.underline.link") {
+        theme.colors.md_link = link;
+    }
+    
     Ok(theme)
 }
 
@@ -203,7 +315,7 @@ fn load_themes_from_dir(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        if path.extension().and_then(|e| e.to_str()) != Some("json") && path.extension().and_then(|e| e.to_str()) != Some("tmTheme") {
             continue;
         }
         match load_theme(&path) {
@@ -293,6 +405,59 @@ mod tests {
 
         // -- Check
         assert_eq!(back, color);
+    }
+
+    #[test]
+    fn test_load_tmtheme_valid() {
+        let dir = make_dir();
+        let path = dir.path().join("mytheme.tmTheme");
+        
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>name</key>
+    <string>mytheme</string>
+    <key>settings</key>
+    <array>
+        <dict>
+            <key>settings</key>
+            <dict>
+                <key>background</key>
+                <string>#1E1E1E</string>
+                <key>foreground</key>
+                <string>#D4D4D4</string>
+                <key>selection</key>
+                <string>#264F78</string>
+                <key>lineHighlight</key>
+                <string>#2A2D2E</string>
+            </dict>
+        </dict>
+        <dict>
+            <key>name</key>
+            <string>Keyword</string>
+            <key>scope</key>
+            <string>keyword.control</string>
+            <key>settings</key>
+            <dict>
+                <key>foreground</key>
+                <string>#C586C0</string>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>"#;
+        fs::write(&path, xml).unwrap();
+
+        let loaded = load_theme(&path).unwrap();
+        assert_eq!(loaded.name, "mytheme");
+        assert_eq!(loaded.source, path);
+        // The parser should extract #1E1E1E for userMessageBg (from background)
+        assert_eq!(loaded.colors.user_message_bg, ThemeColor::Hex("#1E1E1E".to_string()));
+        // The parser should extract #D4D4D4 for text (from foreground)
+        assert_eq!(loaded.colors.text, ThemeColor::Hex("#D4D4D4".to_string()));
+        // The parser should extract #C586C0 for accent (from keyword.control)
+        assert_eq!(loaded.colors.accent, ThemeColor::Hex("#C586C0".to_string()));
     }
 }
 

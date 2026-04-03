@@ -2673,7 +2673,7 @@ fn render_frame(
                             Style::default().fg(colors.dim),
                         )]
                     };
-                    spans.extend(highlight_input_line(seg));
+                    spans.extend(highlight_input_line(seg, colors));
                     Line::from(spans)
                 })
                 .collect()
@@ -3235,7 +3235,7 @@ fn display_tool_name(name: &str) -> String {
 /// syntax so tokens still get some colour without false positives.
 ///
 /// Falls back to a single white span when the feature is absent or on error.
-fn highlight_input_line(text: &str) -> Vec<Span<'static>> {
+fn highlight_input_line(text: &str, colors: &ThemeColors) -> Vec<Span<'static>> {
     #[cfg(feature = "syntax-highlighting")]
     {
         use crate::markdown::{SYNTAX_SET, THEME_SET, syntect_to_tui_style};
@@ -3244,28 +3244,27 @@ fn highlight_input_line(text: &str) -> Vec<Span<'static>> {
         // Pick the best available syntax: try to detect the language from
         // content heuristics, fall back to plain text.
         let syntax = detect_input_syntax(text);
-        let theme = THEME_SET
-            .themes
-            .get("base16-ocean.dark")
-            .or_else(|| THEME_SET.themes.values().next());
-        if let Some(theme) = theme {
-            let mut h = HighlightLines::new(syntax, theme);
-            // highlight_line expects a line WITH a trailing newline.
-            let line_with_nl = format!("{text}\n");
-            if let Ok(ranges) = h.highlight_line(&line_with_nl, &SYNTAX_SET) {
-                return ranges
-                    .into_iter()
-                    .map(|(style, chunk)| {
-                        // Strip the trailing newline we added.
-                        let content = chunk.trim_end_matches('\n').to_string();
-                        Span::styled(content, syntect_to_tui_style(style))
-                    })
-                    .filter(|s| !s.content.is_empty())
-                    .collect();
-            }
+        
+        let theme = colors.syntect_theme.as_deref().unwrap_or_else(|| {
+            THEME_SET
+                .themes
+                .get("base16-ocean.dark")
+                .unwrap_or_else(|| THEME_SET.themes.values().next().unwrap())
+        });
+        
+        let mut h = HighlightLines::new(syntax, theme);
+        let line_with_nl = format!("{text}\n");
+        if let Ok(ranges) = h.highlight_line(&line_with_nl, &SYNTAX_SET) {
+            return ranges
+                .into_iter()
+                .map(|(style, chunk)| {
+                    let content = chunk.trim_end_matches('\n').to_string();
+                    Span::styled(content, syntect_to_tui_style(style))
+                })
+                .filter(|s| !s.content.is_empty())
+                .collect();
         }
     }
-    // Feature disabled or error path — plain white.
     vec![Span::styled(
         text.to_string(),
         Style::default().fg(RC::White),

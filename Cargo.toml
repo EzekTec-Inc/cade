@@ -64,6 +64,7 @@ chrono         = { version = "0.4", features = ["serde"] }
 regex          = "1"
 dotenvy        = "0.15"
 atty           = "0.2"
+plist          = "1.7"
 
 # Crypto
 aes-gcm        = "0.10"
