@@ -39,6 +39,7 @@ A stateful, self-improving Rust CLI coding agent. CADE gives an AI agent full ac
 ### Advanced Features
 - **Intelligent Tool Selection (ITS)**: Reranks and filters tools using a local ONNX cross-encoder (`ms-marco-MiniLM-L-6-v2`) or cloud APIs before passing them to the LLM.
 - **Dynamic Pricing Registry**: Real-time token cost estimation using an efficient, JSON-driven `ModelRegistry`.
+- **Heuristic Evaluator Layer**: A fast, dynamically configurable subagent layer that intercepts user input to evaluate intent, safety, and pathfinding *before* any tool executes, ensuring strict adherence to project constraints while conserving the main context window.
 - **Zero-Panic Safety**: Enforces the `rust10x` standard (no unhandled `unwrap()`/`expect()` in production code) and SQLite WAL mode for high integrity.
 
 ---
@@ -116,6 +117,8 @@ cade -p "..." --no-stream                  # Wait for full response before print
 CADE features a highly responsive, custom-built terminal user interface (TUI) powered by Ratatui:
 
 *   **Flicker-Free Rendering:** Uses CSI 2026 synchronized output for atomic screen updates, eliminating tearing on supported terminals (Kitty, WezTerm, iTerm2).
+*   **Modern Clean Viewport:** Features a typography-driven timeline with inline `thinking...` animations and dynamic padding, avoiding the clutter of classic ASCII line-drawing.
+*   **Native tmTheme Support:** Drop any TextMate `.tmTheme` file (like Tokyonight, Catppuccin, Gruvbox) into `~/.cade/themes/` to natively skin the entire UI and markdown syntax blocks instantly without needing external Lua plugins.
 *   **Bracketed Paste:** Safely handles large text pastes. Pasting >10 lines collapses into a compact `[paste #1 +50 lines]` marker, keeping the input field usable. The full text is transparently expanded before sending to the LLM.
 *   **Pluggable Autocomplete:** Press `Tab` for intelligent path completion, or type `@` to open a fuzzy-search file picker overlay.
 *   **Multi-line Input:** Press `Shift+Enter` (or `Alt+Enter`) to insert a newline; plain `Enter` submits.

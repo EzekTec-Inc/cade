@@ -1,6 +1,10 @@
-# cade.nvim
+# cade.nvim (Legacy)
 
-A lightweight Neovim plugin that exports your active colorscheme to [CADE](https://github.com/ezektec/cade) as a dynamic JSON theme.
+> **⚠️ DEPRECATION NOTICE:** CADE now natively supports parsing TextMate `.tmTheme` files without needing a running Neovim instance. You can download your favorite theme's `.tmTheme` file (e.g., TokyoNight, Catppuccin, Gruvbox) and drop it directly into `~/.cade/themes/` to skin the entire CADE UI. 
+> 
+> This Lua plugin is preserved for users who want CADE to automatically update its colors dynamically whenever they type `:colorscheme` inside a live Neovim session.
+
+A lightweight Neovim plugin that exports your active colorscheme to [CADE](https://github.com/EzekTec-Inc/CADE) as a dynamic JSON theme.
 
 ## Features
 

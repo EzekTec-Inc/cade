@@ -11,9 +11,12 @@
 - [x] Auto-compaction: summarize old turns when context ≥ 98%
 - [x] Subagent runner with seed memory and result writeback
 - [x] MCP server integration with hot-reload
+- [x] Heuristic Evaluator Layer for strict intent, safety, and pathfinding checks
 
 ### Terminal UI
 - [x] Ratatui-based TUI with CSI 2026 synchronized output
+- [x] Modern typography-driven timeline viewport
+- [x] Native TextMate `.tmTheme` parsing for 100% accurate colorscheme syncing
 - [x] Editor component with undo/redo (100 levels, coalesced)
 - [x] Bracketed paste support (large pastes collapse to markers)
 - [x] Tab path completion and `@` fuzzy file picker
