@@ -158,6 +158,19 @@ pub struct PickerState {
     pub cursor: usize,
 }
 
+// -- ThemePickerState
+
+/// State for the `/theme` floating picker overlay.
+#[derive(Debug, Clone)]
+pub struct ThemePickerState {
+    pub query: String,
+    pub themes: Vec<cade_core::resources::themes::Theme>,
+    pub filtered_indices: Vec<usize>,
+    pub cursor: usize,
+    /// If cancelled, restore to this
+    pub original_theme: crate::colors::ThemeColors,
+}
+
 // -- ThinkingState
 
 /// Active thinking animation state.
@@ -282,6 +295,8 @@ pub struct TuiApp {
     pub file_ac: FileAutocompleteProvider,
     /// Active `@` file picker overlay. `None` when inactive.
     pub picker: Option<PickerState>,
+    /// Active `/theme` picker overlay. `None` when inactive.
+    pub theme_picker: Option<ThemePickerState>,
 
     // -- Image paste staging
     /// Images drained from the editor on the last submission.
@@ -389,6 +404,7 @@ impl TuiApp {
             copy_mode: false,
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
             picker: None,
+            theme_picker: None,
             pending_submit_images: Vec::new(),
             header_lines: Vec::new(),
             footer_extra: None,
@@ -1073,6 +1089,7 @@ impl TuiApp {
         let cwd = self.cwd.clone();
         let context_pct = self.context_pct;
         let picker = self.picker.clone();
+        let theme_picker = self.theme_picker.clone();
         let header_lines = self.header_lines.clone();
         let footer_extra = self.footer_extra.clone();
         let reasoning_effort = self.reasoning_effort.clone();
@@ -1122,6 +1139,7 @@ impl TuiApp {
                 &cwd,
                 context_pct,
                 picker.as_ref(),
+                theme_picker.as_ref(),
                 &header_lines,
                 footer_extra.as_deref(),
                 reasoning_effort.as_deref(),
@@ -1725,6 +1743,76 @@ impl TuiApp {
         // Some(Some(s))     = line submitted
         // None              = continue reading
 
+        // -- A-01b: theme picker routing
+        if self.theme_picker.is_some() {
+            match (k.code, k.modifiers) {
+                (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                    if let Some(tp) = self.theme_picker.take() {
+                        self.apply_theme(tp.original_theme);
+                    }
+                }
+                (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
+                    if let Some(tp) = &mut self.theme_picker {
+                        tp.cursor = tp.cursor.saturating_sub(1);
+                        if !tp.filtered_indices.is_empty() {
+                            let idx = tp.filtered_indices[tp.cursor];
+                            let t = &tp.themes[idx];
+                            let colors = if t.name == "dark" {
+                                crate::colors::ThemeColors::dark()
+                            } else if t.name == "light" {
+                                crate::colors::ThemeColors::light()
+                            } else {
+                                crate::colors::ThemeColors::from_theme(t)
+                            };
+                            self.apply_theme(colors);
+                        }
+                    }
+                }
+                (KeyCode::Down, _) | (KeyCode::Tab, _) => {
+                    if let Some(tp) = &mut self.theme_picker {
+                        if !tp.filtered_indices.is_empty() && tp.cursor + 1 < tp.filtered_indices.len() {
+                            tp.cursor += 1;
+                        }
+                        if !tp.filtered_indices.is_empty() {
+                            let idx = tp.filtered_indices[tp.cursor];
+                            let t = &tp.themes[idx];
+                            let colors = if t.name == "dark" {
+                                crate::colors::ThemeColors::dark()
+                            } else if t.name == "light" {
+                                crate::colors::ThemeColors::light()
+                            } else {
+                                crate::colors::ThemeColors::from_theme(t)
+                            };
+                            self.apply_theme(colors);
+                        }
+                    }
+                }
+                (KeyCode::Enter, _) => {
+                    if let Some(tp) = self.theme_picker.take() {
+                        if !tp.filtered_indices.is_empty() {
+                            let t = &tp.themes[tp.filtered_indices[tp.cursor]];
+                            return Ok(Some(Some(format!("/theme {}", t.name))));
+                        }
+                    }
+                }
+                (KeyCode::Backspace, _) => {
+                    if self.theme_picker.is_some() {
+                        self.theme_picker.as_mut().unwrap().query.pop();
+                        self.update_theme_picker_filter();
+                    }
+                }
+                (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+                    if self.theme_picker.is_some() {
+                        self.theme_picker.as_mut().unwrap().query.push(c);
+                        self.update_theme_picker_filter();
+                    }
+                }
+                _ => {}
+            }
+            let _ = self.draw();
+            return Ok(None);
+        }
+
         // -- A-01: file picker routing
         if self.picker.is_some() {
             match (k.code, k.modifiers) {
@@ -2097,6 +2185,45 @@ impl TuiApp {
         }
         Ok(None)
     }
+
+    pub fn open_theme_picker(&mut self, themes: Vec<cade_core::resources::themes::Theme>, original_theme: crate::colors::ThemeColors) {
+        let tp = ThemePickerState {
+            query: String::new(),
+            filtered_indices: (0..themes.len()).collect(),
+            themes,
+            cursor: 0,
+            original_theme,
+        };
+        self.theme_picker = Some(tp);
+        self.apply_theme_from_picker();
+    }
+
+    fn apply_theme_from_picker(&mut self) {
+        if let Some(tp) = &self.theme_picker {
+            if !tp.filtered_indices.is_empty() {
+                let idx = tp.filtered_indices[tp.cursor];
+                let t = &tp.themes[idx];
+                let colors = if t.name == "dark" {
+                    crate::colors::ThemeColors::dark()
+                } else if t.name == "light" {
+                    crate::colors::ThemeColors::light()
+                } else {
+                    crate::colors::ThemeColors::from_theme(t)
+                };
+                self.apply_theme(colors);
+            }
+        }
+    }
+
+    fn update_theme_picker_filter(&mut self) {
+        if let Some(tp) = &mut self.theme_picker {
+            tp.cursor = 0;
+            tp.filtered_indices = tp.themes.iter().enumerate()
+                .filter(|(_, t)| tp.query.is_empty() || t.name.to_lowercase().contains(&tp.query.to_lowercase()))
+                .map(|(i, _)| i).collect();
+        }
+        self.apply_theme_from_picker();
+    }
 }
 
 // -- Scroll helpers
@@ -2190,6 +2317,7 @@ fn render_frame(
     cwd: &str,
     context_pct: Option<u8>,
     picker: Option<&PickerState>,
+    theme_picker: Option<&ThemePickerState>,
     header_lines: &[RenderLine],
     footer_extra: Option<&str>,
     reasoning_effort: Option<&str>,
@@ -2214,7 +2342,7 @@ fn render_frame(
 
     let (input_badge, _input_badge_color) = input_mode_badge(input_mode, colors);
     let input_prefix_w = input_badge.chars().count() as u16 + 1 + 2;
-    let available_w = main_area.width.saturating_sub(2).max(1);
+    let available_w = main_area.width;
     let mut input_rows =
         calc_input_rows(input, available_w, input_prefix_w).clamp(1, MAX_INPUT_ROWS);
 
@@ -2343,6 +2471,37 @@ fn render_frame(
         );
         let rows = lines.iter().map(|l| count_wrapped_rows(l, content_w)).sum();
         prepared.push(PreparedTimelineEntry { lines, rows });
+    } else if let Some(elapsed) = thinking_elapsed {
+        let text = thinking_text.unwrap_or("thinking…");
+        let ms = elapsed.as_millis();
+
+        let spinner = if (ms / 3000) % 2 == 0 {
+            BRAILLE[(ms / 80) as usize % BRAILLE.len()]
+        } else {
+            DOTS[(ms / 100) as usize % DOTS.len()]
+        };
+
+        let palette: &[(u8, u8, u8)] = &[
+            (80, 190, 255),
+            (120, 215, 255),
+            (160, 235, 255),
+            (100, 200, 255),
+        ];
+        let (r, g, b) = palette[(ms / 400) as usize % palette.len()];
+
+        let lines = vec![
+            ratatui::text::Line::from(""),
+            ratatui::text::Line::from(vec![
+                ratatui::text::Span::styled(
+                    format!("{spinner} {text}"),
+                    ratatui::style::Style::default()
+                        .fg(ratatui::style::Color::Rgb(r, g, b))
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                )
+            ])
+        ];
+        let rows = lines.iter().map(|l| count_wrapped_rows(l, content_w)).sum();
+        prepared.push(PreparedTimelineEntry { lines, rows });
     }
 
     let max_skip = render_timeline_viewport(frame, messages_area, &prepared, scroll);
@@ -2360,34 +2519,23 @@ fn render_frame(
         render_picker(frame, pk, picker_rect, colors);
     }
 
-    // -- Status row
-    let (status_text, status_style) = if let Some(elapsed) = thinking_elapsed {
-        let text = thinking_text.unwrap_or("thinking…");
-        let ms = elapsed.as_millis();
-
-        // Dynamic spinner selection based on elapsed time or just variety
-        let spinner = if (ms / 3000) % 2 == 0 {
-            BRAILLE[(ms / 80) as usize % BRAILLE.len()]
-        } else {
-            DOTS[(ms / 100) as usize % DOTS.len()]
+    // -- A-01b: Theme picker overlay
+    if let Some(tp) = theme_picker {
+        let w = (frame.area().width / 2).max(40).min(frame.area().width.saturating_sub(4));
+        let n = tp.filtered_indices.len().max(1).min(10);
+        let h = (n as u16 + 4).clamp(5, frame.area().height.saturating_sub(4));
+        
+        let r = ratatui::layout::Rect {
+            x: frame.area().x + (frame.area().width.saturating_sub(w)) / 2,
+            y: frame.area().y + (frame.area().height.saturating_sub(h)) / 2,
+            width: w,
+            height: h,
         };
+        render_theme_picker(frame, tp, r, colors);
+    }
 
-        // Pulse through bright-cyan shades (~400ms per step)
-        let palette: &[(u8, u8, u8)] = &[
-            (80, 190, 255),
-            (120, 215, 255),
-            (160, 235, 255),
-            (100, 200, 255),
-        ];
-        let (r, g, b) = palette[(ms / 400) as usize % palette.len()];
-
-        (
-            format!("{spinner} {text}"),
-            Style::default()
-                .fg(RC::Rgb(r, g, b))
-                .add_modifier(Modifier::BOLD),
-        )
-    } else if let Some(s) = last_status {
+    // -- Status row
+    let (status_text, status_style) = if let Some(s) = last_status {
         (
             s.clone(),
             Style::default()
@@ -2477,9 +2625,11 @@ fn render_frame(
         render_question_inline(frame, aq, chunks[5], chunks[5], colors);
     } else {
         let (badge_text, badge_color) = input_mode_badge(input_mode, colors);
-        // Continuation prefix: pad to align with first-line content, then a dim
-        // middle-dot so the user can clearly see they are in multiline mode.
-        let cont_prefix = format!("{}  · ", " ".repeat(badge_text.chars().count() + 1));
+        // Continuation prefix: EXACTLY matches input_prefix_w length.
+        // badge_text (B) + 1 space + "> " (2 chars) = B + 3.
+        // We want cont_prefix to also be B + 3 chars long.
+        // "· " is 2 chars, so we need B + 1 spaces before it.
+        let cont_prefix = format!("{}· ", " ".repeat(badge_text.chars().count() + 1));
         // Build one ratatui Line per logical line so wrapping is correct and the
         // input-mode badge is shown only on the first line.
         let input_placeholder = if queued_count > 0 {
@@ -3337,6 +3487,59 @@ mod tests {
         assert!(error_entry.matches_jump_target(TimelineJumpTarget::Error));
         assert!(error_entry.matches_jump_target(TimelineJumpTarget::Tool));
     }
+}
+
+fn render_theme_picker(frame: &mut ratatui::Frame, tp: &ThemePickerState, area: ratatui::layout::Rect, colors: &crate::colors::ThemeColors) {
+    use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, Cell};
+    use ratatui::style::{Style, Modifier};
+    use ratatui::layout::Constraint;
+
+    if area.height == 0 {
+        return;
+    }
+
+    let hint = " ↑↓ Navigate  Enter Select  Esc/q Cancel ".to_string();
+    let rows: Vec<Row> = tp.filtered_indices.iter().enumerate().map(|(i, &original_idx)| {
+        let t = &tp.themes[original_idx];
+        let is_sel = i == tp.cursor;
+        
+        let style = if is_sel {
+            Style::default().bg(colors.overlay_selected_bg).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default()
+        };
+
+        Row::new(vec![
+            Cell::from(ratatui::text::Span::styled(if is_sel { "▶ " } else { "  " }, Style::default().fg(if is_sel { colors.overlay_selected_fg } else { colors.overlay_hint }))),
+            Cell::from(ratatui::text::Span::styled(t.name.clone(), Style::default().fg(if is_sel { crate::colors::ThemeColors::dark().text } else { colors.text }))),
+            Cell::from(ratatui::text::Span::styled(format!("{:?}", t.source), Style::default().fg(colors.overlay_hint))),
+        ]).style(style)
+    }).collect();
+
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Length(3),
+            Constraint::Length(25),
+            Constraint::Min(20),
+        ],
+    )
+    .header(Row::new(vec!["", "Theme", "Source"]).style(Style::default().fg(colors.overlay_title).add_modifier(Modifier::BOLD)))
+    .block(Block::default().borders(Borders::ALL).title(format!(" Themes {hint}")).border_style(Style::default().fg(colors.overlay_border)));
+
+    let mut ts = ratatui::widgets::TableState::default().with_selected(Some(tp.cursor));
+
+    let main_chunks = ratatui::layout::Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
+        .split(area);
+
+    frame.render_widget(ratatui::widgets::Clear, area);
+    frame.render_stateful_widget(table, main_chunks[0], &mut ts);
+
+    let filter_block = Block::default().borders(Borders::ALL).title(" Filter (Type to search) ").border_style(Style::default().fg(colors.overlay_border));
+    let filter_text = Paragraph::new(format!("> {}█", tp.query)).block(filter_block).style(Style::default().fg(colors.text));
+    frame.render_widget(filter_text, main_chunks[1]);
 }
 
 // endregion: --- Tests

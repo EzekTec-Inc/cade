@@ -3616,13 +3616,27 @@ impl Repl {
                         };
 
                         let name = if new_theme.is_empty() {
-                            match self.interactive_theme_picker(std::sync::Arc::clone(&self.app)).await? {
-                                Some(picked) => picked,
-                                None => {
-                                    self.tui_dim("  /theme cancelled");
-                                    continue;
-                                }
+                            let agent_dir = self.settings.lock().expect("lock poisoned").global_path().parent().unwrap().to_path_buf();
+                            let mut discovered = cade_core::resources::discover_themes(&self.cwd, &agent_dir);
+                            if !discovered.iter().any(|t| t.name == "dark") {
+                                discovered.insert(0, cade_core::resources::Theme {
+                                    name: "dark".to_string(),
+                                    vars: Default::default(),
+                                    colors: Default::default(),
+                                    source: std::path::PathBuf::from("builtin"),
+                                });
                             }
+                            if !discovered.iter().any(|t| t.name == "light") {
+                                discovered.insert(1, cade_core::resources::Theme {
+                                    name: "light".to_string(),
+                                    vars: Default::default(),
+                                    colors: Default::default(),
+                                    source: std::path::PathBuf::from("builtin"),
+                                });
+                            }
+                            let current_colors = self.app.lock().expect("lock poisoned").colors.clone();
+                            self.app.lock().expect("lock poisoned").open_theme_picker(discovered, current_colors);
+                            continue;
                         } else {
                             new_theme
                         };

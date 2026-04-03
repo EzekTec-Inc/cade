@@ -1,0 +1,94 @@
+--- crates/cade-tui/src/app/mod.rs
++++ crates/cade-tui/src/app/mod.rs
+@@ -158,6 +158,19 @@
+     pub cursor: usize,
+ }
+ 
++// -- ThemePickerState
++
++/// State for the `/theme` floating picker overlay.
++#[derive(Debug, Clone)]
++pub struct ThemePickerState {
++    pub query: String,
++    pub themes: Vec<cade_core::resources::themes::Theme>,
++    pub filtered_indices: Vec<usize>,
++    pub cursor: usize,
++    /// If cancelled, restore to this
++    pub original_theme: crate::colors::ThemeColors,
++}
++
+ // -- ThinkingState
+ 
+ /// Active thinking animation state.
+@@ -282,6 +295,8 @@
+     pub file_ac: FileAutocompleteProvider,
+     /// Active `@` file picker overlay. `None` when inactive.
+     pub picker: Option<PickerState>,
++    /// Active `/theme` picker overlay. `None` when inactive.
++    pub theme_picker: Option<ThemePickerState>,
+ 
+     // -- Image paste staging
+     /// Images drained from the editor on the last submission.
+@@ -348,6 +363,7 @@
+             copy_mode: false,
+             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
+             picker: None,
++            theme_picker: None,
+             pending_submit_images: Vec::new(),
+             header_lines: Vec::new(),
+             footer_extra: None,
+@@ -1747,6 +1763,55 @@
+                     }
+                 }
+                 _ => {}
++            }
++            return Ok(None);
++        }
++
++        // -- A-01b: theme picker routing
++        if self.theme_picker.is_some() {
++            match (k.code, k.modifiers) {
++                (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
++                    // Restore original theme and close
++                    if let Some(tp) = self.theme_picker.take() {
++                        self.apply_theme(tp.original_theme);
++                    }
++                }
++                (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
++                    if let Some(tp) = &mut self.theme_picker {
++                        tp.cursor = tp.cursor.saturating_sub(1);
++                        self.apply_theme_from_picker();
++                    }
++                }
++                (KeyCode::Down, _) | (KeyCode::Tab, _) => {
++                    if let Some(tp) = &mut self.theme_picker {
++                        if tp.cursor + 1 < tp.filtered_indices.len() {
++                            tp.cursor += 1;
++                        }
++                        self.apply_theme_from_picker();
++                    }
++                }
++                (KeyCode::Enter, _) => {
++                    if let Some(tp) = self.theme_picker.take() {
++                        if !tp.filtered_indices.is_empty() {
++                            let t = &tp.themes[tp.filtered_indices[tp.cursor]];
++                            return Ok(Some(Some(format!("/theme {}", t.name))));
++                        }
++                    }
++                }
++                (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
++                    if let Some(tp) = &mut self.theme_picker {
++                        tp.query.push(c);
++                        self.update_theme_picker_filter();
++                    }
++                }
++                (KeyCode::Backspace, _) => {
++                    if let Some(tp) = &mut self.theme_picker {
++                        tp.query.pop();
++                        self.update_theme_picker_filter();
++                    }
++                }
++                _ => {}
+             }
+             return Ok(None);
+         }

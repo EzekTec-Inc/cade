@@ -2,7 +2,7 @@
 name: security-reviewer
 description: Reviews code for security vulnerabilities and suggests fixes
 tools: Glob, Grep, Read
-model: sonnet-4.5
+model: anthropic/claude-sonnet-4-6
 memoryBlocks: human, persona
 ---
 

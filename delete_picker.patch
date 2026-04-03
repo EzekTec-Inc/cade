@@ -1,0 +1,179 @@
+--- crates/cade-cli/src/cli/repl/pickers.rs
++++ crates/cade-cli/src/cli/repl/pickers.rs
+@@ -1370,178 +1370,2 @@
+ 
+-    pub(crate) async fn interactive_theme_picker(
+-        &self,
+-        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+-    ) -> Result<Option<String>> {
+-        use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+-        use ratatui::{
+-            layout::{Constraint, Direction, Layout},
+-            style::{Color as RC, Modifier, Style},
+-            text::{Span},
+-            widgets::{Block, Borders, Cell, Row, Table, TableState, Paragraph},
+-        };
+-
+-        // Gather all themes
+-        let agent_dir = self.settings.lock().expect("lock poisoned").global_path().parent().unwrap().to_path_buf();
+-        let mut discovered = cade_core::resources::discover_themes(&self.cwd, &agent_dir);
+-        // Ensure built-in themes are present
+-        if !discovered.iter().any(|t| t.name == "dark") {
+-            discovered.insert(0, cade_core::resources::Theme {
+-                name: "dark".to_string(),
+-                vars: Default::default(),
+-                colors: Default::default(),
+-                source: std::path::PathBuf::from("builtin"),
+-            });
+-        }
+-        if !discovered.iter().any(|t| t.name == "light") {
+-            discovered.insert(1, cade_core::resources::Theme {
+-                name: "light".to_string(),
+-                vars: Default::default(),
+-                colors: Default::default(),
+-                source: std::path::PathBuf::from("builtin"),
+-            });
+-        }
+-
+-        let mut filter_query = String::new();
+-        let mut selected_filtered: usize = 0;
+-        
+-        // Save the original colors to revert if cancelled
+-        let original_colors = {
+-            let app = app_arc.lock().expect("lock poisoned");
+-            app.colors.clone()
+-        };
+-
+-        let do_draw = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+-                       themes: &[cade_core::resources::Theme],
+-                       filtered_indices: &[usize],
+-                       sel: usize,
+-                       filter_query: &str|
+-         -> Result<()> {
+-            let mut app = app_arc.lock().expect("lock poisoned");
+-            let current_colors = app.colors.clone();
+-            
+-            let hint = " ↑↓ Navigate  Enter Select  Esc/q Cancel ".to_string();
+-
+-            let rows: Vec<Row> = filtered_indices.iter().enumerate().map(|(i, &original_idx)| {
+-                let t = &themes[original_idx];
+-                let is_sel = i == sel;
+-                
+-                let style = if is_sel {
+-                    Style::default().bg(current_colors.overlay_selected_bg).add_modifier(Modifier::BOLD)
+-                } else {
+-                    Style::default()
+-                };
+-
+-                Row::new(vec![
+-                    Cell::from(Span::styled(if is_sel { "▶ " } else { "  " }, Style::default().fg(if is_sel { current_colors.overlay_selected_fg } else { current_colors.overlay_hint }))),
+-                    Cell::from(Span::styled(t.name.clone(), Style::default().fg(if is_sel { RC::White } else { current_colors.text }))),
+-                    Cell::from(Span::styled(format!("{:?}", t.source), Style::default().fg(current_colors.overlay_hint))),
+-                ]).style(style)
+-            }).collect();
+-
+-            let table = Table::new(
+-                rows,
+-                [
+-                    Constraint::Length(3),
+-                    Constraint::Length(25),
+-                    Constraint::Min(20),
+-                ],
+-            )
+-            .header(Row::new(vec!["", "Theme", "Source"]).style(Style::default().fg(current_colors.overlay_title).add_modifier(Modifier::BOLD)))
+-            .block(Block::default().borders(Borders::ALL).title(format!(" Themes {hint}")).border_style(Style::default().fg(current_colors.overlay_border)));
+-
+-            let mut ts = TableState::default().with_selected(Some(sel));
+-
+-            app.terminal.draw(|f| {
+-                let main_chunks = Layout::default()
+-                    .direction(Direction::Vertical)
+-                    .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
+-                    .split(f.area());
+-
+-                f.render_stateful_widget(table, main_chunks[0], &mut ts);
+-
+-                let filter_block = Block::default().borders(Borders::ALL).title(" Filter (Type to search) ").border_style(Style::default().fg(current_colors.overlay_border));
+-                let filter_text = Paragraph::new(format!("> {}█", filter_query)).block(filter_block).style(Style::default().fg(current_colors.text));
+-                f.render_widget(filter_text, main_chunks[1]);
+-            })?;
+-            Ok(())
+-        };
+-
+-        let result = loop {
+-            let q = filter_query.to_lowercase();
+-            let filtered_indices: Vec<usize> = discovered
+-                .iter()
+-                .enumerate()
+-                .filter(|(_, t)| q.is_empty() || t.name.to_lowercase().contains(&q) )
+-                .map(|(i, _)| i)
+-                .collect();
+-
+-            if selected_filtered >= filtered_indices.len() {
+-                selected_filtered = filtered_indices.len().saturating_sub(1);
+-            }
+-
+-            // Live Preview: Apply the highlighted theme to the UI instantly
+-            if !filtered_indices.is_empty() {
+-                let orig_idx = filtered_indices[selected_filtered];
+-                let theme_name = &discovered[orig_idx].name;
+-                let target_colors = if theme_name == "dark" {
+-                    cade_tui::ThemeColors::dark()
+-                } else if theme_name == "light" {
+-                    cade_tui::ThemeColors::light()
+-                } else {
+-                    cade_tui::ThemeColors::from_theme(&discovered[orig_idx])
+-                };
+-                let mut app = app_arc.lock().expect("lock poisoned");
+-                app.apply_theme(target_colors);
+-            }
+-
+-            do_draw(&app_arc, &discovered, &filtered_indices, selected_filtered, &filter_query)?;
+-
+-            if !event::poll(std::time::Duration::from_millis(200))? {
+-                continue;
+-            }
+-            if let Ok(Event::Key(key)) = event::read() {
+-                if key.kind != KeyEventKind::Press {
+-                    continue;
+-                }
+-                match (key.code, key.modifiers) {
+-                    (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => break None,
+-                    (KeyCode::Char('c'), KeyModifiers::CONTROL) => break None,
+-
+-                    (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
+-                        selected_filtered = selected_filtered.saturating_sub(1);
+-                    }
+-                    (KeyCode::Down, _) | (KeyCode::Tab, _) => {
+-                        if selected_filtered + 1 < filtered_indices.len() {
+-                            selected_filtered += 1;
+-                        }
+-                    }
+-
+-                    (KeyCode::Enter, _) => {
+-                        if !filtered_indices.is_empty() {
+-                            let orig_idx = filtered_indices[selected_filtered];
+-                            break Some(discovered[orig_idx].name.clone());
+-                        }
+-                    }
+-
+-                    (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+-                        filter_query.push(c);
+-                    }
+-                    (KeyCode::Backspace, _) => {
+-                        filter_query.pop();
+-                    }
+-                    _ => {}
+-                }
+-            }
+-        };
+-
+-        // Revert to original theme if cancelled
+-        if result.is_none() {
+-            let mut app = app_arc.lock().expect("lock poisoned");
+-            app.apply_theme(original_colors);
+-        }
+-
+-        Ok(result)
+-    }
+ }

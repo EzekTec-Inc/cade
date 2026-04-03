@@ -525,9 +525,9 @@ pub(crate) fn render_timeline_viewport(
     let visible_end = visible_start.saturating_add(visible);
 
     let inner = Rect {
-        x: area.x,
+        x: area.x + 2,
         y: area.y + CONTENT_PAD_TOP,
-        width: area.width,
+        width: area.width.saturating_sub(4),
         height: area
             .height
             .saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT),
@@ -727,23 +727,17 @@ fn render_context_bar_item(
 
 fn render_user_message_item(
     text: &str,
-    width: usize,
+    _width: usize,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
-    const YOU_LABEL: &str = " you ";
-    const LEFT_W: usize = 4;
-    let label_w = YOU_LABEL.chars().count();
-    let right_w = width.saturating_sub(LEFT_W + label_w);
-    let sep_line: Vec<Span<'static>> = vec![
-        Span::styled("─".repeat(LEFT_W), Style::default().fg(RC::DarkGray)),
+    out.push(Line::from(""));
+    out.push(Line::from(vec![
         Span::styled(
-            YOU_LABEL,
-            Style::default().fg(colors.dim).add_modifier(Modifier::DIM),
+            "You",
+            Style::default().fg(colors.text).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("─".repeat(right_w), Style::default().fg(RC::DarkGray)),
-    ];
-    out.push(Line::from(sep_line));
+    ]));
     out.extend(crate::markdown::parse_markdown_lines_with_theme(
         text, colors,
     ));
@@ -751,30 +745,14 @@ fn render_user_message_item(
 
 fn render_assistant_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
     out.push(Line::from(""));
+    out.push(Line::from(vec![
+        Span::styled(
+            "▍ CADE",
+            Style::default().fg(colors.assistant_accent).add_modifier(Modifier::BOLD),
+        ),
+    ]));
     let md_lines = crate::markdown::parse_markdown_lines_with_theme(text, colors);
-    if md_lines.is_empty() {
-        out.push(Line::from(vec![
-            Span::styled("▌ ", Style::default().fg(colors.assistant_accent)),
-            Span::styled("● ", Style::default().fg(colors.assistant_accent)),
-        ]));
-    } else {
-        for (i, ml) in md_lines.into_iter().enumerate() {
-            let mut spans = vec![Span::styled(
-                if i == 0 { "▌ " } else { "│ " },
-                Style::default().fg(colors.assistant_accent),
-            )];
-            if i == 0 {
-                spans.push(Span::styled(
-                    "● ",
-                    Style::default().fg(colors.assistant_accent),
-                ));
-            } else {
-                spans.push(Span::raw("  "));
-            }
-            spans.extend(ml.spans.into_iter());
-            out.push(Line::from(spans));
-        }
-    }
+    out.extend(md_lines);
 }
 
 fn render_streaming_assistant_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
@@ -804,11 +782,10 @@ fn render_tool_call_item(
         Span::styled(format!("{truncated}…)"), Style::default().fg(colors.dim))
     };
     let spans: Vec<Span<'static>> = vec![
-        Span::styled("┌ ", Style::default().fg(colors.border)),
         Span::styled(
             " TOOL ",
             Style::default()
-                .fg(colors.tool_title)
+                .fg(colors.selected_bg)
                 .bg(colors.tool_pending_bg)
                 .add_modifier(Modifier::BOLD),
         ),
@@ -922,7 +899,7 @@ fn render_tool_result_item(
                 format!("… +{remaining} lines (ctrl+o to expand)")
             };
             out.push(Line::from(vec![
-                Span::styled("└────── ", Style::default().fg(colors.border)),
+                Span::styled("       ", Style::default().fg(colors.border)),
                 Span::styled(
                     hint,
                     Style::default()
