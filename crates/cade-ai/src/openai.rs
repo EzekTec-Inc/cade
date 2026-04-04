@@ -411,12 +411,11 @@ impl LlmProvider for OpenAiProvider {
                     let api_key = self.api_key.clone();
                     let body = body.clone();
                     async move {
-                        let resp = client
-                            .post(OPENAI_RESPONSES_URL)
-                            .bearer_auth(&api_key)
-                            .json(&body)
-                            .send()
-                            .await?;
+                        let mut req = client.post(OPENAI_RESPONSES_URL).json(&body);
+                        if !api_key.is_empty() {
+                            req = req.bearer_auth(&api_key);
+                        }
+                        let resp = req.send().await?;
                         if !resp.status().is_success() {
                             let status = resp.status();
                             let text = resp.text().await.unwrap_or_default();
@@ -461,12 +460,11 @@ impl LlmProvider for OpenAiProvider {
                 let api_key = self.api_key.clone();
                 let body = body.clone();
                 async move {
-                    let resp = client
-                        .post(&base_url)
-                        .bearer_auth(&api_key)
-                        .json(&body)
-                        .send()
-                        .await?;
+                    let mut req = client.post(&base_url).json(&body);
+                    if !api_key.is_empty() {
+                        req = req.bearer_auth(&api_key);
+                    }
+                    let resp = req.send().await?;
                     if !resp.status().is_success() {
                         let status = resp.status();
                         let text = resp.text().await.unwrap_or_default();
@@ -512,12 +510,11 @@ impl LlmProvider for OpenAiProvider {
                     let api_key = self.api_key.clone();
                     let body = body.clone();
                     async move {
-                        let resp = client
-                            .post(OPENAI_RESPONSES_URL)
-                            .bearer_auth(&api_key)
-                            .json(&body)
-                            .send()
-                            .await?;
+                        let mut req = client.post(OPENAI_RESPONSES_URL).json(&body);
+                        if !api_key.is_empty() {
+                            req = req.bearer_auth(&api_key);
+                        }
+                        let resp = req.send().await?;
                         if !resp.status().is_success() {
                             let status = resp.status();
                             let text = resp.text().await.unwrap_or_default();
@@ -683,12 +680,11 @@ impl LlmProvider for OpenAiProvider {
                 let api_key = self.api_key.clone();
                 let body = body.clone();
                 async move {
-                    let resp = client
-                        .post(&base_url)
-                        .bearer_auth(&api_key)
-                        .json(&body)
-                        .send()
-                        .await?;
+                    let mut req = client.post(&base_url).json(&body);
+                    if !api_key.is_empty() {
+                        req = req.bearer_auth(&api_key);
+                    }
+                    let resp = req.send().await?;
                     if !resp.status().is_success() {
                         let status = resp.status();
                         let text = resp.text().await.unwrap_or_default();
