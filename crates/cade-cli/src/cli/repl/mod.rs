@@ -1511,8 +1511,8 @@ impl Repl {
                             let url = "https://raw.githubusercontent.com/EzekTec-Inc/CADE/main/crates/cade-ai/src/default_pricing.json";
                             match reqwest::get(url).await {
                                 Ok(res) if res.status().is_success() => {
-                                    if let Ok(text) = res.text().await {
-                                        if let Some(p) = dirs::home_dir()
+                                    if let Ok(text) = res.text().await
+                                        && let Some(p) = dirs::home_dir()
                                             .map(|h| h.join(".cade").join("pricing.json"))
                                         {
                                             if let Err(e) = std::fs::write(&p, text) {
@@ -1533,7 +1533,6 @@ impl Repl {
                                                 self.tui_ok("  Pricing synced successfully!");
                                             }
                                         }
-                                    }
                                 }
                                 _ => self.tui_err("  Failed to fetch pricing from cloud."),
                             }

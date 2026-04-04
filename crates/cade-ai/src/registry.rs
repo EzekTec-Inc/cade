@@ -90,14 +90,13 @@ impl ModelRegistry {
             return registry;
         }
 
-        if let Ok(content) = std::fs::read_to_string(p) {
-            if let Ok(custom_rules) = serde_json::from_str::<Vec<PricingRule>>(&content) {
+        if let Ok(content) = std::fs::read_to_string(p)
+            && let Ok(custom_rules) = serde_json::from_str::<Vec<PricingRule>>(&content) {
                 // Prepend custom rules so they override defaults
                 let mut new_rules = custom_rules;
                 new_rules.extend(registry.rules);
                 registry.rules = new_rules;
             }
-        }
 
         registry
     }

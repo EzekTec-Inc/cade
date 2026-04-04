@@ -444,8 +444,8 @@ impl Repl {
                                                             .load(std::sync::atomic::Ordering::SeqCst);
                                                         let esc_post_modal = esc_last_close > 0
                                                             && esc_now_ms.saturating_sub(esc_last_close) < 500;
-                                                        if !esc_post_modal && tick_start.elapsed().as_millis() >= 200 {
-                                                            if !app.editor.input.is_empty() {
+                                                        if !esc_post_modal && tick_start.elapsed().as_millis() >= 200
+                                                            && !app.editor.input.is_empty() {
                                                                 // Clear typed input rather than
                                                                 // cancelling — lets user discard
                                                                 // a queued message without stopping
@@ -454,7 +454,6 @@ impl Repl {
                                                                 app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
                                                             }
-                                                        }
                                                     }
                                                     // Ctrl+C — always cancel the running turn.
                                                     // Ctrl+C: if input is non-empty → steering

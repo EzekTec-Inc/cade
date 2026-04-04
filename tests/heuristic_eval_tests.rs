@@ -1,4 +1,3 @@
-use cade_core::settings::manager::SettingsManager;
 
 #[tokio::test]
 async fn test_heuristic_evaluator_intercepts_input() {

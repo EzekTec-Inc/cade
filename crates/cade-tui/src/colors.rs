@@ -268,11 +268,10 @@ impl ThemeColors {
         base.source_path = Some(theme.source.clone());
 
         #[cfg(feature = "syntax-highlighting")]
-        if theme.source.extension().and_then(|e| e.to_str()) == Some("tmTheme") {
-            if let Ok(syn_theme) = syntect::highlighting::ThemeSet::get_theme(&theme.source) {
+        if theme.source.extension().and_then(|e| e.to_str()) == Some("tmTheme")
+            && let Ok(syn_theme) = syntect::highlighting::ThemeSet::get_theme(&theme.source) {
                 base.syntect_theme = Some(std::sync::Arc::new(syn_theme));
             }
-        }
 
         let resolve =
             |c: &cade_core::resources::themes::ThemeColor| -> RC { resolve_color(c, &theme.vars) };

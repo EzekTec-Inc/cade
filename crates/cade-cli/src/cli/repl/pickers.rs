@@ -1396,7 +1396,7 @@ Skills: {}
 
 ",
                     s.description,
-                    s.tools.to_string(),
+                    s.tools,
                     s.model.as_deref().unwrap_or("inherited"),
                     s.skills.join(", ")
                 );

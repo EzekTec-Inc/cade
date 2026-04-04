@@ -195,11 +195,10 @@ fn is_retryable_error(e: &Error) -> bool {
         }
     }
     // Check structured provider errors
-    if let Error::Provider { status, .. } = e {
-        if let Ok(status_code) = reqwest::StatusCode::from_u16(*status) {
+    if let Error::Provider { status, .. } = e
+        && let Ok(status_code) = reqwest::StatusCode::from_u16(*status) {
             return is_retryable_status(status_code);
         }
-    }
     false
 }
 

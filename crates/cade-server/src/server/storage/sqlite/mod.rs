@@ -371,8 +371,8 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         // 3. Remove stale providers with undecryptable keys
         if let Ok(mut stmt) = conn.prepare(
             "SELECT name, api_key FROM providers WHERE api_key IS NOT NULL AND api_key != ''",
-        ) {
-            if let Ok(mapped) =
+        )
+            && let Ok(mapped) =
                 stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
             {
                 let stale: Vec<String> = mapped
@@ -384,7 +384,6 @@ fn run_migrations(conn: &Connection) -> Result<()> {
                     let _ = conn.execute("DELETE FROM providers WHERE name = ?1", params![name]);
                 }
             }
-        }
 
         conn.execute("PRAGMA user_version = 1", [])?;
     }

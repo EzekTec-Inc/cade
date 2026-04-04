@@ -691,13 +691,13 @@ fn render_context_bar_item(
                 continue;
             }
             let (glyph, color, _) = CATS.get(i).copied().unwrap_or(('?', RC::DarkGray, ""));
-            let s: String = std::iter::repeat(glyph).take(cells).collect();
+            let s: String = std::iter::repeat_n(glyph, cells).collect();
             bar_spans.push(Span::styled(s, Style::default().fg(color)));
             filled += cells;
         }
         // Pad remainder to full bar width
         if filled < bar_width {
-            let pad: String = std::iter::repeat('·').take(bar_width - filled).collect();
+            let pad: String = std::iter::repeat_n('·', bar_width - filled).collect();
             bar_spans.push(Span::styled(pad, Style::default().fg(RC::Rgb(40, 40, 40))));
         }
     }
