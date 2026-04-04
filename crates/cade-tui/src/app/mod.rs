@@ -2454,6 +2454,7 @@ fn render_frame(
     let _ = header_area_opt; // used above for rendering
 
     // -- Content area
+    let timeline_w = messages_area.width.saturating_sub(4).max(1) as usize;
     let timeline_entries = build_timeline_entries(lines);
     let selected_info = selected_timeline.and_then(|key| {
         timeline_entries
@@ -2463,7 +2464,7 @@ fn render_frame(
     });
     let mut prepared = prepare_timeline_entries(
         &timeline_entries,
-        w,
+        timeline_w,
         expand_all,
         expanded_items,
         selected_timeline,
@@ -2477,14 +2478,14 @@ fn render_frame(
         let streaming_entry = TimelineEntry::streaming(next_index, s);
         let mut lines = Vec::new();
         streaming_entry.render_with_state(
-            w,
+            timeline_w,
             expand_all,
             expanded_items,
             selected_timeline,
             &mut lines,
             colors,
         );
-        let rows = lines.iter().map(|l| count_wrapped_rows(l, content_w)).sum();
+        let rows = lines.iter().map(|l| count_wrapped_rows(l, timeline_w as u16)).sum();
         prepared.push(PreparedTimelineEntry { lines, rows });
     } else if let Some(elapsed) = thinking_elapsed {
         let text = thinking_text.unwrap_or("thinking…");
@@ -2513,7 +2514,7 @@ fn render_frame(
                     .add_modifier(ratatui::style::Modifier::BOLD),
             )]),
         ];
-        let rows = lines.iter().map(|l| count_wrapped_rows(l, content_w)).sum();
+        let rows = lines.iter().map(|l| count_wrapped_rows(l, timeline_w as u16)).sum();
         prepared.push(PreparedTimelineEntry { lines, rows });
     }
 
@@ -2550,20 +2551,42 @@ fn render_frame(
     }
 
     // -- Status row
-    let (status_text, status_style) =
-        if let Some(s) = last_status.as_ref().filter(|_| thinking_text.is_none()) {
-            let fg_color = if s.starts_with('⚠') || s.starts_with('✗') {
-                colors.error
+    let (status_text, status_style) = if let Some(t) = thinking_text {
+        let (spinner_text, fg_color) = if let Some(elapsed) = thinking_elapsed {
+            let ms = elapsed.as_millis();
+            let spinner = if (ms / 3000) % 2 == 0 {
+                BRAILLE[(ms / 80) as usize % BRAILLE.len()]
             } else {
-                colors.success
+                DOTS[(ms / 100) as usize % DOTS.len()]
             };
-            (
-                s.clone(),
-                Style::default().fg(fg_color).add_modifier(Modifier::DIM),
-            )
+            let palette: &[(u8, u8, u8)] = &[
+                (80, 190, 255),
+                (120, 215, 255),
+                (160, 235, 255),
+                (100, 200, 255),
+            ];
+            let (r, g, b) = palette[(ms / 400) as usize % palette.len()];
+            (format!("{} {}", spinner, t), ratatui::style::Color::Rgb(r, g, b))
         } else {
-            (String::new(), Style::default())
+            (t.to_string(), colors.accent)
         };
+        (
+            spinner_text,
+            Style::default().fg(fg_color).add_modifier(Modifier::DIM),
+        )
+    } else if let Some(s) = last_status {
+        let fg_color = if s.starts_with('⚠') || s.starts_with('✗') {
+            colors.error
+        } else {
+            colors.success
+        };
+        (
+            s.clone(),
+            Style::default().fg(fg_color).add_modifier(Modifier::DIM),
+        )
+    } else {
+        (String::new(), Style::default())
+    };
 
     // Append queued-message badge so the user knows their input was accepted.
     let status_text = if queued_count > 0 {
