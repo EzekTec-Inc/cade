@@ -586,7 +586,8 @@ mod tests {
 
     #[test]
     fn parse_index_results_valid() {
-        let docs = [ToolDocument {
+        let docs = [
+            ToolDocument {
                 schema: json!({"name":"a"}),
                 name: "a".into(),
                 text: "a".into(),
@@ -600,7 +601,8 @@ mod tests {
                 schema: json!({"name":"c"}),
                 name: "c".into(),
                 text: "c".into(),
-            }];
+            },
+        ];
         let api_response = json!([
             { "index": 2, "relevance_score": 0.95 },
             { "index": 0, "relevance_score": 0.80 },

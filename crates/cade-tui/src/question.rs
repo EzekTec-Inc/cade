@@ -265,9 +265,7 @@ impl QuestionWidget {
                 };
                 lines.push(Line::from(Span::styled(
                     hint.to_string(),
-                    Style::default()
-                        .fg(colors.dim)
-                        .add_modifier(Modifier::DIM),
+                    Style::default().fg(colors.dim).add_modifier(Modifier::DIM),
                 )));
 
                 // Render: each line gets one row; clip to terminal height.

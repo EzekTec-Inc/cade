@@ -2500,10 +2500,10 @@ fn render_frame(
             .iter()
             .map(|l| count_wrapped_rows(l, effective_w as u16))
             .sum();
-        prepared.push(PreparedTimelineEntry { 
-            lines, 
-            rows, 
-            card_style: crate::app::timeline::CardStyle::Assistant 
+        prepared.push(PreparedTimelineEntry {
+            lines,
+            rows,
+            card_style: crate::app::timeline::CardStyle::Assistant,
         });
     }
 
@@ -2973,7 +2973,9 @@ fn render_question_inline(
         Span::styled("◆ ", Style::default().fg(colors.overlay_section)),
         Span::styled(
             q.header.clone(),
-            Style::default().fg(colors.overlay_section).add_modifier(Modifier::BOLD),
+            Style::default()
+                .fg(colors.overlay_section)
+                .add_modifier(Modifier::BOLD),
         ),
     ]));
     lines.push(Line::from(""));
@@ -3002,7 +3004,9 @@ fn render_question_inline(
         // Submit item (multi-select only)
         if idx == aq.submit_idx {
             let style = if is_selected {
-                Style::default().fg(colors.success).add_modifier(Modifier::BOLD)
+                Style::default()
+                    .fg(colors.success)
+                    .add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(colors.muted)
             };
@@ -3030,7 +3034,11 @@ fn render_question_inline(
             lines.push(Line::from(vec![
                 Span::styled(
                     format!(" {selector} {}.  ", idx + 1),
-                    Style::default().fg(if is_selected { colors.success } else { colors.muted }),
+                    Style::default().fg(if is_selected {
+                        colors.success
+                    } else {
+                        colors.muted
+                    }),
                 ),
                 Span::styled(
                     display,
@@ -3056,7 +3064,9 @@ fn render_question_inline(
             Style::default().fg(colors.muted)
         };
         let label_style = if is_selected {
-            Style::default().fg(colors.text).add_modifier(Modifier::BOLD)
+            Style::default()
+                .fg(colors.text)
+                .add_modifier(Modifier::BOLD)
         } else {
             Style::default().fg(colors.text)
         };
@@ -3084,9 +3094,7 @@ fn render_question_inline(
     };
     lines.push(Line::from(Span::styled(
         hint,
-        Style::default()
-            .fg(colors.dim)
-            .add_modifier(Modifier::DIM),
+        Style::default().fg(colors.dim).add_modifier(Modifier::DIM),
     )));
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body_area);

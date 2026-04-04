@@ -452,7 +452,9 @@ impl<'a> TimelineEntry<'a> {
     ) -> u16 {
         let card_style = match self.key.kind {
             TimelineItemKind::User => CardStyle::User,
-            TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant => CardStyle::Assistant,
+            TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant => {
+                CardStyle::Assistant
+            }
             _ => CardStyle::None,
         };
         let effective_width = match card_style {
@@ -502,7 +504,9 @@ pub(crate) fn prepare_timeline_entries(
         .map(|entry| {
             let card_style = match entry.key.kind {
                 TimelineItemKind::User => CardStyle::User,
-                TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant => CardStyle::Assistant,
+                TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant => {
+                    CardStyle::Assistant
+                }
                 _ => CardStyle::None,
             };
             let effective_width = match card_style {
@@ -522,7 +526,11 @@ pub(crate) fn prepare_timeline_entries(
                 .iter()
                 .map(|l| count_wrapped_rows(l, effective_width as u16))
                 .sum();
-            PreparedTimelineEntry { lines, rows, card_style }
+            PreparedTimelineEntry {
+                lines,
+                rows,
+                card_style,
+            }
         })
         .collect()
 }
