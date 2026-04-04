@@ -58,9 +58,17 @@ pub(crate) struct TimelineSelectionInfo {
     pub(crate) actions: &'static str,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CardStyle {
+    None,
+    User,
+    Assistant,
+}
+
 pub(crate) struct PreparedTimelineEntry {
     pub(crate) lines: Vec<Line<'static>>,
     pub(crate) rows: u16,
+    pub(crate) card_style: CardStyle,
 }
 
 pub(crate) enum TimelineItem<'a> {
@@ -482,9 +490,18 @@ pub(crate) fn prepare_timeline_entries(
     entries
         .iter()
         .map(|entry| {
+            let card_style = match entry.key.kind {
+                TimelineItemKind::User => CardStyle::User,
+                TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant => CardStyle::Assistant,
+                _ => CardStyle::None,
+            };
+            let effective_width = match card_style {
+                CardStyle::None => width,
+                _ => width.saturating_sub(2), // 1 for border, 1 for padding
+            };
             let mut lines = Vec::new();
             entry.render_with_state(
-                width,
+                effective_width,
                 expand_all,
                 expanded_items,
                 selected_timeline,
@@ -493,9 +510,9 @@ pub(crate) fn prepare_timeline_entries(
             );
             let rows = lines
                 .iter()
-                .map(|l| count_wrapped_rows(l, width as u16))
+                .map(|l| count_wrapped_rows(l, effective_width as u16))
                 .sum();
-            PreparedTimelineEntry { lines, rows }
+            PreparedTimelineEntry { lines, rows, card_style }
         })
         .collect()
 }
@@ -505,6 +522,7 @@ pub(crate) fn render_timeline_viewport(
     area: Rect,
     prepared: &[PreparedTimelineEntry],
     scroll: usize,
+    colors: &ThemeColors,
 ) -> u16 {
     // Clear the full messages area so no stale content leaks between frames.
     frame.render_widget(ratatui::widgets::Clear, area);
@@ -553,10 +571,27 @@ pub(crate) fn render_timeline_viewport(
                 width: inner.width,
                 height: render_height,
             };
+            let mut block = ratatui::widgets::Block::default();
+            match item.card_style {
+                CardStyle::User => {
+                    block = block
+                        .borders(ratatui::widgets::Borders::LEFT)
+                        .border_style(Style::default().fg(colors.dim))
+                        .padding(ratatui::widgets::Padding::left(1));
+                }
+                CardStyle::Assistant => {
+                    block = block
+                        .borders(ratatui::widgets::Borders::LEFT)
+                        .border_style(Style::default().fg(colors.assistant_accent))
+                        .padding(ratatui::widgets::Padding::left(1));
+                }
+                CardStyle::None => {}
+            }
             frame.render_widget(
                 Paragraph::new(item.lines.clone())
                     .wrap(Wrap { trim: false })
-                    .scroll((clip_top, 0)),
+                    .scroll((clip_top, 0))
+                    .block(block),
                 rect,
             );
         }
@@ -737,7 +772,6 @@ fn render_user_message_item(
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
-    out.push(Line::from(""));
     out.push(Line::from(vec![Span::styled(
         "You",
         Style::default()
@@ -750,7 +784,6 @@ fn render_user_message_item(
 }
 
 fn render_assistant_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
-    out.push(Line::from(""));
     out.push(Line::from(vec![Span::styled(
         "▍ CADE",
         Style::default()

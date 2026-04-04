@@ -2480,8 +2480,9 @@ fn render_frame(
             .unwrap_or(0);
         let streaming_entry = TimelineEntry::streaming(next_index, s);
         let mut lines = Vec::new();
+        let effective_w = timeline_w.saturating_sub(2);
         streaming_entry.render_with_state(
-            timeline_w,
+            effective_w,
             expand_all,
             expanded_items,
             selected_timeline,
@@ -2490,12 +2491,16 @@ fn render_frame(
         );
         let rows = lines
             .iter()
-            .map(|l| count_wrapped_rows(l, timeline_w as u16))
+            .map(|l| count_wrapped_rows(l, effective_w as u16))
             .sum();
-        prepared.push(PreparedTimelineEntry { lines, rows });
+        prepared.push(PreparedTimelineEntry { 
+            lines, 
+            rows, 
+            card_style: crate::app::timeline::CardStyle::Assistant 
+        });
     }
 
-    let max_skip = render_timeline_viewport(frame, messages_area, &prepared, scroll);
+    let max_skip = render_timeline_viewport(frame, messages_area, &prepared, scroll, colors);
 
     // -- A-01: File picker overlay
     if let Some(pk) = picker {
