@@ -66,7 +66,6 @@ pub(crate) use stats::*;
 
 // -- Session Statistics
 
-
 // -- Session footer helpers
 
 pub(crate) fn fmt_tok_short(n: u64) -> String {
@@ -145,11 +144,10 @@ pub struct Repl {
     /// Set to `true` by a SIGINT handler while a turn is running.
     /// `stream_turn()` checks this flag and aborts the SSE stream early.
     pub(crate) cancel_turn: std::sync::Arc<std::sync::atomic::AtomicBool>,
-    /// Set to `true` when the user presses Ctrl+C while no turn is running,
-    /// signalling a clean exit from the REPL loop.  A single application-
-    /// lifetime SIGINT task writes this flag instead of spawning a new
-    /// listener each turn (which leaked signal registrations).
-    pub(crate) shutdown_flag: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// Set to `true` while an agent turn is actively executing.
+    /// The application-lifetime SIGINT task checks this flag to determine
+    /// whether a Ctrl+C should cancel the current turn.
+    pub(crate) turn_active: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// Active conversation ID — None means the default (legacy) conversation.
     pub(crate) conversation_id: Arc<Mutex<Option<String>>>,
     /// MCP server manager — routes tool calls with `{server}__` prefix.
@@ -260,7 +258,7 @@ impl Repl {
             hooks,
             first_turn: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             cancel_turn: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            shutdown_flag: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            turn_active: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             conversation_id: Arc::new(Mutex::new(conversation_id)),
             mcp,
             subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(cap)),
@@ -397,14 +395,14 @@ impl Repl {
 
         // Spawn exactly ONE application-lifetime SIGINT watcher.
         // On every Ctrl+C press it:
-        //   1. Sets `cancel_turn`  — aborts any active SSE stream.
-        //   2. Sets `shutdown_flag` — signals the idle REPL loop to exit cleanly.
+        //   1. Checks `turn_active`.
+        //   2. If true, sets `cancel_turn`  — aborts any active SSE stream.
         // This replaces the per-turn tokio::signal registrations that previously
         // leaked kernel signal interests and left no active OS handler once the
         // turn ended, causing the process to freeze unrecoverably on Ctrl+C.
         {
             let cancel = self.cancel_turn.clone();
-            let shutdown = self.shutdown_flag.clone();
+            let turn_active = self.turn_active.clone();
             tokio::spawn(async move {
                 #[cfg(unix)]
                 {
@@ -414,8 +412,9 @@ impl Repl {
                         loop {
                             sig.recv().await;
                             use std::sync::atomic::Ordering;
-                            cancel.store(true, Ordering::SeqCst);
-                            shutdown.store(true, Ordering::SeqCst);
+                            if turn_active.load(Ordering::SeqCst) {
+                                cancel.store(true, Ordering::SeqCst);
+                            }
                         }
                     }
                 }
@@ -425,8 +424,9 @@ impl Repl {
                     loop {
                         let _ = tokio::signal::ctrl_c().await;
                         use std::sync::atomic::Ordering;
-                        cancel.store(true, Ordering::SeqCst);
-                        shutdown.store(true, Ordering::SeqCst);
+                        if turn_active.load(Ordering::SeqCst) {
+                            cancel.store(true, Ordering::SeqCst);
+                        }
                     }
                 }
             });
@@ -515,13 +515,6 @@ impl Repl {
                 app.update_mode(self.permissions.mode());
                 app.update_model(self.current_model.lock().expect("lock poisoned").clone());
                 app.update_agent_name(self.agent_name());
-            }
-
-            // Check if the application-lifetime SIGINT handler fired while we
-            // were idle (no turn was running).  Break to exit cleanly so the
-            // TuiApp Drop impl restores the terminal.
-            if self.shutdown_flag.load(std::sync::atomic::Ordering::SeqCst) {
-                break;
             }
 
             // Read input — either from pending (menu dispatch) or from the user.
@@ -733,7 +726,8 @@ impl Repl {
                             // If it's a tool hint (no slash) or a command that needs arguments,
                             // insert it into the editor instead of executing immediately.
                             let needs_args = !cmd.starts_with('/')
-                                || (cmd.contains(' ') && !["/stats model", "/skills reload"].contains(&cmd.as_str()))
+                                || (cmd.contains(' ')
+                                    && !["/stats model", "/skills reload"].contains(&cmd.as_str()))
                                 || [
                                     "/delete",
                                     "/checkpoint",
@@ -810,10 +804,15 @@ impl Repl {
                             continue;
                         }
 
-                        match self.interactive_mcp_picker(std::sync::Arc::clone(&self.app)).await? {
+                        match self
+                            .interactive_mcp_picker(std::sync::Arc::clone(&self.app))
+                            .await?
+                        {
                             Some(cade_tui::mcp_picker::McpAction::Toggle(key)) => {
                                 let mut s = self.settings.lock().expect("lock poisoned");
-                                if let Some(server) = s.global_settings_mut().mcp_servers.get_mut(&key) {
+                                if let Some(server) =
+                                    s.global_settings_mut().mcp_servers.get_mut(&key)
+                                {
                                     server.disabled = !server.disabled;
                                 }
                                 let _ = s.save_global();
@@ -837,17 +836,36 @@ impl Repl {
                                     }
                                 });
                                 let mut app = self.app.lock().expect("lock poisoned");
-                                app.editor.input = format!("/mcp-save\n{}", serde_json::to_string_pretty(&tmpl).unwrap());
+                                app.editor.input = format!(
+                                    "/mcp-save\n{}",
+                                    serde_json::to_string_pretty(&tmpl).unwrap()
+                                );
                                 app.editor.cursor_pos = app.editor.input.len();
-                                app.push_silent(crate::ui::RenderLine::SystemMsg("  Edit the JSON below and hit Enter to create/save.".to_string()));
+                                app.push_silent(crate::ui::RenderLine::SystemMsg(
+                                    "  Edit the JSON below and hit Enter to create/save."
+                                        .to_string(),
+                                ));
                             }
                             Some(cade_tui::mcp_picker::McpAction::Edit(key)) => {
-                                let config = self.settings.lock().expect("lock poisoned").global_settings_mut().mcp_servers.get(&key).cloned().unwrap_or_default();
+                                let config = self
+                                    .settings
+                                    .lock()
+                                    .expect("lock poisoned")
+                                    .global_settings_mut()
+                                    .mcp_servers
+                                    .get(&key)
+                                    .cloned()
+                                    .unwrap_or_default();
                                 let tmpl = serde_json::json!({ key: config });
                                 let mut app = self.app.lock().expect("lock poisoned");
-                                app.editor.input = format!("/mcp-save\n{}", serde_json::to_string_pretty(&tmpl).unwrap());
+                                app.editor.input = format!(
+                                    "/mcp-save\n{}",
+                                    serde_json::to_string_pretty(&tmpl).unwrap()
+                                );
                                 app.editor.cursor_pos = app.editor.input.len();
-                                app.push_silent(crate::ui::RenderLine::SystemMsg("  Edit the JSON below and hit Enter to save.".to_string()));
+                                app.push_silent(crate::ui::RenderLine::SystemMsg(
+                                    "  Edit the JSON below and hit Enter to save.".to_string(),
+                                ));
                             }
                             None => {
                                 self.tui_dim("  /mcp closed");
@@ -855,7 +873,10 @@ impl Repl {
                         }
                     }
                     SlashCmd::McpSave(payload) => {
-                        let parsed: std::result::Result<std::collections::HashMap<String, cade_core::settings::McpServerConfig>, _> = serde_json::from_str(&payload);
+                        let parsed: std::result::Result<
+                            std::collections::HashMap<String, cade_core::settings::McpServerConfig>,
+                            _,
+                        > = serde_json::from_str(&payload);
                         match parsed {
                             Ok(servers) => {
                                 let mut s = self.settings.lock().expect("lock poisoned");
@@ -983,27 +1004,19 @@ impl Repl {
                         // Cat 5: conversation messages
                         let msgs = self
                             .client
-                            .get_conversation_messages(
-                                &agent_id,
-                                conv_id.as_deref().unwrap_or(""),
-                            )
+                            .get_conversation_messages(&agent_id, conv_id.as_deref().unwrap_or(""))
                             .await
                             .unwrap_or_default();
                         let msg_tok = (msgs
                             .iter()
-                            .map(|m| {
-                                m["content"].as_str().map(|s| s.len()).unwrap_or(0)
-                            })
+                            .map(|m| m["content"].as_str().map(|s| s.len()).unwrap_or(0))
                             .sum::<usize>()
                             / 3) as u64;
 
                         // Cat 1: native tools residual (server pct - known categories)
-                        let known_excl_tools =
-                            sys_tok + mcp_tok + mem_tok + skills_tok + msg_tok;
+                        let known_excl_tools = sys_tok + mcp_tok + mem_tok + skills_tok + msg_tok;
                         let tools_tok = pct_opt
-                            .map(|p| {
-                                (p as u64 * window / 100).saturating_sub(known_excl_tools)
-                            })
+                            .map(|p| (p as u64 * window / 100).saturating_sub(known_excl_tools))
                             .unwrap_or(0);
 
                         let total_used = known_excl_tools + tools_tok;
@@ -1020,8 +1033,7 @@ impl Repl {
                                 (total_used * 100 / window).min(100) as u8
                             }
                         });
-                        let model_short =
-                            model.rsplit('/').next().unwrap_or(&model).to_string();
+                        let model_short = model.rsplit('/').next().unwrap_or(&model).to_string();
 
                         // Emit single ContextBar entry
                         let category_tokens = vec![
@@ -1050,7 +1062,11 @@ impl Repl {
 
                         // MCP tools
                         let mcp_fmt = |n: u64| -> String {
-                            if n >= 1_000 { format!("{:.1}k", n as f64 / 1_000.0) } else { n.to_string() }
+                            if n >= 1_000 {
+                                format!("{:.1}k", n as f64 / 1_000.0)
+                            } else {
+                                n.to_string()
+                            }
                         };
                         {
                             let mcp_statuses = self.mcp.status().await;
@@ -1098,8 +1114,7 @@ impl Repl {
                                 }
                             }
                             if !disabled.is_empty() {
-                                let _ =
-                                    app.push(RenderLine::DimMsg("  Disabled".to_string()));
+                                let _ = app.push(RenderLine::DimMsg("  Disabled".to_string()));
                                 for s in &disabled {
                                     let _ = app.push(RenderLine::DimMsg(format!(
                                         "  └ {}  (reconnect failed)",
@@ -1118,9 +1133,8 @@ impl Repl {
                                 mcp_fmt(mem_tok)
                             )));
                             if mem_blocks.is_empty() {
-                                let _ = app.push(RenderLine::DimMsg(
-                                    "  (no memory blocks)".to_string(),
-                                ));
+                                let _ = app
+                                    .push(RenderLine::DimMsg("  (no memory blocks)".to_string()));
                             } else {
                                 for b in &mem_blocks {
                                     let tok = (b.value.chars().count() / 3) as u64;
@@ -1142,11 +1156,7 @@ impl Repl {
 
                         // Skills
                         {
-                            let skills_snap = self
-                                .skills
-                                .lock()
-                                .expect("lock poisoned")
-                                .clone();
+                            let skills_snap = self.skills.lock().expect("lock poisoned").clone();
                             let mut app = self.app.lock().expect("lock poisoned");
                             let _ = app.push(RenderLine::Blank);
                             let _ = app.push(RenderLine::InfoHeader(format!(
@@ -1154,9 +1164,8 @@ impl Repl {
                                 mcp_fmt(skills_tok)
                             )));
                             if skills_snap.is_empty() {
-                                let _ = app.push(RenderLine::DimMsg(
-                                    "  (no skills loaded)".to_string(),
-                                ));
+                                let _ = app
+                                    .push(RenderLine::DimMsg("  (no skills loaded)".to_string()));
                             } else {
                                 for s in &skills_snap {
                                     let tok = (s.body.chars().count() / 3) as u64;
@@ -1191,8 +1200,7 @@ impl Repl {
                             let t_omit = stats["turns_omitted"].as_u64().unwrap_or(0);
                             let c_used = stats["chars_used"].as_u64().unwrap_or(0);
                             let c_bud = stats["message_budget_chars"].as_u64().unwrap_or(0);
-                            let consol =
-                                stats["needs_consolidation"].as_bool().unwrap_or(false);
+                            let consol = stats["needs_consolidation"].as_bool().unwrap_or(false);
                             let pct_c = if c_bud > 0 {
                                 format!("{:.0}%", 100.0 * c_used as f64 / c_bud as f64)
                             } else {
@@ -1209,9 +1217,7 @@ impl Repl {
                                      ({t_omit} omitted — use conversation_search to recover)"
                                 )
                             } else {
-                                format!(
-                                    "  Turns:   {t_inc} of {t_tot} included  (none omitted)"
-                                )
+                                format!("  Turns:   {t_inc} of {t_tot} included  (none omitted)")
                             };
                             let _ = app.push(RenderLine::DimMsg(turns_line));
                             let _ = app.push(RenderLine::DimMsg(format!(
@@ -1222,9 +1228,8 @@ impl Repl {
                             } else {
                                 "none pending"
                             };
-                            let _ = app.push(RenderLine::DimMsg(format!(
-                                "  Consolidation: {consol_str}"
-                            )));
+                            let _ = app
+                                .push(RenderLine::DimMsg(format!("  Consolidation: {consol_str}")));
                             let _ = app.push(RenderLine::Blank);
                         }
                     }
@@ -1320,7 +1325,8 @@ impl Repl {
                             }
                             if !has_plan {
                                 let _ = app.push(crate::ui::RenderLine::SystemMsg(
-                                    "No active plan. Ask the agent to use the set_plan tool.".to_string(),
+                                    "No active plan. Ask the agent to use the set_plan tool."
+                                        .to_string(),
                                 ));
                             } else {
                                 app.show_toast(
@@ -1499,44 +1505,54 @@ impl Repl {
                         }
                     }
 
-                    SlashCmd::Pricing(arg) => {
-                        match arg.as_deref() {
-                            Some("sync") => {
-                                self.tui_dim("  Fetching latest pricing rules from cloud...");
-                                let url = "https://raw.githubusercontent.com/EzekTec-Inc/CADE/main/crates/cade-ai/src/default_pricing.json";
-                                match reqwest::get(url).await {
-                                    Ok(res) if res.status().is_success() => {
-                                        if let Ok(text) = res.text().await {
-                                            if let Some(p) = dirs::home_dir().map(|h| h.join(".cade").join("pricing.json")) {
-                                                if let Err(e) = std::fs::write(&p, text) {
-                                                    self.tui_err(format!("  Failed to write pricing.json: {}", e));
-                                                } else {
-                                                    let mut stats = self.session_stats.lock().expect("lock poisoned");
-                                                    stats.registry = std::sync::Arc::new(cade_ai::ModelRegistry::load_or_default(Some(&p)));
-                                                    self.tui_ok("  Pricing synced successfully!");
-                                                }
+                    SlashCmd::Pricing(arg) => match arg.as_deref() {
+                        Some("sync") => {
+                            self.tui_dim("  Fetching latest pricing rules from cloud...");
+                            let url = "https://raw.githubusercontent.com/EzekTec-Inc/CADE/main/crates/cade-ai/src/default_pricing.json";
+                            match reqwest::get(url).await {
+                                Ok(res) if res.status().is_success() => {
+                                    if let Ok(text) = res.text().await {
+                                        if let Some(p) = dirs::home_dir()
+                                            .map(|h| h.join(".cade").join("pricing.json"))
+                                        {
+                                            if let Err(e) = std::fs::write(&p, text) {
+                                                self.tui_err(format!(
+                                                    "  Failed to write pricing.json: {}",
+                                                    e
+                                                ));
+                                            } else {
+                                                let mut stats = self
+                                                    .session_stats
+                                                    .lock()
+                                                    .expect("lock poisoned");
+                                                stats.registry = std::sync::Arc::new(
+                                                    cade_ai::ModelRegistry::load_or_default(Some(
+                                                        &p,
+                                                    )),
+                                                );
+                                                self.tui_ok("  Pricing synced successfully!");
                                             }
                                         }
-                                    },
-                                    _ => self.tui_err("  Failed to fetch pricing from cloud."),
+                                    }
                                 }
-                            }
-                            Some(cmd) if cmd.starts_with("set ") => {
-                                self.tui_err("  /pricing set is not fully implemented yet. Please edit ~/.cade/pricing.json manually.");
-                            }
-                            _ => {
-                                let model = self.model();
-                                let stats = self.session_stats.lock().expect("lock poisoned");
-                                let pricing = stats.registry.pricing_for_model(&model);
-                                self.tui_hdr(format!("  Pricing for model: {}", model));
-                                self.tui_dim(format!("  Input: ${}/1M", pricing.input));
-                                self.tui_dim(format!("  Output: ${}/1M", pricing.output));
-                                self.tui_dim(format!("  Cache Read: ${}/1M", pricing.cache_read));
-                                self.tui_dim(format!("  Cache Write: ${}/1M", pricing.cache_write));
-                                self.tui_dim("  Use /pricing sync to update from the cloud, or edit ~/.cade/pricing.json to add local overrides.");
+                                _ => self.tui_err("  Failed to fetch pricing from cloud."),
                             }
                         }
-                    }
+                        Some(cmd) if cmd.starts_with("set ") => {
+                            self.tui_err("  /pricing set is not fully implemented yet. Please edit ~/.cade/pricing.json manually.");
+                        }
+                        _ => {
+                            let model = self.model();
+                            let stats = self.session_stats.lock().expect("lock poisoned");
+                            let pricing = stats.registry.pricing_for_model(&model);
+                            self.tui_hdr(format!("  Pricing for model: {}", model));
+                            self.tui_dim(format!("  Input: ${}/1M", pricing.input));
+                            self.tui_dim(format!("  Output: ${}/1M", pricing.output));
+                            self.tui_dim(format!("  Cache Read: ${}/1M", pricing.cache_read));
+                            self.tui_dim(format!("  Cache Write: ${}/1M", pricing.cache_write));
+                            self.tui_dim("  Use /pricing sync to update from the cloud, or edit ~/.cade/pricing.json to add local overrides.");
+                        }
+                    },
 
                     SlashCmd::Cost => {
                         let (total_cost, by_model) = {
@@ -2969,19 +2985,30 @@ impl Repl {
                                 match self.client.get_memory(&id).await {
                                     Ok(mut blocks) => {
                                         loop {
-                                            match self.memory_picker(std::sync::Arc::clone(&self.app), &mut blocks).await {
+                                            match self
+                                                .memory_picker(
+                                                    std::sync::Arc::clone(&self.app),
+                                                    &mut blocks,
+                                                )
+                                                .await
+                                            {
                                                 Ok(Some(MemoryPickerResult::Edit(b))) => {
-                                                    pending_input = Some(format!("/memory edit {}", b.label));
+                                                    pending_input =
+                                                        Some(format!("/memory edit {}", b.label));
                                                     break;
                                                 }
                                                 Ok(Some(MemoryPickerResult::Delete(b))) => {
-                                                    pending_input = Some(format!("/memory delete {}", b.label));
+                                                    pending_input =
+                                                        Some(format!("/memory delete {}", b.label));
                                                     break;
                                                 }
                                                 Ok(Some(MemoryPickerResult::TogglePin(b))) => {
-                                                    let is_pinned = b.tier.as_deref() == Some("pinned");
-                                                    let cmd = if is_pinned { "unpin" } else { "pin" };
-                                                    pending_input = Some(format!("/memory {cmd} {}", b.label));
+                                                    let is_pinned =
+                                                        b.tier.as_deref() == Some("pinned");
+                                                    let cmd =
+                                                        if is_pinned { "unpin" } else { "pin" };
+                                                    pending_input =
+                                                        Some(format!("/memory {cmd} {}", b.label));
                                                     break;
                                                 }
                                                 Ok(None) => break, // cancelled
@@ -3375,15 +3402,25 @@ impl Repl {
                             continue;
                         }
                         let all = discover_all_subagents(&self.cwd);
-                        match self.subagent_picker(std::sync::Arc::clone(&self.app), &all).await? {
+                        match self
+                            .subagent_picker(std::sync::Arc::clone(&self.app), &all)
+                            .await?
+                        {
                             Some(SubagentPickerResult::Run(name)) => {
-                                pending_input = Some(format!("run_subagent(subagent_type=\"{name}\", prompt=\"\")"));
+                                pending_input = Some(format!(
+                                    "run_subagent(subagent_type=\"{name}\", prompt=\"\")"
+                                ));
                             }
                             Some(SubagentPickerResult::Edit(path)) => {
                                 // Drop the TUI temporarily, open $EDITOR, then return
-                                let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-                                self.tui_sys(format!("  Opening {} in {}...", path.display(), editor));
-                                
+                                let editor =
+                                    std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+                                self.tui_sys(format!(
+                                    "  Opening {} in {}...",
+                                    path.display(),
+                                    editor
+                                ));
+
                                 let _ = self.app.lock().expect("lock poisoned").suspend_for(|| {
                                     let mut cmd = std::process::Command::new(&editor);
                                     cmd.arg(&path);
@@ -3673,26 +3710,44 @@ impl Repl {
                         };
 
                         let name = if new_theme.is_empty() {
-                            let agent_dir = self.settings.lock().expect("lock poisoned").global_path().parent().unwrap().to_path_buf();
-                            let mut discovered = cade_core::resources::discover_themes(&self.cwd, &agent_dir);
+                            let agent_dir = self
+                                .settings
+                                .lock()
+                                .expect("lock poisoned")
+                                .global_path()
+                                .parent()
+                                .unwrap()
+                                .to_path_buf();
+                            let mut discovered =
+                                cade_core::resources::discover_themes(&self.cwd, &agent_dir);
                             if !discovered.iter().any(|t| t.name == "dark") {
-                                discovered.insert(0, cade_core::resources::Theme {
-                                    name: "dark".to_string(),
-                                    vars: Default::default(),
-                                    colors: Default::default(),
-                                    source: std::path::PathBuf::from("builtin"),
-                                });
+                                discovered.insert(
+                                    0,
+                                    cade_core::resources::Theme {
+                                        name: "dark".to_string(),
+                                        vars: Default::default(),
+                                        colors: Default::default(),
+                                        source: std::path::PathBuf::from("builtin"),
+                                    },
+                                );
                             }
                             if !discovered.iter().any(|t| t.name == "light") {
-                                discovered.insert(1, cade_core::resources::Theme {
-                                    name: "light".to_string(),
-                                    vars: Default::default(),
-                                    colors: Default::default(),
-                                    source: std::path::PathBuf::from("builtin"),
-                                });
+                                discovered.insert(
+                                    1,
+                                    cade_core::resources::Theme {
+                                        name: "light".to_string(),
+                                        vars: Default::default(),
+                                        colors: Default::default(),
+                                        source: std::path::PathBuf::from("builtin"),
+                                    },
+                                );
                             }
-                            let current_colors = self.app.lock().expect("lock poisoned").colors.clone();
-                            self.app.lock().expect("lock poisoned").open_theme_picker(discovered, current_colors);
+                            let current_colors =
+                                self.app.lock().expect("lock poisoned").colors.clone();
+                            self.app
+                                .lock()
+                                .expect("lock poisoned")
+                                .open_theme_picker(discovered, current_colors);
                             continue;
                         } else {
                             new_theme
@@ -3711,7 +3766,8 @@ impl Repl {
                                 .parent()
                                 .unwrap()
                                 .to_path_buf();
-                            let discovered = cade_core::resources::discover_themes(&self.cwd, &agent_dir);
+                            let discovered =
+                                cade_core::resources::discover_themes(&self.cwd, &agent_dir);
                             if let Some(t) = discovered.iter().find(|t| t.name == name) {
                                 (cade_tui::ThemeColors::from_theme(t), t.name.clone())
                             } else {

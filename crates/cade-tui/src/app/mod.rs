@@ -974,7 +974,8 @@ impl TuiApp {
         crossterm::execute!(
             self.terminal.backend_mut(),
             crossterm::terminal::LeaveAlternateScreen
-        ).map_err(|e| crate::Error::Custom(e.to_string()))?;
+        )
+        .map_err(|e| crate::Error::Custom(e.to_string()))?;
 
         f();
 
@@ -982,8 +983,11 @@ impl TuiApp {
         crossterm::execute!(
             self.terminal.backend_mut(),
             crossterm::terminal::EnterAlternateScreen
-        ).map_err(|e| crate::Error::Custom(e.to_string()))?;
-        self.terminal.clear().map_err(|e| crate::Error::Custom(e.to_string()))?;
+        )
+        .map_err(|e| crate::Error::Custom(e.to_string()))?;
+        self.terminal
+            .clear()
+            .map_err(|e| crate::Error::Custom(e.to_string()))?;
         self.draw()?;
         Ok(())
     }
@@ -1746,7 +1750,9 @@ impl TuiApp {
         // -- A-01b: theme picker routing
         if self.theme_picker.is_some() {
             match (k.code, k.modifiers) {
-                (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                (KeyCode::Esc, _)
+                | (KeyCode::Char('q'), KeyModifiers::NONE)
+                | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                     if let Some(tp) = self.theme_picker.take() {
                         self.apply_theme(tp.original_theme);
                     }
@@ -1770,7 +1776,9 @@ impl TuiApp {
                 }
                 (KeyCode::Down, _) | (KeyCode::Tab, _) => {
                     if let Some(tp) = &mut self.theme_picker {
-                        if !tp.filtered_indices.is_empty() && tp.cursor + 1 < tp.filtered_indices.len() {
+                        if !tp.filtered_indices.is_empty()
+                            && tp.cursor + 1 < tp.filtered_indices.len()
+                        {
                             tp.cursor += 1;
                         }
                         if !tp.filtered_indices.is_empty() {
@@ -1925,15 +1933,15 @@ impl TuiApp {
             {
                 self.copy_selected_timeline_item_to_clipboard();
             }
-            // Ctrl+C at the idle prompt: clear the input line.
-            // The application-lifetime SIGINT watcher in Repl::run handles the
-            // actual shutdown by setting shutdown_flag; we just clear the editor
-            // here so the user sees the input box cleared immediately.
+            // Ctrl+C at the idle prompt: clear the input line if not empty.
+            // If empty, exit cleanly (acts like Ctrl+D).
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                self.editor.clear();
-                // Return an empty string — the REPL loop will check shutdown_flag
-                // next iteration and exit cleanly via the break guard.
-                return Ok(Some(Some(String::new())));
+                if self.editor.input.is_empty() {
+                    return Ok(Some(None));
+                } else {
+                    self.editor.clear();
+                    return Ok(None);
+                }
             }
             (KeyCode::Esc, _) => {
                 if self.editor.input.is_empty() && self.selected_timeline.is_some() {
@@ -2186,7 +2194,11 @@ impl TuiApp {
         Ok(None)
     }
 
-    pub fn open_theme_picker(&mut self, themes: Vec<cade_core::resources::themes::Theme>, original_theme: crate::colors::ThemeColors) {
+    pub fn open_theme_picker(
+        &mut self,
+        themes: Vec<cade_core::resources::themes::Theme>,
+        original_theme: crate::colors::ThemeColors,
+    ) {
         let tp = ThemePickerState {
             query: String::new(),
             filtered_indices: (0..themes.len()).collect(),
@@ -2218,9 +2230,15 @@ impl TuiApp {
     fn update_theme_picker_filter(&mut self) {
         if let Some(tp) = &mut self.theme_picker {
             tp.cursor = 0;
-            tp.filtered_indices = tp.themes.iter().enumerate()
-                .filter(|(_, t)| tp.query.is_empty() || t.name.to_lowercase().contains(&tp.query.to_lowercase()))
-                .map(|(i, _)| i).collect();
+            tp.filtered_indices = tp
+                .themes
+                .iter()
+                .enumerate()
+                .filter(|(_, t)| {
+                    tp.query.is_empty() || t.name.to_lowercase().contains(&tp.query.to_lowercase())
+                })
+                .map(|(i, _)| i)
+                .collect();
         }
         self.apply_theme_from_picker();
     }
@@ -2491,14 +2509,12 @@ fn render_frame(
 
         let lines = vec![
             ratatui::text::Line::from(""),
-            ratatui::text::Line::from(vec![
-                ratatui::text::Span::styled(
-                    format!("{spinner} {text}"),
-                    ratatui::style::Style::default()
-                        .fg(ratatui::style::Color::Rgb(r, g, b))
-                        .add_modifier(ratatui::style::Modifier::BOLD),
-                )
-            ])
+            ratatui::text::Line::from(vec![ratatui::text::Span::styled(
+                format!("{spinner} {text}"),
+                ratatui::style::Style::default()
+                    .fg(ratatui::style::Color::Rgb(r, g, b))
+                    .add_modifier(ratatui::style::Modifier::BOLD),
+            )]),
         ];
         let rows = lines.iter().map(|l| count_wrapped_rows(l, content_w)).sum();
         prepared.push(PreparedTimelineEntry { lines, rows });
@@ -2521,10 +2537,12 @@ fn render_frame(
 
     // -- A-01b: Theme picker overlay
     if let Some(tp) = theme_picker {
-        let w = (frame.area().width / 2).max(40).min(frame.area().width.saturating_sub(4));
+        let w = (frame.area().width / 2)
+            .max(40)
+            .min(frame.area().width.saturating_sub(4));
         let n = tp.filtered_indices.len().max(1).min(10);
         let h = (n as u16 + 4).clamp(5, frame.area().height.saturating_sub(4));
-        
+
         let r = ratatui::layout::Rect {
             x: frame.area().x + (frame.area().width.saturating_sub(w)) / 2,
             y: frame.area().y + (frame.area().height.saturating_sub(h)) / 2,
@@ -2536,11 +2554,14 @@ fn render_frame(
 
     // -- Status row
     let (status_text, status_style) = if let Some(s) = last_status {
+        let fg_color = if s.starts_with('⚠') || s.starts_with('✗') {
+            colors.error
+        } else {
+            colors.success
+        };
         (
             s.clone(),
-            Style::default()
-                .fg(colors.success)
-                .add_modifier(Modifier::DIM),
+            Style::default().fg(fg_color).add_modifier(Modifier::DIM),
         )
     } else {
         (String::new(), Style::default())
@@ -3244,14 +3265,14 @@ fn highlight_input_line(text: &str, colors: &ThemeColors) -> Vec<Span<'static>> 
         // Pick the best available syntax: try to detect the language from
         // content heuristics, fall back to plain text.
         let syntax = detect_input_syntax(text);
-        
+
         let theme = colors.syntect_theme.as_deref().unwrap_or_else(|| {
             THEME_SET
                 .themes
                 .get("base16-ocean.dark")
                 .unwrap_or_else(|| THEME_SET.themes.values().next().unwrap())
         });
-        
+
         let mut h = HighlightLines::new(syntax, theme);
         let line_with_nl = format!("{text}\n");
         if let Ok(ranges) = h.highlight_line(&line_with_nl, &SYNTAX_SET) {
@@ -3278,11 +3299,13 @@ fn detect_input_syntax(text: &str) -> &'static syntect::parsing::SyntaxReference
     use crate::markdown::SYNTAX_SET;
 
     // Code-like signals: brackets, common keywords, operators.
-    let code_score: usize = ["{", "}", "(", ")", ";", "=>", "->", "fn ", "def ", "class ",
-        "import ", "use ", "let ", "var ", "const ", "return ", "#include", "package "]
-        .iter()
-        .filter(|&&pat| text.contains(pat))
-        .count();
+    let code_score: usize = [
+        "{", "}", "(", ")", ";", "=>", "->", "fn ", "def ", "class ", "import ", "use ", "let ",
+        "var ", "const ", "return ", "#include", "package ",
+    ]
+    .iter()
+    .filter(|&&pat| text.contains(pat))
+    .count();
 
     let syntax_name = if code_score >= 2 {
         // Looks like code — use a generic "programming" syntax that gives
@@ -3488,32 +3511,62 @@ mod tests {
     }
 }
 
-fn render_theme_picker(frame: &mut ratatui::Frame, tp: &ThemePickerState, area: ratatui::layout::Rect, colors: &crate::colors::ThemeColors) {
-    use ratatui::widgets::{Block, Borders, Paragraph, Row, Table, Cell};
-    use ratatui::style::{Style, Modifier};
+fn render_theme_picker(
+    frame: &mut ratatui::Frame,
+    tp: &ThemePickerState,
+    area: ratatui::layout::Rect,
+    colors: &crate::colors::ThemeColors,
+) {
     use ratatui::layout::Constraint;
+    use ratatui::style::{Modifier, Style};
+    use ratatui::widgets::{Block, Borders, Cell, Paragraph, Row, Table};
 
     if area.height == 0 {
         return;
     }
 
     let hint = " ↑↓ Navigate  Enter Select  Esc/q Cancel ".to_string();
-    let rows: Vec<Row> = tp.filtered_indices.iter().enumerate().map(|(i, &original_idx)| {
-        let t = &tp.themes[original_idx];
-        let is_sel = i == tp.cursor;
-        
-        let style = if is_sel {
-            Style::default().bg(colors.overlay_selected_bg).add_modifier(Modifier::BOLD)
-        } else {
-            Style::default()
-        };
+    let rows: Vec<Row> = tp
+        .filtered_indices
+        .iter()
+        .enumerate()
+        .map(|(i, &original_idx)| {
+            let t = &tp.themes[original_idx];
+            let is_sel = i == tp.cursor;
 
-        Row::new(vec![
-            Cell::from(ratatui::text::Span::styled(if is_sel { "▶ " } else { "  " }, Style::default().fg(if is_sel { colors.overlay_selected_fg } else { colors.overlay_hint }))),
-            Cell::from(ratatui::text::Span::styled(t.name.clone(), Style::default().fg(if is_sel { crate::colors::ThemeColors::dark().text } else { colors.text }))),
-            Cell::from(ratatui::text::Span::styled(format!("{:?}", t.source), Style::default().fg(colors.overlay_hint))),
-        ]).style(style)
-    }).collect();
+            let style = if is_sel {
+                Style::default()
+                    .bg(colors.overlay_selected_bg)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default()
+            };
+
+            Row::new(vec![
+                Cell::from(ratatui::text::Span::styled(
+                    if is_sel { "▶ " } else { "  " },
+                    Style::default().fg(if is_sel {
+                        colors.overlay_selected_fg
+                    } else {
+                        colors.overlay_hint
+                    }),
+                )),
+                Cell::from(ratatui::text::Span::styled(
+                    t.name.clone(),
+                    Style::default().fg(if is_sel {
+                        crate::colors::ThemeColors::dark().text
+                    } else {
+                        colors.text
+                    }),
+                )),
+                Cell::from(ratatui::text::Span::styled(
+                    format!("{:?}", t.source),
+                    Style::default().fg(colors.overlay_hint),
+                )),
+            ])
+            .style(style)
+        })
+        .collect();
 
     let table = Table::new(
         rows,
@@ -3523,8 +3576,19 @@ fn render_theme_picker(frame: &mut ratatui::Frame, tp: &ThemePickerState, area: 
             Constraint::Min(20),
         ],
     )
-    .header(Row::new(vec!["", "Theme", "Source"]).style(Style::default().fg(colors.overlay_title).add_modifier(Modifier::BOLD)))
-    .block(Block::default().borders(Borders::ALL).title(format!(" Themes {hint}")).border_style(Style::default().fg(colors.overlay_border)));
+    .header(
+        Row::new(vec!["", "Theme", "Source"]).style(
+            Style::default()
+                .fg(colors.overlay_title)
+                .add_modifier(Modifier::BOLD),
+        ),
+    )
+    .block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title(format!(" Themes {hint}"))
+            .border_style(Style::default().fg(colors.overlay_border)),
+    );
 
     let mut ts = ratatui::widgets::TableState::default().with_selected(Some(tp.cursor));
 
@@ -3536,8 +3600,13 @@ fn render_theme_picker(frame: &mut ratatui::Frame, tp: &ThemePickerState, area: 
     frame.render_widget(ratatui::widgets::Clear, area);
     frame.render_stateful_widget(table, main_chunks[0], &mut ts);
 
-    let filter_block = Block::default().borders(Borders::ALL).title(" Filter (Type to search) ").border_style(Style::default().fg(colors.overlay_border));
-    let filter_text = Paragraph::new(format!("> {}█", tp.query)).block(filter_block).style(Style::default().fg(colors.text));
+    let filter_block = Block::default()
+        .borders(Borders::ALL)
+        .title(" Filter (Type to search) ")
+        .border_style(Style::default().fg(colors.overlay_border));
+    let filter_text = Paragraph::new(format!("> {}█", tp.query))
+        .block(filter_block)
+        .style(Style::default().fg(colors.text));
     frame.render_widget(filter_text, main_chunks[1]);
 }
 

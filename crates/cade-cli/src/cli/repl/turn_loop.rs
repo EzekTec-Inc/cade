@@ -6,6 +6,13 @@ use crate::ui::RenderLine;
 use cade_agent::agent::client::CadeMessage;
 use std::io;
 
+#[derive(Default, Debug)]
+pub(crate) struct TurnStats {
+    pub reads: u32,
+    pub edits: u32,
+    pub cmds: u32,
+}
+
 impl Repl {
     pub(crate) fn build_env_context(&self) -> String {
         use std::process::Command;
@@ -110,12 +117,12 @@ impl Repl {
             return;
         }
 
-        // Token reduction measure: We only invoke the full subagent evaluation 
-        // if the user input exceeds a certain character threshold, or contains 
+        // Token reduction measure: We only invoke the full subagent evaluation
+        // if the user input exceeds a certain character threshold, or contains
         // explicit tool/file keywords indicating a complex task.
-        let is_complex = input.len() > 100 
-            || input.contains("file") 
-            || input.contains("code") 
+        let is_complex = input.len() > 100
+            || input.contains("file")
+            || input.contains("code")
             || input.contains("test")
             || input.contains("implement");
 
@@ -160,7 +167,6 @@ impl Repl {
         use std::sync::atomic::Ordering;
 
         let turn_start = std::time::Instant::now();
-        let in_tok_before = self.session_input_tokens.load(Ordering::SeqCst);
         let out_tok_before = self.session_output_tokens.load(Ordering::SeqCst);
 
         // Reset cancel flag at the start of every turn so Ctrl+C presses from
@@ -168,9 +174,9 @@ impl Repl {
         // lifetime SIGINT watcher (spawned once in Repl::run) will set this
         // flag again if Ctrl+C is pressed during this turn.
         self.cancel_turn.store(false, Ordering::SeqCst);
-        // Also clear the shutdown flag: if the user hit Ctrl+C to cancel the
-        // previous turn we don't want to exit the REPL immediately after.
-        self.shutdown_flag.store(false, Ordering::SeqCst);
+
+        // Mark turn as active so OS SIGINT watcher knows to cancel it
+        self.turn_active.store(true, Ordering::SeqCst);
 
         // Run Heuristic Evaluator Layer
         self.heuristic_evaluate(input).await;
@@ -524,10 +530,24 @@ impl Repl {
 
         let messages = messages?;
 
+        let is_cancelled = self.cancel_turn.load(Ordering::SeqCst);
         // Clear cancel flag after turn completes
         self.cancel_turn.store(false, Ordering::SeqCst);
-        self.dispatch_tool_calls(stdout, messages, input, Some(bar_text), false)
+
+        let mut turn_stats = TurnStats::default();
+        if is_cancelled {
+            // Skip tool execution so we don't trigger auto-reprompts on empty responses
+        } else {
+            self.dispatch_tool_calls(
+                stdout,
+                messages,
+                input,
+                Some(bar_text),
+                false,
+                &mut turn_stats,
+            )
             .await?;
+        }
 
         // C3: Once per session, after enough write activity, check whether the
         // agent has been updating its working_set block.  If it's still empty
@@ -558,27 +578,38 @@ impl Repl {
         if let Ok(mut stats) = self.session_stats.lock() {
             stats.agent_active_ms += turn_start.elapsed().as_millis() as u64;
         }
-        let in_delta = self
-            .session_input_tokens
-            .load(Ordering::SeqCst)
-            .saturating_sub(in_tok_before);
-        let out_delta = self
-            .session_output_tokens
-            .load(Ordering::SeqCst)
-            .saturating_sub(out_tok_before);
-        let summary = if secs >= 60 {
-            format!(
-                "✻ Considered for {}m {}s · ↑{} ↓{} tokens",
-                secs / 60,
-                secs % 60,
-                in_delta,
-                out_delta
-            )
+        let time_str = if secs >= 60 {
+            format!("{}m {}s", secs / 60, secs % 60)
         } else {
-            format!(
-                "✻ Considered for {}s · ↑{} ↓{} tokens",
-                secs, in_delta, out_delta
-            )
+            format!("{}s", secs)
+        };
+
+        let summary = if is_cancelled {
+            format!("⚠ Interrupted after {}", time_str)
+        } else {
+            let mut parts = vec![format!("✓ Finished in {}", time_str)];
+            if turn_stats.reads > 0 {
+                parts.push(format!(
+                    "{} read{}",
+                    turn_stats.reads,
+                    if turn_stats.reads == 1 { "" } else { "s" }
+                ));
+            }
+            if turn_stats.edits > 0 {
+                parts.push(format!(
+                    "{} edit{}",
+                    turn_stats.edits,
+                    if turn_stats.edits == 1 { "" } else { "s" }
+                ));
+            }
+            if turn_stats.cmds > 0 {
+                parts.push(format!(
+                    "{} cmd{}",
+                    turn_stats.cmds,
+                    if turn_stats.cmds == 1 { "" } else { "s" }
+                ));
+            }
+            parts.join("  ·  ")
         };
         self.app
             .lock()
@@ -586,6 +617,7 @@ impl Repl {
             .set_last_status(Some(summary));
         let _ = self.app.lock().expect("lock poisoned").draw();
 
+        self.turn_active.store(false, Ordering::SeqCst);
         Ok(())
     }
 
@@ -1051,6 +1083,7 @@ impl Repl {
         user_input: &str,
         bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
         reprompt_done: bool,
+        turn_stats: &mut TurnStats,
     ) -> Result<()> {
         // If the user cancelled (Esc/Ctrl+C) during Phase 2 tool-result sending,
         // stream_turn may return vec![] due to the cancellation rather than an
@@ -1080,6 +1113,54 @@ impl Repl {
         if wc > 0 {
             self.write_tool_calls
                 .fetch_add(wc, std::sync::atomic::Ordering::SeqCst);
+        }
+
+        // Update turn statistics
+        for (_, name, _) in &tool_calls {
+            match name.as_str() {
+                "bash" | "RunShellCommand" | "desktop-commander__start_process" => {
+                    turn_stats.cmds += 1
+                }
+                "write_file"
+                | "edit_file"
+                | "apply_patch"
+                | "WriteFileGemini"
+                | "Replace"
+                | "desktop-commander__write_file"
+                | "desktop-commander__edit_block" => turn_stats.edits += 1,
+                "read_file"
+                | "ReadFileGemini"
+                | "glob"
+                | "GlobGemini"
+                | "grep"
+                | "SearchFileContent"
+                | "desktop-commander__read_file"
+                | "desktop-commander__read_multiple_files" => turn_stats.reads += 1,
+                _ => {
+                    // Fallback heuristics
+                    if name.contains("read")
+                        || name.contains("search")
+                        || name.contains("find")
+                        || name.contains("grep")
+                        || name.contains("list")
+                    {
+                        turn_stats.reads += 1;
+                    } else if name.contains("write")
+                        || name.contains("edit")
+                        || name.contains("patch")
+                        || name.contains("update")
+                        || name.contains("create")
+                    {
+                        turn_stats.edits += 1;
+                    } else if name.contains("bash")
+                        || name.contains("shell")
+                        || name.contains("cmd")
+                        || name.contains("run")
+                    {
+                        turn_stats.cmds += 1;
+                    }
+                }
+            }
         }
 
         if tool_calls.is_empty() {
@@ -1116,8 +1197,12 @@ impl Repl {
                         bar_text.clone(),
                     )
                     .await?;
-                Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text, true))
-                    .await?;
+                Box::pin(
+                    self.dispatch_tool_calls(
+                        stdout, follow, user_input, bar_text, true, turn_stats,
+                    ),
+                )
+                .await?;
                 return Ok(());
             }
 
@@ -1166,6 +1251,7 @@ impl Repl {
                     user_input,
                     bar_text,
                     false,
+                    turn_stats,
                 ))
                 .await?;
             }
@@ -1480,7 +1566,8 @@ impl Repl {
                 .await?;
         }
 
-        Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text, false)).await?;
+        Box::pin(self.dispatch_tool_calls(stdout, follow, user_input, bar_text, false, turn_stats))
+            .await?;
 
         Ok(())
     }
@@ -1552,7 +1639,10 @@ impl Repl {
                     tool_call_id: call_id.to_string(),
                     tool_name: tool_name.to_string(),
                     output: if found {
-                        format!("Step {step_id} marked {}.", if done { "done" } else { "not done" })
+                        format!(
+                            "Step {step_id} marked {}.",
+                            if done { "done" } else { "not done" }
+                        )
                     } else {
                         format!("Step {step_id} not found in active plan.")
                     },
@@ -2166,7 +2256,8 @@ impl Repl {
 
         // Dispatch any tool calls the model makes in response (usually update_memory).
         // reprompt_done=true prevents re-entry loops.
-        Box::pin(self.dispatch_tool_calls(stdout, msgs, "", None, true)).await
+        let mut turn_stats = TurnStats::default();
+        Box::pin(self.dispatch_tool_calls(stdout, msgs, "", None, true, &mut turn_stats)).await
     }
 
     /// Interactive `ask_user_question` tool intercept.
