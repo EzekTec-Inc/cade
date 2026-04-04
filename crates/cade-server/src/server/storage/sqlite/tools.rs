@@ -1,7 +1,9 @@
 use super::*;
 
 pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
-    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     conn.execute(
         "INSERT INTO tools (id, name, description, source_code, json_schema, tags, created_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7)
@@ -33,7 +35,9 @@ pub fn get_tool_id_by_name(db: &Db, name: &str) -> Option<String> {
 /// Delete all messages for an agent (or a specific conversation).
 /// If conversation_id is None, deletes all messages for the agent.
 pub fn clear_messages(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<usize> {
-    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let n = if let Some(conv_id) = conversation_id {
         conn.execute(
             "DELETE FROM messages WHERE agent_id = ?1 AND conversation_id = ?2",
@@ -76,7 +80,9 @@ pub fn search_messages(
     query: &str,
     conversation_id: Option<&str>,
 ) -> Result<Vec<MessageSearchResult>> {
-    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
 
     // Build safe FTS5 query: wrap the whole phrase in double-quotes to handle
     // spaces and special chars; escape internal quotes.
@@ -145,7 +151,9 @@ pub fn search_memory(
     agent_id: &str,
     query: &str,
 ) -> Result<Vec<(String, String, String)>> {
-    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value FROM shared_memory_blocks b
@@ -209,7 +217,9 @@ pub fn insert_archival_memory(
     content: &str,
     tags: &[String],
 ) -> Result<String> {
-    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let id = uuid::Uuid::new_v4().to_string();
     let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
 
@@ -228,7 +238,9 @@ pub fn search_archival_memory(
     query: &str,
     limit: usize,
 ) -> Result<Vec<ArchivalRecord>> {
-    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
 
     // FTS5 requires queries to be properly quoted to avoid syntax errors
     let fts_query = format!("\"{}\"", query.replace('\"', "\"\""));
@@ -303,7 +315,9 @@ pub fn pending_tool_results(
 }
 
 pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
-    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
         "SELECT id, name, description, source_code, json_schema, tags FROM tools ORDER BY name",
     )?;
@@ -545,12 +559,7 @@ mod tests {
             "The quick brown fox jumps over the lazy dog",
             &["test".into(), "fox".into()],
         )?;
-        insert_archival_memory(
-            &db,
-            "a1",
-            "Lorem ipsum dolor sit amet",
-            &["test".into()],
-        )?;
+        insert_archival_memory(&db, "a1", "Lorem ipsum dolor sit amet", &["test".into()])?;
 
         let results = search_archival_memory(&db, "a1", "brown fox", 10)?;
         assert_eq!(results.len(), 1);

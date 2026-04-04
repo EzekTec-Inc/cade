@@ -110,11 +110,7 @@ impl ToolReranker {
     /// - The reranker is disabled
     /// - The tool count is already ≤ top_n + protected count
     /// - An error occurs (graceful fallback)
-    pub async fn rerank(
-        &self,
-        user_prompt: &str,
-        tool_schemas: Vec<Value>,
-    ) -> Vec<Value> {
+    pub async fn rerank(&self, user_prompt: &str, tool_schemas: Vec<Value>) -> Vec<Value> {
         if !self.config.enabled {
             return tool_schemas;
         }
@@ -150,10 +146,7 @@ impl ToolReranker {
         }
 
         // Convert to documents.
-        let docs: Vec<ToolDocument> = candidates
-            .iter()
-            .map(Self::schema_to_document)
-            .collect();
+        let docs: Vec<ToolDocument> = candidates.iter().map(Self::schema_to_document).collect();
 
         let original_count = tool_schemas.len();
         let start = std::time::Instant::now();
@@ -329,7 +322,8 @@ fn parse_index_results(
     for item in arr.iter().take(top_n) {
         let idx = item["index"]
             .as_u64()
-            .ok_or_else(|| Error::custom("missing index in rerank result"))? as usize;
+            .ok_or_else(|| Error::custom("missing index in rerank result"))?
+            as usize;
         if idx < docs.len() {
             selected.push(docs[idx].clone());
         }
@@ -427,7 +421,10 @@ mod tests {
         let result = reranker.rerank("find files", tools).await;
         let names: Vec<&str> = result.iter().filter_map(|v| v["name"].as_str()).collect();
 
-        assert!(names.contains(&"bash"), "protected tool 'bash' must survive");
+        assert!(
+            names.contains(&"bash"),
+            "protected tool 'bash' must survive"
+        );
         assert!(
             names.contains(&"search_memory"),
             "protected tool 'search_memory' must survive"
@@ -451,8 +448,12 @@ mod tests {
         let reranker = ToolReranker::new(config);
 
         let tools: Vec<Value> = (0..6)
-            .map(|i| json!({"name": format!("tool_{i}"), "description": format!("Tool number {i}")}))
-            .chain(std::iter::once(json!({"name": "bash", "description": "Shell"})))
+            .map(
+                |i| json!({"name": format!("tool_{i}"), "description": format!("Tool number {i}")}),
+            )
+            .chain(std::iter::once(
+                json!({"name": "bash", "description": "Shell"}),
+            ))
             .collect();
 
         let result = reranker.rerank("do something", tools.clone()).await;
@@ -460,7 +461,10 @@ mod tests {
 
         // Regardless of whether local model is available or fallback kicks in,
         // "bash" must always be present.
-        assert!(names.contains(&"bash"), "protected tool 'bash' must survive");
+        assert!(
+            names.contains(&"bash"),
+            "protected tool 'bash' must survive"
+        );
         // Result should be at most top_n (3) tools, or the full set on fallback.
         assert!(
             result.len() == 3 || result.len() == tools.len(),
@@ -512,9 +516,21 @@ mod tests {
     #[test]
     fn parse_index_results_valid() {
         let docs = vec![
-            ToolDocument { schema: json!({"name":"a"}), name: "a".into(), text: "a".into() },
-            ToolDocument { schema: json!({"name":"b"}), name: "b".into(), text: "b".into() },
-            ToolDocument { schema: json!({"name":"c"}), name: "c".into(), text: "c".into() },
+            ToolDocument {
+                schema: json!({"name":"a"}),
+                name: "a".into(),
+                text: "a".into(),
+            },
+            ToolDocument {
+                schema: json!({"name":"b"}),
+                name: "b".into(),
+                text: "b".into(),
+            },
+            ToolDocument {
+                schema: json!({"name":"c"}),
+                name: "c".into(),
+                text: "c".into(),
+            },
         ];
         let api_response = json!([
             { "index": 2, "relevance_score": 0.95 },
@@ -530,9 +546,11 @@ mod tests {
 
     #[test]
     fn parse_index_results_empty() {
-        let docs = vec![
-            ToolDocument { schema: json!({"name":"a"}), name: "a".into(), text: "a".into() },
-        ];
+        let docs = vec![ToolDocument {
+            schema: json!({"name":"a"}),
+            name: "a".into(),
+            text: "a".into(),
+        }];
         let api_response = json!([]);
         let result = super::parse_index_results(&api_response, &docs, 5).unwrap();
         assert!(result.is_empty());
@@ -540,9 +558,11 @@ mod tests {
 
     #[test]
     fn parse_index_results_bad_format() {
-        let docs = vec![
-            ToolDocument { schema: json!({"name":"a"}), name: "a".into(), text: "a".into() },
-        ];
+        let docs = vec![ToolDocument {
+            schema: json!({"name":"a"}),
+            name: "a".into(),
+            text: "a".into(),
+        }];
         // Not an array
         let api_response = json!("not an array");
         let result = super::parse_index_results(&api_response, &docs, 5);
@@ -551,9 +571,11 @@ mod tests {
 
     #[test]
     fn parse_index_results_out_of_bounds_index_skipped() {
-        let docs = vec![
-            ToolDocument { schema: json!({"name":"a"}), name: "a".into(), text: "a".into() },
-        ];
+        let docs = vec![ToolDocument {
+            schema: json!({"name":"a"}),
+            name: "a".into(),
+            text: "a".into(),
+        }];
         let api_response = json!([
             { "index": 999, "relevance_score": 0.99 },
             { "index": 0, "relevance_score": 0.50 },

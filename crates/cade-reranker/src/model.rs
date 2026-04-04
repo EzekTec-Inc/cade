@@ -39,7 +39,10 @@ impl LocalModel {
             download_model(&dir).await?;
         }
 
-        tracing::info!("[reranker] loading ONNX model from {}", model_path.display());
+        tracing::info!(
+            "[reranker] loading ONNX model from {}",
+            model_path.display()
+        );
 
         let session = Session::builder()
             .map_err(|e| Error::custom(format!("ort session builder: {e}")))?
@@ -71,10 +74,12 @@ impl LocalModel {
         // Tokenize all (query, document) pairs.
         let pairs: Vec<tokenizers::EncodeInput> = docs
             .iter()
-            .map(|d| tokenizers::EncodeInput::Dual(
-                tokenizers::InputSequence::from(query),
-                tokenizers::InputSequence::from(d.text.as_str()),
-            ))
+            .map(|d| {
+                tokenizers::EncodeInput::Dual(
+                    tokenizers::InputSequence::from(query),
+                    tokenizers::InputSequence::from(d.text.as_str()),
+                )
+            })
             .collect();
 
         let encodings = self
@@ -83,7 +88,11 @@ impl LocalModel {
             .map_err(|e| Error::custom(format!("tokenize: {e}")))?;
 
         // Find max length for padding.
-        let max_len = encodings.iter().map(|e| e.get_ids().len()).max().unwrap_or(0);
+        let max_len = encodings
+            .iter()
+            .map(|e| e.get_ids().len())
+            .max()
+            .unwrap_or(0);
         let batch_size = encodings.len();
 
         // Build padded input tensors: input_ids, attention_mask, token_type_ids.
@@ -127,7 +136,11 @@ impl LocalModel {
         // Pair each document with its score and sort descending.
         // For a cross-encoder the logits shape is [batch, 1]; we take the first
         // (and only) column value for each row.
-        let cols = if shape.len() > 1 { shape[1] as usize } else { 1 };
+        let cols = if shape.len() > 1 {
+            shape[1] as usize
+        } else {
+            1
+        };
         let mut scored: Vec<(usize, f32)> = (0..batch_size)
             .map(|i| (i, logits_data[i * cols]))
             .collect();
@@ -163,17 +176,10 @@ async fn download_model(dest: &Path) -> Result<()> {
 
     std::fs::create_dir_all(dest)?;
 
-    let base_url = format!(
-        "https://huggingface.co/{}/resolve/main",
-        DEFAULT_HF_REPO
-    );
+    let base_url = format!("https://huggingface.co/{}/resolve/main", DEFAULT_HF_REPO);
 
     // Download ONNX model.
-    download_file(
-        &format!("{base_url}/{ONNX_FILE}"),
-        &dest.join("model.onnx"),
-    )
-    .await?;
+    download_file(&format!("{base_url}/{ONNX_FILE}"), &dest.join("model.onnx")).await?;
 
     // Download tokenizer.
     download_file(

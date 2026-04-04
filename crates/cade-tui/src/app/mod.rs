@@ -2553,7 +2553,7 @@ fn render_frame(
     }
 
     // -- Status row
-    let (status_text, status_style) = if let Some(s) = last_status {
+    let (status_text, status_style) = if let Some(s) = last_status.as_ref().filter(|_| thinking_text.is_none()) {
         let fg_color = if s.starts_with('⚠') || s.starts_with('✗') {
             colors.error
         } else {

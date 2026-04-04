@@ -40,11 +40,12 @@ pub(crate) struct SessionStats {
 
 impl SessionStats {
     pub(crate) fn new() -> Self {
-        let registry = if let Some(p) = dirs::home_dir().map(|h| h.join(".cade").join("pricing.json")) {
-            cade_ai::ModelRegistry::load_or_default(Some(&p))
-        } else {
-            cade_ai::ModelRegistry::new()
-        };
+        let registry =
+            if let Some(p) = dirs::home_dir().map(|h| h.join(".cade").join("pricing.json")) {
+                cade_ai::ModelRegistry::load_or_default(Some(&p))
+            } else {
+                cade_ai::ModelRegistry::new()
+            };
 
         Self {
             started_at: std::time::Instant::now(),
@@ -103,7 +104,11 @@ impl SessionStats {
     }
 
     /// Render a structured stats card as a Vec of RenderLine for the TUI.
-    pub(crate) fn render_card(&self, auth_method: &str, session_id: &str) -> Vec<crate::ui::RenderLine> {
+    pub(crate) fn render_card(
+        &self,
+        auth_method: &str,
+        session_id: &str,
+    ) -> Vec<crate::ui::RenderLine> {
         use crate::ui::RenderLine;
 
         let wall_secs = self.started_at.elapsed().as_secs();
@@ -395,7 +400,11 @@ impl SessionStats {
             "—".to_string()
         };
         let (total_cost, _) = self.compute_cost();
-        let cost_total_str = if total_cost > 0.0 { format!("${total_cost:.4}") } else { "—".to_string() };
+        let cost_total_str = if total_cost > 0.0 {
+            format!("${total_cost:.4}")
+        } else {
+            "—".to_string()
+        };
 
         let mut totals_row = vec!["Total".to_string()];
         for (model_name, ms) in &models {
@@ -404,7 +413,11 @@ impl SessionStats {
                 + (ms.output_tokens as f64 * p.output) / 1_000_000.0
                 + (ms.cache_read_tokens as f64 * p.cache_read) / 1_000_000.0
                 + (ms.cache_write_tokens as f64 * p.cache_write) / 1_000_000.0;
-            let cost_str = if cost > 0.0 { format!("${cost:.4}") } else { "—".to_string() };
+            let cost_str = if cost > 0.0 {
+                format!("${cost:.4}")
+            } else {
+                "—".to_string()
+            };
             let tot_in_model = ms.input_tokens + ms.cache_read_tokens;
             let cpct = if tot_in_model > 0 {
                 format!(

@@ -28,103 +28,289 @@ const SECTIONS: &[Section] = &[
     Section {
         name: "Session",
         items: &[
-            CmdEntry { cmd: "/info",       desc: "Agent, model, mode, cwd" },
-            CmdEntry { cmd: "/agent",      desc: "Show current agent name and ID" },
-            CmdEntry { cmd: "/agents",     desc: "List + switch agents  (r rename, d delete)" },
-            CmdEntry { cmd: "/new-agent",  desc: "Create a brand-new agent" },
-            CmdEntry { cmd: "/rename",     desc: "Rename current agent" },
-            CmdEntry { cmd: "/delete",     desc: "/delete <name>  — delete an agent by name/id" },
-            CmdEntry { cmd: "/pin",        desc: "Pin current agent to settings" },
-            CmdEntry { cmd: "/new",        desc: "Start a fresh conversation on the current agent" },
-            CmdEntry { cmd: "/resume",     desc: "Browse past conversations and switch to one" },
-            CmdEntry { cmd: "/checkpoint", desc: "/checkpoint [label]  — save a checkpoint" },
-            CmdEntry { cmd: "/tree",       desc: "Browse and restore checkpoints  (fullscreen picker)" },
-            CmdEntry { cmd: "/fork",       desc: "/fork [label]  — create a new conversation from a checkpoint" },
-            CmdEntry { cmd: "/artifacts",  desc: "List stored artifacts (logs, diffs, reports)" },
+            CmdEntry {
+                cmd: "/info",
+                desc: "Agent, model, mode, cwd",
+            },
+            CmdEntry {
+                cmd: "/agent",
+                desc: "Show current agent name and ID",
+            },
+            CmdEntry {
+                cmd: "/agents",
+                desc: "List + switch agents  (r rename, d delete)",
+            },
+            CmdEntry {
+                cmd: "/new-agent",
+                desc: "Create a brand-new agent",
+            },
+            CmdEntry {
+                cmd: "/rename",
+                desc: "Rename current agent",
+            },
+            CmdEntry {
+                cmd: "/delete",
+                desc: "/delete <name>  — delete an agent by name/id",
+            },
+            CmdEntry {
+                cmd: "/pin",
+                desc: "Pin current agent to settings",
+            },
+            CmdEntry {
+                cmd: "/new",
+                desc: "Start a fresh conversation on the current agent",
+            },
+            CmdEntry {
+                cmd: "/resume",
+                desc: "Browse past conversations and switch to one",
+            },
+            CmdEntry {
+                cmd: "/checkpoint",
+                desc: "/checkpoint [label]  — save a checkpoint",
+            },
+            CmdEntry {
+                cmd: "/tree",
+                desc: "Browse and restore checkpoints  (fullscreen picker)",
+            },
+            CmdEntry {
+                cmd: "/fork",
+                desc: "/fork [label]  — create a new conversation from a checkpoint",
+            },
+            CmdEntry {
+                cmd: "/artifacts",
+                desc: "List stored artifacts (logs, diffs, reports)",
+            },
         ],
     },
     Section {
         name: "Model & Mode",
         items: &[
-            CmdEntry { cmd: "/theme",          desc: "Change colorscheme  (/theme [name])" },
-            CmdEntry { cmd: "/model",          desc: "Interactive model picker  (or /model provider/name)" },
-            CmdEntry { cmd: "/reasoning",      desc: "Set reasoning effort (none, low, medium, high, xhigh)" },
-            CmdEntry { cmd: "/toolset",        desc: "/toolset [default|codex|gemini]" },
-            CmdEntry { cmd: "/mode",           desc: "Show or set permission mode" },
-            CmdEntry { cmd: "/plan",           desc: "Switch to read-only plan mode (write/exec tools blocked)" },
-            CmdEntry { cmd: "/todo",           desc: "Display the agent's scratchpad (.cade-todo.md)" },
-            CmdEntry { cmd: "/todos",          desc: "Toggle live plan panel (set via set_plan tool)" },
-            CmdEntry { cmd: "/default",        desc: "Return to default permission mode" },
-            CmdEntry { cmd: "/yolo",           desc: "Bypass permissions (auto-approve all tools)" },
-            CmdEntry { cmd: "/approve-always", desc: "/approve-always <pattern>  — add allow rule" },
-            CmdEntry { cmd: "/deny-always",    desc: "/deny-always <pattern>   — add deny rule" },
-            CmdEntry { cmd: "/permissions",    desc: "Show current permission mode + rules" },
+            CmdEntry {
+                cmd: "/theme",
+                desc: "Change colorscheme  (/theme [name])",
+            },
+            CmdEntry {
+                cmd: "/model",
+                desc: "Interactive model picker  (or /model provider/name)",
+            },
+            CmdEntry {
+                cmd: "/reasoning",
+                desc: "Set reasoning effort (none, low, medium, high, xhigh)",
+            },
+            CmdEntry {
+                cmd: "/toolset",
+                desc: "/toolset [default|codex|gemini]",
+            },
+            CmdEntry {
+                cmd: "/mode",
+                desc: "Show or set permission mode",
+            },
+            CmdEntry {
+                cmd: "/plan",
+                desc: "Switch to read-only plan mode (write/exec tools blocked)",
+            },
+            CmdEntry {
+                cmd: "/todo",
+                desc: "Display the agent's scratchpad (.cade-todo.md)",
+            },
+            CmdEntry {
+                cmd: "/todos",
+                desc: "Toggle live plan panel (set via set_plan tool)",
+            },
+            CmdEntry {
+                cmd: "/default",
+                desc: "Return to default permission mode",
+            },
+            CmdEntry {
+                cmd: "/yolo",
+                desc: "Bypass permissions (auto-approve all tools)",
+            },
+            CmdEntry {
+                cmd: "/approve-always",
+                desc: "/approve-always <pattern>  — add allow rule",
+            },
+            CmdEntry {
+                cmd: "/deny-always",
+                desc: "/deny-always <pattern>   — add deny rule",
+            },
+            CmdEntry {
+                cmd: "/permissions",
+                desc: "Show current permission mode + rules",
+            },
         ],
     },
     Section {
         name: "Memory",
         items: &[
-            CmdEntry { cmd: "/memory",         desc: "List all memory blocks" },
-            CmdEntry { cmd: "/memory view",    desc: "/memory view <label>  — show full block" },
-            CmdEntry { cmd: "/memory set",     desc: "/memory set <label> <value>" },
-            CmdEntry { cmd: "/memory edit",    desc: "/memory edit <label>  — interactive edit" },
-            CmdEntry { cmd: "/memory delete",  desc: "/memory delete <label>" },
-            CmdEntry { cmd: "/memory history", desc: "/memory history <label>  — last 5 revisions" },
-            CmdEntry { cmd: "/init",           desc: "Analyse project + populate memory" },
-            CmdEntry { cmd: "/remember",       desc: "/remember [text]  — ask agent to update memory" },
+            CmdEntry {
+                cmd: "/memory",
+                desc: "List all memory blocks",
+            },
+            CmdEntry {
+                cmd: "/memory view",
+                desc: "/memory view <label>  — show full block",
+            },
+            CmdEntry {
+                cmd: "/memory set",
+                desc: "/memory set <label> <value>",
+            },
+            CmdEntry {
+                cmd: "/memory edit",
+                desc: "/memory edit <label>  — interactive edit",
+            },
+            CmdEntry {
+                cmd: "/memory delete",
+                desc: "/memory delete <label>",
+            },
+            CmdEntry {
+                cmd: "/memory history",
+                desc: "/memory history <label>  — last 5 revisions",
+            },
+            CmdEntry {
+                cmd: "/init",
+                desc: "Analyse project + populate memory",
+            },
+            CmdEntry {
+                cmd: "/remember",
+                desc: "/remember [text]  — ask agent to update memory",
+            },
         ],
     },
     Section {
         name: "Tools & Providers",
         items: &[
-            CmdEntry { cmd: "/backend",    desc: "/backend [local|docker|ssh|readonly]  — show or switch backend" },
-            CmdEntry { cmd: "/link",       desc: "Register + attach all tools to current agent" },
-            CmdEntry { cmd: "/unlink",     desc: "Detach all tools from current agent" },
-            CmdEntry { cmd: "/mcp",        desc: "Show MCP server status + tools" },
-            CmdEntry { cmd: "/connect",    desc: "Connect a new AI provider interactively" },
-            CmdEntry { cmd: "/disconnect", desc: "/disconnect <name>  — remove a provider" },
-            CmdEntry { cmd: "/providers",  desc: "List configured providers" },
+            CmdEntry {
+                cmd: "/backend",
+                desc: "/backend [local|docker|ssh|readonly]  — show or switch backend",
+            },
+            CmdEntry {
+                cmd: "/link",
+                desc: "Register + attach all tools to current agent",
+            },
+            CmdEntry {
+                cmd: "/unlink",
+                desc: "Detach all tools from current agent",
+            },
+            CmdEntry {
+                cmd: "/mcp",
+                desc: "Show MCP server status + tools",
+            },
+            CmdEntry {
+                cmd: "/connect",
+                desc: "Connect a new AI provider interactively",
+            },
+            CmdEntry {
+                cmd: "/disconnect",
+                desc: "/disconnect <name>  — remove a provider",
+            },
+            CmdEntry {
+                cmd: "/providers",
+                desc: "List configured providers",
+            },
         ],
     },
     Section {
         name: "Web & Grounding",
         items: &[
-            CmdEntry { cmd: "web_search",       desc: "Agent tool: search the web (set BRAVE_SEARCH_API_KEY)" },
-            CmdEntry { cmd: "fetch_doc",        desc: "Agent tool: fetch and read a URL as clean text" },
-            CmdEntry { cmd: "index_repository", desc: "Agent tool: index the repository for symbol search" },
+            CmdEntry {
+                cmd: "web_search",
+                desc: "Agent tool: search the web (set BRAVE_SEARCH_API_KEY)",
+            },
+            CmdEntry {
+                cmd: "fetch_doc",
+                desc: "Agent tool: fetch and read a URL as clean text",
+            },
+            CmdEntry {
+                cmd: "index_repository",
+                desc: "Agent tool: index the repository for symbol search",
+            },
         ],
     },
     Section {
         name: "Skills",
         items: &[
-            CmdEntry { cmd: "/skills",        desc: "List available skills" },
-            CmdEntry { cmd: "/skills show",   desc: "/skills show <id>  — show skill detail" },
-            CmdEntry { cmd: "/skills reload", desc: "Reload skills from disk" },
-            CmdEntry { cmd: "/subagents",     desc: "List available subagent definitions" },
+            CmdEntry {
+                cmd: "/skills",
+                desc: "List available skills",
+            },
+            CmdEntry {
+                cmd: "/skills show",
+                desc: "/skills show <id>  — show skill detail",
+            },
+            CmdEntry {
+                cmd: "/skills reload",
+                desc: "Reload skills from disk",
+            },
+            CmdEntry {
+                cmd: "/subagents",
+                desc: "List available subagent definitions",
+            },
         ],
     },
     Section {
         name: "Diagnostics",
         items: &[
-            CmdEntry { cmd: "/search",      desc: "/search <query>  — search message history" },
-            CmdEntry { cmd: "/context",     desc: "Show context window usage bar chart" },
-            CmdEntry { cmd: "/usage",       desc: "Token usage this session" },
-            CmdEntry { cmd: "/cost",        desc: "Estimate API costs for this session" },
-            CmdEntry { cmd: "/stats",       desc: "Full session stats — tokens, tool calls, timing, per-model breakdown" },
-            CmdEntry { cmd: "/stats model", desc: "Per-model detail: requests, input, cache, output per model" },
-            CmdEntry { cmd: "/stream",      desc: "Toggle streaming mode" },
-            CmdEntry { cmd: "/hooks",       desc: "Show configured hooks" },
-            CmdEntry { cmd: "/feedback",    desc: "Report issues / give feedback" },
+            CmdEntry {
+                cmd: "/search",
+                desc: "/search <query>  — search message history",
+            },
+            CmdEntry {
+                cmd: "/context",
+                desc: "Show context window usage bar chart",
+            },
+            CmdEntry {
+                cmd: "/usage",
+                desc: "Token usage this session",
+            },
+            CmdEntry {
+                cmd: "/cost",
+                desc: "Estimate API costs for this session",
+            },
+            CmdEntry {
+                cmd: "/stats",
+                desc: "Full session stats — tokens, tool calls, timing, per-model breakdown",
+            },
+            CmdEntry {
+                cmd: "/stats model",
+                desc: "Per-model detail: requests, input, cache, output per model",
+            },
+            CmdEntry {
+                cmd: "/stream",
+                desc: "Toggle streaming mode",
+            },
+            CmdEntry {
+                cmd: "/hooks",
+                desc: "Show configured hooks",
+            },
+            CmdEntry {
+                cmd: "/feedback",
+                desc: "Report issues / give feedback",
+            },
         ],
     },
     Section {
         name: "Misc",
         items: &[
-            CmdEntry { cmd: "/copy",   desc: "Toggle copy mode (disables mouse scroll for text selection)" },
-            CmdEntry { cmd: "/export", desc: "/export [file.json]  — export agent to JSON" },
-            CmdEntry { cmd: "/clear",  desc: "Clear screen + context window" },
-            CmdEntry { cmd: "/logout", desc: "Clear stored API key and exit" },
-            CmdEntry { cmd: "/help",   desc: "Show this menu" },
+            CmdEntry {
+                cmd: "/copy",
+                desc: "Toggle copy mode (disables mouse scroll for text selection)",
+            },
+            CmdEntry {
+                cmd: "/export",
+                desc: "/export [file.json]  — export agent to JSON",
+            },
+            CmdEntry {
+                cmd: "/clear",
+                desc: "Clear screen + context window",
+            },
+            CmdEntry {
+                cmd: "/logout",
+                desc: "Clear stored API key and exit",
+            },
+            CmdEntry {
+                cmd: "/help",
+                desc: "Show this menu",
+            },
         ],
     },
 ];
@@ -217,7 +403,9 @@ pub fn show_command_menu_with_caps(
                 let mut matching: Vec<MenuItem> = Vec::new();
                 let mut j = i + 1;
                 while j < items.len() {
-                    if matches!(items[j], MenuItem::Header(_)) { break; }
+                    if matches!(items[j], MenuItem::Header(_)) {
+                        break;
+                    }
                     if let MenuItem::Cmd { cmd, desc } = &items[j] {
                         if cmd.to_lowercase().contains(&q_low)
                             || desc.to_lowercase().contains(&q_low)
@@ -240,24 +428,35 @@ pub fn show_command_menu_with_caps(
     };
 
     let first_cmd = |items: &[MenuItem]| -> usize {
-        items.iter().position(|i| matches!(i, MenuItem::Cmd { .. })).unwrap_or(0)
+        items
+            .iter()
+            .position(|i| matches!(i, MenuItem::Cmd { .. }))
+            .unwrap_or(0)
     };
     let next_sel = |items: &[MenuItem], pos: usize| -> usize {
         let n = items.len();
-        if n == 0 { return 0; }
+        if n == 0 {
+            return 0;
+        }
         let mut p = (pos + 1) % n;
         for _ in 0..n {
-            if matches!(items[p], MenuItem::Cmd { .. }) { return p; }
+            if matches!(items[p], MenuItem::Cmd { .. }) {
+                return p;
+            }
             p = (p + 1) % n;
         }
         pos
     };
     let prev_sel = |items: &[MenuItem], pos: usize| -> usize {
         let n = items.len();
-        if n == 0 { return 0; }
+        if n == 0 {
+            return 0;
+        }
         let mut p = if pos == 0 { n - 1 } else { pos - 1 };
         for _ in 0..n {
-            if matches!(items[p], MenuItem::Cmd { .. }) { return p; }
+            if matches!(items[p], MenuItem::Cmd { .. }) {
+                return p;
+            }
             p = if p == 0 { n - 1 } else { p - 1 };
         }
         pos
@@ -289,8 +488,16 @@ pub fn show_command_menu_with_caps(
                         Span::styled(
                             format!("{cmd:<22}"),
                             Style::default()
-                                .fg(if is_sel { Color::White } else { colors.overlay_selected_fg })
-                                .add_modifier(if is_sel { Modifier::BOLD } else { Modifier::empty() }),
+                                .fg(if is_sel {
+                                    Color::White
+                                } else {
+                                    colors.overlay_selected_fg
+                                })
+                                .add_modifier(if is_sel {
+                                    Modifier::BOLD
+                                } else {
+                                    Modifier::empty()
+                                }),
                         ),
                         Span::styled(desc.clone(), overlay::overlay_muted_style(colors)),
                     ]))
@@ -379,15 +586,27 @@ pub fn show_command_menu_with_caps(
                     }
                 }
                 // j/k navigate only when filter empty (typing a filter uses these chars)
-                KeyCode::Char('k') if query.is_empty() => { sel = prev_sel(&items, sel); }
-                KeyCode::Char('j') if query.is_empty() => { sel = next_sel(&items, sel); }
-                KeyCode::Up   => { sel = prev_sel(&items, sel); }
-                KeyCode::Down => { sel = next_sel(&items, sel); }
+                KeyCode::Char('k') if query.is_empty() => {
+                    sel = prev_sel(&items, sel);
+                }
+                KeyCode::Char('j') if query.is_empty() => {
+                    sel = next_sel(&items, sel);
+                }
+                KeyCode::Up => {
+                    sel = prev_sel(&items, sel);
+                }
+                KeyCode::Down => {
+                    sel = next_sel(&items, sel);
+                }
                 KeyCode::PageUp => {
-                    for _ in 0..8 { sel = prev_sel(&items, sel); }
+                    for _ in 0..8 {
+                        sel = prev_sel(&items, sel);
+                    }
                 }
                 KeyCode::PageDown => {
-                    for _ in 0..8 { sel = next_sel(&items, sel); }
+                    for _ in 0..8 {
+                        sel = next_sel(&items, sel);
+                    }
                 }
                 KeyCode::Backspace => {
                     query.pop();

@@ -21,9 +21,7 @@ pub use manager::{
     schemas_for_toolset,
 };
 pub use meta::{all_meta_schemas, register_meta_tools};
-pub use plan::{
-    EnterPlanModeTool, ExitPlanModeTool, SetPlanTool, TodoWriteTool, UpdatePlanTool,
-};
+pub use plan::{EnterPlanModeTool, ExitPlanModeTool, SetPlanTool, TodoWriteTool, UpdatePlanTool};
 pub use runtime::{RuntimeToolResult, ToolRuntime};
 
 // endregion: --- Modules

@@ -15,7 +15,12 @@ pub async fn log_tool_execution(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let id = format!("te-{}", Uuid::new_v4());
     let now = unix_ts();
-    let conn = state.db.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")}))))?;
+    let conn = state.db.lock().map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")})),
+        )
+    })?;
     let _ = conn.execute(
         "INSERT OR IGNORE INTO tool_executions
          (id, agent_id, conversation_id, tool_name, arguments_json, output, is_error, duration_ms, created_at)

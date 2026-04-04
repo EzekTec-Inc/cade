@@ -361,9 +361,7 @@ impl<'a> TimelineEntry<'a> {
     pub(crate) fn is_focusable(&self) -> bool {
         !matches!(
             self.key.kind,
-            TimelineItemKind::Blank
-                | TimelineItemKind::Separator
-                | TimelineItemKind::ContextBar
+            TimelineItemKind::Blank | TimelineItemKind::Separator | TimelineItemKind::ContextBar
         )
     }
 
@@ -617,13 +615,13 @@ fn render_context_bar_item(
     // Per-category metadata: (glyph, color, label)
     const CATS: &[(char, RC, &str)] = &[
         ('█', RC::Rgb(120, 120, 120), "System prompt"),
-        ('▓', RC::Rgb(8,  145, 178), "Native tools"),
-        ('▒', RC::Rgb(0,  188, 212), "MCP tools"),
+        ('▓', RC::Rgb(8, 145, 178), "Native tools"),
+        ('▒', RC::Rgb(0, 188, 212), "MCP tools"),
         ('░', RC::Rgb(215, 119, 87), "Memory"),
-        ('▪', RC::Rgb(255, 193,  7), "Skills"),
-        ('■', RC::Rgb(147,  51, 234), "Messages"),
-        ('·', RC::Rgb(50,   50,  50), "Free"),
-        ('⎹', RC::Rgb(80,   80,  80), "Buffer (autocompact)"),
+        ('▪', RC::Rgb(255, 193, 7), "Skills"),
+        ('■', RC::Rgb(147, 51, 234), "Messages"),
+        ('·', RC::Rgb(50, 50, 50), "Free"),
+        ('⎹', RC::Rgb(80, 80, 80), "Buffer (autocompact)"),
     ];
 
     let fmt_tok = |n: u64| -> String {
@@ -645,8 +643,16 @@ fn render_context_bar_item(
 
     // -- Header line
     out.push(Line::from(vec![
-        Span::styled("  ◆ Context  ", Style::default().fg(colors.accent).add_modifier(Modifier::BOLD)),
-        Span::styled(model.to_string(), Style::default().fg(RC::White).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            "  ◆ Context  ",
+            Style::default()
+                .fg(colors.accent)
+                .add_modifier(Modifier::BOLD),
+        ),
+        Span::styled(
+            model.to_string(),
+            Style::default().fg(RC::White).add_modifier(Modifier::BOLD),
+        ),
         Span::styled("  ·  ", Style::default().fg(colors.muted)),
         Span::styled(
             format!("{}/{} tokens", fmt_tok(total_used), fmt_tok(window)),
@@ -732,12 +738,12 @@ fn render_user_message_item(
     colors: &ThemeColors,
 ) {
     out.push(Line::from(""));
-    out.push(Line::from(vec![
-        Span::styled(
-            "You",
-            Style::default().fg(colors.text).add_modifier(Modifier::BOLD),
-        ),
-    ]));
+    out.push(Line::from(vec![Span::styled(
+        "You",
+        Style::default()
+            .fg(colors.text)
+            .add_modifier(Modifier::BOLD),
+    )]));
     out.extend(crate::markdown::parse_markdown_lines_with_theme(
         text, colors,
     ));
@@ -745,12 +751,12 @@ fn render_user_message_item(
 
 fn render_assistant_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
     out.push(Line::from(""));
-    out.push(Line::from(vec![
-        Span::styled(
-            "▍ CADE",
-            Style::default().fg(colors.assistant_accent).add_modifier(Modifier::BOLD),
-        ),
-    ]));
+    out.push(Line::from(vec![Span::styled(
+        "▍ CADE",
+        Style::default()
+            .fg(colors.assistant_accent)
+            .add_modifier(Modifier::BOLD),
+    )]));
     let md_lines = crate::markdown::parse_markdown_lines_with_theme(text, colors);
     out.extend(md_lines);
 }

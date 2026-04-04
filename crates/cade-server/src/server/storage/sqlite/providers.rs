@@ -1,7 +1,9 @@
 use super::*;
 
 pub fn upsert_provider(db: &Db, row: &ProviderRow) -> Result<()> {
-    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
 
     // SEC-02: Encrypt API key at rest
     let encrypted_key = match &row.api_key {
@@ -30,7 +32,9 @@ pub fn upsert_provider(db: &Db, row: &ProviderRow) -> Result<()> {
 }
 
 pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
-    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt =
         conn.prepare("SELECT name, kind, api_key, base_url, enabled FROM providers ORDER BY name")?;
     let mut providers = Vec::new();
@@ -78,7 +82,9 @@ pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
 }
 
 pub fn delete_provider(db: &Db, name: &str) -> Result<bool> {
-    let conn = db.lock().map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
     let n = conn.execute("DELETE FROM providers WHERE name = ?1", params![name])?;
     Ok(n > 0)
 }
@@ -121,10 +127,7 @@ mod tests {
         assert_eq!(providers[0].name, "ollama");
         assert_eq!(providers[0].kind, "ollama");
         assert!(providers[0].api_key.is_none());
-        assert_eq!(
-            providers[0].base_url,
-            Some("http://localhost:11434".into())
-        );
+        assert_eq!(providers[0].base_url, Some("http://localhost:11434".into()));
         Ok(())
     }
 

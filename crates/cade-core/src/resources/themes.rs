@@ -181,7 +181,7 @@ pub fn load_theme(path: &Path) -> crate::Result<Theme> {
     if path.extension().and_then(|e| e.to_str()) == Some("tmTheme") {
         return load_tmtheme(path);
     }
-    
+
     let content = std::fs::read_to_string(path)
         .map_err(|e| crate::Error::custom(format!("read theme {}: {e}", path.display())))?;
     let mut theme: Theme = serde_json::from_str(&content)
@@ -193,28 +193,32 @@ pub fn load_theme(path: &Path) -> crate::Result<Theme> {
 fn load_tmtheme(path: &Path) -> crate::Result<Theme> {
     let plist_value = plist::Value::from_file(path)
         .map_err(|e| crate::Error::custom(format!("parse tmTheme {}: {e}", path.display())))?;
-        
-    let dict = plist_value.into_dictionary()
+
+    let dict = plist_value
+        .into_dictionary()
         .ok_or_else(|| crate::Error::custom("root is not a dictionary"))?;
-        
-    let name = dict.get("name")
+
+    let name = dict
+        .get("name")
         .and_then(|v| v.as_string())
-        .unwrap_or("unnamed").to_string();
-        
+        .unwrap_or("unnamed")
+        .to_string();
+
     let mut theme = Theme {
         name,
         vars: HashMap::new(),
         colors: ThemeTokens::default(),
         source: path.to_path_buf(),
     };
-    
-    let settings_array = dict.get("settings")
+
+    let settings_array = dict
+        .get("settings")
         .and_then(|v| v.as_array())
         .ok_or_else(|| crate::Error::custom("missing settings array"))?;
-        
+
     let mut global_settings = None;
     let mut scopes = HashMap::new();
-    
+
     for item in settings_array {
         if let Some(item_dict) = item.as_dictionary() {
             let item_settings = item_dict.get("settings").and_then(|v| v.as_dictionary());
@@ -227,14 +231,15 @@ fn load_tmtheme(path: &Path) -> crate::Result<Theme> {
             }
         }
     }
-    
+
     let to_color = |v: Option<&plist::Value>| -> Option<ThemeColor> {
-        v.and_then(|val| val.as_string()).map(|s| ThemeColor::Hex(s.to_string()))
+        v.and_then(|val| val.as_string())
+            .map(|s| ThemeColor::Hex(s.to_string()))
     };
-    
+
     let mut fallback_bg = ThemeColor::default();
     let mut fallback_fg = ThemeColor::default();
-    
+
     if let Some(global) = global_settings {
         if let Some(bg) = to_color(global.get("background")) {
             theme.colors.user_message_bg = bg.clone();
@@ -260,7 +265,7 @@ fn load_tmtheme(path: &Path) -> crate::Result<Theme> {
             theme.colors.muted = fallback_bg.clone();
         }
     }
-    
+
     let get_scope_fg = |scope_str: &str| -> Option<ThemeColor> {
         for (scope, settings) in &scopes {
             if scope.split(',').any(|s| s.trim().starts_with(scope_str)) {
@@ -269,32 +274,32 @@ fn load_tmtheme(path: &Path) -> crate::Result<Theme> {
         }
         None
     };
-    
+
     if let Some(accent) = get_scope_fg("keyword.control") {
         theme.colors.accent = accent.clone();
         theme.colors.tool_title = accent;
     } else {
         theme.colors.accent = fallback_fg.clone();
     }
-    
+
     if let Some(success) = get_scope_fg("string") {
         theme.colors.success = success.clone();
         theme.colors.tool_success_bg = success;
     }
-    
+
     if let Some(warning) = get_scope_fg("entity.name.function") {
         theme.colors.warning = warning;
     }
-    
+
     if let Some(error) = get_scope_fg("invalid") {
         theme.colors.error = error.clone();
         theme.colors.tool_error_bg = error;
     }
-    
+
     if let Some(link) = get_scope_fg("markup.underline.link") {
         theme.colors.md_link = link;
     }
-    
+
     Ok(theme)
 }
 
@@ -315,7 +320,9 @@ fn load_themes_from_dir(
     };
     for entry in entries.flatten() {
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") && path.extension().and_then(|e| e.to_str()) != Some("tmTheme") {
+        if path.extension().and_then(|e| e.to_str()) != Some("json")
+            && path.extension().and_then(|e| e.to_str()) != Some("tmTheme")
+        {
             continue;
         }
         match load_theme(&path) {
@@ -411,7 +418,7 @@ mod tests {
     fn test_load_tmtheme_valid() {
         let dir = make_dir();
         let path = dir.path().join("mytheme.tmTheme");
-        
+
         let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple Computer//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -453,7 +460,10 @@ mod tests {
         assert_eq!(loaded.name, "mytheme");
         assert_eq!(loaded.source, path);
         // The parser should extract #1E1E1E for userMessageBg (from background)
-        assert_eq!(loaded.colors.user_message_bg, ThemeColor::Hex("#1E1E1E".to_string()));
+        assert_eq!(
+            loaded.colors.user_message_bg,
+            ThemeColor::Hex("#1E1E1E".to_string())
+        );
         // The parser should extract #D4D4D4 for text (from foreground)
         assert_eq!(loaded.colors.text, ThemeColor::Hex("#D4D4D4".to_string()));
         // The parser should extract #C586C0 for accent (from keyword.control)

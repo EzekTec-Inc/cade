@@ -97,7 +97,7 @@ pub fn show_skills_manager(
         terminal.draw(|f| {
             let area = f.area();
             let inner_shell = overlay::render_overlay_shell(f, area, "Skills", colors);
-            
+
             let main_chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
@@ -116,22 +116,38 @@ pub fn show_skills_manager(
             let hint = " ↑↓ Navigate  e Edit  Esc/q Close ";
 
             // -- Left Pane (Table)
-            let rows: Vec<Row> = filtered_indices.iter().enumerate().map(|(i, &idx)| {
-                let s = &skills[idx];
-                let is_sel = i == selected_filtered;
-                
-                let style = if is_sel {
-                    Style::default().bg(colors.overlay_selected_bg).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
+            let rows: Vec<Row> = filtered_indices
+                .iter()
+                .enumerate()
+                .map(|(i, &idx)| {
+                    let s = &skills[idx];
+                    let is_sel = i == selected_filtered;
 
-                Row::new(vec![
-                    Cell::from(Span::styled(s.scope.to_string(), Style::default().fg(if is_sel { RC::White } else { colors.badge_fg }))),
-                    Cell::from(Span::styled(s.name.clone(), Style::default().fg(if is_sel { RC::White } else { colors.text }))),
-                    Cell::from(Span::styled(s.category.clone().unwrap_or_default(), Style::default().fg(colors.overlay_hint))),
-                ]).style(style)
-            }).collect();
+                    let style = if is_sel {
+                        Style::default()
+                            .bg(colors.overlay_selected_bg)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
+
+                    Row::new(vec![
+                        Cell::from(Span::styled(
+                            s.scope.to_string(),
+                            Style::default().fg(if is_sel { RC::White } else { colors.badge_fg }),
+                        )),
+                        Cell::from(Span::styled(
+                            s.name.clone(),
+                            Style::default().fg(if is_sel { RC::White } else { colors.text }),
+                        )),
+                        Cell::from(Span::styled(
+                            s.category.clone().unwrap_or_default(),
+                            Style::default().fg(colors.overlay_hint),
+                        )),
+                    ])
+                    .style(style)
+                })
+                .collect();
 
             let table = Table::new(
                 rows,
@@ -141,40 +157,62 @@ pub fn show_skills_manager(
                     Constraint::Min(15),
                 ],
             )
-            .header(Row::new(vec!["Scope", "Name", "Category"]).style(Style::default().fg(colors.overlay_title).add_modifier(Modifier::BOLD)))
-            .block(Block::default().borders(Borders::ALL).title(format!(" Skills {hint}")).border_style(Style::default().fg(colors.overlay_border)));
+            .header(
+                Row::new(vec!["Scope", "Name", "Category"]).style(
+                    Style::default()
+                        .fg(colors.overlay_title)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            )
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Skills {hint}"))
+                    .border_style(Style::default().fg(colors.overlay_border)),
+            );
 
             let mut ts = TableState::default().with_selected(Some(selected_filtered));
             f.render_stateful_widget(table, top_chunks[0], &mut ts);
 
             // -- Right Pane (Preview)
-            let preview_text = if !filtered_indices.is_empty() && selected_filtered < filtered_indices.len() {
-                let s = &skills[filtered_indices[selected_filtered]];
-                let meta = format!(
-                    "ID: {}
+            let preview_text =
+                if !filtered_indices.is_empty() && selected_filtered < filtered_indices.len() {
+                    let s = &skills[filtered_indices[selected_filtered]];
+                    let meta = format!(
+                        "ID: {}
 Description: {}
 Tags: {}
 Triggers: {}
 
 ",
-                    s.id,
-                    s.description,
-                    s.tags.join(", "),
-                    s.triggers.join(", ")
-                );
-                format!("{}{}", meta, s.body)
-            } else {
-                String::new()
-            };
+                        s.id,
+                        s.description,
+                        s.tags.join(", "),
+                        s.triggers.join(", ")
+                    );
+                    format!("{}{}", meta, s.body)
+                } else {
+                    String::new()
+                };
 
             let preview = Paragraph::new(preview_text)
                 .wrap(Wrap { trim: false })
-                .block(Block::default().borders(Borders::ALL).title(" Preview ").border_style(Style::default().fg(colors.overlay_border)));
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Preview ")
+                        .border_style(Style::default().fg(colors.overlay_border)),
+                );
             f.render_widget(preview, top_chunks[1]);
 
             // -- Bottom Pane (Filter)
-            let filter_block = Block::default().borders(Borders::ALL).title(" Filter (Type to search) ").border_style(Style::default().fg(colors.overlay_border));
-            let filter_text = Paragraph::new(format!("> {}█", filter_query)).block(filter_block).style(Style::default().fg(colors.text));
+            let filter_block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Filter (Type to search) ")
+                .border_style(Style::default().fg(colors.overlay_border));
+            let filter_text = Paragraph::new(format!("> {}█", filter_query))
+                .block(filter_block)
+                .style(Style::default().fg(colors.text));
             f.render_widget(filter_text, main_chunks[1]);
 
             // Footer hint
@@ -207,12 +245,14 @@ Triggers: {}
                     }
                 }
 
-                (KeyCode::Char('e'), KeyModifiers::NONE) | (KeyCode::Enter, KeyModifiers::NONE) if filter_query.is_empty() => {
+                (KeyCode::Char('e'), KeyModifiers::NONE) | (KeyCode::Enter, KeyModifiers::NONE)
+                    if filter_query.is_empty() =>
+                {
                     // Enter edit mode
                     if !filtered_indices.is_empty() {
                         let _orig_idx = filtered_indices[selected_filtered];
                         // We can launch a specific edit modal or return an action.
-                        // Currently, editing is mostly placeholders or writes to file. 
+                        // Currently, editing is mostly placeholders or writes to file.
                         // For a simple modernization without bloat, we just instruct the user to edit the SKILL.MD file directly or launch a basic prompt.
                         // For now, let's keep it simple: we can't easily inline the massive custom edit state machine from the old code without adding 300 lines.
                         // The user should use the `edit_file` tool.

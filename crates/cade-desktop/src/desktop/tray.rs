@@ -41,11 +41,9 @@ pub fn spawn_tray() -> Result<mpsc::Sender<TrayMsg>, String> {
         let show_i = MenuItem::new("Show CADE", true, None);
         let quit_i = MenuItem::new("Quit", true, None);
 
-        tray_menu.append_items(&[
-            &show_i,
-            &PredefinedMenuItem::separator(),
-            &quit_i,
-        ]).unwrap();
+        tray_menu
+            .append_items(&[&show_i, &PredefinedMenuItem::separator(), &quit_i])
+            .unwrap();
 
         let tray_icon = TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))

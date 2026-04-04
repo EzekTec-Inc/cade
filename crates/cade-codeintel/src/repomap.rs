@@ -15,7 +15,9 @@ use crate::index::Db;
 /// Generate a compact repo map.
 pub fn generate_repo_map(repo_root: &Path, db: &Db, max_symbols_per_file: usize) -> Result<String> {
     let repo_root_str = repo_root.to_string_lossy().to_string();
-    let conn = db.lock().map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
 
     let mut stmt = conn.prepare(
         "SELECT file_path, name, kind, line_start, parent_name, signature

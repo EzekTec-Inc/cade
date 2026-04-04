@@ -358,5 +358,4 @@ mod tests {
     fn context_window_completely_unknown() {
         assert_eq!(context_window_for_model("random/model-xyz"), 32_000);
     }
-
 }

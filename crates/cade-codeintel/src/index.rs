@@ -24,7 +24,9 @@ pub type Db = Arc<Mutex<Connection>>;
 /// Ensure the code-intelligence tables exist in the database.
 /// Safe to call multiple times (idempotent).
 pub fn ensure_schema(db: &Db) -> Result<()> {
-    let conn = db.lock().map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
     conn.execute_batch(
         r#"
         CREATE TABLE IF NOT EXISTS symbols (
@@ -338,7 +340,9 @@ fn extract_signature(node: &tree_sitter::Node, source: &[u8]) -> Option<String> 
 // region:    --- DB helpers
 
 fn needs_reindex(db: &Db, repo_root: &str, file_path: &str, new_hash: &str) -> bool {
-    let Ok(conn) = db.lock() else { return true; };
+    let Ok(conn) = db.lock() else {
+        return true;
+    };
     let stored: Option<String> = conn
         .query_row(
             "SELECT file_hash FROM symbol_index_files WHERE repo_root = ?1 AND file_path = ?2",
@@ -355,7 +359,9 @@ fn replace_file_symbols(
     file_path: &str,
     symbols: Vec<Symbol>,
 ) -> Result<()> {
-    let conn = db.lock().map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
     conn.execute(
         "DELETE FROM symbols WHERE repo_root = ?1 AND file_path = ?2",
         params![repo_root, file_path],
@@ -375,7 +381,9 @@ fn replace_file_symbols(
 }
 
 fn remove_file_symbols(db: &Db, repo_root: &str, file_path: &str) -> Result<()> {
-    let conn = db.lock().map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
     conn.execute(
         "DELETE FROM symbols WHERE repo_root = ?1 AND file_path = ?2",
         params![repo_root, file_path],
@@ -388,7 +396,9 @@ fn remove_file_symbols(db: &Db, repo_root: &str, file_path: &str) -> Result<()> 
 }
 
 fn record_file_hash(db: &Db, repo_root: &str, file_path: &str, hash: &str) -> Result<()> {
-    let conn = db.lock().map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
+    let conn = db
+        .lock()
+        .map_err(|e| crate::Error::custom(format!("db lock poisoned: {e}")))?;
     conn.execute(
         "INSERT OR REPLACE INTO symbol_index_files (repo_root, file_path, file_hash, indexed_at)
          VALUES (?1, ?2, ?3, ?4)",

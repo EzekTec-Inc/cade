@@ -135,13 +135,14 @@ pub async fn send_message(
     // when turns are actually dropped — not unconditionally on every message.
     {
         let mut activity = state.agent_activity.write().await;
-        let entry = activity
-            .entry(agent_id.clone())
-            .or_insert(crate::server::state::AgentActivity {
-                last_active_ts: 0,
-                needs_consolidation: false,
-                conversation_id: conv_id.clone(),
-            });
+        let entry =
+            activity
+                .entry(agent_id.clone())
+                .or_insert(crate::server::state::AgentActivity {
+                    last_active_ts: 0,
+                    needs_consolidation: false,
+                    conversation_id: conv_id.clone(),
+                });
         entry.last_active_ts = chrono::Utc::now().timestamp();
         entry.conversation_id = conv_id.clone();
     }
@@ -352,13 +353,14 @@ pub async fn stream_message(
     // when turns are actually dropped — not unconditionally on every message.
     {
         let mut activity = state.agent_activity.write().await;
-        let entry = activity
-            .entry(agent_id.clone())
-            .or_insert(crate::server::state::AgentActivity {
-                last_active_ts: 0,
-                needs_consolidation: false,
-                conversation_id: conv_id.clone(),
-            });
+        let entry =
+            activity
+                .entry(agent_id.clone())
+                .or_insert(crate::server::state::AgentActivity {
+                    last_active_ts: 0,
+                    needs_consolidation: false,
+                    conversation_id: conv_id.clone(),
+                });
         entry.last_active_ts = chrono::Utc::now().timestamp();
         entry.conversation_id = conv_id.clone();
     }

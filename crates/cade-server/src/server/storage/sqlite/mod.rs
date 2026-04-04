@@ -290,14 +290,16 @@ fn apply_schema(conn: &Connection) -> Result<()> {
 
 /// Run sequential, structured migrations using PRAGMA user_version.
 fn run_migrations(conn: &Connection) -> Result<()> {
-    let current_version: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0)).unwrap_or(0);
+    let current_version: i64 = conn
+        .query_row("PRAGMA user_version", [], |r| r.get(0))
+        .unwrap_or(0);
 
     // Version 1: Legacy catch-up
     // For databases created before user_version was used, we apply the old idempotent ALTER TABLEs.
     // For brand new databases, these will safely do nothing because apply_schema already built the columns.
     if current_version < 1 {
         tracing::info!("Running Migration 1: Legacy schema catch-up");
-        
+
         // 1. Add unique constraint to memory_blocks (legacy) and migrate to shared_memory_blocks
         let has_shared: bool = conn.query_row("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='shared_memory_blocks'", [], |r| r.get::<_, i64>(0)).unwrap_or(0) > 0;
         if !has_shared {
@@ -321,24 +323,58 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
         // 2. Add columns silently (fails safely if they exist)
         let _ = conn.execute("ALTER TABLE messages ADD COLUMN conversation_id TEXT", []);
-        let _ = conn.execute("ALTER TABLE messages ADD COLUMN char_count INTEGER NOT NULL DEFAULT 0", []);
+        let _ = conn.execute(
+            "ALTER TABLE messages ADD COLUMN char_count INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         let _ = conn.execute("ALTER TABLE messages ADD COLUMN parent_id TEXT", []);
-        let _ = conn.execute("ALTER TABLE messages ADD COLUMN branch_id TEXT NOT NULL DEFAULT 'main'", []);
-        
-        let _ = conn.execute("ALTER TABLE agents ADD COLUMN memory_turn_counter INTEGER NOT NULL DEFAULT 0", []);
-        
-        let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN last_turn INTEGER NOT NULL DEFAULT 0", []);
-        let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN tier TEXT NOT NULL DEFAULT 'short'", []);
+        let _ = conn.execute(
+            "ALTER TABLE messages ADD COLUMN branch_id TEXT NOT NULL DEFAULT 'main'",
+            [],
+        );
+
+        let _ = conn.execute(
+            "ALTER TABLE agents ADD COLUMN memory_turn_counter INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+
+        let _ = conn.execute(
+            "ALTER TABLE shared_memory_blocks ADD COLUMN last_turn INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE shared_memory_blocks ADD COLUMN tier TEXT NOT NULL DEFAULT 'short'",
+            [],
+        );
         let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN memory_type TEXT NOT NULL DEFAULT 'generic'", []);
-        let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0", []);
-        let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN source_msg_id TEXT", []);
-        let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN source_te_id TEXT", []);
-        let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'", []);
-        let _ = conn.execute("ALTER TABLE shared_memory_blocks ADD COLUMN expires_at INTEGER", []);
+        let _ = conn.execute(
+            "ALTER TABLE shared_memory_blocks ADD COLUMN confidence REAL NOT NULL DEFAULT 1.0",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE shared_memory_blocks ADD COLUMN source_msg_id TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE shared_memory_blocks ADD COLUMN source_te_id TEXT",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE shared_memory_blocks ADD COLUMN tags_json TEXT NOT NULL DEFAULT '[]'",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE shared_memory_blocks ADD COLUMN expires_at INTEGER",
+            [],
+        );
 
         // 3. Remove stale providers with undecryptable keys
-        if let Ok(mut stmt) = conn.prepare("SELECT name, api_key FROM providers WHERE api_key IS NOT NULL AND api_key != ''") {
-            if let Ok(mapped) = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))) {
+        if let Ok(mut stmt) = conn.prepare(
+            "SELECT name, api_key FROM providers WHERE api_key IS NOT NULL AND api_key != ''",
+        ) {
+            if let Ok(mapped) =
+                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))
+            {
                 let stale: Vec<String> = mapped
                     .filter_map(|r| r.ok())
                     .filter(|(_, enc)| crate::server::crypto::decrypt(enc).is_err())
@@ -361,8 +397,6 @@ fn run_migrations(conn: &Connection) -> Result<()> {
 
     Ok(())
 }
-
-
 
 // -- Helpers
 

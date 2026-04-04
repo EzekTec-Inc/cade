@@ -46,7 +46,12 @@ pub async fn create_eval_task(
         .expected_json
         .map(|v| serde_json::to_string(&v).unwrap_or_default());
 
-    let conn = state.db.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")}))))?;
+    let conn = state.db.lock().map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")})),
+        )
+    })?;
     conn.execute(
         "INSERT INTO eval_tasks (id, name, description, prompt, expected_json, tags_json, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -61,7 +66,12 @@ pub async fn create_eval_task(
 pub async fn list_eval_tasks(
     State(state): State<crate::server::state::AppState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let conn = state.db.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")}))))?;
+    let conn = state.db.lock().map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")})),
+        )
+    })?;
     let mut stmt = conn.prepare(
         "SELECT id, name, description, created_at FROM eval_tasks ORDER BY created_at DESC LIMIT 200"
     ).map_err(db_err)?;
@@ -87,7 +97,12 @@ pub async fn create_eval_run_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let id = format!("er-{}", Uuid::new_v4());
     let now = unix_ts();
-    let conn = state.db.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")}))))?;
+    let conn = state.db.lock().map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")})),
+        )
+    })?;
     conn.execute(
         "INSERT INTO eval_runs (id, task_id, agent_id, model, status, created_at)
          VALUES (?1, ?2, ?3, ?4, 'pending', ?5)",
@@ -103,7 +118,12 @@ pub async fn create_eval_run_handler(
 pub async fn list_eval_runs(
     State(state): State<crate::server::state::AppState>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let conn = state.db.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")}))))?;
+    let conn = state.db.lock().map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")})),
+        )
+    })?;
     let mut stmt = conn.prepare(
         "SELECT id, task_id, agent_id, model, status, score, duration_ms, created_at, completed_at
          FROM eval_runs ORDER BY created_at DESC LIMIT 500"
@@ -133,7 +153,12 @@ pub async fn get_eval_run(
     State(state): State<crate::server::state::AppState>,
     Path(run_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let conn = state.db.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")}))))?;
+    let conn = state.db.lock().map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")})),
+        )
+    })?;
     let row = conn.query_row(
         "SELECT id, task_id, agent_id, model, status, score, result_json, duration_ms, created_at, completed_at
          FROM eval_runs WHERE id = ?1",
@@ -160,7 +185,12 @@ pub async fn update_eval_run_handler(
     Path(run_id): Path<String>,
     Json(body): Json<Value>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let conn = state.db.lock().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")}))))?;
+    let conn = state.db.lock().map_err(|e| {
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(serde_json::json!({"error": format!("db lock poisoned: {e}")})),
+        )
+    })?;
 
     // Build dynamic UPDATE query based on provided fields
     let mut sets = Vec::new();

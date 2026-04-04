@@ -506,7 +506,9 @@ impl McpManager {
         use rmcp::transport::{
             SseClientTransport,
             sse_client::SseClientConfig,
-            streamable_http_client::{StreamableHttpClientTransportConfig, StreamableHttpClientWorker},
+            streamable_http_client::{
+                StreamableHttpClientTransportConfig, StreamableHttpClientWorker,
+            },
         };
 
         let mut headers = HeaderMap::new();
@@ -522,14 +524,15 @@ impl McpManager {
         // 2. Inject custom headers with environment interpolation
         if let Some(custom_headers) = &config.headers {
             for (k, v) in custom_headers {
-                let header_name = HeaderName::from_bytes(k.as_bytes())
-                    .map_err(|e| Error::custom(format!("invalid header name '{k}' for '{key}': {e}")))?;
-                
+                let header_name = HeaderName::from_bytes(k.as_bytes()).map_err(|e| {
+                    Error::custom(format!("invalid header name '{k}' for '{key}': {e}"))
+                })?;
+
                 // Extremely lightweight interpolation for `${VAR}` or `$VAR`
                 // We use cade_core's agent_env expansion if available, or just a simple regex/replace.
                 // For simplicity, we just use regex or manual parsing.
                 let mut interpolated = v.to_string();
-                
+
                 // Process ${VAR} style
                 while let Some(start) = interpolated.find("${") {
                     if let Some(end) = interpolated[start..].find('}') {
@@ -542,14 +545,18 @@ impl McpManager {
                     }
                 }
 
-                let mut value = HeaderValue::from_str(&interpolated)
-                    .map_err(|e| Error::custom(format!("invalid header value for '{k}' in '{key}': {e}")))?;
-                
+                let mut value = HeaderValue::from_str(&interpolated).map_err(|e| {
+                    Error::custom(format!("invalid header value for '{k}' in '{key}': {e}"))
+                })?;
+
                 // Heuristically mark sensitive headers
-                if k.to_lowercase().contains("auth") || k.to_lowercase().contains("key") || k.to_lowercase().contains("token") {
+                if k.to_lowercase().contains("auth")
+                    || k.to_lowercase().contains("key")
+                    || k.to_lowercase().contains("token")
+                {
                     value.set_sensitive(true);
                 }
-                
+
                 headers.insert(header_name, value);
             }
         }
@@ -572,10 +579,9 @@ impl McpManager {
                 sse_endpoint: url.into(),
                 ..Default::default()
             };
-            let transport =
-                SseClientTransport::start_with_client(http_client, sse_config)
-                    .await
-                    .map_err(|e| Error::custom(format!("SSE connect to '{key}' ({url}): {e}")))?;
+            let transport = SseClientTransport::start_with_client(http_client, sse_config)
+                .await
+                .map_err(|e| Error::custom(format!("SSE connect to '{key}' ({url}): {e}")))?;
             let service: RunningService<RoleClient, ()> = ()
                 .serve(transport)
                 .await
@@ -588,14 +594,10 @@ impl McpManager {
                 uri: url.into(),
                 ..Default::default()
             };
-            let worker =
-                StreamableHttpClientWorker::new(http_client, sh_config);
-            let service: RunningService<RoleClient, ()> = ()
-                .serve(worker)
-                .await
-                .map_err(|e| {
-                    Error::custom(format!("Streamable HTTP handshake with '{key}': {e}"))
-                })?;
+            let worker = StreamableHttpClientWorker::new(http_client, sh_config);
+            let service: RunningService<RoleClient, ()> = ().serve(worker).await.map_err(|e| {
+                Error::custom(format!("Streamable HTTP handshake with '{key}': {e}"))
+            })?;
             let peer = service.peer().clone();
             (service, peer)
         };
@@ -638,7 +640,6 @@ impl McpManager {
         service: rmcp::service::RunningService<RoleClient, ()>,
         command_display: String,
     ) -> Result<McpServer> {
-
         // Fetch all tools (paginated)
         let raw_tools = peer
             .list_all_tools()

@@ -1,5 +1,5 @@
-use super::{AgentPickerResult, MemoryPickerResult, SubagentPickerResult};
 use super::Repl;
+use super::{AgentPickerResult, MemoryPickerResult, SubagentPickerResult};
 use crate::Result;
 use cade_agent::agent::client::AgentState;
 use crossterm::event::KeyCode;
@@ -174,8 +174,8 @@ impl Repl {
         use ratatui::{
             layout::{Constraint, Direction, Layout},
             style::{Color as RC, Modifier, Style},
-            text::{Span},
-            widgets::{Block, Borders, Cell, Row, Table, TableState, Paragraph},
+            text::Span,
+            widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
         };
         use std::collections::HashSet;
 
@@ -197,7 +197,7 @@ impl Repl {
                        current: &str|
          -> Result<()> {
             let mut app = app_arc.lock().expect("lock poisoned");
-            
+
             let n = marked.len();
             let hint = if n == 0 {
                 " ↑↓  Space mark  r rename  d delete  Enter switch  Esc cancel ".to_string()
@@ -205,42 +205,52 @@ impl Repl {
                 format!(" [{n} marked]  d delete all  Esc cancel ")
             };
 
-            let rows: Vec<Row> = filtered_indices.iter().enumerate().map(|(i, &original_idx)| {
-                let a = &agents[original_idx];
-                let is_sel = i == sel;
-                let is_marked = marked.contains(&original_idx);
-                let is_active = a.id == current;
-                let short_id = if a.id.len() > 22 {
-                    a.id[..22].to_string() + "…"
-                } else {
-                    a.id.clone()
-                };
-                let model_str = a.model.clone().unwrap_or_else(|| "unknown".to_string());
+            let rows: Vec<Row> = filtered_indices
+                .iter()
+                .enumerate()
+                .map(|(i, &original_idx)| {
+                    let a = &agents[original_idx];
+                    let is_sel = i == sel;
+                    let is_marked = marked.contains(&original_idx);
+                    let is_active = a.id == current;
+                    let short_id = if a.id.len() > 22 {
+                        a.id[..22].to_string() + "…"
+                    } else {
+                        a.id.clone()
+                    };
+                    let model_str = a.model.clone().unwrap_or_else(|| "unknown".to_string());
 
-                let style = if is_sel {
-                    Style::default().bg(RC::DarkGray).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
+                    let style = if is_sel {
+                        Style::default()
+                            .bg(RC::DarkGray)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
 
-                let mark_span = Span::styled(
-                    if is_marked { "☑" } else { "☐" },
-                    Style::default().fg(if is_marked { RC::Yellow } else { RC::DarkGray }),
-                );
+                    let mark_span = Span::styled(
+                        if is_marked { "☑" } else { "☐" },
+                        Style::default().fg(if is_marked { RC::Yellow } else { RC::DarkGray }),
+                    );
 
-                let active_span = Span::styled(
-                    if is_active { "★ active" } else { "" },
-                    Style::default().fg(RC::Cyan),
-                );
+                    let active_span = Span::styled(
+                        if is_active { "★ active" } else { "" },
+                        Style::default().fg(RC::Cyan),
+                    );
 
-                Row::new(vec![
-                    Cell::from(mark_span),
-                    Cell::from(Span::styled(a.name.clone(), Style::default().fg(if is_sel { RC::White } else { RC::Gray }))),
-                    Cell::from(Span::styled(model_str, Style::default().fg(RC::DarkGray))),
-                    Cell::from(Span::styled(short_id, Style::default().fg(RC::DarkGray))),
-                    Cell::from(active_span),
-                ]).style(style)
-            }).collect();
+                    Row::new(vec![
+                        Cell::from(mark_span),
+                        Cell::from(Span::styled(
+                            a.name.clone(),
+                            Style::default().fg(if is_sel { RC::White } else { RC::Gray }),
+                        )),
+                        Cell::from(Span::styled(model_str, Style::default().fg(RC::DarkGray))),
+                        Cell::from(Span::styled(short_id, Style::default().fg(RC::DarkGray))),
+                        Cell::from(active_span),
+                    ])
+                    .style(style)
+                })
+                .collect();
 
             let table = Table::new(
                 rows,
@@ -252,8 +262,16 @@ impl Repl {
                     Constraint::Min(10),
                 ],
             )
-            .header(Row::new(vec!["M", "Name", "Model", "ID", "Status"]).style(Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)))
-            .block(Block::default().borders(Borders::ALL).title(format!(" Agents {hint}")).border_style(Style::default().fg(RC::Cyan)));
+            .header(
+                Row::new(vec!["M", "Name", "Model", "ID", "Status"])
+                    .style(Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)),
+            )
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Agents {hint}"))
+                    .border_style(Style::default().fg(RC::Cyan)),
+            );
 
             let mut ts = TableState::default().with_selected(Some(sel));
 
@@ -265,8 +283,13 @@ impl Repl {
 
                 f.render_stateful_widget(table, chunks[0], &mut ts);
 
-                let filter_block = Block::default().borders(Borders::ALL).title(" Filter (Type to search) ").border_style(Style::default().fg(RC::DarkGray));
-                let filter_text = Paragraph::new(format!("> {}█", filter_query)).block(filter_block).style(Style::default().fg(RC::White));
+                let filter_block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Filter (Type to search) ")
+                    .border_style(Style::default().fg(RC::DarkGray));
+                let filter_text = Paragraph::new(format!("> {}█", filter_query))
+                    .block(filter_block)
+                    .style(Style::default().fg(RC::White));
                 f.render_widget(filter_text, chunks[1]);
             })?;
             Ok(())
@@ -279,7 +302,10 @@ impl Repl {
                 .enumerate()
                 .filter(|(_, a)| {
                     let m = a.model.as_deref().unwrap_or("");
-                    q.is_empty() || a.name.to_lowercase().contains(&q) || a.id.to_lowercase().contains(&q) || m.to_lowercase().contains(&q)
+                    q.is_empty()
+                        || a.name.to_lowercase().contains(&q)
+                        || a.id.to_lowercase().contains(&q)
+                        || m.to_lowercase().contains(&q)
                 })
                 .map(|(i, _)| i)
                 .collect();
@@ -288,7 +314,15 @@ impl Repl {
                 selected_filtered = filtered_indices.len().saturating_sub(1);
             }
 
-            do_draw(&app_arc, agents, &filtered_indices, selected_filtered, &marked, &filter_query, &current)?;
+            do_draw(
+                &app_arc,
+                agents,
+                &filtered_indices,
+                selected_filtered,
+                &marked,
+                &filter_query,
+                &current,
+            )?;
 
             if !event::poll(std::time::Duration::from_millis(200))? {
                 continue;
@@ -299,7 +333,7 @@ impl Repl {
                 }
                 match (key.code, key.modifiers) {
                     (KeyCode::Esc, _) => break None,
-                    
+
                     // Allow Ctrl+C to also cancel
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => break None,
 
@@ -336,14 +370,17 @@ impl Repl {
                     (KeyCode::Delete, _) => {
                         // Deletion logic...
                         let targets: Vec<usize> = if marked.is_empty() {
-                            if filtered_indices.is_empty() { continue; }
+                            if filtered_indices.is_empty() {
+                                continue;
+                            }
                             vec![filtered_indices[selected_filtered]]
                         } else {
                             let mut v: Vec<usize> = marked.iter().copied().collect();
                             v.sort_unstable();
                             v
                         };
-                        let names: Vec<String> = targets.iter().map(|&i| agents[i].name.clone()).collect();
+                        let names: Vec<String> =
+                            targets.iter().map(|&i| agents[i].name.clone()).collect();
                         let label = if targets.len() == 1 {
                             format!("Delete '{}'?", names[0])
                         } else {
@@ -351,12 +388,22 @@ impl Repl {
                         };
                         use crate::ui::question::{Question, QuestionOption};
                         let opts = vec![
-                            QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
-                            QuestionOption { label: "No — cancel".to_string(), description: String::new() },
+                            QuestionOption {
+                                label: "Yes — delete".to_string(),
+                                description: String::new(),
+                            },
+                            QuestionOption {
+                                label: "No — cancel".to_string(),
+                                description: String::new(),
+                            },
                         ];
                         let q = Question {
-                            header: "Confirm".to_string(), text: label.clone(), options: opts.clone(),
-                            multi_select: false, allow_other: false, progress: None,
+                            header: "Confirm".to_string(),
+                            text: label.clone(),
+                            options: opts.clone(),
+                            multi_select: false,
+                            allow_other: false,
+                            progress: None,
                         };
                         let confirmed = {
                             let mut app = app_arc.lock().expect("lock poisoned");
@@ -378,11 +425,16 @@ impl Repl {
                                         }
                                     }
                                     Err(e) => {
-                                        app_arc.lock().expect("lock poisoned").show_toast(e.to_string(), crate::ui::ToastLevel::Error);
+                                        app_arc.lock().expect("lock poisoned").show_toast(
+                                            e.to_string(),
+                                            crate::ui::ToastLevel::Error,
+                                        );
                                     }
                                 }
                             } else {
-                                break Some(AgentPickerResult::DeleteMany(targets.into_iter().map(|i| agents[i].clone()).collect()));
+                                break Some(AgentPickerResult::DeleteMany(
+                                    targets.into_iter().map(|i| agents[i].clone()).collect(),
+                                ));
                             }
                         }
                     }
@@ -394,9 +446,15 @@ impl Repl {
                             let a = agents[orig_idx].clone();
                             use crate::ui::question::{Question, QuestionOption};
                             let q = Question {
-                                header: "Rename".to_string(), text: format!("Rename '{}':", a.name),
-                                options: vec![QuestionOption { label: "Cancel".to_string(), description: String::new() }],
-                                multi_select: false, allow_other: true, progress: None,
+                                header: "Rename".to_string(),
+                                text: format!("Rename '{}':", a.name),
+                                options: vec![QuestionOption {
+                                    label: "Cancel".to_string(),
+                                    description: String::new(),
+                                }],
+                                multi_select: false,
+                                allow_other: true,
+                                progress: None,
                             };
                             let name = {
                                 let mut app = app_arc.lock().expect("lock poisoned");
@@ -404,7 +462,9 @@ impl Repl {
                                 app.scroll = 0;
                                 let _ = app.draw();
                                 match ans {
-                                    Some(n) if n.as_str() != "Cancel" && !n.as_str().is_empty() => n.as_str().to_string(),
+                                    Some(n) if n.as_str() != "Cancel" && !n.as_str().is_empty() => {
+                                        n.as_str().to_string()
+                                    }
                                     _ => String::new(),
                                 }
                             };
@@ -413,11 +473,17 @@ impl Repl {
                                     Ok(_) => {
                                         agents[orig_idx].name = name.clone();
                                         if a.id == current {
-                                            break Some(AgentPickerResult::Rename { agent: a, new_name: name });
+                                            break Some(AgentPickerResult::Rename {
+                                                agent: a,
+                                                new_name: name,
+                                            });
                                         }
                                     }
                                     Err(e) => {
-                                        app_arc.lock().expect("lock poisoned").show_toast(e.to_string(), crate::ui::ToastLevel::Error);
+                                        app_arc.lock().expect("lock poisoned").show_toast(
+                                            e.to_string(),
+                                            crate::ui::ToastLevel::Error,
+                                        );
                                     }
                                 }
                             }
@@ -426,7 +492,9 @@ impl Repl {
                         }
                     }
 
-                    (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+                    (KeyCode::Char(c), m)
+                        if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
+                    {
                         filter_query.push(c);
                     }
                     (KeyCode::Backspace, _) => {
@@ -974,7 +1042,7 @@ impl Repl {
             layout::{Constraint, Direction, Layout},
             style::{Color as RC, Modifier, Style},
             text::Span,
-            widgets::{Block, Borders, Cell, Row, Table, TableState, Paragraph, Wrap},
+            widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
         };
 
         if blocks.is_empty() {
@@ -991,36 +1059,49 @@ impl Repl {
                        filter_query: &str|
          -> Result<()> {
             let mut app = app_arc.lock().expect("lock poisoned");
-            
+
             let hint = " ↑↓  Enter/e Edit  p Pin/Unpin  d Delete  Esc/q cancel ".to_string();
 
-            let rows: Vec<Row> = filtered_indices.iter().enumerate().map(|(i, &original_idx)| {
-                let b = &blocks[original_idx];
-                let is_sel = i == sel;
-                
-                let style = if is_sel {
-                    Style::default().bg(RC::DarkGray).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
+            let rows: Vec<Row> = filtered_indices
+                .iter()
+                .enumerate()
+                .map(|(i, &original_idx)| {
+                    let b = &blocks[original_idx];
+                    let is_sel = i == sel;
 
-                let tier_str = b.tier.as_deref().unwrap_or("short");
-                let (tier_icon, tier_color) = match tier_str {
-                    "pinned" => ("📌 Pinned", RC::Magenta),
-                    "long" => ("○ Long", RC::DarkGray),
-                    _ => ("● Short", RC::Green),
-                };
+                    let style = if is_sel {
+                        Style::default()
+                            .bg(RC::DarkGray)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
 
-                let size = format!("{} chars", b.value.chars().count());
-                let desc = b.description.as_deref().unwrap_or("");
+                    let tier_str = b.tier.as_deref().unwrap_or("short");
+                    let (tier_icon, tier_color) = match tier_str {
+                        "pinned" => ("📌 Pinned", RC::Magenta),
+                        "long" => ("○ Long", RC::DarkGray),
+                        _ => ("● Short", RC::Green),
+                    };
 
-                Row::new(vec![
-                    Cell::from(Span::styled(tier_icon, Style::default().fg(tier_color))),
-                    Cell::from(Span::styled(b.label.clone(), Style::default().fg(if is_sel { RC::White } else { RC::Cyan }))),
-                    Cell::from(Span::styled(size, Style::default().fg(RC::DarkGray))),
-                    Cell::from(Span::styled(desc.to_string(), Style::default().fg(RC::Gray))),
-                ]).style(style)
-            }).collect();
+                    let size = format!("{} chars", b.value.chars().count());
+                    let desc = b.description.as_deref().unwrap_or("");
+
+                    Row::new(vec![
+                        Cell::from(Span::styled(tier_icon, Style::default().fg(tier_color))),
+                        Cell::from(Span::styled(
+                            b.label.clone(),
+                            Style::default().fg(if is_sel { RC::White } else { RC::Cyan }),
+                        )),
+                        Cell::from(Span::styled(size, Style::default().fg(RC::DarkGray))),
+                        Cell::from(Span::styled(
+                            desc.to_string(),
+                            Style::default().fg(RC::Gray),
+                        )),
+                    ])
+                    .style(style)
+                })
+                .collect();
 
             let table = Table::new(
                 rows,
@@ -1031,8 +1112,16 @@ impl Repl {
                     Constraint::Min(20),
                 ],
             )
-            .header(Row::new(vec!["Tier", "Label", "Size", "Description"]).style(Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)))
-            .block(Block::default().borders(Borders::ALL).title(format!(" Memory Blocks {hint}")).border_style(Style::default().fg(RC::Cyan)));
+            .header(
+                Row::new(vec!["Tier", "Label", "Size", "Description"])
+                    .style(Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)),
+            )
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Memory Blocks {hint}"))
+                    .border_style(Style::default().fg(RC::Cyan)),
+            );
 
             let mut ts = TableState::default().with_selected(Some(sel));
 
@@ -1045,7 +1134,12 @@ impl Repl {
 
             let preview = Paragraph::new(preview_text)
                 .wrap(Wrap { trim: false })
-                .block(Block::default().borders(Borders::ALL).title(" Preview ").border_style(Style::default().fg(RC::DarkGray)));
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Preview ")
+                        .border_style(Style::default().fg(RC::DarkGray)),
+                );
 
             app.terminal.draw(|f| {
                 let main_chunks = Layout::default()
@@ -1061,8 +1155,13 @@ impl Repl {
                 f.render_stateful_widget(table, top_chunks[0], &mut ts);
                 f.render_widget(preview, top_chunks[1]);
 
-                let filter_block = Block::default().borders(Borders::ALL).title(" Filter (Type to search) ").border_style(Style::default().fg(RC::DarkGray));
-                let filter_text = Paragraph::new(format!("> {}█", filter_query)).block(filter_block).style(Style::default().fg(RC::White));
+                let filter_block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Filter (Type to search) ")
+                    .border_style(Style::default().fg(RC::DarkGray));
+                let filter_text = Paragraph::new(format!("> {}█", filter_query))
+                    .block(filter_block)
+                    .style(Style::default().fg(RC::White));
                 f.render_widget(filter_text, main_chunks[1]);
             })?;
             Ok(())
@@ -1075,7 +1174,9 @@ impl Repl {
                 .enumerate()
                 .filter(|(_, b)| {
                     let d = b.description.as_deref().unwrap_or("");
-                    q.is_empty() || b.label.to_lowercase().contains(&q) || d.to_lowercase().contains(&q)
+                    q.is_empty()
+                        || b.label.to_lowercase().contains(&q)
+                        || d.to_lowercase().contains(&q)
                 })
                 .map(|(i, _)| i)
                 .collect();
@@ -1084,7 +1185,13 @@ impl Repl {
                 selected_filtered = filtered_indices.len().saturating_sub(1);
             }
 
-            do_draw(&app_arc, blocks, &filtered_indices, selected_filtered, &filter_query)?;
+            do_draw(
+                &app_arc,
+                blocks,
+                &filtered_indices,
+                selected_filtered,
+                &filter_query,
+            )?;
 
             if !event::poll(std::time::Duration::from_millis(200))? {
                 continue;
@@ -1137,15 +1244,24 @@ impl Repl {
                         if !filtered_indices.is_empty() {
                             let orig_idx = filtered_indices[selected_filtered];
                             let b = &blocks[orig_idx];
-                            
+
                             use crate::ui::question::{Question, QuestionOption};
                             let q = Question {
-                                header: "Confirm".to_string(), text: format!("Delete memory block '{}'?", b.label),
+                                header: "Confirm".to_string(),
+                                text: format!("Delete memory block '{}'?", b.label),
                                 options: vec![
-                                    QuestionOption { label: "Yes — delete".to_string(), description: String::new() },
-                                    QuestionOption { label: "No — cancel".to_string(), description: String::new() },
+                                    QuestionOption {
+                                        label: "Yes — delete".to_string(),
+                                        description: String::new(),
+                                    },
+                                    QuestionOption {
+                                        label: "No — cancel".to_string(),
+                                        description: String::new(),
+                                    },
                                 ],
-                                multi_select: false, allow_other: false, progress: None,
+                                multi_select: false,
+                                allow_other: false,
+                                progress: None,
                             };
                             let confirmed = {
                                 let mut app = app_arc.lock().expect("lock poisoned");
@@ -1160,7 +1276,9 @@ impl Repl {
                         }
                     }
 
-                    (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+                    (KeyCode::Char(c), m)
+                        if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
+                    {
                         filter_query.push(c);
                     }
                     (KeyCode::Backspace, _) => {
@@ -1175,8 +1293,6 @@ impl Repl {
         Ok(result)
     }
 
-
-
     /// `/subagents` interactive picker
     pub(crate) async fn subagent_picker(
         &self,
@@ -1188,7 +1304,7 @@ impl Repl {
             layout::{Constraint, Direction, Layout},
             style::{Color as RC, Modifier, Style},
             text::Span,
-            widgets::{Block, Borders, Cell, Row, Table, TableState, Paragraph, Wrap},
+            widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
         };
 
         if subagents.is_empty() {
@@ -1205,34 +1321,47 @@ impl Repl {
                        filter_query: &str|
          -> Result<()> {
             let mut app = app_arc.lock().expect("lock poisoned");
-            
+
             let hint = " ↑↓ Navigate  Enter Select  e Edit  Esc/q Cancel ".to_string();
 
-            let rows: Vec<Row> = filtered_indices.iter().enumerate().map(|(i, &original_idx)| {
-                let s = &subagents[original_idx];
-                let is_sel = i == sel;
-                
-                let style = if is_sel {
-                    Style::default().bg(RC::DarkGray).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
+            let rows: Vec<Row> = filtered_indices
+                .iter()
+                .enumerate()
+                .map(|(i, &original_idx)| {
+                    let s = &subagents[original_idx];
+                    let is_sel = i == sel;
 
-                let scope_str = format!("{:?}", s.scope).to_lowercase();
-                let scope_color = match s.scope {
-                    cade_agent::subagents::SubagentScope::Builtin => RC::Magenta,
-                    cade_agent::subagents::SubagentScope::Global => RC::Green,
-                    cade_agent::subagents::SubagentScope::Project => RC::Cyan,
-                };
+                    let style = if is_sel {
+                        Style::default()
+                            .bg(RC::DarkGray)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
 
-                let model_str = s.model.as_deref().unwrap_or("inherited");
+                    let scope_str = format!("{:?}", s.scope).to_lowercase();
+                    let scope_color = match s.scope {
+                        cade_agent::subagents::SubagentScope::Builtin => RC::Magenta,
+                        cade_agent::subagents::SubagentScope::Global => RC::Green,
+                        cade_agent::subagents::SubagentScope::Project => RC::Cyan,
+                    };
 
-                Row::new(vec![
-                    Cell::from(Span::styled(scope_str, Style::default().fg(if is_sel { RC::White } else { scope_color }))),
-                    Cell::from(Span::styled(s.name.clone(), Style::default().fg(if is_sel { RC::White } else { RC::Cyan }))),
-                    Cell::from(Span::styled(model_str, Style::default().fg(RC::DarkGray))),
-                ]).style(style)
-            }).collect();
+                    let model_str = s.model.as_deref().unwrap_or("inherited");
+
+                    Row::new(vec![
+                        Cell::from(Span::styled(
+                            scope_str,
+                            Style::default().fg(if is_sel { RC::White } else { scope_color }),
+                        )),
+                        Cell::from(Span::styled(
+                            s.name.clone(),
+                            Style::default().fg(if is_sel { RC::White } else { RC::Cyan }),
+                        )),
+                        Cell::from(Span::styled(model_str, Style::default().fg(RC::DarkGray))),
+                    ])
+                    .style(style)
+                })
+                .collect();
 
             let table = Table::new(
                 rows,
@@ -1242,8 +1371,16 @@ impl Repl {
                     Constraint::Min(20),
                 ],
             )
-            .header(Row::new(vec!["Scope", "Name", "Model"]).style(Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)))
-            .block(Block::default().borders(Borders::ALL).title(format!(" Subagents {hint}")).border_style(Style::default().fg(RC::Cyan)));
+            .header(
+                Row::new(vec!["Scope", "Name", "Model"])
+                    .style(Style::default().fg(RC::Cyan).add_modifier(Modifier::BOLD)),
+            )
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" Subagents {hint}"))
+                    .border_style(Style::default().fg(RC::Cyan)),
+            );
 
             let mut ts = TableState::default().with_selected(Some(sel));
 
@@ -1270,7 +1407,12 @@ Skills: {}
 
             let preview = Paragraph::new(preview_text)
                 .wrap(Wrap { trim: false })
-                .block(Block::default().borders(Borders::ALL).title(" Preview ").border_style(Style::default().fg(RC::DarkGray)));
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Preview ")
+                        .border_style(Style::default().fg(RC::DarkGray)),
+                );
 
             app.terminal.draw(|f| {
                 let main_chunks = Layout::default()
@@ -1286,8 +1428,13 @@ Skills: {}
                 f.render_stateful_widget(table, top_chunks[0], &mut ts);
                 f.render_widget(preview, top_chunks[1]);
 
-                let filter_block = Block::default().borders(Borders::ALL).title(" Filter (Type to search) ").border_style(Style::default().fg(RC::DarkGray));
-                let filter_text = Paragraph::new(format!("> {}█", filter_query)).block(filter_block).style(Style::default().fg(RC::White));
+                let filter_block = Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Filter (Type to search) ")
+                    .border_style(Style::default().fg(RC::DarkGray));
+                let filter_text = Paragraph::new(format!("> {}█", filter_query))
+                    .block(filter_block)
+                    .style(Style::default().fg(RC::White));
                 f.render_widget(filter_text, main_chunks[1]);
             })?;
             Ok(())
@@ -1299,7 +1446,10 @@ Skills: {}
                 .iter()
                 .enumerate()
                 .filter(|(_, s)| {
-                    q.is_empty() || s.name.to_lowercase().contains(&q) || s.description.to_lowercase().contains(&q) || format!("{:?}", s.scope).to_lowercase().contains(&q)
+                    q.is_empty()
+                        || s.name.to_lowercase().contains(&q)
+                        || s.description.to_lowercase().contains(&q)
+                        || format!("{:?}", s.scope).to_lowercase().contains(&q)
                 })
                 .map(|(i, _)| i)
                 .collect();
@@ -1308,7 +1458,13 @@ Skills: {}
                 selected_filtered = filtered_indices.len().saturating_sub(1);
             }
 
-            do_draw(&app_arc, subagents, &filtered_indices, selected_filtered, &filter_query)?;
+            do_draw(
+                &app_arc,
+                subagents,
+                &filtered_indices,
+                selected_filtered,
+                &filter_query,
+            )?;
 
             if !event::poll(std::time::Duration::from_millis(200))? {
                 continue;
@@ -1333,7 +1489,9 @@ Skills: {}
                     (KeyCode::Enter, _) => {
                         if !filtered_indices.is_empty() {
                             let orig_idx = filtered_indices[selected_filtered];
-                            break Some(SubagentPickerResult::Run(subagents[orig_idx].name.clone()));
+                            break Some(SubagentPickerResult::Run(
+                                subagents[orig_idx].name.clone(),
+                            ));
                         }
                     }
 
@@ -1344,12 +1502,17 @@ Skills: {}
                             if let Some(path) = &s.path {
                                 break Some(SubagentPickerResult::Edit(path.clone()));
                             } else {
-                                app_arc.lock().expect("lock poisoned").show_toast("Built-in subagents cannot be edited", crate::ui::ToastLevel::Error);
+                                app_arc.lock().expect("lock poisoned").show_toast(
+                                    "Built-in subagents cannot be edited",
+                                    crate::ui::ToastLevel::Error,
+                                );
                             }
                         }
                     }
 
-                    (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+                    (KeyCode::Char(c), m)
+                        if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
+                    {
                         filter_query.push(c);
                     }
                     (KeyCode::Backspace, _) => {
@@ -1370,27 +1533,41 @@ Skills: {}
         app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
     ) -> Result<Option<cade_tui::mcp_picker::McpAction>> {
         use cade_tui::mcp_picker::{McpEntry, show_mcp_manager};
-        
-        let mcp_configs = self.settings.lock().expect("lock poisoned").global_settings_mut().mcp_servers.clone();
+
+        let mcp_configs = self
+            .settings
+            .lock()
+            .expect("lock poisoned")
+            .global_settings_mut()
+            .mcp_servers
+            .clone();
         let statuses = self.mcp.status().await;
-        
+
         let mut entries = Vec::new();
         for (key, config) in mcp_configs {
             let status = statuses.iter().find(|s| s.key == key);
             let tool_count = if config.disabled {
                 None
             } else if let Some(s) = status {
-                if !s.disabled { Some(s.tools.len()) } else { None }
+                if !s.disabled {
+                    Some(s.tools.len())
+                } else {
+                    None
+                }
             } else {
                 None
             };
-            entries.push(McpEntry { key, config, tool_count });
+            entries.push(McpEntry {
+                key,
+                config,
+                tool_count,
+            });
         }
         entries.sort_by(|a, b| a.key.cmp(&b.key));
 
         let mut app = app_arc.lock().expect("lock poisoned");
         let colors = app.colors.clone();
-        
+
         let result = show_mcp_manager(&mut app.terminal, entries, &colors);
         // Clear screen when done to force a re-render of underlying timeline
         let _ = app.terminal.clear();

@@ -57,7 +57,9 @@ impl Default for RerankerBackend {
         {
             // Without the `local` feature, there is no zero-config backend.
             // The user must provide a cloud API key.
-            panic!("cade-reranker: no default backend — enable the `local` feature or configure a cloud provider");
+            panic!(
+                "cade-reranker: no default backend — enable the `local` feature or configure a cloud provider"
+            );
         }
     }
 }
@@ -109,8 +111,8 @@ pub fn config_from_env() -> RerankerConfig {
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(15);
 
-    let backend_name = std::env::var("CADE_RERANKER_BACKEND")
-        .unwrap_or_else(|_| "local".to_string());
+    let backend_name =
+        std::env::var("CADE_RERANKER_BACKEND").unwrap_or_else(|_| "local".to_string());
 
     let backend = match backend_name.to_lowercase().as_str() {
         "cohere" => {
@@ -222,7 +224,9 @@ mod tests {
         };
         assert!(cfg.enabled);
         assert_eq!(cfg.top_n, 20);
-        assert!(matches!(cfg.backend, RerankerBackend::Cohere { ref api_key } if api_key == "sk-test"));
+        assert!(
+            matches!(cfg.backend, RerankerBackend::Cohere { ref api_key } if api_key == "sk-test")
+        );
         assert_eq!(cfg.protected_tools, vec!["bash".to_string()]);
     }
 
@@ -236,7 +240,9 @@ mod tests {
             },
             protected_tools: default_protected_tools(),
         };
-        assert!(matches!(cfg.backend, RerankerBackend::Voyage { ref api_key } if api_key == "voy-key"));
+        assert!(
+            matches!(cfg.backend, RerankerBackend::Voyage { ref api_key } if api_key == "voy-key")
+        );
     }
 
     #[test]
@@ -249,7 +255,9 @@ mod tests {
             },
             protected_tools: default_protected_tools(),
         };
-        assert!(matches!(cfg.backend, RerankerBackend::Jina { ref api_key } if api_key == "jina-key"));
+        assert!(
+            matches!(cfg.backend, RerankerBackend::Jina { ref api_key } if api_key == "jina-key")
+        );
     }
 }
 

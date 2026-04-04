@@ -94,7 +94,12 @@ pub fn show_mcp_manager(
                 q.is_empty()
                     || s.key.to_lowercase().contains(&q)
                     || s.config.command.to_lowercase().contains(&q)
-                    || s.config.url.as_deref().unwrap_or("").to_lowercase().contains(&q)
+                    || s.config
+                        .url
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&q)
             })
             .map(|(i, _)| i)
             .collect();
@@ -106,7 +111,7 @@ pub fn show_mcp_manager(
         terminal.draw(|f| {
             let area = f.area();
             let inner_shell = overlay::render_overlay_shell(f, area, "MCP Servers", colors);
-            
+
             let main_chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
@@ -125,41 +130,65 @@ pub fn show_mcp_manager(
             let hint = " ↑↓ Navigate  e Edit  Space Toggle  n New  d Delete  Esc/q Close ";
 
             // -- Left Pane (Table)
-            let rows: Vec<Row> = filtered_indices.iter().enumerate().map(|(i, &idx)| {
-                let s = &servers[idx];
-                let is_sel = i == selected_filtered;
-                
-                let style = if is_sel {
-                    Style::default().bg(colors.overlay_selected_bg).add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default()
-                };
+            let rows: Vec<Row> = filtered_indices
+                .iter()
+                .enumerate()
+                .map(|(i, &idx)| {
+                    let s = &servers[idx];
+                    let is_sel = i == selected_filtered;
 
-                let status_str = if s.config.disabled {
-                    "Disabled"
-                } else if s.tool_count.is_some() {
-                    "Connected"
-                } else {
-                    "Error"
-                };
+                    let style = if is_sel {
+                        Style::default()
+                            .bg(colors.overlay_selected_bg)
+                            .add_modifier(Modifier::BOLD)
+                    } else {
+                        Style::default()
+                    };
 
-                let status_color = if s.config.disabled {
-                    colors.overlay_hint
-                } else if s.tool_count.is_some() {
-                    colors.success
-                } else {
-                    colors.error
-                };
+                    let status_str = if s.config.disabled {
+                        "Disabled"
+                    } else if s.tool_count.is_some() {
+                        "Connected"
+                    } else {
+                        "Error"
+                    };
 
-                let kind_str = if s.config.url.is_some() { "HTTP" } else { "Stdio" };
+                    let status_color = if s.config.disabled {
+                        colors.overlay_hint
+                    } else if s.tool_count.is_some() {
+                        colors.success
+                    } else {
+                        colors.error
+                    };
 
-                Row::new(vec![
-                    Cell::from(Span::styled(if is_sel { "▶ " } else { "  " }, Style::default().fg(if is_sel { colors.overlay_selected_fg } else { colors.overlay_hint }))),
-                    Cell::from(Span::styled(s.key.clone(), Style::default().fg(if is_sel { RC::White } else { colors.text }))),
-                    Cell::from(Span::styled(kind_str, Style::default().fg(colors.overlay_hint))),
-                    Cell::from(Span::styled(status_str, Style::default().fg(status_color))),
-                ]).style(style)
-            }).collect();
+                    let kind_str = if s.config.url.is_some() {
+                        "HTTP"
+                    } else {
+                        "Stdio"
+                    };
+
+                    Row::new(vec![
+                        Cell::from(Span::styled(
+                            if is_sel { "▶ " } else { "  " },
+                            Style::default().fg(if is_sel {
+                                colors.overlay_selected_fg
+                            } else {
+                                colors.overlay_hint
+                            }),
+                        )),
+                        Cell::from(Span::styled(
+                            s.key.clone(),
+                            Style::default().fg(if is_sel { RC::White } else { colors.text }),
+                        )),
+                        Cell::from(Span::styled(
+                            kind_str,
+                            Style::default().fg(colors.overlay_hint),
+                        )),
+                        Cell::from(Span::styled(status_str, Style::default().fg(status_color))),
+                    ])
+                    .style(style)
+                })
+                .collect();
 
             let table = Table::new(
                 rows,
@@ -170,71 +199,99 @@ pub fn show_mcp_manager(
                     Constraint::Length(10),
                 ],
             )
-            .header(Row::new(vec!["", "Server", "Type", "Status"]).style(Style::default().fg(colors.overlay_title).add_modifier(Modifier::BOLD)))
-            .block(Block::default().borders(Borders::ALL).title(format!(" MCP Servers {hint}")).border_style(Style::default().fg(colors.overlay_border)));
+            .header(
+                Row::new(vec!["", "Server", "Type", "Status"]).style(
+                    Style::default()
+                        .fg(colors.overlay_title)
+                        .add_modifier(Modifier::BOLD),
+                ),
+            )
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(format!(" MCP Servers {hint}"))
+                    .border_style(Style::default().fg(colors.overlay_border)),
+            );
 
             let mut ts = TableState::default().with_selected(Some(selected_filtered));
             f.render_stateful_widget(table, top_chunks[0], &mut ts);
 
             // -- Right Pane (Preview)
-            let preview_text = if !filtered_indices.is_empty() && selected_filtered < filtered_indices.len() {
-                let s = &servers[filtered_indices[selected_filtered]];
-                
-                let mut meta = String::new();
-                meta.push_str(&format!("ID: {}\n", s.key));
-                
-                if s.config.disabled {
-                    meta.push_str("Status: Disabled\n");
-                } else if let Some(tc) = s.tool_count {
-                    meta.push_str(&format!("Status: Connected ({} tools)\n", tc));
-                } else {
-                    meta.push_str("Status: Connection Failed / Retrying\n");
-                }
+            let preview_text =
+                if !filtered_indices.is_empty() && selected_filtered < filtered_indices.len() {
+                    let s = &servers[filtered_indices[selected_filtered]];
 
-                if let Some(url) = &s.config.url {
-                    meta.push_str(&format!("Transport: HTTP\nURL: {}\n", url));
-                    if s.config.auth_token.is_some() {
-                        meta.push_str("Auth: Bearer Token (set)\n");
+                    let mut meta = String::new();
+                    meta.push_str(&format!("ID: {}\n", s.key));
+
+                    if s.config.disabled {
+                        meta.push_str("Status: Disabled\n");
+                    } else if let Some(tc) = s.tool_count {
+                        meta.push_str(&format!("Status: Connected ({} tools)\n", tc));
+                    } else {
+                        meta.push_str("Status: Connection Failed / Retrying\n");
                     }
-                    if let Some(headers) = &s.config.headers {
-                        if !headers.is_empty() {
-                            meta.push_str("Headers:\n");
-                            for (k, v) in headers {
-                                meta.push_str(&format!("  {}: {}\n", k, v));
+
+                    if let Some(url) = &s.config.url {
+                        meta.push_str(&format!("Transport: HTTP\nURL: {}\n", url));
+                        if s.config.auth_token.is_some() {
+                            meta.push_str("Auth: Bearer Token (set)\n");
+                        }
+                        if let Some(headers) = &s.config.headers {
+                            if !headers.is_empty() {
+                                meta.push_str("Headers:\n");
+                                for (k, v) in headers {
+                                    meta.push_str(&format!("  {}: {}\n", k, v));
+                                }
                             }
                         }
+                    } else {
+                        meta.push_str(&format!(
+                            "Transport: Stdio\nCommand: {}\n",
+                            s.config.command
+                        ));
+                        if !s.config.args.is_empty() {
+                            meta.push_str(&format!("Args: [{}]\n", s.config.args.join(", ")));
+                        }
                     }
+
+                    if !s.config.env.is_empty() {
+                        meta.push_str("Env:\n");
+                        for (k, v) in &s.config.env {
+                            meta.push_str(&format!("  {}={}\n", k, v));
+                        }
+                    }
+
+                    if !s.config.write_tools.is_empty() {
+                        meta.push_str(&format!(
+                            "Write Tools: [{}]\n",
+                            s.config.write_tools.join(", ")
+                        ));
+                    }
+
+                    meta
                 } else {
-                    meta.push_str(&format!("Transport: Stdio\nCommand: {}\n", s.config.command));
-                    if !s.config.args.is_empty() {
-                        meta.push_str(&format!("Args: [{}]\n", s.config.args.join(", ")));
-                    }
-                }
-
-                if !s.config.env.is_empty() {
-                    meta.push_str("Env:\n");
-                    for (k, v) in &s.config.env {
-                        meta.push_str(&format!("  {}={}\n", k, v));
-                    }
-                }
-
-                if !s.config.write_tools.is_empty() {
-                    meta.push_str(&format!("Write Tools: [{}]\n", s.config.write_tools.join(", ")));
-                }
-
-                meta
-            } else {
-                String::new()
-            };
+                    String::new()
+                };
 
             let preview = Paragraph::new(preview_text)
                 .wrap(Wrap { trim: false })
-                .block(Block::default().borders(Borders::ALL).title(" Configuration ").border_style(Style::default().fg(colors.overlay_border)));
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Configuration ")
+                        .border_style(Style::default().fg(colors.overlay_border)),
+                );
             f.render_widget(preview, top_chunks[1]);
 
             // -- Bottom Pane (Filter)
-            let filter_block = Block::default().borders(Borders::ALL).title(" Filter (Type to search) ").border_style(Style::default().fg(colors.overlay_border));
-            let filter_text = Paragraph::new(format!("> {}█", filter_query)).block(filter_block).style(Style::default().fg(colors.text));
+            let filter_block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Filter (Type to search) ")
+                .border_style(Style::default().fg(colors.overlay_border));
+            let filter_text = Paragraph::new(format!("> {}█", filter_query))
+                .block(filter_block)
+                .style(Style::default().fg(colors.text));
             f.render_widget(filter_text, main_chunks[1]);
 
             // Footer hint

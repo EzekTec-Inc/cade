@@ -76,7 +76,7 @@ impl ModelRegistry {
     /// Custom rules are prepended to the bundled rules.
     pub fn load_or_default(path: Option<&std::path::Path>) -> Self {
         let mut registry = Self::new();
-        
+
         let Some(p) = path else {
             return registry;
         };

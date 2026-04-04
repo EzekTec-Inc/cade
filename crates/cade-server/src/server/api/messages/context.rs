@@ -384,11 +384,14 @@ pub(crate) async fn build_context(
         // Signal the Sleeptime consolidation task.  After 60 s of inactivity
         // it will summarise the dropped turns into the `session_summary` block.
         let mut activity = state.agent_activity.write().await;
-        let entry = activity.entry(agent_id.to_string()).or_insert(crate::server::state::AgentActivity {
-            last_active_ts: chrono::Utc::now().timestamp(),
-            needs_consolidation: true,
-            conversation_id: conversation_id.map(String::from),
-        });
+        let entry =
+            activity
+                .entry(agent_id.to_string())
+                .or_insert(crate::server::state::AgentActivity {
+                    last_active_ts: chrono::Utc::now().timestamp(),
+                    needs_consolidation: true,
+                    conversation_id: conversation_id.map(String::from),
+                });
         entry.needs_consolidation = true;
         if conversation_id.is_some() {
             entry.conversation_id = conversation_id.map(String::from);

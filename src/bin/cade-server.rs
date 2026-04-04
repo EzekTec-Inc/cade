@@ -126,7 +126,9 @@ async fn main() -> Result<()> {
                     "[reranker] intelligent tool selection enabled (top_n={})",
                     reranker_config.top_n,
                 );
-                Some(Arc::new(cade::server::cade_reranker::ToolReranker::new(reranker_config)))
+                Some(Arc::new(cade::server::cade_reranker::ToolReranker::new(
+                    reranker_config,
+                )))
             } else {
                 tracing::debug!("[reranker] intelligent tool selection disabled");
                 None
