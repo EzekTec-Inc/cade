@@ -493,30 +493,68 @@ impl McpManager {
 
     /// Connect via HTTP+SSE or Streamable HTTP (remote servers).
     ///
-    /// Heuristic: if the URL path contains `/sse` use the legacy SSE transport
-    /// (MCP pre-2025-03-26).  Everything else uses Streamable HTTP (MCP 2025-03-26).
-    ///
     /// When `config.auth_token` is set, it is sent as `Authorization: Bearer <token>`
     /// on every HTTP request via a pre-configured `reqwest::Client` default header.
+    /// Custom headers in `config.headers` are also injected, with support for
+    /// environment variable interpolation (e.g. `${MY_KEY}`).
     async fn connect_server_http(
         key: &str,
         config: &McpServerConfig,
         url: &str,
     ) -> Result<McpServer> {
-        use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderValue};
+        use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
         use rmcp::transport::{
             SseClientTransport,
             sse_client::SseClientConfig,
             streamable_http_client::{StreamableHttpClientTransportConfig, StreamableHttpClientWorker},
         };
 
-        // Build a reqwest client with optional Bearer auth header.
-        let http_client = if let Some(token) = &config.auth_token {
-            let mut headers = HeaderMap::new();
+        let mut headers = HeaderMap::new();
+
+        // 1. Inject Bearer token (legacy / convenient)
+        if let Some(token) = &config.auth_token {
             let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
                 .map_err(|e| Error::custom(format!("invalid auth_token for '{key}': {e}")))?;
             value.set_sensitive(true);
             headers.insert(AUTHORIZATION, value);
+        }
+
+        // 2. Inject custom headers with environment interpolation
+        if let Some(custom_headers) = &config.headers {
+            for (k, v) in custom_headers {
+                let header_name = HeaderName::from_bytes(k.as_bytes())
+                    .map_err(|e| Error::custom(format!("invalid header name '{k}' for '{key}': {e}")))?;
+                
+                // Extremely lightweight interpolation for `${VAR}` or `$VAR`
+                // We use cade_core's agent_env expansion if available, or just a simple regex/replace.
+                // For simplicity, we just use regex or manual parsing.
+                let mut interpolated = v.to_string();
+                
+                // Process ${VAR} style
+                while let Some(start) = interpolated.find("${") {
+                    if let Some(end) = interpolated[start..].find('}') {
+                        let end_idx = start + end;
+                        let var_name = &interpolated[start + 2..end_idx];
+                        let var_value = std::env::var(var_name).unwrap_or_default();
+                        interpolated.replace_range(start..=end_idx, &var_value);
+                    } else {
+                        break;
+                    }
+                }
+
+                let mut value = HeaderValue::from_str(&interpolated)
+                    .map_err(|e| Error::custom(format!("invalid header value for '{k}' in '{key}': {e}")))?;
+                
+                // Heuristically mark sensitive headers
+                if k.to_lowercase().contains("auth") || k.to_lowercase().contains("key") || k.to_lowercase().contains("token") {
+                    value.set_sensitive(true);
+                }
+                
+                headers.insert(header_name, value);
+            }
+        }
+
+        let http_client = if !headers.is_empty() {
             reqwest::Client::builder()
                 .default_headers(headers)
                 .build()

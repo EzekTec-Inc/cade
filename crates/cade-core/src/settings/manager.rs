@@ -133,6 +133,10 @@ pub struct McpServerConfig {
     /// Has no effect for stdio (`command`-based) servers.
     #[serde(default)]
     pub auth_token: Option<String>,
+    /// Custom HTTP headers sent to remote servers (HTTP/SSE transports).
+    /// Environment variables like `${MY_TOKEN}` are supported.
+    #[serde(default)]
+    pub headers: Option<std::collections::HashMap<String, String>>,
     /// Tool names that mutate state (require permission prompt).
     /// If not set, ALL tools from this server require permission.
     #[serde(default)]
@@ -368,6 +372,22 @@ mod tests {
         assert!(p.allow.is_empty());
         assert!(p.deny.is_empty());
         assert!(!p.strict_bash);
+    }
+
+    #[test]
+    fn test_mcp_config_headers_parsing() {
+        let json = r#"{
+            "command": "test",
+            "url": "http://localhost",
+            "headers": {
+                "X-Custom": "value",
+                "Authorization": "Bearer ${MY_TOKEN}"
+            }
+        }"#;
+        let config: McpServerConfig = serde_json::from_str(json).unwrap();
+        let headers = config.headers.unwrap();
+        assert_eq!(headers.get("X-Custom").unwrap(), "value");
+        assert_eq!(headers.get("Authorization").unwrap(), "Bearer ${MY_TOKEN}");
     }
 
     // -- GlobalSettings serialization
