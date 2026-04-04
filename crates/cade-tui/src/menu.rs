@@ -7,7 +7,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal,
     layout::{Constraint, Layout},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, List, ListItem, ListState, Paragraph},
 };
@@ -488,7 +488,7 @@ pub fn show_command_menu_with_caps(
                             format!("{cmd:<22}"),
                             Style::default()
                                 .fg(if is_sel {
-                                    Color::White
+                                    colors.text
                                 } else {
                                     colors.overlay_selected_fg
                                 })
@@ -540,7 +540,7 @@ pub fn show_command_menu_with_caps(
                     Style::default().fg(if query_display.is_empty() {
                         colors.overlay_hint
                     } else {
-                        Color::White
+                        colors.text
                     }),
                 ),
             ]);
@@ -556,7 +556,7 @@ pub fn show_command_menu_with_caps(
                     Span::raw(" "),
                     Span::styled(cmd.clone(), overlay::overlay_badge_style(colors)),
                     Span::raw(" "),
-                    Span::styled(desc.clone(), Style::default().fg(Color::White)),
+                    Span::styled(desc.clone(), Style::default().fg(colors.text)),
                 ])
             } else {
                 Line::from("")

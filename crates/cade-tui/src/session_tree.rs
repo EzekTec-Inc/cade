@@ -11,7 +11,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
     DefaultTerminal, Frame,
     layout::{Constraint, Layout},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, List, ListItem, ListState, Paragraph},
 };
@@ -161,7 +161,7 @@ fn draw_tree(
                             .fg(colors.overlay_selected_fg)
                             .add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::White)
+                        Style::default().fg(colors.text)
                     },
                 ),
                 Span::styled(format!("  {dt}"), overlay::overlay_muted_style(colors)),

@@ -33,7 +33,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     DefaultTerminal,
     layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::Paragraph,
 };
@@ -96,6 +96,7 @@ impl QuestionWidget {
     pub fn ask(
         terminal: &mut DefaultTerminal,
         question: &Question,
+        colors: &crate::colors::ThemeColors,
     ) -> Result<Option<QuestionAnswer>> {
         // -- Build the effective options list
         let n_real = question.options.len();
@@ -127,14 +128,14 @@ impl QuestionWidget {
                 // Separator
                 lines.push(Line::from(Span::styled(
                     sep.clone(),
-                    Style::default().fg(Color::DarkGray),
+                    Style::default().fg(colors.border),
                 )));
 
                 // Header chip
                 lines.push(Line::from(Span::styled(
                     question.header.to_string(),
                     Style::default()
-                        .fg(Color::White)
+                        .fg(colors.overlay_section)
                         .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
@@ -142,7 +143,7 @@ impl QuestionWidget {
                 // Question text
                 lines.push(Line::from(Span::styled(
                     question.text.to_string(),
-                    Style::default().fg(Color::White),
+                    Style::default().fg(colors.text),
                 )));
                 lines.push(Line::from(""));
 
@@ -150,7 +151,7 @@ impl QuestionWidget {
                 if let Some((cur, tot)) = question.progress {
                     lines.push(Line::from(Span::styled(
                         format!("Question {cur} of {tot}"),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(colors.muted),
                     )));
                     lines.push(Line::from(""));
                 }
@@ -163,10 +164,10 @@ impl QuestionWidget {
                     if idx == submit_idx {
                         let label_style = if is_selected {
                             Style::default()
-                                .fg(Color::Green)
+                                .fg(colors.success)
                                 .add_modifier(Modifier::BOLD)
                         } else {
-                            Style::default().fg(Color::DarkGray)
+                            Style::default().fg(colors.muted)
                         };
                         lines.push(Line::from(Span::styled(
                             format!("{selector} {}.    Submit", idx + 1),
@@ -189,7 +190,7 @@ impl QuestionWidget {
                             "Type something.".to_string()
                         };
                         let other_style = Style::default()
-                            .fg(Color::DarkGray)
+                            .fg(colors.dim)
                             .add_modifier(Modifier::ITALIC);
 
                         let prefix = format!(" {}.    ", idx + 1);
@@ -208,7 +209,7 @@ impl QuestionWidget {
                                 lines.push(Line::from(vec![
                                     Span::styled(
                                         selector.to_string(),
-                                        Style::default().fg(Color::Green),
+                                        Style::default().fg(colors.success),
                                     ),
                                     Span::styled(format!("{}{}", prefix, chunk), other_style),
                                 ]));
@@ -233,26 +234,26 @@ impl QuestionWidget {
                     };
                     let label_style = if is_selected {
                         Style::default()
-                            .fg(Color::White)
+                            .fg(colors.text)
                             .add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(Color::White)
+                        Style::default().fg(colors.text)
                     };
                     let num_style = if is_selected {
-                        Style::default().fg(Color::Green)
+                        Style::default().fg(colors.success)
                     } else {
-                        Style::default().fg(Color::DarkGray)
+                        Style::default().fg(colors.muted)
                     };
 
                     lines.push(Line::from(vec![
-                        Span::styled(selector.to_string(), Style::default().fg(Color::Green)),
+                        Span::styled(selector.to_string(), Style::default().fg(colors.success)),
                         Span::styled(format!(" {}. ", idx + 1), num_style),
-                        Span::styled(checkbox.to_string(), Style::default().fg(Color::Green)),
+                        Span::styled(checkbox.to_string(), Style::default().fg(colors.success)),
                         Span::styled(opt.label.clone(), label_style),
                     ]));
                     lines.push(Line::from(Span::styled(
                         format!("     {}", opt.description),
-                        Style::default().fg(Color::DarkGray),
+                        Style::default().fg(colors.dim),
                     )));
                 }
 
@@ -265,7 +266,7 @@ impl QuestionWidget {
                 lines.push(Line::from(Span::styled(
                     hint.to_string(),
                     Style::default()
-                        .fg(Color::DarkGray)
+                        .fg(colors.dim)
                         .add_modifier(Modifier::DIM),
                 )));
 

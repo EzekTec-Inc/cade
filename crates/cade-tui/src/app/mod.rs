@@ -2958,10 +2958,10 @@ fn render_question_inline(
 
     // Header chip — left-aligned, yellow bold with a diamond glyph
     lines.push(Line::from(vec![
-        Span::styled("◆ ", Style::default().fg(RC::Yellow)),
+        Span::styled("◆ ", Style::default().fg(colors.overlay_section)),
         Span::styled(
             q.header.clone(),
-            Style::default().fg(RC::Yellow).add_modifier(Modifier::BOLD),
+            Style::default().fg(colors.overlay_section).add_modifier(Modifier::BOLD),
         ),
     ]));
     lines.push(Line::from(""));
@@ -2969,7 +2969,7 @@ fn render_question_inline(
     // Question text
     lines.push(Line::from(Span::styled(
         q.text.clone(),
-        Style::default().fg(RC::White),
+        Style::default().fg(colors.text),
     )));
     lines.push(Line::from(""));
 
@@ -2977,7 +2977,7 @@ fn render_question_inline(
     if let Some((cur, tot)) = q.progress {
         lines.push(Line::from(Span::styled(
             format!("Question {cur} of {tot}"),
-            Style::default().fg(RC::DarkGray),
+            Style::default().fg(colors.muted),
         )));
         lines.push(Line::from(""));
     }
@@ -2990,9 +2990,9 @@ fn render_question_inline(
         // Submit item (multi-select only)
         if idx == aq.submit_idx {
             let style = if is_selected {
-                Style::default().fg(RC::Green).add_modifier(Modifier::BOLD)
+                Style::default().fg(colors.success).add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(RC::DarkGray)
+                Style::default().fg(colors.muted)
             };
             lines.push(Line::from(Span::styled(
                 format!(" {selector} {}.  Submit", idx + 1),
@@ -3018,12 +3018,12 @@ fn render_question_inline(
             lines.push(Line::from(vec![
                 Span::styled(
                     format!(" {selector} {}.  ", idx + 1),
-                    Style::default().fg(if is_selected { RC::Green } else { RC::DarkGray }),
+                    Style::default().fg(if is_selected { colors.success } else { colors.muted }),
                 ),
                 Span::styled(
                     display,
                     Style::default()
-                        .fg(RC::DarkGray)
+                        .fg(colors.dim)
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -3039,26 +3039,26 @@ fn render_question_inline(
             ""
         };
         let num_style = if is_selected {
-            Style::default().fg(RC::Green)
+            Style::default().fg(colors.success)
         } else {
-            Style::default().fg(RC::DarkGray)
+            Style::default().fg(colors.muted)
         };
         let label_style = if is_selected {
-            Style::default().fg(RC::White).add_modifier(Modifier::BOLD)
+            Style::default().fg(colors.text).add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(RC::White)
+            Style::default().fg(colors.text)
         };
 
         lines.push(Line::from(vec![
-            Span::styled(format!(" {selector} "), Style::default().fg(RC::Green)),
+            Span::styled(format!(" {selector} "), Style::default().fg(colors.success)),
             Span::styled(format!("{}. ", idx + 1), num_style),
-            Span::styled(checkbox.to_string(), Style::default().fg(RC::Green)),
+            Span::styled(checkbox.to_string(), Style::default().fg(colors.success)),
             Span::styled(opt.label.clone(), label_style),
         ]));
         if !opt.description.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!("       {}", opt.description),
-                Style::default().fg(RC::DarkGray),
+                Style::default().fg(colors.muted),
             )));
         }
     }
@@ -3073,7 +3073,7 @@ fn render_question_inline(
     lines.push(Line::from(Span::styled(
         hint,
         Style::default()
-            .fg(RC::DarkGray)
+            .fg(colors.dim)
             .add_modifier(Modifier::DIM),
     )));
 

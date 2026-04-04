@@ -4,7 +4,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{
     DefaultTerminal,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color as RC, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
@@ -178,7 +178,7 @@ pub fn show_mcp_manager(
                         )),
                         Cell::from(Span::styled(
                             s.key.clone(),
-                            Style::default().fg(if is_sel { RC::White } else { colors.text }),
+                            Style::default().fg(if is_sel { colors.text } else { colors.text }),
                         )),
                         Cell::from(Span::styled(
                             kind_str,
