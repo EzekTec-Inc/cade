@@ -27,6 +27,9 @@ reqwest-eventsource.workspace = true
 # -- Misc utilities
 uuid.workspace         = true
 
+[dev-dependencies]
+tempfile.workspace = true
+
 [lints.rust]
 unsafe_code = "forbid"
 # unused = { level = "allow", priority = -1 } # For exploratory dev.

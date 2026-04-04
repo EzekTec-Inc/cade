@@ -23,6 +23,8 @@ tracing.workspace      = true
 # -- Async
 tokio.workspace        = true
 futures.workspace      = true
+# -- HTTP
+reqwest.workspace      = true
 # -- Misc utilities
 uuid.workspace         = true
 chrono.workspace       = true

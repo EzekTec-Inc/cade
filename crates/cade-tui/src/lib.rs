@@ -19,6 +19,7 @@ pub mod colors;
 pub mod component;
 pub mod editor;
 pub mod markdown;
+pub mod mcp_picker;
 pub mod menu;
 pub mod overlay;
 pub mod question;

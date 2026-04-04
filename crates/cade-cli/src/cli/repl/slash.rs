@@ -40,6 +40,7 @@ pub(crate) enum SlashCmd {
     Default,
     Mode(Option<String>),
     Mcp,
+    McpSave(String),
     Link,
     Unlink,
     Logout,
@@ -56,6 +57,8 @@ pub(crate) enum SlashCmd {
     DebugLast,
     /// Show session cost breakdown (tokens × pricing).
     Cost,
+    /// Configure or sync pricing rules.
+    Pricing(Option<String>),
     /// Create a checkpoint of the current working-tree state.
     Checkpoint(Option<String>),
     Undo,
@@ -121,6 +124,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "model" => Some(SlashCmd::Model(arg.unwrap_or_default())),
         "reasoning" => Some(SlashCmd::Reasoning(arg.unwrap_or_default())),
         "mcp" => Some(SlashCmd::Mcp),
+        "mcp-save" => Some(SlashCmd::McpSave(arg.unwrap_or_default())),
         "link" => Some(SlashCmd::Link),
         "unlink" => Some(SlashCmd::Unlink),
         "logout" => Some(SlashCmd::Logout),
@@ -128,6 +132,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "usage" => Some(SlashCmd::Usage),
         "stats" => Some(SlashCmd::Stats(arg)),
         "cost" => Some(SlashCmd::Cost),
+        "pricing" => Some(SlashCmd::Pricing(arg)),
         "context" => Some(SlashCmd::Context),
         "debug-last" | "debug_last" => Some(SlashCmd::DebugLast),
         "copy" => Some(SlashCmd::Copy),

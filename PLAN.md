@@ -2,6 +2,24 @@
 
 ---
 
+## 2026-04-03T22:30:00Z — Dynamic Model Pricing & Interactive MCP Server Manager
+
+**Summary:** Upgraded the `ModelRegistry` to support dynamic real-time token pricing via a cloud sync mechanism and local overrides. Replaced the static `/mcp` table with a fully interactive TUI overlay to manage MCP server configurations.
+
+**Features & Fixes:**
+- **Dynamic Pricing Registry:** Replaced the static compiled `default_pricing.json` logic with a dynamic loader that reads from `~/.cade/pricing.json`. Added support for `/pricing sync` (to pull the latest pricing from the cloud) and local overrides. The `/cost` command was updated to provide real-time USD session cost estimations broken down by model.
+- **Interactive MCP Manager:** Rewrote the `/mcp` command to launch a fullscreen Ratatui overlay. Users can navigate, view configurations, toggle `disabled` state (which automatically hot-reloads the connections), delete servers, or launch interactive edits/creation via the new `/mcp-save` command injected into the chat input buffer.
+
+**Files modified:**
+- `MODIFIED` `crates/cade-ai/src/registry.rs`, `crates/cade-ai/Cargo.toml`
+- `MODIFIED` `crates/cade-cli/src/cli/repl/mod.rs`, `crates/cade-cli/src/cli/repl/pickers.rs`, `crates/cade-cli/src/cli/repl/slash.rs`, `crates/cade-cli/src/cli/repl/stats.rs`, `crates/cade-cli/Cargo.toml`
+- `MODIFIED` `crates/cade-tui/src/lib.rs`
+- `ADDED` `crates/cade-tui/src/mcp_picker.rs`
+
+**Verification:** Run `cargo test --workspace` — tests pass cleanly.
+
+---
+
 ## 2026-04-03T20:10:00Z — Heuristic Evaluator, TUI Modernization & Native tmTheme Support
 
 **Summary:** Implemented a new heuristic evaluation subagent layer, modernized the TUI viewport and theme picker, and added native TextMate `.tmTheme` parsing support for zero-dependency Neovim colorscheme synchronization.

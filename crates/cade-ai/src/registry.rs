@@ -72,6 +72,36 @@ impl ModelRegistry {
         }
     }
 
+    /// Load pricing rules from a file, creating it with defaults if it doesn't exist.
+    /// Custom rules are prepended to the bundled rules.
+    pub fn load_or_default(path: Option<&std::path::Path>) -> Self {
+        let mut registry = Self::new();
+        
+        let Some(p) = path else {
+            return registry;
+        };
+
+        if !p.exists() {
+            if let Some(parent) = p.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let default_json = include_str!("default_pricing.json");
+            let _ = std::fs::write(p, default_json);
+            return registry;
+        }
+
+        if let Ok(content) = std::fs::read_to_string(p) {
+            if let Ok(custom_rules) = serde_json::from_str::<Vec<PricingRule>>(&content) {
+                // Prepend custom rules so they override defaults
+                let mut new_rules = custom_rules;
+                new_rules.extend(registry.rules);
+                registry.rules = new_rules;
+            }
+        }
+
+        registry
+    }
+
     /// Returns approximate per-token pricing for a model.
     /// Evaluates rules in order. Unknown models get zero rates.
     pub fn pricing_for_model(&self, model_id: &str) -> ModelPricing {
@@ -130,5 +160,22 @@ mod tests {
         let registry = ModelRegistry::new();
         let p = registry.pricing_for_model("anthropic/future-model");
         assert!(p.input > 0.0);
+    }
+
+    #[test]
+    fn pricing_custom_override() {
+        use std::io::Write;
+        let mut temp_file = tempfile::NamedTempFile::new().unwrap();
+        let custom_json = r#"[
+            {
+                "contains_any": ["custom-model-1"],
+                "pricing": { "input": 99.0, "output": 99.0, "cache_read": 99.0, "cache_write": 99.0 }
+            }
+        ]"#;
+        temp_file.write_all(custom_json.as_bytes()).unwrap();
+
+        let registry = ModelRegistry::load_or_default(Some(temp_file.path()));
+        let p = registry.pricing_for_model("custom-model-1");
+        assert_eq!(p.input, 99.0);
     }
 }

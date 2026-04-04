@@ -40,6 +40,12 @@ pub(crate) struct SessionStats {
 
 impl SessionStats {
     pub(crate) fn new() -> Self {
+        let registry = if let Some(p) = dirs::home_dir().map(|h| h.join(".cade").join("pricing.json")) {
+            cade_ai::ModelRegistry::load_or_default(Some(&p))
+        } else {
+            cade_ai::ModelRegistry::new()
+        };
+
         Self {
             started_at: std::time::Instant::now(),
             agent_active_ms: 0,
@@ -53,7 +59,7 @@ impl SessionStats {
             lines_added: 0,
             lines_removed: 0,
             per_model: std::collections::HashMap::new(),
-            registry: std::sync::Arc::new(cade_ai::ModelRegistry::new()),
+            registry: std::sync::Arc::new(registry),
         }
     }
 
@@ -168,6 +174,14 @@ impl SessionStats {
             out.push(RenderLine::Pair {
                 label: "Auth Method".to_string(),
                 value: auth_method.to_string(),
+            });
+        }
+
+        let (total_cost, _) = self.compute_cost();
+        if total_cost > 0.0 {
+            out.push(RenderLine::Pair {
+                label: "Estimated Cost".to_string(),
+                value: format!("${total_cost:.4}"),
             });
         }
 
@@ -324,12 +338,14 @@ impl SessionStats {
             "Cache Write",
             "Output",
             "Cache %",
+            "Est. Cost",
         ];
         let mut rows: Vec<Vec<String>> = metric_names
             .iter()
             .map(|m| {
                 let mut row = vec![m.to_string()];
-                for (_, ms) in &models {
+                for (model_name, ms) in &models {
+                    let p = self.registry.pricing_for_model(model_name);
                     let val = match *m {
                         "Requests" => ms.reqs.to_string(),
                         "Input" => fmt_tok(ms.input_tokens),
@@ -343,6 +359,17 @@ impl SessionStats {
                                     "{:.1}%",
                                     100.0 * ms.cache_read_tokens as f64 / total as f64
                                 )
+                            } else {
+                                "—".to_string()
+                            }
+                        }
+                        "Est. Cost" => {
+                            let cost = (ms.input_tokens as f64 * p.input) / 1_000_000.0
+                                + (ms.output_tokens as f64 * p.output) / 1_000_000.0
+                                + (ms.cache_read_tokens as f64 * p.cache_read) / 1_000_000.0
+                                + (ms.cache_write_tokens as f64 * p.cache_write) / 1_000_000.0;
+                            if cost > 0.0 {
+                                format!("${cost:.4}")
                             } else {
                                 "—".to_string()
                             }
@@ -367,9 +394,17 @@ impl SessionStats {
         } else {
             "—".to_string()
         };
+        let (total_cost, _) = self.compute_cost();
+        let cost_total_str = if total_cost > 0.0 { format!("${total_cost:.4}") } else { "—".to_string() };
 
         let mut totals_row = vec!["Total".to_string()];
-        for (_, ms) in &models {
+        for (model_name, ms) in &models {
+            let p = self.registry.pricing_for_model(model_name);
+            let cost = (ms.input_tokens as f64 * p.input) / 1_000_000.0
+                + (ms.output_tokens as f64 * p.output) / 1_000_000.0
+                + (ms.cache_read_tokens as f64 * p.cache_read) / 1_000_000.0
+                + (ms.cache_write_tokens as f64 * p.cache_write) / 1_000_000.0;
+            let cost_str = if cost > 0.0 { format!("${cost:.4}") } else { "—".to_string() };
             let tot_in_model = ms.input_tokens + ms.cache_read_tokens;
             let cpct = if tot_in_model > 0 {
                 format!(
@@ -380,13 +415,14 @@ impl SessionStats {
                 "—".to_string()
             };
             totals_row.push(format!(
-                "{}r  {}i  {}cr  {}cw  {}o  {}",
+                "{}r  {}i  {}cr  {}cw  {}o  {}c  {}",
                 ms.reqs,
                 fmt_tok(ms.input_tokens),
                 fmt_tok(ms.cache_read_tokens),
                 fmt_tok(ms.cache_write_tokens),
                 fmt_tok(ms.output_tokens),
                 cpct,
+                cost_str,
             ));
         }
         // For multi-model: add a grand-total column if >1 model
@@ -397,6 +433,7 @@ impl SessionStats {
             rows[3].push(fmt_tok(total_write));
             rows[4].push(fmt_tok(total_out));
             rows[5].push(cache_pct_total);
+            rows[6].push(cost_total_str);
             headers.push("Total".to_string());
         }
 

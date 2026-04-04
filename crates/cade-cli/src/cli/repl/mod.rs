@@ -810,48 +810,66 @@ impl Repl {
                             continue;
                         }
 
-                        let statuses = self.mcp.status().await;
-                        self.tui_blank();
-                        self.tui_hdr("  MCP Servers");
-                        self.tui_blank();
-                        if statuses.is_empty() {
-                            self.tui_dim("  No MCP servers configured.");
-                            self.tui_blank();
-                            self.tui_dim("  Add servers to ~/.cade/settings.json:");
-                            self.tui_dim("  {");
-                            self.tui_dim("    \"mcpServers\": {");
-                            self.tui_dim(
-                                "      \"git\": { \"command\": \"/path/to/git-mcp-server\" }",
-                            );
-                            self.tui_dim("    }");
-                            self.tui_dim("  }");
-                        } else {
-                            let mut rows = Vec::new();
-                            for s in &statuses {
-                                let tool_list = s
-                                    .tools
-                                    .iter()
-                                    .map(|t| t.split_once("__").map(|x| x.1).unwrap_or(t))
-                                    .collect::<Vec<_>>()
-                                    .join(", ");
-                                rows.push(vec![
-                                    s.key.clone(),
-                                    format!("{} tools", s.tools.len()),
-                                    crate::ui::truncate_str(&tool_list, 60),
-                                ]);
+                        match self.interactive_mcp_picker(std::sync::Arc::clone(&self.app)).await? {
+                            Some(cade_tui::mcp_picker::McpAction::Toggle(key)) => {
+                                let mut s = self.settings.lock().expect("lock poisoned");
+                                if let Some(server) = s.global_settings_mut().mcp_servers.get_mut(&key) {
+                                    server.disabled = !server.disabled;
+                                }
+                                let _ = s.save_global();
+                                drop(s);
+                                self.do_settings_reload().await;
                             }
-                            let _ =
-                                self.app
-                                    .lock()
-                                    .expect("lock poisoned")
-                                    .push(RenderLine::Table {
-                                        headers: vec![
-                                            "Server".to_string(),
-                                            "Count".to_string(),
-                                            "Tools".to_string(),
-                                        ],
-                                        rows,
-                                    });
+                            Some(cade_tui::mcp_picker::McpAction::Delete(key)) => {
+                                let mut s = self.settings.lock().expect("lock poisoned");
+                                s.global_settings_mut().mcp_servers.remove(&key);
+                                let _ = s.save_global();
+                                drop(s);
+                                self.do_settings_reload().await;
+                            }
+                            Some(cade_tui::mcp_picker::McpAction::New) => {
+                                let tmpl = serde_json::json!({
+                                    "new_server": {
+                                        "command": "npx",
+                                        "args": ["-y", "@modelcontextprotocol/server-everything"],
+                                        "env": {},
+                                        "disabled": false
+                                    }
+                                });
+                                let mut app = self.app.lock().expect("lock poisoned");
+                                app.editor.input = format!("/mcp-save\n{}", serde_json::to_string_pretty(&tmpl).unwrap());
+                                app.editor.cursor_pos = app.editor.input.len();
+                                app.push_silent(crate::ui::RenderLine::SystemMsg("  Edit the JSON below and hit Enter to create/save.".to_string()));
+                            }
+                            Some(cade_tui::mcp_picker::McpAction::Edit(key)) => {
+                                let config = self.settings.lock().expect("lock poisoned").global_settings_mut().mcp_servers.get(&key).cloned().unwrap_or_default();
+                                let tmpl = serde_json::json!({ key: config });
+                                let mut app = self.app.lock().expect("lock poisoned");
+                                app.editor.input = format!("/mcp-save\n{}", serde_json::to_string_pretty(&tmpl).unwrap());
+                                app.editor.cursor_pos = app.editor.input.len();
+                                app.push_silent(crate::ui::RenderLine::SystemMsg("  Edit the JSON below and hit Enter to save.".to_string()));
+                            }
+                            None => {
+                                self.tui_dim("  /mcp closed");
+                            }
+                        }
+                    }
+                    SlashCmd::McpSave(payload) => {
+                        let parsed: std::result::Result<std::collections::HashMap<String, cade_core::settings::McpServerConfig>, _> = serde_json::from_str(&payload);
+                        match parsed {
+                            Ok(servers) => {
+                                let mut s = self.settings.lock().expect("lock poisoned");
+                                for (k, v) in servers {
+                                    s.global_settings_mut().mcp_servers.insert(k.clone(), v);
+                                    self.tui_ok(format!("  ✓ Saved MCP server: {}", k));
+                                }
+                                let _ = s.save_global();
+                                drop(s);
+                                self.do_settings_reload().await;
+                            }
+                            Err(e) => {
+                                self.tui_err(format!("  ✗ Failed to parse JSON: {}", e));
+                            }
                         }
                     }
                     SlashCmd::Link => {
@@ -1478,6 +1496,45 @@ impl Repl {
                                 .tui_ok(format!("✓ Context window cleared ({n} messages deleted)")),
                             Err(e) => self
                                 .tui_sys(format!("⚠ Screen cleared (context clear failed: {e})")),
+                        }
+                    }
+
+                    SlashCmd::Pricing(arg) => {
+                        match arg.as_deref() {
+                            Some("sync") => {
+                                self.tui_dim("  Fetching latest pricing rules from cloud...");
+                                let url = "https://raw.githubusercontent.com/EzekTec-Inc/CADE/main/crates/cade-ai/src/default_pricing.json";
+                                match reqwest::get(url).await {
+                                    Ok(res) if res.status().is_success() => {
+                                        if let Ok(text) = res.text().await {
+                                            if let Some(p) = dirs::home_dir().map(|h| h.join(".cade").join("pricing.json")) {
+                                                if let Err(e) = std::fs::write(&p, text) {
+                                                    self.tui_err(format!("  Failed to write pricing.json: {}", e));
+                                                } else {
+                                                    let mut stats = self.session_stats.lock().expect("lock poisoned");
+                                                    stats.registry = std::sync::Arc::new(cade_ai::ModelRegistry::load_or_default(Some(&p)));
+                                                    self.tui_ok("  Pricing synced successfully!");
+                                                }
+                                            }
+                                        }
+                                    },
+                                    _ => self.tui_err("  Failed to fetch pricing from cloud."),
+                                }
+                            }
+                            Some(cmd) if cmd.starts_with("set ") => {
+                                self.tui_err("  /pricing set is not fully implemented yet. Please edit ~/.cade/pricing.json manually.");
+                            }
+                            _ => {
+                                let model = self.model();
+                                let stats = self.session_stats.lock().expect("lock poisoned");
+                                let pricing = stats.registry.pricing_for_model(&model);
+                                self.tui_hdr(format!("  Pricing for model: {}", model));
+                                self.tui_dim(format!("  Input: ${}/1M", pricing.input));
+                                self.tui_dim(format!("  Output: ${}/1M", pricing.output));
+                                self.tui_dim(format!("  Cache Read: ${}/1M", pricing.cache_read));
+                                self.tui_dim(format!("  Cache Write: ${}/1M", pricing.cache_write));
+                                self.tui_dim("  Use /pricing sync to update from the cloud, or edit ~/.cade/pricing.json to add local overrides.");
+                            }
                         }
                     }
 
