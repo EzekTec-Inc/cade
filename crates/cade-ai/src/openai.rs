@@ -531,47 +531,47 @@ impl LlmProvider for OpenAiProvider {
 
             let mut byte_stream = resp.bytes_stream();
             let s = stream! {
-                let mut buf = String::new();
+                let mut buf = Vec::new();
                 let mut tool_map: std::collections::BTreeMap<usize, (String, String, String)> =
                     std::collections::BTreeMap::new();
 
                 while let Some(chunk) = byte_stream.next().await {
                     let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(crate::Error::custom(format!("{e}"))); break; } };
-                    buf.push_str(&String::from_utf8_lossy(&chunk));
+                    buf.extend_from_slice(&chunk);
 
+                    let mut start = 0;
                     while let Some((pos, len)) = {
                         let mut earliest = None;
-                        if let Some(p) = buf.find("\n\n") {
+                        if let Some(p) = buf[start..].windows(2).position(|w| w == b"\n\n") {
                             earliest = Some((p, 2));
                         }
-                        if let Some(p) = buf.find("\r\n\r\n")
+                        if let Some(p) = buf[start..].windows(4).position(|w| w == b"\r\n\r\n")
                             && earliest.is_none_or(|(ep, _)| p < ep) {
                                 earliest = Some((p, 4));
                             }
                         earliest
                     } {
-                        let block = buf[..pos].trim().to_string();
-                        buf = buf[pos + len..].to_string();
+                        let end = start + pos;
+                        let next_start = end + len;
 
-                        if block.is_empty() { continue; }
+                        if let Ok(block_str) = std::str::from_utf8(&buf[start..end]) {
+                            let block = block_str.trim();
+                            if !block.is_empty() {
+                                let mut event_type = "";
+                                let mut data_str = "";
 
-                        let mut event_type = String::new();
-                        let mut data_str = String::new();
+                                for line in block.lines() {
+                                    let line = line.trim();
+                                    if let Some(t) = line.strip_prefix("event: ") {
+                                        event_type = t.trim();
+                                    } else if let Some(d) = line.strip_prefix("data: ") {
+                                        data_str = d.trim();
+                                    }
+                                }
 
-                        for line in block.lines() {
-                            let line = line.trim();
-                            if let Some(t) = line.strip_prefix("event: ") {
-                                event_type = t.trim().to_string();
-                            } else if let Some(d) = line.strip_prefix("data: ") {
-                                data_str = d.trim().to_string();
-                            }
-                        }
-
-                        if data_str.is_empty() || data_str == "[DONE]" { continue; }
-
-                        let v: Value = match serde_json::from_str(&data_str) { Ok(v) => v, Err(_) => continue };
-
-                        match event_type.as_str() {
+                                if !data_str.is_empty() && data_str != "[DONE]"
+                                    && let Ok(v) = serde_json::from_str::<Value>(data_str) {
+                                        match event_type {
                                     "response.output_text.delta" => {
                                         if let Some(text) = v["delta"].as_str()
                                             && !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
@@ -592,8 +592,7 @@ impl LlmProvider for OpenAiProvider {
                                     }
                                     "response.completed" => {
                                         let calls: Vec<(String, String, String)> =
-                                            tool_map.values().cloned().collect();
-                                        tool_map.clear();
+                                            std::mem::take(&mut tool_map).into_values().collect();
                                         for (id, name, args_str) in calls {
                                             if !name.is_empty() {
                                                 let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
@@ -626,10 +625,17 @@ impl LlmProvider for OpenAiProvider {
                                     }
                                     _ => {}
                                 }
+                                    }
+                            }
+                        }
+                        start = next_start;
+                    }
+                    if start > 0 {
+                        buf.drain(..start);
                     }
                 }
                 let remaining: Vec<(String, String, String)> =
-                    tool_map.values().cloned().collect();
+                    std::mem::take(&mut tool_map).into_values().collect();
                 for (id, name, args_str) in remaining {
                     if !name.is_empty() {
                         let args = serde_json::from_str(&args_str).unwrap_or_default();
@@ -696,7 +702,7 @@ impl LlmProvider for OpenAiProvider {
 
         let mut byte_stream = resp.bytes_stream();
         let s = stream! {
-            let mut buf = String::new();
+            let mut buf = Vec::new();
             // OpenAI streams tool calls with an `index` field to distinguish
             // parallel calls.  Use a BTreeMap keyed by index so multiple
             // tool calls in one turn are accumulated and emitted separately.
@@ -706,16 +712,17 @@ impl LlmProvider for OpenAiProvider {
 
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(crate::Error::custom(format!("{e}"))); break; } };
-                buf.push_str(&String::from_utf8_lossy(&chunk));
+                buf.extend_from_slice(&chunk);
 
-                while let Some(pos) = buf.find('\n') {
-                    let line = buf[..pos].trim().to_string();
-                    buf = buf[pos + 1..].to_string();
-                    let data = match line.strip_prefix("data: ") { Some(d) => d, None => continue };
-                    if data == "[DONE]" {
+                let mut start = 0;
+                while let Some(pos) = buf[start..].iter().position(|&b| b == b'\n') {
+                    let end = start + pos;
+                    if let Ok(line_str) = std::str::from_utf8(&buf[start..end]) {
+                        let line = line_str.trim();
+                        if let Some(data) = line.strip_prefix("data: ") {
+                            if data == "[DONE]" {
                         let remaining: Vec<(String, String, String)> =
-                            tool_map.values().cloned().collect();
-                        tool_map.clear();
+                            std::mem::take(&mut tool_map).into_values().collect();
                         for (id, name, args_str) in remaining {
                             if !name.is_empty() {
                                 let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
@@ -747,8 +754,7 @@ impl LlmProvider for OpenAiProvider {
                         if matches!(reason, "stop" | "tool_calls") {
                             // Emit every accumulated tool call in index order
                             let calls: Vec<(String, String, String)> =
-                                tool_map.values().cloned().collect();
-                            tool_map.clear();
+                                std::mem::take(&mut tool_map).into_values().collect();
                             for (id, name, args_str) in calls {
                                 if !name.is_empty() {
                                     let args = serde_json::from_str(&args_str).unwrap_or_else(|e| {
@@ -782,6 +788,12 @@ impl LlmProvider for OpenAiProvider {
                             }));
                         }
                     }
+                        }
+                        start = end + 1;
+                    }
+                    if start > 0 {
+                        buf.drain(..start);
+                    }
                 }
             }
             // Byte stream exhausted without explicit [DONE] — always send Done
@@ -789,7 +801,7 @@ impl LlmProvider for OpenAiProvider {
             // Also flush any tool calls that arrived without an explicit finish_reason
             // (some OpenAI-compatible providers omit it).
             let remaining: Vec<(String, String, String)> =
-                tool_map.values().cloned().collect();
+                std::mem::take(&mut tool_map).into_values().collect();
             for (id, name, args_str) in remaining {
                 if !name.is_empty() {
                     let args = serde_json::from_str(&args_str).unwrap_or_default();

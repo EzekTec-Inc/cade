@@ -73,11 +73,13 @@ impl AnthropicProvider {
         // Separate system messages from the conversation
         let (system, messages): (Vec<_>, Vec<_>) =
             req.messages.iter().partition(|m| m.role == "system");
-        let system_text: String = system
-            .iter()
-            .map(|m| m.content.as_str())
-            .collect::<Vec<_>>()
-            .join("\n\n");
+        let mut system_text = String::new();
+        for (i, m) in system.iter().enumerate() {
+            if i > 0 {
+                system_text.push_str("\n\n");
+            }
+            system_text.push_str(&m.content);
+        }
 
         // Anthropic rule: all tool_result blocks for a given assistant turn MUST be
         // in ONE user message. Consecutive "tool" messages must be merged.
@@ -101,23 +103,20 @@ impl AnthropicProvider {
                     anthropic_messages.push(json!({ "role": "user", "content": tool_results }));
                 }
                 "assistant" if m.tool_calls.as_ref().is_some_and(|tc| !tc.is_empty()) => {
-                    let tool_uses: Vec<Value> = m
-                        .tool_calls
-                        .as_deref()
-                        .unwrap_or_default()
-                        .iter()
-                        .map(|tc| {
+                    let mut blocks =
+                        Vec::with_capacity(1 + m.tool_calls.as_deref().unwrap_or_default().len());
+                    if !m.content.is_empty() {
+                        blocks.push(json!({"type": "text", "text": m.content}));
+                    }
+                    if let Some(calls) = &m.tool_calls {
+                        blocks.extend(calls.iter().map(|tc| {
                             json!({
                                 "type": "tool_use",
                                 "id": tc.id,
                                 "name": tc.name,
                                 "input": tc.arguments
                             })
-                        })
-                        .collect();
-                    let mut blocks = tool_uses;
-                    if !m.content.is_empty() {
-                        blocks.insert(0, json!({"type": "text", "text": m.content}));
+                        }));
                     }
                     anthropic_messages.push(json!({"role": "assistant", "content": blocks}));
                     i += 1;
@@ -354,7 +353,7 @@ impl LlmProvider for AnthropicProvider {
         let mut byte_stream = resp.bytes_stream();
 
         let s = stream! {
-            let mut buf = String::new();
+            let mut buf = Vec::new();
             // Accumulate partial tool call state
             let mut tool_id = String::new();
             let mut tool_name = String::new();
@@ -372,20 +371,20 @@ impl LlmProvider for AnthropicProvider {
                     Ok(c) => c,
                     Err(e) => { yield Err(crate::Error::custom(format!("stream error: {e}"))); break; }
                 };
-                buf.push_str(&String::from_utf8_lossy(&chunk));
+                buf.extend_from_slice(&chunk);
 
                 // Process complete SSE lines
-                while let Some(pos) = buf.find('\n') {
-                    let line = buf[..pos].trim().to_string();
-                    buf = buf[pos + 1..].to_string();
-
-                    if line.is_empty() || line.starts_with(':') { continue; }
-                    let data = if let Some(d) = line.strip_prefix("data: ") { d } else { continue };
-
-                    let event: Value = match serde_json::from_str(data) {
-                        Ok(v) => v,
-                        Err(_) => continue,
-                    };
+                let mut start = 0;
+                while let Some(pos) = buf[start..].iter().position(|&b| b == b'\n') {
+                    let end = start + pos;
+                    if let Ok(line_str) = std::str::from_utf8(&buf[start..end]) {
+                        let line = line_str.trim();
+                        if !line.is_empty() && !line.starts_with(':')
+                            && let Some(data) = line.strip_prefix("data: ") {
+                                let event: Value = match serde_json::from_str(data) {
+                                    Ok(v) => v,
+                                    Err(_) => { start = end + 1; continue; }
+                                };
 
                     match event["type"].as_str().unwrap_or("") {
                         "content_block_delta" => {
@@ -436,13 +435,11 @@ impl LlmProvider for AnthropicProvider {
                                         Value::Object(serde_json::Map::new())
                                     });
                                 yield Ok(StreamChunk::ToolCall(LlmToolCall {
-                                    id:                tool_id.clone(),
-                                    name:              tool_name.clone(),
+                                    id:                std::mem::take(&mut tool_id),
+                                    name:              std::mem::take(&mut tool_name),
                                     arguments:         args,
                                     thought_signature: None,
                                 }));
-                                tool_name.clear();
-                                tool_id.clear();
                                 tool_args.clear();
                             }
                         }
@@ -482,6 +479,12 @@ impl LlmProvider for AnthropicProvider {
                         }
                         _ => {}
                     }
+                            }
+                    }
+                    start = end + 1;
+                }
+                if start > 0 {
+                    buf.drain(..start);
                 }
             }
         };

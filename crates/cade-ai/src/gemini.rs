@@ -348,8 +348,14 @@ impl GeminiProvider {
 
                     if has_unsigned {
                         // Convert to text summaries instead of functionResponse
-                        let mut text_parts: Vec<String> = Vec::new();
+                        use std::fmt::Write;
+                        let mut text = String::new();
+                        let mut first = true;
                         while i < req.messages.len() && req.messages[i].role == "tool" {
+                            if !first {
+                                text.push('\n');
+                            }
+                            first = false;
                             let m = &req.messages[i];
                             let fn_name = m
                                 .tool_call_id
@@ -362,12 +368,12 @@ impl GeminiProvider {
                             } else {
                                 ""
                             };
-                            text_parts.push(format!(
+                            let _ = write!(
+                                text,
                                 "[Result of '{fn_name}': {content_preview}{truncated}]"
-                            ));
+                            );
                             i += 1;
                         }
-                        let text = text_parts.join("\n");
                         // Merge with preceding user turn if possible
                         let merged = if let Some(last) = contents.last_mut() {
                             if last.get("role").and_then(|v| v.as_str()) == Some("user") {
@@ -423,11 +429,15 @@ impl GeminiProvider {
                     if has_unsigned {
                         // Fallback: emit a text-only model turn summarising
                         // what the assistant did.
-                        let mut text_parts: Vec<String> = Vec::new();
+                        use std::fmt::Write;
+                        let mut summary = String::new();
                         if !msg.content.is_empty() {
-                            text_parts.push(msg.content.clone());
+                            summary.push_str(&msg.content);
                         }
                         for tc in msg.tool_calls.as_deref().unwrap_or_default() {
+                            if !summary.is_empty() {
+                                summary.push('\n');
+                            }
                             let args_str = serde_json::to_string(&tc.arguments).unwrap_or_default();
                             let args_preview: String = args_str.chars().take(200).collect();
                             let truncated = if args_str.chars().count() > 200 {
@@ -435,10 +445,12 @@ impl GeminiProvider {
                             } else {
                                 ""
                             };
-                            text_parts
-                                .push(format!("[Called '{}': {args_preview}{truncated}]", tc.name));
+                            let _ = write!(
+                                summary,
+                                "[Called '{}': {args_preview}{truncated}]",
+                                tc.name
+                            );
                         }
-                        let summary = text_parts.join("\n");
                         if !summary.is_empty() {
                             let merged = if let Some(last) = contents.last_mut() {
                                 if last.get("role").and_then(|v| v.as_str()) == Some("model") {
@@ -717,16 +729,18 @@ impl LlmProvider for GeminiProvider {
 
         let mut byte_stream = resp.bytes_stream();
         let s = stream! {
-            let mut buf = String::new();
+            let mut buf = Vec::new();
             while let Some(chunk) = byte_stream.next().await {
                 let chunk = match chunk { Ok(c) => c, Err(e) => { yield Err(crate::Error::custom(format!("{e}"))); break; } };
-                buf.push_str(&String::from_utf8_lossy(&chunk));
+                buf.extend_from_slice(&chunk);
 
-                while let Some(pos) = buf.find('\n') {
-                    let line = buf[..pos].trim().to_string();
-                    buf = buf[pos + 1..].to_string();
-                    let data = match line.strip_prefix("data: ") { Some(d) => d, None => continue };
-                    let v: Value = match serde_json::from_str(data) { Ok(v) => v, Err(_) => continue };
+                let mut start = 0;
+                while let Some(pos) = buf[start..].iter().position(|&b| b == b'\n') {
+                    let end = start + pos;
+                    if let Ok(line_str) = std::str::from_utf8(&buf[start..end]) {
+                        let line = line_str.trim();
+                        if let Some(data) = line.strip_prefix("data: ")
+                            && let Ok(mut v) = serde_json::from_str::<Value>(data) {
 
                     // 1. Always check for usage metadata at the root if it's present
                     if let Some(usage) = v.get("usageMetadata") {
@@ -745,9 +759,9 @@ impl LlmProvider for GeminiProvider {
                     }
 
                     // 2. Parse candidates (content, tool calls, finishReason)
-                    if let Some(candidates) = v.get("candidates").and_then(|c| c.as_array())
-                        && let Some(candidate) = candidates.first() {
-                            if let Some(parts) = candidate["content"]["parts"].as_array() {
+                    if let Some(candidates) = v.get_mut("candidates").and_then(|c| c.as_array_mut())
+                        && let Some(candidate) = candidates.first_mut() {
+                            if let Some(parts) = candidate.get_mut("content").and_then(|c| c.get_mut("parts")).and_then(|p| p.as_array_mut()) {
                                 for part in parts {
                                     if let Some(text) = part["text"].as_str()
                                         && !text.is_empty() {
@@ -757,10 +771,10 @@ impl LlmProvider for GeminiProvider {
                                                 yield Ok(StreamChunk::Text(text.to_string()));
                                             }
                                         }
-                                    if let Some(fc) = part.get("functionCall") {
+                                    if let Some(fc) = part.get_mut("functionCall") {
                                         let name = fc["name"].as_str().unwrap_or("").to_string();
                                         let arguments = {
-                                            let raw = fc["args"].clone();
+                                            let raw = fc["args"].take();
                                             if raw.is_object() || raw.is_null() {
                                                 raw
                                             } else {
@@ -786,6 +800,12 @@ impl LlmProvider for GeminiProvider {
                                 yield Ok(StreamChunk::Done); return;
                             }
                         }
+                            }
+                    }
+                    start = end + 1;
+                }
+                if start > 0 {
+                    buf.drain(..start);
                 }
             }
             // Byte stream exhausted without an explicit finishReason chunk.
