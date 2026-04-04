@@ -12,6 +12,6 @@ pub mod reranker;
 
 pub use config::{RerankerBackend, RerankerConfig, config_from_env, default_protected_tools};
 pub use error::{Error, Result};
-pub use reranker::{RerankResult, ToolDocument, ToolReranker};
+pub use reranker::{RerankResult, SkillDocument, ToolDocument, ToolReranker};
 
 // endregion: --- Re-exports

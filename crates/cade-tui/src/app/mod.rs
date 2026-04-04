@@ -559,11 +559,12 @@ impl TuiApp {
     /// step_id is 1-based.  Returns false if the id is out of range.
     pub fn update_plan_step(&mut self, step_id: usize, done: bool) -> bool {
         if let Some(plan) = &mut self.active_plan
-            && let Some(step) = plan.steps.iter_mut().find(|s| s.id == step_id) {
-                step.is_done = done;
-                self.draw_dirty = true;
-                return true;
-            }
+            && let Some(step) = plan.steps.iter_mut().find(|s| s.id == step_id)
+        {
+            step.is_done = done;
+            self.draw_dirty = true;
+            return true;
+        }
         false
     }
 
@@ -1796,10 +1797,11 @@ impl TuiApp {
                 }
                 (KeyCode::Enter, _) => {
                     if let Some(tp) = self.theme_picker.take()
-                        && !tp.filtered_indices.is_empty() {
-                            let t = &tp.themes[tp.filtered_indices[tp.cursor]];
-                            return Ok(Some(Some(format!("/theme {}", t.name))));
-                        }
+                        && !tp.filtered_indices.is_empty()
+                    {
+                        let t = &tp.themes[tp.filtered_indices[tp.cursor]];
+                        return Ok(Some(Some(format!("/theme {}", t.name))));
+                    }
                 }
                 (KeyCode::Backspace, _) => {
                     if self.theme_picker.is_some() {
@@ -2210,18 +2212,19 @@ impl TuiApp {
 
     fn apply_theme_from_picker(&mut self) {
         if let Some(tp) = &self.theme_picker
-            && !tp.filtered_indices.is_empty() {
-                let idx = tp.filtered_indices[tp.cursor];
-                let t = &tp.themes[idx];
-                let colors = if t.name == "dark" {
-                    crate::colors::ThemeColors::dark()
-                } else if t.name == "light" {
-                    crate::colors::ThemeColors::light()
-                } else {
-                    crate::colors::ThemeColors::from_theme(t)
-                };
-                self.apply_theme(colors);
-            }
+            && !tp.filtered_indices.is_empty()
+        {
+            let idx = tp.filtered_indices[tp.cursor];
+            let t = &tp.themes[idx];
+            let colors = if t.name == "dark" {
+                crate::colors::ThemeColors::dark()
+            } else if t.name == "light" {
+                crate::colors::ThemeColors::light()
+            } else {
+                crate::colors::ThemeColors::from_theme(t)
+            };
+            self.apply_theme(colors);
+        }
     }
 
     fn update_theme_picker_filter(&mut self) {
@@ -2485,36 +2488,10 @@ fn render_frame(
             &mut lines,
             colors,
         );
-        let rows = lines.iter().map(|l| count_wrapped_rows(l, timeline_w as u16)).sum();
-        prepared.push(PreparedTimelineEntry { lines, rows });
-    } else if let Some(elapsed) = thinking_elapsed {
-        let text = thinking_text.unwrap_or("thinking…");
-        let ms = elapsed.as_millis();
-
-        let spinner = if (ms / 3000) % 2 == 0 {
-            BRAILLE[(ms / 80) as usize % BRAILLE.len()]
-        } else {
-            DOTS[(ms / 100) as usize % DOTS.len()]
-        };
-
-        let palette: &[(u8, u8, u8)] = &[
-            (80, 190, 255),
-            (120, 215, 255),
-            (160, 235, 255),
-            (100, 200, 255),
-        ];
-        let (r, g, b) = palette[(ms / 400) as usize % palette.len()];
-
-        let lines = vec![
-            ratatui::text::Line::from(""),
-            ratatui::text::Line::from(vec![ratatui::text::Span::styled(
-                format!("{spinner} {text}"),
-                ratatui::style::Style::default()
-                    .fg(ratatui::style::Color::Rgb(r, g, b))
-                    .add_modifier(ratatui::style::Modifier::BOLD),
-            )]),
-        ];
-        let rows = lines.iter().map(|l| count_wrapped_rows(l, timeline_w as u16)).sum();
+        let rows = lines
+            .iter()
+            .map(|l| count_wrapped_rows(l, timeline_w as u16))
+            .sum();
         prepared.push(PreparedTimelineEntry { lines, rows });
     }
 
@@ -2566,7 +2543,10 @@ fn render_frame(
                 (100, 200, 255),
             ];
             let (r, g, b) = palette[(ms / 400) as usize % palette.len()];
-            (format!("{} {}", spinner, t), ratatui::style::Color::Rgb(r, g, b))
+            (
+                format!("{} {}", spinner, t),
+                ratatui::style::Color::Rgb(r, g, b),
+            )
         } else {
             (t.to_string(), colors.accent)
         };

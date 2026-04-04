@@ -43,6 +43,41 @@ pub fn last_assistant_message(
     }
 }
 
+pub fn get_latest_user_message(
+    db: &Db,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+) -> Result<Option<String>> {
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+
+    let sql = if conversation_id.is_some() {
+        "SELECT content FROM messages
+         WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'user'
+         ORDER BY created_at DESC, rowid DESC LIMIT 1"
+    } else {
+        "SELECT content FROM messages
+         WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'user'
+         ORDER BY created_at DESC, rowid DESC LIMIT 1"
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+    let mut rows = if let Some(cid) = conversation_id {
+        stmt.query(params![agent_id, cid])?
+    } else {
+        stmt.query(params![agent_id])?
+    };
+
+    if let Some(r) = rows.next()? {
+        let content_str: String = r.get(0)?;
+        let content: Value = serde_json::from_str(&content_str).unwrap_or(Value::Null);
+        Ok(content.as_str().map(String::from))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn insert_message(db: &Db, row: &MessageRow) -> Result<()> {
     let conn = db
         .lock()

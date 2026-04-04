@@ -238,12 +238,13 @@ pub fn show_mcp_manager(
                             meta.push_str("Auth: Bearer Token (set)\n");
                         }
                         if let Some(headers) = &s.config.headers
-                            && !headers.is_empty() {
-                                meta.push_str("Headers:\n");
-                                for (k, v) in headers {
-                                    meta.push_str(&format!("  {}: {}\n", k, v));
-                                }
+                            && !headers.is_empty()
+                        {
+                            meta.push_str("Headers:\n");
+                            for (k, v) in headers {
+                                meta.push_str(&format!("  {}: {}\n", k, v));
                             }
+                        }
                     } else {
                         meta.push_str(&format!(
                             "Transport: Stdio\nCommand: {}\n",

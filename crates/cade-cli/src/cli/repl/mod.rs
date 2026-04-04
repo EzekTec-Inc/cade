@@ -1514,25 +1514,21 @@ impl Repl {
                                     if let Ok(text) = res.text().await
                                         && let Some(p) = dirs::home_dir()
                                             .map(|h| h.join(".cade").join("pricing.json"))
-                                        {
-                                            if let Err(e) = std::fs::write(&p, text) {
-                                                self.tui_err(format!(
-                                                    "  Failed to write pricing.json: {}",
-                                                    e
-                                                ));
-                                            } else {
-                                                let mut stats = self
-                                                    .session_stats
-                                                    .lock()
-                                                    .expect("lock poisoned");
-                                                stats.registry = std::sync::Arc::new(
-                                                    cade_ai::ModelRegistry::load_or_default(Some(
-                                                        &p,
-                                                    )),
-                                                );
-                                                self.tui_ok("  Pricing synced successfully!");
-                                            }
+                                    {
+                                        if let Err(e) = std::fs::write(&p, text) {
+                                            self.tui_err(format!(
+                                                "  Failed to write pricing.json: {}",
+                                                e
+                                            ));
+                                        } else {
+                                            let mut stats =
+                                                self.session_stats.lock().expect("lock poisoned");
+                                            stats.registry = std::sync::Arc::new(
+                                                cade_ai::ModelRegistry::load_or_default(Some(&p)),
+                                            );
+                                            self.tui_ok("  Pricing synced successfully!");
                                         }
+                                    }
                                 }
                                 _ => self.tui_err("  Failed to fetch pricing from cloud."),
                             }

@@ -147,6 +147,60 @@ pub(crate) async fn build_context(
         if val.trim().is_empty() {
             continue;
         }
+
+        #[cfg(feature = "reranker")]
+        let val = if label == "skills" {
+            if let Some(reranker) = &state.tool_reranker {
+                if reranker.is_enabled() {
+                    let user_prompt =
+                        sqlite::get_latest_user_message(&state.db, agent_id, conversation_id)
+                            .unwrap_or_default()
+                            .unwrap_or_default();
+
+                    let mut skills = Vec::new();
+                    let mut header = String::new();
+                    let mut in_list = false;
+                    for line in val.lines() {
+                        if line.starts_with("- ") {
+                            in_list = true;
+                            let id = line[2..]
+                                .split_whitespace()
+                                .next()
+                                .unwrap_or("")
+                                .to_string();
+                            skills.push(cade_reranker::SkillDocument {
+                                id,
+                                text: line.to_string(),
+                            });
+                        } else if !in_list {
+                            header.push_str(line);
+                            header.push('\n');
+                        }
+                    }
+
+                    if !skills.is_empty() {
+                        let ranked = reranker.rerank_skills(&user_prompt, skills).await;
+                        let mut new_val = header;
+                        for s in ranked {
+                            new_val.push_str(&s.text);
+                            new_val.push('\n');
+                        }
+                        new_val.trim_end().to_string()
+                    } else {
+                        val.to_string()
+                    }
+                } else {
+                    val.to_string()
+                }
+            } else {
+                val.to_string()
+            }
+        } else {
+            val.to_string()
+        };
+        #[cfg(not(feature = "reranker"))]
+        let val = val.to_string();
+
         if tier == "pinned" {
             let entry = format!("📌 [{label}]\n{val}");
             let chars = entry.chars().count();

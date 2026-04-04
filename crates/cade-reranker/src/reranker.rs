@@ -14,6 +14,15 @@ pub struct ToolDocument {
     pub text: String,
 }
 
+/// A skill document prepared for reranking.
+#[derive(Debug, Clone)]
+pub struct SkillDocument {
+    /// Original skill identifier.
+    pub id: String,
+    /// Human-readable text representation used for scoring.
+    pub text: String,
+}
+
 /// Outcome of a rerank operation.
 pub struct RerankResult {
     /// The filtered and reordered tool schemas.
@@ -102,6 +111,73 @@ impl ToolReranker {
         }
     }
 
+    // -- Main rerank entry point for skills
+
+    /// Rerank the given skills against a user prompt.
+    ///
+    /// Returns all skills if:
+    /// - The reranker is disabled
+    /// - The skill count is already ≤ max_skills
+    /// - An error occurs (graceful fallback)
+    pub async fn rerank_skills(
+        &self,
+        user_prompt: &str,
+        skills: Vec<SkillDocument>,
+    ) -> Vec<SkillDocument> {
+        if !self.config.enabled {
+            return skills;
+        }
+
+        let budget = self.config.max_skills;
+        if skills.len() <= budget {
+            tracing::debug!(
+                "[reranker] {} skills ��� budget {}, skipping",
+                skills.len(),
+                budget
+            );
+            return skills;
+        }
+
+        let original_count = skills.len();
+        let start = std::time::Instant::now();
+
+        let texts: Vec<&str> = skills.iter().map(|d| d.text.as_str()).collect();
+
+        // Dispatch to the configured backend.
+        let ranked_indices = match &self.config.backend {
+            #[cfg(feature = "local")]
+            RerankerBackend::Local { model_path } => {
+                self.rerank_local_indices(user_prompt, &texts, budget, model_path.as_deref())
+                    .await
+            }
+            RerankerBackend::Cohere { api_key } => {
+                rerank_cohere_indices(api_key, user_prompt, &texts, budget).await
+            }
+            RerankerBackend::Voyage { api_key } => {
+                rerank_voyage_indices(api_key, user_prompt, &texts, budget).await
+            }
+            RerankerBackend::Jina { api_key } => {
+                rerank_jina_indices(api_key, user_prompt, &texts, budget).await
+            }
+        };
+
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+
+        match ranked_indices {
+            Ok(indices) => {
+                tracing::info!(
+                    "[reranker] {original_count} → {} skills in {elapsed_ms}ms",
+                    indices.len()
+                );
+                indices.into_iter().map(|idx| skills[idx].clone()).collect()
+            }
+            Err(e) => {
+                tracing::warn!("[reranker] failed ({e}), returning full skill set");
+                skills
+            }
+        }
+    }
+
     // -- Main rerank entry point
 
     /// Rerank the given tool schemas against a user prompt.
@@ -151,35 +227,37 @@ impl ToolReranker {
         let original_count = tool_schemas.len();
         let start = std::time::Instant::now();
 
+        let texts: Vec<&str> = docs.iter().map(|d| d.text.as_str()).collect();
+
         // Dispatch to the configured backend.
-        let ranked = match &self.config.backend {
+        let ranked_indices = match &self.config.backend {
             #[cfg(feature = "local")]
             RerankerBackend::Local { model_path } => {
-                self.rerank_local(user_prompt, &docs, budget, model_path.as_deref())
+                self.rerank_local_indices(user_prompt, &texts, budget, model_path.as_deref())
                     .await
             }
             RerankerBackend::Cohere { api_key } => {
-                rerank_cohere(api_key, user_prompt, &docs, budget).await
+                rerank_cohere_indices(api_key, user_prompt, &texts, budget).await
             }
             RerankerBackend::Voyage { api_key } => {
-                rerank_voyage(api_key, user_prompt, &docs, budget).await
+                rerank_voyage_indices(api_key, user_prompt, &texts, budget).await
             }
             RerankerBackend::Jina { api_key } => {
-                rerank_jina(api_key, user_prompt, &docs, budget).await
+                rerank_jina_indices(api_key, user_prompt, &texts, budget).await
             }
         };
 
         let elapsed_ms = start.elapsed().as_millis() as u64;
 
-        match ranked {
-            Ok(selected_docs) => {
-                let selected_count = always_keep.len() + selected_docs.len();
+        match ranked_indices {
+            Ok(indices) => {
+                let selected_count = always_keep.len() + indices.len();
                 tracing::info!(
                     "[reranker] {original_count} → {selected_count} tools in {elapsed_ms}ms"
                 );
 
                 let mut result = always_keep;
-                result.extend(selected_docs.into_iter().map(|d| d.schema));
+                result.extend(indices.into_iter().map(|idx| docs[idx].schema.clone()));
                 result
             }
             Err(e) => {
@@ -192,32 +270,31 @@ impl ToolReranker {
     // -- Local ONNX backend
 
     #[cfg(feature = "local")]
-    async fn rerank_local(
+    async fn rerank_local_indices(
         &self,
         user_prompt: &str,
-        docs: &[ToolDocument],
+        texts: &[&str],
         top_n: usize,
         model_path: Option<&std::path::Path>,
-    ) -> Result<Vec<ToolDocument>> {
+    ) -> Result<Vec<usize>> {
         let model = self
             .local
             .get_or_try_init(|| async { crate::model::LocalModel::load(model_path).await })
             .await?;
 
-        model.rerank(user_prompt, docs, top_n)
+        model.rerank_indices(user_prompt, texts, top_n)
     }
 }
 
 // region:    --- Cloud backends
 
 /// Cohere `/v2/rerank` API.
-async fn rerank_cohere(
+async fn rerank_cohere_indices(
     api_key: &str,
     query: &str,
-    docs: &[ToolDocument],
+    texts: &[&str],
     top_n: usize,
-) -> Result<Vec<ToolDocument>> {
-    let texts: Vec<&str> = docs.iter().map(|d| d.text.as_str()).collect();
+) -> Result<Vec<usize>> {
     let body = serde_json::json!({
         "model": "rerank-v3.5",
         "query": query,
@@ -239,17 +316,16 @@ async fn rerank_cohere(
     }
 
     let json: Value = resp.json().await?;
-    parse_index_results(&json["results"], docs, top_n)
+    parse_index_results(&json["results"], texts.len(), top_n)
 }
 
 /// Voyage AI `/v1/rerank` API.
-async fn rerank_voyage(
+async fn rerank_voyage_indices(
     api_key: &str,
     query: &str,
-    docs: &[ToolDocument],
+    texts: &[&str],
     top_n: usize,
-) -> Result<Vec<ToolDocument>> {
-    let texts: Vec<&str> = docs.iter().map(|d| d.text.as_str()).collect();
+) -> Result<Vec<usize>> {
     let body = serde_json::json!({
         "model": "rerank-2.5",
         "query": query,
@@ -271,17 +347,16 @@ async fn rerank_voyage(
     }
 
     let json: Value = resp.json().await?;
-    parse_index_results(&json["results"], docs, top_n)
+    parse_index_results(&json["results"], texts.len(), top_n)
 }
 
 /// Jina AI `/v1/rerank` API.
-async fn rerank_jina(
+async fn rerank_jina_indices(
     api_key: &str,
     query: &str,
-    docs: &[ToolDocument],
+    texts: &[&str],
     top_n: usize,
-) -> Result<Vec<ToolDocument>> {
-    let texts: Vec<&str> = docs.iter().map(|d| d.text.as_str()).collect();
+) -> Result<Vec<usize>> {
     let body = serde_json::json!({
         "model": "jina-reranker-v2-base-multilingual",
         "query": query,
@@ -303,29 +378,25 @@ async fn rerank_jina(
     }
 
     let json: Value = resp.json().await?;
-    parse_index_results(&json["results"], docs, top_n)
+    parse_index_results(&json["results"], texts.len(), top_n)
 }
 
 /// Parse the `results` array returned by Cohere / Voyage / Jina APIs.
 ///
 /// Each element has `{ "index": N, "relevance_score": F }`.
-fn parse_index_results(
-    results: &Value,
-    docs: &[ToolDocument],
-    top_n: usize,
-) -> Result<Vec<ToolDocument>> {
+fn parse_index_results(results: &Value, doc_count: usize, top_n: usize) -> Result<Vec<usize>> {
     let arr = results
         .as_array()
         .ok_or_else(|| Error::custom("expected results array from rerank API"))?;
 
-    let mut selected: Vec<ToolDocument> = Vec::with_capacity(top_n);
+    let mut selected: Vec<usize> = Vec::with_capacity(top_n);
     for item in arr.iter().take(top_n) {
         let idx = item["index"]
             .as_u64()
             .ok_or_else(|| Error::custom("missing index in rerank result"))?
             as usize;
-        if idx < docs.len() {
-            selected.push(docs[idx].clone());
+        if idx < doc_count {
+            selected.push(idx);
         }
     }
     Ok(selected)
@@ -538,10 +609,10 @@ mod tests {
             { "index": 1, "relevance_score": 0.30 },
         ]);
 
-        let result = super::parse_index_results(&api_response, &docs, 2).unwrap();
+        let result = super::parse_index_results(&api_response, docs.len(), 2).unwrap();
         assert_eq!(result.len(), 2);
-        assert_eq!(result[0].name, "c");
-        assert_eq!(result[1].name, "a");
+        assert_eq!(docs[result[0]].name, "c");
+        assert_eq!(docs[result[1]].name, "a");
     }
 
     #[test]
@@ -552,7 +623,7 @@ mod tests {
             text: "a".into(),
         }];
         let api_response = json!([]);
-        let result = super::parse_index_results(&api_response, &docs, 5).unwrap();
+        let result = super::parse_index_results(&api_response, docs.len(), 5).unwrap();
         assert!(result.is_empty());
     }
 
@@ -565,7 +636,7 @@ mod tests {
         }];
         // Not an array
         let api_response = json!("not an array");
-        let result = super::parse_index_results(&api_response, &docs, 5);
+        let result = super::parse_index_results(&api_response, docs.len(), 5);
         assert!(result.is_err());
     }
 
@@ -580,10 +651,10 @@ mod tests {
             { "index": 999, "relevance_score": 0.99 },
             { "index": 0, "relevance_score": 0.50 },
         ]);
-        let result = super::parse_index_results(&api_response, &docs, 5).unwrap();
+        let result = super::parse_index_results(&api_response, docs.len(), 5).unwrap();
         // Index 999 is out of bounds and skipped, only index 0 is kept.
         assert_eq!(result.len(), 1);
-        assert_eq!(result[0].name, "a");
+        assert_eq!(docs[result[0]].name, "a");
     }
 }
 

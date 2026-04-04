@@ -7,6 +7,9 @@ pub struct RerankerConfig {
     /// Number of top tools to keep after reranking.
     pub top_n: usize,
 
+    /// Number of top skills to keep after reranking.
+    pub max_skills: usize,
+
     /// Which backend to use.
     pub backend: RerankerBackend,
 
@@ -41,6 +44,7 @@ impl Default for RerankerConfig {
         Self {
             enabled: false,
             top_n: 15,
+            max_skills: 5,
             backend: RerankerBackend::default(),
             protected_tools: default_protected_tools(),
         }
@@ -111,6 +115,11 @@ pub fn config_from_env() -> RerankerConfig {
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(15);
 
+    let max_skills = std::env::var("CADE_RERANKER_MAX_SKILLS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(5);
+
     let backend_name =
         std::env::var("CADE_RERANKER_BACKEND").unwrap_or_else(|_| "local".to_string());
 
@@ -147,6 +156,7 @@ pub fn config_from_env() -> RerankerConfig {
     RerankerConfig {
         enabled,
         top_n,
+        max_skills,
         backend,
         protected_tools: default_protected_tools(),
     }
@@ -217,6 +227,7 @@ mod tests {
         let cfg = RerankerConfig {
             enabled: true,
             top_n: 20,
+            max_skills: 5,
             backend: RerankerBackend::Cohere {
                 api_key: "sk-test".into(),
             },
@@ -235,6 +246,7 @@ mod tests {
         let cfg = RerankerConfig {
             enabled: true,
             top_n: 10,
+            max_skills: 5,
             backend: RerankerBackend::Voyage {
                 api_key: "voy-key".into(),
             },
@@ -250,6 +262,7 @@ mod tests {
         let cfg = RerankerConfig {
             enabled: true,
             top_n: 10,
+            max_skills: 5,
             backend: RerankerBackend::Jina {
                 api_key: "jina-key".into(),
             },

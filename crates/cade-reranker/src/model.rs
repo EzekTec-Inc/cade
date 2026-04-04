@@ -5,7 +5,6 @@
 
 #![cfg(feature = "local")]
 
-use crate::reranker::ToolDocument;
 use crate::{Error, Result};
 use ndarray::Array2;
 use ort::session::Session;
@@ -61,12 +60,12 @@ impl LocalModel {
     }
 
     /// Score `(query, document)` pairs and return the top-N documents.
-    pub fn rerank(
+    pub fn rerank_indices(
         &self,
         query: &str,
-        docs: &[ToolDocument],
+        docs: &[impl AsRef<str>],
         top_n: usize,
-    ) -> Result<Vec<ToolDocument>> {
+    ) -> Result<Vec<usize>> {
         if docs.is_empty() {
             return Ok(vec![]);
         }
@@ -77,7 +76,7 @@ impl LocalModel {
             .map(|d| {
                 tokenizers::EncodeInput::Dual(
                     tokenizers::InputSequence::from(query),
-                    tokenizers::InputSequence::from(d.text.as_str()),
+                    tokenizers::InputSequence::from(d.as_ref()),
                 )
             })
             .collect();
@@ -148,10 +147,10 @@ impl LocalModel {
         scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
         // Take top-N.
-        let selected: Vec<ToolDocument> = scored
+        let selected: Vec<usize> = scored
             .into_iter()
             .take(top_n)
-            .map(|(idx, _score)| docs[idx].clone())
+            .map(|(idx, _score)| idx)
             .collect();
 
         Ok(selected)

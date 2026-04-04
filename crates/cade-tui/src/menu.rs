@@ -409,9 +409,9 @@ pub fn show_command_menu_with_caps(
                     if let MenuItem::Cmd { cmd, desc } = &items[j]
                         && (cmd.to_lowercase().contains(&q_low)
                             || desc.to_lowercase().contains(&q_low))
-                        {
-                            matching.push(items[j].clone());
-                        }
+                    {
+                        matching.push(items[j].clone());
+                    }
                     j += 1;
                 }
                 if !matching.is_empty() {
