@@ -108,11 +108,18 @@ fn pattern_matches(pattern: &str, arg: &str) -> bool {
 
 /// Extract the first meaningful string argument from a tool's args JSON.
 pub fn tool_first_arg(tool_name: &str, args: &serde_json::Value) -> Option<String> {
+    // Strip MCP server prefix (e.g. "desktop-commander__write_file" -> "write_file")
+    let base_name = if let Some(pos) = tool_name.rfind("__") {
+        &tool_name[pos + 2..]
+    } else {
+        tool_name
+    };
+
     // Known arg key names per tool type
-    let keys = match tool_name.to_lowercase().as_str() {
-        "bash" | "shell" | "run_command" | "execute_command" => &["command", "cmd"][..],
+    let keys = match base_name.to_lowercase().as_str() {
+        "bash" | "shell" | "run_command" | "execute_command" | "start_process" => &["command", "cmd"][..],
         "read_file" | "write_file" | "edit_file" | "create_file" | "delete_file" | "move_file"
-        | "rename_file" | "apply_patch" => &["path", "file_path", "filename"][..],
+        | "rename_file" | "apply_patch" | "edit_block" => &["path", "file_path", "filename"][..],
         _ => &["path", "command", "query"][..],
     };
     for key in keys {
@@ -177,7 +184,8 @@ const WRITE_TOOLS: &[&str] = &[
     "patch_file",
     "apply_patch", // Codex toolset file patching
     "apply_diff",
-    "desktop_control",   // sends input / clicks
+    "edit_block",      // Desktop commander
+    "desktop_control", // sends input / clicks
     "send_notification", // side-effect
 ];
 
@@ -1059,15 +1067,21 @@ impl PermissionManager {
         let arg = tool_first_arg(tool_name, args);
         let arg_ref = arg.as_deref();
 
+        let base_name = if let Some(pos) = tool_name.rfind("__") {
+            &tool_name[pos + 2..]
+        } else {
+            tool_name
+        };
+
         if let Some(arg_str) = arg_ref
             && path_is_protected(arg_str)
         {
-            if WRITE_TOOLS.contains(&tool_name) {
+            if WRITE_TOOLS.contains(&base_name) {
                 return false;
             }
             if matches!(
-                tool_name,
-                "bash" | "shell" | "run_command" | "execute_command"
+                base_name,
+                "bash" | "shell" | "run_command" | "execute_command" | "start_process"
             ) {
                 let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
                 if bash_command_is_write(cmd) {
@@ -1091,8 +1105,8 @@ impl PermissionManager {
         // an allow rule matches.  Every bash call requires explicit approval.
         if self.strict_bash
             && matches!(
-                tool_name,
-                "bash" | "shell" | "run_command" | "execute_command"
+                base_name,
+                "bash" | "shell" | "run_command" | "execute_command" | "start_process"
             )
         {
             return false;
@@ -1111,8 +1125,8 @@ impl PermissionManager {
 
         // SEC-B3: Prevent Auto-Approval of Config/Skill Edits (RCE Mitigation)
         if matches!(
-            tool_name,
-            "write_file" | "edit_file" | "apply_patch" | "write" | "edit" | "patch"
+            base_name,
+            "write_file" | "edit_file" | "apply_patch" | "write" | "edit" | "patch" | "edit_block"
         ) && let Some(path) = arg_ref
             && (path.contains(".cade/settings.json")
                 || path.contains("settings.local.json")
@@ -1134,7 +1148,7 @@ impl PermissionManager {
             }
             PermissionMode::AcceptEdits => {
                 // File edits + apply_patch (Codex toolset)
-                matches!(tool_name, "write_file" | "edit_file" | "apply_patch")
+                matches!(base_name, "write_file" | "edit_file" | "apply_patch" | "edit_block")
             }
             _ => false,
         }
@@ -1149,16 +1163,22 @@ impl PermissionManager {
         let arg = tool_first_arg(tool_name, args);
         let arg_ref = arg.as_deref();
 
+        let base_name = if let Some(pos) = tool_name.rfind("__") {
+            &tool_name[pos + 2..]
+        } else {
+            tool_name
+        };
+
         // 0. Granular path protections (block always, regardless of mode)
         if let Some(arg_str) = arg_ref
             && path_is_protected(arg_str)
         {
-            if WRITE_TOOLS.contains(&tool_name) {
+            if WRITE_TOOLS.contains(&base_name) {
                 return true;
             }
             if matches!(
-                tool_name,
-                "bash" | "shell" | "run_command" | "execute_command"
+                base_name,
+                "bash" | "shell" | "run_command" | "execute_command" | "start_process"
             ) {
                 let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
                 if bash_command_is_write(cmd) {
@@ -1183,14 +1203,14 @@ impl PermissionManager {
         }
 
         // Plan mode: block write tools
-        if WRITE_TOOLS.contains(&tool_name) {
+        if WRITE_TOOLS.contains(&base_name) {
             return true;
         }
 
         // Bash — allow read-only commands, block write ones
         if matches!(
-            tool_name,
-            "bash" | "shell" | "run_command" | "execute_command"
+            base_name,
+            "bash" | "shell" | "run_command" | "execute_command" | "start_process"
         ) {
             let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
             return bash_command_is_write(cmd);
@@ -1204,15 +1224,21 @@ impl PermissionManager {
         let arg = tool_first_arg(tool_name, args);
         let arg_ref = arg.as_deref();
 
+        let base_name = if let Some(pos) = tool_name.rfind("__") {
+            &tool_name[pos + 2..]
+        } else {
+            tool_name
+        };
+
         // Check granular path protections first
         if let Some(arg_str) = arg_ref
             && path_is_protected(arg_str)
         {
-            let is_write = if WRITE_TOOLS.contains(&tool_name) {
+            let is_write = if WRITE_TOOLS.contains(&base_name) {
                 true
             } else if matches!(
-                tool_name,
-                "bash" | "shell" | "run_command" | "execute_command"
+                base_name,
+                "bash" | "shell" | "run_command" | "execute_command" | "start_process"
             ) {
                 let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
                 bash_command_is_write(cmd)
@@ -1236,8 +1262,8 @@ impl PermissionManager {
         }
 
         if matches!(
-            tool_name,
-            "bash" | "shell" | "run_command" | "execute_command"
+            base_name,
+            "bash" | "shell" | "run_command" | "execute_command" | "start_process"
         ) {
             let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
             format!(
