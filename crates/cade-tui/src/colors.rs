@@ -309,9 +309,22 @@ impl ThemeColors {
         base.overlay_section = base.md_heading;
         base.overlay_hint = base.muted;
         base.overlay_selected_bg = base.selected_bg;
-        base.overlay_selected_fg = base.accent;
+
+        let dark_text = RC::Rgb(20, 20, 20); // Dark text for bright backgrounds
+
+        if is_bright(&base.overlay_selected_bg) {
+            base.overlay_selected_fg = dark_text;
+        } else {
+            base.overlay_selected_fg = base.accent;
+        }
+
         base.badge_bg = base.selected_bg;
-        base.badge_fg = base.accent;
+        if is_bright(&base.selected_bg) {
+            base.badge_fg = dark_text;
+        } else {
+            base.badge_fg = base.accent;
+        }
+
         base.assistant_accent = base.tool_title;
         base.reasoning_bg = base.tool_pending_bg;
         base
@@ -321,6 +334,16 @@ impl ThemeColors {
 // endregion: --- ThemeColors
 
 // region:    --- Support
+
+fn is_bright(color: &RC) -> bool {
+    if let RC::Rgb(r, g, b) = color {
+        // Standard relative luminance formula
+        let luminance = 0.299 * (*r as f32) + 0.587 * (*g as f32) + 0.114 * (*b as f32);
+        luminance > 128.0
+    } else {
+        false
+    }
+}
 
 fn resolve_color(
     c: &cade_core::resources::themes::ThemeColor,
