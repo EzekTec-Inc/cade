@@ -464,7 +464,14 @@ impl TuiApp {
     /// that the ToolCall header appears at the top of the viewport when the
     /// corresponding ToolResult is pushed.
     fn rows_from_last_tool_call(&self) -> usize {
-        let cw = self.term_width.max(20);
+        let main_w = if self.term_width >= crate::app::SIDEBAR_BREAKPOINT {
+            let sidebar_w = crate::app::SIDEBAR_WIDTH.min(self.term_width.saturating_sub(24));
+            self.term_width.saturating_sub(sidebar_w)
+        } else {
+            self.term_width
+        };
+        let cw = main_w.saturating_sub(4).max(1);
+
         let mut total: u16 = 0;
         for entry in build_timeline_entries(&self.lines).into_iter().rev() {
             total = total.saturating_add(entry.visual_rows_with_state(
@@ -1717,12 +1724,12 @@ impl TuiApp {
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp => {
                         self.follow = false;
-                        self.scroll = self.scroll.saturating_add(3);
+                        self.scroll = self.scroll.saturating_add(1);
                         self.draw()?;
                     }
                     MouseEventKind::ScrollDown => {
                         if self.scroll > 0 {
-                            self.scroll = self.scroll.saturating_sub(3);
+                            self.scroll = self.scroll.saturating_sub(1);
                         }
                         if self.scroll == 0 {
                             self.follow = true;

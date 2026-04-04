@@ -504,8 +504,8 @@ impl Repl {
                         } else if let Ok(mut app) = tick_app.try_lock() {
                             // Mouse / resize — best-effort, fine to drop
                             if let Event::Mouse(m) = evt { match m.kind {
-                                MouseEventKind::ScrollUp   => { app.follow = false; app.scroll = app.scroll.saturating_add(3); let _ = app.draw(); }
-                                MouseEventKind::ScrollDown => { if app.scroll > 3 { app.scroll = app.scroll.saturating_sub(3); } else { app.scroll = 0; app.follow = true; } let _ = app.draw(); }
+                                MouseEventKind::ScrollUp   => { app.follow = false; app.scroll = app.scroll.saturating_add(1); let _ = app.draw(); }
+                                MouseEventKind::ScrollDown => { if app.scroll > 1 { app.scroll = app.scroll.saturating_sub(1); } else { app.scroll = 0; app.follow = true; } let _ = app.draw(); }
                                 _ => {}
                             } }
                         }

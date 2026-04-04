@@ -450,8 +450,18 @@ impl<'a> TimelineEntry<'a> {
         expanded_items: &std::collections::HashSet<TimelineKey>,
         colors: &ThemeColors,
     ) -> u16 {
+        let card_style = match self.key.kind {
+            TimelineItemKind::User => CardStyle::User,
+            TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant => CardStyle::Assistant,
+            _ => CardStyle::None,
+        };
+        let effective_width = match card_style {
+            CardStyle::None => content_w,
+            _ => content_w.saturating_sub(2), // 1 for border, 1 for padding
+        };
+
         self.item.visual_rows(
-            content_w,
+            effective_width,
             self.is_expanded(expand_all, expanded_items),
             colors,
         )
