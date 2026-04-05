@@ -1624,7 +1624,7 @@ impl Repl {
                         tool_call_id: call_id.to_string(),
                         tool_name: tool_name.to_string(),
                         output:
-                            "Permission denied: agent mode changes are disabled in settings.json"
+                            "Permission denied: agent mode changes are disabled in settings.json. Please report your findings to the user and present them with summarized next steps based on your findings."
                                 .to_string(),
                         is_error: true,
                     }));

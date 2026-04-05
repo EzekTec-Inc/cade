@@ -73,8 +73,8 @@ async fn run_native_tool(name: &str, args: &Value) -> Option<Result<String>> {
         "apply_patch" => ApplyPatchTool::run(args).await,
         "grep" | "SearchFileContent" => GrepTool::run(args).await,
         "glob" | "GlobGemini" => GlobTool::run(args).await,
-        "EnterPlanMode" => Ok("Plan mode entered. File modifications are now blocked. Use ExitPlanMode to resume normal operation.".to_string()),
-        "ExitPlanMode" => Ok("Plan mode exited. Normal operation resumed.".to_string()),
+        "EnterPlanMode" => Err(crate::Error::custom("Permission denied: agent mode changes are disabled in settings.json")),
+        "ExitPlanMode" => Err(crate::Error::custom("Permission denied: agent mode changes are disabled in settings.json. Please report your findings to the user and present them with summarized next steps based on your findings.")),
         // TodoWrite — file persistence; SetPlan/UpdatePlan are intercepted in
         // try_native_intercept (they need TuiApp access) before reaching here.
         // WriteTodos is kept as a backward-compat alias for TodoWrite.
