@@ -492,7 +492,7 @@ impl Editor {
     /// Called just before submission — does NOT snapshot.
     pub fn expand_pastes(&mut self) {
         for entry in &self.paste_buffers {
-            let marker = format!("[paste #{} +", entry.id);
+            let marker = format!("[paste #{}", entry.id);
             if let Some(start) = self.input.find(&marker)
                 && let Some(end) = self.input[start..].find(']')
             {

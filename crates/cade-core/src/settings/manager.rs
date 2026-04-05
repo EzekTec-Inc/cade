@@ -99,6 +99,11 @@ pub struct PermissionSettings {
     /// Every bash invocation will require explicit user confirmation.
     #[serde(default)]
     pub strict_bash: bool,
+    /// When true, allows the LLM to autonomously change the permission mode
+    /// via `EnterPlanMode` and `ExitPlanMode` tools. When false, these tools
+    /// are hidden from the LLM context.
+    #[serde(default)]
+    pub allow_agent_mode_changes: bool,
 }
 
 // -- MCP server configuration

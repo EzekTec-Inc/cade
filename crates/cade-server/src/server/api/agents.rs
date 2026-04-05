@@ -376,20 +376,38 @@ pub async fn clear_messages_handler(
     Ok(Json(json!({ "deleted": n })))
 }
 
-/// GET /v1/agents/:id/messages?q=<query>&conversation_id=<id> — search message history
+/// GET /v1/agents/:id/messages?q=<query>&conversation_id=<id>&limit=<limit> — search or list message history
 pub async fn search_messages_handler(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
     axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let query = params.get("q").map(String::as_str).unwrap_or("");
-    if query.is_empty() {
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(json!({"detail": "missing ?q= parameter"})),
-        ));
-    }
     let conv_id = params.get("conversation_id").map(String::as_str);
+
+    if query.is_empty() {
+        let limit = params
+            .get("limit")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(100);
+        let rows = sqlite::list_messages(&state.db, &agent_id, conv_id, limit)
+            .map_err(|e| server_err(e.to_string()))?;
+        let messages: Vec<Value> = rows
+            .into_iter()
+            .map(|r| {
+                json!({
+                    "id":              r.id,
+                    "role":            r.role,
+                    "content":         r.content,
+                    "conversation_id": r.conversation_id,
+                    "score":           0.0,
+                    "snippet":         Value::Null,
+                })
+            })
+            .collect();
+        return Ok(Json(json!({ "messages": messages, "query": query })));
+    }
+
     let rows = sqlite::search_messages(&state.db, &agent_id, query, conv_id)
         .map_err(|e| server_err(e.to_string()))?;
     let messages: Vec<Value> = rows

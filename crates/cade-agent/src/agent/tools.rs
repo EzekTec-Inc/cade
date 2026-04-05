@@ -50,10 +50,14 @@ pub async fn register_mcp_tools(client: &CadeClient, schemas: Vec<Value>) -> Res
 /// accurate parameter descriptions.
 ///
 /// Execution happens client-side in Rust — the Python stubs are never run.
-pub async fn register_cade_tools(client: &CadeClient, toolset: Toolset) -> Result<Vec<ToolDef>> {
+pub async fn register_cade_tools(
+    client: &CadeClient,
+    toolset: Toolset,
+    allow_agent_mode_changes: bool,
+) -> Result<Vec<ToolDef>> {
     let mut registered = Vec::new();
 
-    for schema in schemas_for_toolset(toolset) {
+    for schema in schemas_for_toolset(toolset, allow_agent_mode_changes) {
         let name = schema["name"].as_str().unwrap_or("").to_string();
         let description = schema["description"].as_str().unwrap_or("").to_string();
 

@@ -70,7 +70,7 @@ pub fn meta_schemas_for_capabilities(caps: &CapabilitySet) -> Vec<Value> {
 
 /// Filter native-tool schemas (for a toolset) to only those allowed by capabilities.
 pub fn native_schemas_for_capabilities(toolset: Toolset, caps: &CapabilitySet) -> Vec<Value> {
-    schemas_for_toolset(toolset)
+    schemas_for_toolset(toolset, false)
         .into_iter()
         .filter(|schema| {
             let name = tool_name(schema);

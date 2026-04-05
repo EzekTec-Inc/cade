@@ -362,9 +362,15 @@ impl Repl {
         let client = self.client.clone();
         let mcp_arc = std::sync::Arc::clone(&self.mcp);
         let toolset = *self.current_toolset.lock().expect("lock poisoned");
+        let allow_agent_mode = self
+            .settings
+            .lock()
+            .expect("lock poisoned")
+            .permission_settings()
+            .allow_agent_mode_changes;
         tokio::spawn(async move {
             use cade_agent::agent::tools::{register_cade_tools, register_mcp_tools};
-            let tools = register_cade_tools(&client, toolset)
+            let tools = register_cade_tools(&client, toolset, allow_agent_mode)
                 .await
                 .unwrap_or_default();
             let ids: Vec<String> = tools.into_iter().map(|t| t.id).collect();
@@ -900,12 +906,19 @@ impl Repl {
                         let toolset2 = *self.current_toolset.lock().expect("lock poisoned");
                         let agent_id = self.agent_id();
                         use cade_agent::agent::tools::{register_cade_tools, register_mcp_tools};
-                        let native_ids: Vec<String> = register_cade_tools(&client2, toolset2)
-                            .await
-                            .unwrap_or_default()
-                            .into_iter()
-                            .map(|t| t.id)
-                            .collect();
+                        let allow_agent_mode = self
+                            .settings
+                            .lock()
+                            .expect("lock poisoned")
+                            .permission_settings()
+                            .allow_agent_mode_changes;
+                        let native_ids: Vec<String> =
+                            register_cade_tools(&client2, toolset2, allow_agent_mode)
+                                .await
+                                .unwrap_or_default()
+                                .into_iter()
+                                .map(|t| t.id)
+                                .collect();
                         let n_native = native_ids.len();
                         if !native_ids.is_empty() {
                             let _ = client2.attach_agent_tools(&agent_id, &native_ids).await;
@@ -2265,12 +2278,18 @@ impl Repl {
                                 let mcp2 = std::sync::Arc::clone(&self.mcp);
                                 let toolset2 = *self.current_toolset.lock().expect("lock poisoned");
                                 let new_id = a.id.clone();
+                                let allow_agent_mode = self
+                                    .settings
+                                    .lock()
+                                    .expect("lock poisoned")
+                                    .permission_settings()
+                                    .allow_agent_mode_changes;
                                 tokio::spawn(async move {
                                     use cade_agent::agent::tools::{
                                         register_cade_tools, register_mcp_tools,
                                     };
                                     let native_ids: Vec<String> =
-                                        register_cade_tools(&client2, toolset2)
+                                        register_cade_tools(&client2, toolset2, allow_agent_mode)
                                             .await
                                             .unwrap_or_default()
                                             .into_iter()

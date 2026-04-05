@@ -117,7 +117,9 @@ pub fn tool_first_arg(tool_name: &str, args: &serde_json::Value) -> Option<Strin
 
     // Known arg key names per tool type
     let keys = match base_name.to_lowercase().as_str() {
-        "bash" | "shell" | "run_command" | "execute_command" | "start_process" => &["command", "cmd"][..],
+        "bash" | "shell" | "run_command" | "execute_command" | "start_process" => {
+            &["command", "cmd"][..]
+        }
         "read_file" | "write_file" | "edit_file" | "create_file" | "delete_file" | "move_file"
         | "rename_file" | "apply_patch" | "edit_block" => &["path", "file_path", "filename"][..],
         _ => &["path", "command", "query"][..],
@@ -184,8 +186,8 @@ const WRITE_TOOLS: &[&str] = &[
     "patch_file",
     "apply_patch", // Codex toolset file patching
     "apply_diff",
-    "edit_block",      // Desktop commander
-    "desktop_control", // sends input / clicks
+    "edit_block",        // Desktop commander
+    "desktop_control",   // sends input / clicks
     "send_notification", // side-effect
 ];
 
@@ -786,24 +788,24 @@ mod tests {
 
         // Write to .env should be blocked
         let args = json!({"path": ".env"});
-        assert!(mgr.is_blocked("write_file", &args));
-        assert!(!mgr.auto_approve("write_file", &args));
+        assert!(mgr.is_blocked("write_file", &args, false));
+        assert!(!mgr.auto_approve("write_file", &args, false));
 
         // Write to .git should be blocked
         let args = json!({"path": ".git/config"});
-        assert!(mgr.is_blocked("edit_file", &args));
+        assert!(mgr.is_blocked("edit_file", &args, false));
 
         // Read from .env should NOT be blocked (unless Plan mode? No, plan mode allows read)
         let args = json!({"path": ".env"});
-        assert!(!mgr.is_blocked("read_file", &args));
+        assert!(!mgr.is_blocked("read_file", &args, false));
 
         // Bash write to .ssh should be blocked
         let args = json!({"command": "echo 'key' > ~/.ssh/authorized_keys"});
-        assert!(mgr.is_blocked("bash", &args));
+        assert!(mgr.is_blocked("bash", &args, false));
 
         // Bash read from .git should NOT be blocked
         let args = json!({"command": "cat .git/HEAD"});
-        assert!(!mgr.is_blocked("bash", &args));
+        assert!(!mgr.is_blocked("bash", &args, false));
     }
 
     #[test]
@@ -819,23 +821,23 @@ mod tests {
     fn manager_bypass_mode_auto_approves() {
         let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
         let args = json!({"command": "rm -rf /"});
-        assert!(mgr.auto_approve("bash", &args));
+        assert!(mgr.auto_approve("bash", &args, false));
     }
 
     #[test]
     fn manager_default_mode_does_not_auto_approve() {
         let mgr = PermissionManager::new(PermissionMode::Default);
         let args = json!({"command": "ls"});
-        assert!(!mgr.auto_approve("bash", &args));
+        assert!(!mgr.auto_approve("bash", &args, false));
     }
 
     #[test]
     fn manager_accept_edits_auto_approves_file_tools() {
         let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
-        assert!(mgr.auto_approve("write_file", &json!({"path": "foo.rs"})));
-        assert!(mgr.auto_approve("edit_file", &json!({"path": "foo.rs"})));
-        assert!(mgr.auto_approve("apply_patch", &json!({"path": "foo.rs"})));
-        assert!(!mgr.auto_approve("bash", &json!({"command": "ls"})));
+        assert!(mgr.auto_approve("write_file", &json!({"path": "foo.rs"}), false));
+        assert!(mgr.auto_approve("edit_file", &json!({"path": "foo.rs"}), false));
+        assert!(mgr.auto_approve("apply_patch", &json!({"path": "foo.rs"}), false));
+        assert!(!mgr.auto_approve("bash", &json!({"command": "ls"}), false));
     }
 
     #[test]
@@ -843,7 +845,7 @@ mod tests {
         let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
         mgr.add_deny_rule(PermissionRule::parse("Bash(rm -rf:*)").unwrap());
         let args = json!({"command": "rm -rf /tmp"});
-        assert!(!mgr.auto_approve("bash", &args));
+        assert!(!mgr.auto_approve("bash", &args, false));
     }
 
     #[test]
@@ -851,7 +853,7 @@ mod tests {
         let mgr = PermissionManager::new(PermissionMode::Default);
         mgr.add_deny_rule(PermissionRule::parse("bash").unwrap());
         let args = json!({"command": "ls"});
-        assert!(mgr.is_blocked("bash", &args));
+        assert!(mgr.is_blocked("bash", &args, false));
     }
 
     #[test]
@@ -859,7 +861,7 @@ mod tests {
         let mgr = PermissionManager::new(PermissionMode::Default);
         mgr.add_allow_rule(PermissionRule::parse("Bash(cargo test)").unwrap());
         let args = json!({"command": "cargo test"});
-        assert!(mgr.auto_approve("bash", &args));
+        assert!(mgr.auto_approve("bash", &args, false));
     }
 
     #[test]
@@ -867,7 +869,7 @@ mod tests {
         let mgr = PermissionManager::new(PermissionMode::Default);
         mgr.add_allow_rule(PermissionRule::parse("Bash(cargo test)").unwrap());
         let args = json!({"command": "cargo build"});
-        assert!(!mgr.auto_approve("bash", &args));
+        assert!(!mgr.auto_approve("bash", &args, false));
     }
 
     #[test]
@@ -889,25 +891,25 @@ mod tests {
     fn manager_plan_mode_blocks_write_tools() {
         let mgr = PermissionManager::new(PermissionMode::Plan);
         let args = json!({"path": "foo.rs"});
-        assert!(mgr.is_blocked("write_file", &args));
-        assert!(mgr.is_blocked("edit_file", &args));
-        assert!(mgr.is_blocked("delete_file", &args));
-        assert!(mgr.is_blocked("desktop_control", &json!({})));
-        assert!(mgr.is_blocked("apply_patch", &args));
+        assert!(mgr.is_blocked("write_file", &args, false));
+        assert!(mgr.is_blocked("edit_file", &args, false));
+        assert!(mgr.is_blocked("delete_file", &args, false));
+        assert!(mgr.is_blocked("desktop_control", &json!({}), false));
+        assert!(mgr.is_blocked("apply_patch", &args, false));
     }
 
     #[test]
     fn manager_plan_mode_allows_read_commands() {
         let mgr = PermissionManager::new(PermissionMode::Plan);
         let args = json!({"command": "ls -la"});
-        assert!(!mgr.is_blocked("bash", &args));
+        assert!(!mgr.is_blocked("bash", &args, false));
     }
 
     #[test]
     fn manager_plan_mode_blocks_write_commands() {
         let mgr = PermissionManager::new(PermissionMode::Plan);
         let args = json!({"command": "rm -rf target"});
-        assert!(mgr.is_blocked("bash", &args));
+        assert!(mgr.is_blocked("bash", &args, false));
     }
 
     #[test]
@@ -916,7 +918,7 @@ mod tests {
         mgr.add_allow_rule(PermissionRule::parse("bash").unwrap());
         let args = json!({"command": "ls"});
         // strict_bash prevents auto-approval even with an allow rule
-        assert!(!mgr.auto_approve("bash", &args));
+        assert!(!mgr.auto_approve("bash", &args, false));
     }
 
     #[test]
@@ -924,7 +926,7 @@ mod tests {
         let mgr = PermissionManager::new_with_strict_bash(PermissionMode::Default, true);
         mgr.add_allow_rule(PermissionRule::parse("read_file").unwrap());
         let args = json!({"path": "foo.rs"});
-        assert!(mgr.auto_approve("read_file", &args));
+        assert!(mgr.auto_approve("read_file", &args, false));
     }
 
     #[test]
@@ -932,11 +934,11 @@ mod tests {
         // SEC-B3: Config/skill edits should never be auto-approved
         let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
         let args = json!({"path": ".cade/settings.json"});
-        assert!(!mgr.auto_approve("write_file", &args));
+        assert!(!mgr.auto_approve("write_file", &args, false));
         let args = json!({"path": "settings.local.json"});
-        assert!(!mgr.auto_approve("edit_file", &args));
+        assert!(!mgr.auto_approve("edit_file", &args, false));
         let args = json!({"path": ".skills/hack/SKILL.MD"});
-        assert!(!mgr.auto_approve("write_file", &args));
+        assert!(!mgr.auto_approve("write_file", &args, false));
     }
 
     #[test]
@@ -952,7 +954,7 @@ mod tests {
         let mgr = PermissionManager::new(PermissionMode::Default);
         mgr.add_deny_rule(PermissionRule::parse("Bash(rm:*)").unwrap());
         let args = json!({"command": "rm -rf /"});
-        let reason = mgr.block_reason("bash", &args);
+        let reason = mgr.block_reason("bash", &args, false);
         assert!(reason.contains("deny rule"), "got: {reason}");
     }
 
@@ -960,7 +962,7 @@ mod tests {
     fn manager_block_reason_plan_mode() {
         let mgr = PermissionManager::new(PermissionMode::Plan);
         let args = json!({"path": "foo.rs"});
-        let reason = mgr.block_reason("write_file", &args);
+        let reason = mgr.block_reason("write_file", &args, false);
         assert!(reason.contains("plan mode"), "got: {reason}");
     }
 }
@@ -1063,7 +1065,12 @@ impl PermissionManager {
     ///   1. deny_rules match  → NOT auto-approved (must prompt or block)
     ///   2. allow_rules match → auto-approved
     ///   3. Mode-based        → BypassPermissions=always, AcceptEdits=file writes
-    pub fn auto_approve(&self, tool_name: &str, args: &serde_json::Value) -> bool {
+    pub fn auto_approve(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+        is_mcp_write: bool,
+    ) -> bool {
         let arg = tool_first_arg(tool_name, args);
         let arg_ref = arg.as_deref();
 
@@ -1076,7 +1083,7 @@ impl PermissionManager {
         if let Some(arg_str) = arg_ref
             && path_is_protected(arg_str)
         {
-            if WRITE_TOOLS.contains(&base_name) {
+            if WRITE_TOOLS.contains(&base_name) || is_mcp_write {
                 return false;
             }
             if matches!(
@@ -1148,7 +1155,10 @@ impl PermissionManager {
             }
             PermissionMode::AcceptEdits => {
                 // File edits + apply_patch (Codex toolset)
-                matches!(base_name, "write_file" | "edit_file" | "apply_patch" | "edit_block")
+                matches!(
+                    base_name,
+                    "write_file" | "edit_file" | "apply_patch" | "edit_block"
+                ) || is_mcp_write
             }
             _ => false,
         }
@@ -1159,7 +1169,12 @@ impl PermissionManager {
     /// Resolution order:
     ///   1. deny_rules match in any mode → block
     ///   2. plan mode write detection    → block
-    pub fn is_blocked(&self, tool_name: &str, args: &serde_json::Value) -> bool {
+    pub fn is_blocked(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+        is_mcp_write: bool,
+    ) -> bool {
         let arg = tool_first_arg(tool_name, args);
         let arg_ref = arg.as_deref();
 
@@ -1173,7 +1188,7 @@ impl PermissionManager {
         if let Some(arg_str) = arg_ref
             && path_is_protected(arg_str)
         {
-            if WRITE_TOOLS.contains(&base_name) {
+            if WRITE_TOOLS.contains(&base_name) || is_mcp_write {
                 return true;
             }
             if matches!(
@@ -1203,7 +1218,7 @@ impl PermissionManager {
         }
 
         // Plan mode: block write tools
-        if WRITE_TOOLS.contains(&base_name) {
+        if WRITE_TOOLS.contains(&base_name) || is_mcp_write {
             return true;
         }
 
@@ -1220,7 +1235,12 @@ impl PermissionManager {
     }
 
     /// Human-readable reason why a tool call was blocked.
-    pub fn block_reason(&self, tool_name: &str, args: &serde_json::Value) -> String {
+    pub fn block_reason(
+        &self,
+        tool_name: &str,
+        args: &serde_json::Value,
+        is_mcp_write: bool,
+    ) -> String {
         let arg = tool_first_arg(tool_name, args);
         let arg_ref = arg.as_deref();
 
@@ -1234,7 +1254,7 @@ impl PermissionManager {
         if let Some(arg_str) = arg_ref
             && path_is_protected(arg_str)
         {
-            let is_write = if WRITE_TOOLS.contains(&base_name) {
+            let is_write = if WRITE_TOOLS.contains(&base_name) || is_mcp_write {
                 true
             } else if matches!(
                 base_name,

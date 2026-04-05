@@ -324,6 +324,7 @@ impl Repl {
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::CONTROL =>
                                                     {
+                                                        app.editor.expand_pastes();
                                                         let msg = app.editor.input.trim().to_string();
                                                         if !msg.is_empty() {
                                                             let now_ms = std::time::SystemTime::now()
@@ -349,6 +350,7 @@ impl Repl {
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::NONE =>
                                                     {
+                                                        app.editor.expand_pastes();
                                                         let msg = app.editor.input.trim().to_string();
                                                         if !msg.is_empty() {
                                                             let now_ms = std::time::SystemTime::now()
@@ -384,6 +386,7 @@ impl Repl {
                                                         if m == KeyModifiers::ALT
                                                         || m == (KeyModifiers::SHIFT | KeyModifiers::ALT) =>
                                                     {
+                                                        app.editor.expand_pastes();
                                                         let msg = app.editor.input.trim().to_string();
                                                         if !msg.is_empty() {
                                                             tick_queued_followup.lock().expect("lock poisoned").push_back(msg);
@@ -473,6 +476,7 @@ impl Repl {
                                                         let cc_post_modal = cc_last_close > 0
                                                             && cc_now_ms.saturating_sub(cc_last_close) < 500;
                                                         if !cc_post_modal && tick_start.elapsed().as_millis() >= 200 {
+                                                            app.editor.expand_pastes();
                                                             let msg = app.editor.input.trim().to_string();
                                                             if !msg.is_empty() {
                                                                 // Steering: cancel current turn and
@@ -1581,6 +1585,22 @@ impl Repl {
     ) -> Option<Result<cade_agent::tools::ToolResult>> {
         match tool_name {
             "EnterPlanMode" => {
+                let allow_changes = self
+                    .settings
+                    .lock()
+                    .expect("lock poisoned")
+                    .permission_settings()
+                    .allow_agent_mode_changes;
+                if !allow_changes {
+                    return Some(Ok(cade_agent::tools::ToolResult {
+                        tool_call_id: call_id.to_string(),
+                        tool_name: tool_name.to_string(),
+                        output:
+                            "Permission denied: agent mode changes are disabled in settings.json"
+                                .to_string(),
+                        is_error: true,
+                    }));
+                }
                 self.permissions
                     .set_mode(cade_core::permissions::PermissionMode::Plan);
                 let mut app = self.app.lock().expect("lock poisoned");
@@ -1593,6 +1613,22 @@ impl Repl {
                 }))
             }
             "ExitPlanMode" => {
+                let allow_changes = self
+                    .settings
+                    .lock()
+                    .expect("lock poisoned")
+                    .permission_settings()
+                    .allow_agent_mode_changes;
+                if !allow_changes {
+                    return Some(Ok(cade_agent::tools::ToolResult {
+                        tool_call_id: call_id.to_string(),
+                        tool_name: tool_name.to_string(),
+                        output:
+                            "Permission denied: agent mode changes are disabled in settings.json"
+                                .to_string(),
+                        is_error: true,
+                    }));
+                }
                 self.permissions
                     .set_mode(cade_core::permissions::PermissionMode::Default);
                 let mut app = self.app.lock().expect("lock poisoned");
@@ -1704,9 +1740,11 @@ impl Repl {
         tool_name: &str,
         args: &serde_json::Value,
     ) -> Result<ToolPreflightResult> {
+        let is_mcp_write = cade_agent::tools::is_write_tool(tool_name, &self.mcp).await;
+
         // Permission check — plan mode / deny rules
-        if self.permissions.is_blocked(tool_name, args) {
-            let msg = self.permissions.block_reason(tool_name, args);
+        if self.permissions.is_blocked(tool_name, args, is_mcp_write) {
+            let msg = self.permissions.block_reason(tool_name, args, is_mcp_write);
             let _ = self
                 .app
                 .lock()
@@ -1727,7 +1765,7 @@ impl Repl {
             ));
         }
 
-        if !self.permissions.auto_approve(tool_name, args) {
+        if !self.permissions.auto_approve(tool_name, args, is_mcp_write) {
             // PermissionRequest hook — can block before showing prompt
             if let cade_core::hooks::HookOutcome::Block { reason } =
                 self.hooks.permission_request(tool_name, args).await

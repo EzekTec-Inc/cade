@@ -30,7 +30,7 @@ mod permission_tests {
 
         // -- Check (pre-condition)
         assert!(
-            !mgr.auto_approve("bash", &args),
+            !mgr.auto_approve("bash", &args, false),
             "should require approval before session-allow is added"
         );
 
@@ -39,7 +39,7 @@ mod permission_tests {
 
         // -- Check
         assert!(
-            mgr.auto_approve("bash", &args),
+            mgr.auto_approve("bash", &args, false),
             "should be auto-approved after add_session_allow"
         );
     }
@@ -55,11 +55,11 @@ mod permission_tests {
 
         // -- Check
         assert!(
-            mgr.auto_approve("bash", &bash_args),
+            mgr.auto_approve("bash", &bash_args, false),
             "bash should be allowed"
         );
         assert!(
-            !mgr.auto_approve("write_file", &write_args),
+            !mgr.auto_approve("write_file", &write_args, false),
             "write_file should still need approval"
         );
     }
@@ -76,11 +76,11 @@ mod permission_tests {
 
         // -- Check
         assert!(
-            mgr.auto_approve("bash", &safe_args),
+            mgr.auto_approve("bash", &safe_args, false),
             "safe bash should be allowed"
         );
         assert!(
-            !mgr.auto_approve("bash", &risky_args),
+            !mgr.auto_approve("bash", &risky_args, false),
             "rm -rf must be denied even after session allow"
         );
 
@@ -94,8 +94,8 @@ mod permission_tests {
         let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
 
         // -- Check
-        assert!(mgr.auto_approve("bash", &json!({ "command": "rm -rf /" })));
-        assert!(mgr.auto_approve("write_file", &json!({ "path": "/etc/passwd" })));
+        assert!(mgr.auto_approve("bash", &json!({ "command": "rm -rf /" }), false));
+        assert!(mgr.auto_approve("write_file", &json!({ "path": "/etc/passwd" }), false));
     }
 
     /// AcceptEdits only auto-approves file-mutation tools.
@@ -105,10 +105,10 @@ mod permission_tests {
         let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
 
         // -- Check
-        assert!(mgr.auto_approve("write_file", &json!({ "path": "x.rs" })));
-        assert!(mgr.auto_approve("edit_file", &json!({ "path": "x.rs" })));
-        assert!(mgr.auto_approve("apply_patch", &json!({ "path": "x.rs" })));
-        assert!(!mgr.auto_approve("bash", &json!({ "command": "ls" })));
+        assert!(mgr.auto_approve("write_file", &json!({ "path": "x.rs" }), false));
+        assert!(mgr.auto_approve("edit_file", &json!({ "path": "x.rs" }), false));
+        assert!(mgr.auto_approve("apply_patch", &json!({ "path": "x.rs" }), false));
+        assert!(!mgr.auto_approve("bash", &json!({ "command": "ls" }), false));
     }
 
     /// Plan mode blocks write tools and write shell commands.
@@ -118,10 +118,10 @@ mod permission_tests {
         let mgr = PermissionManager::new(PermissionMode::Plan);
 
         // -- Check
-        assert!(mgr.is_blocked("write_file", &json!({ "path": "x.rs" })));
-        assert!(mgr.is_blocked("bash", &json!({ "command": "rm foo" })));
-        assert!(!mgr.is_blocked("bash", &json!({ "command": "ls -la" })));
-        assert!(!mgr.is_blocked("bash", &json!({ "command": "cargo check" })));
+        assert!(mgr.is_blocked("write_file", &json!({ "path": "x.rs" }), false));
+        assert!(mgr.is_blocked("bash", &json!({ "command": "rm foo" }), false));
+        assert!(!mgr.is_blocked("bash", &json!({ "command": "ls -la" }), false));
+        assert!(!mgr.is_blocked("bash", &json!({ "command": "cargo check" }), false));
     }
 
     /// add_session_allow is idempotent — duplicate rules are not stored.
@@ -161,18 +161,21 @@ mod back_to_back_tool_tests {
         let args = json!({ "command": "cargo build" });
 
         // -- Check (pre-condition)
-        assert!(!mgr.auto_approve("bash", &args), "first call needs prompt");
+        assert!(
+            !mgr.auto_approve("bash", &args, false),
+            "first call needs prompt"
+        );
 
         // -- Exec
         mgr.add_session_allow("bash");
 
         // -- Check
         assert!(
-            mgr.auto_approve("bash", &args),
+            mgr.auto_approve("bash", &args, false),
             "second call must be auto-approved"
         );
         assert!(
-            mgr.auto_approve("bash", &json!({ "command": "cargo test" })),
+            mgr.auto_approve("bash", &json!({ "command": "cargo test" }), false),
             "third call with different args must also be auto-approved"
         );
     }

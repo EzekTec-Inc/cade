@@ -241,9 +241,10 @@ async fn run_one_tool(
     mcp: &std::sync::Arc<McpManager>,
     hooks: &HookEngine,
 ) -> (String, String, bool) {
+    let is_mcp_write = cade_agent::tools::is_write_tool(&tool_name, mcp).await;
     // -- Permission check
-    if permissions.is_blocked(&tool_name, &args) {
-        let reason = permissions.block_reason(&tool_name, &args);
+    if permissions.is_blocked(&tool_name, &args, is_mcp_write) {
+        let reason = permissions.block_reason(&tool_name, &args, is_mcp_write);
         tracing::warn!("{reason}");
         return (call_id, reason, true);
     }

@@ -100,7 +100,7 @@ fn rename_schema(mut schema: Value, new_name: &str) -> Value {
 }
 
 /// All tool JSON schemas for a given toolset.
-pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
+pub fn schemas_for_toolset(toolset: Toolset, allow_agent_mode_changes: bool) -> Vec<Value> {
     #[cfg(feature = "desktop")]
     let desktop = vec![
         DesktopCaptureTool::schema(),
@@ -117,8 +117,6 @@ pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
             ApplyPatchTool::schema(), // patch-based edit + write
             GrepTool::schema(),
             GlobTool::schema(),
-            EnterPlanModeTool::schema(),
-            ExitPlanModeTool::schema(),
             TodoWriteTool::schema(),
             SetPlanTool::schema(),
             UpdatePlanTool::schema(),
@@ -130,8 +128,6 @@ pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
             rename_schema(EditTool::schema(), "Replace"),
             rename_schema(GrepTool::schema(), "SearchFileContent"),
             rename_schema(GlobTool::schema(), "GlobGemini"),
-            EnterPlanModeTool::schema(),
-            ExitPlanModeTool::schema(),
             TodoWriteTool::schema(),
             SetPlanTool::schema(),
             UpdatePlanTool::schema(),
@@ -143,13 +139,15 @@ pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
             EditTool::schema(), // string-replace
             GrepTool::schema(),
             GlobTool::schema(),
-            EnterPlanModeTool::schema(),
-            ExitPlanModeTool::schema(),
             TodoWriteTool::schema(),
             SetPlanTool::schema(),
             UpdatePlanTool::schema(),
         ],
     };
+    if allow_agent_mode_changes {
+        schemas.push(EnterPlanModeTool::schema());
+        schemas.push(ExitPlanModeTool::schema());
+    }
     schemas.extend(desktop);
     // AskUserQuestion is intercepted before dispatch — but the schema must still be
     // sent to the LLM so it knows the tool exists.
@@ -158,15 +156,19 @@ pub fn schemas_for_toolset(toolset: Toolset) -> Vec<Value> {
 }
 
 /// Backwards-compat alias (Default toolset).
-pub fn all_schemas() -> Vec<Value> {
-    schemas_for_toolset(Toolset::Default)
+pub fn all_schemas(allow_agent_mode_changes: bool) -> Vec<Value> {
+    schemas_for_toolset(Toolset::Default, allow_agent_mode_changes)
 }
 
 /// Filter schemas to only the named tools. Names are case-insensitive.
 /// Used to implement `--tools "bash,read_file"`.
-pub fn schemas_for_names(toolset: Toolset, names: &[String]) -> Vec<Value> {
+pub fn schemas_for_names(
+    toolset: Toolset,
+    names: &[String],
+    allow_agent_mode_changes: bool,
+) -> Vec<Value> {
     let lower: std::collections::HashSet<String> = names.iter().map(|n| n.to_lowercase()).collect();
-    schemas_for_toolset(toolset)
+    schemas_for_toolset(toolset, allow_agent_mode_changes)
         .into_iter()
         .filter(|s| {
             s["name"]
@@ -217,7 +219,7 @@ mod tests {
 
     #[test]
     fn default_toolset_has_bash_and_edit_file() {
-        let schemas = schemas_for_toolset(Toolset::Default);
+        let schemas = schemas_for_toolset(Toolset::Default, false);
         let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
         assert!(names.contains(&"bash"), "missing bash in {names:?}");
         assert!(
@@ -238,7 +240,7 @@ mod tests {
 
     #[test]
     fn codex_toolset_has_apply_patch() {
-        let schemas = schemas_for_toolset(Toolset::Codex);
+        let schemas = schemas_for_toolset(Toolset::Codex, false);
         let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
         assert!(
             names.contains(&"apply_patch"),
@@ -252,7 +254,7 @@ mod tests {
 
     #[test]
     fn gemini_toolset_has_renamed_tools() {
-        let schemas = schemas_for_toolset(Toolset::Gemini);
+        let schemas = schemas_for_toolset(Toolset::Gemini, false);
         let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
         assert!(
             names.contains(&"RunShellCommand"),
@@ -271,7 +273,7 @@ mod tests {
     #[test]
     fn all_toolsets_include_ask_user_question() {
         for ts in [Toolset::Default, Toolset::Codex, Toolset::Gemini] {
-            let schemas = schemas_for_toolset(ts);
+            let schemas = schemas_for_toolset(ts, false);
             let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
             assert!(
                 names.contains(&"ask_user_question"),
@@ -283,7 +285,7 @@ mod tests {
     #[test]
     fn all_toolsets_include_desktop_tools() {
         for ts in [Toolset::Default, Toolset::Codex, Toolset::Gemini] {
-            let schemas = schemas_for_toolset(ts);
+            let schemas = schemas_for_toolset(ts, false);
             let names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
             assert!(
                 names.contains(&"desktop_screenshot"),
@@ -300,8 +302,8 @@ mod tests {
 
     #[test]
     fn all_schemas_is_default_toolset() {
-        let all = all_schemas();
-        let default = schemas_for_toolset(Toolset::Default);
+        let all = all_schemas(false);
+        let default = schemas_for_toolset(Toolset::Default, false);
         assert_eq!(all.len(), default.len());
     }
 
@@ -310,7 +312,7 @@ mod tests {
     #[test]
     fn schemas_for_names_filters() {
         let names = vec!["bash".to_string(), "grep".to_string()];
-        let schemas = schemas_for_names(Toolset::Default, &names);
+        let schemas = schemas_for_names(Toolset::Default, &names, false);
         assert_eq!(schemas.len(), 2);
         let schema_names: Vec<&str> = schemas.iter().filter_map(|s| s["name"].as_str()).collect();
         assert!(schema_names.contains(&"bash"));
@@ -320,14 +322,14 @@ mod tests {
     #[test]
     fn schemas_for_names_case_insensitive() {
         let names = vec!["BASH".to_string()];
-        let schemas = schemas_for_names(Toolset::Default, &names);
+        let schemas = schemas_for_names(Toolset::Default, &names, false);
         assert_eq!(schemas.len(), 1);
         assert_eq!(schemas[0]["name"].as_str(), Some("bash"));
     }
 
     #[test]
     fn schemas_for_names_empty() {
-        let schemas = schemas_for_names(Toolset::Default, &[]);
+        let schemas = schemas_for_names(Toolset::Default, &[], false);
         assert!(schemas.is_empty());
     }
 
@@ -402,7 +404,7 @@ mod tests {
     #[test]
     fn all_schemas_have_name_and_description() {
         for ts in [Toolset::Default, Toolset::Codex, Toolset::Gemini] {
-            for schema in schemas_for_toolset(ts) {
+            for schema in schemas_for_toolset(ts, false) {
                 let name = schema["name"].as_str();
                 assert!(name.is_some(), "schema missing name: {schema}");
                 let desc = schema["description"].as_str();

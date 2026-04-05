@@ -244,7 +244,7 @@ async fn run_task(
     // Register tools with the eval agent
     cade_agent::tools::register_meta_tools(client).await;
     let toolset = cade_core::toolsets::Toolset::default();
-    if let Ok(tools) = cade_agent::agent::tools::register_cade_tools(client, toolset).await {
+    if let Ok(tools) = cade_agent::agent::tools::register_cade_tools(client, toolset, false).await {
         let ids: Vec<String> = tools.iter().map(|t| t.id.clone()).collect();
         if !ids.is_empty() {
             let _ = client.attach_agent_tools(&agent.id, &ids).await;
