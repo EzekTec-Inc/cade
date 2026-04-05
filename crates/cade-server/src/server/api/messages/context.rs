@@ -391,14 +391,16 @@ pub(crate) async fn build_context(
         .unwrap_or(0);
     let message_budget = context_char_budget.saturating_sub(system_chars);
 
-    let mut selected: Vec<&[LlmMessage]> = Vec::new();
+    let mut selected: Vec<Vec<LlmMessage>> = Vec::new();
     let mut budget_used: usize = 0;
     let mut omitted_turns: usize = 0;
 
-    for turn in turns.iter().rev() {
+    let turns_len = turns.len();
+
+    for mut turn in turns.into_iter().rev() {
         // Approximate turn cost: sum of content chars + serialised tool-call
         // argument strings (arguments are JSON text and can be large).
-        let turn_chars: usize = turn
+        let raw_chars: usize = turn
             .iter()
             .map(|m| {
                 m.content.chars().count()
@@ -411,14 +413,78 @@ pub(crate) async fn build_context(
             })
             .sum();
 
+        #[cfg(feature = "reranker")]
+        let mut turn_chars = if let Some(reranker) = &state.tool_reranker {
+            let mut turn_text = String::with_capacity(raw_chars);
+            for m in turn.iter() {
+                turn_text.push_str(&m.content);
+                if let Some(tcs) = &m.tool_calls {
+                    for tc in tcs {
+                        turn_text.push_str(&tc.arguments.to_string());
+                    }
+                }
+            }
+            if let Some(tokens) = reranker.count_tokens(&turn_text).await {
+                tokens.saturating_mul(CHARS_PER_TOKEN)
+            } else {
+                raw_chars
+            }
+        } else {
+            raw_chars
+        };
+
+        #[cfg(not(feature = "reranker"))]
+        let mut turn_chars = raw_chars;
+
         if selected.is_empty() {
             // Always include the most-recent turn regardless of size.
-            selected.push(turn.as_slice());
+            selected.push(turn);
             budget_used += turn_chars;
         } else if budget_used + turn_chars <= message_budget {
-            selected.push(turn.as_slice());
+            selected.push(turn);
             budget_used += turn_chars;
         } else {
+            // Attempt Tool Result Truncation before dropping the turn
+            let deficit = (budget_used + turn_chars).saturating_sub(message_budget);
+            let tool_results_chars: usize = turn
+                .iter()
+                .filter(|m| m.role == "tool")
+                .map(|m| m.content.chars().count())
+                .sum();
+            
+            let margin = 200; // minimum characters remaining plus truncation text length
+            if tool_results_chars > deficit + margin {
+                let to_cut = deficit + margin;
+                let mut cut_remaining = to_cut;
+                
+                for m in turn.iter_mut().filter(|m| m.role == "tool") {
+                    let len = m.content.chars().count();
+                    if len > margin && cut_remaining > 0 {
+                        let cut_here = cut_remaining.min(len.saturating_sub(margin));
+                        let keep = len - cut_here;
+                        let mut new_content: String = m.content.chars().take(keep).collect();
+                        new_content.push_str(&format!(
+                            "\n... [{} chars truncated to fit context window]",
+                            cut_here
+                        ));
+                        m.content = new_content;
+                        cut_remaining -= cut_here;
+                    }
+                    if cut_remaining == 0 {
+                        break;
+                    }
+                }
+                
+                if cut_remaining == 0 {
+                    turn_chars -= to_cut;
+                    if budget_used + turn_chars <= message_budget {
+                        selected.push(turn);
+                        budget_used += turn_chars;
+                        continue;
+                    }
+                }
+            }
+            
             omitted_turns += 1;
         }
     }
@@ -430,7 +496,7 @@ pub(crate) async fn build_context(
              agent can recover them via conversation_search / search_memory",
             agent_id,
             selected.len(),
-            turns.len(),
+            turns_len,
             budget_used,
             message_budget,
             omitted_turns,
@@ -454,7 +520,7 @@ pub(crate) async fn build_context(
 
     // Reverse (was newest-first) back to oldest-first, then flatten.
     selected.reverse();
-    messages.extend(selected.into_iter().flat_map(|t| t.iter().cloned()));
+    messages.extend(selected.into_iter().flatten());
 
     // Sanitize history: fix orphaned tool_calls, dedup tool_results, drop
     // stray tool_results so Anthropic never sees an invalid sequence.

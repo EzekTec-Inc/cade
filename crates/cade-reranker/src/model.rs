@@ -59,6 +59,14 @@ impl LocalModel {
         })
     }
 
+    /// Count the number of tokens in the given text using the local tokenizer.
+    pub fn count_tokens(&self, text: &str) -> usize {
+        self.tokenizer
+            .encode(text, true)
+            .map(|e| e.len())
+            .unwrap_or(0)
+    }
+
     /// Score `(query, document)` pairs and return the top-N documents.
     pub fn rerank_indices(
         &self,

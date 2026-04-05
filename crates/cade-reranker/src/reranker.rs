@@ -270,6 +270,20 @@ impl ToolReranker {
     // -- Local ONNX backend
 
     #[cfg(feature = "local")]
+    pub async fn count_tokens(&self, text: &str) -> Option<usize> {
+        let model_path = match &self.config.backend {
+            RerankerBackend::Local { model_path } => model_path.as_deref(),
+            _ => None,
+        };
+        let model = self
+            .local
+            .get_or_try_init(|| async { crate::model::LocalModel::load(model_path).await })
+            .await
+            .ok()?;
+        Some(model.count_tokens(text))
+    }
+
+    #[cfg(feature = "local")]
     async fn rerank_local_indices(
         &self,
         user_prompt: &str,
