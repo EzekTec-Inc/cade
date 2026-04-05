@@ -1022,7 +1022,15 @@ impl Repl {
                             .unwrap_or_default();
                         let msg_tok = (msgs
                             .iter()
-                            .map(|m| m["content"].as_str().map(|s| s.len()).unwrap_or(0))
+                            .map(|m| {
+                                m.get("char_count")
+                                    .and_then(|v| v.as_u64())
+                                    .map(|n| n as usize)
+                                    .unwrap_or_else(|| {
+                                        // Fallback if char_count is missing or content is string
+                                        m["content"].as_str().map(|s| s.len()).unwrap_or(0)
+                                    })
+                            })
                             .sum::<usize>()
                             / 3) as u64;
 
