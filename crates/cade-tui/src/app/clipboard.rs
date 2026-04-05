@@ -1,32 +1,6 @@
 use super::*;
 
 impl TuiApp {
-    pub(crate) fn copy_selected_timeline_item_to_clipboard(&mut self) -> bool {
-        let Some(text) = self.selected_timeline_item_text() else {
-            self.show_toast("No block selected", ToastLevel::Info);
-            return false;
-        };
-        #[cfg(not(feature = "clipboard-images"))]
-        {
-            let _ = text;
-            self.show_toast("Clipboard support not compiled", ToastLevel::Error);
-            return false;
-        }
-        #[cfg(feature = "clipboard-images")]
-        {
-            let Ok(mut cb) = arboard::Clipboard::new() else {
-                self.show_toast("Clipboard unavailable", ToastLevel::Error);
-                return true;
-            };
-            if cb.set_text(text).is_ok() {
-                self.show_toast("Copied selected block", ToastLevel::Success);
-            } else {
-                self.show_toast("Failed to copy selected block", ToastLevel::Error);
-            }
-            true
-        }
-    }
-
     #[cfg(not(feature = "clipboard-images"))]
     pub(crate) fn try_paste_image_file_path(&mut self, _text: &str) -> bool {
         false

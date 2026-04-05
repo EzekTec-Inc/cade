@@ -43,21 +43,6 @@ pub(crate) struct TimelineEntry<'a> {
     pub(crate) item: TimelineItem<'a>,
 }
 
-#[derive(Debug, Clone, Copy)]
-pub(crate) enum TimelineJumpTarget {
-    Assistant,
-    Tool,
-    Error,
-}
-
-#[derive(Debug, Clone)]
-pub(crate) struct TimelineSelectionInfo {
-    pub(crate) index: usize,
-    pub(crate) kind_label: &'static str,
-    pub(crate) summary: String,
-    pub(crate) actions: &'static str,
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CardStyle {
     None,
@@ -249,96 +234,6 @@ impl<'a> TimelineItem<'a> {
         self.render_into(content_w as usize, expand_all, &mut lines, colors);
         lines.iter().map(|l| count_wrapped_rows(l, content_w)).sum()
     }
-
-    pub(crate) fn kind_label(&self) -> &'static str {
-        match self {
-            Self::Separator => "separator",
-            Self::Blank => "blank",
-            Self::ContextBar { .. } => "context",
-            Self::User(_) => "user",
-            Self::Assistant(_) => "assistant",
-            Self::ToolCall { .. } => "tool call",
-            Self::ToolResult { is_error, .. } => {
-                if *is_error {
-                    "tool error"
-                } else {
-                    "tool result"
-                }
-            }
-            Self::LiveOutput { .. } => "live output",
-            Self::Reasoning { .. } => "thinking",
-            Self::System(_) => "system",
-            Self::Success(_) => "success",
-            Self::InfoHeader(_) => "section",
-            Self::Dim(_) => "hint",
-            Self::Pair { .. } => "pair",
-            Self::Error(_) => "error",
-            Self::QuestionResult { .. } => "decision",
-            Self::Table { .. } => "table",
-            Self::StreamingAssistant(_) => "streaming",
-        }
-    }
-
-    pub(crate) fn action_hint(&self) -> &'static str {
-        match self {
-            Self::Assistant(_)
-            | Self::StreamingAssistant(_)
-            | Self::ToolResult { .. }
-            | Self::LiveOutput { .. }
-            | Self::Reasoning { .. } => "Ctrl+O expand · Ctrl+Shift+C copy · Esc clear",
-            Self::ToolCall { .. }
-            | Self::User(_)
-            | Self::System(_)
-            | Self::Success(_)
-            | Self::InfoHeader(_)
-            | Self::Dim(_)
-            | Self::Pair { .. }
-            | Self::Error(_)
-            | Self::QuestionResult { .. }
-            | Self::Table { .. } => "Ctrl+Shift+C copy · Esc clear",
-            Self::Separator | Self::Blank | Self::ContextBar { .. } => "Esc clear",
-        }
-    }
-
-    pub(crate) fn summary(&self) -> String {
-        match self {
-            Self::Separator => "separator".to_string(),
-            Self::Blank => "blank".to_string(),
-            Self::ContextBar { model, pct, .. } => format!("context {model} {pct}%"),
-            Self::User(text)
-            | Self::Assistant(text)
-            | Self::System(text)
-            | Self::Success(text)
-            | Self::InfoHeader(text)
-            | Self::Dim(text)
-            | Self::Error(text)
-            | Self::StreamingAssistant(text) => truncate_str(first_line(text), 40),
-            Self::ToolCall { name, preview } => {
-                let display = display_tool_name(name);
-                if preview.is_empty() {
-                    display
-                } else {
-                    truncate_str(&format!("{display}({preview})"), 40)
-                }
-            }
-            Self::ToolResult { is_error, content } => {
-                let prefix = if *is_error { "error: " } else { "ok: " };
-                truncate_str(&format!("{prefix}{}", first_line(content)), 40)
-            }
-            Self::LiveOutput { lines, done, .. } => {
-                let state = if *done { "done" } else { "running" };
-                format!("{state} · {} line(s)", lines.len())
-            }
-            Self::Reasoning { words, .. } => format!("{words} words"),
-            Self::Pair { label, value } => truncate_str(&format!("{label}: {value}"), 40),
-            Self::QuestionResult { header, answer } => {
-                truncate_str(&format!("{header}: {answer}"), 40)
-            }
-            Self::Table { headers, rows } => {
-                format!("{} cols · {} rows", headers.len(), rows.len())
-            }
-        }
-    }
 }
 
 impl<'a> TimelineEntry<'a> {
@@ -366,44 +261,6 @@ impl<'a> TimelineEntry<'a> {
         }
     }
 
-    pub(crate) fn is_focusable(&self) -> bool {
-        !matches!(
-            self.key.kind,
-            TimelineItemKind::Blank | TimelineItemKind::Separator | TimelineItemKind::ContextBar
-        )
-    }
-
-    pub(crate) fn matches_jump_target(&self, target: TimelineJumpTarget) -> bool {
-        match target {
-            TimelineJumpTarget::Assistant => matches!(
-                self.key.kind,
-                TimelineItemKind::Assistant | TimelineItemKind::StreamingAssistant
-            ),
-            TimelineJumpTarget::Tool => matches!(
-                self.key.kind,
-                TimelineItemKind::ToolCall
-                    | TimelineItemKind::ToolResult
-                    | TimelineItemKind::LiveOutput
-            ),
-            TimelineJumpTarget::Error => match &self.item {
-                TimelineItem::Error(_) => true,
-                TimelineItem::ToolResult { is_error, .. } => *is_error,
-                _ => false,
-            },
-        }
-    }
-
-    pub(crate) fn is_expandable(&self) -> bool {
-        matches!(
-            self.key.kind,
-            TimelineItemKind::ToolResult
-                | TimelineItemKind::LiveOutput
-                | TimelineItemKind::Reasoning
-                | TimelineItemKind::Assistant
-                | TimelineItemKind::StreamingAssistant
-        )
-    }
-
     pub(crate) fn is_expanded(
         &self,
         expand_all: bool,
@@ -427,20 +284,15 @@ impl<'a> TimelineEntry<'a> {
         width: usize,
         expand_all: bool,
         expanded_items: &std::collections::HashSet<TimelineKey>,
-        selected_timeline: Option<&TimelineKey>,
         out: &mut Vec<Line<'static>>,
         colors: &ThemeColors,
     ) {
-        let start = out.len();
         self.item.render_into(
             width,
             self.is_expanded(expand_all, expanded_items),
             out,
             colors,
         );
-        if selected_timeline == Some(&self.key) {
-            highlight_rendered_item(&mut out[start..], colors);
-        }
     }
 
     pub(crate) fn visual_rows_with_state(
@@ -472,15 +324,6 @@ impl<'a> TimelineEntry<'a> {
     pub(crate) fn is_tool_call(&self) -> bool {
         self.key.kind == TimelineItemKind::ToolCall
     }
-
-    pub(crate) fn selection_info(&self) -> TimelineSelectionInfo {
-        TimelineSelectionInfo {
-            index: self.key.index,
-            kind_label: self.item.kind_label(),
-            summary: self.item.summary(),
-            actions: self.item.action_hint(),
-        }
-    }
 }
 
 pub(crate) fn build_timeline_entries<'a>(lines: &'a [RenderLine]) -> Vec<TimelineEntry<'a>> {
@@ -496,7 +339,6 @@ pub(crate) fn prepare_timeline_entries(
     width: usize,
     expand_all: bool,
     expanded_items: &std::collections::HashSet<TimelineKey>,
-    selected_timeline: Option<&TimelineKey>,
     colors: &ThemeColors,
 ) -> Vec<PreparedTimelineEntry> {
     entries
@@ -518,7 +360,6 @@ pub(crate) fn prepare_timeline_entries(
                 effective_width,
                 expand_all,
                 expanded_items,
-                selected_timeline,
                 &mut lines,
                 colors,
             );
@@ -628,13 +469,7 @@ pub(crate) fn timeline_key_expanded(
     expand_all || expanded_items.contains(key)
 }
 
-fn highlight_rendered_item(lines: &mut [Line<'static>], colors: &ThemeColors) {
-    for line in lines {
-        for span in &mut line.spans {
-            span.style = span.style.patch(Style::default().bg(colors.selected_bg));
-        }
-    }
-}
+
 
 // -- Line renderers
 
@@ -1287,7 +1122,6 @@ pub(crate) fn render_sidebar(
     thinking_elapsed: Option<std::time::Duration>,
     active_plan: Option<&PlanState>,
     copy_mode: bool,
-    selected_info: Option<&TimelineSelectionInfo>,
     colors: &ThemeColors,
 ) {
     let inner = Block::default()
@@ -1330,15 +1164,6 @@ pub(crate) fn render_sidebar(
     } else {
         "none".to_string()
     };
-    let selected_kind = selected_info
-        .map(|s| s.kind_label.to_string())
-        .unwrap_or_else(|| "none".to_string());
-    let selected_summary = selected_info
-        .map(|s| truncate_str(&s.summary, 28))
-        .unwrap_or_else(|| "none".to_string());
-    let selected_actions = selected_info
-        .map(|s| truncate_str(s.actions, 28))
-        .unwrap_or_else(|| "Ctrl+Shift+J/K focus blocks".to_string());
 
     let lines = vec![
         Line::from(Span::styled(
@@ -1402,10 +1227,6 @@ pub(crate) fn render_sidebar(
                 }),
             ),
         ]),
-        Line::from(vec![
-            Span::styled(" focus   ", Style::default().fg(colors.muted)),
-            Span::styled(selected_kind, Style::default().fg(colors.text)),
-        ]),
         if let Some(reason) = reasoning_effort {
             Line::from(vec![
                 Span::styled(" reason  ", Style::default().fg(colors.muted)),
@@ -1430,21 +1251,6 @@ pub(crate) fn render_sidebar(
         )),
         Line::from(""),
         Line::from(Span::styled(
-            " Selected ",
-            Style::default()
-                .fg(colors.overlay_title)
-                .add_modifier(Modifier::BOLD),
-        )),
-        Line::from(vec![
-            Span::styled(" block   ", Style::default().fg(colors.muted)),
-            Span::styled(selected_summary, Style::default().fg(colors.text)),
-        ]),
-        Line::from(vec![
-            Span::styled(" action  ", Style::default().fg(colors.muted)),
-            Span::styled(selected_actions, Style::default().fg(colors.muted)),
-        ]),
-        Line::from(""),
-        Line::from(Span::styled(
             " Plan ",
             Style::default()
                 .fg(colors.overlay_title)
@@ -1462,31 +1268,27 @@ pub(crate) fn render_sidebar(
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            " Ctrl+O expand blocks",
+            " Ctrl+C abort / clear",
             Style::default().fg(colors.muted),
         )),
         Line::from(Span::styled(
-            " Ctrl+Shift+J next block",
+            " Ctrl+O expand/collapse all",
             Style::default().fg(colors.muted),
         )),
         Line::from(Span::styled(
-            " Ctrl+Shift+K prev block",
+            " Tab cycle permissions",
             Style::default().fg(colors.muted),
         )),
         Line::from(Span::styled(
-            " Alt+A/T/E jump kinds",
+            " ↑/↓ command history",
             Style::default().fg(colors.muted),
         )),
         Line::from(Span::styled(
-            " Ctrl+Shift+C copy block",
+            " @ file picker",
             Style::default().fg(colors.muted),
         )),
         Line::from(Span::styled(
-            " Shift+J follow output",
-            Style::default().fg(colors.muted),
-        )),
-        Line::from(Span::styled(
-            " /help commands",
+            " / commands menu",
             Style::default().fg(colors.muted),
         )),
     ];
@@ -1540,10 +1342,6 @@ fn context_severity_color(context_pct: Option<u8>, colors: &ThemeColors) -> RC {
         Some(_) => colors.muted,
         None => colors.dim,
     }
-}
-
-fn first_line(text: &str) -> &str {
-    text.lines().next().unwrap_or("")
 }
 
 // -- Input helpers (ported from input.rs)

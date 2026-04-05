@@ -1775,3 +1775,29 @@ the developer's machine.
 - `cargo check` (full workspace) ✅
 
 **Status:** Phase 3 complete. All ITS phases complete.
+
+## 2026-04-04T22:30:00Z — Performance Refactoring, Skills Reranker & Viewport Modernization
+
+**Summary:** Executed major performance optimizations across AI providers, implemented an intelligent Skills Reranker to prevent context bloat, modernized the TUI into a "glass card" aesthetic, and locked down `Plan` mode for zero-trust security.
+
+**Features & Fixes:**
+- **Provider Performance (cade-ai):** Eliminated $O(N^2)$ streaming buffer anti-patterns and deep string cloning across Anthropic, OpenAI, and Gemini providers, ensuring zero-allocation on hot paths via `Vec<u8>`.
+- **Intelligent Skills Reranking:** Upgraded `cade-reranker` to dynamically score and inject only the top-K relevant skills into the LLM context per turn, governed by a `max_skills` config (default 5).
+- **Exact Token Counting & Tool Truncation:** Replaced conservative character heuristics with precise ONNX token counting in `build_context` (`cade-server`). Implemented aggressive tool result truncation to prevent dropping entire historical turns when the context budget overflows.
+- **Glass Card Viewport:** Refactored the TUI `timeline.rs` to render conversational blocks as sleek, left-bordered glass cards. Borders dynamically adopt semantic theme properties (`colors.assistant_accent` / `colors.dim`).
+- **Dynamic Text Luminance:** Added a relative luminance calculator (`is_bright`) to `colors.rs` to automatically fallback to high-contrast dark text for bright selection backgrounds in menus and tool badges.
+- **Zero-Trust Plan Mode:** Added `allow_agent_mode_changes` to `PermissionSettings` (default `false`), fully hiding `EnterPlanMode` and `ExitPlanMode` schemas from the LLM and actively blocking/intercepting hallucinatory executions with instructions to summarize findings.
+- **Subagent Model Fallback:** Introduced `fast_model_for_main_model` to dynamically deploy subagents on high-speed reasoning models matching the primary provider (e.g., `gpt-4o-mini`, `claude-3-5-haiku-20241022`).
+- **MCP Tool Permissions Fix:** Updated `PermissionManager` to seamlessly strip `{server}__` prefixes from MCP tool names, ensuring mutating tools correctly auto-approve in `AcceptEdits` mode and block in `Plan` mode.
+- **TUI Fixes & Mouse Scrolling:** Reduced mouse wheel scroll delta from 3 lines to 1 line for smoother scrolling. Decoupled `Ctrl+C` from the global shutdown flag to gracefully abort active turns without crashing the REPL, and fixed bracketed paste parsing to prevent duplicate markers.
+
+**Files modified:**
+- `MODIFIED` `crates/cade-ai/src/*` (anthropic, openai, gemini, catalogue, lib, registry)
+- `MODIFIED` `crates/cade-cli/src/cli/repl/*` (mod, turn_loop, pickers, tool_intercepts)
+- `MODIFIED` `crates/cade-core/src/permissions/mod.rs`, `crates/cade-core/src/settings/manager.rs`
+- `MODIFIED` `crates/cade-reranker/src/*` (config, model, reranker, lib)
+- `MODIFIED` `crates/cade-server/src/server/api/messages/context.rs`, `crates/cade-server/src/server/storage/sqlite/*` (messages, conversations)
+- `MODIFIED` `crates/cade-tui/src/app/*` (mod, timeline)
+- `MODIFIED` `crates/cade-tui/src/*` (colors, mcp_picker, menu, question, session_tree, editor)
+
+**Verification:** Run `cargo test --workspace` — tests pass cleanly.

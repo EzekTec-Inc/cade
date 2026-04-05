@@ -256,8 +256,6 @@ pub struct TuiApp {
     pub expand_all: bool,
     /// Per-item expansion overrides keyed by stable timeline identity.
     expanded_items: std::collections::HashSet<TimelineKey>,
-    /// Currently focused timeline item for per-item actions/navigation.
-    selected_timeline: Option<TimelineKey>,
     pub active_question: Option<ActiveQuestionState>,
     pub active_plan: Option<PlanState>,
 
@@ -384,7 +382,6 @@ impl TuiApp {
             follow: true,
             expand_all: false,
             expanded_items: std::collections::HashSet::new(),
-            selected_timeline: None,
             active_question: None,
             active_plan: None,
             streaming_text: String::new(),
@@ -655,248 +652,12 @@ impl TuiApp {
         });
     }
 
-    fn focus_next_timeline_item(&mut self) {
-        let entries = build_timeline_entries(&self.lines);
-        let focusable: Vec<_> = entries.into_iter().filter(|e| e.is_focusable()).collect();
-        if focusable.is_empty() {
-            self.selected_timeline = None;
-            return;
-        }
-        let next = if let Some(current) = self.selected_timeline {
-            focusable
-                .iter()
-                .position(|e| e.key == current)
-                .map(|i| (i + 1) % focusable.len())
-                .unwrap_or(0)
-        } else {
-            0
-        };
-        self.selected_timeline = Some(focusable[next].key);
-        self.ensure_selected_timeline_visible();
-    }
 
-    fn focus_next_timeline_matching(&mut self, target: TimelineJumpTarget) {
-        let entries = build_timeline_entries(&self.lines);
-        if entries.is_empty() {
-            self.selected_timeline = None;
-            return;
-        }
-        let start_idx = self
-            .selected_timeline
-            .and_then(|current| entries.iter().position(|e| e.key == current));
-
-        let found = if let Some(idx) = start_idx {
-            (1..=entries.len())
-                .map(|off| (idx + off) % entries.len())
-                .find(|&i| entries[i].is_focusable() && entries[i].matches_jump_target(target))
-        } else {
-            (0..entries.len())
-                .find(|&i| entries[i].is_focusable() && entries[i].matches_jump_target(target))
-        };
-
-        if let Some(i) = found {
-            self.selected_timeline = Some(entries[i].key);
-            self.ensure_selected_timeline_visible();
-            let label = match target {
-                TimelineJumpTarget::Assistant => "assistant block",
-                TimelineJumpTarget::Tool => "tool block",
-                TimelineJumpTarget::Error => "error block",
-            };
-            self.show_toast(format!("Focused next {label}"), ToastLevel::Info);
-        } else {
-            let label = match target {
-                TimelineJumpTarget::Assistant => "assistant",
-                TimelineJumpTarget::Tool => "tool",
-                TimelineJumpTarget::Error => "error",
-            };
-            self.show_toast(format!("No {label} blocks found"), ToastLevel::Info);
-        }
-    }
-
-    fn focus_prev_timeline_item(&mut self) {
-        let entries = build_timeline_entries(&self.lines);
-        let focusable: Vec<_> = entries.into_iter().filter(|e| e.is_focusable()).collect();
-        if focusable.is_empty() {
-            self.selected_timeline = None;
-            return;
-        }
-        let prev = if let Some(current) = self.selected_timeline {
-            focusable
-                .iter()
-                .position(|e| e.key == current)
-                .map(|i| if i == 0 { focusable.len() - 1 } else { i - 1 })
-                .unwrap_or(focusable.len() - 1)
-        } else {
-            focusable.len() - 1
-        };
-        self.selected_timeline = Some(focusable[prev].key);
-        self.ensure_selected_timeline_visible();
-    }
-
-    fn toggle_selected_timeline_expansion(&mut self) -> bool {
-        let Some(key) = self.selected_timeline else {
-            return false;
-        };
-        let entries = build_timeline_entries(&self.lines);
-        let Some(entry) = entries.iter().find(|e| e.key == key) else {
-            return false;
-        };
-        if !entry.is_expandable() {
-            self.show_toast("Selected block is not expandable", ToastLevel::Info);
-            return true;
-        }
-        let expanded = timeline_key_expanded(self.expand_all, &self.expanded_items, &key);
-        if expanded {
-            self.expanded_items.remove(&key);
-            if self.expand_all {
-                self.expand_all = false;
-            }
-            self.show_toast("Collapsed selected block", ToastLevel::Info);
-        } else {
-            self.expanded_items.insert(key);
-            self.show_toast("Expanded selected block", ToastLevel::Info);
-        }
-        self.ensure_selected_timeline_visible();
-        true
-    }
-
-    fn selected_timeline_item_text(&self) -> Option<String> {
-        let key = self.selected_timeline?;
-        let (term_w, _) = crossterm::terminal::size()
-            .ok()
-            .unwrap_or((self.term_width, 24));
-        let main_w = main_content_width(term_w);
-        let entries = build_timeline_entries(&self.lines);
-        let entry = entries.iter().find(|e| e.key == key)?;
-        let mut rendered = Vec::new();
-        entry.render_with_state(
-            main_w as usize,
-            self.expand_all,
-            &self.expanded_items,
-            None,
-            &mut rendered,
-            &self.colors,
-        );
-        let text = rendered
-            .into_iter()
-            .map(|line| {
-                line.spans
-                    .into_iter()
-                    .map(|s| s.content.into_owned())
-                    .collect::<String>()
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        Some(text)
-    }
-
-    fn ensure_selected_timeline_visible(&mut self) {
-        let Some(target_key) = self.selected_timeline else {
-            return;
-        };
-        let Some((content_w, visible_rows)) = self.current_messages_viewport_metrics() else {
-            return;
-        };
-        if visible_rows == 0 {
-            return;
-        }
-
-        let entries = build_timeline_entries(&self.lines);
-        let mut start_row: u16 = 0;
-        let mut selected_range: Option<(u16, u16)> = None;
-        let mut total_rows: u16 = 0;
-        for entry in &entries {
-            let rows = entry.visual_rows_with_state(
-                content_w,
-                self.expand_all,
-                &self.expanded_items,
-                &self.colors,
-            );
-            if entry.key == target_key {
-                selected_range = Some((start_row, start_row.saturating_add(rows)));
-            }
-            start_row = start_row.saturating_add(rows);
-            total_rows = total_rows.saturating_add(rows);
-        }
-        let Some((sel_start, sel_end)) = selected_range else {
-            return;
-        };
-
-        let max_skip = total_rows.saturating_sub(visible_rows);
-        let current_up = (self.scroll as u16).min(max_skip);
-        let visible_start = max_skip.saturating_sub(current_up);
-        let visible_end = visible_start.saturating_add(visible_rows);
-
-        let desired_start = if sel_start < visible_start {
-            sel_start
-        } else if sel_end > visible_end {
-            sel_end.saturating_sub(visible_rows)
-        } else {
-            return;
-        };
-
-        self.follow = false;
-        self.scroll = max_skip.saturating_sub(desired_start) as usize;
-    }
-
-    fn current_messages_viewport_metrics(&self) -> Option<(u16, u16)> {
-        let (term_w, term_h) = crossterm::terminal::size()
-            .ok()
-            .unwrap_or((self.term_width, 24));
-        let main_w = main_content_width(term_w);
-        let available_w = main_w.saturating_sub(2).max(1);
-        let (badge_text, _) = input_mode_badge(self.editor.detect_mode(), &self.colors);
-        let input_prefix_w = badge_text.chars().count() as u16 + 1 + 2;
-        let mut input_rows = calc_input_rows(&self.editor.input, available_w, input_prefix_w)
-            .clamp(1, MAX_INPUT_ROWS);
-        let inline_h = self
-            .active_question
-            .as_ref()
-            .map(|aq| question_height(&aq.draw_state, term_h))
-            .unwrap_or(0);
-        if inline_h > 0 {
-            input_rows = inline_h;
-        }
-        let footer_extra_h: u16 = if self.footer_extra.is_some() || self.selected_timeline.is_some()
-        {
-            1
-        } else {
-            0
-        };
-        let bottom_rows = FIXED_ROWS + input_rows + footer_extra_h;
-        if term_h <= bottom_rows + 1 {
-            return None;
-        }
-        let content_height = term_h - bottom_rows;
-        let plan_h = self
-            .active_plan
-            .as_ref()
-            .filter(|p| p.is_visible)
-            .map(|p| (p.steps.len() as u16 + 2).min(10).max(4))
-            .unwrap_or(0);
-        let mut messages_h = content_height.saturating_sub(plan_h);
-        if !self.header_lines.is_empty() {
-            let mut header_text: Vec<Line<'static>> = Vec::new();
-            for entry in build_timeline_entries(&self.header_lines) {
-                entry.render_into(main_w as usize, false, &mut header_text, &self.colors);
-            }
-            let header_h: u16 = header_text
-                .iter()
-                .map(|l| count_wrapped_rows(l, main_w))
-                .sum::<u16>()
-                .min(messages_h / 3)
-                .max(1);
-            messages_h = messages_h.saturating_sub(header_h);
-        }
-        let visible = messages_h.saturating_sub(CONTENT_PAD_TOP + CONTENT_PAD_BOT);
-        Some((main_w, visible))
-    }
 
     /// Clear all content (e.g. /clear).
     pub fn clear_content(&mut self) -> Result<()> {
         self.lines.clear();
         self.expanded_items.clear();
-        self.selected_timeline = None;
         self.discard_streaming();
         self.scroll = 0;
         self.follow = true;
@@ -1105,7 +866,6 @@ impl TuiApp {
         let footer_extra = self.footer_extra.clone();
         let reasoning_effort = self.reasoning_effort.clone();
         let active_plan_snap = self.active_plan.clone();
-        let selected_timeline = self.selected_timeline;
         if self
             .toast
             .as_ref()
@@ -1157,7 +917,6 @@ impl TuiApp {
                 active_plan_snap.as_ref(),
                 copy_mode,
                 toast.as_ref(),
-                selected_timeline.as_ref(),
                 &expanded_items,
                 &colors,
             );
@@ -1934,12 +1693,7 @@ impl TuiApp {
                 return Ok(Some(None));
             }
 
-            // -- Cancel / clear / copy selected block
-            (KeyCode::Char('C') | KeyCode::Char('c'), m)
-                if m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
-            {
-                self.copy_selected_timeline_item_to_clipboard();
-            }
+            // -- Cancel / clear
             // Ctrl+C at the idle prompt: clear the input line if not empty.
             // If empty, exit cleanly (acts like Ctrl+D).
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
@@ -1951,12 +1705,7 @@ impl TuiApp {
                 }
             }
             (KeyCode::Esc, _) => {
-                if self.editor.input.is_empty() && self.selected_timeline.is_some() {
-                    self.selected_timeline = None;
-                    self.show_toast("Timeline selection cleared", ToastLevel::Info);
-                } else {
-                    self.editor.clear();
-                }
+                self.editor.clear();
             }
 
             // -- Edit shortcuts
@@ -2101,23 +1850,6 @@ impl TuiApp {
             }
 
             // -- Timeline navigation / content scroll
-            // Ctrl+Shift+K/J navigates between timeline blocks.
-            // Shift+K/J scrolls the conversation by 10 rows.
-            (KeyCode::Char('K'), m) if m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
-                self.focus_prev_timeline_item();
-            }
-            (KeyCode::Char('J'), m) if m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
-                self.focus_next_timeline_item();
-            }
-            (KeyCode::Char('a'), m) if m == KeyModifiers::ALT => {
-                self.focus_next_timeline_matching(TimelineJumpTarget::Assistant);
-            }
-            (KeyCode::Char('t'), m) if m == KeyModifiers::ALT => {
-                self.focus_next_timeline_matching(TimelineJumpTarget::Tool);
-            }
-            (KeyCode::Char('e'), m) if m == KeyModifiers::ALT => {
-                self.focus_next_timeline_matching(TimelineJumpTarget::Error);
-            }
             (KeyCode::Char('K'), _) => {
                 self.follow = false;
                 self.scroll = self.scroll.saturating_add(10);
@@ -2151,17 +1883,15 @@ impl TuiApp {
 
             // -- Expand/Collapse Tool Outputs
             (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
-                if !self.toggle_selected_timeline_expansion() {
-                    self.expand_all = !self.expand_all;
-                    self.show_toast(
-                        if self.expand_all {
-                            "Expanded all blocks"
-                        } else {
-                            "Collapsed all blocks"
-                        },
-                        ToastLevel::Info,
-                    );
-                }
+                self.expand_all = !self.expand_all;
+                self.show_toast(
+                    if self.expand_all {
+                        "Expanded all blocks"
+                    } else {
+                        "Collapsed all blocks"
+                    },
+                    ToastLevel::Info,
+                );
             }
 
             // -- Image / clipboard paste
@@ -2311,14 +2041,7 @@ fn count_wrapped_segment(text: &str, content_w: u16) -> u16 {
 // -- Frame renderer
 
 #[allow(clippy::too_many_arguments)]
-fn main_content_width(term_w: u16) -> u16 {
-    if term_w >= SIDEBAR_BREAKPOINT {
-        let sidebar_w = SIDEBAR_WIDTH.min(term_w.saturating_sub(24));
-        term_w.saturating_sub(sidebar_w)
-    } else {
-        term_w
-    }
-}
+
 
 #[allow(clippy::too_many_arguments)]
 fn render_frame(
@@ -2349,7 +2072,6 @@ fn render_frame(
     active_plan: Option<&PlanState>,
     copy_mode: bool,
     toast: Option<&Toast>,
-    selected_timeline: Option<&TimelineKey>,
     expanded_items: &std::collections::HashSet<TimelineKey>,
     colors: &ThemeColors,
 ) -> u16 {
@@ -2380,8 +2102,7 @@ fn render_frame(
     }
 
     // A-02: footer_extra adds one row below the normal footer when present.
-    let has_selected_info = selected_timeline.is_some();
-    let footer_extra_h: u16 = if footer_extra.is_some() || has_selected_info {
+    let footer_extra_h: u16 = if footer_extra.is_some() {
         1
     } else {
         0
@@ -2466,18 +2187,11 @@ fn render_frame(
     // -- Content area
     let timeline_w = messages_area.width.saturating_sub(4).max(1) as usize;
     let timeline_entries = build_timeline_entries(lines);
-    let selected_info = selected_timeline.and_then(|key| {
-        timeline_entries
-            .iter()
-            .find(|entry| entry.key == *key)
-            .map(|entry| entry.selection_info())
-    });
     let mut prepared = prepare_timeline_entries(
         &timeline_entries,
         timeline_w,
         expand_all,
         expanded_items,
-        selected_timeline,
         colors,
     );
     if let Some(s) = streaming {
@@ -2492,7 +2206,6 @@ fn render_frame(
             effective_w,
             expand_all,
             expanded_items,
-            selected_timeline,
             &mut lines,
             colors,
         );
@@ -2601,15 +2314,6 @@ fn render_frame(
         } else {
             format!("{status_text}{hint}")
         }
-    } else {
-        status_text
-    };
-
-    let status_text = if let Some(info) = &selected_info {
-        format!(
-            "{status_text}  · selected {} #{} — {}",
-            info.kind_label, info.index, info.actions
-        )
     } else {
         status_text
     };
@@ -2803,19 +2507,7 @@ fn render_frame(
     frame.render_widget(Paragraph::new(Line::from(footer)), chunks[7]);
 
     // -- A-02: Footer extra row / selected-block action bar
-    let action_bar_text = selected_info.as_ref().map(|info| {
-        format!(
-            "selected {} #{} — {}  |  {}",
-            info.kind_label, info.index, info.summary, info.actions
-        )
-    });
-    let extra_text = match (action_bar_text.as_deref(), footer_extra) {
-        (Some(action), Some(extra)) => Some(format!("{action}  ·  {extra}")),
-        (Some(action), None) => Some(action.to_string()),
-        (None, Some(extra)) => Some(extra.to_string()),
-        (None, None) => None,
-    };
-    if let Some(extra) = extra_text {
+    if let Some(extra) = footer_extra {
         let extra_rect = ratatui::layout::Rect {
             x: chunks[7].x,
             y: chunks[7].y + 1,
@@ -2847,7 +2539,6 @@ fn render_frame(
             thinking_elapsed,
             active_plan,
             copy_mode,
-            selected_info.as_ref(),
             colors,
         );
     }
@@ -3586,48 +3277,10 @@ mod tests {
         let entries = build_timeline_entries(&lines);
         let colors = ThemeColors::dark();
         let expanded = std::collections::HashSet::new();
-        let prepared = prepare_timeline_entries(&entries, 80, false, &expanded, None, &colors);
+        let prepared = prepare_timeline_entries(&entries, 80, false, &expanded, &colors);
         assert_eq!(prepared.len(), 3);
         let total: u16 = prepared.iter().map(|p| p.rows).sum();
         assert!(total >= 3, "at least 1 row per item; got {total}");
-    }
-
-    #[test]
-    fn test_timeline_selection_info() {
-        let line = RenderLine::AssistantText("hello world".to_string());
-        let entry = TimelineEntry::from_render_line(0, &line);
-        let info = entry.selection_info();
-        assert_eq!(info.kind_label, "assistant");
-        assert_eq!(info.index, 0);
-        assert!(!info.summary.is_empty());
-        assert!(info.actions.contains("copy"));
-    }
-
-    #[test]
-    fn test_timeline_jump_target_matching() {
-        let assistant_line = RenderLine::AssistantText("reply".to_string());
-        let tool_line = RenderLine::ToolCall {
-            name: "bash".to_string(),
-            preview: "ls".to_string(),
-        };
-        let error_line = RenderLine::ToolResult {
-            is_error: true,
-            content: "fail".to_string(),
-        };
-
-        let assistant_entry = TimelineEntry::from_render_line(0, &assistant_line);
-        let tool_entry = TimelineEntry::from_render_line(1, &tool_line);
-        let error_entry = TimelineEntry::from_render_line(2, &error_line);
-
-        assert!(assistant_entry.matches_jump_target(TimelineJumpTarget::Assistant));
-        assert!(!assistant_entry.matches_jump_target(TimelineJumpTarget::Tool));
-        assert!(!assistant_entry.matches_jump_target(TimelineJumpTarget::Error));
-
-        assert!(tool_entry.matches_jump_target(TimelineJumpTarget::Tool));
-        assert!(!tool_entry.matches_jump_target(TimelineJumpTarget::Assistant));
-
-        assert!(error_entry.matches_jump_target(TimelineJumpTarget::Error));
-        assert!(error_entry.matches_jump_target(TimelineJumpTarget::Tool));
     }
 }
 
