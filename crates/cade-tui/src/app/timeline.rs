@@ -842,7 +842,7 @@ fn render_tool_call_item(
         Span::styled(
             " TOOL ",
             Style::default()
-                .fg(colors.selected_bg)
+                .fg(colors.tool_badge_fg)
                 .bg(colors.tool_pending_bg)
                 .add_modifier(Modifier::BOLD),
         ),

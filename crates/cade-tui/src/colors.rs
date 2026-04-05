@@ -53,6 +53,7 @@ pub struct ThemeColors {
     pub overlay_selected_fg: RC,
     pub badge_bg: RC,
     pub badge_fg: RC,
+    pub tool_badge_fg: RC,
     pub assistant_accent: RC,
     pub reasoning_bg: RC,
 
@@ -142,6 +143,7 @@ impl ThemeColors {
             overlay_selected_fg: RC::Rgb(100, 180, 255),
             badge_bg: RC::Rgb(28, 32, 48),
             badge_fg: RC::Rgb(100, 180, 255),
+            tool_badge_fg: RC::Rgb(38, 42, 60),
             assistant_accent: RC::Rgb(100, 180, 255),
             reasoning_bg: RC::Rgb(18, 22, 32),
 
@@ -220,6 +222,7 @@ impl ThemeColors {
             overlay_selected_fg: RC::Rgb(0, 100, 200),
             badge_bg: RC::Rgb(230, 236, 250),
             badge_fg: RC::Rgb(0, 100, 200),
+            tool_badge_fg: RC::Rgb(220, 228, 248),
             assistant_accent: RC::Rgb(0, 100, 200),
             reasoning_bg: RC::Rgb(238, 242, 250),
 
@@ -323,6 +326,12 @@ impl ThemeColors {
             base.badge_fg = dark_text;
         } else {
             base.badge_fg = base.accent;
+        }
+
+        if is_bright(&base.tool_pending_bg) {
+            base.tool_badge_fg = dark_text;
+        } else {
+            base.tool_badge_fg = base.selected_bg;
         }
 
         base.assistant_accent = base.tool_title;
