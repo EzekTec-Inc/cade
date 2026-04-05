@@ -29,7 +29,7 @@ pub fn get_conversation(db: &Db, conv_id: &str) -> Result<Option<ConversationRow
         "SELECT c.id, c.agent_id, c.title, c.created_at, c.updated_at,
                 COUNT(m.id) as message_count
          FROM conversations c
-         LEFT JOIN messages m ON m.conversation_id = c.id
+         LEFT JOIN messages m ON m.conversation_id = c.id OR (m.conversation_id IS NULL AND c.id = '')
          WHERE c.id = ?1
          GROUP BY c.id",
     )?;
@@ -56,7 +56,7 @@ pub fn list_conversations(db: &Db, agent_id: &str) -> Result<Vec<ConversationRow
         "SELECT c.id, c.agent_id, c.title, c.created_at, c.updated_at,
                 COUNT(m.id) as message_count
          FROM conversations c
-         LEFT JOIN messages m ON m.conversation_id = c.id
+         LEFT JOIN messages m ON m.conversation_id = c.id OR (m.conversation_id IS NULL AND c.id = '')
          WHERE c.agent_id = ?1
          GROUP BY c.id
          ORDER BY c.updated_at DESC",
