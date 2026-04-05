@@ -252,7 +252,6 @@ impl Repl {
             loop {
                 tokio::select! {
                     _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
-                        if tick_cancel.load(Ordering::SeqCst) { break; }
                         // Update assessing text once per second
                         let secs = tick_start.elapsed().as_secs();
                         let toks = tick_tokens.load(Ordering::SeqCst).saturating_sub(tick_base);
@@ -273,7 +272,6 @@ impl Repl {
                             }
                     }
                     Some(Ok(evt)) = reader.next() => {
-                        if tick_cancel.load(Ordering::SeqCst) { break; }
                         use crossterm::event::MouseEventKind;
 
                         // For key events targeting an active question modal we MUST
@@ -286,7 +284,6 @@ impl Repl {
                                 // Spin-wait until app lock is available,
                                 // then process the key (async question or Esc/scroll).
                                 loop {
-                                    if tick_cancel.load(Ordering::SeqCst) { break; }
                                     if let Ok(mut app) = tick_app.try_lock() {
                                         let has_async_question = app.active_question
                                             .as_ref()
