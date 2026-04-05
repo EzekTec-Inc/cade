@@ -156,7 +156,7 @@ impl Repl {
                     let model = model_override
                         .clone()
                         .or_else(|| def_opt.as_ref().and_then(|d| d.model.clone()))
-                        .unwrap_or(main_model);
+                        .unwrap_or_else(|| cade_ai::catalogue::fast_model_for_main_model(&main_model));
 
                     let req = cade_agent::agent::client::CreateAgentRequest {
                         name: Some(format!("subagent-{}-{}", subagent_type_c, task_id_c)),
