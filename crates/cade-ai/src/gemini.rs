@@ -6,7 +6,8 @@ use reqwest::Client;
 use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::pin::Pin;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use tokio_stream::Stream;
 
 use super::{
@@ -142,7 +143,7 @@ impl GeminiProvider {
 
     /// Check the in-process cache and return the resource name if still valid.
     fn cached_name(&self, hash: u64) -> Option<String> {
-        let cache = self.content_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let cache = self.content_cache.lock();
         cache.get(&hash).and_then(|e| {
             if e.expires_at > std::time::Instant::now() {
                 Some(e.name.clone())
@@ -225,7 +226,7 @@ impl GeminiProvider {
 
         // Store with 55-min TTL (5-min buffer before the 1-hour server TTL)
         let expires_at = std::time::Instant::now() + std::time::Duration::from_secs(3300);
-        let mut cache = self.content_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = self.content_cache.lock();
         cache.insert(
             hash,
             GeminiCacheEntry {

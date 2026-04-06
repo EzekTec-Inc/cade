@@ -1,6 +1,7 @@
 // region:    --- Modules
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 // endregion: --- Modules
 
@@ -1229,21 +1230,21 @@ impl PermissionManager {
     }
 
     pub fn mode(&self) -> PermissionMode {
-        *self.mode.lock().unwrap()
+        *self.mode.lock()
     }
     pub fn set_mode(&self, mode: PermissionMode) {
-        *self.mode.lock().unwrap() = mode;
+        *self.mode.lock() = mode;
     }
 
     pub fn add_allow_rule(&self, rule: PermissionRule) {
-        let mut rules = self.allow_rules.lock().unwrap();
+        let mut rules = self.allow_rules.lock();
         if !rules.contains(&rule) {
             rules.push(rule);
         }
     }
 
     pub fn add_deny_rule(&self, rule: PermissionRule) {
-        let mut rules = self.deny_rules.lock().unwrap();
+        let mut rules = self.deny_rules.lock();
         if !rules.contains(&rule) {
             rules.push(rule);
         }
@@ -1260,8 +1261,8 @@ impl PermissionManager {
     /// Clear all rules, then load new ones from the given settings.
     /// Note: This resets any session-level allow rules.
     pub fn reload_from_settings(&self, settings: &crate::settings::manager::PermissionSettings) {
-        self.allow_rules.lock().unwrap().clear();
-        self.deny_rules.lock().unwrap().clear();
+        self.allow_rules.lock().clear();
+        self.deny_rules.lock().clear();
         for raw in &settings.allow {
             if let Some(rule) = PermissionRule::parse(raw) {
                 self.add_allow_rule(rule);
@@ -1275,10 +1276,10 @@ impl PermissionManager {
     }
 
     pub fn allow_rules(&self) -> Vec<PermissionRule> {
-        self.allow_rules.lock().unwrap().clone()
+        self.allow_rules.lock().clone()
     }
     pub fn deny_rules(&self) -> Vec<PermissionRule> {
-        self.deny_rules.lock().unwrap().clone()
+        self.deny_rules.lock().clone()
     }
 
     /// Unified permission resolution.
@@ -1339,14 +1340,12 @@ impl PermissionManager {
         if self
             .deny_rules
             .lock()
-            .unwrap()
             .iter()
             .any(|r| r.matches(tool_name, arg_ref))
         {
             let rule = self
                 .deny_rules
                 .lock()
-                .unwrap()
                 .iter()
                 .find(|r| r.matches(tool_name, arg_ref))
                 .cloned();
@@ -1360,7 +1359,6 @@ impl PermissionManager {
         if self
             .allow_rules
             .lock()
-            .unwrap()
             .iter()
             .any(|r| r.matches(tool_name, arg_ref))
         {

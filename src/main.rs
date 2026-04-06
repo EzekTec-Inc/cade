@@ -17,7 +17,8 @@ use clap::Parser;
 use serde_json::json;
 use std::path::PathBuf;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 use agent::{CadeClient, session::SessionStore};
 use cade::support::text::sanitize_for_terminal;

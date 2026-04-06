@@ -63,7 +63,7 @@ impl Repl {
                 progress: None,
             };
             let ans = {
-                let mut app = self.app.lock().expect("lock poisoned");
+                let mut app = self.app.lock();
                 app.ask_question(&q)?
             };
             let Some(chosen) = ans else {
@@ -99,7 +99,7 @@ impl Repl {
                 progress: None,
             };
             let ans = {
-                let mut app = self.app.lock().expect("lock poisoned");
+                let mut app = self.app.lock();
                 app.ask_question(&kq)?
             };
             match &ans {
@@ -127,7 +127,7 @@ impl Repl {
                 progress: None,
             };
             let ans = {
-                let mut app = self.app.lock().expect("lock poisoned");
+                let mut app = self.app.lock();
                 app.ask_question(&uq)?
             };
             match &ans {

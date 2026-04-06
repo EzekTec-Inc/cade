@@ -23,7 +23,8 @@ pub(crate) use timeline::*;
 /// └─────────────────────────────────────────┘
 /// ```
 use std::io::Write;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 use std::time::Instant;
 
 use crate::Result;
@@ -790,8 +791,8 @@ impl TuiApp {
     /// Update the thinking text from the animation/assessing timer.
     pub fn update_thinking_text(&mut self, text: String) {
         if let Some(ts) = &self.thinking
-            && let Ok(mut guard) = ts.text.lock()
         {
+            let mut guard = ts.text.lock();
             *guard = text;
         }
     }
@@ -851,7 +852,7 @@ impl TuiApp {
         let thinking_text = self
             .thinking
             .as_ref()
-            .and_then(|ts| ts.text.lock().ok().map(|g| g.clone()));
+            .map(|ts| ts.text.lock().clone());
         let thinking_elapsed = self.thinking.as_ref().map(|ts| ts.started.elapsed());
         let expand_all = self.expand_all;
         let expanded_items = self.expanded_items.clone();

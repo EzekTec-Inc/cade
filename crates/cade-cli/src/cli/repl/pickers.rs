@@ -11,7 +11,7 @@ impl Repl {
     /// Returns the picked conversation JSON, or None if cancelled.
     pub(crate) async fn conversation_picker(
         &self,
-        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        app_arc: std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
         convs: &[serde_json::Value],
         agent_id: &str,
     ) -> Result<Option<serde_json::Value>> {
@@ -61,7 +61,7 @@ impl Repl {
 
         // Initial draw
         {
-            let mut app = app_arc.lock().expect("lock poisoned");
+            let mut app = app_arc.lock();
             let items = build_items(sel);
             let n = convs.len();
             let mut ls = ListState::default().with_selected(Some(sel));
@@ -125,7 +125,7 @@ impl Repl {
                             progress: None,
                         };
                         let ans = {
-                            let mut app = app_arc.lock().expect("lock poisoned");
+                            let mut app = app_arc.lock();
                             app.ask_question(&q)?
                         };
                         if matches!(&ans, Some(a) if a.as_str().starts_with("Yes")) {
@@ -138,7 +138,7 @@ impl Repl {
                 }
             }
             // Redraw after state change
-            let mut app = app_arc.lock().expect("lock poisoned");
+            let mut app = app_arc.lock();
             let items = build_items(sel);
             let n = convs.len();
             let mut ls = ListState::default().with_selected(Some(sel));
@@ -167,7 +167,7 @@ impl Repl {
     ///   Esc / q    — cancel
     pub(crate) async fn agent_picker(
         &self,
-        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        app_arc: std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
         agents: &mut [AgentState],
     ) -> Result<Option<AgentPickerResult>> {
         use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -188,7 +188,7 @@ impl Repl {
         let mut filter_query = String::new();
         let mut selected_filtered: usize = 0;
 
-        let do_draw = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        let do_draw = |app_arc: &std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
                        agents: &[AgentState],
                        filtered_indices: &[usize],
                        sel: usize,
@@ -196,7 +196,7 @@ impl Repl {
                        filter_query: &str,
                        current: &str|
          -> Result<()> {
-            let mut app = app_arc.lock().expect("lock poisoned");
+            let mut app = app_arc.lock();
 
             let n = marked.len();
             let hint = if n == 0 {
@@ -406,7 +406,7 @@ impl Repl {
                             progress: None,
                         };
                         let confirmed = {
-                            let mut app = app_arc.lock().expect("lock poisoned");
+                            let mut app = app_arc.lock();
                             let r = app.ask_question(&q)?;
                             app.scroll = 0;
                             let _ = app.draw();
@@ -425,7 +425,7 @@ impl Repl {
                                         }
                                     }
                                     Err(e) => {
-                                        app_arc.lock().expect("lock poisoned").show_toast(
+                                        app_arc.lock().show_toast(
                                             e.to_string(),
                                             crate::ui::ToastLevel::Error,
                                         );
@@ -457,7 +457,7 @@ impl Repl {
                                 progress: None,
                             };
                             let name = {
-                                let mut app = app_arc.lock().expect("lock poisoned");
+                                let mut app = app_arc.lock();
                                 let ans = app.ask_question(&q)?;
                                 app.scroll = 0;
                                 let _ = app.draw();
@@ -480,7 +480,7 @@ impl Repl {
                                         }
                                     }
                                     Err(e) => {
-                                        app_arc.lock().expect("lock poisoned").show_toast(
+                                        app_arc.lock().show_toast(
                                             e.to_string(),
                                             crate::ui::ToastLevel::Error,
                                         );
@@ -513,7 +513,7 @@ impl Repl {
     /// Returns the selected model string or None if cancelled.
     pub(crate) async fn interactive_model_picker(
         &self,
-        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        app_arc: std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
     ) -> Result<Option<String>> {
         use crossterm::event::{self, Event, KeyCode, KeyEventKind};
         use ratatui::{
@@ -527,7 +527,7 @@ impl Repl {
         };
 
         {
-            let mut app = app_arc.lock().expect("lock poisoned");
+            let mut app = app_arc.lock();
             let _ = app.push(crate::ui::RenderLine::DimMsg(
                 "  Fetching models…".to_string(),
             ));
@@ -576,7 +576,7 @@ impl Repl {
                 }
             }
             Err(_) => {
-                let mut app = app_arc.lock().expect("lock poisoned");
+                let mut app = app_arc.lock();
                 let _ = app.push(crate::ui::RenderLine::ErrorMsg(
                     "Could not fetch models. Specify directly: /model provider/model-name"
                         .to_string(),
@@ -604,7 +604,7 @@ impl Repl {
         ));
 
         if models.len() == 1 {
-            let mut app = app_arc.lock().expect("lock poisoned");
+            let mut app = app_arc.lock();
             let _ = app.push(crate::ui::RenderLine::DimMsg(
                 "  No models available. Connect a provider: /connect".to_string(),
             ));
@@ -764,7 +764,7 @@ impl Repl {
         };
 
         // -- Draw helper
-        let do_draw_model = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        let do_draw_model = |app_arc: &std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
                              list_pos: usize|
          -> Result<()> {
             let sel_model = model_at(list_pos);
@@ -782,7 +782,7 @@ impl Repl {
             );
             let mut ls = ListState::default().with_selected(Some(list_pos));
             let mut sb = ScrollbarState::new(disp_len).position(list_pos);
-            let mut app = app_arc.lock().expect("lock poisoned");
+            let mut app = app_arc.lock();
             app.terminal.draw(|f| {
                 let area = f.area();
                 let chunks = Layout::default()
@@ -841,7 +841,7 @@ impl Repl {
                                 progress: None,
                             };
                             let ans = {
-                                let mut app = app_arc.lock().expect("lock poisoned");
+                                let mut app = app_arc.lock();
                                 app.ask_question(&q)?
                             };
                             if let Some(a) = &ans {
@@ -893,7 +893,7 @@ impl Repl {
     /// Returns the selected reasoning tier string or None if cancelled.
     pub(crate) async fn interactive_reasoning_picker(
         &self,
-        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        app_arc: std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
     ) -> Result<Option<String>> {
         use crossterm::event::{self, Event, KeyCode, KeyEventKind};
         use ratatui::{
@@ -906,7 +906,6 @@ impl Repl {
         let current_effort = self
             .reasoning_effort
             .lock()
-            .expect("lock poisoned")
             .clone()
             .unwrap_or_else(|| "none".to_string());
 
@@ -923,7 +922,7 @@ impl Repl {
             .position(|&(t, _)| t == current_effort)
             .unwrap_or(0);
 
-        let do_draw_tier = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        let do_draw_tier = |app_arc: &std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
                             list_pos: usize|
          -> Result<()> {
             let title = format!(
@@ -968,7 +967,7 @@ impl Repl {
                     .border_style(Style::default().fg(RC::DarkGray)),
             );
 
-            let mut app = app_arc.lock().expect("lock poisoned");
+            let mut app = app_arc.lock();
             app.terminal.draw(|f| {
                 let area = f.area();
                 let center = Layout::default()
@@ -1034,7 +1033,7 @@ impl Repl {
     /// `/memory` interactive picker
     pub(crate) async fn memory_picker(
         &self,
-        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        app_arc: std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
         blocks: &mut [cade_agent::agent::client::MemoryBlock],
     ) -> Result<Option<MemoryPickerResult>> {
         use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -1052,13 +1051,13 @@ impl Repl {
         let mut filter_query = String::new();
         let mut selected_filtered: usize = 0;
 
-        let do_draw = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        let do_draw = |app_arc: &std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
                        blocks: &[cade_agent::agent::client::MemoryBlock],
                        filtered_indices: &[usize],
                        sel: usize,
                        filter_query: &str|
          -> Result<()> {
-            let mut app = app_arc.lock().expect("lock poisoned");
+            let mut app = app_arc.lock();
 
             let hint = " ↑↓  Enter/e Edit  p Pin/Unpin  d Delete  Esc/q cancel ".to_string();
 
@@ -1264,7 +1263,7 @@ impl Repl {
                                 progress: None,
                             };
                             let confirmed = {
-                                let mut app = app_arc.lock().expect("lock poisoned");
+                                let mut app = app_arc.lock();
                                 let r = app.ask_question(&q)?;
                                 app.scroll = 0;
                                 let _ = app.draw();
@@ -1296,7 +1295,7 @@ impl Repl {
     /// `/subagents` interactive picker
     pub(crate) async fn subagent_picker(
         &self,
-        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        app_arc: std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
         subagents: &[cade_agent::subagents::SubagentDef],
     ) -> Result<Option<SubagentPickerResult>> {
         use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -1314,13 +1313,13 @@ impl Repl {
         let mut filter_query = String::new();
         let mut selected_filtered: usize = 0;
 
-        let do_draw = |app_arc: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        let do_draw = |app_arc: &std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
                        subagents: &[cade_agent::subagents::SubagentDef],
                        filtered_indices: &[usize],
                        sel: usize,
                        filter_query: &str|
          -> Result<()> {
-            let mut app = app_arc.lock().expect("lock poisoned");
+            let mut app = app_arc.lock();
 
             let hint = " ↑↓ Navigate  Enter Select  e Edit  Esc/q Cancel ".to_string();
 
@@ -1502,7 +1501,7 @@ Skills: {}
                             if let Some(path) = &s.path {
                                 break Some(SubagentPickerResult::Edit(path.clone()));
                             } else {
-                                app_arc.lock().expect("lock poisoned").show_toast(
+                                app_arc.lock().show_toast(
                                     "Built-in subagents cannot be edited",
                                     crate::ui::ToastLevel::Error,
                                 );
@@ -1530,14 +1529,13 @@ Skills: {}
     /// `/mcp` interactive picker
     pub(crate) async fn interactive_mcp_picker(
         &self,
-        app_arc: std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        app_arc: std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
     ) -> Result<Option<cade_tui::mcp_picker::McpAction>> {
         use cade_tui::mcp_picker::{McpEntry, show_mcp_manager};
 
         let mcp_configs = self
             .settings
             .lock()
-            .expect("lock poisoned")
             .global_settings_mut()
             .mcp_servers
             .clone();
@@ -1565,7 +1563,7 @@ Skills: {}
         }
         entries.sort_by(|a, b| a.key.cmp(&b.key));
 
-        let mut app = app_arc.lock().expect("lock poisoned");
+        let mut app = app_arc.lock();
         let colors = app.colors.clone();
 
         let result = show_mcp_manager(&mut app.terminal, entries, &colors);

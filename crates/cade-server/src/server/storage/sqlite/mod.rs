@@ -1,7 +1,8 @@
 use crate::server::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use std::sync::Mutex;
 
 // -- Provider row
 

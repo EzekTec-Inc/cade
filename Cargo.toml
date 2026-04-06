@@ -65,6 +65,7 @@ regex          = "1"
 dotenvy        = "0.15"
 atty           = "0.2"
 plist          = "1.7"
+parking_lot    = "0.12"
 
 # Crypto
 aes-gcm        = "0.10"
@@ -152,6 +153,7 @@ dotenvy.workspace      = true
 chrono.workspace       = true
 atty.workspace         = true
 dirs.workspace         = true
+parking_lot.workspace  = true
 # -- Used by cade-server binary (RouterAdapter)
 async-trait.workspace  = true
 tokio-stream.workspace = true

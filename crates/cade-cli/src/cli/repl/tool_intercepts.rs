@@ -102,7 +102,7 @@ impl Repl {
 
         let app_arc = self.app.clone();
         let live_idx = if !background {
-            let mut app = app_arc.lock().expect("lock poisoned");
+            let mut app = app_arc.lock();
             app.push_silent(crate::ui::RenderLine::SystemMsg(format!(
                 "  [Subagent: {}]",
                 subagent_type
@@ -112,21 +112,20 @@ impl Repl {
             None
         };
 
-        let buffer = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let buffer = std::sync::Arc::new(parking_lot::Mutex::new(String::new()));
 
         let on_output: Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>> =
             if let Some(idx) = live_idx {
                 let app_arc = app_arc.clone();
                 let buffer = buffer.clone();
                 Some(std::sync::Arc::new(move |chunk: &str| {
-                    let mut buf = buffer.lock().unwrap();
+                    let mut buf = buffer.lock();
                     buf.push_str(chunk);
                     while let Some(pos) = buf.find('\n') {
                         let line = buf[..pos].to_string();
                         buf.replace_range(..=pos, "");
                         let _ = app_arc
                             .lock()
-                            .expect("lock poisoned")
                             .append_live_output_line(idx, line);
                     }
                 }))
@@ -323,7 +322,7 @@ impl Repl {
                         .await;
                 }
 
-                bg.lock().expect("lock poisoned").push(BackgroundResult {
+                bg.lock().push(BackgroundResult {
                     task_id: task_id.clone(),
                     subagent: st,
                     prompt_preview,
@@ -350,17 +349,15 @@ impl Repl {
 
             // Finish live output and push any remaining buffer
             if let Some(idx) = live_idx {
-                let mut buf = buffer.lock().unwrap();
+                let mut buf = buffer.lock();
                 if !buf.is_empty() {
                     let _ = app_arc
                         .lock()
-                        .expect("lock poisoned")
                         .append_live_output_line(idx, buf.clone());
                     buf.clear();
                 }
                 let _ = app_arc
                     .lock()
-                    .expect("lock poisoned")
                     .finish_live_output(idx);
             }
 

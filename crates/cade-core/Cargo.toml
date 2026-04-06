@@ -29,6 +29,7 @@ chrono.workspace     = true
 uuid.workspace       = true
 dotenvy.workspace    = true
 plist.workspace      = true
+parking_lot.workspace = true
 # -- HTTP
 reqwest.workspace    = true
 

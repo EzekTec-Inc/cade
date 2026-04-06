@@ -199,7 +199,7 @@ impl Repl {
         // If the input matches any skill trigger, silently pre-load the skill
         // body by injecting it as a system context note before the user message.
         let effective_input = {
-            let skills = self.skills.lock().expect("lock poisoned");
+            let skills = self.skills.lock();
             let matched: Vec<String> = skills
                 .iter()
                 .filter(|s| s.matches_trigger(&effective_input))
@@ -230,7 +230,6 @@ impl Repl {
         let bar_text = self
             .app
             .lock()
-            .expect("lock poisoned")
             .start_thinking("assessing… (esc to interrupt · 0s · 0↑)");
 
         // Redraw tick task — updates the spinner animation and assessing timer.
@@ -256,9 +255,9 @@ impl Repl {
                         let secs = tick_start.elapsed().as_secs();
                         let toks = tick_tokens.load(Ordering::SeqCst).saturating_sub(tick_base);
                         {
-                            let cur = tick_bar.lock().expect("lock poisoned").clone();
+                            let cur = tick_bar.lock().clone();
                             if cur.starts_with("assessing") || cur.starts_with("CADE thinking") {
-                                *tick_bar.lock().expect("lock poisoned") =
+                                *tick_bar.lock() =
                                     format!("assessing… (esc to interrupt · {secs}s · {toks}↑)");
                             }
                         }
@@ -266,7 +265,7 @@ impl Repl {
                         // (draw_dirty) or the thinking animation needs refreshing.
                         // This avoids redundant full-screen redraws when nothing
                         // has changed since the last frame.
-                        if let Ok(mut app) = tick_app.try_lock()
+                        if let Some(mut app) = tick_app.try_lock()
                             && (app.draw_dirty || app.thinking.is_some()) {
                                 let _ = app.draw();
                             }
@@ -284,7 +283,7 @@ impl Repl {
                                 // Spin-wait until app lock is available,
                                 // then process the key (async question or Esc/scroll).
                                 loop {
-                                    if let Ok(mut app) = tick_app.try_lock() {
+                                    if let Some(mut app) = tick_app.try_lock() {
                                         let has_async_question = app.active_question
                                             .as_ref()
                                             .is_some_and(|aq| aq.tx.is_some());
@@ -333,8 +332,8 @@ impl Repl {
                                                             let post_modal = last_close > 0
                                                                 && now_ms.saturating_sub(last_close) < 300;
                                                             if !post_modal {
-                                                                tick_queued_followup.lock().expect("lock poisoned").push_back(msg);
-                                                                app.queued_count = tick_queued_followup.lock().expect("lock poisoned").len();
+                                                                tick_queued_followup.lock().push_back(msg);
+                                                                app.queued_count = tick_queued_followup.lock().len();
                                                                 app.editor.input.clear();
                                                                 app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
@@ -359,8 +358,8 @@ impl Repl {
                                                             let post_modal = last_close > 0
                                                                 && now_ms.saturating_sub(last_close) < 300;
                                                             if !post_modal {
-                                                                tick_queued_followup.lock().expect("lock poisoned").push_back(msg);
-                                                                app.queued_count = tick_queued_followup.lock().expect("lock poisoned").len();
+                                                                tick_queued_followup.lock().push_back(msg);
+                                                                app.queued_count = tick_queued_followup.lock().len();
                                                                 app.editor.input.clear();
                                                                 app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
@@ -386,8 +385,8 @@ impl Repl {
                                                         app.editor.expand_pastes();
                                                         let msg = app.editor.input.trim().to_string();
                                                         if !msg.is_empty() {
-                                                            tick_queued_followup.lock().expect("lock poisoned").push_back(msg);
-                                                            app.queued_count = tick_queued_followup.lock().expect("lock poisoned").len();
+                                                            tick_queued_followup.lock().push_back(msg);
+                                                            app.queued_count = tick_queued_followup.lock().len();
                                                             app.editor.input.clear();
                                                             app.editor.cursor_pos = 0;
                                                             let _ = app.draw();
@@ -478,7 +477,7 @@ impl Repl {
                                                             if !msg.is_empty() {
                                                                 // Steering: cancel current turn and
                                                                 // run this message immediately after.
-                                                                *tick_queued_steering.lock().expect("lock poisoned") = Some(msg);
+                                                                *tick_queued_steering.lock() = Some(msg);
                                                                 app.editor.input.clear();
                                                                 app.editor.cursor_pos = 0;
                                                                 let _ = app.draw();
@@ -502,7 +501,7 @@ impl Repl {
                                         tokio::time::sleep(tokio::time::Duration::from_millis(1)).await;
                                     }
                             }
-                        } else if let Ok(mut app) = tick_app.try_lock() {
+                        } else if let Some(mut app) = tick_app.try_lock() {
                             // Mouse / resize — best-effort, fine to drop
                             if let Event::Mouse(m) = evt { match m.kind {
                                 MouseEventKind::ScrollUp   => { app.follow = false; app.scroll = app.scroll.saturating_add(1); let _ = app.draw(); }
@@ -567,15 +566,14 @@ impl Repl {
         let _ = self
             .app
             .lock()
-            .expect("lock poisoned")
             .push(RenderLine::Blank);
 
         // -- Stop thinking animation
         tick_handle.abort();
         let _ = tick_handle.await;
-        let secs = self.app.lock().expect("lock poisoned").stop_thinking();
+        let secs = self.app.lock().stop_thinking();
         // Accumulate agent-active time in session stats
-        if let Ok(mut stats) = self.session_stats.lock() {
+        { let mut stats = self.session_stats.lock();
             stats.agent_active_ms += turn_start.elapsed().as_millis() as u64;
         }
         let time_str = if secs >= 60 {
@@ -613,9 +611,8 @@ impl Repl {
         };
         self.app
             .lock()
-            .expect("lock poisoned")
             .set_last_status(Some(summary));
-        let _ = self.app.lock().expect("lock poisoned").draw();
+        let _ = self.app.lock().draw();
 
         self.turn_active.store(false, Ordering::SeqCst);
         Ok(())
@@ -638,7 +635,7 @@ impl Repl {
         // don't pollute conversation history or consume future context window.
         ephemeral: bool,
         _spinner: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>,
-        bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
+        bar_text: Option<std::sync::Arc<parking_lot::Mutex<String>>>,
     ) -> Result<Vec<CadeMessage>> {
         // -- R-04: Async event buffering
         // Decouples network I/O from TUI rendering.  The SSE callback (`on_event`)
@@ -656,11 +653,11 @@ impl Repl {
         let sess_in_tok = self.session_input_tokens.clone();
         let sess_out_tok = self.session_output_tokens.clone();
         let sess_stats = self.session_stats.clone();
-        let run_id_cell: std::sync::Arc<std::sync::Mutex<Option<String>>> = Default::default();
-        let seq_id_cell: std::sync::Arc<std::sync::Mutex<Option<i64>>> = Default::default();
+        let run_id_cell: std::sync::Arc<parking_lot::Mutex<Option<String>>> = Default::default();
+        let seq_id_cell: std::sync::Arc<parking_lot::Mutex<Option<i64>>> = Default::default();
         let run_id_cell2 = run_id_cell.clone();
         let seq_id_cell2 = seq_id_cell.clone();
-        let finish_reason_arc: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+        let finish_reason_arc: std::sync::Arc<parking_lot::Mutex<Option<String>>> =
             Default::default();
         let finish_reason_cb = finish_reason_arc.clone();
 
@@ -670,16 +667,16 @@ impl Repl {
                 "stream_start" => {
                     if let Some(cid) = msg.data["conversation_id"].as_str()
                         && !cid.is_empty()
-                        && conv_arc.lock().expect("lock poisoned").as_deref() != Some(cid)
+                        && conv_arc.lock().as_deref() != Some(cid)
                     {
                         let cid: String = cid.to_string();
-                        *conv_arc.lock().expect("lock poisoned") = Some(cid.clone());
-                        if let Ok(mut s) = session_arc.lock() {
+                        *conv_arc.lock() = Some(cid.clone());
+                        { let mut s = session_arc.lock();
                             let _ = s.set_conversation(Some(cid));
                         }
                     }
                     if let Some(rid) = msg.run_id() {
-                        *run_id_cell2.lock().expect("lock poisoned") = Some(rid.to_string());
+                        *run_id_cell2.lock() = Some(rid.to_string());
                     }
                 }
                 "usage_statistics" => {
@@ -690,7 +687,7 @@ impl Repl {
                     if let Some(n) = msg.data["output_tokens"].as_u64() {
                         sess_out_tok.fetch_add(n, Ordering::SeqCst);
                     }
-                    if let Ok(mut stats) = sess_stats.lock() {
+                    { let mut stats = sess_stats.lock();
                         let model = msg.data["model"].as_str().unwrap_or("").to_string();
                         let input = msg.data["input_tokens"].as_u64().unwrap_or(0);
                         let cache_read = msg.data["cache_read_tokens"].as_u64().unwrap_or(0);
@@ -701,13 +698,13 @@ impl Repl {
                 }
                 "finish_reason" => {
                     if let Some(reason) = msg.data["reason"].as_str() {
-                        *finish_reason_cb.lock().expect("lock poisoned") = Some(reason.to_string());
+                        *finish_reason_cb.lock() = Some(reason.to_string());
                     }
                 }
                 _ => {}
             }
             if let Some(s) = msg.seq_id() {
-                *seq_id_cell2.lock().expect("lock poisoned") = Some(s);
+                *seq_id_cell2.lock() = Some(s);
             }
             // Forward to UI consumer (non-blocking, never stalls the SSE loop).
             let _ = ui_tx.send(msg.clone());
@@ -728,8 +725,8 @@ impl Repl {
         // context_window_for_model to fall through to a wrong default.
         let full_model_id = self.model();
         // Clear buffers at the start of each turn.
-        reasoning_buf.lock().expect("lock poisoned").clear();
-        assistant_buf.lock().expect("lock poisoned").clear();
+        reasoning_buf.lock().clear();
+        assistant_buf.lock().clear();
         let ui_task = tokio::spawn(async move {
             let mut ui_rx = ui_rx;
             let mut in_reasoning = false;
@@ -739,42 +736,41 @@ impl Repl {
                     "reasoning_message" => {
                         if let Some(text) = msg.reasoning_text() {
                             in_reasoning = true;
-                            reasoning_buf.lock().expect("lock poisoned").push_str(text);
+                            reasoning_buf.lock().push_str(text);
                             app_arc
                                 .lock()
-                                .expect("lock poisoned")
                                 .push_reasoning_chunk(text);
                         }
                     }
                     "assistant_message" => {
                         if let Some(text) = msg.assistant_text() {
-                            assistant_buf.lock().expect("lock poisoned").push_str(text);
+                            assistant_buf.lock().push_str(text);
                             if !text.is_empty() {
                                 in_reasoning = false;
                                 in_assistant = true;
                                 let line_count = {
-                                    let mut app = app_arc.lock().expect("lock poisoned");
+                                    let mut app = app_arc.lock();
                                     app.commit_reasoning_inner();
                                     let _ = app.push_streaming_chunk(text);
                                     app.lines.len()
                                 };
                                 if let Some(bar) = &bar_text_arc {
-                                    let cur = bar.lock().expect("lock poisoned").clone();
+                                    let cur = bar.lock().clone();
                                     if !cur.starts_with("●") {
-                                        *bar.lock().expect("lock poisoned") =
+                                        *bar.lock() =
                                             format!("generating… ({line_count} lines)");
                                     }
                                 }
                             }
                         } else if in_reasoning {
-                            let _ = app_arc.lock().expect("lock poisoned").commit_reasoning();
+                            let _ = app_arc.lock().commit_reasoning();
                             in_reasoning = false;
                         }
                     }
                     "tool_call_message" => {
                         in_reasoning = false;
                         {
-                            let mut app = app_arc.lock().expect("lock poisoned");
+                            let mut app = app_arc.lock();
                             app.commit_reasoning_inner();
                             let _ = app.commit_streaming();
                         }
@@ -788,7 +784,7 @@ impl Repl {
                             } else {
                                 tool_name
                             };
-                            *bar.lock().expect("lock poisoned") = format!("● {}…", display);
+                            *bar.lock() = format!("● {}…", display);
                         }
                     }
                     "usage_statistics" => {
@@ -825,7 +821,7 @@ impl Repl {
                         let in_tok = sess_in_tok_ui.load(Ordering::SeqCst);
                         let out_tok = sess_out_tok_ui.load(Ordering::SeqCst);
                         let (cache_r, cache_w, total_cost) = {
-                            let stats = sess_stats_ui.lock().expect("lock poisoned");
+                            let stats = sess_stats_ui.lock();
                             let cache_r: u64 =
                                 stats.per_model.values().map(|m| m.cache_read_tokens).sum();
                             let cache_w: u64 =
@@ -835,7 +831,7 @@ impl Repl {
                         };
 
                         // Update TUI context_pct and footer_extra in one lock
-                        let mut app = app_arc.lock().expect("lock poisoned");
+                        let mut app = app_arc.lock();
                         if let Some(pct_int) = pct_int_opt {
                             app.set_context_pct(pct_int);
                         }
@@ -876,7 +872,7 @@ impl Repl {
         let conv_ref = conv_id.as_deref();
 
         let messages = if is_tool_return {
-            let reasoning_effort = self.reasoning_effort.lock().expect("lock poisoned").clone();
+            let reasoning_effort = self.reasoning_effort.lock().clone();
             match self
                 .client
                 .stream_tool_return_cancellable(
@@ -895,7 +891,7 @@ impl Repl {
                 Err(e) if is_cancel(&e) => {
                     // Drop the sender so the UI task drains and exits.
                     ui_task.abort();
-                    let mut app = self.app.lock().expect("lock poisoned");
+                    let mut app = self.app.lock();
                     let _ = app.commit_reasoning();
                     let _ = app.commit_streaming();
                     let _ = app.push(RenderLine::ErrorMsg("Turn interrupted".to_string()));
@@ -903,7 +899,7 @@ impl Repl {
                 }
                 Err(e) => {
                     ui_task.abort();
-                    let mut app = self.app.lock().expect("lock poisoned");
+                    let mut app = self.app.lock();
                     let _ = app.commit_reasoning();
                     let _ = app.commit_streaming();
                     let _ = app.push(RenderLine::ErrorMsg(e.to_string()));
@@ -921,7 +917,7 @@ impl Repl {
                 } else {
                     vec![]
                 };
-                let reasoning_effort = self.reasoning_effort.lock().expect("lock poisoned").clone();
+                let reasoning_effort = self.reasoning_effort.lock().clone();
                 match self
                     .client
                     .stream_message_cancellable_with_images(
@@ -939,7 +935,7 @@ impl Repl {
                     Ok(m) => m,
                     Err(e) if is_cancel(&e) => {
                         ui_task.abort();
-                        let mut app = self.app.lock().expect("lock poisoned");
+                        let mut app = self.app.lock();
                         let _ = app.commit_reasoning();
                         let _ = app.commit_streaming();
                         let _ = app.push(RenderLine::ErrorMsg("Turn interrupted".to_string()));
@@ -947,7 +943,7 @@ impl Repl {
                     }
                     Err(e) => {
                         ui_task.abort();
-                        let mut app = self.app.lock().expect("lock poisoned");
+                        let mut app = self.app.lock();
                         let _ = app.commit_reasoning();
                         let _ = app.commit_streaming();
                         let _ = app.push(RenderLine::ErrorMsg(e.to_string()));
@@ -976,18 +972,16 @@ impl Repl {
                                 let _ = self
                                     .app
                                     .lock()
-                                    .expect("lock poisoned")
                                     .push_streaming_chunk(text);
                             }
                         }
-                        let _ = self.app.lock().expect("lock poisoned").commit_streaming();
+                        let _ = self.app.lock().commit_streaming();
                         msgs
                     }
                     Err(e) => {
                         let _ = self
                             .app
                             .lock()
-                            .expect("lock poisoned")
                             .push(RenderLine::ErrorMsg(e.to_string()));
                         return Ok(vec![]);
                     }
@@ -1001,12 +995,12 @@ impl Repl {
         // closed, so ui_rx.recv() will return None after draining.
         let _ = ui_task.await;
 
-        let finish_reason_value = finish_reason_arc.lock().expect("lock poisoned").clone();
+        let finish_reason_value = finish_reason_arc.lock().clone();
 
         // Safety-net commit: ensure reasoning/streaming are flushed even if the
         // UI task missed the final messages (e.g. channel race on success path).
         {
-            let mut app = self.app.lock().expect("lock poisoned");
+            let mut app = self.app.lock();
             let _ = app.commit_reasoning();
             let _ = app.commit_streaming();
         }
@@ -1016,7 +1010,6 @@ impl Repl {
             let text = self
                 .last_assistant_text
                 .lock()
-                .expect("lock poisoned")
                 .clone();
             let trimmed = text.trim_end();
             let looks_truncated = !trimmed.is_empty()
@@ -1047,7 +1040,7 @@ impl Repl {
                 );
             }
 
-            let context_pct_opt = { self.app.lock().expect("lock poisoned").context_pct };
+            let context_pct_opt = { self.app.lock().context_pct };
             if let Some(pct) = context_pct_opt
                 && pct >= 95
             {
@@ -1061,11 +1054,11 @@ impl Repl {
         }
 
         // Save run_id + last seq_id for crash recovery / reconnect
-        let saved_run_id = run_id_cell.lock().expect("lock poisoned").clone();
-        let saved_seq_id = *seq_id_cell.lock().expect("lock poisoned");
-        if (saved_run_id.is_some() || saved_seq_id.is_some())
-            && let Ok(mut s) = self.session.lock()
+        let saved_run_id = run_id_cell.lock().clone();
+        let saved_seq_id = *seq_id_cell.lock();
+        if saved_run_id.is_some() || saved_seq_id.is_some()
         {
+            let mut s = self.session.lock();
             let _ = s.set_run(saved_run_id, saved_seq_id);
         }
 
@@ -1081,7 +1074,7 @@ impl Repl {
         stdout: &mut io::Stdout,
         messages: Vec<CadeMessage>,
         user_input: &str,
-        bar_text: Option<std::sync::Arc<std::sync::Mutex<String>>>,
+        bar_text: Option<std::sync::Arc<parking_lot::Mutex<String>>>,
         reprompt_done: bool,
         turn_stats: &mut TurnStats,
     ) -> Result<()> {
@@ -1179,7 +1172,6 @@ impl Repl {
                 let _ = self
                     .app
                     .lock()
-                    .expect("lock poisoned")
                     .push(RenderLine::SystemMsg(
                         "  ⎿  (no response after tool — re-prompting)".to_string(),
                     ));
@@ -1207,7 +1199,7 @@ impl Repl {
             }
 
             // Stop hook — exit 2 feeds stderr back to agent as a continuation
-            let last_reasoning = self.last_reasoning.lock().expect("lock poisoned").clone();
+            let last_reasoning = self.last_reasoning.lock().clone();
             let stop_outcome = self
                 .hooks
                 .stop(
@@ -1225,7 +1217,6 @@ impl Repl {
                 let _ = self
                     .app
                     .lock()
-                    .expect("lock poisoned")
                     .push(RenderLine::SystemMsg(format!(
                         "  ⎿  Hook continuing: {reason}"
                     )));
@@ -1278,7 +1269,7 @@ impl Repl {
                 .map(|(_, name, _)| name.rfind("__").map_or(name.as_str(), |p| &name[p + 2..]))
                 .collect::<Vec<_>>()
                 .join(", ");
-            *bar.lock().expect("lock poisoned") = format!("● {}…", display);
+            *bar.lock() = format!("● {}…", display);
         }
 
         // -- Phase 1: Sequential preflight (approval, blocking, hooks)
@@ -1295,7 +1286,6 @@ impl Repl {
                 let _ = self
                     .app
                     .lock()
-                    .expect("lock poisoned")
                     .push(RenderLine::ToolCall {
                         name: tool_name.to_string(),
                         preview: String::new(),
@@ -1309,7 +1299,6 @@ impl Repl {
                 let _ = self
                     .app
                     .lock()
-                    .expect("lock poisoned")
                     .push(RenderLine::ToolCall {
                         name: tool_name.to_string(),
                         preview,
@@ -1361,7 +1350,6 @@ impl Repl {
             let auto_enabled = self
                 .settings
                 .lock()
-                .expect("lock poisoned")
                 .project()
                 .auto_checkpoint;
             if auto_enabled {
@@ -1409,14 +1397,13 @@ impl Repl {
 
         // Snapshot reasoning/assistant buffers for hook payloads.
         let pr = {
-            let s = self.last_reasoning.lock().expect("lock poisoned").clone();
+            let s = self.last_reasoning.lock().clone();
             if s.is_empty() { None } else { Some(s) }
         };
         let pa = {
             let s = self
                 .last_assistant_text
                 .lock()
-                .expect("lock poisoned")
                 .clone();
             if s.is_empty() { None } else { Some(s) }
         };
@@ -1523,7 +1510,7 @@ impl Repl {
 
         // Update stats.
         for r in &results {
-            if let Ok(mut stats) = self.session_stats.lock() {
+            { let mut stats = self.session_stats.lock();
                 stats.tool_calls_total += 1;
                 if r.is_error {
                     stats.tool_calls_err += 1;
@@ -1585,7 +1572,6 @@ impl Repl {
                 let allow_changes = self
                     .settings
                     .lock()
-                    .expect("lock poisoned")
                     .permission_settings()
                     .allow_agent_mode_changes;
                 if !allow_changes {
@@ -1600,7 +1586,7 @@ impl Repl {
                 }
                 self.permissions
                     .set_mode(cade_core::permissions::PermissionMode::Plan);
-                let mut app = self.app.lock().expect("lock poisoned");
+                let mut app = self.app.lock();
                 app.update_mode(cade_core::permissions::PermissionMode::Plan);
                 Some(Ok(cade_agent::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
@@ -1613,7 +1599,6 @@ impl Repl {
                 let allow_changes = self
                     .settings
                     .lock()
-                    .expect("lock poisoned")
                     .permission_settings()
                     .allow_agent_mode_changes;
                 if !allow_changes {
@@ -1628,7 +1613,7 @@ impl Repl {
                 }
                 self.permissions
                     .set_mode(cade_core::permissions::PermissionMode::Default);
-                let mut app = self.app.lock().expect("lock poisoned");
+                let mut app = self.app.lock();
                 app.update_mode(cade_core::permissions::PermissionMode::Default);
                 Some(Ok(cade_agent::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
@@ -1651,7 +1636,7 @@ impl Repl {
                     })
                     .unwrap_or_default();
                 let n = steps.len();
-                self.app.lock().expect("lock poisoned").set_plan(steps);
+                self.app.lock().set_plan(steps);
                 Some(Ok(cade_agent::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: tool_name.to_string(),
@@ -1665,7 +1650,6 @@ impl Repl {
                 let found = self
                     .app
                     .lock()
-                    .expect("lock poisoned")
                     .update_plan_step(step_id, done);
                 Some(Ok(cade_agent::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
@@ -1746,7 +1730,6 @@ impl Repl {
                 let _ = self
                     .app
                     .lock()
-                    .expect("lock poisoned")
                     .push(RenderLine::ToolResult {
                         is_error: true,
                         content: msg.clone(),
@@ -1771,7 +1754,6 @@ impl Repl {
                 let _ = self
                     .app
                     .lock()
-                    .expect("lock poisoned")
                     .push(RenderLine::ToolResult {
                         is_error: true,
                         content: format!("Hook denied: {reason}"),
@@ -1790,14 +1772,13 @@ impl Repl {
 
             // Prompt for approval
             if !self.prompt_approval(stdout, tool_name, args).await? {
-                if let Ok(mut stats) = self.session_stats.lock() {
+                { let mut stats = self.session_stats.lock();
                     stats.reviewed += 1;
                 }
                 let msg = format!("Tool '{tool_name}' denied by user");
                 let _ = self
                     .app
                     .lock()
-                    .expect("lock poisoned")
                     .push(RenderLine::ToolResult {
                         is_error: true,
                         content: msg.clone(),
@@ -1815,7 +1796,7 @@ impl Repl {
             }
             self.cancel_turn
                 .store(false, std::sync::atomic::Ordering::SeqCst);
-            if let Ok(mut stats) = self.session_stats.lock() {
+            { let mut stats = self.session_stats.lock();
                 stats.reviewed += 1;
                 stats.approved += 1;
             }
@@ -1841,7 +1822,6 @@ impl Repl {
             let _ = self
                 .app
                 .lock()
-                .expect("lock poisoned")
                 .push(RenderLine::ToolResult {
                     is_error: true,
                     content: format!("Hook blocked: {reason}"),
@@ -1869,7 +1849,7 @@ impl Repl {
         args: &serde_json::Value,
         mcp: &std::sync::Arc<cade_agent::mcp::McpManager>,
         hooks: &cade_core::hooks::HookEngine,
-        app: &std::sync::Arc<std::sync::Mutex<crate::ui::TuiApp>>,
+        app: &std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
         runtime: &std::sync::Arc<cade_agent::tools::ToolRuntime>,
         preceding_reasoning: Option<&str>,
         preceding_assistant_message: Option<&str>,
@@ -1878,18 +1858,16 @@ impl Repl {
 
         // Bash tools — live-streaming path (buffered per-tool)
         if matches!(tool_name, "bash" | "run_command" | "execute_command") {
-            let live_idx = app.lock().expect("lock poisoned").begin_live_output(8);
+            let live_idx = app.lock().begin_live_output(8);
             let app_arc = app.clone();
             let run_result = cade_agent::tools::bash::BashTool::run_streaming(args, move |line| {
                 let _ = app_arc
                     .lock()
-                    .expect("lock poisoned")
                     .append_live_output_line(live_idx, line);
             })
             .await;
             let _ = app
                 .lock()
-                .expect("lock poisoned")
                 .finish_live_output(live_idx);
 
             let (output, is_error) = match run_result {
@@ -2035,7 +2013,6 @@ impl Repl {
         };
         let _ = app
             .lock()
-            .expect("lock poisoned")
             .push(RenderLine::ToolResult {
                 is_error: is_err,
                 content,
@@ -2132,7 +2109,7 @@ impl Repl {
 
         // Show diff preview for file-mutation tools before the approval prompt.
         if let Some(diff_lines) = Self::build_diff_preview(tool_name, args) {
-            let mut app = self.app.lock().expect("lock poisoned");
+            let mut app = self.app.lock();
             for line in diff_lines {
                 let _ = app.push(line);
             }
@@ -2194,7 +2171,7 @@ impl Repl {
 
         #[allow(deprecated)]
         let rx = {
-            let mut app = self.app.lock().expect("lock poisoned");
+            let mut app = self.app.lock();
             app.ask_question_async(q)?
         };
 
@@ -2319,7 +2296,6 @@ impl Repl {
                 let _ = self
                     .app
                     .lock()
-                    .expect("lock poisoned")
                     .push(RenderLine::ToolResult {
                         is_error: true,
                         content: msg.clone(),
@@ -2334,7 +2310,7 @@ impl Repl {
         };
 
         let total = ask_questions.len();
-        let _ = self.app.lock().expect("lock poisoned").commit_streaming();
+        let _ = self.app.lock().commit_streaming();
 
         let mut answers: HashMap<String, String> = HashMap::new();
         let mut answers_display: Vec<(String, String)> = Vec::new();
@@ -2366,7 +2342,7 @@ impl Repl {
             // while awaiting user input. The app mutex is released during await.
             #[allow(deprecated)]
             let rx = {
-                let mut app = self.app.lock().expect("lock poisoned");
+                let mut app = self.app.lock();
                 app.ask_question_async(q)?
             };
 
@@ -2392,7 +2368,6 @@ impl Repl {
                     let _ = self
                         .app
                         .lock()
-                        .expect("lock poisoned")
                         .push(RenderLine::ToolResult {
                             is_error: true,
                             content: msg.clone(),
@@ -2428,7 +2403,7 @@ impl Repl {
 
         // Removed internal ToolResult push since dispatch_tool_calls pushes it unconditionally.
         {
-            let mut app = self.app.lock().expect("lock poisoned");
+            let mut app = self.app.lock();
             // Force a redraw to ensure the viewport updates immediately after the
             // question modal is dismissed, fixing a race condition where the
             // result of the next tool call would not be displayed.

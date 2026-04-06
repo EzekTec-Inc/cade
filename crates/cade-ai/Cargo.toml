@@ -26,6 +26,7 @@ reqwest.workspace      = true
 reqwest-eventsource.workspace = true
 # -- Misc utilities
 uuid.workspace         = true
+parking_lot.workspace  = true
 
 [dev-dependencies]
 tempfile.workspace = true

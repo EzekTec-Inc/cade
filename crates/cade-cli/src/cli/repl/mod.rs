@@ -10,7 +10,8 @@ use crate::Result;
 use serde_json::json;
 use std::io;
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use parking_lot::Mutex;
 
 use crate::ui::{RenderLine, ToastLevel, TuiApp, cycle_mode, cycle_mode_back};
 use cade_agent::agent::session::SessionStore;
@@ -169,7 +170,7 @@ pub struct Repl {
     pub(crate) session_input_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub(crate) session_output_tokens: std::sync::Arc<std::sync::atomic::AtomicU64>,
     /// Rich session statistics (per-model token breakdown, tool calls, timing).
-    pub(crate) session_stats: std::sync::Arc<std::sync::Mutex<SessionStats>>,
+    pub(crate) session_stats: std::sync::Arc<parking_lot::Mutex<SessionStats>>,
     /// Fullscreen ratatui TUI — single render path for all output + input.
     pub(crate) app: Arc<Mutex<TuiApp>>,
     /// I-01: steering message typed during a turn (Enter key) — cancel current
@@ -267,7 +268,7 @@ impl Repl {
             streaming_enabled: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
             session_input_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            session_stats: std::sync::Arc::new(std::sync::Mutex::new(SessionStats::new())),
+            session_stats: std::sync::Arc::new(parking_lot::Mutex::new(SessionStats::new())),
             app: Arc::new(Mutex::new(TuiApp::new_with_theme(
                 perm_mode,
                 agent_name_clone.clone(),
@@ -289,16 +290,16 @@ impl Repl {
     }
 
     fn agent_id(&self) -> String {
-        self.agent_id.lock().expect("lock poisoned").clone()
+        self.agent_id.lock().clone()
     }
     fn agent_name(&self) -> String {
-        self.agent_name.lock().expect("lock poisoned").clone()
+        self.agent_name.lock().clone()
     }
     fn model(&self) -> String {
-        self.current_model.lock().expect("lock poisoned").clone()
+        self.current_model.lock().clone()
     }
     fn conversation_id(&self) -> Option<String> {
-        self.conversation_id.lock().expect("lock poisoned").clone()
+        self.conversation_id.lock().clone()
     }
 
     /// Reload MCP servers, hooks, and permissions from current settings.
@@ -309,11 +310,11 @@ impl Repl {
         );
 
         // 1. Reload raw settings from disk
-        let _ = self.settings.lock().expect("lock poisoned").reload();
+        let _ = self.settings.lock().reload();
 
         // 2. Extract merged config slices
         let (new_mcp, new_hooks, new_perms) = {
-            let guard = self.settings.lock().expect("lock poisoned");
+            let guard = self.settings.lock();
             (
                 guard.merged_mcp_servers(),
                 guard.merged_hooks(),
@@ -361,11 +362,10 @@ impl Repl {
         let agent_id = self.agent_id();
         let client = self.client.clone();
         let mcp_arc = std::sync::Arc::clone(&self.mcp);
-        let toolset = *self.current_toolset.lock().expect("lock poisoned");
+        let toolset = *self.current_toolset.lock();
         let allow_agent_mode = self
             .settings
             .lock()
-            .expect("lock poisoned")
             .permission_settings()
             .allow_agent_mode_changes;
         tokio::spawn(async move {
@@ -440,10 +440,10 @@ impl Repl {
 
         // Push banner + agent info into TuiApp content.
         {
-            let mut app = self.app.lock().expect("lock poisoned");
-            let agent_id = self.agent_id.lock().expect("lock poisoned").clone();
-            let agent_name = self.agent_name.lock().expect("lock poisoned").clone();
-            let model = self.current_model.lock().expect("lock poisoned").clone();
+            let mut app = self.app.lock();
+            let agent_id = self.agent_id.lock().clone();
+            let agent_name = self.agent_name.lock().clone();
+            let model = self.current_model.lock().clone();
             let mode_str = format!("{}", self.permissions.mode());
             let banner_text = format!(
                 "{BANNER}\n  Agent  : {agent_name}  ({agent_id})\n  Model  : {model}\n  Mode   : {mode_str}"
@@ -462,13 +462,12 @@ impl Repl {
         loop {
             // Check for completed background subagent results
             {
-                let mut results = self.background_results.lock().expect("lock poisoned");
+                let mut results = self.background_results.lock();
                 for r in results.drain(..) {
                     let msg = format!("  ✓ Subagent '{}' finished:\n{}", r.subagent, r.result);
                     let _ = self
                         .app
                         .lock()
-                        .expect("lock poisoned")
                         .push(RenderLine::SystemMsg(msg));
                     let notify = format!(
                         "[Background subagent '{}' completed (task ID: {})]:\n{}",
@@ -506,7 +505,7 @@ impl Repl {
             while self.skill_reload_rx.try_recv().is_ok() {
                 let new_skills = cade_core::skills::discover_all_skills(&self.cwd, None, None);
                 let new_count = new_skills.len();
-                *self.skills.lock().expect("lock poisoned") = new_skills.clone();
+                *self.skills.lock() = new_skills.clone();
                 let names: Vec<String> = new_skills.iter().map(|s| s.name.clone()).collect();
                 let list = names.join(", ");
                 self.tui_ok(format!(
@@ -517,9 +516,9 @@ impl Repl {
 
             // Update app footer to reflect current mode/model before reading input.
             {
-                let mut app = self.app.lock().expect("lock poisoned");
+                let mut app = self.app.lock();
                 app.update_mode(self.permissions.mode());
-                app.update_model(self.current_model.lock().expect("lock poisoned").clone());
+                app.update_model(self.current_model.lock().clone());
                 app.update_agent_name(self.agent_name());
             }
 
@@ -530,7 +529,6 @@ impl Repl {
                 match self
                     .app
                     .lock()
-                    .expect("lock poisoned")
                     .read_input(&mut history, &mut hist_idx)?
                 {
                     Some(s) => s,
@@ -543,19 +541,19 @@ impl Repl {
             if input == "__TAB__" {
                 let next = cycle_mode(self.permissions.mode());
                 self.permissions.set_mode(next);
-                self.app.lock().expect("lock poisoned").update_mode(next);
+                self.app.lock().update_mode(next);
                 continue;
             }
             if input == "__BACKTAB__" {
                 let prev = cycle_mode_back(self.permissions.mode());
                 self.permissions.set_mode(prev);
-                self.app.lock().expect("lock poisoned").update_mode(prev);
+                self.app.lock().update_mode(prev);
                 continue;
             }
 
             // Drain any pasted images staged by the TUI on the last submission.
             let submit_images: Vec<serde_json::Value> = {
-                let mut app = self.app.lock().expect("lock poisoned");
+                let mut app = self.app.lock();
                 std::mem::take(&mut app.pending_submit_images)
                     .into_iter()
                     .map(|img| {
@@ -595,7 +593,6 @@ impl Repl {
             let _ = self
                 .app
                 .lock()
-                .expect("lock poisoned")
                 .push(RenderLine::UserMessage(echo_text));
 
             // Direct bash:
@@ -621,21 +618,19 @@ impl Repl {
                             let _ = self
                                 .app
                                 .lock()
-                                .expect("lock poisoned")
                                 .push(RenderLine::SystemMsg(text.clone()));
                             if !silent {
                                 // Send command + output to agent
                                 let agent_msg =
                                     format!("Command: `{cmd_str}`\n\nOutput:\n```\n{text}\n```");
                                 self.agent_turn(&mut stdout, &agent_msg).await?;
-                                let _ = self.app.lock().expect("lock poisoned").commit_streaming();
+                                let _ = self.app.lock().commit_streaming();
                             }
                         }
                         Err(e) => {
                             let _ = self
                                 .app
                                 .lock()
-                                .expect("lock poisoned")
                                 .push(RenderLine::ErrorMsg(format!("bash: {e}")));
                         }
                     }
@@ -667,7 +662,6 @@ impl Repl {
             let skill_ids: Vec<String> = self
                 .skills
                 .lock()
-                .expect("lock poisoned")
                 .iter()
                 .map(|s| s.id.clone())
                 .collect();
@@ -678,7 +672,7 @@ impl Repl {
                         let in_tok = self.session_input_tokens.load(Ordering::SeqCst);
                         let out_tok = self.session_output_tokens.load(Ordering::SeqCst);
                         if in_tok > 0 || out_tok > 0 {
-                            let _ = self.app.lock().expect("lock poisoned").push(
+                            let _ = self.app.lock().push(
                                 RenderLine::SystemMsg(format!(
                                     "  Session tokens — in: {in_tok}  out: {out_tok}  total: {}",
                                     in_tok + out_tok
@@ -688,7 +682,6 @@ impl Repl {
                         let _ = self
                             .app
                             .lock()
-                            .expect("lock poisoned")
                             .push(RenderLine::SystemMsg("Bye!".to_string()));
                         break;
                     }
@@ -699,7 +692,6 @@ impl Repl {
                         let skill_body = self
                             .skills
                             .lock()
-                            .expect("lock poisoned")
                             .iter()
                             .find(|s| s.id == skill_id)
                             .map(|s| s.to_context_block());
@@ -719,7 +711,7 @@ impl Repl {
                     SlashCmd::Help => {
                         // Open full-screen command browser (filtered by capabilities)
                         let chosen = {
-                            let mut app = self.app.lock().expect("lock poisoned");
+                            let mut app = self.app.lock();
                             let colors = app.colors.clone();
                             crate::ui::menu::show_command_menu_with_caps(
                                 &mut app.terminal,
@@ -727,7 +719,7 @@ impl Repl {
                                 Some(&self.capabilities),
                             )?
                         };
-                        let _ = self.app.lock().expect("lock poisoned").draw();
+                        let _ = self.app.lock().draw();
                         if let Some(cmd) = chosen {
                             // If it's a tool hint (no slash) or a command that needs arguments,
                             // insert it into the editor instead of executing immediately.
@@ -750,7 +742,7 @@ impl Repl {
                                 .contains(&cmd.as_str());
 
                             if needs_args {
-                                let mut app = self.app.lock().expect("lock poisoned");
+                                let mut app = self.app.lock();
                                 app.editor.insert_str(&format!("{cmd} "));
                             } else {
                                 pending_input = Some(cmd);
@@ -763,7 +755,6 @@ impl Repl {
                         let _ = self
                             .app
                             .lock()
-                            .expect("lock poisoned")
                             .push(RenderLine::SystemMsg(msg));
                     }
                     SlashCmd::Info => {
@@ -780,19 +771,16 @@ impl Repl {
                         let _ = self
                             .app
                             .lock()
-                            .expect("lock poisoned")
                             .push(RenderLine::SystemMsg(msg));
                     }
                     SlashCmd::Yolo => {
                         self.permissions.set_mode(PermissionMode::BypassPermissions);
                         self.app
                             .lock()
-                            .expect("lock poisoned")
                             .update_mode(PermissionMode::BypassPermissions);
                         let _ =
                             self.app
                                 .lock()
-                                .expect("lock poisoned")
                                 .push(RenderLine::SystemMsg(
                                 "⚡ Permission mode: bypassPermissions — all tools auto-approved"
                                     .to_string(),
@@ -815,7 +803,7 @@ impl Repl {
                             .await?
                         {
                             Some(cade_tui::mcp_picker::McpAction::Toggle(key)) => {
-                                let mut s = self.settings.lock().expect("lock poisoned");
+                                let mut s = self.settings.lock();
                                 if let Some(server) =
                                     s.global_settings_mut().mcp_servers.get_mut(&key)
                                 {
@@ -826,7 +814,7 @@ impl Repl {
                                 self.do_settings_reload().await;
                             }
                             Some(cade_tui::mcp_picker::McpAction::Delete(key)) => {
-                                let mut s = self.settings.lock().expect("lock poisoned");
+                                let mut s = self.settings.lock();
                                 s.global_settings_mut().mcp_servers.remove(&key);
                                 let _ = s.save_global();
                                 drop(s);
@@ -841,7 +829,7 @@ impl Repl {
                                         "disabled": false
                                     }
                                 });
-                                let mut app = self.app.lock().expect("lock poisoned");
+                                let mut app = self.app.lock();
                                 app.editor.input = format!(
                                     "/mcp-save\n{}",
                                     serde_json::to_string_pretty(&tmpl).unwrap()
@@ -856,14 +844,13 @@ impl Repl {
                                 let config = self
                                     .settings
                                     .lock()
-                                    .expect("lock poisoned")
                                     .global_settings_mut()
                                     .mcp_servers
                                     .get(&key)
                                     .cloned()
                                     .unwrap_or_default();
                                 let tmpl = serde_json::json!({ key: config });
-                                let mut app = self.app.lock().expect("lock poisoned");
+                                let mut app = self.app.lock();
                                 app.editor.input = format!(
                                     "/mcp-save\n{}",
                                     serde_json::to_string_pretty(&tmpl).unwrap()
@@ -885,7 +872,7 @@ impl Repl {
                         > = serde_json::from_str(&payload);
                         match parsed {
                             Ok(servers) => {
-                                let mut s = self.settings.lock().expect("lock poisoned");
+                                let mut s = self.settings.lock();
                                 for (k, v) in servers {
                                     s.global_settings_mut().mcp_servers.insert(k.clone(), v);
                                     self.tui_ok(format!("  ✓ Saved MCP server: {}", k));
@@ -903,13 +890,12 @@ impl Repl {
                         self.tui_dim("  Linking tools…");
                         let client2 = self.client.clone();
                         let mcp2 = std::sync::Arc::clone(&self.mcp);
-                        let toolset2 = *self.current_toolset.lock().expect("lock poisoned");
+                        let toolset2 = *self.current_toolset.lock();
                         let agent_id = self.agent_id();
                         use cade_agent::agent::tools::{register_cade_tools, register_mcp_tools};
                         let allow_agent_mode = self
                             .settings
                             .lock()
-                            .expect("lock poisoned")
                             .permission_settings()
                             .allow_agent_mode_changes;
                         let native_ids: Vec<String> =
@@ -953,7 +939,6 @@ impl Repl {
                         self.tui_hdr(format!("  Streaming: {label}"));
                         self.app
                             .lock()
-                            .expect("lock poisoned")
                             .show_toast(format!("Streaming {label}"), ToastLevel::Info);
                     }
                     SlashCmd::Usage => {
@@ -971,9 +956,9 @@ impl Repl {
                         }
                     }
                     SlashCmd::Context => {
-                        let model = self.current_model.lock().expect("lock poisoned").clone();
+                        let model = self.current_model.lock().clone();
                         let window = cade_ai::catalogue::context_window_for_model(&model) as u64;
-                        let pct_opt = self.app.lock().expect("lock poisoned").context_pct;
+                        let pct_opt = self.app.lock().context_pct;
                         let agent_id = self.agent_id();
                         let conv_id = self.conversation_id();
 
@@ -1009,7 +994,7 @@ impl Repl {
 
                         // Cat 4: skills loaded this session
                         let skills_tok = {
-                            let skills = self.skills.lock().expect("lock poisoned");
+                            let skills = self.skills.lock();
                             (skills.iter().map(|s| s.body.chars().count()).sum::<usize>() / 3)
                                 as u64
                         };
@@ -1069,7 +1054,7 @@ impl Repl {
                         ];
 
                         {
-                            let mut app = self.app.lock().expect("lock poisoned");
+                            let mut app = self.app.lock();
                             let _ = app.push(RenderLine::Blank);
                             let _ = app.push(RenderLine::ContextBar {
                                 model: model_short,
@@ -1095,7 +1080,7 @@ impl Repl {
                                 mcp_statuses.iter().filter(|s| !s.disabled).collect();
                             let disabled: Vec<_> =
                                 mcp_statuses.iter().filter(|s| s.disabled).collect();
-                            let mut app = self.app.lock().expect("lock poisoned");
+                            let mut app = self.app.lock();
                             let _ = app.push(RenderLine::InfoHeader(format!(
                                 "  MCP Tools  ·  /mcp  (~{} tokens)",
                                 mcp_fmt(mcp_tok)
@@ -1147,7 +1132,7 @@ impl Repl {
 
                         // Memory blocks
                         {
-                            let mut app = self.app.lock().expect("lock poisoned");
+                            let mut app = self.app.lock();
                             let _ = app.push(RenderLine::Blank);
                             let _ = app.push(RenderLine::InfoHeader(format!(
                                 "  Memory  ·  /memory  (~{} tokens)",
@@ -1177,8 +1162,8 @@ impl Repl {
 
                         // Skills
                         {
-                            let skills_snap = self.skills.lock().expect("lock poisoned").clone();
-                            let mut app = self.app.lock().expect("lock poisoned");
+                            let skills_snap = self.skills.lock().clone();
+                            let mut app = self.app.lock();
                             let _ = app.push(RenderLine::Blank);
                             let _ = app.push(RenderLine::InfoHeader(format!(
                                 "  Skills  ·  /skills  (~{} tokens)",
@@ -1201,7 +1186,7 @@ impl Repl {
                         }
 
                         {
-                            let mut app = self.app.lock().expect("lock poisoned");
+                            let mut app = self.app.lock();
                             let _ = app.push(RenderLine::Blank);
                             let _ = app.push(RenderLine::DimMsg(
                                 "  /stats  session totals  ·  /stats model  per-model breakdown"
@@ -1227,7 +1212,7 @@ impl Repl {
                             } else {
                                 "?".to_string()
                             };
-                            let mut app = self.app.lock().expect("lock poisoned");
+                            let mut app = self.app.lock();
                             let _ = app.push(RenderLine::InfoHeader(
                                 "  ◆ Server Context Accounting (live)".to_string(),
                             ));
@@ -1284,44 +1269,28 @@ impl Repl {
                             "model" | "models" => self
                                 .session_stats
                                 .lock()
-                                .map(|s| s.render_model_detail())
-                                .unwrap_or_else(|_| {
-                                    vec![crate::ui::RenderLine::DimMsg(
-                                        "(stats unavailable)".to_string(),
-                                    )]
-                                }),
+                                .render_model_detail(),
                             _ => {
                                 // full session card (default)
-                                let auth_method = self
-                                    .settings
-                                    .lock()
-                                    .map(|s| {
-                                        if s.api_key().is_some() {
-                                            "API Key".to_string()
-                                        } else {
-                                            "OAuth / Browser".to_string()
-                                        }
-                                    })
-                                    .unwrap_or_default();
+                                let auth_method = if self.settings.lock().api_key().is_some() {
+                                    "API Key".to_string()
+                                } else {
+                                    "OAuth / Browser".to_string()
+                                };
                                 let session_id = self.conversation_id().unwrap_or_default();
                                 self.session_stats
                                     .lock()
-                                    .map(|s| s.render_card(&auth_method, &session_id))
-                                    .unwrap_or_else(|_| {
-                                        vec![crate::ui::RenderLine::DimMsg(
-                                            "(stats unavailable)".to_string(),
-                                        )]
-                                    })
+                                    .render_card(&auth_method, &session_id)
                             }
                         };
                         self.tui_blank();
                         for line in lines {
-                            let _ = self.app.lock().expect("lock poisoned").push(line);
+                            let _ = self.app.lock().push(line);
                         }
                         self.tui_blank();
                     }
                     SlashCmd::Logout => {
-                        if let Ok(mut s) = self.settings.lock() {
+                        { let mut s = self.settings.lock();
                             s.clear_api_key();
                         }
                         self.tui_ok("  ✓ API key cleared. Restart CADE to re-authenticate.");
@@ -1331,12 +1300,11 @@ impl Repl {
                         self.permissions.set_mode(PermissionMode::Plan);
                         self.app
                             .lock()
-                            .expect("lock poisoned")
                             .show_toast("Permission mode: plan (read-only)", ToastLevel::Info);
                         self.tui_hdr("📖 Permission mode: plan (read-only) — write/exec tools blocked. Use /default to resume.");
                     }
                     SlashCmd::Todos => {
-                        if let Ok(mut app) = self.app.lock() {
+                        { let mut app = self.app.lock();
                             let mut has_plan = false;
                             let mut now_visible = false;
                             if let Some(plan) = &mut app.active_plan {
@@ -1368,14 +1336,12 @@ impl Repl {
                         let _ = self
                             .app
                             .lock()
-                            .expect("lock poisoned")
                             .push(crate::ui::RenderLine::SystemMsg(content));
                     }
                     SlashCmd::Default => {
                         self.permissions.set_mode(PermissionMode::Default);
                         self.app
                             .lock()
-                            .expect("lock poisoned")
                             .show_toast("Permission mode: default", ToastLevel::Success);
                         self.tui_ok("✅ Permission mode: default — tools require approval");
                     }
@@ -1393,7 +1359,7 @@ impl Repl {
                                         self.permissions.set_mode(PermissionMode::Default);
                                         let (icon, label, _) =
                                             mode_display(PermissionMode::Default);
-                                        self.app.lock().expect("lock poisoned").show_toast(
+                                        self.app.lock().show_toast(
                                             format!("{icon} {label}"),
                                             ToastLevel::Success,
                                         );
@@ -1403,7 +1369,7 @@ impl Repl {
                                         self.permissions.set_mode(PermissionMode::Plan);
                                         let (icon, label, hint) =
                                             mode_display(PermissionMode::Plan);
-                                        self.app.lock().expect("lock poisoned").show_toast(
+                                        self.app.lock().show_toast(
                                             format!("{icon} {label}"),
                                             ToastLevel::Info,
                                         );
@@ -1416,7 +1382,7 @@ impl Repl {
                                             .set_mode(PermissionMode::BypassPermissions);
                                         let (icon, label, _) =
                                             mode_display(PermissionMode::BypassPermissions);
-                                        self.app.lock().expect("lock poisoned").show_toast(
+                                        self.app.lock().show_toast(
                                             format!("{icon} {label}"),
                                             ToastLevel::Warning,
                                         );
@@ -1426,7 +1392,7 @@ impl Repl {
                                         self.permissions.set_mode(PermissionMode::AcceptEdits);
                                         let (icon, label, _) =
                                             mode_display(PermissionMode::AcceptEdits);
-                                        self.app.lock().expect("lock poisoned").show_toast(
+                                        self.app.lock().show_toast(
                                             format!("{icon} {label}"),
                                             ToastLevel::Success,
                                         );
@@ -1448,7 +1414,7 @@ impl Repl {
                             match self.interactive_model_picker(Arc::clone(&self.app)).await? {
                                 Some(picked) => picked,
                                 None => {
-                                    let _ = self.app.lock().expect("lock poisoned").draw();
+                                    let _ = self.app.lock().draw();
                                     continue;
                                 }
                             }
@@ -1456,14 +1422,14 @@ impl Repl {
                             m
                         };
                         let new_toolset = Toolset::for_model(&m);
-                        let old_toolset = *self.current_toolset.lock().expect("lock poisoned");
+                        let old_toolset = *self.current_toolset.lock();
                         self.tui_dim(format!("  Switching model → {m}…"));
                         match self.client.patch_agent_model(&self.agent_id(), &m).await {
                             Ok(new_model) => {
-                                *self.current_model.lock().expect("lock poisoned") =
+                                *self.current_model.lock() =
                                     new_model.clone();
                                 if new_toolset != old_toolset {
-                                    *self.current_toolset.lock().expect("lock poisoned") =
+                                    *self.current_toolset.lock() =
                                         new_toolset;
                                     self.spawn_tool_reregister();
                                     self.tui_hdr(format!(
@@ -1473,7 +1439,7 @@ impl Repl {
                                 }
                                 self.tui_ok(format!("  ✓ Model: {new_model}"));
                                 {
-                                    let mut app = self.app.lock().expect("lock poisoned");
+                                    let mut app = self.app.lock();
                                     app.show_toast(
                                         format!("Model → {new_model}"),
                                         ToastLevel::Success,
@@ -1493,7 +1459,7 @@ impl Repl {
                             {
                                 Some(picked) => picked,
                                 None => {
-                                    let _ = self.app.lock().expect("lock poisoned").draw();
+                                    let _ = self.app.lock().draw();
                                     continue;
                                 }
                             }
@@ -1505,9 +1471,9 @@ impl Repl {
                             self.tui_err(format!("Invalid reasoning tier '{r}'. Valid: none, low, medium, high, xhigh"));
                         } else {
                             let effort = if r == "none" { None } else { Some(r.clone()) };
-                            *self.reasoning_effort.lock().expect("lock poisoned") = effort.clone();
+                            *self.reasoning_effort.lock() = effort.clone();
                             {
-                                let mut app = self.app.lock().expect("lock poisoned");
+                                let mut app = self.app.lock();
                                 app.reasoning_effort = effort;
                                 app.show_toast(format!("Reasoning → {r}"), ToastLevel::Success);
                             }
@@ -1517,7 +1483,7 @@ impl Repl {
 
                     // -- New commands
                     SlashCmd::Clear => {
-                        let _ = self.app.lock().expect("lock poisoned").clear_content();
+                        let _ = self.app.lock().clear_content();
                         match self.client.clear_messages(&self.agent_id()).await {
                             Ok(n) => self
                                 .tui_ok(format!("✓ Context window cleared ({n} messages deleted)")),
@@ -1543,7 +1509,7 @@ impl Repl {
                                             ));
                                         } else {
                                             let mut stats =
-                                                self.session_stats.lock().expect("lock poisoned");
+                                                self.session_stats.lock();
                                             stats.registry = std::sync::Arc::new(
                                                 cade_ai::ModelRegistry::load_or_default(Some(&p)),
                                             );
@@ -1559,7 +1525,7 @@ impl Repl {
                         }
                         _ => {
                             let model = self.model();
-                            let stats = self.session_stats.lock().expect("lock poisoned");
+                            let stats = self.session_stats.lock();
                             let pricing = stats.registry.pricing_for_model(&model);
                             self.tui_hdr(format!("  Pricing for model: {}", model));
                             self.tui_dim(format!("  Input: ${}/1M", pricing.input));
@@ -1572,11 +1538,11 @@ impl Repl {
 
                     SlashCmd::Cost => {
                         let (total_cost, by_model) = {
-                            let stats = self.session_stats.lock().expect("lock poisoned");
+                            let stats = self.session_stats.lock();
                             stats.compute_cost()
                         };
                         let (wall_ms, api_ms, lines_added, lines_removed) = {
-                            let stats = self.session_stats.lock().expect("lock poisoned");
+                            let stats = self.session_stats.lock();
                             (
                                 stats.started_at.elapsed().as_millis() as u64,
                                 stats.agent_active_ms,
@@ -1585,7 +1551,7 @@ impl Repl {
                             )
                         };
                         let per_model_snap: Vec<(String, ModelStats)> = {
-                            let stats = self.session_stats.lock().expect("lock poisoned");
+                            let stats = self.session_stats.lock();
                             stats
                                 .per_model
                                 .iter()
@@ -1692,14 +1658,14 @@ impl Repl {
                                 .to_string(),
                         ));
                         lines.push(crate::ui::RenderLine::Blank);
-                        let mut app = self.app.lock().expect("lock poisoned");
+                        let mut app = self.app.lock();
                         for line in lines {
                             let _ = app.push(line);
                         }
                     }
 
                     SlashCmd::Copy => {
-                        let mut app = self.app.lock().expect("lock poisoned");
+                        let mut app = self.app.lock();
                         app.toggle_copy_mode();
                         if app.copy_mode {
                             let _ = app.push(RenderLine::SystemMsg(
@@ -1727,7 +1693,7 @@ impl Repl {
                         .await
                         {
                             Ok(_) => {
-                                self.app.lock().expect("lock poisoned").show_toast(
+                                self.app.lock().show_toast(
                                     format!("Exported → {out_path}"),
                                     ToastLevel::Success,
                                 );
@@ -1773,7 +1739,7 @@ impl Repl {
                                 if stash.is_some() {
                                     msg.push_str("  (git stashed)");
                                 }
-                                self.app.lock().expect("lock poisoned").show_toast(
+                                self.app.lock().show_toast(
                                     format!("Checkpoint '{label}' created"),
                                     ToastLevel::Success,
                                 );
@@ -1843,7 +1809,7 @@ impl Repl {
                                 Ok(checkpoints) => {
                                     // Show the fullscreen tree browser
                                     let action = {
-                                        let mut app = self.app.lock().expect("lock poisoned");
+                                        let mut app = self.app.lock();
                                         let colors = app.colors.clone();
                                         cade_tui::show_session_tree(
                                             &mut app.terminal,
@@ -1853,7 +1819,7 @@ impl Repl {
                                     };
                                     match action {
                                         Ok(cade_tui::TreeAction::Cancel) => {
-                                            self.app.lock().expect("lock poisoned").show_toast(
+                                            self.app.lock().show_toast(
                                                 "Checkpoint browser closed",
                                                 ToastLevel::Info,
                                             );
@@ -1890,7 +1856,7 @@ impl Repl {
                                             };
                                             let ans = {
                                                 let mut app =
-                                                    self.app.lock().expect("lock poisoned");
+                                                    self.app.lock();
                                                 let r = app.ask_question(&q);
                                                 app.scroll = 0;
                                                 let _ = app.draw();
@@ -1923,7 +1889,6 @@ impl Repl {
                                                     Ok(_) => {
                                                         self.app
                                                             .lock()
-                                                            .expect("lock poisoned")
                                                             .show_toast(
                                                                 format!(
                                                                     "Deleted checkpoint {title}"
@@ -1971,7 +1936,7 @@ impl Repl {
                                                 .client
                                                 .restore_checkpoint(&agent_id, &checkpoint_id)
                                                 .await;
-                                            self.app.lock().expect("lock poisoned").show_toast(
+                                            self.app.lock().show_toast(
                                                 format!("Restored checkpoint {checkpoint_id}"),
                                                 ToastLevel::Success,
                                             );
@@ -2023,9 +1988,9 @@ impl Repl {
                                 match self.client.create_conversation(&agent_id, "").await {
                                     Ok(conv) => {
                                         let cid = conv["id"].as_str().unwrap_or("").to_string();
-                                        *self.conversation_id.lock().expect("lock poisoned") =
+                                        *self.conversation_id.lock() =
                                             Some(cid.clone());
-                                        if let Ok(mut s) = self.session.lock() {
+                                        { let mut s = self.session.lock();
                                             let _ = s.set_conversation(Some(cid.clone()));
                                         }
                                         self.first_turn
@@ -2064,7 +2029,7 @@ impl Repl {
                                         // Build a new backend from the current settings profile
                                         // with the backend kind overridden
                                         let profile = {
-                                            let s = self.settings.lock().expect("lock poisoned");
+                                            let s = self.settings.lock();
                                             let mut p = s.execution_profile().clone();
                                             p.backend = kind;
                                             p
@@ -2147,9 +2112,9 @@ impl Repl {
                         match self.client.create_conversation(&agent_id, "").await {
                             Ok(conv) => {
                                 let cid = conv["id"].as_str().unwrap_or("").to_string();
-                                *self.conversation_id.lock().expect("lock poisoned") =
+                                *self.conversation_id.lock() =
                                     Some(cid.clone());
-                                if let Ok(mut s) = self.session.lock() {
+                                { let mut s = self.session.lock();
                                     let _ = s.set_conversation(Some(cid.clone()));
                                 }
                                 self.first_turn
@@ -2167,7 +2132,6 @@ impl Repl {
                         let _ = self
                             .app
                             .lock()
-                            .expect("lock poisoned")
                             .push(RenderLine::SystemMsg("  Creating new agent…".to_string()));
 
                         // S5: Offer to copy `human` and `project` blocks from current agent
@@ -2219,7 +2183,7 @@ impl Repl {
                                 progress: None,
                             };
                             let ans = {
-                                let mut app = self.app.lock().expect("lock poisoned");
+                                let mut app = self.app.lock();
                                 let r = app.ask_question(&q);
                                 app.scroll = 0;
                                 let _ = app.draw();
@@ -2244,16 +2208,16 @@ impl Repl {
                         };
                         match self.client.create_agent(req).await {
                             Ok(a) => {
-                                *self.agent_id.lock().expect("lock poisoned") = a.id.clone();
-                                *self.agent_name.lock().expect("lock poisoned") = a.name.clone();
-                                *self.conversation_id.lock().expect("lock poisoned") = None;
-                                if let Ok(mut s) = self.settings.lock() {
+                                *self.agent_id.lock() = a.id.clone();
+                                *self.agent_name.lock() = a.name.clone();
+                                *self.conversation_id.lock() = None;
+                                { let mut s = self.settings.lock();
                                     let _ = s.set_last_agent(&a.id);
                                 }
-                                if let Ok(mut s) = self.session.lock() {
+                                { let mut s = self.session.lock();
                                     let _ = s.set_agent(a.id.clone(), Some(a.name.clone()));
                                 }
-                                let _ = self.app.lock().expect("lock poisoned").push(
+                                let _ = self.app.lock().push(
                                     RenderLine::SystemMsg(format!(
                                         "  ✓ New agent: {} ({})",
                                         a.name, a.id
@@ -2274,7 +2238,7 @@ impl Repl {
                                             .await;
                                     }
                                     let n = inherit_blocks.len();
-                                    let _ = self.app.lock().expect("lock poisoned").push(
+                                    let _ = self.app.lock().push(
                                         RenderLine::SystemMsg(format!(
                                             "  ✓ Copied {n} memory block(s) from previous agent"
                                         )),
@@ -2284,12 +2248,11 @@ impl Repl {
                                 // Attach native + MCP tools in background
                                 let client2 = self.client.clone();
                                 let mcp2 = std::sync::Arc::clone(&self.mcp);
-                                let toolset2 = *self.current_toolset.lock().expect("lock poisoned");
+                                let toolset2 = *self.current_toolset.lock();
                                 let new_id = a.id.clone();
                                 let allow_agent_mode = self
                                     .settings
                                     .lock()
-                                    .expect("lock poisoned")
                                     .permission_settings()
                                     .allow_agent_mode_changes;
                                 tokio::spawn(async move {
@@ -2332,7 +2295,6 @@ impl Repl {
                                     let _ =
                                         self.app
                                             .lock()
-                                            .expect("lock poisoned")
                                             .push(RenderLine::DimMsg(
                                             "  No saved conversations yet. Use /new to start one."
                                                 .to_string(),
@@ -2342,27 +2304,26 @@ impl Repl {
                                     .await?
                                 {
                                     let cid = picked["id"].as_str().unwrap_or("").to_string();
-                                    *self.conversation_id.lock().expect("lock poisoned") =
+                                    *self.conversation_id.lock() =
                                         Some(cid.clone());
-                                    if let Ok(mut s) = self.session.lock() {
+                                    { let mut s = self.session.lock();
                                         let _ = s.set_conversation(Some(cid));
                                     }
                                     self.first_turn
                                         .store(false, std::sync::atomic::Ordering::SeqCst);
-                                    let _ = self.app.lock().expect("lock poisoned").push(
+                                    let _ = self.app.lock().push(
                                         RenderLine::SuccessMsg(format!(
                                             "  ✓ Switched to: {}",
                                             picked["title"].as_str().unwrap_or("(untitled)")
                                         )),
                                     );
                                 }
-                                let _ = self.app.lock().expect("lock poisoned").draw();
+                                let _ = self.app.lock().draw();
                             }
                             Err(e) => {
                                 let _ = self
                                     .app
                                     .lock()
-                                    .expect("lock poisoned")
                                     .push(RenderLine::ErrorMsg(e.to_string()));
                             }
                         }
@@ -2371,10 +2332,10 @@ impl Repl {
                     SlashCmd::Pin => {
                         let id = self.agent_id();
                         let name = self.agent_name();
-                        if let Ok(mut s) = self.settings.lock() {
+                        { let mut s = self.settings.lock();
                             match s.pin_agent(&id, &name) {
                                 Ok(_) => {
-                                    self.app.lock().expect("lock poisoned").show_toast(
+                                    self.app.lock().show_toast(
                                         format!("Pinned agent: {name}"),
                                         ToastLevel::Success,
                                     );
@@ -2404,11 +2365,11 @@ impl Repl {
                                 {
                                     match result {
                                         AgentPickerResult::Switch(a) => {
-                                            *self.agent_id.lock().expect("lock poisoned") =
+                                            *self.agent_id.lock() =
                                                 a.id.clone();
-                                            *self.agent_name.lock().expect("lock poisoned") =
+                                            *self.agent_name.lock() =
                                                 a.name.clone();
-                                            if let Ok(mut s) = self.settings.lock() {
+                                            { let mut s = self.settings.lock();
                                                 let _ = s.set_last_agent(&a.id);
                                             }
                                             self.tui_ok(format!(
@@ -2425,8 +2386,7 @@ impl Repl {
                                                 if agent.id == self.agent_id() {
                                                     *self
                                                         .agent_name
-                                                        .lock()
-                                                        .expect("lock poisoned") = new_name.clone();
+                                                        .lock() = new_name.clone();
                                                 }
                                                 self.tui_ok(format!(
                                                     "  ✓ Renamed '{}' → '{new_name}'",
@@ -2458,15 +2418,13 @@ impl Repl {
                                                         let first = &remaining[0];
                                                         *self
                                                             .agent_id
-                                                            .lock()
-                                                            .expect("lock poisoned") =
+                                                            .lock() =
                                                             first.id.clone();
                                                         *self
                                                             .agent_name
-                                                            .lock()
-                                                            .expect("lock poisoned") =
+                                                            .lock() =
                                                             first.name.clone();
-                                                        if let Ok(mut s) = self.settings.lock() {
+                                                        { let mut s = self.settings.lock();
                                                             let _ = s.set_last_agent(&first.id);
                                                         }
                                                         self.tui_dim(format!(
@@ -2482,7 +2440,7 @@ impl Repl {
                                         }
                                     }
                                 }
-                                let _ = self.app.lock().expect("lock poisoned").draw();
+                                let _ = self.app.lock().draw();
                             }
                             Err(e) => self.tui_err(e.to_string()),
                         }
@@ -2531,7 +2489,7 @@ impl Repl {
                                         progress: None,
                                     };
                                     let confirmed = {
-                                        let mut app = self.app.lock().expect("lock poisoned");
+                                        let mut app = self.app.lock();
                                         let r = app.ask_question(&q_widget)?;
                                         app.scroll = 0;
                                         let _ = app.draw();
@@ -2645,7 +2603,7 @@ impl Repl {
                              Acknowledge and summarise what you learned in 2-3 sentences."
                         );
                         self.agent_turn(&mut stdout, &init_prompt).await?;
-                        let _ = self.app.lock().expect("lock poisoned").commit_streaming();
+                        let _ = self.app.lock().commit_streaming();
                     }
 
                     SlashCmd::Remember(text) => {
@@ -2660,7 +2618,7 @@ impl Repl {
                             format!("[/remember] {text}")
                         };
                         self.agent_turn(&mut stdout, &msg).await?;
-                        let _ = self.app.lock().expect("lock poisoned").commit_streaming();
+                        let _ = self.app.lock().commit_streaming();
                     }
 
                     SlashCmd::Memory => {
@@ -2755,7 +2713,7 @@ impl Repl {
                                     progress: None,
                                 };
                                 let ans = {
-                                    let mut app = self.app.lock().expect("lock poisoned");
+                                    let mut app = self.app.lock();
                                     app.ask_question(&q)?
                                 };
                                 if let Some(a) = &ans {
@@ -2783,7 +2741,7 @@ impl Repl {
                                 let id = self.agent_id();
                                 match self.client.list_memory_history(&id, label, 5).await {
                                     Ok(revs) if revs.is_empty() => {
-                                        let _ = self.app.lock().expect("lock poisoned").push(
+                                        let _ = self.app.lock().push(
                                             RenderLine::SystemMsg(format!(
                                                 "  [{label}] no history recorded yet"
                                             )),
@@ -2793,7 +2751,6 @@ impl Repl {
                                         let _ = self
                                             .app
                                             .lock()
-                                            .expect("lock poisoned")
                                             .push(RenderLine::Blank);
                                         for (i, rev) in revs.iter().enumerate() {
                                             let rev_id = rev["id"].as_str().unwrap_or("");
@@ -2801,12 +2758,12 @@ impl Repl {
                                             let val = rev["value"].as_str().unwrap_or("");
                                             let preview: String = val.chars().take(120).collect();
                                             let ellipsis = if val.len() > 120 { "…" } else { "" };
-                                            let _ = self.app.lock().expect("lock poisoned").push(
+                                            let _ = self.app.lock().push(
                                                 RenderLine::SystemMsg(format!(
                                                     "  [{i}] {ts}  id={rev_id}"
                                                 )),
                                             );
-                                            let _ = self.app.lock().expect("lock poisoned").push(
+                                            let _ = self.app.lock().push(
                                                 RenderLine::SystemMsg(format!(
                                                     "      {preview}{ellipsis}"
                                                 )),
@@ -2814,10 +2771,9 @@ impl Repl {
                                             let _ = self
                                                 .app
                                                 .lock()
-                                                .expect("lock poisoned")
                                                 .push(RenderLine::Blank);
                                         }
-                                        let _ = self.app.lock().expect("lock poisoned").push(
+                                        let _ = self.app.lock().push(
                                             RenderLine::SystemMsg(format!(
                                                 "  Use: /memory restore {label} <id>"
                                             )),
@@ -2827,7 +2783,6 @@ impl Repl {
                                         let _ = self
                                             .app
                                             .lock()
-                                            .expect("lock poisoned")
                                             .push(RenderLine::ErrorMsg(format!("  ✗ {e}")));
                                     }
                                 }
@@ -2839,7 +2794,7 @@ impl Repl {
                                 let id = self.agent_id();
                                 match self.client.restore_memory(&id, label, rev_id).await {
                                     Ok(_) => {
-                                        let _ = self.app.lock().expect("lock poisoned").push(
+                                        let _ = self.app.lock().push(
                                             RenderLine::SystemMsg(format!(
                                                 "  ✓ [{label}] restored to revision {rev_id}"
                                             )),
@@ -2849,7 +2804,6 @@ impl Repl {
                                         let _ = self
                                             .app
                                             .lock()
-                                            .expect("lock poisoned")
                                             .push(RenderLine::ErrorMsg(format!("  ✗ {e}")));
                                     }
                                 }
@@ -3133,10 +3087,10 @@ impl Repl {
 
                         match sub_cmd {
                             "list" | "" => {
-                                let skills = self.skills.lock().expect("lock poisoned");
+                                let skills = self.skills.lock();
                                 let agent_id = self.agent_id();
                                 if skills.is_empty() {
-                                    let mut app = self.app.lock().expect("lock poisoned");
+                                    let mut app = self.app.lock();
                                     let _ = app.push(RenderLine::Blank);
                                     let _ = app.push(RenderLine::InfoHeader(
                                         "  ◆ Skills  (none loaded)".to_string(),
@@ -3179,7 +3133,7 @@ impl Repl {
                                     drop(skills);
 
                                     let chosen = {
-                                        let mut app = self.app.lock().expect("lock poisoned");
+                                        let mut app = self.app.lock();
                                         let colors = app.colors.clone();
                                         crate::ui::skills::show_skills_manager(
                                             &mut app.terminal,
@@ -3187,7 +3141,7 @@ impl Repl {
                                             &colors,
                                         )?
                                     };
-                                    let _ = self.app.lock().expect("lock poisoned").draw();
+                                    let _ = self.app.lock().draw();
 
                                     if let Some(crate::ui::skills::SkillsAction::Reload) = chosen {
                                         pending_input = Some("/skills reload".to_string());
@@ -3274,7 +3228,7 @@ impl Repl {
                                     Some(&agent_id),
                                     None,
                                 );
-                                let prev_count = self.skills.lock().expect("lock poisoned").len();
+                                let prev_count = self.skills.lock().len();
                                 let new_count = new_skills.len();
 
                                 let existing =
@@ -3313,7 +3267,7 @@ impl Repl {
                                     )
                                     .await;
 
-                                *self.skills.lock().expect("lock poisoned") = new_skills;
+                                *self.skills.lock() = new_skills;
 
                                 self.tui_ok(format!(
                                     "  ✓ Skills reloaded  ({new_count} loaded, was {prev_count})"
@@ -3327,7 +3281,7 @@ impl Repl {
                                     );
                                     self.agent_turn(&mut stdout, &notify).await?;
                                     let _ =
-                                        self.app.lock().expect("lock poisoned").commit_streaming();
+                                        self.app.lock().commit_streaming();
                                 }
                             }
 
@@ -3360,14 +3314,12 @@ impl Repl {
                                                 // Remove from in-memory list
                                                 self.skills
                                                     .lock()
-                                                    .expect("lock poisoned")
                                                     .retain(|s| s.id != id);
                                                 // Update memory
                                                 let agent_id = self.agent_id();
                                                 let skills_snap = self
                                                     .skills
                                                     .lock()
-                                                    .expect("lock poisoned")
                                                     .clone();
                                                 let listing =
                                                     cade_core::skills::skills_listing(&skills_snap);
@@ -3443,7 +3395,7 @@ impl Repl {
                                     editor
                                 ));
 
-                                let _ = self.app.lock().expect("lock poisoned").suspend_for(|| {
+                                let _ = self.app.lock().suspend_for(|| {
                                     let mut cmd = std::process::Command::new(&editor);
                                     cmd.arg(&path);
                                     let _ = cmd.status();
@@ -3556,7 +3508,6 @@ impl Repl {
                                 let _ = self
                                     .app
                                     .lock()
-                                    .expect("lock poisoned")
                                     .push(RenderLine::Blank);
                             }
                             if !deny.is_empty() {
@@ -3610,14 +3561,14 @@ impl Repl {
                                 progress: None,
                             };
                             let save = {
-                                let mut app = self.app.lock().expect("lock poisoned");
+                                let mut app = self.app.lock();
                                 let r = app.ask_question(&q)?;
                                 app.scroll = 0;
                                 let _ = app.draw();
                                 matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
                             };
                             if save {
-                                let mut settings = self.settings.lock().expect("lock poisoned");
+                                let mut settings = self.settings.lock();
                                 match settings.save_allow_rule(&pattern) {
                                     Ok(_) => self.tui_ok("  ✓ Saved"),
                                     Err(e) => self.tui_err(e.to_string()),
@@ -3663,14 +3614,14 @@ impl Repl {
                                 progress: None,
                             };
                             let save = {
-                                let mut app = self.app.lock().expect("lock poisoned");
+                                let mut app = self.app.lock();
                                 let r = app.ask_question(&q)?;
                                 app.scroll = 0;
                                 let _ = app.draw();
                                 matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
                             };
                             if save {
-                                let mut settings = self.settings.lock().expect("lock poisoned");
+                                let mut settings = self.settings.lock();
                                 match settings.save_deny_rule(&pattern) {
                                     Ok(_) => self.tui_ok("  ✓ Saved"),
                                     Err(e) => self.tui_err(e.to_string()),
@@ -3682,7 +3633,7 @@ impl Repl {
                     }
 
                     SlashCmd::Hooks => {
-                        let merged = self.settings.lock().expect("lock poisoned").merged_hooks();
+                        let merged = self.settings.lock().merged_hooks();
                         self.tui_blank();
                         if merged.is_empty() {
                             self.tui_dim("  No hooks configured.");
@@ -3735,7 +3686,6 @@ impl Repl {
                             let agent_dir = self
                                 .settings
                                 .lock()
-                                .expect("lock poisoned")
                                 .global_path()
                                 .parent()
                                 .unwrap()
@@ -3765,10 +3715,9 @@ impl Repl {
                                 );
                             }
                             let current_colors =
-                                self.app.lock().expect("lock poisoned").colors.clone();
+                                self.app.lock().colors.clone();
                             self.app
                                 .lock()
-                                .expect("lock poisoned")
                                 .open_theme_picker(discovered, current_colors);
                             continue;
                         } else {
@@ -3783,7 +3732,6 @@ impl Repl {
                             let agent_dir = self
                                 .settings
                                 .lock()
-                                .expect("lock poisoned")
                                 .global_path()
                                 .parent()
                                 .unwrap()
@@ -3802,13 +3750,13 @@ impl Repl {
                         } else {
                             // Apply it dynamically
                             {
-                                let mut app = self.app.lock().expect("lock poisoned");
+                                let mut app = self.app.lock();
                                 app.apply_theme(target_theme_colors);
                             }
 
                             // Save to settings
                             {
-                                let mut s = self.settings.lock().expect("lock poisoned");
+                                let mut s = self.settings.lock();
                                 s.global_settings_mut().theme = Some(found_name.clone());
                                 let _ = s.save_global();
                             }
@@ -3836,7 +3784,7 @@ impl Repl {
                                 progress: None,
                             };
                             let ans = {
-                                let mut app = self.app.lock().expect("lock poisoned");
+                                let mut app = self.app.lock();
                                 app.ask_question(&q)?
                             };
                             match &ans {
@@ -3853,7 +3801,7 @@ impl Repl {
                         } else {
                             match self.client.rename_agent(&id, &name).await {
                                 Ok(_) => {
-                                    *self.agent_name.lock().expect("lock poisoned") = name.clone();
+                                    *self.agent_name.lock() = name.clone();
                                     self.tui_ok(format!("  ✓ Renamed to: {name}"));
                                 }
                                 Err(e) => self.tui_err(e.to_string()),
@@ -3862,7 +3810,7 @@ impl Repl {
                     }
 
                     SlashCmd::Toolset(arg) => {
-                        let old_toolset = *self.current_toolset.lock().expect("lock poisoned");
+                        let old_toolset = *self.current_toolset.lock();
                         let new_toolset = if let Some(name) = arg.as_deref() {
                             match cade_core::toolsets::Toolset::from_name(name) {
                                 Some(t) => t,
@@ -3877,7 +3825,7 @@ impl Repl {
                             continue;
                         };
                         if new_toolset != old_toolset {
-                            *self.current_toolset.lock().expect("lock poisoned") = new_toolset;
+                            *self.current_toolset.lock() = new_toolset;
                             self.spawn_tool_reregister();
                             self.tui_ok(format!("  ✓ Toolset → {}", new_toolset.display_name()));
                         } else {
@@ -3904,7 +3852,7 @@ impl Repl {
             // Send to agent and handle tool loop
             self.agent_turn_with_images(&mut stdout, &input, submit_images)
                 .await?;
-            let _ = self.app.lock().expect("lock poisoned").commit_streaming();
+            let _ = self.app.lock().commit_streaming();
 
             // I-01: drain queued messages into pending_input.
             // Follow-up runs after the turn completes naturally.
@@ -3912,14 +3860,14 @@ impl Repl {
             // Follow-up takes priority — if both are set (edge case), run
             // follow-up first; steering is re-queued on the next iteration.
             let queued_msg = {
-                let mut q = self.queued_followup.lock().expect("lock poisoned");
+                let mut q = self.queued_followup.lock();
                 q.pop_front().map(|msg| (msg, q.len()))
             };
 
             if let Some((follow, count)) = queued_msg {
-                self.app.lock().expect("lock poisoned").queued_count = count;
+                self.app.lock().queued_count = count;
                 pending_input = Some(follow);
-            } else if let Some(steer) = self.queued_steering.lock().expect("lock poisoned").take() {
+            } else if let Some(steer) = self.queued_steering.lock().take() {
                 pending_input = Some(steer);
             }
         }

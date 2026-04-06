@@ -8,7 +8,6 @@ impl Repl {
         let _ = self
             .app
             .lock()
-            .expect("lock poisoned")
             .push(crate::ui::RenderLine::SuccessMsg(msg.into()));
     }
     /// Push an error line (red) to the TUI.
@@ -16,7 +15,6 @@ impl Repl {
         let _ = self
             .app
             .lock()
-            .expect("lock poisoned")
             .push(crate::ui::RenderLine::ErrorMsg(msg.into()));
     }
     /// Push a section header (cyan bold) to the TUI.
@@ -24,7 +22,6 @@ impl Repl {
         let _ = self
             .app
             .lock()
-            .expect("lock poisoned")
             .push(crate::ui::RenderLine::InfoHeader(msg.into()));
     }
     /// Push a dim hint / secondary text to the TUI.
@@ -32,7 +29,6 @@ impl Repl {
         let _ = self
             .app
             .lock()
-            .expect("lock poisoned")
             .push(crate::ui::RenderLine::DimMsg(msg.into()));
     }
     /// Push a plain system message (gray) to the TUI.
@@ -40,7 +36,6 @@ impl Repl {
         let _ = self
             .app
             .lock()
-            .expect("lock poisoned")
             .push(crate::ui::RenderLine::SystemMsg(msg.into()));
     }
     /// Push a blank line to the TUI.
@@ -48,7 +43,6 @@ impl Repl {
         let _ = self
             .app
             .lock()
-            .expect("lock poisoned")
             .push(crate::ui::RenderLine::Blank);
     }
 
