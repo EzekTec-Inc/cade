@@ -1,4 +1,5 @@
 // region:    --- Modules
+pub mod evaluator;
 
 use crate::Result;
 use std::path::{Path, PathBuf};

@@ -1833,3 +1833,40 @@ the developer's machine.
 - `cargo test -p cade-core --lib permissions` — 73 passed ✅
 - `cargo test -p cade-core -p cade-agent` — 185 passed ✅
 - `cargo test --test approval_tests` — 10 passed ✅
+
+## 2026-04-05T22:30:00Z — Subagent Evaluator (HMAS Task 1)
+
+**Summary:** Added a heuristic evaluator that intercepts subagent output before it merges into the parent context. Catches empty output, hallucinated crate imports, malformed Rust code (unbalanced braces), and read-only constraint violations. Integrates a retry loop into the subagent dispatch — failed evaluations trigger up to 2 automatic retries with evaluator feedback injected into the retry prompt.
+
+**Previous behavior:**
+- Subagent output from `run_headless()` was returned directly to the parent agent with zero validation.
+- Hallucinated crates, truncated code, and constraint violations all silently polluted parent context.
+- Subagent errors (e.g., model 404) were returned as-is with no retry.
+
+**New behavior:**
+- `evaluate_subagent_output()` runs 4 heuristic checks on every subagent return:
+  1. Empty/error output detection
+  2. Hallucinated Rust crate import scanning
+  3. Bracket-balance check for Rust code blocks
+  4. Read-only constraint violation detection
+- On check failure: retry with evaluator feedback appended to prompt (up to `DEFAULT_MAX_RETRIES=2`)
+- On max retries exceeded: `EvalVerdict::Reject` — error returned to parent with last output attached
+- On all checks pass: `EvalVerdict::Accept` — output merged normally
+- Retry loop sits in `tool_intercepts.rs::handle_run_subagent()` wrapping the `run_headless()` call
+
+**Files modified:**
+- `NEW` `crates/cade-agent/src/subagents/evaluator.rs` — `EvalVerdict` enum, `evaluate_subagent_output()`, 4 heuristic check functions, 17 unit tests
+- `MODIFIED` `crates/cade-agent/src/subagents/mod.rs` — Added `pub mod evaluator;`
+- `MODIFIED` `crates/cade-cli/src/cli/repl/tool_intercepts.rs` — Replaced single `run_headless()` call with evaluator retry loop
+- `NEW` `tests/evaluator_tests.rs` — 8 integration tests covering hallucination, malformed code, constraint violation, retry lifecycle, rejection
+
+**Rollback steps:**
+1. `git revert <commit-hash>`
+2. `cargo test --workspace` to verify rollback
+
+**Verification:**
+- `cargo check --workspace` — 0 errors, 0 warnings ✅
+- `cargo test -p cade-agent --lib subagents::evaluator` — 17 passed ✅
+- `cargo test -p cade-core -p cade-agent` — 276 passed ✅
+- `cargo test --test evaluator_tests --test approval_tests` — 18 passed ✅
+- Total: 294 tests pass ✅

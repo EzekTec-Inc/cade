@@ -172,27 +172,108 @@ impl Repl {
                     }
                 };
 
-                // Run headless
-                let result = crate::cli::headless::run_headless(
-                    &client,
-                    &sub_agent_id,
-                    &prompt,
-                    &permissions,
-                    &mcp_ref,
-                    &hooks,
-                    on_output,
-                )
-                .await;
+                // Run headless with evaluator retry loop
+                use cade_agent::subagents::evaluator::{
+                    evaluate_subagent_output, EvalVerdict, DEFAULT_MAX_RETRIES,
+                };
+
+                let max_retries = DEFAULT_MAX_RETRIES;
+                let mut attempt: u8 = 0;
+                let mut last_output = String::new();
+
+                loop {
+                    let retry_prompt = if attempt == 0 {
+                        prompt.clone()
+                    } else {
+                        // Append evaluator feedback to the original prompt
+                        let feedback = match evaluate_subagent_output(
+                            &last_output,
+                            &prompt,
+                            max_retries,
+                            attempt.saturating_sub(1),
+                        ) {
+                            EvalVerdict::Retry { feedback, .. } => feedback,
+                            _ => "Previous attempt was unsatisfactory.".to_string(),
+                        };
+                        format!(
+                            "{prompt}\n\n[EVALUATOR FEEDBACK — attempt {attempt}]: \
+                             Your previous output failed validation: {feedback}. \
+                             Please fix the issue and try again."
+                        )
+                    };
+
+                    let result = crate::cli::headless::run_headless(
+                        &client,
+                        &sub_agent_id,
+                        &retry_prompt,
+                        &permissions,
+                        &mcp_ref,
+                        &hooks,
+                        on_output.clone(),
+                    )
+                    .await;
+
+                    match result {
+                        Ok((output, _)) => {
+                            let verdict =
+                                evaluate_subagent_output(&output, &prompt, max_retries, attempt);
+                            match verdict {
+                                EvalVerdict::Accept => {
+                                    last_output = output;
+                                    break;
+                                }
+                                EvalVerdict::Retry { feedback, attempt: next } => {
+                                    tracing::info!(
+                                        "evaluator: retry {next}/{max_retries} for subagent \
+                                         [{subagent_type_c}]: {feedback}"
+                                    );
+                                    last_output = output;
+                                    attempt = next;
+                                    continue;
+                                }
+                                EvalVerdict::Reject { reason } => {
+                                    tracing::warn!(
+                                        "evaluator: rejecting subagent [{subagent_type_c}]: {reason}"
+                                    );
+                                    last_output = format!(
+                                        "[Evaluator rejected after {max_retries} retries: {reason}]\n\n\
+                                         Last output:\n{output}"
+                                    );
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            last_output = format!("Subagent error: {e}");
+                            // Evaluate the error output too — may trigger retry
+                            let verdict = evaluate_subagent_output(
+                                &last_output,
+                                &prompt,
+                                max_retries,
+                                attempt,
+                            );
+                            match verdict {
+                                EvalVerdict::Retry { attempt: next, .. } => {
+                                    tracing::info!(
+                                        "evaluator: retrying after subagent error [{subagent_type_c}]"
+                                    );
+                                    attempt = next;
+                                    continue;
+                                }
+                                _ => break,
+                            }
+                        }
+                    }
+                }
 
                 // Delete ephemeral agent
                 if ephemeral {
                     let _ = client.delete_agent(&sub_agent_id).await;
                 }
 
-                match result {
-                    Ok((output, _)) => (output, false),
-                    Err(e) => (format!("Subagent error: {e}"), true),
-                }
+                let is_error = last_output.starts_with("[Evaluator rejected")
+                    || last_output.starts_with("Subagent error:");
+                (last_output, is_error)
             }
         };
 
