@@ -47,7 +47,7 @@ crossterm      = { version = "0.28", features = ["event-stream"] }
 ratatui        = { version = "0.29", features = ["crossterm", "scrolling-regions"] }
 unicode-width  = "0.2"
 pulldown-cmark = "0.13"
-syntect        = "5"
+syntect        = { version = "5", default-features = false, features = ["parsing", "plist-load", "regex-onig", "default-syntaxes", "default-themes"] }
 ansi-to-tui    = "7"
 
 # Filesystem
@@ -78,7 +78,7 @@ url            = "2"
 
 # Desktop
 xcap           = "0.8.2"
-image          = "0.25"
+image          = { version = "0.25", default-features = false, features = ["png"] }
 base64         = "0.22"
 notify-rust    = "4"
 
@@ -118,7 +118,7 @@ name = "cade-server"
 path = "src/bin/cade-server.rs"
 
 [features]
-default     = ["full"]
+default     = ["mcp"]
 full        = ["desktop", "web", "mcp", "integration", "codeintel", "reranker", "backend-docker", "backend-ssh"]
 codeintel   = ["dep:cade-codeintel", "cade-server/codeintel"]
 reranker    = ["cade-server/reranker"]
