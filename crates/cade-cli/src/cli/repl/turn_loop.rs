@@ -1496,6 +1496,7 @@ impl Repl {
                 let pr_c = pr.clone();
                 let pa_c = pa.clone();
                 let rt_c = std::sync::Arc::clone(&runtime);
+                let stats_c = self.session_stats.clone();
 
                 handles.push(tokio::spawn(async move {
                     let r = Self::run_tool_inner(
@@ -1508,6 +1509,7 @@ impl Repl {
                         &rt_c,
                         pr_c.as_deref(),
                         pa_c.as_deref(),
+                        &stats_c,
                     )
                     .await;
                     (i, r)
@@ -1542,6 +1544,7 @@ impl Repl {
                 &runtime,
                 pr.as_deref(),
                 pa.as_deref(),
+                &self.session_stats,
             )
             .await;
             results[i] = r;
@@ -1903,7 +1906,9 @@ impl Repl {
         runtime: &std::sync::Arc<cade_agent::tools::ToolRuntime>,
         preceding_reasoning: Option<&str>,
         preceding_assistant_message: Option<&str>,
+        stats: &std::sync::Arc<parking_lot::Mutex<crate::cli::repl::stats::SessionStats>>,
     ) -> cade_agent::tools::ToolResult {
+        let tool_start = std::time::Instant::now();
         use cade_agent::tools::dispatch;
 
         // Bash tools — live-streaming path (buffered per-tool)
@@ -2067,6 +2072,9 @@ impl Repl {
                 is_error: is_err,
                 content,
             });
+
+        stats.lock().tool_time_ms += tool_start.elapsed().as_millis() as u64;
+
         result
     }
 
