@@ -1070,6 +1070,14 @@ mod tests {
     }
 
     #[test]
+    fn resolve_plan_mode_overrides_allow_rule_for_mutations() {
+        let mgr = PermissionManager::new(PermissionMode::Plan);
+        mgr.add_allow_rule(PermissionRule::parse("write_file").unwrap());
+        // Even though write_file is explicitly allowed, Plan mode must deny it.
+        assert!(mgr.resolve("write_file", &json!({"path": "f.rs"}), false).is_deny());
+    }
+
+    #[test]
     fn resolve_plan_mode_allows_reads() {
         let mgr = PermissionManager::new(PermissionMode::Plan);
         assert!(mgr.resolve("read_file", &json!({"path": "f.rs"}), false).is_allow());
@@ -1355,6 +1363,22 @@ impl PermissionManager {
             ));
         }
 
+        // 2.5. Plan mode strict block — overrides any allow rules for mutations
+        if self.mode() == PermissionMode::Plan {
+            if is_write {
+                return Verdict::Deny(format!(
+                    "plan mode: '{tool_name}' is a write/mutating tool"
+                ));
+            }
+            if is_bash && bash_is_write {
+                let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                return Verdict::Deny(format!(
+                    "plan mode: '{}' would modify system state",
+                    cmd.chars().take(60).collect::<String>()
+                ));
+            }
+        }
+
         // 3. Explicit allow rules
         if self
             .allow_rules
@@ -1400,21 +1424,6 @@ impl PermissionManager {
             }
 
             PermissionMode::Plan => {
-                // Defence-in-depth: even though Plan mode should have filtered
-                // write tools from the schema, guard against race conditions
-                // during mode switching.
-                if is_write {
-                    return Verdict::Deny(format!(
-                        "plan mode: '{tool_name}' is a write/mutating tool"
-                    ));
-                }
-                if is_bash && bash_is_write {
-                    let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                    return Verdict::Deny(format!(
-                        "plan mode: '{}' would modify system state",
-                        cmd.chars().take(60).collect::<String>()
-                    ));
-                }
                 Verdict::Allow
             }
 
