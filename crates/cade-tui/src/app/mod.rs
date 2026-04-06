@@ -1452,11 +1452,15 @@ impl TuiApp {
             }
             match event::read()? {
                 Event::Key(k) if k.kind == KeyEventKind::Press => {
+                    let was_empty = self.editor.input.is_empty();
                     if self.active_question.is_some() {
                         self.handle_question_key(k);
                     } else if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
                         return Ok(result);
                     } else {
+                        if was_empty && !self.editor.input.is_empty() {
+                            self.last_status = None;
+                        }
                         self.draw()?;
                     }
                 }
@@ -1475,6 +1479,7 @@ impl TuiApp {
                         // Image file was loaded — skip normal text paste.
                     } else {
                         self.editor.handle_paste(&text);
+                        self.last_status = None;
                     }
                     self.draw()?;
                 }

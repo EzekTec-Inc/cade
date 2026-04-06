@@ -537,6 +537,9 @@ impl Repl {
             };
             let input = input.trim().to_string();
 
+            // Clear status immediately upon submit
+            self.app.lock().set_last_status(None);
+
             // Handle Tab / BackTab mode-cycle sentinels.
             if input == "__TAB__" {
                 let next = cycle_mode(self.permissions.mode());

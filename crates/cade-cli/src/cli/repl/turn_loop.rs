@@ -336,6 +336,7 @@ impl Repl {
                                                                 app.queued_count = tick_queued_followup.lock().len();
                                                                 app.editor.input.clear();
                                                                 app.editor.cursor_pos = 0;
+                                                                app.set_last_status(None);
                                                                 let _ = app.draw();
                                                             }
                                                         }
@@ -362,6 +363,7 @@ impl Repl {
                                                                 app.queued_count = tick_queued_followup.lock().len();
                                                                 app.editor.input.clear();
                                                                 app.editor.cursor_pos = 0;
+                                                                app.set_last_status(None);
                                                                 let _ = app.draw();
                                                             }
                                                         }
@@ -451,6 +453,7 @@ impl Repl {
                                                                 // the agent.
                                                                 app.editor.input.clear();
                                                                 app.editor.cursor_pos = 0;
+                                                                app.set_last_status(None);
                                                                 let _ = app.draw();
                                                             }
                                                     }
@@ -480,10 +483,12 @@ impl Repl {
                                                                 *tick_queued_steering.lock() = Some(msg);
                                                                 app.editor.input.clear();
                                                                 app.editor.cursor_pos = 0;
+                                                                app.set_last_status(None);
                                                                 let _ = app.draw();
                                                             } else {
                                                                 app.editor.input.clear();
                                                                 app.editor.cursor_pos = 0;
+                                                                app.set_last_status(None);
                                                                 let _ = app.draw();
                                                             }
                                                             tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
