@@ -144,6 +144,44 @@ pub fn delete_memory_block(db: &Db, agent_id: &str, label: &str) -> Result<bool>
     Ok(n > 0)
 }
 
+/// Confidence threshold above which a block resists archival demotion.
+/// Blocks with confidence >= this value stay in 'short' tier even when
+/// chronologically stale.
+pub const CONFIDENCE_RETENTION_THRESHOLD: f64 = 1.5;
+
+/// Confidence increment applied each time a block is returned by search_memory.
+pub const CONFIDENCE_BOOST_PER_HIT: f64 = 0.15;
+
+/// Increment the confidence score for a memory block (called on search hit).
+pub fn boost_confidence(db: &Db, agent_id: &str, label: &str) -> Result<bool> {
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+    let n = conn.execute(
+        "UPDATE shared_memory_blocks
+         SET confidence = confidence + ?1
+         WHERE label = ?2
+           AND id IN (SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?3)",
+        params![CONFIDENCE_BOOST_PER_HIT, label, agent_id],
+    )?;
+    Ok(n > 0)
+}
+
+/// Read the current confidence value for a memory block (used in tests).
+pub fn get_block_confidence(db: &Db, agent_id: &str, label: &str) -> Result<f64> {
+    let conn = db
+        .lock()
+        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+    let confidence: f64 = conn.query_row(
+        "SELECT b.confidence FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.label = ?2",
+        params![agent_id, label],
+        |row| row.get(0),
+    )?;
+    Ok(confidence)
+}
+
 /// Returns (label, value, description) tuples ordered by label.
 pub fn get_memory_blocks(db: &Db, agent_id: &str) -> Result<Vec<(String, String, String)>> {
     let conn = db
@@ -241,10 +279,16 @@ pub fn promote_stale_blocks(
         "UPDATE shared_memory_blocks SET tier = 'long'
          WHERE tier = 'short'
            AND (? - last_turn) >= ?
+           AND confidence < ?
            AND id IN (
                SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?
            )",
-        params![current_turn, threshold, agent_id],
+        params![
+            current_turn,
+            threshold,
+            CONFIDENCE_RETENTION_THRESHOLD,
+            agent_id
+        ],
     )?;
     Ok(n as u64)
 }
@@ -692,6 +736,112 @@ mod tests {
         let labels: Vec<&str> = full.iter().map(|f| f.0.as_str()).collect();
         assert!(labels.contains(&"b1"));
         assert!(labels.contains(&"b2"));
+        Ok(())
+    }
+
+    // -- Confidence weighting
+
+    #[test]
+    fn test_boost_confidence() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        upsert_memory_block(&db, "a1", "project", "Rust app", None, None)?;
+
+        // Default confidence is 1.0
+        let c0 = get_block_confidence(&db, "a1", "project")?;
+        assert!((c0 - 1.0).abs() < f64::EPSILON, "default confidence should be 1.0, got {c0}");
+
+        // Boost once
+        assert!(boost_confidence(&db, "a1", "project")?);
+        let c1 = get_block_confidence(&db, "a1", "project")?;
+        assert!(
+            (c1 - (1.0 + CONFIDENCE_BOOST_PER_HIT)).abs() < f64::EPSILON,
+            "expected {}, got {c1}",
+            1.0 + CONFIDENCE_BOOST_PER_HIT
+        );
+
+        // Boost twice more
+        boost_confidence(&db, "a1", "project")?;
+        boost_confidence(&db, "a1", "project")?;
+        let c3 = get_block_confidence(&db, "a1", "project")?;
+        let expected = 1.0 + 3.0 * CONFIDENCE_BOOST_PER_HIT;
+        assert!(
+            (c3 - expected).abs() < 0.001,
+            "expected ~{expected}, got {c3}"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_boost_confidence_wrong_label_returns_false() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+        upsert_memory_block(&db, "a1", "project", "data", None, None)?;
+
+        assert!(!boost_confidence(&db, "a1", "nonexistent")?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_high_confidence_resists_demotion() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        upsert_memory_block(&db, "a1", "important", "critical data", None, None)?;
+        upsert_memory_block(&db, "a1", "forgettable", "ephemeral data", None, None)?;
+
+        // Boost "important" above the retention threshold
+        // Need ceil((1.5 - 1.0) / 0.15) = 4 boosts to cross 1.5
+        for _ in 0..4 {
+            boost_confidence(&db, "a1", "important")?;
+        }
+        let c = get_block_confidence(&db, "a1", "important")?;
+        assert!(c >= CONFIDENCE_RETENTION_THRESHOLD, "confidence {c} should be >= {CONFIDENCE_RETENTION_THRESHOLD}");
+
+        // Advance turns way past threshold
+        for _ in 0..50 {
+            increment_turn_counter(&db, "a1")?;
+        }
+        let current_turn = get_turn_counter(&db, "a1")?;
+
+        // Run demotion
+        let promoted = promote_stale_blocks(&db, "a1", current_turn, 40)?;
+
+        // "forgettable" should be demoted, "important" should resist
+        let full = get_memory_blocks_full(&db, "a1")?;
+        let important_tier = full.iter().find(|(l, _, _, _)| l == "important").map(|t| &t.3);
+        let forgettable_tier = full.iter().find(|(l, _, _, _)| l == "forgettable").map(|t| &t.3);
+
+        assert_eq!(important_tier, Some(&"short".to_string()), "high-confidence block should stay short");
+        assert_eq!(forgettable_tier, Some(&"long".to_string()), "low-confidence block should be demoted");
+        assert_eq!(promoted, 1, "only one block should be demoted");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_low_confidence_still_demoted() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        upsert_memory_block(&db, "a1", "block1", "data", None, None)?;
+
+        // Boost once — still below threshold (1.0 + 0.15 = 1.15 < 1.5)
+        boost_confidence(&db, "a1", "block1")?;
+        let c = get_block_confidence(&db, "a1", "block1")?;
+        assert!(c < CONFIDENCE_RETENTION_THRESHOLD);
+
+        // Advance turns
+        for _ in 0..50 {
+            increment_turn_counter(&db, "a1")?;
+        }
+        let current_turn = get_turn_counter(&db, "a1")?;
+
+        let promoted = promote_stale_blocks(&db, "a1", current_turn, 40)?;
+        assert_eq!(promoted, 1, "below-threshold block should still be demoted");
+
         Ok(())
     }
 }

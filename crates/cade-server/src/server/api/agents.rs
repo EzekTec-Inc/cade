@@ -583,6 +583,11 @@ pub async fn search_memory_handler(
     let rows = sqlite::search_memory(&state.db, &agent_id, query)
         .map_err(|e| server_err(e.to_string()))?;
 
+    // Boost confidence for every block returned by search — relevance weighting.
+    for (label, _value, _snippet) in &rows {
+        let _ = sqlite::boost_confidence(&state.db, &agent_id, label);
+    }
+
     // Auto-reactivate any long-term blocks returned by search — they're clearly
     // relevant to the current task, so promote back to short-term for 20 turns.
     let full = sqlite::get_memory_blocks_full(&state.db, &agent_id).unwrap_or_default();

@@ -1870,3 +1870,35 @@ the developer's machine.
 - `cargo test -p cade-core -p cade-agent` — 276 passed ✅
 - `cargo test --test evaluator_tests --test approval_tests` — 18 passed ✅
 - Total: 294 tests pass ✅
+
+## 2026-04-05T23:15:00Z — Confidence-Weighted Memory Retention (HMAS Task 2)
+
+**Summary:** Transitioned memory demotion from purely chronological (recency-based) to relevance-weighted retention. Blocks accessed via `search_memory` now accumulate confidence, and high-confidence blocks resist archival demotion even when chronologically stale. No schema migration required — uses existing `confidence` column in `shared_memory_blocks`.
+
+**Previous behavior:**
+- `promote_stale_blocks()` demoted all `short` tier blocks to `long` when `(current_turn - last_turn) >= 40`, regardless of how frequently they were accessed.
+- `search_memory_handler` auto-promoted long-term blocks back to short on search hit, but confidence was never modified.
+- The `confidence` column existed but was only written by the evidence system (`memory_evidence.rs`), never by memory search.
+
+**New behavior:**
+- `boost_confidence(db, agent_id, label)` increments confidence by `CONFIDENCE_BOOST_PER_HIT` (0.15) each time a block is returned by `search_memory`.
+- `promote_stale_blocks()` now includes `AND confidence < CONFIDENCE_RETENTION_THRESHOLD` (1.5) in its WHERE clause. Blocks with confidence ≥ 1.5 are exempt from demotion.
+- `search_memory_handler` calls `boost_confidence()` for every block returned before the auto-reactivation step.
+- `get_block_confidence()` test helper added for verifying confidence values.
+- Practical effect: a block accessed ~4 times via search_memory crosses the retention threshold and remains in active context indefinitely, even if 40+ turns have passed since its last_turn.
+
+**Files modified:**
+- `MODIFIED` `crates/cade-server/src/server/storage/sqlite/memory.rs` — Added `boost_confidence()`, `get_block_confidence()`, `CONFIDENCE_RETENTION_THRESHOLD`, `CONFIDENCE_BOOST_PER_HIT`. Updated `promote_stale_blocks()` SQL to exclude high-confidence blocks. Added 4 new tests.
+- `MODIFIED` `crates/cade-server/src/server/api/agents.rs` — Added `boost_confidence()` call in `search_memory_handler` for every search result.
+- `MODIFIED` `PLAN.md` — This entry.
+
+**Rollback steps:**
+1. `git revert <commit-hash>`
+2. `cargo test --workspace` to verify rollback
+
+**Verification:**
+- `cargo check --workspace` — 0 errors, 0 warnings ✅
+- `cargo test -p cade-server --lib storage::sqlite::memory` — 16 passed ✅
+- `cargo test -p cade-core -p cade-agent -p cade-server` — 367 passed ✅
+- `cargo test --test evaluator_tests --test approval_tests` — 18 passed ✅
+- Total: 385 tests pass ✅
