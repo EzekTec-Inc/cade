@@ -91,9 +91,21 @@ impl Skill {
             .as_deref()
             .map(|p| format!(" <{p}>"))
             .unwrap_or_default();
+        // Truncate description to save context tokens — full text available via load_skill.
+        let desc = if self.description.len() > 80 {
+            let end = self
+                .description
+                .char_indices()
+                .nth(80)
+                .map(|(i, _)| i)
+                .unwrap_or(self.description.len());
+            format!("{}…", &self.description[..end])
+        } else {
+            self.description.clone()
+        };
         format!(
             "- {} [{}]{}{}: {}",
-            self.id, self.scope, cat, phase, self.description
+            self.id, self.scope, cat, phase, desc
         )
     }
 

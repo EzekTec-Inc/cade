@@ -30,11 +30,10 @@ After every tool execution, always provide a plain-text response that explains \
 the result, what you found, or what you are doing next. \
 Never end a turn silently after running a tool. \
 Do not include filler phrases like 'Understood' or 'I will adhere to the rules'. Just do the work.";
-/// Number of recent messages examined when deciding whether to include extended
-/// (desktop_*) tool schemas.  These are only sent when the corresponding tool was
-/// actually called within this window, saving prompt tokens on sessions that do not
-/// use desktop features.
-pub(crate) const RECENT_WINDOW: usize = 40;
+/// Number of recent messages examined when deciding whether to include MCP
+/// tool schemas.  MCP tools (identified by `__` namespace separator) are only
+/// sent when actually called within this window, saving prompt tokens.
+pub(crate) const RECENT_WINDOW: usize = 20;
 /// Tool names that must always appear in the tool-schema list even when extended
 /// tools are pruned on long conversations.  These are the agent's primary
 /// mechanism for recovering archived context and must never be silently dropped.
@@ -49,13 +48,13 @@ pub(crate) const ALWAYS_INCLUDE_TOOL_NAMES: &[&str] = &[
 /// Character budget for pinned memory blocks (always injected, highest priority).
 pub(crate) const PINNED_BUDGET: usize = 10_000;
 /// Character budget for short-term active memory blocks (full fidelity).
-pub(crate) const SHORT_BUDGET: usize = 40_000;
+pub(crate) const SHORT_BUDGET: usize = 25_000;
 /// Character budget for the long-term archived index (label + 80-char excerpt).
 pub(crate) const LONG_BUDGET: usize = 5_000;
 /// Turns of inactivity before a short-term block is promoted to long-term.
-pub(crate) const STALE_THRESHOLD: i64 = 40;
+pub(crate) const STALE_THRESHOLD: i64 = 25;
 /// Awareness footer appended to system prompt when any memory tier is present.
-pub(crate) const MEMORY_AWARENESS_FOOTER: &str = "\n\nMemory system: blocks idle for 40+ turns are \
+pub(crate) const MEMORY_AWARENESS_FOOTER: &str = "\n\nMemory system: blocks idle for 25+ turns are \
 archived. The Archived Memory section above lists them with label + excerpt only. \
 To retrieve a full archived block, call the `search_memory` tool with a keyword — \
 matched blocks are automatically promoted back to active memory. \

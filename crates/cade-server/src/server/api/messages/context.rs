@@ -584,14 +584,18 @@ pub(crate) async fn build_context(
             .collect()
     };
 
-    // Lazy tool schema loading: on long conversations, desktop_* tools are pruned
-    // unless they were actually called in the recent message window.  This saves
-    // prompt tokens for sessions that never use desktop features.
+    // Lazy tool schema pruning: MCP tools (identified by the `__` namespace
+    // separator, e.g. `github__create_branch`) are pruned from the schema unless
+    // they were called in the recent message window.  This prevents 60-100+ MCP
+    // tool schemas from consuming ~20K tokens on every turn.
     //
-    // ALWAYS_INCLUDE_TOOL_NAMES are never pruned — they are the agent's primary
-    // mechanism for recovering archived/dropped context and must always be present.
-    const EXTENDED_TOOL_PREFIXES: &[&str] = &["desktop_"];
-    let tool_schemas: Vec<Value> = if messages.len() > 1 + RECENT_WINDOW {
+    // Native tools (bash, read_file, etc.) are never pruned.
+    // ALWAYS_INCLUDE_TOOL_NAMES are never pruned.
+    //
+    // Pruning activates after MCP_PRUNE_AFTER messages to give the LLM a few
+    // turns to discover available tools before they start getting dropped.
+    const MCP_PRUNE_AFTER: usize = 5;
+    let tool_schemas: Vec<Value> = if messages.len() > MCP_PRUNE_AFTER {
         // Collect tool names called in the recent window.
         let recent_start = messages.len().saturating_sub(RECENT_WINDOW);
         let mut recently_used: std::collections::HashSet<&str> = std::collections::HashSet::new();
@@ -610,8 +614,10 @@ pub(crate) async fn build_context(
                 if ALWAYS_INCLUDE_TOOL_NAMES.contains(&name) {
                     return true;
                 }
-                let is_extended = EXTENDED_TOOL_PREFIXES.iter().any(|p| name.starts_with(p));
-                !is_extended || recently_used.contains(name)
+                // MCP tools use "server__tool" naming convention.
+                // Prune them unless recently used.
+                let is_mcp = name.contains("__");
+                !is_mcp || recently_used.contains(name)
             })
             .collect()
     } else {
