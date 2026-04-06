@@ -172,24 +172,115 @@ impl std::str::FromStr for PermissionMode {
     }
 }
 
-// -- Write-tool and write-command detection
+// -- Verdict (unified permission resolution result)
 
-/// Tools that are intrinsically write/mutating regardless of arguments.
-/// In plan mode these are always blocked.
-const WRITE_TOOLS: &[&str] = &[
-    "write_file",
-    "edit_file",
-    "create_file",
-    "delete_file",
-    "move_file",
-    "rename_file",
-    "patch_file",
-    "apply_patch", // Codex toolset file patching
-    "apply_diff",
-    "edit_block",        // Desktop commander
-    "desktop_control",   // sends input / clicks
-    "send_notification", // side-effect
-];
+/// The result of a single permission check via `PermissionManager::resolve()`.
+///
+/// Replaces the old trio of `is_blocked()` / `auto_approve()` / `block_reason()`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Verdict {
+    /// Tool call may proceed without prompting the user.
+    Allow,
+    /// Tool call requires explicit user approval. Contains a human-readable reason.
+    Ask(String),
+    /// Tool call is hard-blocked and must NOT run. Contains a human-readable reason.
+    Deny(String),
+}
+
+impl Verdict {
+    pub fn is_allow(&self) -> bool {
+        matches!(self, Self::Allow)
+    }
+    pub fn is_ask(&self) -> bool {
+        matches!(self, Self::Ask(_))
+    }
+    pub fn is_deny(&self) -> bool {
+        matches!(self, Self::Deny(_))
+    }
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Allow => None,
+            Self::Ask(r) | Self::Deny(r) => Some(r),
+        }
+    }
+}
+
+// -- Write-schema detection (schema-level filtering for Plan mode)
+
+/// Returns true if the tool name represents a write/mutating operation.
+/// Used to filter tool schemas out of the LLM's view in Plan mode.
+pub fn is_write_schema(name: &str) -> bool {
+    matches!(
+        name,
+        "write_file"
+            | "edit_file"
+            | "create_file"
+            | "delete_file"
+            | "move_file"
+            | "rename_file"
+            | "patch_file"
+            | "apply_patch"
+            | "apply_diff"
+            | "edit_block"
+            | "desktop_control"
+            | "send_notification"
+    )
+}
+
+// -- Delete action detection
+
+/// Returns true if a bash command's primary intent is file/directory deletion.
+pub fn bash_first_cmd_is_delete(cmd: &str) -> bool {
+    for segment in split_shell_segments(cmd) {
+        let tokens: Vec<&str> = segment.trim().split_whitespace().collect();
+        let first = match tokens.first() {
+            Some(t) => *t,
+            None => continue,
+        };
+        let c = if first.contains('=') {
+            tokens.get(1).copied().unwrap_or("")
+        } else {
+            first
+        };
+        if matches!(c, "rm" | "rmdir" | "unlink" | "shred") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Returns true if the tool call represents a destructive delete action.
+pub fn is_delete_action(
+    tool_name: &str,
+    base_name: &str,
+    args: &serde_json::Value,
+    is_mcp_write: bool,
+) -> bool {
+    // 1. Native tool name
+    if base_name == "delete_file" {
+        return true;
+    }
+    // 2. MCP tool — inspect full prefixed name for delete/remove keywords
+    if is_mcp_write
+        && (tool_name.contains("delete") || tool_name.contains("remove"))
+    {
+        return true;
+    }
+    // 3. Bash commands: rm, rmdir, unlink, shred
+    if matches!(
+        base_name,
+        "bash" | "shell" | "run_command" | "execute_command" | "start_process"
+    ) {
+        let cmd = args
+            .get("command")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        return bash_first_cmd_is_delete(cmd);
+    }
+    false
+}
+
+// -- Write-tool and write-command detection
 
 /// Shell commands (first token) that are considered read-only and always
 /// permitted in plan mode when running via the `bash` tool.
@@ -786,26 +877,25 @@ mod tests {
     fn manager_granular_path_protection() {
         let mgr = PermissionManager::new(PermissionMode::BypassPermissions); // YOLO mode
 
-        // Write to .env should be blocked
+        // Write to .env should be denied
         let args = json!({"path": ".env"});
-        assert!(mgr.is_blocked("write_file", &args, false));
-        assert!(!mgr.auto_approve("write_file", &args, false));
+        assert!(mgr.resolve("write_file", &args, false).is_deny());
 
-        // Write to .git should be blocked
+        // Write to .git should be denied
         let args = json!({"path": ".git/config"});
-        assert!(mgr.is_blocked("edit_file", &args, false));
+        assert!(mgr.resolve("edit_file", &args, false).is_deny());
 
-        // Read from .env should NOT be blocked (unless Plan mode? No, plan mode allows read)
+        // Read from .env should NOT be denied
         let args = json!({"path": ".env"});
-        assert!(!mgr.is_blocked("read_file", &args, false));
+        assert!(mgr.resolve("read_file", &args, false).is_allow());
 
-        // Bash write to .ssh should be blocked
+        // Bash write to .ssh should be denied
         let args = json!({"command": "echo 'key' > ~/.ssh/authorized_keys"});
-        assert!(mgr.is_blocked("bash", &args, false));
+        assert!(mgr.resolve("bash", &args, false).is_deny());
 
-        // Bash read from .git should NOT be blocked
+        // Bash read from .git should NOT be denied
         let args = json!({"command": "cat .git/HEAD"});
-        assert!(!mgr.is_blocked("bash", &args, false));
+        assert!(mgr.resolve("bash", &args, false).is_allow());
     }
 
     #[test]
@@ -816,61 +906,6 @@ mod tests {
     }
 
     // -- PermissionManager
-
-    #[test]
-    fn manager_bypass_mode_auto_approves() {
-        let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
-        let args = json!({"command": "rm -rf /"});
-        assert!(mgr.auto_approve("bash", &args, false));
-    }
-
-    #[test]
-    fn manager_default_mode_does_not_auto_approve() {
-        let mgr = PermissionManager::new(PermissionMode::Default);
-        let args = json!({"command": "ls"});
-        assert!(!mgr.auto_approve("bash", &args, false));
-    }
-
-    #[test]
-    fn manager_accept_edits_auto_approves_file_tools() {
-        let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
-        assert!(mgr.auto_approve("write_file", &json!({"path": "foo.rs"}), false));
-        assert!(mgr.auto_approve("edit_file", &json!({"path": "foo.rs"}), false));
-        assert!(mgr.auto_approve("apply_patch", &json!({"path": "foo.rs"}), false));
-        assert!(!mgr.auto_approve("bash", &json!({"command": "ls"}), false));
-    }
-
-    #[test]
-    fn manager_deny_rule_overrides_bypass() {
-        let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
-        mgr.add_deny_rule(PermissionRule::parse("Bash(rm -rf:*)").unwrap());
-        let args = json!({"command": "rm -rf /tmp"});
-        assert!(!mgr.auto_approve("bash", &args, false));
-    }
-
-    #[test]
-    fn manager_deny_rule_blocks() {
-        let mgr = PermissionManager::new(PermissionMode::Default);
-        mgr.add_deny_rule(PermissionRule::parse("bash").unwrap());
-        let args = json!({"command": "ls"});
-        assert!(mgr.is_blocked("bash", &args, false));
-    }
-
-    #[test]
-    fn manager_allow_rule_auto_approves() {
-        let mgr = PermissionManager::new(PermissionMode::Default);
-        mgr.add_allow_rule(PermissionRule::parse("Bash(cargo test)").unwrap());
-        let args = json!({"command": "cargo test"});
-        assert!(mgr.auto_approve("bash", &args, false));
-    }
-
-    #[test]
-    fn manager_allow_rule_specific() {
-        let mgr = PermissionManager::new(PermissionMode::Default);
-        mgr.add_allow_rule(PermissionRule::parse("Bash(cargo test)").unwrap());
-        let args = json!({"command": "cargo build"});
-        assert!(!mgr.auto_approve("bash", &args, false));
-    }
 
     #[test]
     fn manager_session_allow_deduplicates() {
@@ -888,60 +923,6 @@ mod tests {
     }
 
     #[test]
-    fn manager_plan_mode_blocks_write_tools() {
-        let mgr = PermissionManager::new(PermissionMode::Plan);
-        let args = json!({"path": "foo.rs"});
-        assert!(mgr.is_blocked("write_file", &args, false));
-        assert!(mgr.is_blocked("edit_file", &args, false));
-        assert!(mgr.is_blocked("delete_file", &args, false));
-        assert!(mgr.is_blocked("desktop_control", &json!({}), false));
-        assert!(mgr.is_blocked("apply_patch", &args, false));
-    }
-
-    #[test]
-    fn manager_plan_mode_allows_read_commands() {
-        let mgr = PermissionManager::new(PermissionMode::Plan);
-        let args = json!({"command": "ls -la"});
-        assert!(!mgr.is_blocked("bash", &args, false));
-    }
-
-    #[test]
-    fn manager_plan_mode_blocks_write_commands() {
-        let mgr = PermissionManager::new(PermissionMode::Plan);
-        let args = json!({"command": "rm -rf target"});
-        assert!(mgr.is_blocked("bash", &args, false));
-    }
-
-    #[test]
-    fn manager_strict_bash_blocks_auto_approve() {
-        let mgr = PermissionManager::new_with_strict_bash(PermissionMode::Default, true);
-        mgr.add_allow_rule(PermissionRule::parse("bash").unwrap());
-        let args = json!({"command": "ls"});
-        // strict_bash prevents auto-approval even with an allow rule
-        assert!(!mgr.auto_approve("bash", &args, false));
-    }
-
-    #[test]
-    fn manager_strict_bash_does_not_affect_other_tools() {
-        let mgr = PermissionManager::new_with_strict_bash(PermissionMode::Default, true);
-        mgr.add_allow_rule(PermissionRule::parse("read_file").unwrap());
-        let args = json!({"path": "foo.rs"});
-        assert!(mgr.auto_approve("read_file", &args, false));
-    }
-
-    #[test]
-    fn manager_config_edit_protection() {
-        // SEC-B3: Config/skill edits should never be auto-approved
-        let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
-        let args = json!({"path": ".cade/settings.json"});
-        assert!(!mgr.auto_approve("write_file", &args, false));
-        let args = json!({"path": "settings.local.json"});
-        assert!(!mgr.auto_approve("edit_file", &args, false));
-        let args = json!({"path": ".skills/hack/SKILL.MD"});
-        assert!(!mgr.auto_approve("write_file", &args, false));
-    }
-
-    #[test]
     fn manager_mode_change() {
         let mgr = PermissionManager::new(PermissionMode::Default);
         assert_eq!(mgr.mode(), PermissionMode::Default);
@@ -949,21 +930,270 @@ mod tests {
         assert_eq!(mgr.mode(), PermissionMode::Plan);
     }
 
+    // -- Verdict enum
+
     #[test]
-    fn manager_block_reason_deny_rule() {
-        let mgr = PermissionManager::new(PermissionMode::Default);
-        mgr.add_deny_rule(PermissionRule::parse("Bash(rm:*)").unwrap());
-        let args = json!({"command": "rm -rf /"});
-        let reason = mgr.block_reason("bash", &args, false);
-        assert!(reason.contains("deny rule"), "got: {reason}");
+    fn verdict_is_allow() {
+        assert!(Verdict::Allow.is_allow());
+        assert!(!Verdict::Allow.is_ask());
+        assert!(!Verdict::Allow.is_deny());
+        assert!(Verdict::Allow.reason().is_none());
     }
 
     #[test]
-    fn manager_block_reason_plan_mode() {
+    fn verdict_is_ask() {
+        let v = Verdict::Ask("reason".into());
+        assert!(!v.is_allow());
+        assert!(v.is_ask());
+        assert!(!v.is_deny());
+        assert_eq!(v.reason(), Some("reason"));
+    }
+
+    #[test]
+    fn verdict_is_deny() {
+        let v = Verdict::Deny("blocked".into());
+        assert!(!v.is_allow());
+        assert!(!v.is_ask());
+        assert!(v.is_deny());
+        assert_eq!(v.reason(), Some("blocked"));
+    }
+
+    // -- is_write_schema
+
+    #[test]
+    fn write_schemas_detected() {
+        assert!(is_write_schema("write_file"));
+        assert!(is_write_schema("edit_file"));
+        assert!(is_write_schema("delete_file"));
+        assert!(is_write_schema("apply_patch"));
+        assert!(is_write_schema("edit_block"));
+        assert!(is_write_schema("desktop_control"));
+    }
+
+    #[test]
+    fn read_schemas_not_write() {
+        assert!(!is_write_schema("read_file"));
+        assert!(!is_write_schema("grep"));
+        assert!(!is_write_schema("glob"));
+        assert!(!is_write_schema("bash")); // bash is not inherently write at schema level
+    }
+
+    // -- bash_first_cmd_is_delete
+
+    #[test]
+    fn bash_delete_commands_detected() {
+        assert!(bash_first_cmd_is_delete("rm -rf target"));
+        assert!(bash_first_cmd_is_delete("rmdir empty_dir"));
+        assert!(bash_first_cmd_is_delete("unlink file.txt"));
+        assert!(bash_first_cmd_is_delete("shred secret.key"));
+    }
+
+    #[test]
+    fn bash_non_delete_commands_not_detected() {
+        assert!(!bash_first_cmd_is_delete("ls -la"));
+        assert!(!bash_first_cmd_is_delete("cp foo bar"));
+        assert!(!bash_first_cmd_is_delete("mv foo bar"));
+        assert!(!bash_first_cmd_is_delete("mkdir new_dir"));
+        assert!(!bash_first_cmd_is_delete("touch new_file"));
+    }
+
+    #[test]
+    fn bash_delete_in_compound_command() {
+        assert!(bash_first_cmd_is_delete("ls && rm foo"));
+        assert!(bash_first_cmd_is_delete("echo done; rmdir out"));
+    }
+
+    // -- is_delete_action
+
+    #[test]
+    fn delete_action_native_tool() {
+        assert!(is_delete_action("delete_file", "delete_file", &json!({"path": "f"}), false));
+    }
+
+    #[test]
+    fn delete_action_mcp_tool() {
+        assert!(is_delete_action(
+            "desktop-commander__delete_file",
+            "delete_file",
+            &json!({"path": "f"}),
+            true,
+        ));
+        assert!(is_delete_action(
+            "desktop-commander__remove_directory",
+            "remove_directory",
+            &json!({"path": "d"}),
+            true,
+        ));
+    }
+
+    #[test]
+    fn delete_action_mcp_write_not_delete() {
+        // MCP write tool that is NOT a delete
+        assert!(!is_delete_action(
+            "desktop-commander__write_file",
+            "write_file",
+            &json!({"path": "f"}),
+            true,
+        ));
+    }
+
+    #[test]
+    fn delete_action_bash_rm() {
+        assert!(is_delete_action(
+            "bash",
+            "bash",
+            &json!({"command": "rm -rf target"}),
+            false,
+        ));
+    }
+
+    #[test]
+    fn delete_action_bash_non_delete() {
+        assert!(!is_delete_action(
+            "bash",
+            "bash",
+            &json!({"command": "cp foo bar"}),
+            false,
+        ));
+    }
+
+    // -- resolve()
+
+    #[test]
+    fn resolve_plan_mode_denies_write_tools() {
         let mgr = PermissionManager::new(PermissionMode::Plan);
-        let args = json!({"path": "foo.rs"});
-        let reason = mgr.block_reason("write_file", &args, false);
-        assert!(reason.contains("plan mode"), "got: {reason}");
+        assert!(mgr.resolve("write_file", &json!({"path": "f.rs"}), false).is_deny());
+        assert!(mgr.resolve("edit_file", &json!({"path": "f.rs"}), false).is_deny());
+        assert!(mgr.resolve("delete_file", &json!({"path": "f.rs"}), false).is_deny());
+        assert!(mgr.resolve("apply_patch", &json!({"path": "f.rs"}), false).is_deny());
+    }
+
+    #[test]
+    fn resolve_plan_mode_allows_reads() {
+        let mgr = PermissionManager::new(PermissionMode::Plan);
+        assert!(mgr.resolve("read_file", &json!({"path": "f.rs"}), false).is_allow());
+        assert!(mgr.resolve("grep", &json!({"pattern": "foo"}), false).is_allow());
+        assert!(mgr.resolve("glob", &json!({"pattern": "*.rs"}), false).is_allow());
+    }
+
+    #[test]
+    fn resolve_plan_mode_allows_readonly_bash() {
+        let mgr = PermissionManager::new(PermissionMode::Plan);
+        assert!(mgr.resolve("bash", &json!({"command": "ls -la"}), false).is_allow());
+        assert!(mgr.resolve("bash", &json!({"command": "cargo test"}), false).is_allow());
+    }
+
+    #[test]
+    fn resolve_plan_mode_denies_write_bash() {
+        let mgr = PermissionManager::new(PermissionMode::Plan);
+        assert!(mgr.resolve("bash", &json!({"command": "rm -rf target"}), false).is_deny());
+        assert!(mgr.resolve("bash", &json!({"command": "mkdir out"}), false).is_deny());
+    }
+
+    #[test]
+    fn resolve_accept_edits_allows_write_tools() {
+        let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
+        assert!(mgr.resolve("write_file", &json!({"path": "f.rs"}), false).is_allow());
+        assert!(mgr.resolve("edit_file", &json!({"path": "f.rs"}), false).is_allow());
+        assert!(mgr.resolve("apply_patch", &json!({"path": "f.rs"}), false).is_allow());
+        assert!(mgr.resolve("edit_block", &json!({"path": "f.rs"}), false).is_allow());
+    }
+
+    #[test]
+    fn resolve_accept_edits_asks_for_delete() {
+        let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
+        assert!(mgr.resolve("delete_file", &json!({"path": "f.rs"}), false).is_ask());
+    }
+
+    #[test]
+    fn resolve_accept_edits_asks_for_mcp_delete() {
+        let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
+        assert!(mgr.resolve(
+            "desktop-commander__delete_file",
+            &json!({"path": "f"}),
+            true,
+        ).is_ask());
+    }
+
+    #[test]
+    fn resolve_accept_edits_asks_for_bash_rm() {
+        let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
+        assert!(mgr.resolve("bash", &json!({"command": "rm -rf target"}), false).is_ask());
+    }
+
+    #[test]
+    fn resolve_accept_edits_allows_bash_write_non_delete() {
+        let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
+        // cp, mv, mkdir are writes but not deletes — auto-approved
+        assert!(mgr.resolve("bash", &json!({"command": "cp foo bar"}), false).is_allow());
+    }
+
+    #[test]
+    fn resolve_accept_edits_allows_mcp_write_non_delete() {
+        let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
+        assert!(mgr.resolve(
+            "desktop-commander__write_file",
+            &json!({"path": "f"}),
+            true,
+        ).is_allow());
+    }
+
+    #[test]
+    fn resolve_default_mode_asks_for_writes() {
+        let mgr = PermissionManager::new(PermissionMode::Default);
+        assert!(mgr.resolve("write_file", &json!({"path": "f.rs"}), false).is_ask());
+        assert!(mgr.resolve("bash", &json!({"command": "rm foo"}), false).is_ask());
+    }
+
+    #[test]
+    fn resolve_default_mode_allows_reads() {
+        let mgr = PermissionManager::new(PermissionMode::Default);
+        assert!(mgr.resolve("read_file", &json!({"path": "f.rs"}), false).is_allow());
+        assert!(mgr.resolve("bash", &json!({"command": "ls"}), false).is_allow());
+    }
+
+    #[test]
+    fn resolve_bypass_allows_everything() {
+        let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
+        assert!(mgr.resolve("bash", &json!({"command": "rm -rf /"}), false).is_allow());
+        assert!(mgr.resolve("write_file", &json!({"path": "f"}), false).is_allow());
+        assert!(mgr.resolve("delete_file", &json!({"path": "f"}), false).is_allow());
+    }
+
+    #[test]
+    fn resolve_protected_path_denies_write() {
+        let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
+        assert!(mgr.resolve("write_file", &json!({"path": ".env"}), false).is_deny());
+        assert!(mgr.resolve("edit_file", &json!({"path": ".git/config"}), false).is_deny());
+    }
+
+    #[test]
+    fn resolve_deny_rule_overrides() {
+        let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
+        mgr.add_deny_rule(PermissionRule::parse("Bash(rm -rf:*)").unwrap());
+        assert!(mgr.resolve("bash", &json!({"command": "rm -rf /tmp"}), false).is_deny());
+    }
+
+    #[test]
+    fn resolve_allow_rule_approves() {
+        let mgr = PermissionManager::new(PermissionMode::Default);
+        mgr.add_allow_rule(PermissionRule::parse("Bash(cargo test)").unwrap());
+        assert!(mgr.resolve("bash", &json!({"command": "cargo test"}), false).is_allow());
+    }
+
+    #[test]
+    fn resolve_strict_bash_overrides_allow_rule() {
+        let mgr = PermissionManager::new_with_strict_bash(PermissionMode::Default, true);
+        mgr.add_allow_rule(PermissionRule::parse("bash").unwrap());
+        assert!(mgr.resolve("bash", &json!({"command": "ls"}), false).is_ask());
+    }
+
+    #[test]
+    fn resolve_config_edit_protection() {
+        let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
+        assert!(mgr.resolve("write_file", &json!({"path": ".cade/settings.json"}), false).is_ask());
+        assert!(mgr.resolve("edit_file", &json!({"path": "settings.local.json"}), false).is_ask());
+        assert!(mgr.resolve("write_file", &json!({"path": ".skills/hack/SKILL.MD"}), false).is_ask());
     }
 }
 
@@ -986,14 +1216,6 @@ impl PermissionManager {
             deny_rules: Arc::new(Mutex::new(Vec::new())),
             strict_bash: false,
         }
-    }
-
-    /// Set the strict_bash flag (loaded from settings at startup).
-    pub fn set_strict_bash(&self, _v: bool) {
-        // Field is not behind a lock — set via a mutable reference before
-        // the manager is shared, or at construction.  For simplicity we
-        // accept &self here and use a harmless no-op if already shared.
-        // Real mutation happens via new_with_strict_bash().
     }
 
     /// Construct with the strict_bash flag pre-set.
@@ -1059,18 +1281,26 @@ impl PermissionManager {
         self.deny_rules.lock().unwrap().clone()
     }
 
-    /// Returns true if the tool call should proceed without prompting.
+    /// Unified permission resolution.
     ///
     /// Resolution order (highest priority first):
-    ///   1. deny_rules match  → NOT auto-approved (must prompt or block)
-    ///   2. allow_rules match → auto-approved
-    ///   3. Mode-based        → BypassPermissions=always, AcceptEdits=file writes
-    pub fn auto_approve(
+    ///   1. Protected path write        → Deny (always, any mode)
+    ///   2. Explicit deny_rules match   → Deny
+    ///   3. Explicit allow_rules match  → Allow
+    ///   4. SEC-B1: strict_bash         → Ask
+    ///   5. SEC-B3: config/skill edits  → Ask
+    ///   6. Mode-based:
+    ///      - Bypass         → Allow (with audit log)
+    ///      - Plan           → Deny for writes, Allow for reads
+    ///      - AcceptEdits    → Allow for create/edit, Ask for delete
+    ///      - Default        → Ask for writes, Allow for reads
+    ///   7. Fallback                    → Allow (read-only tools)
+    pub fn resolve(
         &self,
         tool_name: &str,
         args: &serde_json::Value,
         is_mcp_write: bool,
-    ) -> bool {
+    ) -> Verdict {
         let arg = tool_first_arg(tool_name, args);
         let arg_ref = arg.as_deref();
 
@@ -1080,24 +1310,32 @@ impl PermissionManager {
             tool_name
         };
 
+        let is_bash = matches!(
+            base_name,
+            "bash" | "shell" | "run_command" | "execute_command" | "start_process"
+        );
+
+        let is_write = is_write_schema(base_name) || is_mcp_write;
+
+        let bash_is_write = if is_bash {
+            let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+            bash_command_is_write(cmd)
+        } else {
+            false
+        };
+
+        // 1. Protected path — hard-block writes always
         if let Some(arg_str) = arg_ref
             && path_is_protected(arg_str)
         {
-            if WRITE_TOOLS.contains(&base_name) || is_mcp_write {
-                return false;
-            }
-            if matches!(
-                base_name,
-                "bash" | "shell" | "run_command" | "execute_command" | "start_process"
-            ) {
-                let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                if bash_command_is_write(cmd) {
-                    return false;
-                }
+            if is_write || bash_is_write {
+                return Verdict::Deny(
+                    "security: protected path access denied (.git, .env, .ssh)".to_string(),
+                );
             }
         }
 
-        // Explicit deny wins over everything
+        // 2. Explicit deny rules — hard-block
         if self
             .deny_rules
             .lock()
@@ -1105,21 +1343,20 @@ impl PermissionManager {
             .iter()
             .any(|r| r.matches(tool_name, arg_ref))
         {
-            return false;
+            let rule = self
+                .deny_rules
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|r| r.matches(tool_name, arg_ref))
+                .cloned();
+            return Verdict::Deny(format!(
+                "blocked by deny rule: {}",
+                rule.map(|r| r.to_string()).unwrap_or_default()
+            ));
         }
 
-        // SEC-B1: strict_bash — never auto-approve bash tools, even if
-        // an allow rule matches.  Every bash call requires explicit approval.
-        if self.strict_bash
-            && matches!(
-                base_name,
-                "bash" | "shell" | "run_command" | "execute_command" | "start_process"
-            )
-        {
-            return false;
-        }
-
-        // Explicit allow
+        // 3. Explicit allow rules
         if self
             .allow_rules
             .lock()
@@ -1127,10 +1364,19 @@ impl PermissionManager {
             .iter()
             .any(|r| r.matches(tool_name, arg_ref))
         {
-            return true;
+            // SEC-B1: strict_bash overrides allow rules for bash tools
+            if self.strict_bash && is_bash {
+                return Verdict::Ask("strict_bash: bash tools always require approval".to_string());
+            }
+            return Verdict::Allow;
         }
 
-        // SEC-B3: Prevent Auto-Approval of Config/Skill Edits (RCE Mitigation)
+        // 4. SEC-B1: strict_bash — never auto-approve bash tools
+        if self.strict_bash && is_bash {
+            return Verdict::Ask("strict_bash: bash tools always require approval".to_string());
+        }
+
+        // 5. SEC-B3: Prevent auto-approval of config/skill edits (RCE mitigation)
         if matches!(
             base_name,
             "write_file" | "edit_file" | "apply_patch" | "write" | "edit" | "patch" | "edit_block"
@@ -1139,159 +1385,71 @@ impl PermissionManager {
                 || path.contains("settings.local.json")
                 || path.contains(".skills/"))
         {
-            return false;
+            return Verdict::Ask(
+                "security: config/skill edits require explicit approval".to_string(),
+            );
         }
 
-        // Mode-based
+        // 6. Mode-based resolution
         match self.mode() {
             PermissionMode::BypassPermissions => {
-                // M-02: Audit log every auto-approved call in bypass mode
                 tracing::warn!(
                     "bypassPermissions: auto-approving tool '{}' arg={:?}",
                     tool_name,
                     arg.as_deref().unwrap_or("<none>")
                 );
-                true
+                Verdict::Allow
             }
-            PermissionMode::AcceptEdits => {
-                // File edits + apply_patch (Codex toolset)
-                matches!(
-                    base_name,
-                    "write_file" | "edit_file" | "apply_patch" | "edit_block"
-                ) || is_mcp_write
-            }
-            _ => false,
-        }
-    }
 
-    /// Returns true if this tool call is blocked (must NOT run, even with approval).
-    ///
-    /// Resolution order:
-    ///   1. deny_rules match in any mode → block
-    ///   2. plan mode write detection    → block
-    pub fn is_blocked(
-        &self,
-        tool_name: &str,
-        args: &serde_json::Value,
-        is_mcp_write: bool,
-    ) -> bool {
-        let arg = tool_first_arg(tool_name, args);
-        let arg_ref = arg.as_deref();
-
-        let base_name = if let Some(pos) = tool_name.rfind("__") {
-            &tool_name[pos + 2..]
-        } else {
-            tool_name
-        };
-
-        // 0. Granular path protections (block always, regardless of mode)
-        if let Some(arg_str) = arg_ref
-            && path_is_protected(arg_str)
-        {
-            if WRITE_TOOLS.contains(&base_name) || is_mcp_write {
-                return true;
-            }
-            if matches!(
-                base_name,
-                "bash" | "shell" | "run_command" | "execute_command" | "start_process"
-            ) {
-                let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                if bash_command_is_write(cmd) {
-                    return true;
+            PermissionMode::Plan => {
+                // Defence-in-depth: even though Plan mode should have filtered
+                // write tools from the schema, guard against race conditions
+                // during mode switching.
+                if is_write {
+                    return Verdict::Deny(format!(
+                        "plan mode: '{tool_name}' is a write/mutating tool"
+                    ));
                 }
+                if is_bash && bash_is_write {
+                    let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                    return Verdict::Deny(format!(
+                        "plan mode: '{}' would modify system state",
+                        cmd.chars().take(60).collect::<String>()
+                    ));
+                }
+                Verdict::Allow
             }
-        }
 
-        // Explicit deny rules block regardless of mode
-        if self
-            .deny_rules
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|r| r.matches(tool_name, arg_ref))
-        {
-            return true;
-        }
-
-        if self.mode() != PermissionMode::Plan {
-            return false;
-        }
-
-        // Plan mode: block write tools
-        if WRITE_TOOLS.contains(&base_name) || is_mcp_write {
-            return true;
-        }
-
-        // Bash — allow read-only commands, block write ones
-        if matches!(
-            base_name,
-            "bash" | "shell" | "run_command" | "execute_command" | "start_process"
-        ) {
-            let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-            return bash_command_is_write(cmd);
-        }
-
-        false
-    }
-
-    /// Human-readable reason why a tool call was blocked.
-    pub fn block_reason(
-        &self,
-        tool_name: &str,
-        args: &serde_json::Value,
-        is_mcp_write: bool,
-    ) -> String {
-        let arg = tool_first_arg(tool_name, args);
-        let arg_ref = arg.as_deref();
-
-        let base_name = if let Some(pos) = tool_name.rfind("__") {
-            &tool_name[pos + 2..]
-        } else {
-            tool_name
-        };
-
-        // Check granular path protections first
-        if let Some(arg_str) = arg_ref
-            && path_is_protected(arg_str)
-        {
-            let is_write = if WRITE_TOOLS.contains(&base_name) || is_mcp_write {
-                true
-            } else if matches!(
-                base_name,
-                "bash" | "shell" | "run_command" | "execute_command" | "start_process"
-            ) {
-                let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-                bash_command_is_write(cmd)
-            } else {
-                false
-            };
-            if is_write {
-                return "security: protected path access denied (.git, .env, .ssh)".to_string();
+            PermissionMode::AcceptEdits => {
+                // Delete actions always require user approval
+                if is_delete_action(tool_name, base_name, args, is_mcp_write) {
+                    return Verdict::Ask(
+                        "delete action requires approval in acceptEdits mode".to_string(),
+                    );
+                }
+                // Non-delete writes are auto-approved
+                if is_write || bash_is_write {
+                    return Verdict::Allow;
+                }
+                // Read-only tools are always allowed
+                Verdict::Allow
             }
-        }
 
-        // Check deny rule first
-        if let Some(rule) = self
-            .deny_rules
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|r| r.matches(tool_name, arg_ref))
-        {
-            return format!("blocked by deny rule: {rule}");
-        }
-
-        if matches!(
-            base_name,
-            "bash" | "shell" | "run_command" | "execute_command" | "start_process"
-        ) {
-            let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
-            format!(
-                "plan mode: '{}' would modify system state",
-                cmd.chars().take(60).collect::<String>()
-            )
-        } else {
-            format!("plan mode: '{tool_name}' is a write/mutating tool")
+            PermissionMode::Default => {
+                if is_write || bash_is_write {
+                    let reason = if is_bash {
+                        let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
+                        format!(
+                            "default mode: '{}' requires approval",
+                            cmd.chars().take(60).collect::<String>()
+                        )
+                    } else {
+                        format!("default mode: '{tool_name}' requires approval")
+                    };
+                    return Verdict::Ask(reason);
+                }
+                Verdict::Allow
+            }
         }
     }
 }

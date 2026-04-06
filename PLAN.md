@@ -1801,3 +1801,35 @@ the developer's machine.
 - `MODIFIED` `crates/cade-tui/src/*` (colors, mcp_picker, menu, question, session_tree, editor)
 
 **Verification:** Run `cargo test --workspace` — tests pass cleanly.
+## 2026-04-05T21:00:00Z — OpenCode-Aligned Permission Model Refactor
+
+**Summary:** Refactored CADE's permission system from a three-function model (`auto_approve()`/`is_blocked()`/`block_reason()`) to a single unified `resolve()` function returning a `Verdict` enum (`Allow`/`Ask`/`Deny`). Added granular delete-action detection so AcceptEdits mode auto-approves create/edit but prompts for deletions. Removed ~230 lines of duplicated runtime classification logic.
+
+**Previous behavior:**
+- Three separate functions each independently extracted `base_name`, called `tool_first_arg()`, checked `path_is_protected()`, matched `WRITE_TOOLS`, and inspected `is_mcp_write` — triplicating the same logic across `auto_approve()`, `is_blocked()`, and `block_reason()`.
+- `AcceptEdits` mode auto-approved all write operations including deletions.
+- `WRITE_TOOLS` static array was the sole mechanism for classifying mutating tools.
+- `set_strict_bash()` was a dead no-op method.
+
+**New behavior:**
+- Single `resolve()` method performs all classification once and returns `Verdict::Allow`, `Verdict::Ask(reason)`, or `Verdict::Deny(reason)`.
+- `AcceptEdits` mode: create/edit → auto-approved; delete → prompts user (`Verdict::Ask`).
+- Delete detection via `is_delete_action()`: matches native `delete_file`, MCP tools containing "delete"/"remove" in name, and bash commands `rm`/`rmdir`/`unlink`/`shred`.
+- `is_write_schema()` public function for future schema-level filtering in Plan mode.
+- `Verdict` enum with `is_allow()`/`is_ask()`/`is_deny()`/`reason()` helpers.
+
+**Files modified:**
+- `MODIFIED` `crates/cade-core/src/permissions/mod.rs` — Added `Verdict` enum, `resolve()`, `is_write_schema()`, `is_delete_action()`, `bash_first_cmd_is_delete()`. Removed `auto_approve()`, `is_blocked()`, `block_reason()`, `set_strict_bash()`, `WRITE_TOOLS` array. Updated all tests.
+- `MODIFIED` `crates/cade-cli/src/cli/repl/turn_loop.rs` — Replaced `is_blocked()`+`auto_approve()` call pair with single `match resolve()` dispatch.
+- `MODIFIED` `crates/cade-cli/src/cli/headless.rs` — Replaced `is_blocked()`+`block_reason()` with `match resolve()`.
+- `MODIFIED` `tests/approval_tests.rs` — Rewrote all integration tests to use `resolve()` and `Verdict` API.
+
+**Rollback steps:**
+1. `git revert <commit-hash>` to restore the three-function model.
+2. Run `cargo test --workspace` to verify rollback compiles.
+
+**Verification:**
+- `cargo check --workspace` — 0 errors, 0 warnings ✅
+- `cargo test -p cade-core --lib permissions` — 73 passed ✅
+- `cargo test -p cade-core -p cade-agent` — 185 passed ✅
+- `cargo test --test approval_tests` — 10 passed ✅

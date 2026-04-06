@@ -242,11 +242,19 @@ async fn run_one_tool(
     hooks: &HookEngine,
 ) -> (String, String, bool) {
     let is_mcp_write = cade_agent::tools::is_write_tool(&tool_name, mcp).await;
-    // -- Permission check
-    if permissions.is_blocked(&tool_name, &args, is_mcp_write) {
-        let reason = permissions.block_reason(&tool_name, &args, is_mcp_write);
-        tracing::warn!("{reason}");
-        return (call_id, reason, true);
+    // -- Unified permission resolution
+    use cade_core::permissions::Verdict;
+    match permissions.resolve(&tool_name, &args, is_mcp_write) {
+        Verdict::Deny(reason) => {
+            tracing::warn!("{reason}");
+            return (call_id, reason, true);
+        }
+        Verdict::Ask(reason) => {
+            // Headless mode cannot prompt — treat Ask as Deny
+            tracing::warn!("headless: cannot prompt for approval, denying: {reason}");
+            return (call_id, reason, true);
+        }
+        Verdict::Allow => {}
     }
 
     // -- PreToolUse hook — can block execution

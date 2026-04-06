@@ -1739,34 +1739,35 @@ impl Repl {
     ) -> Result<ToolPreflightResult> {
         let is_mcp_write = cade_agent::tools::is_write_tool(tool_name, &self.mcp).await;
 
-        // Permission check — plan mode / deny rules
-        if self.permissions.is_blocked(tool_name, args, is_mcp_write) {
-            let msg = self.permissions.block_reason(tool_name, args, is_mcp_write);
-            let _ = self
-                .app
-                .lock()
-                .expect("lock poisoned")
-                .push(RenderLine::ToolResult {
-                    is_error: true,
-                    content: msg.clone(),
-                });
-            self.cancel_turn
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-            return Ok(ToolPreflightResult::Blocked(
-                cade_agent::tools::ToolResult {
-                    tool_call_id: call_id.to_string(),
-                    tool_name: tool_name.to_string(),
-                    output: msg,
-                    is_error: true,
-                },
-            ));
-        }
+        // Unified permission resolution
+        use cade_core::permissions::Verdict;
+        match self.permissions.resolve(tool_name, args, is_mcp_write) {
+            Verdict::Deny(msg) => {
+                let _ = self
+                    .app
+                    .lock()
+                    .expect("lock poisoned")
+                    .push(RenderLine::ToolResult {
+                        is_error: true,
+                        content: msg.clone(),
+                    });
+                self.cancel_turn
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                return Ok(ToolPreflightResult::Blocked(
+                    cade_agent::tools::ToolResult {
+                        tool_call_id: call_id.to_string(),
+                        tool_name: tool_name.to_string(),
+                        output: msg,
+                        is_error: true,
+                    },
+                ));
+            }
 
-        if !self.permissions.auto_approve(tool_name, args, is_mcp_write) {
-            // PermissionRequest hook — can block before showing prompt
-            if let cade_core::hooks::HookOutcome::Block { reason } =
-                self.hooks.permission_request(tool_name, args).await
-            {
+            Verdict::Ask(_reason) => {
+                // PermissionRequest hook — can block before showing prompt
+                if let cade_core::hooks::HookOutcome::Block { reason } =
+                    self.hooks.permission_request(tool_name, args).await
+                {
                 let _ = self
                     .app
                     .lock()
@@ -1818,16 +1819,19 @@ impl Repl {
                 stats.reviewed += 1;
                 stats.approved += 1;
             }
-        } else {
-            self.cancel_turn
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-            self.last_modal_close_ms.store(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
-                std::sync::atomic::Ordering::SeqCst,
-            );
+            }
+
+            Verdict::Allow => {
+                self.cancel_turn
+                    .store(false, std::sync::atomic::Ordering::SeqCst);
+                self.last_modal_close_ms.store(
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64,
+                    std::sync::atomic::Ordering::SeqCst,
+                );
+            }
         }
 
         // PreToolUse hook — can block execution
