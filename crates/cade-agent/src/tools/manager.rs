@@ -179,26 +179,10 @@ pub fn schemas_for_names(
         .collect()
 }
 
-/// Returns true if the native tool can mutate state (used for permission gating).
-pub fn is_native_write_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "bash"
-            | "write_file"
-            | "edit_file"
-            | "apply_patch"
-            | "desktop_control"
-            | "desktop_screenshot"
-    )
-}
-
 // endregion: --- Tests
 
-/// Returns true if the tool (native or MCP) can mutate state.
-pub async fn is_write_tool(name: &str, mcp: &McpManager) -> bool {
-    if is_native_write_tool(name) {
-        return true;
-    }
+/// Returns true if the tool is an MCP tool that can mutate state.
+pub async fn is_mcp_write_tool(name: &str, mcp: &McpManager) -> bool {
     if mcp.owns_tool(name).await {
         return mcp.is_write_tool(name).await;
     }
@@ -331,25 +315,6 @@ mod tests {
     fn schemas_for_names_empty() {
         let schemas = schemas_for_names(Toolset::Default, &[], false);
         assert!(schemas.is_empty());
-    }
-
-    // -- is_native_write_tool
-
-    #[test]
-    fn write_tools_identified() {
-        assert!(is_native_write_tool("bash"));
-        assert!(is_native_write_tool("write_file"));
-        assert!(is_native_write_tool("edit_file"));
-        assert!(is_native_write_tool("apply_patch"));
-        assert!(is_native_write_tool("desktop_control"));
-    }
-
-    #[test]
-    fn read_tools_not_write() {
-        assert!(!is_native_write_tool("read_file"));
-        assert!(!is_native_write_tool("grep"));
-        assert!(!is_native_write_tool("glob"));
-        assert!(!is_native_write_tool("AskUserQuestion"));
     }
 
     // -- run_native_tool

@@ -1323,7 +1323,17 @@ impl Repl {
             if matches!(&preflight[i], ToolPreflightResult::Blocked(_)) {
                 continue; // Already have a result
             }
-            if cade_agent::tools::is_write_tool(tool_name, &self.mcp).await {
+
+            let base_name = if let Some(pos) = tool_name.rfind("__") {
+                &tool_name[pos + 2..]
+            } else {
+                tool_name
+            };
+
+            let is_mcp_write = cade_agent::tools::is_mcp_write_tool(tool_name, &self.mcp).await;
+            let is_write = cade_core::permissions::is_write_schema(base_name) || is_mcp_write || base_name == "bash";
+
+            if is_write {
                 write_indices.push(i);
             } else {
                 read_indices.push(i);
@@ -1721,7 +1731,7 @@ impl Repl {
         tool_name: &str,
         args: &serde_json::Value,
     ) -> Result<ToolPreflightResult> {
-        let is_mcp_write = cade_agent::tools::is_write_tool(tool_name, &self.mcp).await;
+        let is_mcp_write = cade_agent::tools::is_mcp_write_tool(tool_name, &self.mcp).await;
 
         // Unified permission resolution
         use cade_core::permissions::Verdict;

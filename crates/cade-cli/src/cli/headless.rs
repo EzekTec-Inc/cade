@@ -241,7 +241,7 @@ async fn run_one_tool(
     mcp: &std::sync::Arc<McpManager>,
     hooks: &HookEngine,
 ) -> (String, String, bool) {
-    let is_mcp_write = cade_agent::tools::is_write_tool(&tool_name, mcp).await;
+    let is_mcp_write = cade_agent::tools::is_mcp_write_tool(&tool_name, mcp).await;
     // -- Unified permission resolution
     use cade_core::permissions::Verdict;
     match permissions.resolve(&tool_name, &args, is_mcp_write) {

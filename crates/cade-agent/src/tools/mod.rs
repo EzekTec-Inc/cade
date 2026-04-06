@@ -17,7 +17,7 @@ pub mod search;
 
 pub use ask::AskUserQuestionTool;
 pub use manager::{
-    ToolResult, all_schemas, dispatch, is_native_write_tool, is_write_tool, schemas_for_names,
+    ToolResult, all_schemas, dispatch, is_mcp_write_tool, schemas_for_names,
     schemas_for_toolset,
 };
 pub use meta::{all_meta_schemas, register_meta_tools};
