@@ -107,6 +107,12 @@ pub enum RenderLine {
     },
     /// Blank spacer line.
     Blank,
+    /// Summary of the heuristic evaluator subagent.
+    HeuristicSummary {
+        intent: String,
+        safety: String,
+        directives: String,
+    },
     /// Interactive question completed result.
     QuestionResult { header: String, answer: String },
     /// Live-streaming bash output.  Lines accumulate in real-time; only the

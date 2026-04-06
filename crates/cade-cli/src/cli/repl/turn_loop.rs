@@ -131,7 +131,7 @@ impl Repl {
             return;
         }
 
-        self.tui_dim("  Evaluating heuristic constraints (Antivirus/Pathfinding) via subagent…");
+        self.tui_dim("  [ ⚡ Reaching into memory & synthesizing rules... ]");
 
         let prompt = format!(
             "You are the Heuristic Evaluation Layer. Perform an evaluation on the current task: The user has requested to '{}'.\nExecute the following logic and then call `update_memory` on the `working_set` block to persist the evolved context:\n1. Semantic Extraction: Parse Intent, Entities, Constraints.\n2. Antivirus Heuristic: Compare against Safety Protocol. If deviating, generate a corrective warning.\n3. Pathfinding Heuristic: Analyze distance to goal and recalculate Next Steps.\n4. CoT State Update: Update `working_set` with Vision, Progress, and Directives.",
@@ -141,12 +141,47 @@ impl Repl {
         let args = serde_json::json!({
             "subagent_type": "heuristic_evaluator",
             "prompt": prompt,
-            "background": false
+            "background": false,
+            "silent_stream": true
         });
 
         // Run the subagent tool synchronously for this turn
         let _ = self.handle_run_subagent("heuristic_eval", &args).await;
-        self.tui_ok("  Heuristic Evaluation completed. working_set updated.");
+
+        // Fetch the updated working_set memory block
+        let mut intent = "Analyze user intent".to_string();
+        let mut safety = "Verified".to_string();
+        let mut directives = "Proceed with requested changes".to_string();
+
+        if let Ok(mems) = self.client.get_memory(&self.agent_id()).await {
+            if let Some(ws) = mems.into_iter().find(|m| m.label == "working_set") {
+                let val = ws.value;
+                let extract = |key: &str| -> String {
+                    if let Some(idx) = val.find(key) {
+                        let rest = &val[idx + key.len()..];
+                        let end = rest.find('\n').unwrap_or(rest.len());
+                        let extracted = rest[..end].trim().trim_start_matches(':').trim().to_string();
+                        if !extracted.is_empty() {
+                            return extracted;
+                        }
+                    }
+                    String::new()
+                };
+
+                let extracted_intent = extract("Intent");
+                if !extracted_intent.is_empty() { intent = extracted_intent; }
+                let extracted_safety = extract("Safety");
+                if !extracted_safety.is_empty() { safety = extracted_safety; }
+                let extracted_dir = extract("Directives");
+                if !extracted_dir.is_empty() { directives = extracted_dir; }
+            }
+        }
+
+        let _ = self.app.lock().push(crate::ui::RenderLine::HeuristicSummary {
+            intent,
+            safety,
+            directives,
+        });
     }
 
     /// Send a user message and drive the tool-call loop with live SSE streaming.

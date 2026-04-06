@@ -28,6 +28,7 @@ pub(crate) enum TimelineItemKind {
     Error,
     QuestionResult,
     Table,
+    HeuristicSummary,
     StreamingAssistant,
 }
 
@@ -101,6 +102,11 @@ pub(crate) enum TimelineItem<'a> {
         headers: &'a [String],
         rows: &'a [Vec<String>],
     },
+    HeuristicSummary {
+        intent: &'a str,
+        safety: &'a str,
+        directives: &'a str,
+    },
     StreamingAssistant(&'a str),
 }
 
@@ -124,6 +130,7 @@ impl<'a> TimelineItem<'a> {
             Self::Error(_) => TimelineItemKind::Error,
             Self::QuestionResult { .. } => TimelineItemKind::QuestionResult,
             Self::Table { .. } => TimelineItemKind::Table,
+            Self::HeuristicSummary { .. } => TimelineItemKind::HeuristicSummary,
             Self::StreamingAssistant(_) => TimelineItemKind::StreamingAssistant,
         }
     }
@@ -173,6 +180,7 @@ impl<'a> TimelineItem<'a> {
                 Self::QuestionResult { header, answer }
             }
             RenderLine::Table { headers, rows } => Self::Table { headers, rows },
+            RenderLine::HeuristicSummary { intent, safety, directives } => Self::HeuristicSummary { intent, safety, directives },
         }
     }
 
@@ -220,6 +228,9 @@ impl<'a> TimelineItem<'a> {
                 render_question_result_item(header, answer, out, colors)
             }
             Self::Table { headers, rows } => render_table_item(headers, rows, out, colors),
+            Self::HeuristicSummary { intent, safety, directives } => {
+                render_heuristic_summary_item(intent, safety, directives, width, out, colors)
+            }
             Self::StreamingAssistant(text) => render_streaming_assistant_item(text, out, colors),
         }
     }
@@ -1056,6 +1067,38 @@ fn render_question_result_item(
         ),
         Span::styled(answer.to_string(), Style::default().fg(colors.text)),
     ]));
+}
+
+fn render_heuristic_summary_item(
+    intent: &str,
+    safety: &str,
+    directives: &str,
+    width: usize,
+    out: &mut Vec<Line<'static>>,
+    colors: &ThemeColors,
+) {
+    let w = width.max(40).saturating_sub(4);
+    let top = format!("╭── ⚡ Context & Memory Synchronized {}╮", "─".repeat(w.saturating_sub(35)));
+    out.push(Line::from(Span::styled(top, Style::default().fg(colors.dim))));
+
+    let mut render_row = |label: &str, value: &str, val_color: ratatui::style::Color| {
+        let label_pad = format!("│  {label:<10} │ ");
+        let val_w = w.saturating_sub(15);
+        let val_str = crate::truncate_str(value, val_w);
+        let pad = " ".repeat(val_w.saturating_sub(val_str.width()));
+        out.push(Line::from(vec![
+            Span::styled(label_pad, Style::default().fg(colors.dim)),
+            Span::styled(val_str, Style::default().fg(val_color)),
+            Span::styled(format!("{pad} │"), Style::default().fg(colors.dim)),
+        ]));
+    };
+
+    render_row("Intent", intent, colors.text);
+    render_row("Safety", safety, colors.success);
+    render_row("Directives", directives, colors.text);
+
+    let bot = format!("╰{}╯", "─".repeat(w));
+    out.push(Line::from(Span::styled(bot, Style::default().fg(colors.dim))));
 }
 
 fn render_table_item(

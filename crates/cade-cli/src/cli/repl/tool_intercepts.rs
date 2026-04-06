@@ -18,6 +18,7 @@ impl Repl {
             .to_string();
         let prompt = args["prompt"].as_str().unwrap_or("").trim().to_string();
         let background = args["background"].as_bool().unwrap_or(false);
+        let silent_stream = args["silent_stream"].as_bool().unwrap_or(false);
         let agent_id_arg = args["agent_id"].as_str().map(|s| s.trim().to_string());
         let model_override = args["model"].as_str().map(|s| s.trim().to_string());
 
@@ -101,7 +102,7 @@ impl Repl {
         };
 
         let app_arc = self.app.clone();
-        let live_idx = if !background {
+        let live_idx = if !background && !silent_stream {
             let mut app = app_arc.lock();
             app.push_silent(crate::ui::RenderLine::SystemMsg(format!(
                 "  [Subagent: {}]",
