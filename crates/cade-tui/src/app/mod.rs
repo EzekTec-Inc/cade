@@ -2138,8 +2138,6 @@ fn render_frame(
         return 0;
     }
 
-    let content_height = main_area.height - bottom_rows;
-
     let plan_h = if let Some(plan) = active_plan {
         if plan.is_visible {
             (plan.steps.len() as u16 + 2).min(10).max(4)
@@ -2150,11 +2148,9 @@ fn render_frame(
         0
     };
 
-    let shrunk_content = content_height.saturating_sub(plan_h);
-
     let chunks = if plan_h > 0 {
         Layout::vertical([
-            Constraint::Length(shrunk_content), // [0] content  (shrunk)
+            Constraint::Fill(1),                // [0] content  (fluid)
             Constraint::Length(0),              // [1] unused
             Constraint::Length(plan_h),         // [2] plan panel
             Constraint::Length(1),              // [3] status
@@ -2168,7 +2164,7 @@ fn render_frame(
         // No question: same 6-slot layout, pad with two dummy zero-height slots
         // so all index references below are uniform (we only use 0,3..7 in this branch).
         Layout::vertical([
-            Constraint::Length(content_height), // [0] content
+            Constraint::Fill(1),                // [0] content
             Constraint::Length(0),              // [1] (unused)
             Constraint::Length(0),              // [2] (unused)
             Constraint::Length(1),              // [3] status

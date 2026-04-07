@@ -12,6 +12,7 @@ clipboard-images = ["dep:image", "dep:base64", "dep:arboard"]
 syntax-highlighting = ["dep:syntect"]
 
 [dependencies]
+tui-textarea = "0.2"
 # -- Workspace crates
 cade-core.path       = "../cade-core"
 # -- Error handling
