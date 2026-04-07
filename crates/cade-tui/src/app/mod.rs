@@ -2,6 +2,16 @@ pub mod clipboard;
 pub mod timeline;
 pub(crate) use timeline::*;
 
+pub fn strip_orchestrator_prompts(text: &str) -> std::borrow::Cow<'_, str> {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static RE: OnceLock<Regex> = OnceLock::new();
+    let re = RE.get_or_init(|| {
+        Regex::new(r"(?is)[\w\d]*>thought\s*CRITICAL INSTRUCTION 1:.*?CRITICAL INSTRUCTION 2:.*?(?:task at hand\.)\s*").unwrap()
+    });
+    re.replace_all(text, "")
+}
+
 /// TuiApp — single-terminal, pure ratatui fullscreen rendering for CADE.
 /// Replaces the old hybrid (OutputRenderer DECSTBM + InputWidget Inline viewport +
 /// ThinkingBar raw crossterm).  A single `Terminal<CrosstermBackend<Stdout>>`
@@ -674,8 +684,9 @@ impl TuiApp {
     fn commit_streaming_inner(&mut self) {
         if self.streaming_active {
             let text = std::mem::take(&mut self.streaming_text);
-            if !text.trim().is_empty() {
-                self.lines.push(RenderLine::AssistantText(text));
+            let clean = crate::app::strip_orchestrator_prompts(&text);
+            if !clean.trim().is_empty() {
+                self.lines.push(RenderLine::AssistantText(clean.into_owned()));
             }
             self.streaming_active = false;
         }
@@ -687,11 +698,12 @@ impl TuiApp {
     pub fn commit_reasoning_inner(&mut self) {
         if self.reasoning_active {
             let text = std::mem::take(&mut self.reasoning_text);
-            let words = text.split_whitespace().count();
+            let clean = crate::app::strip_orchestrator_prompts(&text);
+            let words = clean.split_whitespace().count();
             if words > 0 {
                 self.lines.push(RenderLine::Reasoning {
                     words,
-                    content: text,
+                    content: clean.into_owned(),
                 });
             }
             self.reasoning_active = false;
@@ -839,7 +851,7 @@ impl TuiApp {
         // Snapshot all rendering data (avoids borrow conflicts).
         let lines = self.lines.clone();
         let streaming = if self.streaming_active {
-            Some(self.streaming_text.clone())
+            Some(crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned())
         } else {
             None
         };
