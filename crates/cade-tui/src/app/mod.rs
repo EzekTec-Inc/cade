@@ -283,7 +283,7 @@ pub struct TuiApp {
     reasoning_active: bool,
 
     // -- Input state
-    pub editor: Editor,
+    pub editor: Editor<'static>,
     /// Last known terminal width — kept in sync during draw() so that
     /// Up/Down cursor navigation uses the real column width.
     term_width: u16,
@@ -860,9 +860,9 @@ impl TuiApp {
             self.scroll = 0;
             scroll = 0;
         }
-        let input = self.editor.input.clone();
+        let input = self.editor.text();
         let input_mode = self.editor.detect_mode();
-        let cursor_pos = self.editor.cursor_pos;
+        let cursor_pos = self.editor.cursor_pos();
         let mode = self.mode;
         let agent_name = self.agent_name.clone();
         let model = self.model.clone();
@@ -1470,13 +1470,13 @@ impl TuiApp {
             }
             match event::read()? {
                 Event::Key(k) if k.kind == KeyEventKind::Press => {
-                    let was_empty = self.editor.input.is_empty();
+                    let was_empty = self.editor.is_empty();
                     if self.active_question.is_some() {
                         self.handle_question_key(k);
                     } else if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
                         return Ok(result);
                     } else {
-                        if was_empty && !self.editor.input.is_empty() {
+                        if was_empty && !self.editor.is_empty() {
                             self.last_status = None;
                         }
                         self.draw()?;
@@ -1638,11 +1638,12 @@ impl TuiApp {
                     {
                         self.editor.snapshot();
                         let query_end = pk.at_pos + 1 + pk.query.len();
-                        self.editor
-                            .input
-                            .drain(pk.at_pos..query_end.min(self.editor.input.len()));
-                        self.editor.input.insert_str(pk.at_pos, &selected);
-                        self.editor.cursor_pos = pk.at_pos + selected.len();
+                        let drain_end = query_end.min(self.editor.text().len());
+                        let mut text = self.editor.text();
+                        text.drain(pk.at_pos..drain_end);
+                        self.editor.set_text(text);
+                        self.editor.insert_str_at(pk.at_pos, &selected);
+                        self.editor.set_cursor_pos(pk.at_pos + selected.len());
                     }
                     // dismiss whether or not a match was selected
                 }
@@ -1650,17 +1651,17 @@ impl TuiApp {
                     if let Some(pk) = &mut self.picker {
                         if pk.query.is_empty() {
                             // Delete the @ and dismiss
-                            if pk.at_pos < self.editor.input.len() {
-                                self.editor.input.remove(pk.at_pos);
-                                self.editor.cursor_pos = pk.at_pos;
+                            if pk.at_pos < self.editor.text().len() {
+                                self.editor.remove_char_at(pk.at_pos);
+                                self.editor.set_cursor_pos(pk.at_pos);
                             }
                             self.picker = None;
                         } else {
                             // Remove last query char from both query and input
                             let query_end = pk.at_pos + 1 + pk.query.len();
                             let remove_at = query_end.saturating_sub(1);
-                            if remove_at < self.editor.input.len() {
-                                self.editor.input.remove(remove_at);
+                            if remove_at < self.editor.text().len() {
+                                self.editor.remove_char_at(remove_at);
                             }
                             pk.query.pop();
                             pk.cursor = 0;
@@ -1672,8 +1673,8 @@ impl TuiApp {
                     // Append char to both input and picker query
                     if let Some(pk) = &mut self.picker {
                         let query_end = pk.at_pos + 1 + pk.query.len();
-                        self.editor.input.insert(query_end, c);
-                        self.editor.cursor_pos = query_end + c.len_utf8();
+                        self.editor.insert_char_at(query_end, c);
+                        self.editor.set_cursor_pos(query_end + c.len_utf8());
                         pk.query.push(c);
                         pk.cursor = 0;
                         pk.matches = self.file_ac.collect_files(&pk.query);
@@ -1705,7 +1706,7 @@ impl TuiApp {
                 // into pending_submit_images for repl.rs to pick up.
                 self.editor.expand_pastes();
                 self.pending_submit_images = self.editor.drain_images();
-                let line = self.editor.input.clone();
+                let line = self.editor.text();
                 self.editor.clear();
                 self.scroll = 0; // snap to bottom on submit
                 self.pending_lines = 0; // user is following the conversation
@@ -1713,7 +1714,7 @@ impl TuiApp {
             }
 
             // -- Exit
-            (KeyCode::Char('d'), KeyModifiers::CONTROL) if self.editor.input.is_empty() => {
+            (KeyCode::Char('d'), KeyModifiers::CONTROL) if self.editor.is_empty() => {
                 return Ok(Some(None));
             }
 
@@ -1721,7 +1722,7 @@ impl TuiApp {
             // Ctrl+C at the idle prompt: clear the input line if not empty.
             // If empty, exit cleanly (acts like Ctrl+D).
             (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                if self.editor.input.is_empty() {
+                if self.editor.is_empty() {
                     return Ok(Some(None));
                 } else {
                     self.editor.clear();
@@ -1788,10 +1789,10 @@ impl TuiApp {
             (KeyCode::Right, m) if m.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
                 self.editor.move_word_right();
             }
-            (KeyCode::Left, _) if self.editor.cursor_pos > 0 => {
+            (KeyCode::Left, _) if self.editor.cursor_pos() > 0 => {
                 self.editor.move_left();
             }
-            (KeyCode::Right, _) if self.editor.cursor_pos < self.editor.input.len() => {
+            (KeyCode::Right, _) if self.editor.cursor_pos() < self.editor.text().len() => {
                 self.editor.move_right();
             }
 
@@ -1804,7 +1805,7 @@ impl TuiApp {
                 let available_w = self.term_width.saturating_sub(2).max(1);
                 let (badge_text, _) = input_mode_badge(self.editor.detect_mode(), &self.colors);
                 let input_prefix_w = badge_text.chars().count() as u16 + 1 + 2;
-                let before = &self.editor.input[..self.editor.cursor_pos];
+                let before = &self.editor.text()[..self.editor.cursor_pos()];
                 let (cur_row, cur_col) = calc_visual_cursor(before, available_w, input_prefix_w);
 
                 if cur_row == 0 {
@@ -1816,8 +1817,8 @@ impl TuiApp {
                             Some(i) => i,
                         };
                         *hist_idx = Some(new_idx);
-                        self.editor.input = history[new_idx].clone();
-                        self.editor.cursor_pos = self.editor.input.len();
+                        self.editor.set_text(history[new_idx].clone());
+                        self.editor.set_cursor_pos(self.editor.text().len());
                     }
                 } else {
                     // Move cursor up one visual row: target column = cur_col
@@ -1826,13 +1827,13 @@ impl TuiApp {
                     let target_row = cur_row - 1;
                     // Rebuild visual-row byte-offset map
                     let new_pos = find_cursor_at_visual_row_col(
-                        &self.editor.input,
+                        &self.editor.text(),
                         available_w,
                         input_prefix_w,
                         target_row,
                         cur_col,
                     );
-                    self.editor.cursor_pos = new_pos;
+                    self.editor.set_cursor_pos(new_pos);
                 }
             }
             (KeyCode::Down, _) => {
@@ -1841,10 +1842,10 @@ impl TuiApp {
                 let input_prefix_w = badge_text.chars().count() as u16 + 1 + 2;
                 let total_rows = {
                     let (tr, _) =
-                        calc_visual_cursor(&self.editor.input, available_w, input_prefix_w);
+                        calc_visual_cursor(&self.editor.text(), available_w, input_prefix_w);
                     tr
                 };
-                let before = &self.editor.input[..self.editor.cursor_pos];
+                let before = &self.editor.text()[..self.editor.cursor_pos()];
                 let (cur_row, cur_col) = calc_visual_cursor(before, available_w, input_prefix_w);
 
                 if cur_row >= total_rows {
@@ -1852,24 +1853,24 @@ impl TuiApp {
                     if let Some(i) = *hist_idx {
                         if i + 1 < history.len() {
                             *hist_idx = Some(i + 1);
-                            self.editor.input = history[i + 1].clone();
-                            self.editor.cursor_pos = self.editor.input.len();
+                            self.editor.set_text(history[i + 1].clone());
+                            self.editor.set_cursor_pos(self.editor.text().len());
                         } else {
                             *hist_idx = None;
-                            self.editor.input.clear();
-                            self.editor.cursor_pos = 0;
+                            self.editor.clear();
+                            self.editor.set_cursor_pos(0);
                         }
                     }
                 } else {
                     let target_row = cur_row + 1;
                     let new_pos = find_cursor_at_visual_row_col(
-                        &self.editor.input,
+                        &self.editor.text(),
                         available_w,
                         input_prefix_w,
                         target_row,
                         cur_col,
                     );
-                    self.editor.cursor_pos = new_pos;
+                    self.editor.set_cursor_pos(new_pos);
                 }
             }
 
@@ -1890,11 +1891,11 @@ impl TuiApp {
                 // fall through to the mode-cycle sentinel.
                 if let Some((new_input, new_cursor)) = self
                     .file_ac
-                    .complete_path(&self.editor.input, self.editor.cursor_pos)
+                    .complete_path(&self.editor.text(), self.editor.cursor_pos())
                 {
                     self.editor.snapshot();
-                    self.editor.input = new_input;
-                    self.editor.cursor_pos = new_cursor;
+                    self.editor.set_text(new_input);
+                    self.editor.set_cursor_pos(new_cursor);
                 } else {
                     self.scroll = 0;
                     return Ok(Some(Some("__TAB__".to_string())));
@@ -1928,10 +1929,10 @@ impl TuiApp {
             }
 
             // -- Editing
-            (KeyCode::Backspace, _) if self.editor.cursor_pos > 0 => {
+            (KeyCode::Backspace, _) if self.editor.cursor_pos() > 0 => {
                 self.editor.delete_back();
             }
-            (KeyCode::Delete, _) if self.editor.cursor_pos < self.editor.input.len() => {
+            (KeyCode::Delete, _) if self.editor.cursor_pos() < self.editor.text().len() => {
                 self.editor.delete_forward();
             }
             (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
@@ -1940,7 +1941,7 @@ impl TuiApp {
                 // A-01: activate file picker when '@' is typed.
                 if c == '@' && self.picker.is_none() {
                     // cursor_pos is now just past the inserted '@'.
-                    let at_pos = self.editor.cursor_pos - c.len_utf8();
+                    let at_pos = self.editor.cursor_pos() - c.len_utf8();
                     let matches = self.file_ac.collect_files("");
                     self.picker = Some(PickerState {
                         at_pos,

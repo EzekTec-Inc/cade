@@ -1,518 +1,242 @@
-//! Standalone text-editor component for the CADE TUI.
-//!
-//! Owns the input buffer (`input`) and cursor position (`cursor_pos`),
-//! provides pure text-manipulation methods (insert, delete, cursor
-//! movement, word ops), bracketed-paste collapsing, and undo/redo.
-//!
-//! Implements [`Component`] so it can participate in the unified render /
-//! input cycle.
-//!
-//! The `TuiApp` embeds a single `Editor` instance.  UI-coupled concerns
-//! (history navigation, `@` file picker, Tab path completion) remain in
-//! `TuiApp::handle_key_input`; only the text-editing primitives live here.
-
 use super::component::{Component, RenderedLine};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use std::collections::VecDeque;
+use tui_textarea::{TextArea, Input, Key};
 
-// -- Input mode
-
-/// Semantic mode of the current input buffer, determined by its prefix.
-///
-/// `TuiApp` can query this to show visual feedback (e.g. a `[bash]` badge).
-/// `repl.rs` already handles the actual `!`/`!!` dispatch at submission time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputMode {
-    /// Regular user message (default).
     Regular,
-    /// Starts with `!` (send output to LLM) or `!!` (silent execution).
     BashCommand { silent: bool },
-    /// Starts with `/` — a slash command.
     SlashCommand,
 }
 
-// -- Paste entry
-
-/// A collapsed text-paste marker stored for later expansion.
 #[derive(Debug, Clone)]
 pub struct PasteEntry {
-    /// 1-based paste ID shown in the marker token.
     pub id: usize,
-    /// The full original pasted text.
     pub text: String,
 }
 
-// -- Image entry
-
-/// An image pasted by the user (Ctrl+V / Alt+V).
-///
-/// Kept in memory alongside the input buffer; extracted by `drain_images()`
-/// just before submission and forwarded to the LLM as a base64 attachment.
 #[derive(Debug, Clone)]
 pub struct ImageEntry {
-    /// 1-based image ID matching the `[image #N …]` placeholder in `input`.
     pub id: usize,
-    /// IANA media type, e.g. `"image/png"`.
     pub media_type: String,
-    /// Base64-encoded image bytes.
     pub data: String,
-    /// Pixel dimensions (informational; shown in the placeholder).
     pub width: u32,
     pub height: u32,
 }
 
-// -- Editor
-
-/// Standalone multi-line text editor component.
-pub struct Editor {
-    /// The raw text buffer (UTF-8).
-    pub input: String,
-    /// Byte-offset cursor position within `input`.
-    pub cursor_pos: usize,
-
-    // -- Bracketed paste
-    /// Monotonically increasing paste counter (for `[paste #N …]` markers).
+pub struct Editor<'a> {
+    pub textarea: TextArea<'a>,
     paste_counter: usize,
-    /// Stored paste buffers keyed by their marker ID.
     pub paste_buffers: Vec<PasteEntry>,
-
-    // -- Image paste
-    /// Monotonically increasing image counter (for `[image #N …]` placeholders).
     image_counter: usize,
-    /// Stored image data keyed by their placeholder ID.
     pub paste_images: Vec<ImageEntry>,
-
-    // -- Undo / redo
-    /// Snapshots of (input, cursor_pos) taken *before* each edit (max 100).
-    /// `undo()` pops the top and restores it.
-    undo_stack: VecDeque<(String, usize)>,
-    /// States saved by `undo()` so `redo()` can reapply them.
-    redo_stack: VecDeque<(String, usize)>,
-    /// Last action performed, used for undo coalescing.
-    pub last_action: EditorAction,
-
-    // -- Kill ring (readline-compatible)
-    /// Text last killed by Ctrl+K or Ctrl+U — yanked back by Ctrl+Y.
-    pub kill_ring: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EditorAction {
-    TypeWord,
-    /// Consecutive backspace presses — coalesced into one undo step.
-    DeleteBack,
-    /// Consecutive forward-delete presses — coalesced into one undo step.
-    DeleteForward,
-    Other,
-}
-
-/// Maximum number of paste lines shown verbatim before collapsing.
 const PASTE_COLLAPSE_THRESHOLD: usize = 10;
-/// Maximum number of paste characters shown verbatim before collapsing.
 const PASTE_CHAR_THRESHOLD: usize = 1000;
-/// Maximum entries kept in the undo / redo stacks.
-const UNDO_LIMIT: usize = 100;
 
-impl Default for Editor {
+impl Default for Editor<'static> {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl Editor {
+impl<'a> Editor<'a> {
     pub fn new() -> Self {
         Self {
-            input: String::new(),
-            cursor_pos: 0,
+            textarea: TextArea::default(),
             paste_counter: 0,
             paste_buffers: Vec::new(),
             image_counter: 0,
             paste_images: Vec::new(),
-            undo_stack: VecDeque::with_capacity(UNDO_LIMIT),
-            redo_stack: VecDeque::with_capacity(UNDO_LIMIT),
-            last_action: EditorAction::Other,
-            kill_ring: String::new(),
         }
     }
 
-    // -- Undo / redo
-
-    /// Save current `(input, cursor_pos)` to the undo stack **before** a
-    /// destructive edit.  Clears the redo stack (new edit invalidates
-    /// any undone future).  Silently caps the stack at `UNDO_LIMIT`.
-    pub fn snapshot(&mut self) {
-        if self.undo_stack.len() >= UNDO_LIMIT {
-            self.undo_stack.pop_front();
-        }
-        self.undo_stack
-            .push_back((self.input.clone(), self.cursor_pos));
-        self.redo_stack.clear();
+    pub fn text(&self) -> String {
+        self.textarea.lines().join("\n")
     }
 
-    /// Undo the last edit.  Returns `true` if a state was restored.
-    pub fn undo(&mut self) -> bool {
-        if let Some((input, pos)) = self.undo_stack.pop_back() {
-            // Save current state so redo() can reapply it.
-            if self.redo_stack.len() >= UNDO_LIMIT {
-                self.redo_stack.pop_front();
+    pub fn is_empty(&self) -> bool {
+        let lines = self.textarea.lines();
+        lines.is_empty() || (lines.len() == 1 && lines[0].is_empty())
+    }
+
+    pub fn set_text(&mut self, text: String) {
+        self.textarea = TextArea::from(text.lines().map(|s| s.to_string()));
+    }
+
+    pub fn cursor_pos(&self) -> usize {
+        let (row, col) = self.textarea.cursor();
+        let lines = self.textarea.lines();
+        let mut pos = 0;
+        for i in 0..row {
+            pos += lines[i].len() + 1; // +1 for newline
+        }
+        pos + col
+    }
+
+    pub fn set_cursor_pos(&mut self, pos: usize) {
+        let lines = self.textarea.lines();
+        let mut current_pos = 0;
+        for (row, line) in lines.iter().enumerate() {
+            let next_pos = current_pos + line.len() + 1;
+            if pos < next_pos {
+                self.textarea.move_cursor(tui_textarea::CursorMove::Jump(row as u16, (pos - current_pos) as u16));
+                return;
             }
-            self.redo_stack
-                .push_back((self.input.clone(), self.cursor_pos));
-            self.input = input;
-            self.cursor_pos = pos;
-            true
-        } else {
-            false
+            current_pos = next_pos;
+        }
+        if let Some(last_row) = lines.len().checked_sub(1) {
+            self.textarea.move_cursor(tui_textarea::CursorMove::Jump(last_row as u16, lines[last_row].len() as u16));
         }
     }
 
-    /// Redo the last undone edit.  Returns `true` if a state was reapplied.
-    pub fn redo(&mut self) -> bool {
-        if let Some((input, pos)) = self.redo_stack.pop_back() {
-            if self.undo_stack.len() >= UNDO_LIMIT {
-                self.undo_stack.pop_front();
-            }
-            self.undo_stack
-                .push_back((self.input.clone(), self.cursor_pos));
-            self.input = input;
-            self.cursor_pos = pos;
-            true
-        } else {
-            false
+    pub fn insert_str_at(&mut self, pos: usize, s: &str) {
+        let mut text = self.text();
+        text.insert_str(pos, s);
+        self.set_text(text);
+        self.set_cursor_pos(pos + s.len());
+    }
+
+    pub fn remove_char_at(&mut self, pos: usize) {
+        let mut text = self.text();
+        if pos < text.len() {
+            text.remove(pos);
+            self.set_text(text);
+            self.set_cursor_pos(pos);
         }
     }
 
-    // -- Insert / delete
-
-    /// Insert a character at the current cursor position.
-    pub fn insert_char(&mut self, c: char) {
-        if c.is_whitespace() || self.last_action != EditorAction::TypeWord {
-            self.snapshot();
-        }
-        self.last_action = EditorAction::TypeWord;
-        let pos = self.cursor_pos;
-        self.input.insert(pos, c);
-        self.cursor_pos = pos + c.len_utf8();
+    pub fn insert_char_at(&mut self, pos: usize, c: char) {
+        let mut text = self.text();
+        text.insert(pos, c);
+        self.set_text(text);
+        self.set_cursor_pos(pos + c.len_utf8());
     }
 
-    /// Insert a string at the current cursor position.
-    pub fn insert_str(&mut self, s: &str) {
-        if s.is_empty() {
-            return;
-        }
-        self.snapshot();
-        self.last_action = EditorAction::Other;
-        self.input.insert_str(self.cursor_pos, s);
-        self.cursor_pos += s.len();
-    }
-
-    /// Insert a newline at the current cursor position (delegates to `insert_char`).
-    pub fn insert_newline(&mut self) {
-        self.insert_char('\n');
-    }
-
-    /// Delete the character before the cursor (Backspace).
-    /// Returns `true` if a character was deleted.
-    pub fn delete_back(&mut self) -> bool {
-        if self.cursor_pos == 0 {
-            return false;
-        }
-        // Coalesce consecutive backspace presses into one undo step.
-        if self.last_action != EditorAction::DeleteBack {
-            self.snapshot();
-        }
-        self.last_action = EditorAction::DeleteBack;
-        let char_len = self.input[..self.cursor_pos]
-            .chars()
-            .last()
-            .map(|c| c.len_utf8())
-            .unwrap_or(1);
-        self.cursor_pos -= char_len;
-        self.input.remove(self.cursor_pos);
-        true
-    }
-
-    /// Delete the character at the cursor (Delete key).
-    /// Returns `true` if a character was deleted.
-    pub fn delete_forward(&mut self) -> bool {
-        if self.cursor_pos >= self.input.len() {
-            return false;
-        }
-        // Coalesce consecutive forward-delete presses into one undo step.
-        if self.last_action != EditorAction::DeleteForward {
-            self.snapshot();
-        }
-        self.last_action = EditorAction::DeleteForward;
-        self.input.remove(self.cursor_pos);
-        true
-    }
-
-    /// Delete from cursor to start of current line (Ctrl+U — readline semantics).
-    ///
-    /// Saves the deleted text to the kill ring.
-    /// For single-line input this is identical to `delete_to_buffer_start`.
-    /// For multiline input it only deletes back to the preceding `\n`.
-    pub fn delete_to_line_start(&mut self) {
-        if self.cursor_pos == 0 {
-            return;
-        }
-        let line_start = self.input[..self.cursor_pos]
-            .rfind('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        if line_start == self.cursor_pos {
-            return;
-        }
-        self.snapshot();
-        self.last_action = EditorAction::Other;
-        let killed: String = self.input[line_start..self.cursor_pos].to_string();
-        self.kill_ring = killed;
-        self.input.drain(line_start..self.cursor_pos);
-        self.cursor_pos = line_start;
-    }
-
-    /// Delete from cursor to end of current line (Ctrl+K — readline semantics).
-    ///
-    /// Stops at the next `\n`; if on the last line deletes to end of buffer.
-    /// Saves the deleted text to the kill ring.
-    pub fn delete_to_end(&mut self) {
-        let end = self.input[self.cursor_pos..]
-            .find('\n')
-            .map(|i| self.cursor_pos + i)
-            .unwrap_or(self.input.len());
-        if end == self.cursor_pos {
-            return;
-        }
-        self.snapshot();
-        self.last_action = EditorAction::Other;
-        let killed: String = self.input[self.cursor_pos..end].to_string();
-        self.kill_ring = killed;
-        self.input.drain(self.cursor_pos..end);
-    }
-
-    /// Yank (paste) the kill ring contents at the cursor (Ctrl+Y).
-    pub fn yank(&mut self) {
-        if self.kill_ring.is_empty() {
-            return;
-        }
-        let text = self.kill_ring.clone();
-        self.insert_str(&text);
-    }
-
-    /// Delete word backwards (Ctrl+W).
-    pub fn delete_word_back(&mut self) {
-        let end = self.cursor_pos;
-        if end == 0 {
-            return;
-        }
-        let start = self.input[..end]
-            .rfind(|c: char| !c.is_whitespace())
-            .and_then(|p| self.input[..p].rfind(char::is_whitespace).map(|q| q + 1))
-            .unwrap_or(0);
-        self.snapshot();
-        self.last_action = EditorAction::Other;
-        self.input.drain(start..end);
-        self.cursor_pos = start;
-    }
-
-    /// Delete word forwards (Alt+D — readline semantics).
-    ///
-    /// Deletes from the cursor to the end of the next word.
-    pub fn delete_word_forward(&mut self) {
-        let start = self.cursor_pos;
-        if start >= self.input.len() {
-            return;
-        }
-        let after = &self.input[start..];
-        // Skip leading whitespace, then consume the word.
-        let ws = after
-            .find(|c: char| !c.is_whitespace())
-            .unwrap_or(after.len());
-        let word_end = after[ws..]
-            .find(|c: char| c.is_whitespace())
-            .map(|i| ws + i)
-            .unwrap_or(after.len());
-        if word_end == 0 {
-            return;
-        }
-        self.snapshot();
-        self.last_action = EditorAction::Other;
-        self.input.drain(start..start + word_end);
-    }
-
-    // -- Cursor movement
-    // Cursor movements do NOT snapshot (they don't modify text).
-
-    /// Move cursor one character to the left.
-    pub fn move_left(&mut self) {
-        if self.cursor_pos > 0 {
-            self.cursor_pos -= self.input[..self.cursor_pos]
-                .chars()
-                .last()
-                .map(|c| c.len_utf8())
-                .unwrap_or(1);
-        }
-    }
-
-    /// Move cursor one character to the right.
-    pub fn move_right(&mut self) {
-        if self.cursor_pos < self.input.len() {
-            self.cursor_pos += self.input[self.cursor_pos..]
-                .chars()
-                .next()
-                .map(|c| c.len_utf8())
-                .unwrap_or(1);
-        }
-    }
-
-    /// Move cursor one word to the left (Alt+← / Ctrl+←).
-    ///
-    /// Skips trailing whitespace, then jumps to the start of the preceding word.
-    pub fn move_word_left(&mut self) {
-        if self.cursor_pos == 0 {
-            return;
-        }
-        let before = &self.input[..self.cursor_pos];
-        // Trim trailing whitespace, then find the last whitespace before the word.
-        let trimmed = before.trim_end_matches(|c: char| c.is_whitespace() && c != '\n');
-        let new_pos = if trimmed.is_empty() {
-            // Only whitespace before cursor; jump to 0 or previous newline.
-            before.rfind('\n').map(|i| i + 1).unwrap_or(0)
-        } else {
-            trimmed
-                .rfind(|c: char| c.is_whitespace())
-                .map(|i| i + 1)
-                .unwrap_or(0)
-        };
-        self.cursor_pos = new_pos;
-    }
-
-    /// Move cursor one word to the right (Alt+→ / Ctrl+→).
-    ///
-    /// Skips any leading whitespace at the cursor, then jumps past the next word.
-    pub fn move_word_right(&mut self) {
-        if self.cursor_pos >= self.input.len() {
-            return;
-        }
-        let after = &self.input[self.cursor_pos..];
-        // Skip current word chars, then skip whitespace.
-        let word_end = after
-            .find(|c: char| c.is_whitespace())
-            .unwrap_or(after.len());
-        let rest = &after[word_end..];
-        let ws_end = rest
-            .find(|c: char| !c.is_whitespace())
-            .unwrap_or(rest.len());
-        self.cursor_pos += word_end + ws_end;
-    }
-
-    /// Move cursor to the start of the current logical line (Home key).
-    ///
-    /// Stops at the character after the preceding `\n` (or byte 0 if on the
-    /// first line).  Use `move_buffer_start` for Ctrl+Home behaviour.
-    pub fn move_home(&mut self) {
-        self.cursor_pos = self.input[..self.cursor_pos]
-            .rfind('\n')
-            .map(|i| i + 1)
-            .unwrap_or(0);
-    }
-
-    /// Move cursor to the end of the current logical line (End key).
-    ///
-    /// Stops just before the next `\n` (or at buffer end if on the last line).
-    /// Use `move_buffer_end` for Ctrl+End behaviour.
-    pub fn move_end(&mut self) {
-        self.cursor_pos = self.input[self.cursor_pos..]
-            .find('\n')
-            .map(|i| self.cursor_pos + i)
-            .unwrap_or(self.input.len());
-    }
-
-    /// Move cursor to the very start of the buffer (Ctrl+Home / Ctrl+A).
-    pub fn move_buffer_start(&mut self) {
-        self.cursor_pos = 0;
-    }
-
-    /// Move cursor to the very end of the buffer (Ctrl+End / Ctrl+E).
-    pub fn move_buffer_end(&mut self) {
-        self.cursor_pos = self.input.len();
-    }
-
-    // -- Bulk operations
-
-    /// Clear the entire buffer and reset cursor.
-    /// Does NOT snapshot (used by submit / Ctrl+C — not undoable by design).
     pub fn clear(&mut self) {
-        self.input.clear();
-        self.cursor_pos = 0;
-        // Don't touch the undo/redo stacks: they survive a clear so the user
-        // can still undo within the same session window.
+        self.textarea = TextArea::default();
     }
 
-    /// Replace the buffer contents and move cursor to end.
-    /// Does NOT snapshot (used for history navigation).
-    pub fn set(&mut self, text: String) {
-        self.input = text;
-        self.cursor_pos = self.input.len();
+    pub fn snapshot(&mut self) {
+        // TextArea does its own undo/redo tracking
     }
 
-    // -- Bracketed paste
+    pub fn undo(&mut self) -> bool {
+        self.textarea.undo()
+    }
 
-    /// Handle a bracketed-paste event.
-    ///
-    /// If the pasted text is ≤ `PASTE_COLLAPSE_THRESHOLD` lines it is
-    /// inserted verbatim (via `insert_str`, which snapshots).  Otherwise
-    /// the full text is stored in `paste_buffers` and a compact marker
-    /// `[paste #N +M lines]` is inserted instead.
+    pub fn redo(&mut self) -> bool {
+        self.textarea.redo()
+    }
+
+    pub fn insert_char(&mut self, c: char) {
+        self.textarea.input(Input { key: Key::Char(c), ctrl: false, alt: false });
+    }
+
+    pub fn insert_str(&mut self, s: &str) {
+        self.textarea.insert_str(s);
+    }
+
+    pub fn insert_newline(&mut self) {
+        self.textarea.insert_newline();
+    }
+
+    pub fn delete_back(&mut self) -> bool {
+        self.textarea.delete_char()
+    }
+
+    pub fn delete_forward(&mut self) -> bool {
+        self.textarea.delete_next_char()
+    }
+
+    pub fn delete_to_line_start(&mut self) {
+        self.textarea.delete_line_by_head();
+    }
+
+    pub fn delete_to_end(&mut self) {
+        self.textarea.delete_line_by_end();
+    }
+
+    pub fn yank(&mut self) {}
+
+    pub fn delete_word_back(&mut self) {
+        self.textarea.delete_word();
+    }
+
+    pub fn delete_word_forward(&mut self) {
+        self.textarea.delete_next_word();
+    }
+
+    pub fn move_left(&mut self) {
+        self.textarea.move_cursor(tui_textarea::CursorMove::Back);
+    }
+
+    pub fn move_right(&mut self) {
+        self.textarea.move_cursor(tui_textarea::CursorMove::Forward);
+    }
+
+    pub fn move_word_left(&mut self) {
+        self.textarea.move_cursor(tui_textarea::CursorMove::WordBack);
+    }
+
+    pub fn move_word_right(&mut self) {
+        self.textarea.move_cursor(tui_textarea::CursorMove::WordForward);
+    }
+
+    pub fn move_home(&mut self) {
+        self.textarea.move_cursor(tui_textarea::CursorMove::Head);
+    }
+
+    pub fn move_end(&mut self) {
+        self.textarea.move_cursor(tui_textarea::CursorMove::End);
+    }
+
+    pub fn move_buffer_start(&mut self) {
+        self.textarea.move_cursor(tui_textarea::CursorMove::Top);
+    }
+
+    pub fn move_buffer_end(&mut self) {
+        self.textarea.move_cursor(tui_textarea::CursorMove::Bottom);
+    }
+
     pub fn handle_paste(&mut self, text: &str) {
-        let line_count = text.lines().count();
-        let char_count = text.chars().count();
-        if line_count <= PASTE_COLLAPSE_THRESHOLD && char_count <= PASTE_CHAR_THRESHOLD {
-            // Short paste — insert verbatim (snapshot happens inside insert_str).
-            self.insert_str(text);
-        } else {
-            // Long paste — collapse into a marker.
+        let lines: Vec<&str> = text.lines().collect();
+        if lines.len() > PASTE_COLLAPSE_THRESHOLD || text.len() > PASTE_CHAR_THRESHOLD {
             self.paste_counter += 1;
             let id = self.paste_counter;
             self.paste_buffers.push(PasteEntry {
                 id,
                 text: text.to_string(),
             });
-            let marker = if line_count > PASTE_COLLAPSE_THRESHOLD {
-                format!("[paste #{id} +{line_count} lines]")
-            } else {
-                format!("[paste #{id} {char_count} chars]")
-            };
-            self.insert_str(&marker); // snapshot happens inside insert_str
+            let marker = format!("[paste #{id}: {} lines]", lines.len());
+            self.insert_str(&marker);
+            self.insert_newline();
+        } else {
+            self.insert_str(text);
         }
     }
 
-    /// Expand all paste markers in the input buffer, replacing each
-    /// `[paste #N …]` token with the original pasted text.
-    /// Called just before submission — does NOT snapshot.
     pub fn expand_pastes(&mut self) {
-        for entry in &self.paste_buffers {
-            let marker = format!("[paste #{}", entry.id);
-            if let Some(start) = self.input.find(&marker)
-                && let Some(end) = self.input[start..].find(']')
-            {
-                self.input
-                    .replace_range(start..start + end + 1, &entry.text);
+        let mut text = self.text();
+        for paste in &self.paste_buffers {
+            let marker_prefix = format!("[paste #{}:", paste.id);
+            if let Some(start) = text.find(&marker_prefix) {
+                if let Some(end_offset) = text[start..].find(']') {
+                    let end = start + end_offset + 1;
+                    text.replace_range(start..end, &paste.text);
+                }
             }
         }
+        self.set_text(text);
         self.paste_buffers.clear();
-        self.cursor_pos = self.cursor_pos.min(self.input.len());
+        self.paste_counter = 0;
     }
 
-    // -- Image paste
-
-    /// Record a pasted image and insert a `[image #N: WxH]` placeholder at
-    /// the cursor.  The full image data is kept in `paste_images` and
-    /// extracted by `drain_images()` just before the message is submitted.
     pub fn handle_image_paste(&mut self, media_type: &str, data: String, width: u32, height: u32) {
         self.image_counter += 1;
         let id = self.image_counter;
-        let placeholder = format!("[image #{id}: {width}×{height}]");
         self.paste_images.push(ImageEntry {
             id,
             media_type: media_type.to_string(),
@@ -520,327 +244,43 @@ impl Editor {
             width,
             height,
         });
-        self.insert_str(&placeholder);
+        let marker = format!("[image #{id}: {width}x{height}]");
+        self.insert_str(&marker);
+        self.insert_newline();
     }
 
-    /// Remove all stored images from the buffer and return them.
-    ///
-    /// Also strips the placeholder tokens from `input` so the LLM sees clean
-    /// text alongside the separate image attachments.
-    /// Called just before submission — does NOT snapshot.
     pub fn drain_images(&mut self) -> Vec<ImageEntry> {
-        for entry in &self.paste_images {
-            let placeholder = format!("[image #{}:", entry.id);
-            if let Some(start) = self.input.find(&placeholder)
-                && let Some(end) = self.input[start..].find(']')
-            {
-                self.input.drain(start..start + end + 1);
-                self.cursor_pos = self.cursor_pos.min(self.input.len());
+        let mut extracted = Vec::new();
+        let mut text = self.text();
+        let current_images = std::mem::take(&mut self.paste_images);
+        
+        for img in current_images {
+            let marker_prefix = format!("[image #{}:", img.id);
+            if text.contains(&marker_prefix) {
+                if let Some(start) = text.find(&marker_prefix) {
+                    if let Some(end_offset) = text[start..].find(']') {
+                        let end = start + end_offset + 1;
+                        text.replace_range(start..end, "");
+                    }
+                }
+                extracted.push(img);
             }
         }
-        std::mem::take(&mut self.paste_images)
+        self.set_text(text);
+        self.image_counter = 0;
+        extracted
     }
 
-    // -- Input-mode detection
-
-    /// Detect the semantic mode of the current buffer based on its prefix.
     pub fn detect_mode(&self) -> InputMode {
-        let t = self.input.trim_start();
-        if t.starts_with("!!") {
+        let text = self.text();
+        if text.starts_with("!!") {
             InputMode::BashCommand { silent: true }
-        } else if t.starts_with('!') {
+        } else if text.starts_with('!') {
             InputMode::BashCommand { silent: false }
-        } else if t.starts_with('/') {
+        } else if text.starts_with('/') {
             InputMode::SlashCommand
         } else {
             InputMode::Regular
         }
     }
 }
-
-// -- Component impl
-
-impl Component for Editor {
-    /// Render the editor as a single-line (or multi-line) input field.
-    ///
-    /// Returns the visible text split by `\n`, each line truncated to `width`.
-    /// A reverse-video block cursor is rendered at `cursor_pos`.
-    fn render(&self, width: u16) -> Vec<RenderedLine> {
-        let w = width as usize;
-        if w == 0 {
-            return vec![String::new()];
-        }
-
-        // Build the display string with a visible cursor marker.
-        let before = &self.input[..self.cursor_pos.min(self.input.len())];
-        let at_cursor = self.input[self.cursor_pos..].chars().next().unwrap_or(' ');
-        let after_start = self.cursor_pos
-            + at_cursor
-                .len_utf8()
-                .min(self.input.len().saturating_sub(self.cursor_pos));
-        let after = &self.input[after_start..];
-        let display = format!("{before}\x1b[7m{at_cursor}\x1b[27m{after}");
-
-        // Split on newlines and truncate each visual line to `width`.
-        display
-            .split('\n')
-            .map(|line| {
-                let visible: String = line.chars().take(w).collect();
-                visible
-            })
-            .collect()
-    }
-
-    /// Handle a key event.  Returns `true` for events consumed here,
-    /// `false` for events that should bubble up to `TuiApp`.
-    ///
-    /// Note: `TuiApp::handle_key_input` also dispatches to Editor methods
-    /// directly (for UI-coupled keys).  This method covers the pure-editing
-    /// subset and is useful for testing and future refactoring.
-    fn handle_input(&mut self, key: KeyEvent) -> bool {
-        match (key.code, key.modifiers) {
-            // -- Text editing (consumed)
-            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                self.delete_to_line_start();
-                true
-            }
-            (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
-                self.delete_to_end();
-                true
-            }
-            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
-                self.delete_word_back();
-                true
-            }
-            // Alt+D — delete word forward (readline standard)
-            (KeyCode::Char('d'), KeyModifiers::ALT) => {
-                self.delete_word_forward();
-                true
-            }
-            // Ctrl+Y — yank (readline standard; replaces old redo binding)
-            (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
-                self.yank();
-                true
-            }
-            (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
-                self.undo();
-                true
-            }
-            // Ctrl+Shift+Z — redo (standard GUI shortcut)
-            (KeyCode::Char('Z'), m) if m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
-                self.redo();
-                true
-            }
-            // Ctrl+A / Ctrl+E — buffer start / end (readline standard)
-            (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
-                self.move_buffer_start();
-                true
-            }
-            (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
-                self.move_buffer_end();
-                true
-            }
-            // Home / End — current line start / end
-            (KeyCode::Home, _) => {
-                self.move_home();
-                true
-            }
-            (KeyCode::End, _) => {
-                self.move_end();
-                true
-            }
-            // Word navigation (Alt+Arrow or Ctrl+Arrow)
-            (KeyCode::Left, m) if m.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
-                self.move_word_left();
-                true
-            }
-            (KeyCode::Right, m) if m.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
-                self.move_word_right();
-                true
-            }
-            (KeyCode::Left, _) => {
-                self.move_left();
-                true
-            }
-            (KeyCode::Right, _) => {
-                self.move_right();
-                true
-            }
-            (KeyCode::Backspace, _) => {
-                self.delete_back();
-                true
-            }
-            (KeyCode::Delete, _) => {
-                self.delete_forward();
-                true
-            }
-            (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
-                self.insert_char(c);
-                true
-            }
-
-            // -- Not consumed — bubble up to TuiApp
-            _ => false,
-        }
-    }
-
-    fn is_dirty(&self) -> bool {
-        true
-    }
-}
-
-// region:    --- Tests
-
-#[cfg(test)]
-mod tests {
-    #[allow(unused)]
-    type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
-
-    use super::*;
-
-    #[test]
-    fn test_editor_insert_and_delete() {
-        // -- Setup & Fixtures
-        let mut editor = Editor::new();
-
-        // -- Exec & Check
-        editor.insert_str("hello");
-        assert_eq!(editor.input, "hello");
-        assert_eq!(editor.cursor_pos, 5);
-
-        editor.delete_back();
-        assert_eq!(editor.input, "hell");
-        assert_eq!(editor.cursor_pos, 4);
-
-        editor.move_left();
-        editor.delete_forward();
-        assert_eq!(editor.input, "hel");
-        assert_eq!(editor.cursor_pos, 3);
-    }
-
-    #[test]
-    fn test_editor_undo_redo() {
-        // -- Setup & Fixtures
-        let mut editor = Editor::new();
-        editor.insert_str("hello");
-        assert_eq!(editor.input, "hello");
-
-        // -- Exec & Check
-        editor.undo();
-        assert_eq!(editor.input, "");
-
-        editor.redo();
-        assert_eq!(editor.input, "hello");
-    }
-
-    #[test]
-    fn test_editor_word_movement() {
-        // -- Setup & Fixtures
-        let mut editor = Editor::new();
-        editor.insert_str("one two three");
-
-        // -- Exec & Check
-        editor.move_word_left();
-        assert_eq!(editor.cursor_pos, 8);
-
-        editor.move_word_left();
-        assert_eq!(editor.cursor_pos, 4);
-
-        editor.move_word_right();
-        assert_eq!(editor.cursor_pos, 8);
-    }
-
-    #[test]
-    fn test_editor_delete_to_end() {
-        // -- Setup & Fixtures
-        let mut editor = Editor::new();
-        editor.insert_str("hello world\nnewline");
-        editor.cursor_pos = 5;
-
-        // -- Exec
-        editor.delete_to_end();
-
-        // -- Check
-        assert_eq!(editor.input, "hello\nnewline");
-
-        editor.undo();
-        assert_eq!(editor.input, "hello world\nnewline");
-    }
-
-    #[test]
-    fn test_delete_coalescing() {
-        // Consecutive delete_back presses should produce ONE undo step.
-        let mut editor = Editor::new();
-        editor.insert_str("hello");
-        // Delete 3 chars in a row — should be one undo step.
-        editor.delete_back();
-        editor.delete_back();
-        editor.delete_back();
-        assert_eq!(editor.input, "he");
-        editor.undo();
-        // One undo restores all 3 deleted chars.
-        assert_eq!(editor.input, "hello");
-    }
-
-    #[test]
-    fn test_kill_ring_and_yank() {
-        let mut editor = Editor::new();
-        editor.insert_str("hello world");
-        editor.cursor_pos = 5; // after "hello"
-        // Ctrl+K kills " world" → kill ring
-        editor.delete_to_end();
-        assert_eq!(editor.input, "hello");
-        assert_eq!(editor.kill_ring, " world");
-        // Ctrl+Y yanks it back
-        editor.yank();
-        assert_eq!(editor.input, "hello world");
-    }
-
-    #[test]
-    fn test_delete_to_line_start() {
-        // Ctrl+U should only delete to the start of the current line.
-        let mut editor = Editor::new();
-        editor.insert_str("first\nsecond");
-        // cursor at end of "second"
-        editor.delete_to_line_start();
-        assert_eq!(editor.input, "first\n");
-        assert_eq!(editor.kill_ring, "second");
-    }
-
-    #[test]
-    fn test_home_end_current_line() {
-        // Home/End should move to current line boundaries, not buffer edges.
-        let mut editor = Editor::new();
-        editor.insert_str("line one\nline two");
-        // cursor at end of "line two" (buffer end)
-        editor.move_home();
-        // Should be at start of "line two" (byte 9)
-        assert_eq!(editor.cursor_pos, 9);
-        editor.move_end();
-        // Should be at end of "line two" (buffer end = 17)
-        assert_eq!(editor.cursor_pos, 17);
-    }
-
-    #[test]
-    fn test_ctrl_a_e_buffer_edges() {
-        // Ctrl+A/Ctrl+E should still jump to buffer start/end.
-        let mut editor = Editor::new();
-        editor.insert_str("line one\nline two");
-        editor.cursor_pos = 9; // start of second line
-        editor.move_buffer_start();
-        assert_eq!(editor.cursor_pos, 0);
-        editor.move_buffer_end();
-        assert_eq!(editor.cursor_pos, 17);
-    }
-
-    #[test]
-    fn test_delete_word_forward() {
-        let mut editor = Editor::new();
-        editor.insert_str("hello world");
-        editor.cursor_pos = 0;
-        editor.delete_word_forward();
-        assert_eq!(editor.input, " world");
-    }
-}
-
-// endregion: --- Tests

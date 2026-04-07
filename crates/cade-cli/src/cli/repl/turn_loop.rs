@@ -369,7 +369,7 @@ impl Repl {
                                                         if m == KeyModifiers::CONTROL =>
                                                     {
                                                         app.editor.expand_pastes();
-                                                        let msg = app.editor.input.trim().to_string();
+                                                        let msg = app.editor.text().trim().to_string();
                                                         if !msg.is_empty() {
                                                             let now_ms = std::time::SystemTime::now()
                                                                 .duration_since(std::time::UNIX_EPOCH)
@@ -382,8 +382,8 @@ impl Repl {
                                                             if !post_modal {
                                                                 tick_queued_followup.lock().push_back(msg);
                                                                 app.queued_count = tick_queued_followup.lock().len();
-                                                                app.editor.input.clear();
-                                                                app.editor.cursor_pos = 0;
+                                                                app.editor.clear();
+                                                                app.editor.set_cursor_pos(0);
                                                                 app.set_last_status(None);
                                                                 let _ = app.draw();
                                                             }
@@ -396,7 +396,7 @@ impl Repl {
                                                         if m == KeyModifiers::NONE =>
                                                     {
                                                         app.editor.expand_pastes();
-                                                        let msg = app.editor.input.trim().to_string();
+                                                        let msg = app.editor.text().trim().to_string();
                                                         if !msg.is_empty() {
                                                             let now_ms = std::time::SystemTime::now()
                                                                 .duration_since(std::time::UNIX_EPOCH)
@@ -409,8 +409,8 @@ impl Repl {
                                                             if !post_modal {
                                                                 tick_queued_followup.lock().push_back(msg);
                                                                 app.queued_count = tick_queued_followup.lock().len();
-                                                                app.editor.input.clear();
-                                                                app.editor.cursor_pos = 0;
+                                                                app.editor.clear();
+                                                                app.editor.set_cursor_pos(0);
                                                                 app.set_last_status(None);
                                                                 let _ = app.draw();
                                                             }
@@ -421,9 +421,9 @@ impl Repl {
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::SHIFT =>
                                                     {
-                                                        let pos = app.editor.cursor_pos;
-                                                        app.editor.input.insert(pos, '\n');
-                                                        app.editor.cursor_pos = pos + 1;
+                                                        let pos = app.editor.cursor_pos();
+                                                        app.editor.insert_char_at(pos, '\n');
+                                                        app.editor.set_cursor_pos(pos + 1);
                                                         let _ = app.draw();
                                                     }
                                                     // Alt+Enter: queue as follow-up without
@@ -433,12 +433,12 @@ impl Repl {
                                                         || m == (KeyModifiers::SHIFT | KeyModifiers::ALT) =>
                                                     {
                                                         app.editor.expand_pastes();
-                                                        let msg = app.editor.input.trim().to_string();
+                                                        let msg = app.editor.text().trim().to_string();
                                                         if !msg.is_empty() {
                                                             tick_queued_followup.lock().push_back(msg);
                                                             app.queued_count = tick_queued_followup.lock().len();
-                                                            app.editor.input.clear();
-                                                            app.editor.cursor_pos = 0;
+                                                            app.editor.clear();
+                                                            app.editor.set_cursor_pos(0);
                                                             let _ = app.draw();
                                                         }
                                                     }
@@ -447,22 +447,27 @@ impl Repl {
                                                         if m == KeyModifiers::NONE
                                                         || m == KeyModifiers::SHIFT =>
                                                     {
-                                                        let pos = app.editor.cursor_pos;
-                                                        app.editor.input.insert(pos, c);
-                                                        app.editor.cursor_pos = pos + c.len_utf8();
+                                                        let pos = app.editor.cursor_pos();
+                                                        app.editor.insert_char_at(pos, c);
+                                                        app.editor.set_cursor_pos(pos + c.len_utf8());
                                                         let _ = app.draw();
                                                     }
                                                     // Backspace — remove char before cursor.
                                                     (KeyCode::Backspace, _) => {
-                                                        let cp = app.editor.cursor_pos;
+                                                        let cp = app.editor.cursor_pos();
                                                         if cp > 0 {
-                                                            let new_pos = app.editor.input[..cp]
+                                                            let new_pos = app.editor.text()[..cp]
                                                                 .char_indices()
                                                                 .next_back()
                                                                 .map(|(i, _)| i)
                                                                 .unwrap_or(0);
-                                                            app.editor.input.drain(new_pos..cp);
-                                                            app.editor.cursor_pos = new_pos;
+                                                            {
+                                                            let drain_end = new_pos..cp;
+                                                            let mut text = app.editor.text();
+                                                            text.drain(drain_end);
+                                                            app.editor.set_text(text);
+                                                        }
+                                                            app.editor.set_cursor_pos(new_pos);
                                                             let _ = app.draw();
                                                         }
                                                     }
@@ -494,13 +499,13 @@ impl Repl {
                                                         let esc_post_modal = esc_last_close > 0
                                                             && esc_now_ms.saturating_sub(esc_last_close) < 500;
                                                         if !esc_post_modal && tick_start.elapsed().as_millis() >= 200
-                                                            && !app.editor.input.is_empty() {
+                                                            && !app.editor.is_empty() {
                                                                 // Clear typed input rather than
                                                                 // cancelling — lets user discard
                                                                 // a queued message without stopping
                                                                 // the agent.
-                                                                app.editor.input.clear();
-                                                                app.editor.cursor_pos = 0;
+                                                                app.editor.clear();
+                                                                app.editor.set_cursor_pos(0);
                                                                 app.set_last_status(None);
                                                                 let _ = app.draw();
                                                             }
@@ -524,18 +529,18 @@ impl Repl {
                                                             && cc_now_ms.saturating_sub(cc_last_close) < 500;
                                                         if !cc_post_modal && tick_start.elapsed().as_millis() >= 200 {
                                                             app.editor.expand_pastes();
-                                                            let msg = app.editor.input.trim().to_string();
+                                                            let msg = app.editor.text().trim().to_string();
                                                             if !msg.is_empty() {
                                                                 // Steering: cancel current turn and
                                                                 // run this message immediately after.
                                                                 *tick_queued_steering.lock() = Some(msg);
-                                                                app.editor.input.clear();
-                                                                app.editor.cursor_pos = 0;
+                                                                app.editor.clear();
+                                                                app.editor.set_cursor_pos(0);
                                                                 app.set_last_status(None);
                                                                 let _ = app.draw();
                                                             } else {
-                                                                app.editor.input.clear();
-                                                                app.editor.cursor_pos = 0;
+                                                                app.editor.clear();
+                                                                app.editor.set_cursor_pos(0);
                                                                 app.set_last_status(None);
                                                                 let _ = app.draw();
                                                             }

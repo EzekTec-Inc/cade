@@ -833,11 +833,12 @@ impl Repl {
                                     }
                                 });
                                 let mut app = self.app.lock();
-                                app.editor.input = format!(
+                                let text = format!(
                                     "/mcp-save\n{}",
                                     serde_json::to_string_pretty(&tmpl).unwrap()
                                 );
-                                app.editor.cursor_pos = app.editor.input.len();
+                                app.editor.set_text(text.clone());
+                                app.editor.set_cursor_pos(text.len());
                                 app.push_silent(crate::ui::RenderLine::SystemMsg(
                                     "  Edit the JSON below and hit Enter to create/save."
                                         .to_string(),
@@ -854,11 +855,12 @@ impl Repl {
                                     .unwrap_or_default();
                                 let tmpl = serde_json::json!({ key: config });
                                 let mut app = self.app.lock();
-                                app.editor.input = format!(
+                                let text = format!(
                                     "/mcp-save\n{}",
                                     serde_json::to_string_pretty(&tmpl).unwrap()
                                 );
-                                app.editor.cursor_pos = app.editor.input.len();
+                                app.editor.set_text(text.clone());
+                                app.editor.set_cursor_pos(text.len());
                                 app.push_silent(crate::ui::RenderLine::SystemMsg(
                                     "  Edit the JSON below and hit Enter to save.".to_string(),
                                 ));
