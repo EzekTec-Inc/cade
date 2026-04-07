@@ -1627,6 +1627,70 @@ impl Repl {
 
     /// Check if a tool is a native intercept (requires &self). If so, execute
     /// it immediately and return the result. Returns None for generic tools.
+
+    async fn sync_plan_tools(&self, enter_plan: bool) {
+        let agent_id = self.agent_id.lock().clone();
+        
+        let write_tools = ["write_file", "edit_file", "apply_patch", "bash", "desktop_control", "desktop_screenshot"];
+        
+        if enter_plan {
+            // Strip write tools
+            if let Ok(attached) = self.client.get_agent_tools(&agent_id).await {
+                let mut new_ids = Vec::new();
+                for (id, name) in attached {
+                    if !write_tools.contains(&name.as_str()) {
+                        new_ids.push(id);
+                    }
+                }
+                let _ = self.client.attach_agent_tools(&agent_id, &new_ids).await;
+            }
+        } else {
+            // Restore write tools. To do this robustly without caching, we re-link all tools based on current caps.
+            // However, Repl does not know the current Toolset easily.
+            // Let's just fetch all tools from the server and link those that are write_tools (or we just link everything that should be there).
+            // Actually, an easier way is to just fetch all tools from the server and filter by what should be enabled.
+            // For simplicity, let's fetch all tools from the server, and if they match a known native/meta tool, or MCP, we link them.
+            // Actually, we can just do:
+            if let Ok(all_tools) = self.client.list_tools().await {
+                let mut new_ids = Vec::new();
+                for t in all_tools {
+                    // For now, let's just add everything back that isn't a known tool from a disabled capability.
+                    // This might be slightly loose but works for re-attaching.
+                    // To be safe, we only add back the write tools that exist on the server.
+                    // Wait, what if the write tool belongs to a capability that is disabled?
+                    // `write_file`, `edit_file`, `apply_patch`, `bash` are CORE tools, so they are always enabled.
+                    // `desktop_control`, `desktop_screenshot` are DESKTOP capability.
+                    // We can just add them back if their capability is enabled.
+                    
+                    let is_write_tool = write_tools.contains(&t.name.as_str());
+                    if !is_write_tool {
+                        new_ids.push(t.id);
+                    } else {
+                        // It is a write tool. Should we add it?
+                        let caps = {
+                            let s = self.settings.lock();
+                            cade_core::capabilities::resolve_capabilities(
+                                &s.global().enable_capabilities,
+                                &s.global().disable_capabilities,
+                            )
+                        };
+                        let allowed = match t.name.as_str() {
+                            "desktop_control" | "desktop_screenshot" => caps.is_enabled(cade_core::capabilities::Capability::Desktop),
+                            _ => true, // core write tools
+                        };
+                        if allowed {
+                            new_ids.push(t.id);
+                        }
+                    }
+                }
+                
+                // Now we also need to get MCP tools and ensure they are attached. 
+                // MCP tools are fetched via list_tools() too since they are registered on the server.
+                let _ = self.client.attach_agent_tools(&agent_id, &new_ids).await;
+            }
+        }
+    }
+
     pub(crate) async fn try_native_intercept(
         &self,
         call_id: &str,
@@ -1654,6 +1718,7 @@ impl Repl {
                     .set_mode(cade_core::permissions::PermissionMode::Plan);
                 let mut app = self.app.lock();
                 app.update_mode(cade_core::permissions::PermissionMode::Plan);
+                self.sync_plan_tools(true).await;
                 Some(Ok(cade_agent::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: tool_name.to_string(),
@@ -1681,6 +1746,7 @@ impl Repl {
                     .set_mode(cade_core::permissions::PermissionMode::Default);
                 let mut app = self.app.lock();
                 app.update_mode(cade_core::permissions::PermissionMode::Default);
+                self.sync_plan_tools(false).await;
                 Some(Ok(cade_agent::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: tool_name.to_string(),

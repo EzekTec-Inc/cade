@@ -144,66 +144,16 @@ impl Default for CapabilitySet {
 
 // endregion: --- CapabilitySet
 
-// region:    --- Profile
-
-/// Pre-defined capability profiles.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Profile {
-    /// Minimal: core coding tools + memory + checkpoints only.
-    Core,
-    /// Core + agentic.
-    Pro,
-    /// Everything enabled.
-    Full,
-}
-
-impl Profile {
-    pub fn name(&self) -> &'static str {
-        match self {
-            Profile::Core => "core",
-            Profile::Pro => "pro",
-            Profile::Full => "full",
-        }
-    }
-
-    pub fn from_name(name: &str) -> Option<Profile> {
-        match name.to_lowercase().as_str() {
-            "core" | "lean" => Some(Profile::Core),
-            "pro" => Some(Profile::Pro),
-            "full" => Some(Profile::Full),
-            _ => None,
-        }
-    }
-
-    /// Resolve the capability set for this profile.
-    pub fn capabilities(&self) -> CapabilitySet {
-        match self {
-            Profile::Core => CapabilitySet::core(),
-            Profile::Pro => CapabilitySet::from_caps([Capability::Agentic]),
-            Profile::Full => CapabilitySet::full(),
-        }
-    }
-}
-
-impl Default for Profile {
-    /// Default profile is Full (backward compatible).
-    fn default() -> Self {
-        Profile::Full
-    }
-}
-
-// endregion: --- Profile
 
 // region:    --- Resolve
 
 /// Resolve the effective capability set from a profile + optional user
 /// overrides (enable/disable lists).
 pub fn resolve_capabilities(
-    profile: Profile,
     enable: &[String],
     disable: &[String],
 ) -> CapabilitySet {
-    let mut caps = profile.capabilities();
+    let mut caps = CapabilitySet::full();
     for name in enable {
         if let Some(cap) = Capability::from_name(name) {
             caps.enable(cap);
@@ -226,52 +176,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn core_profile_has_no_optional_caps() {
-        let caps = Profile::Core.capabilities();
-        assert!(caps.is_empty());
-        assert!(!caps.is_enabled(Capability::Desktop));
-        assert!(!caps.is_enabled(Capability::Agentic));
-    }
-
-    #[test]
-    fn pro_profile_has_agentic() {
-        let caps = Profile::Pro.capabilities();
-        assert!(caps.is_enabled(Capability::Agentic));
-        assert!(!caps.is_enabled(Capability::Desktop));
-        assert!(!caps.is_enabled(Capability::Web));
-        assert!(!caps.is_enabled(Capability::Mcp));
-    }
-
-    #[test]
-    fn full_profile_has_everything() {
-        let caps = Profile::Full.capabilities();
-        for cap in Capability::ALL {
-            assert!(caps.is_enabled(*cap), "Full should enable {:?}", cap);
-        }
-    }
-
-    #[test]
     fn resolve_with_overrides() {
         let caps = resolve_capabilities(
-            Profile::Core,
             &["web".to_string(), "desktop".to_string()],
             &[],
         );
         assert!(caps.is_enabled(Capability::Web));
         assert!(caps.is_enabled(Capability::Desktop));
-        assert!(!caps.is_enabled(Capability::Agentic));
     }
 
     #[test]
     fn resolve_disable_overrides_profile() {
         let caps = resolve_capabilities(
-            Profile::Full,
             &[],
             &["desktop".to_string(), "tray".to_string()],
         );
         assert!(!caps.is_enabled(Capability::Desktop));
         assert!(!caps.is_enabled(Capability::Tray));
-        assert!(caps.is_enabled(Capability::Agentic));
     }
 
     #[test]
@@ -280,15 +201,6 @@ mod tests {
             let name = cap.name();
             let parsed = Capability::from_name(name);
             assert_eq!(parsed, Some(*cap), "roundtrip failed for {name}");
-        }
-    }
-
-    #[test]
-    fn profile_roundtrip_names() {
-        for p in [Profile::Core, Profile::Pro, Profile::Full] {
-            let name = p.name();
-            let parsed = Profile::from_name(name);
-            assert_eq!(parsed, Some(p), "roundtrip failed for {name}");
         }
     }
 }
