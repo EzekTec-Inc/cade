@@ -71,9 +71,7 @@ const CONTENT_PAD_BOT: u16 = 1;
 /// Braille spinner frames for thinking animation.
 const BRAILLE: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const DOTS: &[&str] = &["⠁", "⠂", "⠄", "⠐", "⠠", "⠐", "⠄", "⠂"];
-/// R-01: minimum interval between consecutive draws during high-frequency
-/// updates (streaming tokens, live bash output).  ~60 FPS target.
-const DRAW_MIN_INTERVAL: std::time::Duration = std::time::Duration::from_millis(16);
+
 /// Responsive layout breakpoint for showing the right sidebar.
 const SIDEBAR_BREAKPOINT: u16 = 110;
 /// Target width for the informational sidebar on wide terminals.
@@ -841,9 +839,6 @@ impl TuiApp {
     /// high-frequency callers (`push_streaming_chunk`, `append_live_output_line`).
     pub fn draw_throttled(&mut self) -> Result<()> {
         self.draw_dirty = true;
-        if self.last_draw_at.elapsed() >= DRAW_MIN_INTERVAL {
-            return self.draw();
-        }
         Ok(())
     }
 
@@ -2158,7 +2153,7 @@ fn render_frame(
             Constraint::Length(1),              // [4] top separator
             Constraint::Length(input_rows),     // [5] input or question
             Constraint::Length(1),              // [6] bottom separator
-            Constraint::Length(1),              // [7] footer
+            Constraint::Length(1 + footer_extra_h), // [7] footer
         ])
         .split(main_area)
     } else {
@@ -2172,7 +2167,7 @@ fn render_frame(
             Constraint::Length(1),              // [4] top separator
             Constraint::Length(input_rows),     // [5] input or question
             Constraint::Length(1),              // [6] bottom separator
-            Constraint::Length(1),              // [7] footer
+            Constraint::Length(1 + footer_extra_h), // [7] footer
         ])
         .split(main_area)
     };

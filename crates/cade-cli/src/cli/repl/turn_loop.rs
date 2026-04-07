@@ -136,7 +136,7 @@ impl Repl {
         let _bar_text = self.app.lock().start_thinking("Reaching into memory & synthesizing rules...");
         let tick_handle = tokio::spawn(async move {
             loop {
-                tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+                tokio::time::sleep(tokio::time::Duration::from_millis(16)).await;
                 if let Some(mut app) = tick_app.try_lock() {
                     let _ = app.draw();
                 }
@@ -298,7 +298,7 @@ impl Repl {
             let mut reader = EventStream::new();
             loop {
                 tokio::select! {
-                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(100)) => {
+                    _ = tokio::time::sleep(tokio::time::Duration::from_millis(16)) => {
                         // Update assessing text once per second
                         let secs = tick_start.elapsed().as_secs();
                         let toks = tick_tokens.load(Ordering::SeqCst).saturating_sub(tick_base);

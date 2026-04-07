@@ -1,6 +1,3 @@
-use super::component::{Component, RenderedLine};
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use std::collections::VecDeque;
 use tui_textarea::{TextArea, Input, Key};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
