@@ -9,7 +9,7 @@ own server, requiring no external platform.
 
 ## Workspace Layout
 
-CADE is a Cargo workspace with twelve independent crates plus a root package that
+CADE is a Cargo workspace with ten independent crates plus a root package that
 owns the two binaries (`cade` and `cade-server`).
 
 ```
@@ -24,12 +24,10 @@ CADE/
 │   ├── cade-agent/         # Client, tools, subagents
 │   ├── cade-ai/            # LLM providers & model registry
 │   ├── cade-cli/           # CLI orchestrator, headless mode
-│   ├── cade-codeintel/     # Code intelligence tools
 │   ├── cade-core/          # Shared types, toolsets, hooks
 │   ├── cade-desktop/       # Desktop extensions (xcap, xdotool)
 │   ├── cade-mcp/           # MCP client integration
 │   ├── cade-plugin/        # WASM/dylib plugin system
-│   ├── cade-reranker/      # Intelligent Tool Selection (ITS) reranking
 │   ├── cade-sdk/           # Developer SDK
 │   ├── cade-server/        # HTTP API + SQLite storage
 │   ├── cade-tui/           # Ratatui rendering engine
@@ -44,8 +42,7 @@ cade-core       (standalone — permissions, settings, skills, hooks, toolsets)
 cade-ai         (standalone — LLM providers, registry, retry)
 cade-desktop    (standalone — screen capture, window control, notifications, tray)
 
-cade-reranker   → cade-core, cade-ai
-cade-server     → cade-core, cade-ai, cade-reranker
+cade-server     → cade-core, cade-ai
 cade-agent      → cade-core, cade-desktop
 cade-cli        → cade-core, cade-agent, cade-ai
 
@@ -84,17 +81,6 @@ LLM provider abstraction and model routing. No crate dependencies.
 | `gemini.rs` | Google Gemini provider (thought signatures, vision) |
 | `ollama.rs` | Local Ollama provider (delegates to OpenAI-compatible API) |
 | `registry.rs` | Dynamic model pricing registry (`ModelRegistry`) |
-
-### `cade-reranker`
-
-Intelligent Tool Selection (ITS) and context filtering. Depends on `cade-core` and `cade-ai`.
-
-| Module | Purpose |
-|--------|---------|
-| `reranker.rs` | Core reranking logic, `ToolDocument`, and budget calculation |
-| `local.rs` | Local ONNX cross-encoder inference (`ms-marco-MiniLM-L-6-v2`) |
-| `cloud.rs` | Cloud reranker API clients (Cohere, Jina, Voyage) |
-| `config.rs` | Reranker configuration and protected tool definitions |
 
 ### `cade-desktop`
 
@@ -217,7 +203,6 @@ CADE organizes optional features into **capability packs** controlled by
 | Capability | Description |
 |---|---|
 | `agentic` | Subagents, agent messaging, reflection, artifacts |
-| `codeintel` | Tree-sitter indexing, symbol search, references |
 | `desktop` | Screenshots, window control, notifications, tray |
 | `web` | Web search, fetch docs, browser screenshot |
 | `mcp` | MCP server management and external tools |
@@ -229,7 +214,7 @@ CADE organizes optional features into **capability packs** controlled by
 ### Profiles
 
 - **Core** — coding tools + memory + checkpoints
-- **Pro** — Core + agentic + codeintel
+- **Pro** — Core + agentic
 - **Full** — everything (default)
 
 ### Resolution

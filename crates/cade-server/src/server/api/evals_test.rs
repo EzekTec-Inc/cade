@@ -58,8 +58,6 @@ async fn test_db_lock_poisoning_yields_500() {
         rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
         memory_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        #[cfg(feature = "reranker")]
-        tool_reranker: None,
     };
 
     // 3. Call the handler directly

@@ -504,7 +504,6 @@ crates/
 │   └── cli/, ui/
 ├── cade-mcp/                   # MCP server integration
 ├── cade-web/                   # Web search and scraping capabilities
-├── cade-codeintel/             # Local code indexing and intelligence
 ├── cade-tui/                   # Standalone TUI component library
 ├── cade-plugin/                # Plugin loading and manifests
 └── cade-sdk/                   # Rust SDK for programmatic agent control

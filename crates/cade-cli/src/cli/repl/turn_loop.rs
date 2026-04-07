@@ -1975,7 +1975,7 @@ impl Repl {
             return result;
         }
 
-        // Try ToolRuntime first (handles memory, skills, checkpoints, web, codeintel, etc.).
+        // Try ToolRuntime first (handles memory, skills, checkpoints, web, etc.).
         // Fall back to native dispatch / MCP for tools ToolRuntime does not handle.
         const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
         let mut result = match tokio::time::timeout(

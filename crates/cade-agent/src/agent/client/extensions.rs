@@ -21,7 +21,7 @@ impl CadeClient {
         Ok(resp.json::<ToolDef>().await?)
     }
 
-    // -- Raw HTTP helpers for extension tools (codeintel, etc.)
+    // -- Raw HTTP helpers for extension tools
 
     /// GET /v1{path} and return parsed JSON.
     pub async fn raw_get(&self, path: &str) -> Result<serde_json::Value> {

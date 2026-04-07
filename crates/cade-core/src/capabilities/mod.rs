@@ -151,7 +151,7 @@ impl Default for CapabilitySet {
 pub enum Profile {
     /// Minimal: core coding tools + memory + checkpoints only.
     Core,
-    /// Core + agentic + codeintel.
+    /// Core + agentic.
     Pro,
     /// Everything enabled.
     Full,

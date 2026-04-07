@@ -86,7 +86,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn core_caps_exclude_desktop_and_web_and_codeintel() {
+    fn core_caps_exclude_desktop_and_web() {
         let caps = CapabilitySet::core();
         let meta = meta_schemas_for_capabilities(&caps);
         let native = native_schemas_for_capabilities(Toolset::Default, &caps);
@@ -120,7 +120,7 @@ mod tests {
     }
 
     #[test]
-    fn pro_caps_include_agentic_and_codeintel_not_desktop() {
+    fn pro_caps_include_agentic_not_desktop() {
         let caps = cade_core::capabilities::Profile::Pro.capabilities();
         let meta = meta_schemas_for_capabilities(&caps);
         let native = native_schemas_for_capabilities(Toolset::Default, &caps);

@@ -292,24 +292,6 @@ pub fn openai_compat_presets() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
-/// Deprecated constant kept for compile-time references — use `openai_compat_presets()` instead.
-#[deprecated(note = "use PRESET_PROVIDERS or openai_compat_presets()")]
-pub const OPENAI_COMPAT_PRESETS: &[(&str, &str)] = &[
-    (
-        "openrouter",
-        "https://openrouter.ai/api/v1/chat/completions",
-    ),
-    ("together", "https://api.together.xyz/v1/chat/completions"),
-    ("groq", "https://api.groq.com/openai/v1/chat/completions"),
-    (
-        "fireworks",
-        "https://api.fireworks.ai/inference/v1/chat/completions",
-    ),
-    (
-        "deepinfra",
-        "https://api.deepinfra.com/v1/openai/chat/completions",
-    ),
-];
 
 pub struct LlmRouter {
     providers: std::collections::HashMap<String, Arc<dyn LlmProvider>>,
