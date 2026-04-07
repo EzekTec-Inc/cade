@@ -30,8 +30,4 @@ pub struct AppState {
     /// dropped from the context window — the Sleeptime background task picks it
     /// up after 60 s of inactivity and summarises the dropped turns.
     pub agent_activity: Arc<RwLock<std::collections::HashMap<String, AgentActivity>>>,
-    /// Intelligent tool selection: reranks tools per-prompt to reduce token usage.
-    /// `None` when the `reranker` feature is not compiled in or not configured.
-    #[cfg(feature = "reranker")]
-    pub tool_reranker: Option<Arc<cade_reranker::ToolReranker>>,
 }

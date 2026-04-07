@@ -59,11 +59,6 @@ async fn main() -> Result<()> {
 
     let db = open_db(&config.db_path).map_err(|e| Error::custom(e.to_string()))?;
 
-    // C6: Ensure codeintel schema exists at startup
-    #[cfg(feature = "codeintel")]
-    if let Err(e) = cade_codeintel::ensure_schema(&db) {
-        tracing::warn!("Failed to initialize codeintel schema: {e}");
-    }
 
     // Build router from env vars first
     let ai_config = config.to_ai_config();
@@ -118,22 +113,6 @@ async fn main() -> Result<()> {
         rate_limiter: RateLimiter::from_env(),
         memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        #[cfg(feature = "reranker")]
-        tool_reranker: {
-            let reranker_config = cade::server::cade_reranker::config_from_env();
-            if reranker_config.enabled {
-                tracing::info!(
-                    "[reranker] intelligent tool selection enabled (top_n={})",
-                    reranker_config.top_n,
-                );
-                Some(Arc::new(cade::server::cade_reranker::ToolReranker::new(
-                    reranker_config,
-                )))
-            } else {
-                tracing::debug!("[reranker] intelligent tool selection disabled");
-                None
-            }
-        },
     };
 
     // ── Sleeptime consolidation task ─────────────────────────────────────────

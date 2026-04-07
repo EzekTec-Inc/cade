@@ -148,57 +148,6 @@ pub(crate) async fn build_context(
             continue;
         }
 
-        #[cfg(feature = "reranker")]
-        let val = if label == "skills" {
-            if let Some(reranker) = &state.tool_reranker {
-                if reranker.is_enabled() {
-                    let user_prompt =
-                        sqlite::get_latest_user_message(&state.db, agent_id, conversation_id)
-                            .unwrap_or_default()
-                            .unwrap_or_default();
-
-                    let mut skills = Vec::new();
-                    let mut header = String::new();
-                    let mut in_list = false;
-                    for line in val.lines() {
-                        if line.starts_with("- ") {
-                            in_list = true;
-                            let id = line[2..]
-                                .split_whitespace()
-                                .next()
-                                .unwrap_or("")
-                                .to_string();
-                            skills.push(cade_reranker::SkillDocument {
-                                id,
-                                text: line.to_string(),
-                            });
-                        } else if !in_list {
-                            header.push_str(line);
-                            header.push('\n');
-                        }
-                    }
-
-                    if !skills.is_empty() {
-                        let ranked = reranker.rerank_skills(&user_prompt, skills).await;
-                        let mut new_val = header;
-                        for s in ranked {
-                            new_val.push_str(&s.text);
-                            new_val.push('\n');
-                        }
-                        new_val.trim_end().to_string()
-                    } else {
-                        val.to_string()
-                    }
-                } else {
-                    val.to_string()
-                }
-            } else {
-                val.to_string()
-            }
-        } else {
-            val.to_string()
-        };
-        #[cfg(not(feature = "reranker"))]
         let val = val.to_string();
 
         if tier == "pinned" {
@@ -417,27 +366,6 @@ pub(crate) async fn build_context(
             })
             .sum();
 
-        #[cfg(feature = "reranker")]
-        let mut turn_chars = if let Some(reranker) = &state.tool_reranker {
-            let mut turn_text = String::with_capacity(raw_chars);
-            for m in turn.iter() {
-                turn_text.push_str(&m.content);
-                if let Some(tcs) = &m.tool_calls {
-                    for tc in tcs {
-                        turn_text.push_str(&tc.arguments.to_string());
-                    }
-                }
-            }
-            if let Some(tokens) = reranker.count_tokens(&turn_text).await {
-                tokens.saturating_mul(CHARS_PER_TOKEN)
-            } else {
-                raw_chars
-            }
-        } else {
-            raw_chars
-        };
-
-        #[cfg(not(feature = "reranker"))]
         let mut turn_chars = raw_chars;
 
         if selected.is_empty() {
@@ -629,32 +557,6 @@ pub(crate) async fn build_context(
     };
 
     // ── Intelligent tool selection ────────────────────────────────────────────
-    //
-    // When the reranker feature is compiled in and enabled, score every tool
-    // schema against the latest user prompt and keep only the top-N most
-    // relevant ones (plus protected tools that are always included).
-    //
-    // This runs AFTER the lazy desktop_* pruning above so the candidate set
-    // is already reduced on long sessions.  On error the full set is returned
-    // (graceful fallback).
-    #[cfg(feature = "reranker")]
-    let tool_schemas: Vec<Value> = if let Some(reranker) = &state.tool_reranker {
-        if reranker.is_enabled() {
-            // Extract the latest user message as the reranking query.
-            let user_prompt = messages
-                .iter()
-                .rev()
-                .find(|m| m.role == "user")
-                .map(|m| m.content.as_str())
-                .unwrap_or("");
-
-            reranker.rerank(user_prompt, tool_schemas).await
-        } else {
-            tool_schemas
-        }
-    } else {
-        tool_schemas
-    };
 
     Ok((agent.model, messages, tool_schemas))
 }

@@ -28,9 +28,6 @@ fn meta_tool_capability(name: &str) -> Option<Capability> {
         // Web pack
         "web_search" | "fetch_doc" | "browser_screenshot" => Some(Capability::Web),
 
-        // CodeIntel pack
-        "symbol_search" | "find_references" | "goto_definition" | "get_repo_map"
-        | "index_repository" => Some(Capability::CodeIntel),
 
         // Core tools — always available
         // update_memory, memory_apply_patch, archival_memory_insert,
@@ -104,7 +101,6 @@ mod tests {
 
         // Core excludes optional packs
         assert!(!meta_names.contains(&"web_search"));
-        assert!(!meta_names.contains(&"symbol_search"));
         assert!(!meta_names.contains(&"run_subagent"));
         assert!(!native_names.contains(&"desktop_screenshot"));
     }
@@ -119,7 +115,6 @@ mod tests {
         let native_names: Vec<&str> = native.iter().map(tool_name).collect();
 
         assert!(meta_names.contains(&"web_search"));
-        assert!(meta_names.contains(&"symbol_search"));
         assert!(meta_names.contains(&"run_subagent"));
         assert!(native_names.contains(&"desktop_screenshot"));
     }
@@ -134,7 +129,6 @@ mod tests {
         let native_names: Vec<&str> = native.iter().map(tool_name).collect();
 
         assert!(meta_names.contains(&"run_subagent"));
-        assert!(meta_names.contains(&"symbol_search"));
         assert!(!meta_names.contains(&"web_search"));
         assert!(!native_names.contains(&"desktop_screenshot"));
     }

@@ -7,8 +7,6 @@ members = [
     "crates/cade-agent",
     "crates/cade-plugin",
     "crates/cade-sdk",
-    "crates/cade-codeintel",
-    "crates/cade-reranker",
     "crates/cade-web",
     "crates/cade-tui",
     "crates/cade-mcp",
@@ -120,9 +118,7 @@ path = "src/bin/cade-server.rs"
 
 [features]
 default     = ["mcp"]
-full        = ["desktop", "web", "mcp", "integration", "codeintel", "reranker", "backend-docker", "backend-ssh"]
-codeintel   = ["dep:cade-codeintel", "cade-server/codeintel"]
-reranker    = ["cade-server/reranker"]
+full        = ["desktop", "web", "mcp", "integration", "backend-docker", "backend-ssh"]
 pro         = []
 lean        = []
 desktop     = ["cade-agent/desktop", "dep:cade-desktop"]
@@ -141,7 +137,6 @@ cade-desktop = { path = "crates/cade-desktop", optional = true }
 cade-agent   = { path = "crates/cade-agent", default-features = false }
 cade-cli     = { path = "crates/cade-cli" }
 cade-sdk     = { path = "crates/cade-sdk", optional = true }
-cade-codeintel = { path = "crates/cade-codeintel", optional = true }
 # -- Shared by both binaries
 derive_more.workspace  = true
 tokio.workspace        = true

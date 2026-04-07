@@ -330,7 +330,6 @@ fn cmd_required_capability(cmd: &str) -> Option<cade_core::capabilities::Capabil
         "/agents" | "/subagents" | "/reflect" | "/artifacts" => Some(Capability::Agentic),
         "/mcp" => Some(Capability::Mcp),
         "web_search" | "fetch_doc" => Some(Capability::Web),
-        "index_repository" => Some(Capability::CodeIntel),
         _ => None,
     }
 }

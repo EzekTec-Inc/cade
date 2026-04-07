@@ -3,7 +3,6 @@
 pub mod ask;
 pub mod bash;
 pub mod catalog;
-pub mod codeintel;
 #[cfg(feature = "desktop")]
 pub mod desktop;
 pub mod fs;

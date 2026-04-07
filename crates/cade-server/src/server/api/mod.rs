@@ -4,8 +4,6 @@ pub mod agents;
 pub mod artifacts;
 pub mod auth;
 pub mod checkpoints;
-#[cfg(feature = "codeintel")]
-pub mod codeintel;
 pub mod evals;
 pub mod health;
 pub mod memory_evidence;
@@ -183,18 +181,6 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/v1/providers/presets", get(providers::list_presets))
         .route("/v1/providers/:name", delete(providers::remove_provider));
-
-    // Code intelligence routes (optional)
-    #[cfg(feature = "codeintel")]
-    let rest = rest
-        .route("/v1/symbols", get(codeintel::symbol_search))
-        .route(
-            "/v1/symbols/:name/definition",
-            get(codeintel::goto_definition),
-        )
-        .route("/v1/symbols/:name/refs", get(codeintel::find_references))
-        .route("/v1/repo-map", get(codeintel::get_repo_map))
-        .route("/v1/agents/:id/index", post(codeintel::index_repository));
 
     // Merge and apply auth middleware to everything
     Router::new()

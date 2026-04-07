@@ -173,30 +173,6 @@ impl ToolRuntime {
             LINK_MEMORY_EVIDENCE => self.handle_link_memory_evidence(args).await,
             REFLECT => self.handle_reflect(args).await,
 
-            // -- Code intelligence (Phase 3)
-            SYMBOL_SEARCH => {
-                crate::tools::codeintel::SymbolSearchTool::run(&self.client, &self.cwd, args)
-                    .await
-                    .map_or_else(|e| (e.to_string(), true), |o| (o, false))
-            }
-            FIND_REFERENCES => crate::tools::codeintel::FindReferencesTool::run(&self.client, args)
-                .await
-                .map_or_else(|e| (e.to_string(), true), |o| (o, false)),
-            GOTO_DEFINITION => crate::tools::codeintel::GotoDefinitionTool::run(&self.client, args)
-                .await
-                .map_or_else(|e| (e.to_string(), true), |o| (o, false)),
-            GET_REPO_MAP => {
-                crate::tools::codeintel::GetRepoMapTool::run(&self.client, &self.cwd, args)
-                    .await
-                    .map_or_else(|e| (e.to_string(), true), |o| (o, false))
-            }
-            INDEX_REPOSITORY => crate::tools::codeintel::IndexRepositoryTool::run(
-                &self.client,
-                &self.agent_id,
-                args,
-            )
-            .await
-            .map_or_else(|e| (e.to_string(), true), |o| (o, false)),
 
             // -- Interactive tools — not handled here
             RUN_SUBAGENT | ASK_USER_QUESTION | ENTER_PLAN_MODE | EXIT_PLAN_MODE => {

@@ -13,8 +13,6 @@ use std::collections::HashSet;
 pub enum Capability {
     /// Subagents, agent messaging, reflection, artifacts, evidence
     Agentic,
-    /// Tree-sitter indexing, symbol search, references, repo map
-    CodeIntel,
     /// Screenshots, window list, desktop control, notifications
     Desktop,
     /// System tray icon
@@ -37,7 +35,6 @@ impl Capability {
     /// All known capabilities.
     pub const ALL: &[Capability] = &[
         Capability::Agentic,
-        Capability::CodeIntel,
         Capability::Desktop,
         Capability::Tray,
         Capability::Web,
@@ -52,7 +49,6 @@ impl Capability {
     pub fn name(&self) -> &'static str {
         match self {
             Capability::Agentic => "agentic",
-            Capability::CodeIntel => "codeintel",
             Capability::Desktop => "desktop",
             Capability::Tray => "tray",
             Capability::Web => "web",
@@ -68,7 +64,6 @@ impl Capability {
     pub fn from_name(name: &str) -> Option<Capability> {
         match name.to_lowercase().replace('_', "-").as_str() {
             "agentic" => Some(Capability::Agentic),
-            "codeintel" | "code-intel" => Some(Capability::CodeIntel),
             "desktop" => Some(Capability::Desktop),
             "tray" => Some(Capability::Tray),
             "web" => Some(Capability::Web),
@@ -184,7 +179,7 @@ impl Profile {
     pub fn capabilities(&self) -> CapabilitySet {
         match self {
             Profile::Core => CapabilitySet::core(),
-            Profile::Pro => CapabilitySet::from_caps([Capability::Agentic, Capability::CodeIntel]),
+            Profile::Pro => CapabilitySet::from_caps([Capability::Agentic]),
             Profile::Full => CapabilitySet::full(),
         }
     }
@@ -239,10 +234,9 @@ mod tests {
     }
 
     #[test]
-    fn pro_profile_has_agentic_and_codeintel() {
+    fn pro_profile_has_agentic() {
         let caps = Profile::Pro.capabilities();
         assert!(caps.is_enabled(Capability::Agentic));
-        assert!(caps.is_enabled(Capability::CodeIntel));
         assert!(!caps.is_enabled(Capability::Desktop));
         assert!(!caps.is_enabled(Capability::Web));
         assert!(!caps.is_enabled(Capability::Mcp));

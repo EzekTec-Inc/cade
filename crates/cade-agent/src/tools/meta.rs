@@ -61,12 +61,6 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schemas.push(cade_web::BrowserScreenshotTool::schema());
     }
 
-    // Phase 3: code intelligence (always compiled for now — gated at catalog level)
-    schemas.push(crate::tools::codeintel::SymbolSearchTool::schema());
-    schemas.push(crate::tools::codeintel::FindReferencesTool::schema());
-    schemas.push(crate::tools::codeintel::GotoDefinitionTool::schema());
-    schemas.push(crate::tools::codeintel::GetRepoMapTool::schema());
-    schemas.push(crate::tools::codeintel::IndexRepositoryTool::schema());
 
     schemas
 }
