@@ -7,7 +7,7 @@ pub fn strip_orchestrator_prompts(text: &str) -> std::borrow::Cow<'_, str> {
     use std::sync::OnceLock;
     static RE: OnceLock<Regex> = OnceLock::new();
     let re = RE.get_or_init(|| {
-        Regex::new(r"(?is)[\w\d]*>thought\s*CRITICAL INSTRUCTION 1:.*?CRITICAL INSTRUCTION 2:.*?(?:task at hand\.)\s*").unwrap()
+        Regex::new(r"(?is)[\w\d]*>thought\s*CRITICAL INSTRUCTION 1:.*?CRITICAL INSTRUCTION 2:.*?(?:task at hand\.)(?:[^\n]*?task at hand\.)?\s*").unwrap()
     });
     re.replace_all(text, "")
 }
