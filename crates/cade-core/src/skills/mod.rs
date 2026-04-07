@@ -18,7 +18,7 @@ pub enum SkillScope {
     Global = 1,
     /// Agent-scoped skills in ~/.cade/agents/{id}/skills/
     Agent = 2,
-    /// Project-scoped skills in <cwd>/.skills/  (highest priority)
+    /// Project-scoped skills in <cwd>/.cade/skills/  (highest priority)
     Project = 3,
 }
 
@@ -246,7 +246,7 @@ pub fn discover_all_skills(
         }
     }
     all.extend(discover_skills_in(
-        &cwd.join(".skills"),
+        &cwd.join(".cade/skills"),
         SkillScope::Project,
     ));
 
@@ -572,7 +572,7 @@ pub fn spawn_skill_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
         }
     }
 
-    let project_skills = cwd.join(".skills");
+    let project_skills = cwd.join(".cade/skills");
     if project_skills.exists() {
         watch_dirs.push(project_skills.clone());
     }
@@ -1061,7 +1061,7 @@ mod tests {
         )?;
 
         // Project skill with same ID
-        let proj_dir = dir.path().join(".skills").join("shared");
+        let proj_dir = dir.path().join(".cade/skills").join("shared");
         fs::create_dir_all(&proj_dir)?;
         fs::write(
             proj_dir.join("SKILL.MD"),

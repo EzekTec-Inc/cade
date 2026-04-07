@@ -13,7 +13,7 @@ members = [
     "crates/cade-tui",
     "crates/cade-mcp",
     "crates/cade-cli",
-    ".",          # root package — owns the two binaries
+    ".", "crates/cade-ide-mcp",          # root package — owns the two binaries
 ]
 resolver = "3"
 

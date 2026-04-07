@@ -391,9 +391,9 @@ impl ToolRuntime {
         let target_dir = if scope == "global" {
             dirs::home_dir()
                 .map(|h| h.join(".cade").join("skills"))
-                .unwrap_or_else(|| self.cwd.join(".skills"))
+                .unwrap_or_else(|| self.cwd.join(".cade/skills"))
         } else {
-            self.cwd.join(".skills")
+            self.cwd.join(".cade/skills")
         };
         match cade_core::skills::install_skill_from_url(&url, &target_dir).await {
             Ok(skill) => (

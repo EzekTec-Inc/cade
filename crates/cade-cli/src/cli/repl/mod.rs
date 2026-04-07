@@ -3104,7 +3104,7 @@ impl Repl {
                                     ));
                                     let _ = app.push(RenderLine::Pair {
                                         label: "project".to_string(),
-                                        value: ".skills/".to_string(),
+                                        value: ".cade/skills/".to_string(),
                                     });
                                     let _ = app.push(RenderLine::Pair {
                                         label: "global".to_string(),

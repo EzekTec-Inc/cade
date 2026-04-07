@@ -227,7 +227,7 @@ fn schema_install_skill() -> Value {
                 "scope": {
                     "type": "string",
                     "enum": ["project", "global"],
-                    "description": "Where to install: project (.skills/) or global (~/.cade/skills/)"
+                    "description": "Where to install: project (.cade/skills/) or global (~/.cade/skills/)"
                 }
             },
             "required": ["url"]

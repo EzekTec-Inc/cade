@@ -1202,7 +1202,7 @@ mod tests {
         let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
         assert!(mgr.resolve("write_file", &json!({"path": ".cade/settings.json"}), false).is_ask());
         assert!(mgr.resolve("edit_file", &json!({"path": "settings.local.json"}), false).is_ask());
-        assert!(mgr.resolve("write_file", &json!({"path": ".skills/hack/SKILL.MD"}), false).is_ask());
+        assert!(mgr.resolve("write_file", &json!({"path": ".cade/skills/hack/SKILL.MD"}), false).is_ask());
     }
 }
 
@@ -1405,7 +1405,7 @@ impl PermissionManager {
         ) && let Some(path) = arg_ref
             && (path.contains(".cade/settings.json")
                 || path.contains("settings.local.json")
-                || path.contains(".skills/"))
+                || path.contains(".cade/skills/"))
         {
             return Verdict::Ask(
                 "security: config/skill edits require explicit approval".to_string(),
