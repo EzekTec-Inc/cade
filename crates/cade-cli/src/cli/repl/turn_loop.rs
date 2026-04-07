@@ -131,7 +131,17 @@ impl Repl {
             return;
         }
 
-        self.tui_dim("  [ ⚡ Reaching into memory & synthesizing rules... ]");
+        // Animate the evaluation using CADE's native braille spinner
+        let tick_app = self.app.clone();
+        let _bar_text = self.app.lock().start_thinking("Reaching into memory & synthesizing rules...");
+        let tick_handle = tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+                if let Some(mut app) = tick_app.try_lock() {
+                    let _ = app.draw();
+                }
+            }
+        });
 
         let prompt = format!(
             "You are the Heuristic Evaluation Layer. Perform an evaluation on the current task: The user has requested to '{}'.\nExecute the following logic and then call `update_memory` on the `working_set` block to persist the evolved context:\n1. Semantic Extraction: Parse Intent, Entities, Constraints.\n2. Antivirus Heuristic: Compare against Safety Protocol. If deviating, generate a corrective warning.\n3. Pathfinding Heuristic: Analyze distance to goal and recalculate Next Steps.\n4. CoT State Update: Update `working_set` with Vision, Progress, and Directives.",
@@ -176,6 +186,9 @@ impl Repl {
                 if !extracted_dir.is_empty() { directives = extracted_dir; }
             }
         }
+
+        tick_handle.abort();
+        self.app.lock().stop_thinking();
 
         let _ = self.app.lock().push(crate::ui::RenderLine::HeuristicSummary {
             intent,
