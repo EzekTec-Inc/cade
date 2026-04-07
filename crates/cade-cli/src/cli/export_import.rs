@@ -19,13 +19,13 @@
 use crate::Result;
 use serde_json::{Value, json};
 
-use cade_agent::agent::client::{CadeClient, CreateAgentRequest, MemoryBlock};
+use cade_agent::agent::client::{HttpTransport, CreateAgentRequest, MemoryBlock};
 
 // -- Export
 
 /// Export the agent identified by `agent_id` to a JSON value.
 /// Fetches: agent metadata, memory blocks, conversations + their messages.
-pub async fn export_agent(client: &CadeClient, agent_id: &str) -> Result<Value> {
+pub async fn export_agent(client: &HttpTransport, agent_id: &str) -> Result<Value> {
     // 1. Agent metadata
     let agent = client
         .get_agent(agent_id)
@@ -103,7 +103,7 @@ pub async fn export_agent(client: &CadeClient, agent_id: &str) -> Result<Value> 
 /// Serialize and write the export payload to `output_path`.
 /// Use `"-"` to write to stdout.
 pub async fn export_agent_to_file(
-    client: &CadeClient,
+    client: &HttpTransport,
     agent_id: &str,
     output_path: &str,
 ) -> Result<()> {
@@ -128,7 +128,7 @@ pub async fn export_agent_to_file(
 /// Import an agent from a JSON export file.
 /// Creates a NEW agent (never overwrites an existing one).
 /// Returns the new agent's ID.
-pub async fn import_agent_from_file(client: &CadeClient, input_path: &str) -> Result<String> {
+pub async fn import_agent_from_file(client: &HttpTransport, input_path: &str) -> Result<String> {
     let content = if input_path == "-" {
         let mut s = String::new();
         use std::io::Read;
@@ -146,7 +146,7 @@ pub async fn import_agent_from_file(client: &CadeClient, input_path: &str) -> Re
 }
 
 /// Import from an already-parsed JSON payload. Returns the new agent ID.
-pub async fn import_agent(client: &CadeClient, payload: &Value) -> Result<String> {
+pub async fn import_agent(client: &HttpTransport, payload: &Value) -> Result<String> {
     let version = payload["cade_export_version"].as_u64().unwrap_or(0);
     if version != 1 {
         return Err(crate::Error::custom(format!(
@@ -223,7 +223,7 @@ pub async fn import_agent(client: &CadeClient, payload: &Value) -> Result<String
 /// Resolve `name_or_id` to an agent ID:
 /// - if it matches an exact agent ID → use it
 /// - otherwise do a case-insensitive partial name search
-pub async fn resolve_agent_id(client: &CadeClient, name_or_id: &str) -> Result<String> {
+pub async fn resolve_agent_id(client: &HttpTransport, name_or_id: &str) -> Result<String> {
     // Try direct ID first
     if client.get_agent(name_or_id).await.is_ok() {
         return Ok(name_or_id.to_string());

@@ -2,10 +2,8 @@ use axum::{Json, extract::State, http::StatusCode};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::server::{
-    state::AppState,
-    storage::sqlite::{self, ToolRow},
-};
+use crate::server::state::AppState;
+use cade_store::sqlite::{self, ToolRow};
 
 pub async fn create_tool(
     State(state): State<AppState>,

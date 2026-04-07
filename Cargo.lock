@@ -671,6 +671,7 @@ dependencies = [
  "cade-desktop",
  "cade-sdk",
  "cade-server",
+ "cade-store",
  "cade-tui",
  "chrono",
  "clap",
@@ -868,6 +869,7 @@ dependencies = [
  "base64",
  "cade-ai",
  "cade-core",
+ "cade-store",
  "chrono",
  "derive_more 2.1.1",
  "dirs 5.0.1",
@@ -887,6 +889,31 @@ dependencies = [
  "tokio-stream",
  "tokio-util",
  "tower-http 0.5.2",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "cade-store"
+version = "0.2.0"
+dependencies = [
+ "aes-gcm",
+ "axum",
+ "base64",
+ "cade-ai",
+ "cade-core",
+ "chrono",
+ "derive_more 2.1.1",
+ "getrandom 0.2.17",
+ "hmac",
+ "machine-uid",
+ "parking_lot",
+ "pbkdf2",
+ "rusqlite",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
  "tracing",
  "uuid",
 ]

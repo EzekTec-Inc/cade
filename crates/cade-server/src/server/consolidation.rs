@@ -9,7 +9,8 @@
 
 use cade_ai::{CompletionRequest, LlmMessage, catalogue};
 
-use crate::server::{state::AppState, storage::sqlite};
+use crate::server::state::AppState;
+use cade_store::sqlite;
 
 // ── tunables ──────────────────────────────────────────────────────────────────
 

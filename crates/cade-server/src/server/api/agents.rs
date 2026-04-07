@@ -7,10 +7,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::server::{
-    state::AppState,
-    storage::sqlite::{self, AgentRow},
-};
+use crate::server::state::AppState;
+use cade_store::sqlite::{self, AgentRow};
 
 /// Minimal fallback system prompt used only when the client doesn't supply one
 /// (e.g. API calls outside the CLI). The CLI always sends BASE_SYSTEM_PROMPT.
@@ -445,7 +443,7 @@ pub async fn latest_assistant_message(
 
 // -- Conversation endpoints
 
-use crate::server::storage::sqlite::ConversationRow;
+use cade_store::sqlite::ConversationRow;
 
 fn conv_to_json(c: &ConversationRow) -> Value {
     json!({

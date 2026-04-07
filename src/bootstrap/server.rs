@@ -1,5 +1,5 @@
 use cade::{Error, Result};
-use cade_agent::agent::CadeClient;
+use cade_agent::agent::HttpTransport;
 
 pub async fn auto_start_server(base_url: &str) -> Result<()> {
     let server_bin = std::env::current_exe()
@@ -37,7 +37,7 @@ pub async fn auto_start_server(base_url: &str) -> Result<()> {
             .spawn()
             .map_err(|e| Error::custom(format!("auto-start cade-server: {e}")))?;
 
-        let client = CadeClient::new(base_url.to_string(), "".to_string())
+        let client = HttpTransport::new(base_url.to_string(), "".to_string())
             .map_err(|e| Error::custom(format!("create health-check client: {e}")))?;
         let mut ready = false;
         for _ in 0..10 {

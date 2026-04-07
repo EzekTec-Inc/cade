@@ -5,7 +5,7 @@ pub fn create_conversation(db: &Db, agent_id: &str, title: &str) -> Result<Conve
     let ts = now_ts();
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     conn.execute(
         "INSERT INTO conversations (id, agent_id, title, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -24,7 +24,7 @@ pub fn create_conversation(db: &Db, agent_id: &str, title: &str) -> Result<Conve
 pub fn get_conversation(db: &Db, conv_id: &str) -> Result<Option<ConversationRow>> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
         "SELECT c.id, c.agent_id, c.title, c.created_at, c.updated_at,
                 COUNT(m.id) as message_count
@@ -51,7 +51,7 @@ pub fn get_conversation(db: &Db, conv_id: &str) -> Result<Option<ConversationRow
 pub fn list_conversations(db: &Db, agent_id: &str) -> Result<Vec<ConversationRow>> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
         "SELECT c.id, c.agent_id, c.title, c.created_at, c.updated_at,
                 COUNT(m.id) as message_count
@@ -77,7 +77,7 @@ pub fn list_conversations(db: &Db, agent_id: &str) -> Result<Vec<ConversationRow
 pub fn delete_conversation(db: &Db, conv_id: &str) -> Result<bool> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     // CASCADE deletes the messages too
     let n = conn.execute("DELETE FROM conversations WHERE id = ?1", params![conv_id])?;
     // Also clean up orphaned messages (fallback for rows without FK enforcement)
@@ -92,7 +92,7 @@ pub fn delete_conversation(db: &Db, conv_id: &str) -> Result<bool> {
 pub fn update_conversation_title(db: &Db, conv_id: &str, title: &str) -> Result<()> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     conn.execute(
         "UPDATE conversations SET title = ?1, updated_at = ?2 WHERE id = ?3",
         params![title, now_ts(), conv_id],
@@ -104,7 +104,7 @@ pub fn update_conversation_title(db: &Db, conv_id: &str, title: &str) -> Result<
 pub fn touch_conversation(db: &Db, conv_id: &str) -> Result<()> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     conn.execute(
         "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
         params![now_ts(), conv_id],

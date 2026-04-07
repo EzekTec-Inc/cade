@@ -6,7 +6,8 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-use crate::server::{reflection, state::AppState, storage::sqlite};
+use crate::server::{reflection, state::AppState};
+use cade_store::sqlite;
 
 // region:    --- Evidence endpoints
 
@@ -15,7 +16,7 @@ pub async fn list_evidence(
     State(state): State<AppState>,
     Path((agent_id, label)): Path<(String, String)>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let rows = sqlite::list_memory_evidence(&state.db, &agent_id, &label).map_err(|e| {
+    let rows = sqlite::list_memory_evidence(&state.db, &agent_id, &label).map_err(|e: cade_store::error::Error| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "detail": e.to_string() })),
@@ -59,7 +60,7 @@ pub async fn add_evidence(
     let id = sqlite::insert_memory_evidence(
         &state.db, &agent_id, &label, kind, reference, excerpt, confidence,
     )
-    .map_err(|e| {
+    .map_err(|e: cade_store::error::Error| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "detail": e.to_string() })),
@@ -80,7 +81,7 @@ pub async fn memory_why(
     let blocks = sqlite::get_memory_blocks_full(&state.db, &agent_id).unwrap_or_default();
     let block = blocks.iter().find(|(l, _, _, _)| l == &label);
     let value = block
-        .map(|(_, v, _, _)| v.as_str())
+        .map(|(_, v, _, _): &(String, String, String, String)| v.as_str())
         .unwrap_or("(not found)");
     let memory_type = block.map(|(_, _, _, _)| "").unwrap_or("generic");
 
@@ -139,7 +140,7 @@ pub async fn list_reflection(
     State(state): State<AppState>,
     Path(agent_id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
-    let rows = sqlite::list_reflection_log(&state.db, &agent_id).map_err(|e| {
+    let rows = sqlite::list_reflection_log(&state.db, &agent_id).map_err(|e: cade_store::error::Error| {
         (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(json!({ "detail": e.to_string() })),

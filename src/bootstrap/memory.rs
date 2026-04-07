@@ -1,6 +1,6 @@
-use cade_agent::agent::CadeClient;
+use cade_agent::agent::HttpTransport;
 
-pub async fn seed_default_memory(client: &CadeClient, agent_id: &str) {
+pub async fn seed_default_memory(client: &HttpTransport, agent_id: &str) {
     for (label, value, description, max_chars, tier) in cade::DEFAULT_MEMORY_BLOCKS {
         if let Err(e) = client
             .upsert_memory_with_limit(agent_id, label, value, Some(description), Some(*max_chars))

@@ -1,12 +1,12 @@
 use cade::toolsets::Toolset;
 use cade_agent::agent;
-use cade_agent::agent::CadeClient;
+use cade_agent::agent::HttpTransport;
 use cade_core::capabilities::CapabilitySet;
 
 /// Capability-aware tool registration: only registers and attaches tools
 /// allowed by the given `CapabilitySet`.
 pub async fn register_and_attach_with_caps(
-    client: &CadeClient,
+    client: &HttpTransport,
     agent_id: &str,
     toolset: Toolset,
     caps: &CapabilitySet,
@@ -72,7 +72,7 @@ pub async fn register_and_attach_with_caps(
 /// When `tool_filter` is `None`, registers all tools allowed by `caps`.
 /// When `tool_filter` is `Some(names)`, intersects the filter with caps.
 pub async fn register_and_attach_with_caps_filtered(
-    client: &CadeClient,
+    client: &HttpTransport,
     agent_id: &str,
     toolset: Toolset,
     caps: &CapabilitySet,

@@ -7,7 +7,7 @@ pub fn last_assistant_message(
 ) -> Result<Option<MessageRow>> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
 
     let sql = if conversation_id.is_some() {
         "SELECT id, agent_id, conversation_id, role, content, char_count FROM messages
@@ -50,7 +50,7 @@ pub fn get_latest_user_message(
 ) -> Result<Option<String>> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
 
     let sql = if conversation_id.is_some() {
         "SELECT content FROM messages
@@ -81,7 +81,7 @@ pub fn get_latest_user_message(
 pub fn insert_message(db: &Db, row: &MessageRow) -> Result<()> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     conn.execute(
         "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at, char_count)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -121,7 +121,7 @@ pub fn list_messages_page(
 ) -> Result<Vec<MessageRow>> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     // Filter: conversation_id IS NULL for legacy messages, or matches given id.
     let sql = if conversation_id.is_some() {
         "SELECT id, agent_id, conversation_id, role, content, char_count FROM messages
@@ -176,7 +176,7 @@ pub fn get_context_window(
 ) -> Result<Vec<MessageRow>> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     let sql = if conversation_id.is_some() {
         "WITH ranked AS (
              SELECT id, agent_id, conversation_id, role, content, char_count, created_at, rowid,

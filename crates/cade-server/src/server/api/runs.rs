@@ -8,7 +8,8 @@ use axum::{
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
-use crate::server::{state::AppState, storage::sqlite};
+use crate::server::state::AppState;
+use cade_store::sqlite;
 
 fn err(status: StatusCode, msg: &str) -> Response {
     (status, Json(json!({ "detail": msg }))).into_response()

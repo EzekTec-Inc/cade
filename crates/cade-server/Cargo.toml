@@ -12,6 +12,7 @@ doctest     = false
 # -- Workspace crates
 cade-core.path       = "../cade-core"
 cade-ai.path         = "../cade-ai"
+cade-store.path      = "../cade-store"
 # -- Error handling
 derive_more.workspace  = true
 # -- Serialisation

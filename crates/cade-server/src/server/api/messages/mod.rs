@@ -14,10 +14,8 @@ use axum::{
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::server::{
-    state::AppState,
-    storage::sqlite::{self, MessageRow},
-};
+use crate::server::state::AppState;
+use cade_store::sqlite::{self, MessageRow};
 use cade_ai::catalogue;
 use cade_ai::{CompletionRequest, LlmMessage, LlmToolCall, MessageImage, StreamChunk, TokenUsage};
 

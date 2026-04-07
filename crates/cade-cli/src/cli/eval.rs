@@ -7,7 +7,7 @@
 ///   cade eval show <run_id>
 use std::path::{Path, PathBuf};
 
-use cade_agent::agent::client::CadeClient;
+use cade_agent::agent::client::HttpTransport;
 use cade_agent::mcp::McpManager;
 use cade_core::permissions::{PermissionManager, PermissionMode};
 
@@ -79,7 +79,7 @@ impl EvalResult {
 // region:    --- Commands
 
 /// `cade eval list`
-pub async fn cmd_list(client: &CadeClient) -> Result<()> {
+pub async fn cmd_list(client: &HttpTransport) -> Result<()> {
     let tasks = client
         .list_eval_tasks()
         .await
@@ -117,7 +117,7 @@ pub async fn cmd_list(client: &CadeClient) -> Result<()> {
 }
 
 /// `cade eval show <run_id>`
-pub async fn cmd_show(client: &CadeClient, run_id: &str) -> Result<()> {
+pub async fn cmd_show(client: &HttpTransport, run_id: &str) -> Result<()> {
     let run = client
         .get_eval_run(run_id)
         .await
@@ -128,7 +128,7 @@ pub async fn cmd_show(client: &CadeClient, run_id: &str) -> Result<()> {
 
 /// `cade eval run <task_file>`
 pub async fn cmd_run(
-    client: &CadeClient,
+    client: &HttpTransport,
     task_file: &Path,
     model_opt: Option<&str>,
     cwd: &Path,
@@ -142,7 +142,7 @@ pub async fn cmd_run(
 
 /// `cade eval bench <dir/>`
 pub async fn cmd_bench(
-    client: &CadeClient,
+    client: &HttpTransport,
     tasks_dir: &Path,
     model_opt: Option<&str>,
     concurrency: usize,
@@ -205,7 +205,7 @@ pub async fn cmd_bench(
 // region:    --- Task runner
 
 async fn run_task(
-    client: &CadeClient,
+    client: &HttpTransport,
     task: &EvalTask,
     model_opt: Option<&str>,
     cwd: &Path,

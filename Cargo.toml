@@ -11,7 +11,7 @@ members = [
     "crates/cade-tui",
     "crates/cade-mcp",
     "crates/cade-cli",
-    ".", "crates/cade-ide-mcp",          # root package — owns the two binaries
+    ".", "crates/cade-ide-mcp", "crates/cade-store",          # root package — owns the two binaries
 ]
 resolver = "3"
 
@@ -133,6 +133,7 @@ backend-ssh = ["cade-agent/backend-ssh"]
 cade-core    = { path = "crates/cade-core" }
 cade-ai      = { path = "crates/cade-ai" }
 cade-server  = { path = "crates/cade-server" }
+cade-store   = { path = "crates/cade-store" }
 cade-desktop = { path = "crates/cade-desktop", optional = true }
 cade-agent   = { path = "crates/cade-agent", default-features = false }
 cade-cli     = { path = "crates/cade-cli" }

@@ -1,11 +1,11 @@
-use cade_agent::agent::CadeClient;
+use cade_agent::agent::HttpTransport;
 
 /// Forward API keys from the CLI's environment to cade-server.
 ///
 /// cade-server is a separate process and may not share the same environment.
 /// This bridges the gap so that `export ANTHROPIC_API_KEY=...` in the user's
 /// terminal is automatically propagated to the server.
-pub async fn push_env_providers_to_server(client: &CadeClient) {
+pub async fn push_env_providers_to_server(client: &HttpTransport) {
     // (name, kind, env_vars, base_url)
     let core: &[(&str, &str, &[&str], Option<&str>)] = &[
         (

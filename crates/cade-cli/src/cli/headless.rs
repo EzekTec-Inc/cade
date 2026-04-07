@@ -3,7 +3,7 @@ use futures::future::join_all;
 use serde_json::json;
 
 use crate::support::text::sanitize_for_terminal;
-use cade_agent::agent::{CadeClient, client::CadeMessage};
+use cade_agent::agent::{HttpTransport, client::CadeMessage};
 use cade_agent::mcp::McpManager;
 use cade_agent::tools::{ToolRuntime, dispatch};
 use cade_core::hooks::{HookEngine, HookOutcome};
@@ -42,7 +42,7 @@ fn is_sequential_tool(name: &str) -> bool {
 /// Prints streaming output to stdout. Returns the final assistant text + stats.
 #[allow(clippy::type_complexity)]
 pub async fn run_headless(
-    client: &CadeClient,
+    client: &HttpTransport,
     agent_id: &str,
     prompt: &str,
     permissions: &PermissionManager,
@@ -113,7 +113,7 @@ pub async fn run_headless(
 /// Run headless with JSONL (stream-json) output — one JSON object per event.
 /// Emits to stdout. Each line is a complete JSON object (JSONL format).
 pub async fn run_headless_stream_json(
-    client: &CadeClient,
+    client: &HttpTransport,
     agent_id: &str,
     model: &str,
     prompt: &str,
@@ -232,7 +232,7 @@ pub async fn run_headless_stream_json(
 ///
 /// Returns `(call_id, output, is_error)`.
 async fn run_one_tool(
-    client: &CadeClient,
+    client: &HttpTransport,
     agent_id: &str,
     call_id: String,
     tool_name: String,
@@ -306,7 +306,7 @@ async fn run_one_tool(
 
 /// Apply PostToolUse / PostToolUseFailure hooks for a completed tool.
 async fn finalize_tool_result(
-    client: &CadeClient,
+    client: &HttpTransport,
     agent_id: &str,
     hooks: &HookEngine,
     call_id: String,
@@ -372,7 +372,7 @@ async fn finalize_tool_result(
 
 #[allow(clippy::type_complexity)]
 async fn process_tool_calls(
-    client: &CadeClient,
+    client: &HttpTransport,
     agent_id: &str,
     messages: Vec<CadeMessage>,
     permissions: &PermissionManager,
@@ -569,7 +569,7 @@ async fn process_tool_calls(
 // -- stream-json tool loop
 
 async fn process_tool_calls_stream_json(
-    client: &CadeClient,
+    client: &HttpTransport,
     agent_id: &str,
     messages: Vec<CadeMessage>,
     permissions: &PermissionManager,

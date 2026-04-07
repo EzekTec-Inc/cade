@@ -1,4 +1,5 @@
-use crate::server::{config::ServerConfig, rate_limit::RateLimiter, storage::Db};
+use crate::server::{config::ServerConfig, rate_limit::RateLimiter};
+use cade_store::sqlite::Db;
 use cade_ai::{LlmProvider, LlmRouter};
 use std::sync::Arc;
 use tokio::sync::RwLock;

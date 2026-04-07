@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 /// CADE REST API client
 #[derive(Clone)]
-pub struct CadeClient {
+pub struct HttpTransport {
     client: Client,
     base_url: String,
     api_key: String,
@@ -154,7 +154,7 @@ pub struct CreateToolRequest {
 
 // -- Client impl
 
-impl CadeClient {
+impl HttpTransport {
     pub fn new(base_url: String, api_key: String) -> Result<Self> {
         let client = Client::builder()
             .user_agent("cade/0.1.0")

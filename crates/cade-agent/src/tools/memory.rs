@@ -29,7 +29,7 @@ impl ArchivalMemoryInsertTool {
     }
 
     pub async fn run(
-        client: &crate::agent::client::CadeClient,
+        client: &crate::agent::client::HttpTransport,
         agent_id: &str,
         args: &Value,
     ) -> Result<String> {
@@ -82,7 +82,7 @@ impl ArchivalMemorySearchTool {
     }
 
     pub async fn run(
-        client: &crate::agent::client::CadeClient,
+        client: &crate::agent::client::HttpTransport,
         agent_id: &str,
         args: &Value,
     ) -> Result<String> {
@@ -151,7 +151,7 @@ impl ConversationSearchTool {
     }
 
     pub async fn run(
-        client: &crate::agent::client::CadeClient,
+        client: &crate::agent::client::HttpTransport,
         agent_id: &str,
         args: &Value,
     ) -> Result<String> {
@@ -209,7 +209,7 @@ impl SearchMemoryTool {
     }
 
     pub async fn run(
-        client: &crate::agent::client::CadeClient,
+        client: &crate::agent::client::HttpTransport,
         agent_id: &str,
         args: &Value,
     ) -> Result<String> {

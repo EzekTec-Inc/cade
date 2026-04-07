@@ -1,4 +1,4 @@
-use crate::server::Result;
+use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use std::sync::Arc;
@@ -25,7 +25,7 @@ pub fn open(path: &str) -> Result<Db> {
         std::fs::create_dir_all(parent)?;
     }
     let conn = Connection::open(path)
-        .map_err(|e| crate::server::error::Error::custom(format!("open SQLite at {path}: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("open SQLite at {path}: {e}")))?;
     conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
     apply_schema(&conn)?;
     run_migrations(&conn)?;
@@ -377,7 +377,7 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         {
             let stale: Vec<String> = mapped
                 .filter_map(|r| r.ok())
-                .filter(|(_, enc)| crate::server::crypto::decrypt(enc).is_err())
+                .filter(|(_, enc)| crate::crypto::decrypt(enc).is_err())
                 .map(|(name, _)| name)
                 .collect();
             for name in stale {

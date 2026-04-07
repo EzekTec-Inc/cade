@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use parking_lot::Mutex;
 
-use agent::{CadeClient, session::SessionStore};
+use agent::{HttpTransport, session::SessionStore};
 use cade::support::text::sanitize_for_terminal;
 use cade::toolsets::Toolset;
 use cli::{Args, EvalAction, PackageAction, PackageSubcommand, Repl};
@@ -136,7 +136,7 @@ async fn main() -> Result<()> {
     })?;
     let base_url = settings.base_url();
 
-    let client = CadeClient::new(base_url.clone(), api_key)
+    let client = HttpTransport::new(base_url.clone(), api_key)
         .map_err(|e| Error::custom(format!("create CADE server: {e}")))?;
 
     if !client.health().await.unwrap_or(false) {

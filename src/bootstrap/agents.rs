@@ -8,13 +8,13 @@ use cade::skills::{discover_all_skills, skills_listing};
 use cade::toolsets::Toolset;
 use cade::{Error, Result};
 use cade_agent::agent;
-use cade_agent::agent::CadeClient;
+use cade_agent::agent::HttpTransport;
 use cade_agent::agent::client::{CreateAgentRequest, MemoryBlock};
 use cade_agent::agent::session::SessionStore;
 use cade_core::capabilities::CapabilitySet;
 
 pub async fn resolve_agent_and_conversation(
-    client: &CadeClient,
+    client: &HttpTransport,
     args: &Args,
     default_model: &str,
     toolset: Toolset,

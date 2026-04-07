@@ -18,7 +18,7 @@ pub fn upsert_memory_block_typed(
     if memory_type.is_some() || confidence.is_some() {
         let conn = db
             .lock()
-            .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+            .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
         if let Some(mt) = memory_type {
             let _ = conn.execute(
                 "UPDATE shared_memory_blocks SET memory_type = ?1 WHERE label = ?2",
@@ -47,7 +47,7 @@ pub fn insert_memory_evidence(
 ) -> Result<String> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
 
     // Find the block_id
     let block_id: Option<String> = conn
@@ -61,7 +61,7 @@ pub fn insert_memory_evidence(
         .optional()?;
 
     let Some(block_id) = block_id else {
-        return Err(crate::server::Error::custom(format!(
+        return Err(crate::error::Error::custom(format!(
             "Memory block '{label}' not found for agent {agent_id}"
         )));
     };
@@ -83,7 +83,7 @@ pub fn list_memory_evidence(
 ) -> Result<Vec<(String, String, String, Option<String>, f64, i64)>> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
         "SELECT e.id, e.kind, e.reference, e.excerpt, e.confidence, e.created_at
          FROM memory_evidence e
@@ -119,7 +119,7 @@ pub fn insert_reflection_log(
 ) -> Result<()> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     conn.execute(
         "INSERT OR IGNORE INTO reflection_log
          (id, agent_id, trigger, blocks_created, blocks_updated, summary, duration_ms, created_at)
@@ -142,7 +142,7 @@ pub fn insert_reflection_log(
 pub fn list_reflection_log(db: &Db, agent_id: &str) -> Result<Vec<serde_json::Value>> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
         "SELECT id, trigger, blocks_created, blocks_updated, summary, duration_ms, created_at
          FROM reflection_log WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 50",
@@ -218,7 +218,7 @@ mod tests {
         let block_id: String = {
             let conn = db
                 .lock()
-                .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+                .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
             conn.query_row(
                 "SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?1",
                 params![agent1],
@@ -319,7 +319,7 @@ mod tests {
         apply_schema(&conn)?;
 
         // Insert a provider with a valid encrypted key
-        let valid_key = crate::server::crypto::encrypt("sk-real-key")?;
+        let valid_key = crate::crypto::encrypt("sk-real-key")?;
         conn.execute(
             "INSERT INTO providers (name, kind, api_key, base_url, enabled, created_at)
              VALUES ('good', 'anthropic', ?1, NULL, 1, 0)",

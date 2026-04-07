@@ -1,6 +1,6 @@
 use super::*;
 
-impl CadeClient {
+impl HttpTransport {
     // -- Tools
 
     pub async fn create_tool(&self, req: CreateToolRequest) -> Result<ToolDef> {

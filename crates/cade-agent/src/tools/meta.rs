@@ -3,14 +3,14 @@
 /// This module owns the JSON schemas and server-registration logic for all
 /// meta tools.  Previously these lived in `src/main.rs`; centralising them
 /// here lets `ToolRuntime` and `headless.rs` share a single source of truth.
-use crate::agent::client::{CadeClient, CreateToolRequest};
+use crate::agent::client::{HttpTransport, CreateToolRequest};
 use serde_json::{Value, json};
 
 // region:    --- Public API
 
 /// Register all meta tools with the server and return their IDs.
 /// Returns the list of IDs that were successfully registered/upserted.
-pub async fn register_meta_tools(client: &CadeClient) -> Vec<String> {
+pub async fn register_meta_tools(client: &HttpTransport) -> Vec<String> {
     let schemas = all_meta_schemas();
     let mut ids = Vec::new();
     for schema in schemas {

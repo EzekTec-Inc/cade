@@ -20,7 +20,7 @@ use cade_core::skills::discover_all_skills;
 
 use cade_core::tool_ids::*;
 
-use crate::agent::client::CadeClient;
+use crate::agent::client::HttpTransport;
 use crate::backends::{ExecutionBackend, LocalBackend};
 use crate::mcp::McpManager;
 use crate::tools::git_checkpoint;
@@ -45,7 +45,7 @@ pub struct RuntimeToolResult {
 ///
 /// Create once per session and reuse across turns.
 pub struct ToolRuntime {
-    pub client: Arc<CadeClient>,
+    pub client: Arc<HttpTransport>,
     pub mcp: Arc<McpManager>,
     pub agent_id: String,
     pub cwd: PathBuf,
@@ -61,7 +61,7 @@ impl ToolRuntime {
     // -- Constructor
 
     pub fn new(
-        client: Arc<CadeClient>,
+        client: Arc<HttpTransport>,
         mcp: Arc<McpManager>,
         agent_id: String,
         cwd: PathBuf,
@@ -78,7 +78,7 @@ impl ToolRuntime {
     }
 
     /// Convenience constructor that clones the client and wraps an MCP reference.
-    pub fn from_refs(client: &CadeClient, mcp: &McpManager, agent_id: &str, cwd: PathBuf) -> Self {
+    pub fn from_refs(client: &HttpTransport, mcp: &McpManager, agent_id: &str, cwd: PathBuf) -> Self {
         let _ = mcp;
         Self {
             client: Arc::new(client.clone()),

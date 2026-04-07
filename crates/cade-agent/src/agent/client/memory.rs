@@ -1,6 +1,6 @@
 use super::*;
 
-impl CadeClient {
+impl HttpTransport {
     // -- Memory
 
     /// Fetch all memory blocks for an agent.

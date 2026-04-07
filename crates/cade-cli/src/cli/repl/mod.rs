@@ -15,7 +15,7 @@ use parking_lot::Mutex;
 
 use crate::ui::{RenderLine, ToastLevel, TuiApp, cycle_mode, cycle_mode_back};
 use cade_agent::agent::session::SessionStore;
-use cade_agent::agent::{CadeClient, client::AgentState};
+use cade_agent::agent::{HttpTransport, client::AgentState};
 use cade_agent::subagents::{BackgroundResult, discover_all_subagents};
 use cade_core::permissions::{PermissionManager, PermissionMode};
 use cade_core::settings::SettingsManager;
@@ -114,7 +114,7 @@ pub(crate) enum ToolPreflightResult {
 use crate::cli::repl::format::mode_display;
 
 pub struct Repl {
-    pub(crate) client: CadeClient,
+    pub(crate) client: HttpTransport,
     /// Shared-mutable so /new and /agents can hot-swap the agent mid-session
     pub(crate) agent_id: Arc<Mutex<String>>,
     pub(crate) agent_name: Arc<Mutex<String>>,
@@ -205,7 +205,7 @@ pub struct Repl {
 
 impl Repl {
     pub fn new(
-        client: CadeClient,
+        client: HttpTransport,
         agent_id: String,
         agent_name: String,
         permissions: PermissionManager,

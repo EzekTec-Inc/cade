@@ -5,10 +5,8 @@ use axum::{
 };
 use serde_json::{Value, json};
 
-use crate::server::{
-    state::AppState,
-    storage::sqlite::{self, ProviderRow},
-};
+use crate::server::state::AppState;
+use cade_store::sqlite::{self, ProviderRow};
 use cade_ai::{LlmRouter, PRESET_PROVIDERS};
 
 fn server_err(msg: String) -> (StatusCode, Json<Value>) {

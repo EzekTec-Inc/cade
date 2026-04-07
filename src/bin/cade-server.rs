@@ -12,8 +12,8 @@ use cade::server::{
     config::ServerConfig,
     rate_limit::RateLimiter,
     state::AppState,
-    storage::{open as open_db, sqlite},
 };
+use cade_store::sqlite::{open as open_db, self};
 
 use cade_ai::{CompletionRequest, LlmProvider, LlmRouter};
 
@@ -57,7 +57,7 @@ async fn main() -> Result<()> {
         config.db_path
     );
 
-    let db = open_db(&config.db_path).map_err(|e| Error::custom(e.to_string()))?;
+    let db = open_db(&config.db_path).map_err(|e: cade_store::error::Error| Error::custom(e.to_string()))?;
 
 
     // Build router from env vars first

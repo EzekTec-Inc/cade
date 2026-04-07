@@ -3,11 +3,11 @@ use super::*;
 pub fn upsert_provider(db: &Db, row: &ProviderRow) -> Result<()> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
 
     // SEC-02: Encrypt API key at rest
     let encrypted_key = match &row.api_key {
-        Some(k) if !k.is_empty() => Some(crate::server::crypto::encrypt(k)?),
+        Some(k) if !k.is_empty() => Some(crate::crypto::encrypt(k)?),
         other => other.clone(),
     };
 
@@ -34,7 +34,7 @@ pub fn upsert_provider(db: &Db, row: &ProviderRow) -> Result<()> {
 pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt =
         conn.prepare("SELECT name, kind, api_key, base_url, enabled FROM providers ORDER BY name")?;
     let mut providers = Vec::new();
@@ -54,7 +54,7 @@ pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
         // vars if available; the user can also re-save it via /connect.
         let api_key = match encrypted_key {
             Some(k) if !k.is_empty() => {
-                match crate::server::crypto::decrypt(&k) {
+                match crate::crypto::decrypt(&k) {
                     Ok(d) => Some(d),
                     Err(e) => {
                         tracing::warn!(
@@ -84,7 +84,7 @@ pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
 pub fn delete_provider(db: &Db, name: &str) -> Result<bool> {
     let conn = db
         .lock()
-        .map_err(|e| crate::server::Error::custom(format!("db lock poisoned: {e}")))?;
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     let n = conn.execute("DELETE FROM providers WHERE name = ?1", params![name])?;
     Ok(n > 0)
 }

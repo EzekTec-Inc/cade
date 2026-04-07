@@ -1,6 +1,6 @@
 use super::*;
 
-impl CadeClient {
+impl HttpTransport {
     // -- Messages
 
     /// Send a user message and return the response messages.

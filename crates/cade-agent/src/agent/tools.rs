@@ -1,7 +1,7 @@
 use crate::Result;
 use serde_json::{Value, json};
 
-use super::client::{CadeClient, CreateToolRequest, ToolDef};
+use super::client::{HttpTransport, CreateToolRequest, ToolDef};
 use crate::tools::schemas_for_toolset;
 use cade_core::toolsets::Toolset;
 
@@ -9,7 +9,7 @@ use cade_core::toolsets::Toolset;
 ///
 /// Skips already-registered tools (by name) to stay idempotent across restarts.
 /// Returns the full list of `ToolDef`s — needed for `attach_agent_tools()`.
-pub async fn register_mcp_tools(client: &CadeClient, schemas: Vec<Value>) -> Result<Vec<ToolDef>> {
+pub async fn register_mcp_tools(client: &HttpTransport, schemas: Vec<Value>) -> Result<Vec<ToolDef>> {
     if schemas.is_empty() {
         return Ok(vec![]);
     }
@@ -51,7 +51,7 @@ pub async fn register_mcp_tools(client: &CadeClient, schemas: Vec<Value>) -> Res
 ///
 /// Execution happens client-side in Rust — the Python stubs are never run.
 pub async fn register_cade_tools(
-    client: &CadeClient,
+    client: &HttpTransport,
     toolset: Toolset,
     allow_agent_mode_changes: bool,
 ) -> Result<Vec<ToolDef>> {
