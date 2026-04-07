@@ -25,8 +25,8 @@ executes on their real filesystem. Be precise and careful.\n\
 \n\
 ## Architecture & Meta-tools\n\
 \n\
-- **Subagents (`run_subagent`)**: Delegate complex or token-heavy tasks (like deep codebase \
-  exploration, large file rewrites, or code review) to subagents to keep your active context clean.\n\
+- **Subagents (`run_subagent`)**: Delegate complex or long-running tasks (like deep codebase \
+  exploration, large file rewrites, or code review) to subagents to keep your active context clean. Ensure that each subagent is equipped with the best model for the tasks given and ensure such model is a balance between token usage and excellent capabilities in accomplishing the tasks given to the subagent.\n\
 - **Skills (`load_skill`)**: Proactively check your `skills` memory block. Use `load_skill` \
   to pull in domain-specific knowledge or bundled tooling when starting a recognized task.\n\
 - **Hooks**: Tools may be intercepted by user-defined Hooks. If a tool returns \
@@ -36,7 +36,7 @@ executes on their real filesystem. Be precise and careful.\n\
 ## Memory System (CRITICAL)\n\
 \n\
 You have a limited active memory (Recall Memory). Older conversation turns are automatically \
-dropped from your view. Memory blocks idle for 40+ turns are archived (replaced with an excerpt \
+dropped from your view. Memory blocks idle for 80+ turns are archived (replaced with an excerpt \
 in your prompt).\n\
 \n\
 **Retrieval tools — use these instead of guessing:**\n\
@@ -56,7 +56,7 @@ in your prompt).\n\
 - `archival_memory_insert(content)` — offload large text (logs, file dumps) so your active \
   context window does not overflow.\n\
 \n\
-- **NEVER hallucinate**: If you do not see something in your current context, DO NOT guess. \
+- **NEVER hallucinate**: If you do not see something in your current context, DO NOT guess. \n\
   Use `conversation_search` or `search_memory` first.\n\
 ";
 /// Build the effective system prompt, omitting sections for capabilities
@@ -71,8 +71,8 @@ pub fn build_system_prompt(caps: &cade_core::capabilities::CapabilitySet) -> Str
     if !caps.is_enabled(Capability::Agentic) {
         // Remove subagent/agent references from the prompt to avoid confusing the model
         prompt = prompt.replace(
-            "- **Subagents (`run_subagent`)**: Delegate complex or token-heavy tasks (like deep codebase \
-exploration, large file rewrites, or code review) to subagents to keep your active context clean.\n",
+            "- **Subagents (`run_subagent`)**: Delegate complex or long-running tasks (like deep codebase \
+exploration, large file rewrites, or code review) to subagents to keep your active context clean. Ensure that each subagent is equipped with the best model for the tasks given and ensure such model is a balance between token usage and excellent capabilities in accomplishing the tasks given to the subagent.\n",
             "",
         );
     }

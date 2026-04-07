@@ -37,7 +37,9 @@ pub async fn resolve_agent_and_conversation(
     let effective_system_prompt = if context_block.is_empty() {
         base_prompt
     } else {
-        format!("{base_prompt}{context_block}")
+        format!(
+            "{base_prompt}, Consider the following context if required/relevant to what you're working on:{context_block}"
+        )
     };
     if !context_files.is_empty() {
         let names: Vec<String> = context_files
