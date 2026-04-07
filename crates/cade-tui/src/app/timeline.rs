@@ -686,14 +686,13 @@ fn render_tool_call_item(
     };
     let spans: Vec<Span<'static>> = vec![
         Span::styled(
-            " TOOL ",
+            "▶ TOOL ",
             Style::default()
-                .fg(colors.tool_badge_fg)
-                .bg(colors.tool_pending_bg)
+                .fg(colors.assistant_accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::raw(" "),
-        Span::styled(format!("{display}("), name_style),
+        Span::styled(format!("{display}"), name_style.add_modifier(Modifier::BOLD)),
+        Span::styled("(", Style::default().fg(colors.dim)),
         args_span,
     ];
     out.push(Line::from(spans));
@@ -712,21 +711,15 @@ fn render_tool_result_item(
     } else {
         colors.diff_added
     };
-    let badge_bg = if is_error {
-        colors.tool_error_bg
-    } else {
-        colors.tool_success_bg
-    };
     let inner_w = width.saturating_sub(11);
     let lns: Vec<&str> = content.lines().collect();
     if lns.is_empty() {
         out.push(Line::from(vec![
             Span::styled("│ ", Style::default().fg(colors.border)),
             Span::styled(
-                if is_error { " ERR " } else { " OK " },
+                if is_error { "✗ ERR " } else { "✓ OK " },
                 Style::default()
                     .fg(color)
-                    .bg(badge_bg)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -745,10 +738,9 @@ fn render_tool_result_item(
             if i == 0 {
                 spans.push(Span::styled("│ ", Style::default().fg(colors.border)));
                 spans.push(Span::styled(
-                    if is_error { " ERR " } else { " OK " },
+                    if is_error { "✗ ERR " } else { "✓ OK " },
                     Style::default()
                         .fg(color)
-                        .bg(badge_bg)
                         .add_modifier(Modifier::BOLD),
                 ));
                 spans.push(Span::raw(" "));
