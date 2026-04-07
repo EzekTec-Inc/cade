@@ -366,9 +366,13 @@ pub(crate) async fn build_context(
     //     char budget allows.  The most-recent turn is ALWAYS included — it
     //     carries the current user request the model must respond to.
     //  4. Reverse back to oldest-first and flatten into the message list.
-    let all_rows =
-        sqlite::get_context_window(&state.db, agent_id, conversation_id, context_char_budget)
-            .unwrap_or_default();
+    let all_rows = sqlite::get_context_window(
+        &state.db,
+        agent_id,
+        conversation_id,
+        context_char_budget.min(MAX_HISTORY_CHARS),
+    )
+    .unwrap_or_default();
 
     // Convert DB rows to LlmMessages (oldest-first).
     let all_llm_msgs: Vec<LlmMessage> = all_rows.iter().flat_map(db_row_to_llm).collect();

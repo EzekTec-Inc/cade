@@ -79,6 +79,13 @@ pub(crate) const MIN_CONTEXT_CHARS: usize = 8_000;
 /// (200_000 × 3 = 600_000 < cap).
 pub(crate) const MAX_CONTEXT_CHARS: usize = 6_000_000;
 
+/// Maximum character budget for older conversation history.
+/// Limits the sliding window of past turns to prevent models with massive
+/// context windows (e.g. 1M tokens) from causing quadratic API costs by
+/// sending 800+ turns on every request. The most recent turn is always
+/// included regardless of size (allowing large file uploads).
+pub(crate) const MAX_HISTORY_CHARS: usize = 200_000;
+
 /// Fraction of the context window reserved for the model's output (including
 /// reasoning/thinking tokens).  0.15 means 15% of the total window is off-limits
 /// to input context.  For a 128k model this reserves ~19k tokens for output,
