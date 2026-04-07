@@ -2955,19 +2955,15 @@ fn mode_footer_left<'a>(mode: PermissionMode, colors: &ThemeColors) -> (&'a str,
 
 pub fn cycle_mode(mode: PermissionMode) -> PermissionMode {
     match mode {
-        PermissionMode::Default => PermissionMode::AcceptEdits,
-        PermissionMode::AcceptEdits => PermissionMode::Plan,
-        PermissionMode::Plan => PermissionMode::BypassPermissions,
-        PermissionMode::BypassPermissions => PermissionMode::Default,
+        PermissionMode::Plan => PermissionMode::Default,
+        _ => PermissionMode::Plan,
     }
 }
 
 pub fn cycle_mode_back(mode: PermissionMode) -> PermissionMode {
     match mode {
-        PermissionMode::Default => PermissionMode::BypassPermissions,
-        PermissionMode::AcceptEdits => PermissionMode::Default,
-        PermissionMode::Plan => PermissionMode::AcceptEdits,
-        PermissionMode::BypassPermissions => PermissionMode::Plan,
+        PermissionMode::Plan => PermissionMode::Default,
+        _ => PermissionMode::Plan,
     }
 }
 
