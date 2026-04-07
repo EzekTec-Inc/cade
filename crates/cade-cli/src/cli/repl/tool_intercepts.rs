@@ -18,7 +18,8 @@ impl Repl {
             .to_string();
         let prompt = args["prompt"].as_str().unwrap_or("").trim().to_string();
         let background = args["background"].as_bool().unwrap_or(false);
-        let silent_stream = args["silent_stream"].as_bool().unwrap_or(false);
+        let silent_stream = args["silent_stream"].as_bool().unwrap_or(false)
+            || self.settings.lock().silent_subagents();
         let agent_id_arg = args["agent_id"].as_str().map(|s| s.trim().to_string());
         let model_override = args["model"].as_str().map(|s| s.trim().to_string());
 

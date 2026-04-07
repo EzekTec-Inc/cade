@@ -193,6 +193,11 @@ pub struct GlobalSettings {
     #[serde(default)]
     pub execution: ExecutionProfile,
 
+    // -- Subagents
+    /// Whether to silence the live streaming output of subagents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silent_subagents: Option<bool>,
+
     // -- Capability profile
     /// Capability profile name: "core", "pro", or "full".
     /// Default is "full" for backward compatibility.
@@ -302,6 +307,9 @@ pub struct ProjectSettings {
     /// Whether to automatically create a checkpoint before destructive edits
     #[serde(default = "default_true")]
     pub auto_checkpoint: bool,
+    /// Whether to silence the live streaming output of subagents.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub silent_subagents: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -908,6 +916,11 @@ impl SettingsManager {
     }
     pub fn project(&self) -> &ProjectSettings {
         &self.project
+    }
+
+    /// Whether subagent live streaming should be silenced.
+    pub fn silent_subagents(&self) -> bool {
+        self.project.silent_subagents.unwrap_or(self.global.silent_subagents.unwrap_or(false))
     }
 
     /// Remove the API key from global settings and persist.
