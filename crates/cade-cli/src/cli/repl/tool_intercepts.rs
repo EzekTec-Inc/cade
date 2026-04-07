@@ -11,9 +11,9 @@ impl Repl {
         call_id: &str,
         args: &serde_json::Value,
     ) -> Result<cade_agent::tools::ToolResult> {
-        let subagent_type = args["subagent_type"]
+        let subagent_mode = args["mode"]
             .as_str()
-            .unwrap_or("general-purpose")
+            .unwrap_or("build")
             .trim()
             .to_string();
         let prompt = args["prompt"].as_str().unwrap_or("").trim().to_string();
@@ -32,17 +32,17 @@ impl Repl {
             });
         }
 
-        // Resolve subagent definition
+        // Resolve subagent definition - we now always use the unified worker
         let all_defs = discover_all_subagents(&self.cwd);
-        let def_opt = find_subagent(&subagent_type, &all_defs).cloned();
+        let def_opt = find_subagent("worker", &all_defs).cloned();
 
         // Determine if using existing stateful agent or ephemeral
         let _use_existing_agent = agent_id_arg.is_some();
 
         // Show progress
         self.tui_dim(format!(
-            "  Launching subagent [{}]{}…",
-            subagent_type,
+            "  Launching unified subagent [mode: {}]{}…",
+            subagent_mode,
             if background { " (background)" } else { "" }
         ));
 
@@ -107,7 +107,7 @@ impl Repl {
             let mut app = app_arc.lock();
             app.push_silent(crate::ui::RenderLine::SystemMsg(format!(
                 "  [Subagent: {}]",
-                subagent_type
+                subagent_mode
             )));
             Some(app.begin_live_output(12))
         } else {
@@ -137,7 +137,7 @@ impl Repl {
             };
 
         let run_task = {
-            let subagent_type_c = subagent_type.clone();
+            let subagent_mode_c = subagent_mode.clone();
             let task_id_c = task_id.clone();
             let _prompt_preview_c = prompt_preview.clone();
             async move {
@@ -160,9 +160,9 @@ impl Repl {
                         .unwrap_or_else(|| cade_ai::catalogue::fast_model_for_main_model(&main_model));
 
                     let req = cade_agent::agent::client::CreateAgentRequest {
-                        name: Some(format!("subagent-{}-{}", subagent_type_c, task_id_c)),
+                        name: Some(format!("subagent-{}-{}", subagent_mode_c, task_id_c)),
                         model,
-                        description: Some(format!("Ephemeral subagent: {subagent_type_c}")),
+                        description: Some(format!("Ephemeral subagent: {subagent_mode_c}")),
                         system_prompt: None,
                         memory_blocks: seed_blocks,
                         tool_ids: vec![],
@@ -173,107 +173,28 @@ impl Repl {
                     }
                 };
 
-                // Run headless with evaluator retry loop
-                use cade_agent::subagents::evaluator::{
-                    evaluate_subagent_output, EvalVerdict, DEFAULT_MAX_RETRIES,
+                // Run headless
+                let result = crate::cli::headless::run_headless(
+                    &client,
+                    &sub_agent_id,
+                    &prompt,
+                    &permissions,
+                    &mcp_ref,
+                    &hooks,
+                    on_output.clone(),
+                )
+                .await;
+
+                let (last_output, is_error) = match result {
+                    Ok((output, _)) => (output, false),
+                    Err(e) => (format!("Subagent error: {e}"), true),
                 };
-
-                let max_retries = DEFAULT_MAX_RETRIES;
-                let mut attempt: u8 = 0;
-                let mut last_output = String::new();
-
-                loop {
-                    let retry_prompt = if attempt == 0 {
-                        prompt.clone()
-                    } else {
-                        // Append evaluator feedback to the original prompt
-                        let feedback = match evaluate_subagent_output(
-                            &last_output,
-                            &prompt,
-                            max_retries,
-                            attempt.saturating_sub(1),
-                        ) {
-                            EvalVerdict::Retry { feedback, .. } => feedback,
-                            _ => "Previous attempt was unsatisfactory.".to_string(),
-                        };
-                        format!(
-                            "{prompt}\n\n[EVALUATOR FEEDBACK — attempt {attempt}]: \
-                             Your previous output failed validation: {feedback}. \
-                             Please fix the issue and try again."
-                        )
-                    };
-
-                    let result = crate::cli::headless::run_headless(
-                        &client,
-                        &sub_agent_id,
-                        &retry_prompt,
-                        &permissions,
-                        &mcp_ref,
-                        &hooks,
-                        on_output.clone(),
-                    )
-                    .await;
-
-                    match result {
-                        Ok((output, _)) => {
-                            let verdict =
-                                evaluate_subagent_output(&output, &prompt, max_retries, attempt);
-                            match verdict {
-                                EvalVerdict::Accept => {
-                                    last_output = output;
-                                    break;
-                                }
-                                EvalVerdict::Retry { feedback, attempt: next } => {
-                                    tracing::info!(
-                                        "evaluator: retry {next}/{max_retries} for subagent \
-                                         [{subagent_type_c}]: {feedback}"
-                                    );
-                                    last_output = output;
-                                    attempt = next;
-                                    continue;
-                                }
-                                EvalVerdict::Reject { reason } => {
-                                    tracing::warn!(
-                                        "evaluator: rejecting subagent [{subagent_type_c}]: {reason}"
-                                    );
-                                    last_output = format!(
-                                        "[Evaluator rejected after {max_retries} retries: {reason}]\n\n\
-                                         Last output:\n{output}"
-                                    );
-                                    break;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            last_output = format!("Subagent error: {e}");
-                            // Evaluate the error output too — may trigger retry
-                            let verdict = evaluate_subagent_output(
-                                &last_output,
-                                &prompt,
-                                max_retries,
-                                attempt,
-                            );
-                            match verdict {
-                                EvalVerdict::Retry { attempt: next, .. } => {
-                                    tracing::info!(
-                                        "evaluator: retrying after subagent error [{subagent_type_c}]"
-                                    );
-                                    attempt = next;
-                                    continue;
-                                }
-                                _ => break,
-                            }
-                        }
-                    }
-                }
 
                 // Delete ephemeral agent
                 if ephemeral {
                     let _ = client.delete_agent(&sub_agent_id).await;
                 }
 
-                let is_error = last_output.starts_with("[Evaluator rejected")
-                    || last_output.starts_with("Subagent error:");
                 (last_output, is_error)
             }
         };
@@ -282,10 +203,10 @@ impl Repl {
             // Acquire a permit — blocks if cap is reached, queues the task
             let sem = std::sync::Arc::clone(&self.subagent_semaphore);
             let bg = bg_results;
-            let st = subagent_type.clone();
+            let st = subagent_mode.clone();
             let bg_client = self.client.clone();
             let bg_parent_id = parent_agent_id.clone();
-            let bg_st_label = subagent_type.clone();
+            let bg_st_label = subagent_mode.clone();
             let bg_task_id = task_id.clone();
             tokio::spawn(async move {
                 // Permit held for the lifetime of the spawned task
@@ -337,7 +258,7 @@ impl Repl {
                 tool_call_id: call_id_owned,
                 tool_name: "run_subagent".to_string(),
                 output: format!(
-                    "Background subagent [{subagent_type}] launched (task ID: {}). \
+                    "Background subagent [{subagent_mode}] launched (task ID: {}). \
                      You will be notified when it completes.",
                     task_id_c
                 ),
@@ -366,17 +287,17 @@ impl Repl {
             // SubagentStop hook — can block (exit 2 continues the agent)
             let hook_outcome = self
                 .hooks
-                .subagent_stop(&subagent_type, &output, is_error)
+                .subagent_stop(&subagent_mode, &output, is_error)
                 .await;
 
             if !is_error {
-                self.tui_ok(format!("  ✓ Subagent [{}] complete", subagent_type));
+                self.tui_ok(format!("  ✓ Subagent [{}] complete", subagent_mode));
             }
 
             // Write sub-agent result summary into parent agent's short-term memory.
             // Store full output in Archival Memory and give parent a summary pointer.
             {
-                let label = format!("subagent:{}:{}", subagent_type, task_id_c);
+                let label = format!("subagent:{}:{}", subagent_mode, task_id_c);
                 let summary_value = if output.chars().count() > 1500 {
                     let _ = self
                         .client
@@ -400,7 +321,7 @@ impl Repl {
                 } else {
                     output.clone()
                 };
-                let desc = format!("Result from subagent [{}]", subagent_type);
+                let desc = format!("Result from subagent [{}]", subagent_mode);
                 let _ = self
                     .client
                     .upsert_memory(&parent_agent_id, &label, &summary_value, Some(&desc))

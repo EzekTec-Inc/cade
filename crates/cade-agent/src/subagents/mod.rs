@@ -1,5 +1,5 @@
 // region:    --- Modules
-pub mod evaluator;
+
 
 use crate::Result;
 use std::path::{Path, PathBuf};
@@ -97,74 +97,16 @@ impl SubagentDef {
 pub fn builtin_subagents() -> Vec<SubagentDef> {
     vec![
         SubagentDef {
-            name: "explore".to_string(),
-            description:
-                "Fast read-only codebase search — find files, search patterns, understand structure"
-                    .to_string(),
-            model: None, // inherit (works well with any model)
-            tools: SubagentTools::Readonly,
-            system_prompt: "\
-You are an expert code explorer. Your job is to search the codebase efficiently and return \
-precise, concise answers. Do NOT make any modifications to files. \
-Focus on finding exactly what was asked and report back clearly with file paths, line numbers, \
-and relevant code snippets. Be thorough but succinct."
-                .to_string(),
-            skills: vec![],
-            scope: SubagentScope::Builtin,
-            path: None,
-        },
-        SubagentDef {
-            name: "general-purpose".to_string(),
-            description: "Full-capability agent — research, plan, and implement changes"
-                .to_string(),
+            name: "worker".to_string(),
+            description: "Highly capable unified worker — explore, plan, implement, and review".to_string(),
             model: None,
-            tools: SubagentTools::List(vec![
-                "bash".to_string(),
-                "read_file".to_string(),
-                "write_file".to_string(),
-                "edit_file".to_string(),
-                "glob".to_string(),
-                "grep_search".to_string(),
-            ]),
+            tools: SubagentTools::All,
             system_prompt: "\
-You are a general-purpose coding assistant. Complete the assigned task thoroughly, \
-making all necessary file changes. Report back with a clear summary of what you did, \
-what files were changed, and any important decisions made."
-                .to_string(),
-            skills: vec![],
-            scope: SubagentScope::Builtin,
-            path: None,
-        },
-        SubagentDef {
-            name: "coder".to_string(),
-            description: "Focused code implementation — edits files, runs tests".to_string(),
-            model: None,
-            tools: SubagentTools::List(vec![
-                "bash".to_string(),
-                "read_file".to_string(),
-                "write_file".to_string(),
-                "edit_file".to_string(),
-                "glob".to_string(),
-                "grep_search".to_string(),
-            ]),
-            system_prompt: "\
-You are a focused coding agent. Implement the requested changes cleanly and correctly. \
-Follow the existing code style and patterns. Run tests if available. \
-Report what you changed and whether tests pass."
-                .to_string(),
-            skills: vec![],
-            scope: SubagentScope::Builtin,
-            path: None,
-        },
-        SubagentDef {
-            name: "reviewer".to_string(),
-            description: "Code review — read-only analysis of quality, bugs, security".to_string(),
-            model: None,
-            tools: SubagentTools::Readonly,
-            system_prompt: "\
-You are an expert code reviewer. Analyse the specified code for: bugs, security issues, \
-performance problems, style inconsistencies, and missing error handling. \
-Be specific — include file paths and line numbers. Prioritise findings by severity."
+You are a highly capable unified worker agent. Complete the assigned task autonomously. \
+You have full access to tools—use them dynamically to explore code, plan changes, and implement them. \
+Ensure changes are correct and idiomatic. Report back with a clear summary of what you did, \
+what files were changed, and any important decisions made. \
+Use `archival_memory_insert` for storing large text artifacts or logs."
                 .to_string(),
             skills: vec![],
             scope: SubagentScope::Builtin,

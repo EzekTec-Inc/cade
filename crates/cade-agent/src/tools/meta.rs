@@ -283,13 +283,13 @@ fn schema_load_skill_ref() -> Value {
 fn schema_run_subagent() -> Value {
     json!({
         "name": "run_subagent",
-        "description": "Spawn a subagent to handle a task autonomously. Only the final answer is returned — your context stays clean. Use for: codebase search (explore), implementation (general-purpose, coder), code review (reviewer), or custom subagents.",
+        "description": "Spawn a subagent to handle a task autonomously. Only the final answer is returned — your context stays clean.",
         "parameters": {
             "type": "object",
             "properties": {
-                "subagent_type": {
+                "mode": {
                     "type": "string",
-                    "description": "Built-in type (explore, general-purpose, coder, reviewer) or custom name from .cade/agents/"
+                    "description": "Subagent mode: 'plan' (read-only) or 'build' (full access). Default is 'build'."
                 },
                 "prompt": {
                     "type": "string",
@@ -308,7 +308,7 @@ fn schema_run_subagent() -> Value {
                     "description": "Optional: override the subagent's model"
                 }
             },
-            "required": ["subagent_type", "prompt"]
+            "required": ["prompt"]
         }
     })
 }
