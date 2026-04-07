@@ -2574,18 +2574,18 @@ fn render_frame(
         let mut items = Vec::new();
         for step in &plan.steps {
             let (prefix, color) = if step.is_done {
-                ("[✓] ", RC::DarkGray)
+                ("[✓] ", colors.muted)
             } else {
-                ("[ ] ", RC::Green)
+                ("[ ] ", colors.success)
             };
             items.push(ListItem::new(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(color)),
                 Span::styled(
                     format!("{}. {}", step.id, step.description),
                     Style::default().fg(if step.is_done {
-                        RC::DarkGray
+                        colors.muted
                     } else {
-                        RC::White
+                        colors.text
                     }),
                 ),
             ])));
@@ -2594,7 +2594,7 @@ fn render_frame(
             Block::default()
                 .borders(Borders::ALL)
                 .title(" Todos ")
-                .border_style(Style::default().fg(RC::Cyan)),
+                .border_style(Style::default().fg(colors.overlay_border)),
         );
         frame.render_widget(list, chunks[2]); // chunks[2] is plan panel in my new chunks array
     }
@@ -2851,7 +2851,7 @@ fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, colors: &Theme
                 .fg(colors.thinking_minimal)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(no_match, Style::default().fg(RC::DarkGray)),
+        Span::styled(no_match, Style::default().fg(colors.muted)),
     ]));
 
     // Match entries — fill remaining rows (minus sep + header already pushed)
@@ -2861,7 +2861,7 @@ fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, colors: &Theme
         let (glyph, style) = if selected {
             (
                 "❯",
-                Style::default().fg(RC::White).add_modifier(Modifier::BOLD),
+                Style::default().fg(colors.text).add_modifier(Modifier::BOLD),
             )
         } else {
             (" ", Style::default().fg(colors.muted))
