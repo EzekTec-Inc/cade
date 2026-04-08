@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::server::state::AppState;
 use cade_store::sqlite::{self, ProviderRow};
-use cade_ai::{LlmRouter, PRESET_PROVIDERS};
+use cade_ai::{LlmRouter, provider_registry::ProviderRegistry};
 
 fn server_err(msg: String) -> (StatusCode, Json<Value>) {
     tracing::error!("500 providers: {msg}");
@@ -94,10 +94,13 @@ pub async fn add_provider(
         return Err(bad_req("'name' cannot be empty"));
     }
 
+    let config_path = dirs::home_dir().map(|h| h.join(".cade/providers.json"));
+    let provider_registry = ProviderRegistry::load_or_default(config_path.as_deref());
+
     // Preset shortcut: if kind == "preset" or kind == name and it matches a PresetDef, auto-fill base_url
     let base_url = if kind == "openai-compatible" || kind == "preset" || kind == name {
-        if let Some(preset_url) = PRESET_PROVIDERS
-            .iter()
+        if let Some(preset_url) = provider_registry
+            .get_all_providers().iter()
             .find(|p| p.name == name.as_str())
             .map(|p| p.chat_url.to_string())
         {
@@ -185,15 +188,18 @@ pub async fn remove_provider(
 
 /// GET /v1/providers/presets — list available OpenAI-compatible presets
 pub async fn list_presets() -> Json<Value> {
-    let presets: Vec<Value> = PRESET_PROVIDERS
-        .iter()
+    let config_path = dirs::home_dir().map(|h| h.join(".cade/providers.json"));
+    let provider_registry = ProviderRegistry::load_or_default(config_path.as_deref());
+
+    let presets: Vec<Value> = provider_registry
+        .get_all_providers().iter()
         .map(|p| {
             json!({
                 "name":     p.name,
                 "kind":     "openai-compatible",
                 "base_url": p.chat_url,
-                "models_url": p.models_url,
-                "env_vars": p.env_vars,
+                "models_url": &p.models_url,
+                "env_vars": &p.env_vars,
             })
         })
         .collect();

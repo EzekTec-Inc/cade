@@ -10,6 +10,7 @@ pub mod gemini;
 pub mod ollama;
 pub mod openai;
 pub mod registry;
+pub mod provider_registry;
 
 pub use catalogue::{CATALOGUE, ModelEntry};
 pub use registry::{ModelPricing, ModelRegistry};

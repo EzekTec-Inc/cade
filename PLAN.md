@@ -2,6 +2,29 @@
 
 ---
 
+## 2026-04-08T21:00:00Z — Dynamic Provider Registry Refactor
+
+**Summary:** Extracted hardcoded preset provider definitions (`PRESET_PROVIDERS`) into a dynamic JSON-backed registry, achieving zero-hardcoded OpenCode-parity.
+
+**Files modified:**
+- `MODIFIED` `crates/cade-ai/src/lib.rs` (Removed static array, wired up `LlmRouter` to use `ProviderRegistry`)
+- `MODIFIED` `crates/cade-server/src/server/api/providers.rs`, `crates/cade-server/src/server/api/models.rs` (Updated API endpoints to query `ProviderRegistry`)
+- `ADDED` `crates/cade-ai/src/default_providers.json` (Bundled preset definitions)
+- `ADDED` `crates/cade-ai/src/provider_registry.rs` (Dynamic registry loader merging with `~/.cade/providers.json`)
+
+**Reason:** The previous implementation hardcoded proxy providers (Groq, OpenRouter, etc.) into a static Rust array (`PRESET_PROVIDERS`). This required a binary recompile to update endpoints or environment variables. This change moves configuration to JSON and allows users to define custom presets in `~/.cade/providers.json` that are merged dynamically at runtime.
+
+**Previous behavior:** `PRESET_PROVIDERS` was a static slice compiled into `cade-ai`. The router iterated over this static array during boot.
+
+**New behavior:** `ProviderRegistry::load_or_default()` reads the bundled defaults and overrides them with any user-defined configuration found in `~/.cade/providers.json`.
+
+**Rollback steps:**
+1. Restore `PRESET_PROVIDERS` block to `crates/cade-ai/src/lib.rs`.
+2. Delete `crates/cade-ai/src/default_providers.json` and `crates/cade-ai/src/provider_registry.rs`.
+3. Revert `LlmRouter` loop in `lib.rs` and imports in `cade-server`.
+
+---
+
 ## 2026-04-03T22:30:00Z — Dynamic Model Pricing & Interactive MCP Server Manager
 
 **Summary:** Upgraded the `ModelRegistry` to support dynamic real-time token pricing via a cloud sync mechanism and local overrides. Replaced the static `/mcp` table with a fully interactive TUI overlay to manage MCP server configurations.

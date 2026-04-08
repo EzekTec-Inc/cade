@@ -3,7 +3,7 @@ use axum::extract::State;
 use serde_json::{Value, json};
 
 use crate::server::state::AppState;
-use cade_ai::PRESET_PROVIDERS;
+use cade_ai::provider_registry::ProviderRegistry;
 
 /// GET /v1/models
 ///
@@ -33,15 +33,18 @@ pub async fn list_models(State(state): State<AppState>) -> Json<Value> {
     drop(router);
 
     // Providers with no known model listing (not in catalogue, preset, or ollama)
+    let config_path = dirs::home_dir().map(|h| h.join(".cade/providers.json"));
+    let provider_registry = ProviderRegistry::load_or_default(config_path.as_deref());
+
     const KNOWN: &[&str] = &["anthropic", "openai", "gemini", "google", "ollama"];
-    let all_known: std::collections::HashSet<&str> = KNOWN
+    let all_known: std::collections::HashSet<String> = KNOWN
         .iter()
-        .chain(PRESET_PROVIDERS.iter().map(|p| &p.name))
-        .copied()
+        .map(|s| s.to_string())
+        .chain(provider_registry.get_all_providers().iter().map(|p| p.name.clone()))
         .collect();
     let custom_providers: Vec<String> = live_names
         .into_iter()
-        .filter(|n| !all_known.contains(n.as_str()))
+        .filter(|n| !all_known.contains(n))
         .collect();
 
     Json(json!({

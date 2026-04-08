@@ -1,0 +1,32 @@
+[
+  {
+    "name": "openrouter",
+    "env_vars": ["OPENROUTER_API_KEY"],
+    "chat_url": "https://openrouter.ai/api/v1/chat/completions",
+    "models_url": "https://openrouter.ai/api/v1/models"
+  },
+  {
+    "name": "groq",
+    "env_vars": ["GROQ_API_KEY"],
+    "chat_url": "https://api.groq.com/openai/v1/chat/completions",
+    "models_url": "https://api.groq.com/openai/v1/models"
+  },
+  {
+    "name": "together",
+    "env_vars": ["TOGETHER_API_KEY", "TOGETHER_AI_API_KEY"],
+    "chat_url": "https://api.together.xyz/v1/chat/completions",
+    "models_url": "https://api.together.xyz/v1/models"
+  },
+  {
+    "name": "fireworks",
+    "env_vars": ["FIREWORKS_API_KEY"],
+    "chat_url": "https://api.fireworks.ai/inference/v1/chat/completions",
+    "models_url": "https://api.fireworks.ai/inference/v1/models"
+  },
+  {
+    "name": "deepinfra",
+    "env_vars": ["DEEPINFRA_API_KEY"],
+    "chat_url": "https://api.deepinfra.com/v1/openai/chat/completions",
+    "models_url": "https://api.deepinfra.com/v1/openai/models"
+  }
+]
