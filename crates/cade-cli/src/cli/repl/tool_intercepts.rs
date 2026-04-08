@@ -294,38 +294,22 @@ impl Repl {
                 self.tui_ok(format!("  ✓ Subagent [{}] complete", subagent_mode));
             }
 
-            // Write sub-agent result summary into parent agent's short-term memory.
-            // Store full output in Archival Memory and give parent a summary pointer.
-            {
-                let label = format!("subagent:{}:{}", subagent_mode, task_id_c);
-                let summary_value = if output.chars().count() > 1500 {
-                    let _ = self
-                        .client
-                        .insert_archival_memory(
-                            &parent_agent_id,
-                            &output,
-                            &["subagent".to_string(), task_id_c.clone()],
-                        )
-                        .await;
+            // Clean up any stale subagent memory blocks from the parent agent
+            if let Ok(blocks) = self.client.get_memory(&parent_agent_id).await {
+                for block in blocks {
+                    if block.label.starts_with("subagent:") {
+                        let _ = self.client.delete_memory(&parent_agent_id, &block.label).await;
+                    }
+                }
+            }
 
-                    let end = output
-                        .char_indices()
-                        .nth(500)
-                        .map(|(i, _)| i)
-                        .unwrap_or(output.len());
-                    format!(
-                        "Subagent completed. Full output is stored in Archival Memory. To view it, use archival_memory_search with query 'subagent {}'. Summary preview: {}…",
-                        task_id_c,
-                        &output[..end]
-                    )
-                } else {
-                    output.clone()
-                };
-                let desc = format!("Result from subagent [{}]", subagent_mode);
-                let _ = self
-                    .client
-                    .upsert_memory(&parent_agent_id, &label, &summary_value, Some(&desc))
-                    .await;
+            // Store full output in Archival Memory if it's large, but DO NOT pollute active memory.
+            if output.chars().count() > 1500 {
+                let _ = self.client.insert_archival_memory(
+                    &parent_agent_id,
+                    &output,
+                    &["subagent".to_string(), task_id_c.clone()],
+                ).await;
             }
 
             // If hook blocked, append its reason to the output so the agent sees it

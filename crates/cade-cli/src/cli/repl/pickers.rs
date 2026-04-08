@@ -172,10 +172,10 @@ impl Repl {
     ) -> Result<Option<AgentPickerResult>> {
         use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
         use ratatui::{
-            layout::{Constraint, Direction, Layout},
+            layout::Constraint,
             style::{Color as RC, Modifier, Style},
             text::Span,
-            widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState},
+            widgets::{Block, Borders, Cell, Row, Table, TableState},
         };
         use std::collections::HashSet;
 
@@ -185,15 +185,12 @@ impl Repl {
 
         let current = self.agent_id();
         let mut marked: HashSet<usize> = HashSet::new();
-        let mut filter_query = String::new();
-        let mut selected_filtered: usize = 0;
+        let mut selected_idx: usize = 0;
 
         let do_draw = |app_arc: &std::sync::Arc<parking_lot::Mutex<crate::ui::TuiApp>>,
                        agents: &[AgentState],
-                       filtered_indices: &[usize],
                        sel: usize,
                        marked: &HashSet<usize>,
-                       filter_query: &str,
                        current: &str|
          -> Result<()> {
             let mut app = app_arc.lock();
@@ -205,13 +202,12 @@ impl Repl {
                 format!(" [{n} marked]  d delete all  Esc cancel ")
             };
 
-            let rows: Vec<Row> = filtered_indices
+            let rows: Vec<Row> = agents
                 .iter()
                 .enumerate()
-                .map(|(i, &original_idx)| {
-                    let a = &agents[original_idx];
+                .map(|(i, a)| {
                     let is_sel = i == sel;
-                    let is_marked = marked.contains(&original_idx);
+                    let is_marked = marked.contains(&i);
                     let is_active = a.id == current;
                     let short_id = if a.id.len() > 22 {
                         a.id[..22].to_string() + "…"
@@ -276,51 +272,21 @@ impl Repl {
             let mut ts = TableState::default().with_selected(Some(sel));
 
             app.terminal.draw(|f| {
-                let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
-                    .split(f.area());
-
-                f.render_stateful_widget(table, chunks[0], &mut ts);
-
-                let filter_block = Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Filter (Type to search) ")
-                    .border_style(Style::default().fg(RC::DarkGray));
-                let filter_text = Paragraph::new(format!("> {}█", filter_query))
-                    .block(filter_block)
-                    .style(Style::default().fg(RC::White));
-                f.render_widget(filter_text, chunks[1]);
+                f.render_stateful_widget(table, f.area(), &mut ts);
             })?;
             Ok(())
         };
 
         let result = loop {
-            let q = filter_query.to_lowercase();
-            let filtered_indices: Vec<usize> = agents
-                .iter()
-                .enumerate()
-                .filter(|(_, a)| {
-                    let m = a.model.as_deref().unwrap_or("");
-                    q.is_empty()
-                        || a.name.to_lowercase().contains(&q)
-                        || a.id.to_lowercase().contains(&q)
-                        || m.to_lowercase().contains(&q)
-                })
-                .map(|(i, _)| i)
-                .collect();
-
-            if selected_filtered >= filtered_indices.len() {
-                selected_filtered = filtered_indices.len().saturating_sub(1);
+            if selected_idx >= agents.len() {
+                selected_idx = agents.len().saturating_sub(1);
             }
 
             do_draw(
                 &app_arc,
                 agents,
-                &filtered_indices,
-                selected_filtered,
+                selected_idx,
                 &marked,
-                &filter_query,
                 &current,
             )?;
 
@@ -338,18 +304,17 @@ impl Repl {
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => break None,
 
                     (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
-                        selected_filtered = selected_filtered.saturating_sub(1);
+                        selected_idx = selected_idx.saturating_sub(1);
                     }
                     (KeyCode::Down, _) | (KeyCode::Tab, _) => {
-                        if selected_filtered + 1 < filtered_indices.len() {
-                            selected_filtered += 1;
+                        if selected_idx + 1 < agents.len() {
+                            selected_idx += 1;
                         }
                     }
 
                     (KeyCode::Enter, _) => {
-                        if marked.is_empty() && !filtered_indices.is_empty() {
-                            let orig_idx = filtered_indices[selected_filtered];
-                            let a = agents[orig_idx].clone();
+                        if marked.is_empty() && !agents.is_empty() {
+                            let a = agents[selected_idx].clone();
                             if a.id != current {
                                 break Some(AgentPickerResult::Switch(a));
                             }
@@ -357,12 +322,11 @@ impl Repl {
                     }
 
                     (KeyCode::Char(' '), _) => {
-                        if !filtered_indices.is_empty() {
-                            let orig_idx = filtered_indices[selected_filtered];
-                            if marked.contains(&orig_idx) {
-                                marked.remove(&orig_idx);
+                        if !agents.is_empty() {
+                            if marked.contains(&selected_idx) {
+                                marked.remove(&selected_idx);
                             } else {
-                                marked.insert(orig_idx);
+                                marked.insert(selected_idx);
                             }
                         }
                     }
@@ -370,10 +334,10 @@ impl Repl {
                     (KeyCode::Delete, _) => {
                         // Deletion logic...
                         let targets: Vec<usize> = if marked.is_empty() {
-                            if filtered_indices.is_empty() {
+                            if agents.is_empty() {
                                 continue;
                             }
-                            vec![filtered_indices[selected_filtered]]
+                            vec![selected_idx]
                         } else {
                             let mut v: Vec<usize> = marked.iter().copied().collect();
                             v.sort_unstable();
@@ -439,10 +403,10 @@ impl Repl {
                         }
                     }
 
-                    (KeyCode::Char('r'), KeyModifiers::NONE) if filter_query.is_empty() => {
-                        // rename only when not typing query to avoid intercepting words like "red"
-                        if !filtered_indices.is_empty() {
-                            let orig_idx = filtered_indices[selected_filtered];
+                    (KeyCode::Char('r'), KeyModifiers::NONE) => {
+                        // rename
+                        if !agents.is_empty() {
+                            let orig_idx = selected_idx;
                             let a = agents[orig_idx].clone();
                             use crate::ui::question::{Question, QuestionOption};
                             let q = Question {
@@ -487,18 +451,7 @@ impl Repl {
                                     }
                                 }
                             }
-                        } else {
-                            filter_query.push('r');
                         }
-                    }
-
-                    (KeyCode::Char(c), m)
-                        if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
-                    {
-                        filter_query.push(c);
-                    }
-                    (KeyCode::Backspace, _) => {
-                        filter_query.pop();
                     }
 
                     _ => {}
@@ -1059,13 +1012,18 @@ impl Repl {
          -> Result<()> {
             let mut app = app_arc.lock();
 
-            let hint = " ↑↓  Enter/e Edit  p Pin/Unpin  d Delete  Esc/q cancel ".to_string();
+            let f_disp = if filter_query.is_empty() {
+                String::new()
+            } else {
+                format!(" [Filter: {}] ", filter_query)
+            };
+            let hint = format!("{}{}", f_disp, " ↑↓ j k  Enter/e Edit  p Pin/Unpin  d Delete  Esc/q cancel ");
 
             let rows: Vec<Row> = filtered_indices
                 .iter()
                 .enumerate()
-                .map(|(i, &original_idx)| {
-                    let b = &blocks[original_idx];
+                .map(|(i, &orig_idx)| {
+                    let b = &blocks[orig_idx];
                     let is_sel = i == sel;
 
                     let style = if is_sel {
@@ -1124,8 +1082,8 @@ impl Repl {
 
             let mut ts = TableState::default().with_selected(Some(sel));
 
-            let preview_text = if !filtered_indices.is_empty() && sel < filtered_indices.len() {
-                let b = &blocks[filtered_indices[sel]];
+            let preview_text = if !blocks.is_empty() && sel < blocks.len() {
+                let b = &blocks[sel];
                 b.value.clone()
             } else {
                 String::new()
@@ -1141,27 +1099,13 @@ impl Repl {
                 );
 
             app.terminal.draw(|f| {
-                let main_chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
-                    .split(f.area());
-
                 let top_chunks = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
-                    .split(main_chunks[0]);
+                    .split(f.area());
 
                 f.render_stateful_widget(table, top_chunks[0], &mut ts);
                 f.render_widget(preview, top_chunks[1]);
-
-                let filter_block = Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Filter (Type to search) ")
-                    .border_style(Style::default().fg(RC::DarkGray));
-                let filter_text = Paragraph::new(format!("> {}█", filter_query))
-                    .block(filter_block)
-                    .style(Style::default().fg(RC::White));
-                f.render_widget(filter_text, main_chunks[1]);
             })?;
             Ok(())
         };
@@ -1321,7 +1265,12 @@ impl Repl {
          -> Result<()> {
             let mut app = app_arc.lock();
 
-            let hint = " ↑↓ Navigate  Enter Select  e Edit  Esc/q Cancel ".to_string();
+            let f_disp = if filter_query.is_empty() {
+                String::new()
+            } else {
+                format!(" [Filter: {}] ", filter_query)
+            };
+            let hint = format!("{}{}", f_disp, " ↑↓ Navigate  Enter Select  e Edit  Esc/q Cancel ");
 
             let rows: Vec<Row> = filtered_indices
                 .iter()
@@ -1414,27 +1363,13 @@ Skills: {}
                 );
 
             app.terminal.draw(|f| {
-                let main_chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
-                    .split(f.area());
-
                 let top_chunks = Layout::default()
                     .direction(Direction::Horizontal)
                     .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
-                    .split(main_chunks[0]);
+                    .split(f.area());
 
                 f.render_stateful_widget(table, top_chunks[0], &mut ts);
                 f.render_widget(preview, top_chunks[1]);
-
-                let filter_block = Block::default()
-                    .borders(Borders::ALL)
-                    .title(" Filter (Type to search) ")
-                    .border_style(Style::default().fg(RC::DarkGray));
-                let filter_text = Paragraph::new(format!("> {}█", filter_query))
-                    .block(filter_block)
-                    .style(Style::default().fg(RC::White));
-                f.render_widget(filter_text, main_chunks[1]);
             })?;
             Ok(())
         };

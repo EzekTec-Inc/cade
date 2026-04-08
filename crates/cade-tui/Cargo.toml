@@ -12,7 +12,7 @@ clipboard-images = ["dep:image", "dep:base64", "dep:arboard"]
 syntax-highlighting = ["dep:syntect"]
 
 [dependencies]
-tui-textarea = "0.2"
+tui-textarea = { version = "0.7", features = ["ratatui", "crossterm"] }
 # -- Workspace crates
 cade-core.path       = "../cade-core"
 # -- Error handling

@@ -120,16 +120,12 @@ impl<'a> Editor<'a> {
         // TextArea does its own undo/redo tracking
     }
 
-    pub fn undo(&mut self) -> bool {
-        self.textarea.undo()
-    }
-
-    pub fn redo(&mut self) -> bool {
-        self.textarea.redo()
+    pub fn handle_key_event(&mut self, event: crossterm::event::KeyEvent) -> bool {
+        self.textarea.input(event)
     }
 
     pub fn insert_char(&mut self, c: char) {
-        self.textarea.input(Input { key: Key::Char(c), ctrl: false, alt: false });
+        self.textarea.input(Input { key: Key::Char(c), ctrl: false, alt: false, shift: false });
     }
 
     pub fn insert_str(&mut self, s: &str) {
@@ -138,64 +134,6 @@ impl<'a> Editor<'a> {
 
     pub fn insert_newline(&mut self) {
         self.textarea.insert_newline();
-    }
-
-    pub fn delete_back(&mut self) -> bool {
-        self.textarea.delete_char()
-    }
-
-    pub fn delete_forward(&mut self) -> bool {
-        self.textarea.delete_next_char()
-    }
-
-    pub fn delete_to_line_start(&mut self) {
-        self.textarea.delete_line_by_head();
-    }
-
-    pub fn delete_to_end(&mut self) {
-        self.textarea.delete_line_by_end();
-    }
-
-    pub fn yank(&mut self) {}
-
-    pub fn delete_word_back(&mut self) {
-        self.textarea.delete_word();
-    }
-
-    pub fn delete_word_forward(&mut self) {
-        self.textarea.delete_next_word();
-    }
-
-    pub fn move_left(&mut self) {
-        self.textarea.move_cursor(tui_textarea::CursorMove::Back);
-    }
-
-    pub fn move_right(&mut self) {
-        self.textarea.move_cursor(tui_textarea::CursorMove::Forward);
-    }
-
-    pub fn move_word_left(&mut self) {
-        self.textarea.move_cursor(tui_textarea::CursorMove::WordBack);
-    }
-
-    pub fn move_word_right(&mut self) {
-        self.textarea.move_cursor(tui_textarea::CursorMove::WordForward);
-    }
-
-    pub fn move_home(&mut self) {
-        self.textarea.move_cursor(tui_textarea::CursorMove::Head);
-    }
-
-    pub fn move_end(&mut self) {
-        self.textarea.move_cursor(tui_textarea::CursorMove::End);
-    }
-
-    pub fn move_buffer_start(&mut self) {
-        self.textarea.move_cursor(tui_textarea::CursorMove::Top);
-    }
-
-    pub fn move_buffer_end(&mut self) {
-        self.textarea.move_cursor(tui_textarea::CursorMove::Bottom);
     }
 
     pub fn handle_paste(&mut self, text: &str) {

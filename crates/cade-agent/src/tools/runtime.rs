@@ -248,6 +248,17 @@ impl ToolRuntime {
             return ("Error: 'label' is required".to_string(), true);
         }
 
+        if operation == "delete" {
+            return match self.client.delete_memory(&self.agent_id, &label).await {
+                Ok(_) => (format!("Memory block '{label}' deleted"), false),
+                Err(e) => (format!("Failed to delete memory block: {e}"), true),
+            };
+        }
+
+        if value.is_empty() && operation != "delete" {
+            return ("Error: 'value' is required for set/append operations".to_string(), true);
+        }
+
         let final_value = if operation == "append" {
             let existing = self
                 .client

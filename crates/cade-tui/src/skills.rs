@@ -72,35 +72,21 @@ pub fn show_skills_manager(
         }
     }
 
-    let mut filter_query = String::new();
-    let mut selected_filtered: usize = 0;
+    let mut selected_idx: usize = 0;
     let result: Option<SkillsAction> = None;
 
     loop {
-        let q = filter_query.to_lowercase();
-        let filtered_indices: Vec<usize> = skills
-            .iter()
-            .enumerate()
-            .filter(|(_, s)| {
-                q.is_empty()
-                    || s.name.to_lowercase().contains(&q)
-                    || s.id.to_lowercase().contains(&q)
-                    || s.description.to_lowercase().contains(&q)
-            })
-            .map(|(i, _)| i)
-            .collect();
-
-        if selected_filtered >= filtered_indices.len() {
-            selected_filtered = filtered_indices.len().saturating_sub(1);
+        if selected_idx >= skills.len() {
+            selected_idx = skills.len().saturating_sub(1);
         }
 
         terminal.draw(|f| {
             let area = f.area();
             let inner_shell = overlay::render_overlay_shell(f, area, "Skills", colors);
 
-            let main_chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([Constraint::Min(5), Constraint::Length(3)].as_ref())
+            let top_chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
                 .split(Rect {
                     x: inner_shell.x,
                     y: inner_shell.y,
@@ -108,20 +94,14 @@ pub fn show_skills_manager(
                     height: inner_shell.height.saturating_sub(1), // leave room for footer
                 });
 
-            let top_chunks = Layout::default()
-                .direction(Direction::Horizontal)
-                .constraints([Constraint::Percentage(40), Constraint::Percentage(60)].as_ref())
-                .split(main_chunks[0]);
-
-            let hint = " ↑↓ Navigate  e Edit  Esc/q Close ";
+            let hint = " ↑↓ j k Navigate  e Edit  Esc/q Close ";
 
             // -- Left Pane (Table)
-            let rows: Vec<Row> = filtered_indices
+            let rows: Vec<Row> = skills
                 .iter()
                 .enumerate()
-                .map(|(i, &idx)| {
-                    let s = &skills[idx];
-                    let is_sel = i == selected_filtered;
+                .map(|(i, s)| {
+                    let is_sel = i == selected_idx;
 
                     let style = if is_sel {
                         Style::default()
@@ -171,13 +151,13 @@ pub fn show_skills_manager(
                     .border_style(Style::default().fg(colors.overlay_border)),
             );
 
-            let mut ts = TableState::default().with_selected(Some(selected_filtered));
+            let mut ts = TableState::default().with_selected(Some(selected_idx));
             f.render_stateful_widget(table, top_chunks[0], &mut ts);
 
             // -- Right Pane (Preview)
             let preview_text =
-                if !filtered_indices.is_empty() && selected_filtered < filtered_indices.len() {
-                    let s = &skills[filtered_indices[selected_filtered]];
+                if !skills.is_empty() && selected_idx < skills.len() {
+                    let s = &skills[selected_idx];
                     let meta = format!(
                         "ID: {}
 Description: {}
@@ -205,16 +185,6 @@ Triggers: {}
                 );
             f.render_widget(preview, top_chunks[1]);
 
-            // -- Bottom Pane (Filter)
-            let filter_block = Block::default()
-                .borders(Borders::ALL)
-                .title(" Filter (Type to search) ")
-                .border_style(Style::default().fg(colors.overlay_border));
-            let filter_text = Paragraph::new(format!("> {}█", filter_query))
-                .block(filter_block)
-                .style(Style::default().fg(colors.text));
-            f.render_widget(filter_text, main_chunks[1]);
-
             // Footer hint
             let hint_area = Rect {
                 x: inner_shell.x,
@@ -236,21 +206,20 @@ Triggers: {}
                 (KeyCode::Esc, _) => break,
                 (KeyCode::Char('c'), KeyModifiers::CONTROL) => break,
 
-                (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
-                    selected_filtered = selected_filtered.saturating_sub(1);
+                (KeyCode::Up, _) | (KeyCode::Char('k'), _) | (KeyCode::BackTab, _) => {
+                    selected_idx = selected_idx.saturating_sub(1);
                 }
-                (KeyCode::Down, _) | (KeyCode::Tab, _) => {
-                    if selected_filtered + 1 < filtered_indices.len() {
-                        selected_filtered += 1;
+                (KeyCode::Down, _) | (KeyCode::Char('j'), _) | (KeyCode::Tab, _) => {
+                    if selected_idx + 1 < skills.len() {
+                        selected_idx += 1;
                     }
                 }
 
-                (KeyCode::Char('e'), KeyModifiers::NONE) | (KeyCode::Enter, KeyModifiers::NONE)
-                    if filter_query.is_empty() =>
+                (KeyCode::Char('e'), KeyModifiers::NONE) | (KeyCode::Enter, KeyModifiers::NONE) =>
                 {
                     // Enter edit mode
-                    if !filtered_indices.is_empty() {
-                        let _orig_idx = filtered_indices[selected_filtered];
+                    if !skills.is_empty() {
+                        let _orig_idx = selected_idx;
                         // We can launch a specific edit modal or return an action.
                         // Currently, editing is mostly placeholders or writes to file.
                         // For a simple modernization without bloat, we just instruct the user to edit the SKILL.MD file directly or launch a basic prompt.
@@ -260,13 +229,6 @@ Triggers: {}
                         // Actually, editing a skill is best done via `/skills create` or the `edit_file` tool.
                         // Let's implement a fallback toast or just let it break out if needed.
                     }
-                }
-
-                (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
-                    filter_query.push(c);
-                }
-                (KeyCode::Backspace, _) => {
-                    filter_query.pop();
                 }
 
                 _ => {}

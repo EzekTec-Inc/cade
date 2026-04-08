@@ -120,8 +120,10 @@ mod tests {
     }
 
     #[test]
-    fn pro_caps_include_agentic_not_desktop() {
-        let caps = cade_core::capabilities::Profile::Pro.capabilities();
+    fn custom_caps_include_agentic_not_desktop() {
+        let mut caps = CapabilitySet::core();
+        caps.enable(Capability::Agentic);
+
         let meta = meta_schemas_for_capabilities(&caps);
         let native = native_schemas_for_capabilities(Toolset::Default, &caps);
 

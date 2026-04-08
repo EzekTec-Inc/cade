@@ -855,9 +855,8 @@ impl TuiApp {
             self.scroll = 0;
             scroll = 0;
         }
-        let input = self.editor.text();
+        let mut textarea = self.editor.textarea.clone();
         let input_mode = self.editor.detect_mode();
-        let cursor_pos = self.editor.cursor_pos();
         let mode = self.mode;
         let agent_name = self.agent_name.clone();
         let model = self.model.clone();
@@ -909,8 +908,7 @@ impl TuiApp {
                 streaming.as_deref(),
                 scroll,
                 expand_all,
-                &input,
-                cursor_pos,
+                &mut textarea,
                 input_mode,
                 mode,
                 &agent_name,
@@ -1729,66 +1727,11 @@ impl TuiApp {
             }
 
             // -- Edit shortcuts
-            (KeyCode::Char('u'), KeyModifiers::CONTROL) => {
-                self.editor.delete_to_line_start();
-            }
-            (KeyCode::Char('k'), KeyModifiers::CONTROL) => {
-                self.editor.delete_to_end();
-            }
-            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
-                self.editor.delete_word_back();
-            }
-            // Alt+D — delete word forward (readline standard)
-            (KeyCode::Char('d'), KeyModifiers::ALT) => {
-                self.editor.delete_word_forward();
-            }
-            // Ctrl+Y — yank from kill ring (readline standard)
-            (KeyCode::Char('y'), KeyModifiers::CONTROL) => {
-                self.editor.yank();
-            }
-            (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
-                self.editor.undo();
-            }
-            // Ctrl+Shift+Z — redo
-            (KeyCode::Char('Z'), m) if m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) => {
-                self.editor.redo();
-            }
-            // Ctrl+A / Ctrl+E — buffer start / end (readline)
-            (KeyCode::Char('a'), KeyModifiers::CONTROL) => {
-                self.editor.move_buffer_start();
-            }
-            (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
-                self.editor.move_buffer_end();
-            }
-            // Home / End — current line start / end
-            (KeyCode::Home, _) => {
-                self.editor.move_home();
-            }
-            (KeyCode::End, _) => {
-                self.editor.move_end();
-            }
-            // Ctrl+L — redraw / scroll to bottom
             (KeyCode::Char('l'), KeyModifiers::CONTROL) => {
                 self.scroll = 0;
                 self.follow = true;
                 self.pending_lines = 0;
                 let _ = self.draw();
-            }
-
-            // -- Cursor movement
-            // Word navigation: Alt+Arrow or Ctrl+Arrow — must come before the
-            // plain-Left / plain-Right arms below (more specific guard wins).
-            (KeyCode::Left, m) if m.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
-                self.editor.move_word_left();
-            }
-            (KeyCode::Right, m) if m.intersects(KeyModifiers::ALT | KeyModifiers::CONTROL) => {
-                self.editor.move_word_right();
-            }
-            (KeyCode::Left, _) if self.editor.cursor_pos() > 0 => {
-                self.editor.move_left();
-            }
-            (KeyCode::Right, _) if self.editor.cursor_pos() < self.editor.text().len() => {
-                self.editor.move_right();
             }
 
             // -- History / cursor-up
@@ -1923,30 +1866,21 @@ impl TuiApp {
                 // don't consume — if no image was found the keypress is silently ignored
             }
 
-            // -- Editing
-            (KeyCode::Backspace, _) if self.editor.cursor_pos() > 0 => {
-                self.editor.delete_back();
-            }
-            (KeyCode::Delete, _) if self.editor.cursor_pos() < self.editor.text().len() => {
-                self.editor.delete_forward();
-            }
-            (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
-                // Route through insert_char() so the undo snapshot fires.
-                self.editor.insert_char(c);
-                // A-01: activate file picker when '@' is typed.
-                if c == '@' && self.picker.is_none() {
-                    // cursor_pos is now just past the inserted '@'.
-                    let at_pos = self.editor.cursor_pos() - c.len_utf8();
-                    let matches = self.file_ac.collect_files("");
-                    self.picker = Some(PickerState {
-                        at_pos,
-                        query: String::new(),
-                        matches,
-                        cursor: 0,
-                    });
+            _ => {
+                self.editor.handle_key_event(k);
+                if let KeyCode::Char('@') = k.code {
+                    if self.picker.is_none() {
+                        let at_pos = self.editor.cursor_pos().saturating_sub(1);
+                        let matches = self.file_ac.collect_files("");
+                        self.picker = Some(PickerState {
+                            at_pos,
+                            query: String::new(),
+                            matches,
+                            cursor: 0,
+                        });
+                    }
                 }
             }
-            _ => {}
         }
         Ok(None)
     }
@@ -2070,8 +2004,7 @@ fn render_frame(
     streaming: Option<&str>,
     scroll: usize,
     expand_all: bool,
-    input: &str,
-    cursor_pos: usize,
+    textarea: &mut tui_textarea::TextArea<'static>,
     input_mode: InputMode,
     mode: PermissionMode,
     agent_name: &str,
@@ -2107,11 +2040,12 @@ fn render_frame(
     };
     let w = main_area.width as usize;
 
+    let input = textarea.lines().join("\n");
     let (input_badge, _input_badge_color) = input_mode_badge(input_mode, colors);
     let input_prefix_w = input_badge.chars().count() as u16 + 1 + 2;
     let available_w = main_area.width;
     let mut input_rows =
-        calc_input_rows(input, available_w, input_prefix_w).clamp(1, MAX_INPUT_ROWS);
+        calc_input_rows(&input, available_w, input_prefix_w).clamp(1, MAX_INPUT_ROWS);
 
     let inline_h = active_question
         .map(|aq| question_height(aq, main_area.height))
@@ -2379,70 +2313,35 @@ fn render_frame(
         render_question_inline(frame, aq, chunks[5], chunks[5], colors);
     } else {
         let (badge_text, badge_color) = input_mode_badge(input_mode, colors);
-        // Continuation prefix: EXACTLY matches input_prefix_w length.
-        // badge_text (B) + 1 space + "> " (2 chars) = B + 3.
-        // We want cont_prefix to also be B + 3 chars long.
-        // "· " is 2 chars, so we need B + 1 spaces before it.
-        let cont_prefix = format!("{}· ", " ".repeat(badge_text.chars().count() + 1));
-        // Build one ratatui Line per logical line so wrapping is correct and the
-        // input-mode badge is shown only on the first line.
+        let prefix_w = badge_text.chars().count() as u16 + 3;
+        
+        let input_chunks = Layout::horizontal([
+            Constraint::Length(prefix_w),
+            Constraint::Fill(1),
+        ]).split(chunks[5]);
+
+        let prefix_spans = vec![
+            Span::styled(
+                badge_text.to_string(),
+                Style::default().fg(colors.badge_fg).bg(badge_color).add_modifier(Modifier::BOLD),
+            ),
+            Span::raw(" "),
+            Span::styled("> ", Style::default().fg(colors.dim)),
+        ];
+        frame.render_widget(Paragraph::new(Line::from(prefix_spans)), input_chunks[0]);
+
         let input_placeholder = if queued_count > 0 {
             format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
         } else {
             "Type a message or paste code…".to_string()
         };
-        let input_paragraph: Vec<Line<'static>> = if input.is_empty() {
-            vec![Line::from(vec![
-                Span::styled(
-                    badge_text.to_string(),
-                    Style::default()
-                        .fg(colors.badge_fg)
-                        .bg(badge_color)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" "),
-                Span::styled("> ", Style::default().fg(colors.dim)),
-                Span::styled(input_placeholder, Style::default().fg(colors.muted)),
-            ])]
-        } else {
-            input
-                .split('\n')
-                .enumerate()
-                .map(|(i, seg)| {
-                    let mut spans = if i == 0 {
-                        vec![
-                            Span::styled(
-                                badge_text.to_string(),
-                                Style::default()
-                                    .fg(colors.badge_fg)
-                                    .bg(badge_color)
-                                    .add_modifier(Modifier::BOLD),
-                            ),
-                            Span::raw(" "),
-                            Span::styled("> ", Style::default().fg(colors.dim)),
-                        ]
-                    } else {
-                        vec![Span::styled(
-                            cont_prefix.clone(),
-                            Style::default().fg(colors.dim),
-                        )]
-                    };
-                    spans.extend(highlight_input_line(seg, colors));
-                    Line::from(spans)
-                })
-                .collect()
-        };
-        frame.render_widget(
-            Paragraph::new(input_paragraph).wrap(Wrap { trim: false }),
-            chunks[5],
-        );
 
-        // Cursor position
-        let before = &input[..cursor_pos.min(input.len())];
-        let (vis_row, vis_col) = calc_visual_cursor(before, available_w, input_prefix_w);
-        let cx = (chunks[5].x + vis_col).min(chunks[5].x + chunks[5].width.saturating_sub(1));
-        let cy = (chunks[5].y + vis_row).min(chunks[5].y + chunks[5].height.saturating_sub(1));
-        frame.set_cursor_position((cx, cy));
+        textarea.set_placeholder_text(input_placeholder);
+        textarea.set_placeholder_style(Style::default().fg(colors.muted));
+        textarea.set_cursor_line_style(Style::default());
+        textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
+
+        frame.render_widget(&*textarea, input_chunks[1]);
     }
 
     // -- Footer
@@ -2979,70 +2878,6 @@ fn display_tool_name(name: &str) -> String {
 /// `<`, `;`, `fn `, `def `, `import `, etc.) we use a plain-text / generic
 /// syntax so tokens still get some colour without false positives.
 ///
-/// Falls back to a single white span when the feature is absent or on error.
-fn highlight_input_line(text: &str, colors: &ThemeColors) -> Vec<Span<'static>> {
-    #[cfg(feature = "syntax-highlighting")]
-    {
-        use crate::markdown::{SYNTAX_SET, THEME_SET, syntect_to_tui_style};
-        use syntect::easy::HighlightLines;
-
-        // Pick the best available syntax: try to detect the language from
-        // content heuristics, fall back to plain text.
-        let syntax = detect_input_syntax(text);
-
-        let theme = colors.syntect_theme.as_deref().unwrap_or_else(|| {
-            THEME_SET
-                .themes
-                .get("base16-ocean.dark")
-                .unwrap_or_else(|| THEME_SET.themes.values().next().unwrap())
-        });
-
-        let mut h = HighlightLines::new(syntax, theme);
-        let line_with_nl = format!("{text}\n");
-        if let Ok(ranges) = h.highlight_line(&line_with_nl, &SYNTAX_SET) {
-            return ranges
-                .into_iter()
-                .map(|(style, chunk)| {
-                    let content = chunk.trim_end_matches('\n').to_string();
-                    Span::styled(content, syntect_to_tui_style(style))
-                })
-                .filter(|s| !s.content.is_empty())
-                .collect();
-        }
-    }
-    vec![Span::styled(
-        text.to_string(),
-        Style::default().fg(RC::White),
-    )]
-}
-
-/// Heuristically choose the best syntect `SyntaxReference` for the given text.
-/// Returns a reference with a static lifetime from the global `SYNTAX_SET`.
-#[cfg(feature = "syntax-highlighting")]
-fn detect_input_syntax(text: &str) -> &'static syntect::parsing::SyntaxReference {
-    use crate::markdown::SYNTAX_SET;
-
-    // Code-like signals: brackets, common keywords, operators.
-    let code_score: usize = [
-        "{", "}", "(", ")", ";", "=>", "->", "fn ", "def ", "class ", "import ", "use ", "let ",
-        "var ", "const ", "return ", "#include", "package ",
-    ]
-    .iter()
-    .filter(|&&pat| text.contains(pat))
-    .count();
-
-    let syntax_name = if code_score >= 2 {
-        // Looks like code — use a generic "programming" syntax that gives
-        // reasonable colouring without requiring us to guess the exact language.
-        "Rust" // Rust tokenizer is broad enough to give good colours for many langs
-    } else {
-        "Plain Text"
-    };
-
-    SYNTAX_SET
-        .find_syntax_by_name(syntax_name)
-        .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text())
-}
 
 pub fn truncate_str(s: &str, max: usize) -> String {
     let chars: Vec<char> = s.chars().collect();

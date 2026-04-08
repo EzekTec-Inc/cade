@@ -5,7 +5,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use cade_agent::agent::client::{CadeClient, MemoryBlock};
+use cade_agent::agent::client::{HttpTransport, MemoryBlock};
 use cade_agent::mcp::McpManager;
 use cade_agent::tools::ToolRuntime;
 use cade_core::permissions::{PermissionManager, PermissionMode};
@@ -50,7 +50,7 @@ impl Default for SessionOptions {
 
 /// A stateful agent session.
 pub struct AgentSession {
-    client: Arc<CadeClient>,
+    client: Arc<HttpTransport>,
     runtime: ToolRuntime,
     agent_id: String,
     #[allow(dead_code)]
@@ -63,7 +63,7 @@ impl AgentSession {
     /// Create or resume an agent session.
     pub async fn create(opts: SessionOptions) -> Result<Self> {
         let client = Arc::new(
-            CadeClient::new(opts.server_url.clone(), opts.api_key.clone())
+            HttpTransport::new(opts.server_url.clone(), opts.api_key.clone())
                 .map_err(|e| crate::Error::custom(format!("connect: {e}")))?,
         );
 

@@ -72,7 +72,7 @@ pub fn all_meta_schemas() -> Vec<Value> {
 fn schema_update_memory() -> Value {
     json!({
         "name": "update_memory",
-        "description": "Update a persistent memory block. Use this to store important information about the user, project, or yourself that should be remembered across conversations. Call this whenever you learn something worth remembering.",
+        "description": "Update or delete a persistent memory block. Use this to store important information about the user, project, or yourself that should be remembered across conversations. Call this whenever you learn something worth remembering.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -82,19 +82,19 @@ fn schema_update_memory() -> Value {
                 },
                 "value": {
                     "type": "string",
-                    "description": "Content to store in the memory block"
+                    "description": "Content to store in the memory block (required for set/append, ignore for delete)"
                 },
                 "operation": {
                     "type": "string",
-                    "enum": ["set", "append"],
-                    "description": "set = replace the block entirely, append = add to existing content"
+                    "enum": ["set", "append", "delete"],
+                    "description": "set = replace the block entirely, append = add to existing content, delete = remove the block"
                 },
                 "description": {
                     "type": "string",
                     "description": "Short description of what this block is for (optional, shown in /memory display)"
                 }
             },
-            "required": ["label", "value"]
+            "required": ["label"]
         }
     })
 }

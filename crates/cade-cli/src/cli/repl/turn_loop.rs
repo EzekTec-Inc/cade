@@ -442,36 +442,6 @@ impl Repl {
                                                             let _ = app.draw();
                                                         }
                                                     }
-                                                    // Regular character input.
-                                                    (KeyCode::Char(c), m)
-                                                        if m == KeyModifiers::NONE
-                                                        || m == KeyModifiers::SHIFT =>
-                                                    {
-                                                        let pos = app.editor.cursor_pos();
-                                                        app.editor.insert_char_at(pos, c);
-                                                        app.editor.set_cursor_pos(pos + c.len_utf8());
-                                                        let _ = app.draw();
-                                                    }
-                                                    // Backspace — remove char before cursor.
-                                                    (KeyCode::Backspace, _) => {
-                                                        let cp = app.editor.cursor_pos();
-                                                        if cp > 0 {
-                                                            let new_pos = app.editor.text()[..cp]
-                                                                .char_indices()
-                                                                .next_back()
-                                                                .map(|(i, _)| i)
-                                                                .unwrap_or(0);
-                                                            {
-                                                            let drain_end = new_pos..cp;
-                                                            let mut text = app.editor.text();
-                                                            text.drain(drain_end);
-                                                            app.editor.set_text(text);
-                                                        }
-                                                            app.editor.set_cursor_pos(new_pos);
-                                                            let _ = app.draw();
-                                                        }
-                                                    }
-
                                                     (KeyCode::Esc, _) => {
                                                         // Ignore Esc events that arrive within
                                                         // the first 200 ms of the turn.  The
@@ -546,6 +516,10 @@ impl Repl {
                                                             }
                                                             tick_cancel.store(true, std::sync::atomic::Ordering::SeqCst);
                                                         }
+                                                    }
+                                                    (KeyCode::Char(_), _) | (KeyCode::Backspace, _) | (KeyCode::Delete, _) | (KeyCode::Left, _) | (KeyCode::Right, _) | (KeyCode::Home, _) | (KeyCode::End, _) | (KeyCode::Up, _) | (KeyCode::Down, _) => {
+                                                        app.editor.handle_key_event(k);
+                                                        let _ = app.draw();
                                                     }
                                                     _ => {}
                                                 }
