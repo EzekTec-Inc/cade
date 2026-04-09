@@ -3,6 +3,7 @@ type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tes
 
 use super::*;
 use std::fs;
+use std::path::{Path, PathBuf};
 
 // -- SkillScope ordering
 

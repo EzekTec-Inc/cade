@@ -1,6 +1,9 @@
-// region:    --- Modules
+pub mod hooks;
+pub mod models;
+pub mod resolver;
 
-pub mod manager;
-pub use manager::{ExecutionBackendKind, ExecutionProfile, McpServerConfig, SettingsManager};
+pub use hooks::*;
+pub use models::*;
 
-// endregion: --- Modules
+#[cfg(test)]
+mod tests;

@@ -2,6 +2,7 @@
 type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
 
 use super::*;
+use crate::settings::resolver::SettingsManager;
 use std::fs;
 
 // -- HooksConfig

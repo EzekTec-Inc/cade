@@ -12,7 +12,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use serde_json::{Value, json};
 use tokio::process::Command;
 
-use crate::settings::manager::HooksConfig;
+use crate::settings::HooksConfig;
 
 // endregion: --- Modules
 
@@ -222,7 +222,7 @@ impl HookEngine {
     /// Run all entries that match `tool_name`. First exit-2 blocks; returns outcome.
     async fn run_entries_blocking(
         &self,
-        entries: &[crate::settings::manager::HookEntry],
+        entries: &[crate::settings::HookEntry],
         tool_name: &str,
         input: Value,
     ) -> HookOutcome {
@@ -243,7 +243,7 @@ impl HookEngine {
     /// Same as above but for non-tool events (no matcher).
     async fn run_all_blocking(
         &self,
-        entries: &[crate::settings::manager::HookEntry],
+        entries: &[crate::settings::HookEntry],
         input: Value,
     ) -> HookOutcome {
         for entry in entries {
@@ -260,7 +260,7 @@ impl HookEngine {
     /// Run PostToolUse hooks; collect additionalContext from stdout JSON.
     async fn run_entries_context(
         &self,
-        entries: &[crate::settings::manager::HookEntry],
+        entries: &[crate::settings::HookEntry],
         tool_name: &str,
         input: Value,
     ) -> Option<String> {
@@ -283,7 +283,7 @@ impl HookEngine {
 
     async fn run_entries_fire_forget(
         &self,
-        entries: &[crate::settings::manager::HookEntry],
+        entries: &[crate::settings::HookEntry],
         tool_name: &str,
         input: Value,
     ) {
@@ -299,7 +299,7 @@ impl HookEngine {
 
     async fn run_all_fire_forget(
         &self,
-        entries: &[crate::settings::manager::HookEntry],
+        entries: &[crate::settings::HookEntry],
         input: Value,
     ) {
         for entry in entries {
@@ -346,11 +346,11 @@ enum HookResult {
 }
 
 async fn run_hook_command(
-    hook: &crate::settings::manager::HookDef,
+    hook: &crate::settings::HookDef,
     input: &Value,
     cwd: &PathBuf,
 ) -> HookResult {
-    let crate::settings::manager::HookDef::Command { command, timeout } = hook;
+    let crate::settings::HookDef::Command { command, timeout } = hook;
     let timeout_ms = *timeout;
     let input_str = serde_json::to_string(input).unwrap_or_default();
 
@@ -399,11 +399,11 @@ async fn run_hook_command(
 
 /// Run a PostToolUse hook and return additionalContext if stdout contains it.
 async fn run_hook_command_with_context(
-    hook: &crate::settings::manager::HookDef,
+    hook: &crate::settings::HookDef,
     input: &Value,
     cwd: &PathBuf,
 ) -> Option<String> {
-    let crate::settings::manager::HookDef::Command { command, timeout } = hook;
+    let crate::settings::HookDef::Command { command, timeout } = hook;
     let input_str = serde_json::to_string(input).unwrap_or_default();
 
     let result = tokio::time::timeout(
@@ -475,7 +475,7 @@ async fn spawn_command(
 
 // -- Display helpers
 
-impl std::fmt::Display for crate::settings::manager::HookDef {
+impl std::fmt::Display for crate::settings::HookDef {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let Self::Command { command, timeout } = self;
         if *timeout == 60_000 {
@@ -494,7 +494,7 @@ mod tests {
     type Result<T> = core::result::Result<T, Box<dyn std::error::Error>>; // For tests.
 
     use super::*;
-    use crate::settings::manager::{HookDef, HookEntry, HooksConfig};
+    use crate::settings::{HookDef, HookEntry, HooksConfig};
     use std::path::PathBuf;
 
     // -- HookOutcome
