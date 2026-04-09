@@ -26,4 +26,3 @@ base64 = { workspace = true }
 machine-uid = { workspace = true }
 getrandom = { workspace = true }
 derive_more = { workspace = true }
-axum = { workspace = true }

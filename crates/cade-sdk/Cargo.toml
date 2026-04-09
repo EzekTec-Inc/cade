@@ -9,7 +9,7 @@ doctest = false
 [dependencies]
 # -- Workspace crates
 cade-core.path  = "../cade-core"
-cade-agent.path = "../cade-agent"
+cade-agent = { path = "../cade-agent", default-features = false, features = ["mcp"] }
 # -- Error handling
 derive_more.workspace = true
 # -- Serialisation

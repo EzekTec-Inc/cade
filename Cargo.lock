@@ -779,9 +779,7 @@ dependencies = [
 name = "cade-server"
 version = "0.2.0"
 dependencies = [
- "aes-gcm",
  "axum",
- "base64",
  "cade-ai",
  "cade-core",
  "cade-store",
@@ -790,15 +788,10 @@ dependencies = [
  "dirs",
  "dotenvy",
  "futures",
- "getrandom 0.2.17",
- "hmac",
- "machine-uid",
- "pbkdf2",
  "reqwest",
  "rusqlite",
  "serde",
  "serde_json",
- "sha2",
  "subtle",
  "tokio",
  "tokio-stream",
@@ -813,7 +806,6 @@ name = "cade-store"
 version = "0.2.0"
 dependencies = [
  "aes-gcm",
- "axum",
  "base64",
  "cade-ai",
  "cade-core",

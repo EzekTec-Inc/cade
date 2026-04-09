@@ -31,18 +31,11 @@ uuid.workspace         = true
 chrono.workspace       = true
 dotenvy.workspace      = true
 dirs.workspace         = true
-base64.workspace       = true
 # -- Server
 axum.workspace         = true
 tower-http.workspace   = true
 rusqlite.workspace     = true
-# -- Crypto
-aes-gcm.workspace      = true
-pbkdf2.workspace       = true
-sha2.workspace         = true
-hmac.workspace         = true
-getrandom.workspace    = true
-machine-uid.workspace  = true
+# -- Auth
 subtle = "2.6.1"
 
 [lints.rust]
