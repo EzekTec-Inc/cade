@@ -298,15 +298,15 @@ impl Repl {
                     continue;
                 }
                 match (key.code, key.modifiers) {
-                    (KeyCode::Esc, _) => break None,
+                    (KeyCode::Esc, _) | (KeyCode::Char('q'), KeyModifiers::NONE) => break None,
 
                     // Allow Ctrl+C to also cancel
                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => break None,
 
-                    (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
+                    (KeyCode::Up, _) | (KeyCode::BackTab, _) | (KeyCode::Char('k'), _) => {
                         selected_idx = selected_idx.saturating_sub(1);
                     }
-                    (KeyCode::Down, _) | (KeyCode::Tab, _) => {
+                    (KeyCode::Down, _) | (KeyCode::Tab, _) | (KeyCode::Char('j'), _) => {
                         if selected_idx + 1 < agents.len() {
                             selected_idx += 1;
                         }
@@ -331,7 +331,7 @@ impl Repl {
                         }
                     }
 
-                    (KeyCode::Delete, _) => {
+                    (KeyCode::Delete, _) | (KeyCode::Char('d'), KeyModifiers::NONE) => {
                         // Deletion logic...
                         let targets: Vec<usize> = if marked.is_empty() {
                             if agents.is_empty() {
