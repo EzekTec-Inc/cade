@@ -73,46 +73,7 @@ impl Repl {
                 return Ok(false);
             }
             SlashCmd::Help => {
-                // Open full-screen command browser (filtered by capabilities)
-                let chosen = {
-                    let mut app = self.app.lock();
-                    let colors = app.colors.clone();
-                    crate::ui::menu::show_command_menu_with_caps(
-                        &mut app.terminal,
-                        &colors,
-                        Some(&self.capabilities),
-                    )?
-                };
-                let _ = self.app.lock().draw();
-                if let Some(cmd) = chosen {
-                    // If it's a tool hint (no slash) or a command that needs arguments,
-                    // insert it into the editor instead of executing immediately.
-                    let needs_args = !cmd.starts_with('/')
-                        || (cmd.contains(' ')
-                            && !["/stats model", "/skills reload"].contains(&cmd.as_str()))
-                        || [
-                            "/delete",
-                            "/checkpoint",
-                            "/fork",
-                            "/approve-always",
-                            "/deny-always",
-                            "/remember",
-                            "/disconnect",
-                            "/search",
-                            "/export",
-                            "/rename",
-                            "/connect",
-                        ]
-                        .contains(&cmd.as_str());
-
-                    if needs_args {
-                        let mut app = self.app.lock();
-                        app.editor.insert_str(&format!("{cmd} "));
-                    } else {
-                        *pending_input = Some(cmd);
-                    }
-                }
-                return Ok(false);
+                return self.cmd_help(pending_input).await;
             }
             SlashCmd::Agent => {
                 let msg = format!("  Agent: {} ({})", self.agent_name(), self.agent_id());
@@ -122,34 +83,10 @@ impl Repl {
                     .push(RenderLine::SystemMsg(msg));
             }
             SlashCmd::Info => {
-                let msg = format!(
-                    "  Agent   : {} ({})\n  Conv    : {}\n  Model   : {}\n  Mode    : {}\n  CWD     : {}\n  Version : {}",
-                    self.agent_name(),
-                    self.agent_id(),
-                    self.conversation_id().as_deref().unwrap_or("default"),
-                    self.model(),
-                    self.permissions.mode(),
-                    self.cwd.display(),
-                    env!("CARGO_PKG_VERSION")
-                );
-                let _ = self
-                    .app
-                    .lock()
-                    .push(RenderLine::SystemMsg(msg));
+                return self.cmd_info().await;
             }
             SlashCmd::Yolo => {
-                self.permissions.set_mode(PermissionMode::BypassPermissions);
-                self.app
-                    .lock()
-                    .update_mode(PermissionMode::BypassPermissions);
-                let _ =
-                    self.app
-                        .lock()
-                        .push(RenderLine::SystemMsg(
-                        "⚡ Permission mode: bypassPermissions — all tools auto-approved"
-                            .to_string(),
-                    ));
-                self.sync_plan_tools(false).await;
+                return self.cmd_yolo().await;
             }
             SlashCmd::Mcp => {
                 return self.cmd_mcp(input, pending_input).await;
@@ -176,126 +113,25 @@ impl Repl {
                 }
             }
             SlashCmd::Link => {
-                self.tui_dim("  Linking tools…");
-                let client2 = self.client.clone();
-                let mcp2 = std::sync::Arc::clone(&self.mcp);
-                let toolset2 = *self.current_toolset.lock();
-                let agent_id = self.agent_id();
-                use cade_agent::agent::tools::{register_cade_tools, register_mcp_tools};
-                let allow_agent_mode = self
-                    .settings
-                    .lock()
-                    .permission_settings()
-                    .allow_agent_mode_changes;
-                let native_ids: Vec<String> =
-                    register_cade_tools(&client2, toolset2, allow_agent_mode)
-                        .await
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|t| t.id)
-                        .collect();
-                let n_native = native_ids.len();
-                if !native_ids.is_empty() {
-                    let _ = client2.attach_agent_tools(&agent_id, &native_ids).await;
-                }
-                let mcp_ids: Vec<String> =
-                    register_mcp_tools(&client2, mcp2.all_tool_schemas().await)
-                        .await
-                        .unwrap_or_default()
-                        .into_iter()
-                        .map(|t| t.id)
-                        .collect();
-                let n_mcp = mcp_ids.len();
-                if !mcp_ids.is_empty() {
-                    let _ = client2.attach_agent_tools(&agent_id, &mcp_ids).await;
-                }
-                self.tui_ok(format!(
-                    "  ✓ Linked {n_native} native + {n_mcp} MCP tool(s)"
-                ));
+                return self.cmd_link(pending_input).await;
             }
             SlashCmd::Unlink => {
-                let agent_id = self.agent_id();
-                match self.client.detach_agent_tools(&agent_id).await {
-                    Ok(n) => self.tui_ok(format!("  ✓ Detached {n} tool(s) from agent")),
-                    Err(e) => self.tui_err(e.to_string()),
-                }
+                return self.cmd_unlink().await;
             }
             SlashCmd::Stream => {
-                use std::sync::atomic::Ordering;
-                let current = self.streaming_enabled.load(Ordering::SeqCst);
-                self.streaming_enabled.store(!current, Ordering::SeqCst);
-                let label = if !current { "on" } else { "off" };
-                self.tui_hdr(format!("  Streaming: {label}"));
-                self.app
-                    .lock()
-                    .show_toast(format!("Streaming {label}"), ToastLevel::Info);
+                return self.cmd_stream().await;
             }
             SlashCmd::Usage => {
-                use std::sync::atomic::Ordering;
-                let in_tok = self.session_input_tokens.load(Ordering::SeqCst);
-                let out_tok = self.session_output_tokens.load(Ordering::SeqCst);
-                let total = in_tok + out_tok;
-                self.tui_blank();
-                self.tui_hdr("  Token usage this session:");
-                self.tui_dim(format!("    Input  : {:>8}", in_tok));
-                self.tui_dim(format!("    Output : {:>8}", out_tok));
-                self.tui_dim(format!("    Total  : {:>8}", total));
-                if total == 0 {
-                    self.tui_dim("    (no usage recorded yet — requires Anthropic/OpenAI)");
-                }
+                return self.cmd_usage(pending_input).await;
             }
             SlashCmd::Context => {
                 return self.cmd_context(stdout).await;
             }
             SlashCmd::DebugLast => {
-                let conv = self.conversation_id();
-                match self
-                    .client
-                    .last_assistant_message(&self.agent_id(), conv.as_deref())
-                    .await
-                {
-                    Ok(Some(msg)) => {
-                        self.tui_hdr("  Raw last assistant message");
-                        if let Ok(raw) = serde_json::to_string_pretty(&msg) {
-                            for line in raw.lines() {
-                                self.tui_dim(format!("    {line}"));
-                            }
-                        } else {
-                            self.tui_dim(format!("    {msg}"));
-                        }
-                        self.tui_blank();
-                    }
-                    Ok(None) => self.tui_dim("  ⎿  No assistant replies stored yet."),
-                    Err(e) => {
-                        self.tui_err(format!("Failed to load last assistant message: {e}"))
-                    }
-                }
+                return self.cmd_debug_last(pending_input).await;
             }
             SlashCmd::Stats(arg) => {
-                let sub = arg.as_deref().unwrap_or("").trim();
-                let lines = match sub {
-                    "model" | "models" => self
-                        .session_stats
-                        .lock()
-                        .render_model_detail(),
-                    _ => {
-                        // full session card (default)
-                        let auth_method = if self.settings.lock().api_key().is_some() {
-                            "API Key".to_string()
-                        } else {
-                            "OAuth / Browser".to_string()
-                        };
-                        let session_id = self.conversation_id().unwrap_or_default();
-                        self.session_stats
-                            .lock()
-                            .render_card(&auth_method, &session_id)
-                    }
-                };
-                self.tui_blank();
-                for line in lines {
-                    let _ = self.app.lock().push(line);
-                }
-                self.tui_blank();
+                return self.cmd_stats(arg).await;
             }
             SlashCmd::Logout => {
                 { let mut s = self.settings.lock();
@@ -393,15 +229,8 @@ impl Repl {
 
             // -- New commands
             SlashCmd::Clear => {
-                let _ = self.app.lock().clear_content();
-                match self.client.clear_messages(&self.agent_id()).await {
-                    Ok(n) => self
-                        .tui_ok(format!("✓ Context window cleared ({n} messages deleted)")),
-                    Err(e) => self
-                        .tui_sys(format!("⚠ Screen cleared (context clear failed: {e})")),
-                }
+                return self.cmd_clear().await;
             }
-
             SlashCmd::Pricing(arg) => {
                 return self.cmd_pricing(arg).await;
             }
@@ -409,89 +238,17 @@ impl Repl {
                 return self.cmd_cost().await;
             }
             SlashCmd::Copy => {
-                let mut app = self.app.lock();
-                app.toggle_copy_mode();
-                if app.copy_mode {
-                    let _ = app.push(RenderLine::SystemMsg(
-                        "Copy mode ON — mouse scroll disabled. Click and drag to select text. /copy to restore.".into()
-                    ));
-                } else {
-                    let _ = app.push(RenderLine::SuccessMsg(
-                        "Copy mode OFF — mouse scroll restored.".into(),
-                    ));
-                }
+                return self.cmd_copy().await;
             }
-
             SlashCmd::Export(out_arg) => {
-                let agent_id = self.agent_id();
-                let agent_name = self.agent_name();
-                let out_path = out_arg.unwrap_or_else(|| {
-                    crate::cli::export_import::default_export_path(&agent_name)
-                });
-                self.tui_dim(format!("  Exporting agent '{agent_name}' → {out_path} …"));
-                match crate::cli::export_import::export_agent_to_file(
-                    &self.client,
-                    &agent_id,
-                    &out_path,
-                )
-                .await
-                {
-                    Ok(_) => {
-                        self.app.lock().show_toast(
-                            format!("Exported → {out_path}"),
-                            ToastLevel::Success,
-                        );
-                        self.tui_ok(format!("  ✓ Exported → {out_path}"))
-                    }
-                    Err(e) => self.tui_err(format!("  ✗ Export failed: {e}")),
-                }
+                return self.cmd_export(out_arg).await;
             }
-
-            // -- Checkpoints
             SlashCmd::Checkpoint(label_arg) => {
                 return self.cmd_checkpoint(label_arg).await;
             }
             SlashCmd::Undo => {
-                let agent_id = self.agent_id();
-                match self.client.list_checkpoints(&agent_id).await {
-                    Err(e) => self.tui_err(format!("  ✗ list_checkpoints: {e}")),
-                    Ok(checkpoints) if checkpoints.is_empty() => {
-                        self.tui_dim("  No checkpoints available to undo.".to_string());
-                    }
-                    Ok(checkpoints) => {
-                        if let Some(last_cp) = checkpoints.last() {
-                            let checkpoint_id =
-                                last_cp["id"].as_str().unwrap_or("").to_string();
-                            let stash_ref =
-                                last_cp["git_stash_ref"].as_str().map(String::from);
-
-                            self.tui_dim(format!(
-                                "  Restoring checkpoint {checkpoint_id}…"
-                            ));
-
-                            if let Some(s) = stash_ref {
-                                use cade_agent::tools::git_checkpoint;
-                                match git_checkpoint::restore_git_checkpoint(&s, &self.cwd)
-                                    .await
-                                {
-                                    Ok(()) => {
-                                        self.tui_ok(format!("  ✓ Git stash applied: {s}"))
-                                    }
-                                    Err(e) => self.tui_err(format!("  ✗ Git restore: {e}")),
-                                }
-                            }
-                            let _ = self
-                                .client
-                                .restore_checkpoint(&agent_id, &checkpoint_id)
-                                .await;
-                            self.tui_ok(format!(
-                                "  ✓ Restored to checkpoint {checkpoint_id}"
-                            ));
-                        }
-                    }
-                }
+                return self.cmd_undo().await;
             }
-
             SlashCmd::Tree => {
                 return self.cmd_tree().await;
             }
@@ -502,54 +259,11 @@ impl Repl {
                 return self.cmd_backend(backend_arg).await;
             }
             SlashCmd::Reflect(focus_arg) => {
-                if self.require_capability(
-                    cade_core::capabilities::Capability::Agentic,
-                    "/reflect",
-                ) {
-                    return Ok(false);
-                }
-                let agent_id = self.agent_id();
-                let focus = focus_arg.as_deref();
-                let focus_msg = focus.map(|f| format!(" (focus: {f})")).unwrap_or_default();
-                self.tui_dim(format!("  Reflecting on conversation history{focus_msg}…"));
-                match self.client.trigger_reflect(&agent_id, focus).await {
-                    Ok(summary) => self.tui_ok(format!("  ✓ {summary}")),
-                    Err(e) => self.tui_err(format!("  ✗ Reflect failed: {e}")),
-                }
+                return self.cmd_reflect(focus_arg).await;
             }
-
             SlashCmd::Artifacts => {
-                if self.require_capability(
-                    cade_core::capabilities::Capability::Agentic,
-                    "/artifacts",
-                ) {
-                    return Ok(false);
-                }
-                let agent_id = self.agent_id();
-                match self.client.list_artifacts(&agent_id).await {
-                    Err(e) => self.tui_err(format!("  ✗ list_artifacts: {e}")),
-                    Ok(arts) if arts.is_empty() => {
-                        self.tui_dim("  No artifacts stored yet.".to_string());
-                    }
-                    Ok(arts) => {
-                        self.tui_hdr(format!("  Artifacts ({}):", arts.len()));
-                        for a in arts.iter().take(20) {
-                            let id = a["id"].as_str().unwrap_or("?");
-                            let kind = a["kind"].as_str().unwrap_or("?");
-                            let size = a["size_bytes"].as_i64().unwrap_or(0);
-                            let ts = a["created_at"].as_i64().unwrap_or(0);
-                            let dt = chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
-                                .map(|d| d.format("%m-%d %H:%M").to_string())
-                                .unwrap_or_default();
-                            self.tui_dim(format!(
-                                "    {kind:<12}  {size:>6}B  {dt}  {}",
-                                &id[..12.min(id.len())]
-                            ));
-                        }
-                    }
-                }
+                return self.cmd_artifacts().await;
             }
-
             SlashCmd::New => {
                 let agent_id = self.agent_id();
                 match self.client.create_conversation(&agent_id, "").await {
@@ -578,22 +292,8 @@ impl Repl {
                 return self.cmd_resume().await;
             }
             SlashCmd::Pin => {
-                let id = self.agent_id();
-                let name = self.agent_name();
-                { let mut s = self.settings.lock();
-                    match s.pin_agent(&id, &name) {
-                        Ok(_) => {
-                            self.app.lock().show_toast(
-                                format!("Pinned agent: {name}"),
-                                ToastLevel::Success,
-                            );
-                            self.tui_ok(format!("  ✓ Pinned: {name} ({id})"))
-                        }
-                        Err(e) => self.tui_err(format!("Pin failed: {e}")),
-                    }
-                }
+                return self.cmd_pin().await;
             }
-
             SlashCmd::Agents => {
                 return self.cmd_agents().await;
             }
@@ -604,21 +304,8 @@ impl Repl {
                 return self.cmd_init(stdout).await;
             }
             SlashCmd::Remember(text) => {
-                // Route through the agent — it decides what to store and where.
-                // This matches CADE's /remember behaviour exactly.
-                let msg = if text.is_empty() {
-                    "[/remember] Please review our recent conversation and update your \
-                     memory blocks with anything important you've learned about me, \
-                     my preferences, or this project."
-                        .to_string()
-                } else {
-                    format!("[/remember] {text}")
-                };
-                self.agent_turn(&mut stdout, &msg).await?;
-                let _ = self.app.lock().commit_streaming();
+                return self.cmd_remember(text).await;
             }
-
-
             SlashCmd::Memory => {
                 return self.cmd_memory(input, stdout, pending_input).await;
             }
@@ -693,49 +380,8 @@ impl Repl {
                 return self.cmd_theme(theme_arg).await;
             }
             SlashCmd::Rename(new_name) => {
-                let id = self.agent_id();
-                let new_name = new_name.trim().to_string();
-                let name = if new_name.is_empty() {
-                    // Prompt for name via QuestionWidget
-                    use crate::ui::question::{Question, QuestionOption};
-                    let opts = vec![QuestionOption {
-                        label: "Cancel".to_string(),
-                        description: String::new(),
-                    }];
-                    let q = Question {
-                        header: "Rename agent".to_string(),
-                        text: "Enter new agent name:".to_string(),
-                        options: opts.clone(),
-                        multi_select: false,
-                        allow_other: true,
-                        progress: None,
-                    };
-                    let ans = {
-                        let mut app = self.app.lock();
-                        app.ask_question(&q)?
-                    };
-                    match &ans {
-                        Some(a) if a.as_str() != "Cancel" && !a.as_str().is_empty() => {
-                            a.as_str().to_string()
-                        }
-                        _ => String::new(),
-                    }
-                } else {
-                    new_name
-                };
-                if name.is_empty() {
-                    self.tui_dim("  (cancelled)");
-                } else {
-                    match self.client.rename_agent(&id, &name).await {
-                        Ok(_) => {
-                            *self.agent_name.lock() = name.clone();
-                            self.tui_ok(format!("  ✓ Renamed to: {name}"));
-                        }
-                        Err(e) => self.tui_err(e.to_string()),
-                    }
-                }
+                return self.cmd_rename(new_name).await;
             }
-
             SlashCmd::Toolset(arg) => {
                 let old_toolset = *self.current_toolset.lock();
                 let new_toolset = if let Some(name) = arg.as_deref() {

@@ -1,7 +1,7 @@
 //! /memory command handler.
 
 use crate::Result;
-use crate::ui::RenderLine;
+use crate::ui::{RenderLine, ToastLevel};
 use super::{MemoryPickerResult, Repl};
 
 impl Repl {
@@ -382,6 +382,67 @@ impl Repl {
                         }
                         Err(e) => self.tui_err(e.to_string()),
                     }
+                }
+            }
+        Ok(false)
+    }
+
+    pub(crate) async fn cmd_reflect(
+        &mut self,
+        focus_arg: Option<String>,
+    ) -> Result<bool> {
+            if self.require_capability(
+                cade_core::capabilities::Capability::Agentic,
+                "/reflect",
+            ) {
+                return Ok(false);
+            }
+            let agent_id = self.agent_id();
+            let focus = focus_arg.as_deref();
+            let focus_msg = focus.map(|f| format!(" (focus: {f})")).unwrap_or_default();
+            self.tui_dim(format!("  Reflecting on conversation history{focus_msg}…"));
+            match self.client.trigger_reflect(&agent_id, focus).await {
+                Ok(summary) => self.tui_ok(format!("  ✓ {summary}")),
+                Err(e) => self.tui_err(format!("  ✗ Reflect failed: {e}")),
+            }
+        Ok(false)
+    }
+
+    pub(crate) async fn cmd_remember(
+        &mut self,
+        text: String,
+    ) -> Result<bool> {
+            // Route through the agent — it decides what to store and where.
+            // This matches CADE's /remember behaviour exactly.
+            let msg = if text.is_empty() {
+                "[/remember] Please review our recent conversation and update your \
+                 memory blocks with anything important you've learned about me, \
+                 my preferences, or this project."
+                    .to_string()
+            } else {
+                format!("[/remember] {text}")
+            };
+            let mut stdout = std::io::stdout();
+            self.agent_turn(&mut stdout, &msg).await?;
+            let _ = self.app.lock().commit_streaming();
+        Ok(false)
+    }
+
+    pub(crate) async fn cmd_pin(
+        &mut self,
+    ) -> Result<bool> {
+            let id = self.agent_id();
+            let name = self.agent_name();
+            { let mut s = self.settings.lock();
+                match s.pin_agent(&id, &name) {
+                    Ok(_) => {
+                        self.app.lock().show_toast(
+                            format!("Pinned agent: {name}"),
+                            ToastLevel::Success,
+                        );
+                        self.tui_ok(format!("  ✓ Pinned: {name} ({id})"));
+                    }
+                    Err(e) => self.tui_err(format!("Pin failed: {e}")),
                 }
             }
         Ok(false)
