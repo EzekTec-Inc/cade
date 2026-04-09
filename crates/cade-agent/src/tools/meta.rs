@@ -30,6 +30,7 @@ pub async fn register_meta_tools(client: &HttpTransport) -> Vec<String> {
 
 /// All meta-tool JSON schemas in a single list.
 pub fn all_meta_schemas() -> Vec<Value> {
+    #[allow(unused_mut)] // mut needed when "web" feature is enabled
     let mut schemas = vec![
         schema_update_memory(),
         schema_memory_apply_patch(),
