@@ -152,85 +152,7 @@ impl Repl {
                 self.sync_plan_tools(false).await;
             }
             SlashCmd::Mcp => {
-                if self.require_capability(cade_core::capabilities::Capability::Mcp, "/mcp")
-                {
-                    return Ok(false);
-                }
-                // Support "/mcp reload" subcommand
-                let sub = input.trim().strip_prefix("/mcp").unwrap_or("").trim();
-                if sub == "reload" {
-                    self.do_settings_reload().await;
-                    return Ok(false);
-                }
-
-                match self
-                    .interactive_mcp_picker(std::sync::Arc::clone(&self.app))
-                    .await?
-                {
-                    Some(cade_tui::mcp_picker::McpAction::Toggle(key)) => {
-                        let mut s = self.settings.lock();
-                        if let Some(server) =
-                            s.global_settings_mut().mcp_servers.get_mut(&key)
-                        {
-                            server.disabled = !server.disabled;
-                        }
-                        let _ = s.save_global();
-                        drop(s);
-                        self.do_settings_reload().await;
-                    }
-                    Some(cade_tui::mcp_picker::McpAction::Delete(key)) => {
-                        let mut s = self.settings.lock();
-                        s.global_settings_mut().mcp_servers.remove(&key);
-                        let _ = s.save_global();
-                        drop(s);
-                        self.do_settings_reload().await;
-                    }
-                    Some(cade_tui::mcp_picker::McpAction::New) => {
-                        let tmpl = serde_json::json!({
-                            "new_server": {
-                                "command": "npx",
-                                "args": ["-y", "@modelcontextprotocol/server-everything"],
-                                "env": {},
-                                "disabled": false
-                            }
-                        });
-                        let mut app = self.app.lock();
-                        let text = format!(
-                            "/mcp-save\n{}",
-                            serde_json::to_string_pretty(&tmpl).unwrap()
-                        );
-                        app.editor.set_text(text.clone());
-                        app.editor.set_cursor_pos(text.len());
-                        app.push_silent(crate::ui::RenderLine::SystemMsg(
-                            "  Edit the JSON below and hit Enter to create/save."
-                                .to_string(),
-                        ));
-                    }
-                    Some(cade_tui::mcp_picker::McpAction::Edit(key)) => {
-                        let config = self
-                            .settings
-                            .lock()
-                            .global_settings_mut()
-                            .mcp_servers
-                            .get(&key)
-                            .cloned()
-                            .unwrap_or_default();
-                        let tmpl = serde_json::json!({ key: config });
-                        let mut app = self.app.lock();
-                        let text = format!(
-                            "/mcp-save\n{}",
-                            serde_json::to_string_pretty(&tmpl).unwrap()
-                        );
-                        app.editor.set_text(text.clone());
-                        app.editor.set_cursor_pos(text.len());
-                        app.push_silent(crate::ui::RenderLine::SystemMsg(
-                            "  Edit the JSON below and hit Enter to save.".to_string(),
-                        ));
-                    }
-                    None => {
-                        self.tui_dim("  /mcp closed");
-                    }
-                }
+                return self.cmd_mcp(input, pending_input).await;
             }
             SlashCmd::McpSave(payload) => {
                 let parsed: std::result::Result<
@@ -434,72 +356,8 @@ impl Repl {
                 self.sync_plan_tools(false).await;
             }
             SlashCmd::Mode(arg) => {
-                use crate::cli::repl::format::parse_mode_label;
-                match arg.as_deref() {
-                    None | Some("") => {
-                        let (icon, label, hint) = mode_display(self.permissions.mode());
-                        self.tui_sys(format!("{icon} Current mode: {label}  {hint}"));
-                    }
-                    Some(name) => {
-                        let resolved = parse_mode_label(name);
-                        match resolved {
-                            Some("default") => {
-                                self.permissions.set_mode(PermissionMode::Default);
-                                let (icon, label, _) =
-                                    mode_display(PermissionMode::Default);
-                                self.app.lock().show_toast(
-                                    format!("{icon} {label}"),
-                                    ToastLevel::Success,
-                                );
-                                self.tui_ok(format!("{icon} Permission mode: {label}"));
-                                self.sync_plan_tools(false).await;
-                            }
-                            Some("plan") => {
-                                self.permissions.set_mode(PermissionMode::Plan);
-                                let (icon, label, hint) =
-                                    mode_display(PermissionMode::Plan);
-                                self.app.lock().show_toast(
-                                    format!("{icon} {label}"),
-                                    ToastLevel::Info,
-                                );
-                                self.tui_hdr(format!(
-                                    "{icon} Permission mode: {label} {hint}"
-                                ));
-                                self.sync_plan_tools(true).await;
-                            }
-                            Some("yolo") => {
-                                self.permissions
-                                    .set_mode(PermissionMode::BypassPermissions);
-                                let (icon, label, _) =
-                                    mode_display(PermissionMode::BypassPermissions);
-                                self.app.lock().show_toast(
-                                    format!("{icon} {label}"),
-                                    ToastLevel::Warning,
-                                );
-                                self.tui_sys(format!("{icon} Permission mode: {label}"));
-                                self.sync_plan_tools(false).await;
-                            }
-                            Some("acceptEdits") => {
-                                self.permissions.set_mode(PermissionMode::AcceptEdits);
-                                let (icon, label, _) =
-                                    mode_display(PermissionMode::AcceptEdits);
-                                self.app.lock().show_toast(
-                                    format!("{icon} {label}"),
-                                    ToastLevel::Success,
-                                );
-                                self.tui_ok(format!("{icon} Permission mode: {label}"));
-                                self.sync_plan_tools(false).await;
-                            }
-                            _ => {
-                                self.tui_err(format!(
-                                    "Unknown mode '{name}'. Valid: safe | edit-freely | plan | full-access (or: default | acceptEdits | yolo)"
-                                ));
-                            }
-                        }
-                    }
-                }
+                return self.cmd_mode(arg).await;
             }
-            // SlashCmd::New is handled below (hot-swap)
             SlashCmd::Model(m) => {
                 // Empty arg → open interactive picker
                 let m = if m.is_empty() {
@@ -1001,77 +859,8 @@ impl Repl {
                 return self.cmd_agents().await;
             }
             SlashCmd::Delete(target) => {
-                // /delete [name-or-id] — delete a specific agent by name/id prefix
-                let agents = match self.client.list_agents().await {
-                    Ok(a) => a,
-                    Err(e) => {
-                        self.print_error(&mut stdout, &e.to_string())?;
-                        vec![]
-                    }
-                };
-                if agents.is_empty() {
-                    self.tui_dim("  (no agents)");
-                } else if let Some(query) = target {
-                    let q = query.to_lowercase();
-                    let matched: Vec<_> = agents
-                        .iter()
-                        .filter(|a| {
-                            a.name.to_lowercase().contains(&q) || a.id.starts_with(&q)
-                        })
-                        .collect();
-                    match matched.len() {
-                        0 => self.tui_err(format!("No agent matching '{query}'")),
-                        1 => {
-                            let a = matched[0];
-                            use crate::ui::question::{Question, QuestionOption};
-                            let opts = vec![
-                                QuestionOption {
-                                    label: "Yes — delete".to_string(),
-                                    description: String::new(),
-                                },
-                                QuestionOption {
-                                    label: "No — cancel".to_string(),
-                                    description: String::new(),
-                                },
-                            ];
-                            let q_widget = Question {
-                                header: "Confirm delete".to_string(),
-                                text: format!("Delete '{}'?", a.name),
-                                options: opts.clone(),
-                                multi_select: false,
-                                allow_other: false,
-                                progress: None,
-                            };
-                            let confirmed = {
-                                let mut app = self.app.lock();
-                                let r = app.ask_question(&q_widget)?;
-                                app.scroll = 0;
-                                let _ = app.draw();
-                                matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
-                            };
-                            if confirmed {
-                                match self.client.delete_agent(&a.id).await {
-                                    Ok(_) => {
-                                        self.tui_ok(format!("  ✓ Deleted: {}", a.name));
-                                        if a.id == self.agent_id() {
-                                            self.tui_dim("  Active agent deleted — use /new or /agents to continue");
-                                        }
-                                    }
-                                    Err(e) => self.tui_err(e.to_string()),
-                                }
-                            } else {
-                                self.tui_dim("  (cancelled)");
-                            }
-                        }
-                        n => self.tui_err(format!(
-                            "{n} agents match '{query}' — be more specific"
-                        )),
-                    }
-                } else {
-                    self.tui_dim("  Usage: /delete <name-or-id>  or  /agents then press d");
-                }
+                return self.cmd_delete(target, stdout, pending_input).await;
             }
-
             SlashCmd::Init => {
                 return self.cmd_init(stdout).await;
             }
@@ -1095,80 +884,8 @@ impl Repl {
                 return self.cmd_memory(input, stdout, pending_input).await;
             }
             SlashCmd::Search(query) => {
-                if query.is_empty() {
-                    self.tui_dim("  Usage: /search <query>");
-                    return Ok(false);
-                }
-                // Run both searches concurrently
-                let agent_id = self.agent_id();
-                let (msg_res, mem_res) = tokio::join!(
-                    self.client.search_messages(&agent_id, &query),
-                    self.client.search_memory(&agent_id, &query),
-                );
-
-                let msgs_empty = msg_res.as_ref().map(|v| v.is_empty()).unwrap_or(true);
-                let mem_empty = mem_res.as_ref().map(|v| v.is_empty()).unwrap_or(true);
-
-                if msgs_empty && mem_empty && msg_res.is_ok() && mem_res.is_ok() {
-                    self.tui_dim(format!("  No results for '{query}'"));
-                } else {
-                    self.tui_blank();
-                    self.tui_hdr(format!("  Search results for '{query}'"));
-                    self.tui_blank();
-
-                    // Message results (FTS5 BM25-ranked)
-                    match &msg_res {
-                        Ok(msgs) if !msgs.is_empty() => {
-                            self.tui_dim(format!(
-                                "  ── Messages ({} match(es)) ──",
-                                msgs.len()
-                            ));
-                            for m in msgs.iter().take(8) {
-                                let role = m["role"].as_str().unwrap_or("?");
-                                let snippet = m["snippet"].as_str().unwrap_or("").trim();
-                                let display = if snippet.is_empty() {
-                                    m["content"]["content"]
-                                        .as_str()
-                                        .or_else(|| m["content"].as_str())
-                                        .unwrap_or("")
-                                        .chars()
-                                        .take(100)
-                                        .collect::<String>()
-                                } else {
-                                    snippet.chars().take(120).collect::<String>()
-                                };
-                                let score = m["score"].as_f64().unwrap_or(0.0);
-                                self.tui_dim(format!(
-                                    "  [{role}] (bm25 {score:.2})  {display}"
-                                ));
-                            }
-                            self.tui_blank();
-                        }
-                        Err(e) => self.tui_err(format!("  Message search error: {e}")),
-                        _ => {}
-                    }
-
-                    // Memory results (LIKE search)
-                    match &mem_res {
-                        Ok(blocks) if !blocks.is_empty() => {
-                            self.tui_dim(format!(
-                                "  ── Memory ({} match(es)) ──",
-                                blocks.len()
-                            ));
-                            for b in blocks.iter().take(5) {
-                                let label = b["label"].as_str().unwrap_or("?");
-                                let snippet = b["snippet"].as_str().unwrap_or("").trim();
-                                let display: String = snippet.chars().take(120).collect();
-                                self.tui_dim(format!("  [{label}]  {display}"));
-                            }
-                            self.tui_blank();
-                        }
-                        Err(e) => self.tui_err(format!("  Memory search error: {e}")),
-                        _ => {}
-                    }
-                }
+                return self.cmd_search(query).await;
             }
-
             SlashCmd::Skills(arg) => {
                 return self.cmd_skills(arg, stdout, pending_input).await;
             }
