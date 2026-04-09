@@ -2,6 +2,7 @@ pub mod capability_gate;
 pub mod commands;
 pub mod commands_memory;
 pub mod commands_providers;
+pub mod commands_skills;
 pub mod format;
 pub mod pickers;
 pub mod tool_intercepts;
