@@ -1,0 +1,136 @@
+use super::*;
+use std::path::PathBuf;
+use std::sync::Arc;
+use serde_json::Value;
+use cade_core::skills::discover_all_skills;
+use cade_core::tool_ids::*;
+use crate::agent::client::HttpTransport;
+use crate::backends::{ExecutionBackend, LocalBackend};
+use crate::mcp::McpManager;
+use crate::tools::git_checkpoint;
+use crate::tools::{dispatch, memory};
+
+impl ToolRuntime {
+    async fn handle_install_skill(&self, args: &Value) -> (String, bool) {
+        let url = args["url"].as_str().unwrap_or("").trim().to_string();
+        let scope = args["scope"].as_str().unwrap_or("project");
+        if url.is_empty() {
+            return ("Error: 'url' is required".to_string(), true);
+        }
+        let target_dir = if scope == "global" {
+            dirs::home_dir()
+                .map(|h| h.join(".cade").join("skills"))
+                .unwrap_or_else(|| self.cwd.join(".cade/skills"))
+        } else {
+            self.cwd.join(".cade/skills")
+        };
+        match cade_core::skills::install_skill_from_url(&url, &target_dir).await {
+            Ok(skill) => (
+                format!(
+                    "Skill '{}' installed as [{}] in {} scope. It is now available via load_skill(\"{}\").",
+                    skill.name, skill.id, scope, skill.id
+                ),
+                false,
+            ),
+            Err(e) => (format!("Failed to install skill: {e}"), true),
+        }
+    }
+
+    async fn handle_run_skill_script(&self, args: &Value) -> (String, bool) {
+        let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
+        let script = args["script"].as_str().unwrap_or("").trim().to_string();
+        let script_args: Vec<String> = args["args"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if skill_id.is_empty() || script.is_empty() {
+            return (
+                "Error: 'skill_id' and 'script' are required".to_string(),
+                true,
+            );
+        }
+
+        let skills = discover_all_skills(&self.cwd, Some(&self.agent_id), None);
+        let Some(skill) = skills.into_iter().find(|s| s.id == skill_id) else {
+            return (format!("Skill '{skill_id}' not found"), true);
+        };
+
+        let Some(sk) = skill.scripts.iter().find(|s| s.name == script).cloned() else {
+            let available: Vec<&str> = skill.scripts.iter().map(|s| s.name.as_str()).collect();
+            let list = if available.is_empty() {
+                "none".to_string()
+            } else {
+                available.join(", ")
+            };
+            return (
+                format!("Script '{script}' not found in skill '{skill_id}'. Available: {list}"),
+                true,
+            );
+        };
+
+        let mut cmd = tokio::process::Command::new(&sk.path);
+        cade_core::agent_env::apply_agent_env(&mut cmd);
+        match cmd.args(&script_args).output().await {
+            Err(e) => (format!("Failed to run script: {e}"), true),
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                let combined = if stderr.is_empty() {
+                    stdout
+                } else {
+                    format!("{stdout}\n[stderr]\n{stderr}")
+                };
+                let is_err = !out.status.success();
+                (combined, is_err)
+            }
+        }
+    }
+
+    fn handle_load_skill_ref(&self, args: &Value) -> (String, bool) {
+        let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
+        let doc = args["doc"].as_str().unwrap_or("").trim().to_string();
+
+        if skill_id.is_empty() || doc.is_empty() {
+            return ("Error: 'skill_id' and 'doc' are required".to_string(), true);
+        }
+
+        let skills = discover_all_skills(&self.cwd, Some(&self.agent_id), None);
+        let Some(skill) = skills.into_iter().find(|s| s.id == skill_id) else {
+            return (format!("Skill '{skill_id}' not found"), true);
+        };
+
+        let Some(r) = skill
+            .references
+            .iter()
+            .find(|r| {
+                r.name == doc || r.path.file_name().and_then(|n| n.to_str()).unwrap_or("") == doc
+            })
+            .cloned()
+        else {
+            let available: Vec<&str> = skill.references.iter().map(|r| r.name.as_str()).collect();
+            let list = if available.is_empty() {
+                "none".to_string()
+            } else {
+                available.join(", ")
+            };
+            return (
+                format!("Reference '{doc}' not found in skill '{skill_id}'. Available: {list}"),
+                true,
+            );
+        };
+
+        match std::fs::read_to_string(&r.path) {
+            Ok(content) => (
+                format!("# Reference: {doc} (skill: {skill_id})\n\n{content}"),
+                false,
+            ),
+            Err(e) => (format!("Failed to read reference '{doc}': {e}"), true),
+        }
+    }
+
+}

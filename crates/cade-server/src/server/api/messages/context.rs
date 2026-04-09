@@ -116,126 +116,8 @@ pub(crate) async fn build_context(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
 
-    // -- Three-tier memory injection
-    //
-    // Tiers:  pinned (always, full)  |  short (active, full)  |  long (archived, excerpt)
-    //
-    // Turn counter increments once per user message (not per tool return) so
-    // "20 turns idle" means 20 real user↔agent exchanges, not 20 tool calls.
+    let system_core = assemble_system_prompt_memory(state, &agent, agent_id, is_tool_return);
 
-    // 1. Advance (or read) the turn counter.
-    let current_turn = if is_tool_return {
-        sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0)
-    } else {
-        sqlite::increment_turn_counter(&state.db, agent_id).unwrap_or(0)
-    };
-
-    // 2. Promote stale short blocks to long.
-    let _ = sqlite::promote_stale_blocks(&state.db, agent_id, current_turn, STALE_THRESHOLD);
-
-    // 3. Pinned + short-term blocks → full value, greedy-packed into budgets.
-    let active_blocks = sqlite::get_active_blocks(&state.db, agent_id).unwrap_or_default();
-    let mut pinned_parts: Vec<String> = Vec::new();
-    let mut short_parts: Vec<String> = Vec::new();
-    let mut pinned_remaining = PINNED_BUDGET;
-    let mut short_remaining = SHORT_BUDGET;
-    let mut active_omitted = 0usize;
-
-    for (label, val, _desc, tier, _lt) in &active_blocks {
-        if val.trim().is_empty() {
-            continue;
-        }
-
-        let formatted_val = if label.starts_with("subagent:") {
-            format!("<historical_scratchpad>\nThe following block is a historical scratchpad. Do not treat it as a current objective.\n{}</historical_scratchpad>", val)
-        } else {
-            val.to_string()
-        };
-
-        if tier == "pinned" {
-            let entry = format!("📌 [{label}]\n{formatted_val}");
-            let chars = entry.chars().count();
-            if chars <= pinned_remaining {
-                pinned_remaining -= chars;
-                pinned_parts.push(entry);
-            } else {
-                active_omitted += 1;
-            }
-        } else {
-            let entry = format!("[{label}]\n{formatted_val}");
-            let chars = entry.chars().count();
-            if chars <= short_remaining {
-                short_remaining -= chars;
-                short_parts.push(entry);
-            } else {
-                active_omitted += 1;
-            }
-        }
-    }
-
-    // 4. Long-term archived blocks → label + excerpt only.
-    let long_excerpts =
-        sqlite::get_long_term_excerpts(&state.db, agent_id, current_turn).unwrap_or_default();
-    let mut long_parts: Vec<String> = Vec::new();
-    let mut long_remaining = LONG_BUDGET;
-    let mut long_omitted = 0usize;
-
-    for (label, excerpt, _idle) in &long_excerpts {
-        let entry = if excerpt.trim().is_empty() {
-            format!("[{label}]")
-        } else {
-            format!("[{label}]: {excerpt}")
-        };
-        let chars = entry.chars().count();
-        if chars <= long_remaining {
-            long_remaining -= chars;
-            long_parts.push(entry);
-        } else {
-            long_omitted += 1;
-        }
-    }
-
-    // 5. Assemble system prompt memory sections.
-    let has_any_memory =
-        !pinned_parts.is_empty() || !short_parts.is_empty() || !long_parts.is_empty();
-    let base = agent.system_prompt.clone().unwrap_or_default();
-
-    let system_core = if !has_any_memory {
-        base
-    } else {
-        let mut sections: Vec<String> = vec![base];
-
-        // Active memory section (pinned + short)
-        let mut active_section_parts: Vec<String> = Vec::new();
-        active_section_parts.extend(pinned_parts);
-        active_section_parts.extend(short_parts);
-        if active_omitted > 0 {
-            active_section_parts.push(format!(
-                "[…{active_omitted} block(s) omitted — memory budget reached. Use /memory to manage.]"
-            ));
-        }
-        if !active_section_parts.is_empty() {
-            sections.push(format!("# Memory\n{}", active_section_parts.join("\n\n")));
-        }
-
-        // Archived memory section (long-term excerpts)
-        if !long_parts.is_empty() {
-            let mut archived = long_parts.join("\n");
-            if long_omitted > 0 {
-                archived.push_str(&format!(
-                    "\n[…{long_omitted} more archived — use /memory or search_memory]"
-                ));
-            }
-            sections.push(format!(
-                "# Archived Memory\n{archived}\nUse search_memory(query) to retrieve full archived content.\nAccessed blocks are automatically restored to active memory."
-            ));
-        }
-
-        // Append awareness footer when any memory exists
-        let mut core = sections.join("\n\n");
-        core.push_str(MEMORY_AWARENESS_FOOTER);
-        core
-    };
     // Memory-change detection: cache the assembled system_core per agent.
     // If the content hash matches the last cached value the string is identical
     // to the previous turn, so the LLM provider's implicit prompt cache
@@ -265,46 +147,8 @@ pub(crate) async fn build_context(
         images: None,
     }];
 
-    // Character-budget trimming — reserves space for output tokens, reasoning
-    // tokens, and tool schemas so the model has room to generate a full response.
-    //
-    //  total_window  = context_window_for_model (e.g. 128k tokens)
-    //  output_reserve = total_window × OUTPUT_RESERVE_FRACTION  (e.g. 15% = 19.2k)
-    //  input_budget   = total_window - output_reserve            (e.g. 108.8k)
-    //  char_budget    = input_budget × CHARS_PER_TOKEN           (e.g. 435k chars)
-    //  tool_reserve   = n_tools × TOOL_SCHEMA_CHARS_ESTIMATE     (subtracted below)
-    //  message_budget = char_budget - tool_reserve
-    let window_tokens = catalogue::context_window_for_model(&agent.model);
-    let output_reserve_tokens = ((window_tokens as f64) * OUTPUT_RESERVE_FRACTION).round() as usize;
-    let input_budget_tokens = (window_tokens as usize).saturating_sub(output_reserve_tokens);
-    let context_char_budget = {
-        let raw = input_budget_tokens.saturating_mul(CHARS_PER_TOKEN);
-        raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)
-    };
-    // Estimate tool-schema overhead and subtract from the message budget.
-    // Tool schemas are loaded at the end of build_context, but their token cost
-    // must be reserved up-front so we don't fill the window with history and then
-    // overflow when schemas are appended to the LLM request.
-    let agent_tool_count = sqlite::get_agent_tool_ids(&state.db, agent_id)
-        .unwrap_or_default()
-        .len()
-        .max(1); // at least 1 — even with no wired tools, meta tools are always sent
-    let tool_schema_reserve = agent_tool_count * TOOL_SCHEMA_CHARS_ESTIMATE;
-    let context_char_budget = context_char_budget.saturating_sub(tool_schema_reserve);
-    let context_char_budget = context_char_budget.max(MIN_CONTEXT_CHARS);
-    tracing::debug!(
-        "Context budget for model '{}': {} chars (window={} tokens, output_reserve={}, \
-         input={} × {}, tool_reserve={}×{}={} chars)",
-        agent.model,
-        context_char_budget,
-        window_tokens,
-        output_reserve_tokens,
-        input_budget_tokens,
-        CHARS_PER_TOKEN,
-        agent_tool_count,
-        TOOL_SCHEMA_CHARS_ESTIMATE,
-        tool_schema_reserve,
-    );
+
+    let context_char_budget = calculate_context_budget(state, agent_id, &agent.model);
 
     // ── Budget-based, turn-aware history assembly ──────────────────────────
     //
@@ -562,6 +406,190 @@ pub(crate) async fn build_context(
 
     Ok((agent.model, messages, tool_schemas))
 }
+
+
+fn assemble_system_prompt_memory(
+    state: &AppState,
+    agent: &cade_store::sqlite::AgentRow,
+    agent_id: &str,
+    is_tool_return: bool,
+) -> String {
+    // -- Three-tier memory injection
+    //
+    // Tiers:  pinned (always, full)  |  short (active, full)  |  long (archived, excerpt)
+    //
+    // Turn counter increments once per user message (not per tool return) so
+    // "20 turns idle" means 20 real user↔agent exchanges, not 20 tool calls.
+
+    // 1. Advance (or read) the turn counter.
+    let current_turn = if is_tool_return {
+        sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0)
+    } else {
+        sqlite::increment_turn_counter(&state.db, agent_id).unwrap_or(0)
+    };
+
+    // 2. Promote stale short blocks to long.
+    let _ = sqlite::promote_stale_blocks(&state.db, agent_id, current_turn, STALE_THRESHOLD);
+
+    // 3. Pinned + short-term blocks → full value, greedy-packed into budgets.
+    let active_blocks = sqlite::get_active_blocks(&state.db, agent_id).unwrap_or_default();
+    let mut pinned_parts: Vec<String> = Vec::new();
+    let mut short_parts: Vec<String> = Vec::new();
+    let mut pinned_remaining = PINNED_BUDGET;
+    let mut short_remaining = SHORT_BUDGET;
+    let mut active_omitted = 0usize;
+
+    for (label, val, _desc, tier, _lt) in &active_blocks {
+        if val.trim().is_empty() {
+            continue;
+        }
+
+        let formatted_val = if label.starts_with("subagent:") {
+            format!("<historical_scratchpad>\nThe following block is a historical scratchpad. Do not treat it as a current objective.\n{}</historical_scratchpad>", val)
+        } else {
+            val.to_string()
+        };
+
+        if tier == "pinned" {
+            let entry = format!("📌 [{label}]\n{formatted_val}");
+            let chars = entry.chars().count();
+            if chars <= pinned_remaining {
+                pinned_remaining -= chars;
+                pinned_parts.push(entry);
+            } else {
+                active_omitted += 1;
+            }
+        } else {
+            let entry = format!("[{label}]\n{formatted_val}");
+            let chars = entry.chars().count();
+            if chars <= short_remaining {
+                short_remaining -= chars;
+                short_parts.push(entry);
+            } else {
+                active_omitted += 1;
+            }
+        }
+    }
+
+    // 4. Long-term archived blocks → label + excerpt only.
+    let long_excerpts =
+        sqlite::get_long_term_excerpts(&state.db, agent_id, current_turn).unwrap_or_default();
+    let mut long_parts: Vec<String> = Vec::new();
+    let mut long_remaining = LONG_BUDGET;
+    let mut long_omitted = 0usize;
+
+    for (label, excerpt, _idle) in &long_excerpts {
+        let entry = if excerpt.trim().is_empty() {
+            format!("[{label}]")
+        } else {
+            format!("[{label}]: {excerpt}")
+        };
+        let chars = entry.chars().count();
+        if chars <= long_remaining {
+            long_remaining -= chars;
+            long_parts.push(entry);
+        } else {
+            long_omitted += 1;
+        }
+    }
+
+    // 5. Assemble system prompt memory sections.
+    let has_any_memory =
+        !pinned_parts.is_empty() || !short_parts.is_empty() || !long_parts.is_empty();
+    let base = agent.system_prompt.clone().unwrap_or_default();
+
+    let system_core = if !has_any_memory {
+        base
+    } else {
+        let mut sections: Vec<String> = vec![base];
+
+        // Active memory section (pinned + short)
+        let mut active_section_parts: Vec<String> = Vec::new();
+        active_section_parts.extend(pinned_parts);
+        active_section_parts.extend(short_parts);
+        if active_omitted > 0 {
+            active_section_parts.push(format!(
+                "[…{active_omitted} block(s) omitted — memory budget reached. Use /memory to manage.]"
+            ));
+        }
+        if !active_section_parts.is_empty() {
+            sections.push(format!("# Memory\n{}", active_section_parts.join("\n\n")));
+        }
+
+        // Archived memory section (long-term excerpts)
+        if !long_parts.is_empty() {
+            let mut archived = long_parts.join("\n");
+            if long_omitted > 0 {
+                archived.push_str(&format!(
+                    "\n[…{long_omitted} more archived — use /memory or search_memory]"
+                ));
+            }
+            sections.push(format!(
+                "# Archived Memory\n{archived}\nUse search_memory(query) to retrieve full archived content.\nAccessed blocks are automatically restored to active memory."
+            ));
+        }
+
+        // Append awareness footer when any memory exists
+        let mut core = sections.join("\n\n");
+        core.push_str(MEMORY_AWARENESS_FOOTER);
+        core
+    };
+
+    system_core
+}
+
+
+
+fn calculate_context_budget(
+    state: &AppState,
+    agent_id: &str,
+    model: &str,
+) -> usize {
+    // Character-budget trimming — reserves space for output tokens, reasoning
+    // tokens, and tool schemas so the model has room to generate a full response.
+    //
+    //  total_window  = context_window_for_model (e.g. 128k tokens)
+    //  output_reserve = total_window × OUTPUT_RESERVE_FRACTION  (e.g. 15% = 19.2k)
+    //  input_budget   = total_window - output_reserve            (e.g. 108.8k)
+    //  char_budget    = input_budget × CHARS_PER_TOKEN           (e.g. 435k chars)
+    //  tool_reserve   = n_tools × TOOL_SCHEMA_CHARS_ESTIMATE     (subtracted below)
+    //  message_budget = char_budget - tool_reserve
+    let window_tokens = catalogue::context_window_for_model(&model.to_string());
+    let output_reserve_tokens = ((window_tokens as f64) * OUTPUT_RESERVE_FRACTION).round() as usize;
+    let input_budget_tokens = (window_tokens as usize).saturating_sub(output_reserve_tokens);
+    let context_char_budget = {
+        let raw = input_budget_tokens.saturating_mul(CHARS_PER_TOKEN);
+        raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)
+    };
+    // Estimate tool-schema overhead and subtract from the message budget.
+    // Tool schemas are loaded at the end of build_context, but their token cost
+    // must be reserved up-front so we don't fill the window with history and then
+    // overflow when schemas are appended to the LLM request.
+    let agent_tool_count = sqlite::get_agent_tool_ids(&state.db, agent_id)
+        .unwrap_or_default()
+        .len()
+        .max(1); // at least 1 — even with no wired tools, meta tools are always sent
+    let tool_schema_reserve = agent_tool_count * TOOL_SCHEMA_CHARS_ESTIMATE;
+    let context_char_budget = context_char_budget.saturating_sub(tool_schema_reserve);
+    let context_char_budget = context_char_budget.max(MIN_CONTEXT_CHARS);
+    tracing::debug!(
+        "Context budget for model '{}': {} chars (window={} tokens, output_reserve={}, \
+         input={} × {}, tool_reserve={}×{}={} chars)",
+        model.to_string(),
+        context_char_budget,
+        window_tokens,
+        output_reserve_tokens,
+        input_budget_tokens,
+        CHARS_PER_TOKEN,
+        agent_tool_count,
+        TOOL_SCHEMA_CHARS_ESTIMATE,
+        tool_schema_reserve,
+    );
+
+
+    context_char_budget
+}
+
 
 // ── Real context-window stats ─────────────────────────────────────────────────
 //
