@@ -788,6 +788,7 @@ impl Repl {
                                 "⚡ Permission mode: bypassPermissions — all tools auto-approved"
                                     .to_string(),
                             ));
+                        self.sync_plan_tools(false).await;
                     }
                     SlashCmd::Mcp => {
                         if self.require_capability(cade_core::capabilities::Capability::Mcp, "/mcp")
@@ -1307,6 +1308,7 @@ impl Repl {
                             .lock()
                             .show_toast("Permission mode: plan (read-only)", ToastLevel::Info);
                         self.tui_hdr("📖 Permission mode: plan (read-only) — write/exec tools blocked. Use /default to resume.");
+                        self.sync_plan_tools(true).await;
                     }
                     SlashCmd::Todos => {
                         { let mut app = self.app.lock();
@@ -1349,6 +1351,7 @@ impl Repl {
                             .lock()
                             .show_toast("Permission mode: default", ToastLevel::Success);
                         self.tui_ok("✅ Permission mode: default — tools require approval");
+                        self.sync_plan_tools(false).await;
                     }
                     SlashCmd::Mode(arg) => {
                         use crate::cli::repl::format::parse_mode_label;
@@ -1369,6 +1372,7 @@ impl Repl {
                                             ToastLevel::Success,
                                         );
                                         self.tui_ok(format!("{icon} Permission mode: {label}"));
+                                        self.sync_plan_tools(false).await;
                                     }
                                     Some("plan") => {
                                         self.permissions.set_mode(PermissionMode::Plan);
@@ -1381,6 +1385,7 @@ impl Repl {
                                         self.tui_hdr(format!(
                                             "{icon} Permission mode: {label} {hint}"
                                         ));
+                                        self.sync_plan_tools(true).await;
                                     }
                                     Some("yolo") => {
                                         self.permissions
@@ -1392,6 +1397,7 @@ impl Repl {
                                             ToastLevel::Warning,
                                         );
                                         self.tui_sys(format!("{icon} Permission mode: {label}"));
+                                        self.sync_plan_tools(false).await;
                                     }
                                     Some("acceptEdits") => {
                                         self.permissions.set_mode(PermissionMode::AcceptEdits);
@@ -1402,6 +1408,7 @@ impl Repl {
                                             ToastLevel::Success,
                                         );
                                         self.tui_ok(format!("{icon} Permission mode: {label}"));
+                                        self.sync_plan_tools(false).await;
                                     }
                                     _ => {
                                         self.tui_err(format!(

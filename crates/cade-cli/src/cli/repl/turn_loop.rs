@@ -1516,7 +1516,7 @@ impl Repl {
 
     /// Check if a tool is a native intercept (requires &self). If so, execute
     /// it immediately and return the result. Returns None for generic tools.
-    async fn sync_plan_tools(&self, enter_plan: bool) {
+    pub(crate) async fn sync_plan_tools(&self, enter_plan: bool) {
         let agent_id = self.agent_id.lock().clone();
         
         if enter_plan {
@@ -1527,7 +1527,7 @@ impl Repl {
                     let canonical_name = cade_agent::tools::manager::canonical_name(&name);
                     let is_mcp = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
                     let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
-                    if !is_write {
+                    if !is_write && canonical_name != "exitplanmode" {
                         new_ids.push(id);
                     }
                 }
