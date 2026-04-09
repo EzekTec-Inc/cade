@@ -2965,38 +2965,32 @@ impl Repl {
                                 let id = self.agent_id();
                                 match self.client.get_memory(&id).await {
                                     Ok(mut blocks) => {
-                                        loop {
-                                            match self
-                                                .memory_picker(
-                                                    std::sync::Arc::clone(&self.app),
-                                                    &mut blocks,
-                                                )
-                                                .await
-                                            {
-                                                Ok(Some(MemoryPickerResult::Edit(b))) => {
-                                                    pending_input =
-                                                        Some(format!("/memory edit {}", b.label));
-                                                    break;
-                                                }
-                                                Ok(Some(MemoryPickerResult::Delete(b))) => {
-                                                    pending_input =
-                                                        Some(format!("/memory delete {}", b.label));
-                                                    break;
-                                                }
-                                                Ok(Some(MemoryPickerResult::TogglePin(b))) => {
-                                                    let is_pinned =
-                                                        b.tier.as_deref() == Some("pinned");
-                                                    let cmd =
-                                                        if is_pinned { "unpin" } else { "pin" };
-                                                    pending_input =
-                                                        Some(format!("/memory {cmd} {}", b.label));
-                                                    break;
-                                                }
-                                                Ok(None) => break, // cancelled
-                                                Err(e) => {
-                                                    self.tui_err(e.to_string());
-                                                    break;
-                                                }
+                                        match self
+                                            .memory_picker(
+                                                std::sync::Arc::clone(&self.app),
+                                                &mut blocks,
+                                            )
+                                            .await
+                                        {
+                                            Ok(Some(MemoryPickerResult::Edit(b))) => {
+                                                pending_input =
+                                                    Some(format!("/memory edit {}", b.label));
+                                            }
+                                            Ok(Some(MemoryPickerResult::Delete(b))) => {
+                                                pending_input =
+                                                    Some(format!("/memory delete {}", b.label));
+                                            }
+                                            Ok(Some(MemoryPickerResult::TogglePin(b))) => {
+                                                let is_pinned =
+                                                    b.tier.as_deref() == Some("pinned");
+                                                let cmd =
+                                                    if is_pinned { "unpin" } else { "pin" };
+                                                pending_input =
+                                                    Some(format!("/memory {cmd} {}", b.label));
+                                            }
+                                            Ok(None) => {} // cancelled
+                                            Err(e) => {
+                                                self.tui_err(e.to_string());
                                             }
                                         }
                                     }

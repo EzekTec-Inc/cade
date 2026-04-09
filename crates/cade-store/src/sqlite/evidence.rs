@@ -76,6 +76,7 @@ pub fn insert_memory_evidence(
 }
 
 /// List evidence entries for a memory block.
+#[allow(clippy::type_complexity)]
 pub fn list_memory_evidence(
     db: &Db,
     agent_id: &str,

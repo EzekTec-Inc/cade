@@ -180,11 +180,11 @@ impl<'a> Editor<'a> {
         let mut text = self.text();
         for paste in &self.paste_buffers {
             let marker_prefix = format!("[paste #{}:", paste.id);
-            if let Some(start) = text.find(&marker_prefix) {
-                if let Some(end_offset) = text[start..].find(']') {
-                    let end = start + end_offset + 1;
-                    text.replace_range(start..end, &paste.text);
-                }
+            if let Some(start) = text.find(&marker_prefix)
+                && let Some(end_offset) = text[start..].find(']')
+            {
+                let end = start + end_offset + 1;
+                text.replace_range(start..end, &paste.text);
             }
         }
         self.set_text(text);
@@ -215,11 +215,11 @@ impl<'a> Editor<'a> {
         for img in current_images {
             let marker_prefix = format!("[image #{}:", img.id);
             if text.contains(&marker_prefix) {
-                if let Some(start) = text.find(&marker_prefix) {
-                    if let Some(end_offset) = text[start..].find(']') {
-                        let end = start + end_offset + 1;
-                        text.replace_range(start..end, "");
-                    }
+                if let Some(start) = text.find(&marker_prefix)
+                    && let Some(end_offset) = text[start..].find(']')
+                {
+                    let end = start + end_offset + 1;
+                    text.replace_range(start..end, "");
                 }
                 extracted.push(img);
             }

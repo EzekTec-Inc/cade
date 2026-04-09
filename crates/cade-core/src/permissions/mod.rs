@@ -233,7 +233,7 @@ pub fn is_write_schema(name: &str) -> bool {
 /// Returns true if a bash command's primary intent is file/directory deletion.
 pub fn bash_first_cmd_is_delete(cmd: &str) -> bool {
     for segment in split_shell_segments(cmd) {
-        let tokens: Vec<&str> = segment.trim().split_whitespace().collect();
+        let tokens: Vec<&str> = segment.split_whitespace().collect();
         let first = match tokens.first() {
             Some(t) => *t,
             None => continue,
@@ -1330,12 +1330,11 @@ impl PermissionManager {
         // 1. Protected path — hard-block writes always
         if let Some(arg_str) = arg_ref
             && path_is_protected(arg_str)
+            && (is_write || bash_is_write)
         {
-            if is_write || bash_is_write {
-                return Verdict::Deny(
-                    "security: protected path access denied (.git, .env, .ssh)".to_string(),
-                );
-            }
+            return Verdict::Deny(
+                "security: protected path access denied (.git, .env, .ssh)".to_string(),
+            );
         }
 
         // 2. Explicit deny rules — hard-block

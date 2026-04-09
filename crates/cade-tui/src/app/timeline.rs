@@ -691,7 +691,7 @@ fn render_tool_call_item(
                 .fg(colors.assistant_accent)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(format!("{display}"), name_style.add_modifier(Modifier::BOLD)),
+        Span::styled(display.to_string(), name_style.add_modifier(Modifier::BOLD)),
         Span::styled("(", Style::default().fg(colors.dim)),
         args_span,
     ];

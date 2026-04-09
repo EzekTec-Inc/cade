@@ -1872,17 +1872,17 @@ impl TuiApp {
 
             _ => {
                 self.editor.handle_key_event(k, self.last_input_width);
-                if let KeyCode::Char('@') = k.code {
-                    if self.picker.is_none() {
-                        let at_pos = self.editor.cursor_pos().saturating_sub(1);
-                        let matches = self.file_ac.collect_files("");
-                        self.picker = Some(PickerState {
-                            at_pos,
-                            query: String::new(),
-                            matches,
-                            cursor: 0,
-                        });
-                    }
+                if let KeyCode::Char('@') = k.code
+                    && self.picker.is_none()
+                {
+                    let at_pos = self.editor.cursor_pos().saturating_sub(1);
+                    let matches = self.file_ac.collect_files("");
+                    self.picker = Some(PickerState {
+                        at_pos,
+                        query: String::new(),
+                        matches,
+                        cursor: 0,
+                    });
                 }
             }
         }
@@ -1997,9 +1997,6 @@ fn count_wrapped_segment(text: &str, content_w: u16) -> u16 {
 }
 
 // -- Frame renderer
-
-#[allow(clippy::too_many_arguments)]
-
 
 #[allow(clippy::too_many_arguments)]
 fn render_frame(
@@ -2437,7 +2434,7 @@ fn render_frame(
         };
         frame.render_widget(
             Paragraph::new(Span::styled(
-                truncate_str(&extra, extra_rect.width.saturating_sub(1) as usize),
+                truncate_str(extra, extra_rect.width.saturating_sub(1) as usize),
                 Style::default().fg(colors.dim),
             )),
             extra_rect,

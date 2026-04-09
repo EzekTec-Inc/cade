@@ -295,6 +295,7 @@ pub fn promote_stale_blocks(
 
 /// Fetch pinned + short-term blocks, pinned first then short by last_turn DESC.
 /// Returns (label, value, description, tier, last_turn).
+#[allow(clippy::type_complexity)]
 pub fn get_active_blocks(
     db: &Db,
     agent_id: &str,

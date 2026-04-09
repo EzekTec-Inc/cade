@@ -48,17 +48,17 @@ impl ProviderRegistry {
             return registry;
         }
 
-        if let Ok(content) = std::fs::read_to_string(p) {
-            if let Ok(custom_providers) = serde_json::from_str::<Vec<ProviderDef>>(&content) {
-                // Merge custom providers, overriding defaults based on name
-                let mut new_providers = custom_providers;
-                for bundled in &registry.providers {
-                    if !new_providers.iter().any(|p| p.name == bundled.name) {
-                        new_providers.push(bundled.clone());
-                    }
+        if let Ok(content) = std::fs::read_to_string(p)
+            && let Ok(custom_providers) = serde_json::from_str::<Vec<ProviderDef>>(&content)
+        {
+            // Merge custom providers, overriding defaults based on name
+            let mut new_providers = custom_providers;
+            for bundled in &registry.providers {
+                if !new_providers.iter().any(|p| p.name == bundled.name) {
+                    new_providers.push(bundled.clone());
                 }
-                registry.providers = new_providers;
             }
+            registry.providers = new_providers;
         }
         
         registry
