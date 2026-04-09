@@ -333,6 +333,8 @@ pub struct TuiApp {
 
     /// Transient toast notification shown in the corner of the UI.
     pub toast: Option<Toast>,
+    /// Width of the input area calculated during the last render.
+    pub last_input_width: u16,
 
     // -- Skills overlay
 
@@ -423,6 +425,7 @@ impl TuiApp {
             pending_lines: 0,
             queued_count: 0,
             toast: None,
+            last_input_width: 80,
             draw_dirty: false,
             last_draw_at: Instant::now(),
             colors,
@@ -931,6 +934,7 @@ impl TuiApp {
                 toast.as_ref(),
                 &expanded_items,
                 &colors,
+                &mut self.last_input_width,
             );
         })?;
 
@@ -1867,7 +1871,7 @@ impl TuiApp {
             }
 
             _ => {
-                self.editor.handle_key_event(k);
+                self.editor.handle_key_event(k, self.last_input_width);
                 if let KeyCode::Char('@') = k.code {
                     if self.picker.is_none() {
                         let at_pos = self.editor.cursor_pos().saturating_sub(1);
@@ -2027,6 +2031,7 @@ fn render_frame(
     toast: Option<&Toast>,
     expanded_items: &std::collections::HashSet<TimelineKey>,
     colors: &ThemeColors,
+    last_input_width: &mut u16,
 ) -> u16 {
     // returns max_skip for V-04 scroll clamping
     let area = frame.area();
@@ -2342,6 +2347,7 @@ fn render_frame(
         textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
 
         frame.render_widget(&*textarea, input_chunks[1]);
+        *last_input_width = input_chunks[1].width;
     }
 
     // -- Footer

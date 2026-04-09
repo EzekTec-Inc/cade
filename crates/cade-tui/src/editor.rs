@@ -120,8 +120,31 @@ impl<'a> Editor<'a> {
         // TextArea does its own undo/redo tracking
     }
 
-    pub fn handle_key_event(&mut self, event: crossterm::event::KeyEvent) -> bool {
-        self.textarea.input(event)
+    pub fn handle_key_event(&mut self, event: crossterm::event::KeyEvent, max_width: u16) -> bool {
+        let modified = self.textarea.input(event);
+        if modified && max_width > 0 {
+            let (row, col) = self.textarea.cursor();
+            if col as u16 >= max_width.saturating_sub(2) {
+                let lines = self.textarea.lines();
+                if let Some(line) = lines.get(row) {
+                    let chars: Vec<char> = line.chars().collect();
+                    if let Some(last_space_idx) = chars[..col].iter().rposition(|&c| c == ' ') {
+                        let go_back = col - last_space_idx;
+                        for _ in 0..go_back {
+                            self.textarea.move_cursor(tui_textarea::CursorMove::Back);
+                        }
+                        self.textarea.delete_next_char();
+                        self.textarea.insert_newline();
+                        for _ in 0..(go_back - 1) {
+                            self.textarea.move_cursor(tui_textarea::CursorMove::Forward);
+                        }
+                    } else {
+                        self.textarea.insert_newline();
+                    }
+                }
+            }
+        }
+        modified
     }
 
     pub fn insert_char(&mut self, c: char) {
