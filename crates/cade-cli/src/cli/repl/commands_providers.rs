@@ -154,4 +154,79 @@ impl Repl {
         }
         Ok(())
     }
+    pub(crate) async fn cmd_providers(
+        &mut self,
+    ) -> Result<bool> {
+        match self.client.list_providers().await {
+            Ok(body) => {
+                let empty = vec![];
+                let providers = body["providers"].as_array().unwrap_or(&empty);
+                self.tui_blank();
+                self.tui_hdr(format!("  Configured providers ({}):", providers.len()));
+                for p in providers {
+                    let name = p["name"].as_str().unwrap_or("?");
+                    let kind = p["kind"].as_str().unwrap_or("?");
+                    let live = p["live"].as_bool().unwrap_or(false);
+                    let source = p["source"].as_str().unwrap_or("db");
+                    let enabled = p["enabled"].as_bool().unwrap_or(true);
+                    let status = if live { "✓ live" } else { "✗ offline" };
+                    let display_name = if enabled {
+                        name.to_string()
+                    } else {
+                        format!("{name} (disabled)")
+                    };
+                    if live {
+                        self.tui_ok(format!(
+                            "  {status:<10} {display_name:<18} [{kind}] ({source})"
+                        ));
+                    } else {
+                        self.tui_err(format!(
+                            "  {status:<10} {display_name:<18} [{kind}] ({source})"
+                        ));
+                    }
+                }
+                self.tui_blank();
+                self.tui_dim("  /connect <name>    — add a provider");
+                self.tui_dim("  /disconnect <name> — remove a provider");
+                let presets = self.client.list_provider_presets().await;
+                if !presets.is_empty() {
+                    self.tui_dim("  OpenAI-compatible presets:");
+                    for p in &presets {
+                        let n = p["name"].as_str().unwrap_or("?");
+                        let u = p["base_url"].as_str().unwrap_or("?");
+                        self.tui_dim(format!("    /connect {n:<14} — {u}"));
+                    }
+                }
+                self.tui_blank();
+            }
+            Err(e) => self.tui_err(e.to_string()),
+        }
+        Ok(false)
+    }
+
+    pub(crate) async fn cmd_connect(
+        &mut self,
+        preset: Option<String>,
+        stdout: &mut std::io::Stdout,
+    ) -> Result<bool> {
+            self.handle_connect(preset, stdout).await?;
+        Ok(false)
+    }
+
+    pub(crate) async fn cmd_disconnect(
+        &mut self,
+        name: String,
+    ) -> Result<bool> {
+            if name.is_empty() {
+                self.tui_err("/disconnect requires a provider name");
+            } else {
+                self.tui_dim(format!("  Disconnecting provider '{name}'…"));
+                match self.client.remove_provider(&name).await {
+                    Ok(_) => self.tui_ok(format!("  ✓ Provider '{name}' removed")),
+                    Err(e) => self.tui_err(e.to_string()),
+                }
+            }
+        Ok(false)
+    }
+
 }

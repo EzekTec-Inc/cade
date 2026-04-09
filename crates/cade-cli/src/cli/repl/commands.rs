@@ -359,48 +359,8 @@ impl Repl {
                 return self.cmd_mode(arg).await;
             }
             SlashCmd::Model(m) => {
-                // Empty arg → open interactive picker
-                let m = if m.is_empty() {
-                    match self.interactive_model_picker(Arc::clone(&self.app)).await? {
-                        Some(picked) => picked,
-                        None => {
-                            let _ = self.app.lock().draw();
-                            return Ok(false);
-                        }
-                    }
-                } else {
-                    m
-                };
-                let new_toolset = Toolset::for_model(&m);
-                let old_toolset = *self.current_toolset.lock();
-                self.tui_dim(format!("  Switching model → {m}…"));
-                match self.client.patch_agent_model(&self.agent_id(), &m).await {
-                    Ok(new_model) => {
-                        *self.current_model.lock() =
-                            new_model.clone();
-                        if new_toolset != old_toolset {
-                            *self.current_toolset.lock() =
-                                new_toolset;
-                            self.spawn_tool_reregister();
-                            self.tui_hdr(format!(
-                                "  Toolset → {}",
-                                new_toolset.display_name()
-                            ));
-                        }
-                        self.tui_ok(format!("  ✓ Model: {new_model}"));
-                        {
-                            let mut app = self.app.lock();
-                            app.show_toast(
-                                format!("Model → {new_model}"),
-                                ToastLevel::Success,
-                            );
-                            let _ = app.draw();
-                        }
-                    }
-                    Err(e) => self.tui_err(e.to_string()),
-                }
+                return self.cmd_model(m, stdout).await;
             }
-
             SlashCmd::Reasoning(r) => {
                 let r = if r.is_empty() {
                     match self
@@ -442,50 +402,9 @@ impl Repl {
                 }
             }
 
-            SlashCmd::Pricing(arg) => match arg.as_deref() {
-                Some("sync") => {
-                    self.tui_dim("  Fetching latest pricing rules from cloud...");
-                    let url = "https://raw.githubusercontent.com/EzekTec-Inc/CADE/main/crates/cade-ai/src/default_pricing.json";
-                    match reqwest::get(url).await {
-                        Ok(res) if res.status().is_success() => {
-                            if let Ok(text) = res.text().await
-                                && let Some(p) = dirs::home_dir()
-                                    .map(|h| h.join(".cade").join("pricing.json"))
-                            {
-                                if let Err(e) = std::fs::write(&p, text) {
-                                    self.tui_err(format!(
-                                        "  Failed to write pricing.json: {}",
-                                        e
-                                    ));
-                                } else {
-                                    let mut stats =
-                                        self.session_stats.lock();
-                                    stats.registry = std::sync::Arc::new(
-                                        cade_ai::ModelRegistry::load_or_default(Some(&p)),
-                                    );
-                                    self.tui_ok("  Pricing synced successfully!");
-                                }
-                            }
-                        }
-                        _ => self.tui_err("  Failed to fetch pricing from cloud."),
-                    }
-                }
-                Some(cmd) if cmd.starts_with("set ") => {
-                    self.tui_err("  /pricing set is not fully implemented yet. Please edit ~/.cade/pricing.json manually.");
-                }
-                _ => {
-                    let model = self.model();
-                    let stats = self.session_stats.lock();
-                    let pricing = stats.registry.pricing_for_model(&model);
-                    self.tui_hdr(format!("  Pricing for model: {}", model));
-                    self.tui_dim(format!("  Input: ${}/1M", pricing.input));
-                    self.tui_dim(format!("  Output: ${}/1M", pricing.output));
-                    self.tui_dim(format!("  Cache Read: ${}/1M", pricing.cache_read));
-                    self.tui_dim(format!("  Cache Write: ${}/1M", pricing.cache_write));
-                    self.tui_dim("  Use /pricing sync to update from the cloud, or edit ~/.cade/pricing.json to add local overrides.");
-                }
-            },
-
+            SlashCmd::Pricing(arg) => {
+                return self.cmd_pricing(arg).await;
+            }
             SlashCmd::Cost => {
                 return self.cmd_cost().await;
             }
@@ -656,48 +575,8 @@ impl Repl {
                 return self.cmd_newagent(pending_input).await;
             }
             SlashCmd::Resume => {
-                self.tui_dim("  Fetching conversations…");
-                let agent_id = self.agent_id();
-                match self.client.list_conversations(&agent_id).await {
-                    Ok(convs) => {
-                        if convs.is_empty() {
-                            let _ =
-                                self.app
-                                    .lock()
-                                    .push(RenderLine::DimMsg(
-                                    "  No saved conversations yet. Use /new to start one."
-                                        .to_string(),
-                                ));
-                        } else if let Some(picked) = self
-                            .conversation_picker(Arc::clone(&self.app), &convs, &agent_id)
-                            .await?
-                        {
-                            let cid = picked["id"].as_str().unwrap_or("").to_string();
-                            *self.conversation_id.lock() =
-                                Some(cid.clone());
-                            { let mut s = self.session.lock();
-                                let _ = s.set_conversation(Some(cid));
-                            }
-                            self.first_turn
-                                .store(false, std::sync::atomic::Ordering::SeqCst);
-                            let _ = self.app.lock().push(
-                                RenderLine::SuccessMsg(format!(
-                                    "  ✓ Switched to: {}",
-                                    picked["title"].as_str().unwrap_or("(untitled)")
-                                )),
-                            );
-                        }
-                        let _ = self.app.lock().draw();
-                    }
-                    Err(e) => {
-                        let _ = self
-                            .app
-                            .lock()
-                            .push(RenderLine::ErrorMsg(e.to_string()));
-                    }
-                }
+                return self.cmd_resume().await;
             }
-
             SlashCmd::Pin => {
                 let id = self.agent_id();
                 let name = self.agent_name();
@@ -789,67 +668,15 @@ impl Repl {
                 }
             }
 
-            SlashCmd::Providers => match self.client.list_providers().await {
-                Ok(body) => {
-                    let empty = vec![];
-                    let providers = body["providers"].as_array().unwrap_or(&empty);
-                    self.tui_blank();
-                    self.tui_hdr(format!("  Configured providers ({}):", providers.len()));
-                    for p in providers {
-                        let name = p["name"].as_str().unwrap_or("?");
-                        let kind = p["kind"].as_str().unwrap_or("?");
-                        let live = p["live"].as_bool().unwrap_or(false);
-                        let source = p["source"].as_str().unwrap_or("db");
-                        let enabled = p["enabled"].as_bool().unwrap_or(true);
-                        let status = if live { "✓ live" } else { "✗ offline" };
-                        let display_name = if enabled {
-                            name.to_string()
-                        } else {
-                            format!("{name} (disabled)")
-                        };
-                        if live {
-                            self.tui_ok(format!(
-                                "  {status:<10} {display_name:<18} [{kind}] ({source})"
-                            ));
-                        } else {
-                            self.tui_err(format!(
-                                "  {status:<10} {display_name:<18} [{kind}] ({source})"
-                            ));
-                        }
-                    }
-                    self.tui_blank();
-                    self.tui_dim("  /connect <name>    — add a provider");
-                    self.tui_dim("  /disconnect <name> — remove a provider");
-                    let presets = self.client.list_provider_presets().await;
-                    if !presets.is_empty() {
-                        self.tui_dim("  OpenAI-compatible presets:");
-                        for p in &presets {
-                            let n = p["name"].as_str().unwrap_or("?");
-                            let u = p["base_url"].as_str().unwrap_or("?");
-                            self.tui_dim(format!("    /connect {n:<14} — {u}"));
-                        }
-                    }
-                    self.tui_blank();
-                }
-                Err(e) => self.tui_err(e.to_string()),
-            },
-
+            SlashCmd::Providers => {
+                return self.cmd_providers().await;
+            }
             SlashCmd::Connect(preset) => {
-                self.handle_connect(preset, &mut stdout).await?;
+                return self.cmd_connect(preset, stdout).await;
             }
-
             SlashCmd::Disconnect(name) => {
-                if name.is_empty() {
-                    self.tui_err("/disconnect requires a provider name");
-                } else {
-                    self.tui_dim(format!("  Disconnecting provider '{name}'…"));
-                    match self.client.remove_provider(&name).await {
-                        Ok(_) => self.tui_ok(format!("  ✓ Provider '{name}' removed")),
-                        Err(e) => self.tui_err(e.to_string()),
-                    }
-                }
+                return self.cmd_disconnect(name).await;
             }
-
             SlashCmd::Permissions => {
                 return self.cmd_permissions().await;
             }
@@ -860,48 +687,8 @@ impl Repl {
                 return self.cmd_deny_always(pattern).await;
             }
             SlashCmd::Hooks => {
-                let merged = self.settings.lock().merged_hooks();
-                self.tui_blank();
-                if merged.is_empty() {
-                    self.tui_dim("  No hooks configured.");
-                    self.tui_dim(
-                        "  Configure in ~/.cade/settings.json or .cade/settings.json",
-                    );
-                    self.tui_blank();
-                    self.tui_dim("  Example: { \"hooks\": { \"PreToolUse\": [{ \"matcher\": \"Bash\", \"hooks\": [{ \"type\": \"command\", \"command\": \"./validate.sh\" }] }] } }");
-                    self.tui_dim(
-                        "  Exit codes:  0=allow  1=log+continue  2=block (stderr→agent)",
-                    );
-                } else {
-                    self.tui_hdr("  Hooks");
-                    self.tui_blank();
-                    let show_section = |name: &str, entries: &[cade_core::settings::manager::HookEntry]| {
-                        if !entries.is_empty() {
-                            self.tui_hdr(format!("  {name}  ({}):", entries.len()));
-                            for entry in entries {
-                                let m = entry.matcher.as_deref().unwrap_or("*");
-                                self.tui_dim(format!("    matcher: {m}"));
-                                for hook in &entry.hooks {
-                                    self.tui_dim(format!("      {hook}"));
-                                }
-                            }
-                            self.tui_blank();
-                        }
-                    };
-                    show_section("PreToolUse", &merged.pre_tool_use);
-                    show_section("PostToolUse", &merged.post_tool_use);
-                    show_section("PostToolUseFailure", &merged.post_tool_use_failure);
-                    show_section("PermissionRequest", &merged.permission_request);
-                    show_section("UserPromptSubmit", &merged.user_prompt_submit);
-                    show_section("Stop", &merged.stop);
-                    show_section("SubagentStop", &merged.subagent_stop);
-                    show_section("SessionStart", &merged.session_start);
-                    show_section("SessionEnd", &merged.session_end);
-                    show_section("Notification", &merged.notification);
-                    self.tui_dim("  Config: ~/.cade/settings.json  ·  .cade/settings.json  ·  .cade/settings.local.json");
-                }
+                return self.cmd_hooks().await;
             }
-
             SlashCmd::Theme(theme_arg) => {
                 return self.cmd_theme(theme_arg).await;
             }
