@@ -192,17 +192,17 @@ fn discover_in_dir(dir: &Path, scope: SubagentScope) -> Vec<SubagentDef> {
 pub fn discover_all_subagents(cwd: &Path) -> Vec<SubagentDef> {
     let mut all: Vec<SubagentDef> = builtin_subagents();
 
-    // Global: ~/.cade/agents/
+    // Global: ~/.cade/subagents/
     if let Some(home) = dirs::home_dir() {
         all.extend(discover_in_dir(
-            &home.join(".cade").join("agents"),
+            &home.join(".cade").join("subagents"),
             SubagentScope::Global,
         ));
     }
 
-    // Project: <cwd>/.cade/agents/
+    // Project: <cwd>/.cade/subagents/
     all.extend(discover_in_dir(
-        &cwd.join(".cade").join("agents"),
+        &cwd.join(".cade").join("subagents"),
         SubagentScope::Project,
     ));
 

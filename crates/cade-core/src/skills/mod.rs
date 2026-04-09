@@ -16,7 +16,7 @@ pub enum SkillScope {
     Builtin = 0,
     /// Machine-global skills in ~/.cade/skills/
     Global = 1,
-    /// Agent-scoped skills in ~/.cade/agents/{id}/skills/
+    /// Agent-scoped skills in ~/.cade/subagents/{id}/skills/
     Agent = 2,
     /// Project-scoped skills in <cwd>/.cade/skills/  (highest priority)
     Project = 3,
@@ -240,7 +240,7 @@ pub fn discover_all_skills(
         all.extend(discover_skills_in(&ch.join("skills"), SkillScope::Global));
         if let Some(id) = agent_id {
             all.extend(discover_skills_in(
-                &ch.join("agents").join(id).join("skills"),
+                &ch.join("subagents").join(id).join("skills"),
                 SkillScope::Agent,
             ));
         }

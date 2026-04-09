@@ -3114,7 +3114,7 @@ impl Repl {
                                     });
                                     let _ = app.push(RenderLine::Pair {
                                         label: "agent".to_string(),
-                                        value: format!("~/.cade/agents/{agent_id}/skills/"),
+                                        value: format!("~/.cade/subagents/{agent_id}/skills/"),
                                     });
                                     let _ = app.push(RenderLine::Blank);
                                     let _ = app.push(RenderLine::DimMsg(

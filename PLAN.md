@@ -48,7 +48,7 @@
 **Summary:** Implemented a new heuristic evaluation subagent layer, modernized the TUI viewport and theme picker, and added native TextMate `.tmTheme` parsing support for zero-dependency Neovim colorscheme synchronization.
 
 **Features & Fixes:**
-- **Heuristic Evaluator:** Integrated a `heuristic_evaluate` subagent hook in `turn_loop.rs` to validate intent, safety, and pathfinding before executing tools. Leveraged CADE's dynamic subagent discovery system to allow configuring the evaluator model dynamically via `~/.cade/agents/heuristic_evaluator.md` (defaulting to Haiku for cost efficiency).
+- **Heuristic Evaluator:** Integrated a `heuristic_evaluate` subagent hook in `turn_loop.rs` to validate intent, safety, and pathfinding before executing tools. Leveraged CADE's dynamic subagent discovery system to allow configuring the evaluator model dynamically via `~/.cade/subagents/heuristic_evaluator.md` (defaulting to Haiku for cost efficiency).
 - **TUI Viewport Modernization:** Refactored `timeline.rs` to mirror modern conversational AI aesthetics (like Pi or Claude). Removed heavy ASCII line-drawing, moved the active "thinking" spinner directly into the scrolling chat stream, and softened tool-call UI blocks.
 - **Native tmTheme Parsing:** Added `plist` dependency to `cade-core` to natively parse `.tmTheme` XML files. The system algorithmically maps TextMate scopes (`keyword.control`, `string`, `invalid`) to CADE's 51 UI tokens. This allows Neovim/Sublime themes (like Tokyonight, Catppuccin, Gruvbox) to completely skin the terminal without requiring Lua or a running Neovim instance.
 - **Cursor Tracking Fix:** Fixed a visual artifact where the cursor drifted two characters ahead of typed text during multiline wrapping.
