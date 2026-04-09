@@ -13,6 +13,7 @@ pub enum Error {
     Io(std::io::Error),
     #[from]
     SerdeJson(serde_json::Error),
+    #[cfg(feature = "http")]
     #[from]
     Reqwest(reqwest::Error),
 }

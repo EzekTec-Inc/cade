@@ -709,6 +709,9 @@ pub fn write_skill_to_disk(skill: &Skill, fields: &[String]) -> std::io::Result<
 
 /// Download and install a skill from a URL into `target_dir/<skill-name>/SKILL.MD`.
 /// Returns the installed skill on success.
+///
+/// Requires the `http` feature (enabled by default).
+#[cfg(feature = "http")]
 pub async fn install_skill_from_url(url: &str, target_dir: &Path) -> Result<Skill> {
     // Resolve to raw content URL if needed
     let raw_url = if url.contains("github.com") && url.contains("/tree/") {

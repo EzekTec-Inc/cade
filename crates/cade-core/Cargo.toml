@@ -6,6 +6,10 @@ edition     = "2024"
 [lib]
 doctest     = false
 
+[features]
+default = ["http"]
+http    = ["dep:reqwest"]
+
 [dependencies]
 # -- Error handling
 # -- Others
@@ -30,8 +34,8 @@ uuid.workspace       = true
 dotenvy.workspace    = true
 plist.workspace      = true
 parking_lot.workspace = true
-# -- HTTP
-reqwest.workspace    = true
+# -- HTTP (optional — only used by skill installation)
+reqwest = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace   = true

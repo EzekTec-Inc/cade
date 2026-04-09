@@ -3,6 +3,10 @@ name = "cade-store"
 version = "0.2.0"
 edition = "2024"
 
+[features]
+default         = ["bundled-sqlite"]
+bundled-sqlite  = ["rusqlite/bundled"]
+
 [dependencies]
 cade-core = { path = "../cade-core" }
 cade-ai = { path = "../cade-ai" }
@@ -11,7 +15,7 @@ serde_json = { workspace = true }
 tracing = { workspace = true }
 tokio = { workspace = true }
 uuid = { workspace = true }
-rusqlite = { workspace = true, features = ["bundled"] }
+rusqlite = { workspace = true }
 parking_lot = { workspace = true }
 chrono = { workspace = true }
 aes-gcm = { workspace = true }

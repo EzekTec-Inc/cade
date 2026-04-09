@@ -71,10 +71,6 @@ pub struct Args {
     #[arg(long = "permission-mode")]
     pub permission_mode: Option<String>,
 
-    /// Enable system tray icon (runs CADE in background)
-    #[arg(long = "tray")]
-    pub tray: bool,
-
     /// Custom skills directory
     #[arg(long = "skills")]
     pub skills: Option<String>,

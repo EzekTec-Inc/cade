@@ -6,6 +6,10 @@ edition     = "2024"
 [lib]
 doctest     = false
 
+[features]
+default     = ["input-control"]
+input-control = ["dep:enigo"]
+
 [dependencies]
 # -- Workspace crates
 cade-core.path       = "../cade-core"
@@ -18,14 +22,13 @@ tracing.workspace    = true
 serde_json.workspace = true
 # -- Async
 tokio.workspace      = true
-# -- Desktop
+# -- Desktop: screenshots + notifications
 xcap.workspace       = true
 notify-rust.workspace = true
 base64.workspace     = true
 image.workspace      = true
-enigo = "0.6.1"
-active-win-pos-rs = "0.10.0"
-tray-icon = "0.21.3"
+# -- Desktop: input control (optional — heavy dep tree)
+enigo = { version = "0.6.1", optional = true }
 
 [lints.rust]
 unsafe_code = "forbid"

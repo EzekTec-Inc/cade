@@ -1,9 +1,16 @@
+#[cfg(feature = "input-control")]
 use crate::{Error, Result};
 
+/// Desktop input-control wrapper.
+///
+/// Gated behind the `input-control` feature (enabled by default) because
+/// `enigo` pulls in a non-trivial dependency tree on Linux (x11rb, etc.).
+#[cfg(feature = "input-control")]
 pub struct DesktopControl {
     enigo: std::sync::Arc<tokio::sync::Mutex<enigo::Enigo>>,
 }
 
+#[cfg(feature = "input-control")]
 impl DesktopControl {
     pub async fn detect() -> Self {
         Self {
@@ -14,13 +21,11 @@ impl DesktopControl {
     }
 
     pub async fn focus_window(&self, title: &str) -> Result<()> {
-        let windows = active_win_pos_rs::get_active_window()
-            .map_err(|e| Error::custom(format!("Failed to get active window: {e:?}")))?;
-        // `active-win-pos-rs` only gets the active window or lists them, but doesn't focus them directly.
-        // For full cross-platform window focusing, we would need to integrate platform-specific code or a different crate.
-        // As a placeholder per the plan, we'll log it or return an error.
+        // Native cross-platform window focusing is not yet supported.
+        // xdotool / wmctrl could be shelled out to on Linux, but that
+        // belongs in a future iteration.
         Err(Error::custom(format!(
-            "Native cross-platform window focusing not fully supported yet. Title: {title}. Active window: {windows:?}"
+            "Native cross-platform window focusing not yet implemented. Title: {title}"
         )))
     }
 

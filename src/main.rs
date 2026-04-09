@@ -4,8 +4,6 @@
 // Re-use modules declared in lib.rs
 use cade::agent;
 use cade::cli;
-#[cfg(feature = "desktop")]
-use cade::desktop;
 use cade::hooks::HookEngine;
 use cade::mcp::McpManager;
 use cade::permissions;
@@ -443,15 +441,6 @@ async fn main() -> Result<()> {
                     .set_memory_tier(&agent.id, &block.label, "pinned")
                     .await;
             }
-        }
-    }
-
-    // Tray
-    #[cfg(feature = "desktop")]
-    if args.tray {
-        match desktop::spawn_tray() {
-            Ok(_) => tracing::info!("System tray started"),
-            Err(e) => tracing::warn!("System tray failed: {e}"),
         }
     }
 
