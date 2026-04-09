@@ -530,51 +530,8 @@ impl Repl {
 
             // -- Checkpoints
             SlashCmd::Checkpoint(label_arg) => {
-                let agent_id = self.agent_id();
-                let label = label_arg.as_deref().unwrap_or("manual");
-                self.tui_dim(format!("  Creating checkpoint '{label}'…"));
-
-                // Git stash if dirty
-                use cade_agent::tools::git_checkpoint;
-                let git_cp = git_checkpoint::create_git_checkpoint(label, &self.cwd).await;
-                let stash = git_cp
-                    .as_ref()
-                    .and_then(|g| g.stash_ref.as_deref())
-                    .map(String::from);
-                let commit = git_cp
-                    .as_ref()
-                    .and_then(|g| g.commit_hash.as_deref())
-                    .map(String::from);
-                let conv_id = self.conversation_id();
-
-                match self
-                    .client
-                    .create_checkpoint(
-                        &agent_id,
-                        Some(label),
-                        None,
-                        conv_id.as_deref(),
-                        stash.as_deref(),
-                        commit.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(cp_id) => {
-                        let mut msg = format!("  ✓ Checkpoint '{label}' — ID: {cp_id}");
-                        if stash.is_some() {
-                            msg.push_str("  (git stashed)");
-                        }
-                        self.app.lock().show_toast(
-                            format!("Checkpoint '{label}' created"),
-                            ToastLevel::Success,
-                        );
-                        self.tui_ok(msg);
-                    }
-                    Err(e) => self.tui_err(format!("  ✗ Checkpoint failed: {e}")),
-                }
+                return self.cmd_checkpoint(label_arg).await;
             }
-
-            // -- Undo
             SlashCmd::Undo => {
                 let agent_id = self.agent_id();
                 match self.client.list_checkpoints(&agent_id).await {
@@ -620,108 +577,11 @@ impl Repl {
                 return self.cmd_tree().await;
             }
             SlashCmd::Fork(label_arg) => {
-                let agent_id = self.agent_id();
-                let label = label_arg.as_deref().unwrap_or("fork");
-                self.tui_dim(format!("  Creating fork point '{label}'…"));
-                use cade_agent::tools::git_checkpoint;
-                let git_cp = git_checkpoint::create_git_checkpoint(label, &self.cwd).await;
-                let stash = git_cp
-                    .as_ref()
-                    .and_then(|g| g.stash_ref.as_deref())
-                    .map(String::from);
-                let commit = git_cp
-                    .as_ref()
-                    .and_then(|g| g.commit_hash.as_deref())
-                    .map(String::from);
-
-                // Create a checkpoint as the fork anchor
-                match self
-                    .client
-                    .create_checkpoint(
-                        &agent_id,
-                        Some(label),
-                        Some("fork anchor"),
-                        self.conversation_id().as_deref(),
-                        stash.as_deref(),
-                        commit.as_deref(),
-                    )
-                    .await
-                {
-                    Ok(cp_id) => {
-                        // Start a new conversation from this point
-                        match self.client.create_conversation(&agent_id, "").await {
-                            Ok(conv) => {
-                                let cid = conv["id"].as_str().unwrap_or("").to_string();
-                                *self.conversation_id.lock() =
-                                    Some(cid.clone());
-                                { let mut s = self.session.lock();
-                                    let _ = s.set_conversation(Some(cid.clone()));
-                                }
-                                self.first_turn
-                                    .store(true, std::sync::atomic::Ordering::SeqCst);
-                                self.tui_ok(format!(
-                                    "  ✓ Forked from checkpoint {cp_id}  →  new conversation {}",
-                                    &cid[..cid.len().min(16)]
-                                ));
-                            }
-                            Err(e) => self.tui_err(format!("  ✗ Create conversation: {e}")),
-                        }
-                    }
-                    Err(e) => self.tui_err(format!("  ✗ Fork failed: {e}")),
-                }
+                return self.cmd_fork(label_arg).await;
             }
-
             SlashCmd::Backend(backend_arg) => {
-                let current = self.exec_backend.name();
-                match backend_arg {
-                    None => {
-                        self.tui_hdr(format!("  Execution backend: {current}"));
-                        self.tui_dim(
-                            "  Available: local, docker, ssh, readonly".to_string(),
-                        );
-                        self.tui_dim(
-                            "  Change: /backend local|docker|ssh|readonly".to_string(),
-                        );
-                        self.tui_dim("  Or set in ~/.cade/settings.json: { \"execution\": { \"backend\": \"docker\" } }".to_string());
-                    }
-                    Some(new_backend) => {
-                        use cade_core::settings::ExecutionBackendKind;
-
-                        match new_backend.parse::<ExecutionBackendKind>() {
-                            Err(e) => self.tui_err(format!("  ✗ {e}")),
-                            Ok(kind) => {
-                                // Build a new backend from the current settings profile
-                                // with the backend kind overridden
-                                let profile = {
-                                    let s = self.settings.lock();
-                                    let mut p = s.execution_profile().clone();
-                                    p.backend = kind;
-                                    p
-                                };
-                                let new_b =
-                                    cade_agent::backends::backend_from_profile(&profile);
-                                let name = new_b.name();
-                                self.exec_backend = std::sync::Arc::from(new_b);
-                                self.tui_ok(format!("  ✓ Switched to {name} backend"));
-                                if name == "docker" {
-                                    let docker_image = profile
-                                        .docker_image
-                                        .as_deref()
-                                        .unwrap_or("ubuntu:22.04");
-                                    self.tui_dim(format!("  Image: {docker_image}  (set execution.docker_image in settings to change)"));
-                                } else if name == "ssh" {
-                                    let host = profile
-                                        .ssh_host
-                                        .as_deref()
-                                        .unwrap_or("(not configured)");
-                                    self.tui_dim(format!("  Host: {host}  (set execution.ssh_host in settings)"));
-                                }
-                            }
-                        }
-                    }
-                }
+                return self.cmd_backend(backend_arg).await;
             }
-
             SlashCmd::Reflect(focus_arg) => {
                 if self.require_capability(
                     cade_core::capabilities::Capability::Agentic,
@@ -991,168 +851,14 @@ impl Repl {
             }
 
             SlashCmd::Permissions => {
-                let mode = self.permissions.mode();
-                let allow = self.permissions.allow_rules();
-                let deny = self.permissions.deny_rules();
-
-                let (icon, label, _) = mode_display(mode);
-                let mode_hint = match mode {
-                    cade_core::permissions::PermissionMode::Default => {
-                        "ask before each tool call"
-                    }
-                    cade_core::permissions::PermissionMode::AcceptEdits => {
-                        "file edits auto-approved; Bash still prompts"
-                    }
-                    cade_core::permissions::PermissionMode::Plan => {
-                        "read-only; write operations blocked"
-                    }
-                    cade_core::permissions::PermissionMode::BypassPermissions => {
-                        "all tools auto-approved (deny rules still apply)"
-                    }
-                };
-                self.tui_blank();
-                self.tui_hdr(format!("  Mode: {icon} {label}  —  {mode_hint}"));
-                self.tui_blank();
-
-                if allow.is_empty() && deny.is_empty() {
-                    self.tui_dim("  No allow/deny rules active.");
-                } else {
-                    if !allow.is_empty() {
-                        self.tui_ok(format!("  Allow rules ({}):", allow.len()));
-                        for r in &allow {
-                            self.tui_dim(format!(
-                                "    {:<12} {}",
-                                r.tool(),
-                                r.arg_display()
-                            ));
-                        }
-                        let _ = self
-                            .app
-                            .lock()
-                            .push(RenderLine::Blank);
-                    }
-                    if !deny.is_empty() {
-                        self.tui_err(format!("  Deny rules ({}):", deny.len()));
-                        for r in &deny {
-                            self.tui_dim(format!(
-                                "    {:<12} {}",
-                                r.tool(),
-                                r.arg_display()
-                            ));
-                        }
-                        self.tui_blank();
-                    }
-                }
-                self.tui_dim("  /approve-always <pattern>    /deny-always <pattern>");
-                self.tui_dim(
-                    "  Pattern:  Bash(cargo test)  ·  Read(src/**)  ·  Bash(rm -rf:*)",
-                );
+                return self.cmd_permissions().await;
             }
-
             SlashCmd::ApproveAlways(pattern) => {
-                if pattern.is_empty() {
-                    self.tui_dim("  /approve-always <pattern>");
-                    self.tui_dim("  Examples:  Bash(cargo test)  Read(src/**)  Bash(git commit:*)  Bash");
-                } else if let Some(rule) =
-                    cade_core::permissions::PermissionRule::parse(&pattern)
-                {
-                    self.permissions.add_allow_rule(rule.clone());
-                    self.tui_ok(format!(
-                        "  ✓ Allow  {:<12} {}",
-                        rule.tool(),
-                        rule.arg_display()
-                    ));
-                    use crate::ui::question::{Question, QuestionOption};
-                    let opts = vec![
-                        QuestionOption {
-                            label: "Yes — save to settings.json".to_string(),
-                            description: String::new(),
-                        },
-                        QuestionOption {
-                            label: "No — session only".to_string(),
-                            description: String::new(),
-                        },
-                    ];
-                    let q = Question {
-                        header: "Save rule?".to_string(),
-                        text: "Persist this rule to settings.json?".to_string(),
-                        options: opts.clone(),
-                        multi_select: false,
-                        allow_other: false,
-                        progress: None,
-                    };
-                    let save = {
-                        let mut app = self.app.lock();
-                        let r = app.ask_question(&q)?;
-                        app.scroll = 0;
-                        let _ = app.draw();
-                        matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
-                    };
-                    if save {
-                        let mut settings = self.settings.lock();
-                        match settings.save_allow_rule(&pattern) {
-                            Ok(_) => self.tui_ok("  ✓ Saved"),
-                            Err(e) => self.tui_err(e.to_string()),
-                        }
-                    }
-                } else {
-                    self.tui_err(format!("invalid pattern: {pattern:?}  Expected: Tool  or  Tool(arg)  or  Tool(prefix:*)"));
-                }
+                return self.cmd_approve_always(pattern).await;
             }
-
             SlashCmd::DenyAlways(pattern) => {
-                if pattern.is_empty() {
-                    self.tui_dim("  /deny-always <pattern>");
-                    self.tui_dim(
-                        "  Examples:  Bash(rm -rf:*)  Bash(git push --force)  Bash",
-                    );
-                } else if let Some(rule) =
-                    cade_core::permissions::PermissionRule::parse(&pattern)
-                {
-                    self.permissions.add_deny_rule(rule.clone());
-                    self.tui_err(format!(
-                        "  ✗ Deny   {:<12} {}",
-                        rule.tool(),
-                        rule.arg_display()
-                    ));
-                    use crate::ui::question::{Question, QuestionOption};
-                    let opts = vec![
-                        QuestionOption {
-                            label: "Yes — save to settings.json".to_string(),
-                            description: String::new(),
-                        },
-                        QuestionOption {
-                            label: "No — session only".to_string(),
-                            description: String::new(),
-                        },
-                    ];
-                    let q = Question {
-                        header: "Save rule?".to_string(),
-                        text: "Persist this rule to settings.json?".to_string(),
-                        options: opts.clone(),
-                        multi_select: false,
-                        allow_other: false,
-                        progress: None,
-                    };
-                    let save = {
-                        let mut app = self.app.lock();
-                        let r = app.ask_question(&q)?;
-                        app.scroll = 0;
-                        let _ = app.draw();
-                        matches!(&r, Some(a) if a.as_str().starts_with("Yes"))
-                    };
-                    if save {
-                        let mut settings = self.settings.lock();
-                        match settings.save_deny_rule(&pattern) {
-                            Ok(_) => self.tui_ok("  ✓ Saved"),
-                            Err(e) => self.tui_err(e.to_string()),
-                        }
-                    }
-                } else {
-                    self.tui_err(format!("invalid pattern: {pattern:?}  Expected: Tool  or  Tool(arg)  or  Tool(prefix:*)"));
-                }
+                return self.cmd_deny_always(pattern).await;
             }
-
             SlashCmd::Hooks => {
                 let merged = self.settings.lock().merged_hooks();
                 self.tui_blank();

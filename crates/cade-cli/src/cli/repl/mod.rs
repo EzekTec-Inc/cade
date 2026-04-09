@@ -1,6 +1,8 @@
 pub mod capability_gate;
 pub mod commands;
 pub mod commands_agents;
+pub mod commands_backend;
+pub mod commands_checkpoints;
 pub mod commands_context;
 pub mod commands_cost;
 pub mod commands_delete;
@@ -9,6 +11,7 @@ pub mod commands_mcp;
 pub mod commands_memory;
 pub mod commands_mode;
 pub mod commands_newagent;
+pub mod commands_permissions;
 pub mod commands_providers;
 pub mod commands_search;
 pub mod commands_skills;
