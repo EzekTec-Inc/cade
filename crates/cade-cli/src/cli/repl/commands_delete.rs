@@ -8,7 +8,7 @@ impl Repl {
         &mut self,
         target: Option<String>,
         stdout: &mut std::io::Stdout,
-        pending_input: &mut Option<String>,
+        _pending_input: &mut Option<String>,
     ) -> Result<bool> {
             // /delete [name-or-id] — delete a specific agent by name/id prefix
             let agents = match self.client.list_agents().await {

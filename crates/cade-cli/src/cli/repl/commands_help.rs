@@ -71,7 +71,7 @@ impl Repl {
 
     pub(crate) async fn cmd_usage(
         &mut self,
-        pending_input: &mut Option<String>,
+        _pending_input: &mut Option<String>,
     ) -> Result<bool> {
             use std::sync::atomic::Ordering;
             let in_tok = self.session_input_tokens.load(Ordering::SeqCst);
@@ -121,7 +121,7 @@ impl Repl {
 
     pub(crate) async fn cmd_debug_last(
         &mut self,
-        pending_input: &mut Option<String>,
+        _pending_input: &mut Option<String>,
     ) -> Result<bool> {
             let conv = self.conversation_id();
             match self

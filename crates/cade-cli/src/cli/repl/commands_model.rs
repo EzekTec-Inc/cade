@@ -10,7 +10,7 @@ impl Repl {
     pub(crate) async fn cmd_model(
         &mut self,
         m: String,
-        stdout: &mut std::io::Stdout,
+        _stdout: &mut std::io::Stdout,
     ) -> Result<bool> {
             // Empty arg → open interactive picker
             let m = if m.is_empty() {

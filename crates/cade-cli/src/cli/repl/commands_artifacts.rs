@@ -6,7 +6,7 @@ use super::Repl;
 impl Repl {
     pub(crate) async fn cmd_link(
         &mut self,
-        pending_input: &mut Option<String>,
+        _pending_input: &mut Option<String>,
     ) -> Result<bool> {
             self.tui_dim("  Linking tools…");
             let client2 = self.client.clone();

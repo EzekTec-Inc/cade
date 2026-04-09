@@ -7,7 +7,7 @@ impl Repl {
     pub(crate) async fn cmd_mcp(
         &mut self,
         input: &str,
-        pending_input: &mut Option<String>,
+        _pending_input: &mut Option<String>,
     ) -> Result<bool> {
             if self.require_capability(cade_core::capabilities::Capability::Mcp, "/mcp")
             {

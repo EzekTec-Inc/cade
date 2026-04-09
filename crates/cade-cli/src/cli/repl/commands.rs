@@ -10,13 +10,11 @@ use std::sync::Arc;
 use crate::Result;
 use crate::ui::{RenderLine, ToastLevel};
 use super::{
-    mode_display,
     SubagentPickerResult, Repl,
 };
 use super::slash::SlashCmd;
 use cade_agent::subagents::discover_all_subagents;
 use cade_core::permissions::PermissionMode;
-use cade_core::toolsets::Toolset;
 
 impl Repl {
     /// Dispatch a parsed slash command.

@@ -1,7 +1,7 @@
-use super::{EMPTY_YIELD_REPROMPT, Repl, ToolPreflightResult};
+use super::{Repl, ToolPreflightResult};
 use super::{fmt_tok_short, fmt_window_tokens_short, short_mode_label};
 use crate::Result;
-use crate::support::text::{FinishReasonCategory, finish_reason_hint, truncate};
+use crate::support::text::{FinishReasonCategory, finish_reason_hint};
 use crate::ui::RenderLine;
 use cade_agent::agent::client::CadeMessage;
 use std::io;

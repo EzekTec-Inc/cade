@@ -1,13 +1,9 @@
-//! Tool dispatch and execution logic.
-
-use super::{EMPTY_YIELD_REPROMPT, Repl, ToolPreflightResult};
-use super::{fmt_tok_short, fmt_window_tokens_short, short_mode_label};
+use super::super::{EMPTY_YIELD_REPROMPT, Repl, ToolPreflightResult};
 use crate::Result;
-use crate::support::text::{FinishReasonCategory, finish_reason_hint, truncate};
 use crate::ui::RenderLine;
 use cade_agent::agent::client::CadeMessage;
 use std::io;
-use super::turn_loop::{now_epoch_ms, blocked_result, TurnStats};
+use super::super::turn_loop::{now_epoch_ms, TurnStats};
 
 impl Repl {
     pub(crate) async fn dispatch_tool_calls(
@@ -502,326 +498,6 @@ impl Repl {
         Ok(())
     }
 
-    /// Check if a tool is a native intercept (requires &self). If so, execute
-    /// it immediately and return the result. Returns None for generic tools.
-    pub(crate) async fn sync_plan_tools(&self, enter_plan: bool) {
-        let agent_id = self.agent_id.lock().clone();
-        
-        if enter_plan {
-            // Strip write tools
-            if let Ok(attached) = self.client.get_agent_tools(&agent_id).await {
-                let mut new_ids = Vec::new();
-                for (id, name) in attached {
-                    let canonical_name = cade_agent::tools::manager::canonical_name(&name);
-                    let is_mcp = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
-                    let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
-                    if !is_write && canonical_name != "exitplanmode" {
-                        new_ids.push(id);
-                    }
-                }
-                let _ = self.client.attach_agent_tools(&agent_id, &new_ids).await;
-            }
-        } else {
-            // Restore write tools. To do this robustly without caching, we re-link all tools based on current caps.
-            // However, Repl does not know the current Toolset easily.
-            // Let's just fetch all tools from the server and link those that are write_tools (or we just link everything that should be there).
-            // Actually, an easier way is to just fetch all tools from the server and filter by what should be enabled.
-            // For simplicity, let's fetch all tools from the server, and if they match a known native/meta tool, or MCP, we link them.
-            // Actually, we can just do:
-            if let Ok(all_tools) = self.client.list_tools().await {
-                let mut new_ids = Vec::new();
-                for t in all_tools {
-                    // For now, let's just add everything back that isn't a known tool from a disabled capability.
-                    // This might be slightly loose but works for re-attaching.
-                    // To be safe, we only add back the write tools that exist on the server.
-                    // Wait, what if the write tool belongs to a capability that is disabled?
-                    // `write_file`, `edit_file`, `apply_patch`, `bash` are CORE tools, so they are always enabled.
-                    // `desktop_control`, `desktop_screenshot` are DESKTOP capability.
-                    // We can just add them back if their capability is enabled.
-                    
-                    let canonical_name = cade_agent::tools::manager::canonical_name(&t.name);
-                    let is_mcp = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
-                    let is_write_tool = cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
-                    if !is_write_tool {
-                        new_ids.push(t.id);
-                    } else {
-                        // It is a write tool. Should we add it?
-                        let caps = {
-                            let s = self.settings.lock();
-                            cade_core::capabilities::resolve_capabilities(
-                                &s.global().enable_capabilities,
-                                &s.global().disable_capabilities,
-                            )
-                        };
-                        let allowed = match t.name.as_str() {
-                            "desktop_control" | "desktop_screenshot" => caps.is_enabled(cade_core::capabilities::Capability::Desktop),
-                            _ => true, // core write tools
-                        };
-                        if allowed {
-                            new_ids.push(t.id);
-                        }
-                    }
-                }
-                
-                // Now we also need to get MCP tools and ensure they are attached. 
-                // MCP tools are fetched via list_tools() too since they are registered on the server.
-                let _ = self.client.attach_agent_tools(&agent_id, &new_ids).await;
-            }
-        }
-    }
-
-    pub(crate) async fn try_native_intercept(
-        &self,
-        call_id: &str,
-        tool_name: &str,
-        args: &serde_json::Value,
-    ) -> Option<Result<cade_agent::tools::ToolResult>> {
-        match tool_name {
-            "EnterPlanMode" => {
-                let allow_changes = self
-                    .settings
-                    .lock()
-                    .permission_settings()
-                    .allow_agent_mode_changes;
-                if !allow_changes {
-                    return Some(Ok(cade_agent::tools::ToolResult {
-                        tool_call_id: call_id.to_string(),
-                        tool_name: tool_name.to_string(),
-                        output:
-                            "Permission denied: agent mode changes are disabled in settings.json"
-                                .to_string(),
-                        is_error: true,
-                    }));
-                }
-                self.permissions
-                    .set_mode(cade_core::permissions::PermissionMode::Plan);
-                let mut app = self.app.lock();
-                app.update_mode(cade_core::permissions::PermissionMode::Plan);
-                self.sync_plan_tools(true).await;
-                Some(Ok(cade_agent::tools::ToolResult {
-                    tool_call_id: call_id.to_string(),
-                    tool_name: tool_name.to_string(),
-                    output: "Plan mode entered. File modifications are now blocked.".to_string(),
-                    is_error: false,
-                }))
-            }
-            "ExitPlanMode" => {
-                let allow_changes = self
-                    .settings
-                    .lock()
-                    .permission_settings()
-                    .allow_agent_mode_changes;
-                if !allow_changes {
-                    return Some(Ok(cade_agent::tools::ToolResult {
-                        tool_call_id: call_id.to_string(),
-                        tool_name: tool_name.to_string(),
-                        output:
-                            "Permission denied: agent mode changes are disabled in settings.json. Please report your findings to the user and present them with summarized next steps based on your findings."
-                                .to_string(),
-                        is_error: true,
-                    }));
-                }
-                self.permissions
-                    .set_mode(cade_core::permissions::PermissionMode::Default);
-                let mut app = self.app.lock();
-                app.update_mode(cade_core::permissions::PermissionMode::Default);
-                self.sync_plan_tools(false).await;
-                Some(Ok(cade_agent::tools::ToolResult {
-                    tool_call_id: call_id.to_string(),
-                    tool_name: tool_name.to_string(),
-                    output: "Plan mode exited. Normal operation resumed.".to_string(),
-                    is_error: false,
-                }))
-            }
-            "run_subagent" => Some(self.handle_run_subagent(call_id, args).await),
-            "ask_user_question" => Some(self.handle_ask_user_question(call_id, args).await),
-            "message_agent" => Some(self.handle_message_agent(call_id, args).await),
-            // Plan panel — require TuiApp access, intercepted before generic dispatch.
-            "set_plan" => {
-                let steps: Vec<String> = args["steps"]
-                    .as_array()
-                    .map(|arr| {
-                        arr.iter()
-                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                let n = steps.len();
-                self.app.lock().set_plan(steps);
-                Some(Ok(cade_agent::tools::ToolResult {
-                    tool_call_id: call_id.to_string(),
-                    tool_name: tool_name.to_string(),
-                    output: format!("Plan set with {n} step(s)."),
-                    is_error: false,
-                }))
-            }
-            "UpdatePlan" => {
-                let step_id = args["step_id"].as_u64().unwrap_or(0) as usize;
-                let done = args["done"].as_bool().unwrap_or(true);
-                let found = self
-                    .app
-                    .lock()
-                    .update_plan_step(step_id, done);
-                Some(Ok(cade_agent::tools::ToolResult {
-                    tool_call_id: call_id.to_string(),
-                    tool_name: tool_name.to_string(),
-                    output: if found {
-                        format!(
-                            "Step {step_id} marked {}.",
-                            if done { "done" } else { "not done" }
-                        )
-                    } else {
-                        format!("Step {step_id} not found in active plan.")
-                    },
-                    is_error: !found,
-                }))
-            }
-            _ => None,
-        }
-    }
-
-    /// Build a compact argument preview for a tool call header.
-    pub(crate) fn tool_preview(_tool_name: &str, args: &serde_json::Value) -> String {
-        fn short(s: &str, n: usize) -> String {
-            let s = s.trim();
-            if s.chars().count() <= n {
-                s.to_string()
-            } else {
-                format!("{}…", s.chars().take(n).collect::<String>())
-            }
-        }
-        let a = args;
-        if let Some(cmd) = a["command"].as_str() {
-            short(cmd, 80)
-        } else if let Some(fp) = a["file_path"].as_str().or(a["path"].as_str()) {
-            let extra = if let Some(old) = a["old_string"].as_str() {
-                format!("  \"{}\"", short(old, 40))
-            } else if let Some(content) = a["content"].as_str() {
-                format!("  ({} chars)", content.len())
-            } else {
-                String::new()
-            };
-            format!("{fp}{extra}")
-        } else if let Some(pat) = a["pattern"].as_str() {
-            let in_path = a["path"].as_str().unwrap_or("");
-            if in_path.is_empty() {
-                format!("\"{}\"", short(pat, 60))
-            } else {
-                format!("\"{}\" in {in_path}", short(pat, 40))
-            }
-        } else if let Some(label) = a["label"].as_str() {
-            let op = a["operation"].as_str().unwrap_or("set");
-            format!("[{label}] ({op})")
-        } else if let Some(patch) = a["patch"].as_str() {
-            short(patch, 60)
-        } else {
-            a.as_object()
-                .and_then(|m| m.values().find_map(|v| v.as_str()).map(|s| short(s, 60)))
-                .unwrap_or_default()
-        }
-    }
-
-    /// Phase 1: Sequential preflight — checks permissions, plan-mode blocking,
-    /// hooks, and prompts the user for approval if needed.
-    /// Returns `Approved` if the tool should proceed, or `Blocked(result)` if it
-    /// was denied (with a pre-built error ToolResult).
-    pub(crate) async fn preflight_tool(
-        &self,
-        stdout: &mut io::Stdout,
-        call_id: &str,
-        tool_name: &str,
-        args: &serde_json::Value,
-    ) -> Result<ToolPreflightResult> {
-        let canonical_name = cade_agent::tools::manager::canonical_name(tool_name);
-        let is_mcp_write = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
-
-        // Unified permission resolution
-        use cade_core::permissions::Verdict;
-        match self.permissions.resolve(canonical_name, args, is_mcp_write) {
-            Verdict::Deny(msg) => {
-                let _ = self
-                    .app
-                    .lock()
-                    .push(RenderLine::ToolResult {
-                        is_error: true,
-                        content: msg.clone(),
-                    });
-                self.cancel_turn
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                return Ok(blocked_result(call_id, tool_name, msg));
-            }
-
-            Verdict::Ask(_reason) => {
-                // PermissionRequest hook — can block before showing prompt
-                if let cade_core::hooks::HookOutcome::Block { reason } =
-                    self.hooks.permission_request(tool_name, args).await
-                {
-                let _ = self
-                    .app
-                    .lock()
-                    .push(RenderLine::ToolResult {
-                        is_error: true,
-                        content: format!("Hook denied: {reason}"),
-                    });
-                self.cancel_turn
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                return Ok(blocked_result(call_id, tool_name, format!("Hook denied: {reason}")));
-            }
-
-            // Prompt for approval
-            if !self.prompt_approval(stdout, tool_name, args).await? {
-                { let mut stats = self.session_stats.lock();
-                    stats.reviewed += 1;
-                }
-                let msg = format!("Tool '{tool_name}' denied by user");
-                let _ = self
-                    .app
-                    .lock()
-                    .push(RenderLine::ToolResult {
-                        is_error: true,
-                        content: msg.clone(),
-                    });
-                self.cancel_turn
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                return Ok(blocked_result(call_id, tool_name, msg));
-            }
-            self.cancel_turn
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-            { let mut stats = self.session_stats.lock();
-                stats.reviewed += 1;
-                stats.approved += 1;
-            }
-            }
-
-            Verdict::Allow => {
-                self.cancel_turn
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                self.last_modal_close_ms.store(
-                    now_epoch_ms(),
-                    std::sync::atomic::Ordering::SeqCst,
-                );
-            }
-        }
-
-        // PreToolUse hook — can block execution
-        if let cade_core::hooks::HookOutcome::Block { reason } =
-            self.hooks.pre_tool_use(tool_name, args).await
-        {
-            let _ = self
-                .app
-                .lock()
-                .push(RenderLine::ToolResult {
-                    is_error: true,
-                    content: format!("Hook blocked: {reason}"),
-                });
-            self.cancel_turn
-                .store(false, std::sync::atomic::Ordering::SeqCst);
-            return Ok(blocked_result(call_id, tool_name, format!("Blocked by hook: {reason}")));
-        }
-
-        Ok(ToolPreflightResult::Approved)
-    }
-
     /// Phase 2: Execute a single tool (no stdout, no approval — already preflighted).
     /// This is safe to call from `tokio::spawn` for parallel execution.
     pub(crate) async fn run_tool_inner(
@@ -1006,199 +682,180 @@ impl Repl {
         result
     }
 
-    /// Prompt the user to approve/deny a tool call.
-    /// Returns true = approved, false = denied.
-    ///
-    /// Shows a ratatui inline menu with three options:
-    ///   1. Yes — run once
-    ///   2. Yes, don't ask again — session-allow + run
-    ///   3. No — deny
-    ///      Generate a diff preview for file-mutation tools shown before the approval prompt.
-    pub(crate) fn build_diff_preview(
+    pub(crate) async fn try_native_intercept(
+        &self,
+        call_id: &str,
         tool_name: &str,
         args: &serde_json::Value,
-    ) -> Option<Vec<RenderLine>> {
+    ) -> Option<Result<cade_agent::tools::ToolResult>> {
         match tool_name {
-            "edit_file" => {
-                let path = args["path"].as_str()?;
-                let old_string = args["old_string"].as_str()?;
-                let new_string = args["new_string"].as_str()?;
-                let existing = std::fs::read_to_string(path).ok()?;
-                let offset = existing
-                    .find(old_string)
-                    .map(|byte| existing[..byte].lines().count())
-                    .unwrap_or(0);
-                let mut out: Vec<RenderLine> = vec![RenderLine::DimMsg(format!("--- {path}"))];
-                for (i, ln) in old_string.lines().enumerate() {
-                    out.push(RenderLine::ErrorMsg(format!(
-                        "- {ln}  (L{})",
-                        offset + i + 1
-                    )));
+            "EnterPlanMode" => {
+                let allow_changes = self
+                    .settings
+                    .lock()
+                    .permission_settings()
+                    .allow_agent_mode_changes;
+                if !allow_changes {
+                    return Some(Ok(cade_agent::tools::ToolResult {
+                        tool_call_id: call_id.to_string(),
+                        tool_name: tool_name.to_string(),
+                        output:
+                            "Permission denied: agent mode changes are disabled in settings.json"
+                                .to_string(),
+                        is_error: true,
+                    }));
                 }
-                for ln in new_string.lines() {
-                    out.push(RenderLine::SuccessMsg(format!("+ {ln}")));
-                }
-                Some(out)
+                self.permissions
+                    .set_mode(cade_core::permissions::PermissionMode::Plan);
+                let mut app = self.app.lock();
+                app.update_mode(cade_core::permissions::PermissionMode::Plan);
+                self.sync_plan_tools(true).await;
+                Some(Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    output: "Plan mode entered. File modifications are now blocked.".to_string(),
+                    is_error: false,
+                }))
             }
-            "write_file" | "create_file" => {
-                let path = args["path"].as_str()?;
-                let content = args["content"].as_str()?;
-                let is_new = !std::path::Path::new(path).exists();
-                let lines: Vec<&str> = content.lines().collect();
-                let show = lines.len().min(12);
-                let mut out: Vec<RenderLine> = vec![RenderLine::DimMsg(format!(
-                    "{} {path}",
-                    if is_new { "new file:" } else { "overwrite:" }
-                ))];
-                for ln in &lines[..show] {
-                    out.push(RenderLine::SuccessMsg(format!("+ {ln}")));
+            "ExitPlanMode" => {
+                let allow_changes = self
+                    .settings
+                    .lock()
+                    .permission_settings()
+                    .allow_agent_mode_changes;
+                if !allow_changes {
+                    return Some(Ok(cade_agent::tools::ToolResult {
+                        tool_call_id: call_id.to_string(),
+                        tool_name: tool_name.to_string(),
+                        output:
+                            "Permission denied: agent mode changes are disabled in settings.json. Please report your findings to the user and present them with summarized next steps based on your findings."
+                                .to_string(),
+                        is_error: true,
+                    }));
                 }
-                if lines.len() > show {
-                    out.push(RenderLine::DimMsg(format!(
-                        "  … ({} more lines)",
-                        lines.len() - show
-                    )));
-                }
-                Some(out)
+                self.permissions
+                    .set_mode(cade_core::permissions::PermissionMode::Default);
+                let mut app = self.app.lock();
+                app.update_mode(cade_core::permissions::PermissionMode::Default);
+                self.sync_plan_tools(false).await;
+                Some(Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    output: "Plan mode exited. Normal operation resumed.".to_string(),
+                    is_error: false,
+                }))
             }
-            "apply_patch" => {
-                let patch = args["patch"].as_str()?;
-                let mut out: Vec<RenderLine> = vec![RenderLine::DimMsg("(patch)".to_string())];
-                for ln in patch.lines().take(20) {
-                    if ln.starts_with('-') && !ln.starts_with("---") {
-                        out.push(RenderLine::ErrorMsg(ln.to_string()));
-                    } else if ln.starts_with('+') && !ln.starts_with("+++") {
-                        out.push(RenderLine::SuccessMsg(ln.to_string()));
+            "run_subagent" => Some(self.handle_run_subagent(call_id, args).await),
+            "ask_user_question" => Some(self.handle_ask_user_question(call_id, args).await),
+            "message_agent" => Some(self.handle_message_agent(call_id, args).await),
+            // Plan panel — require TuiApp access, intercepted before generic dispatch.
+            "set_plan" => {
+                let steps: Vec<String> = args["steps"]
+                    .as_array()
+                    .map(|arr| {
+                        arr.iter()
+                            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let n = steps.len();
+                self.app.lock().set_plan(steps);
+                Some(Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    output: format!("Plan set with {n} step(s)."),
+                    is_error: false,
+                }))
+            }
+            "UpdatePlan" => {
+                let step_id = args["step_id"].as_u64().unwrap_or(0) as usize;
+                let done = args["done"].as_bool().unwrap_or(true);
+                let found = self
+                    .app
+                    .lock()
+                    .update_plan_step(step_id, done);
+                Some(Ok(cade_agent::tools::ToolResult {
+                    tool_call_id: call_id.to_string(),
+                    tool_name: tool_name.to_string(),
+                    output: if found {
+                        format!(
+                            "Step {step_id} marked {}.",
+                            if done { "done" } else { "not done" }
+                        )
                     } else {
-                        out.push(RenderLine::DimMsg(ln.to_string()));
-                    }
-                }
-                if patch.lines().count() > 20 {
-                    out.push(RenderLine::DimMsg(format!(
-                        "… ({} more lines)",
-                        patch.lines().count() - 20
-                    )));
-                }
-                Some(out)
+                        format!("Step {step_id} not found in active plan.")
+                    },
+                    is_error: !found,
+                }))
             }
             _ => None,
         }
     }
 
-    pub(crate) async fn prompt_approval(
-        &self,
-        _stdout: &mut io::Stdout,
-        tool_name: &str,
-        args: &serde_json::Value,
-    ) -> Result<bool> {
-        use crate::ui::question::{Question, QuestionOption};
-
-        // Show diff preview for file-mutation tools before the approval prompt.
-        if let Some(diff_lines) = Self::build_diff_preview(tool_name, args) {
-            let mut app = self.app.lock();
-            for line in diff_lines {
-                let _ = app.push(line);
-            }
-            let _ = app.draw();
-        }
-
-        // One-line preview of what is being requested
-        let preview: String = if let Some(cmd) = args["command"].as_str() {
-            truncate(cmd, 100).to_string()
-        } else if let Some(fp) = args["file_path"].as_str().or(args["path"].as_str()) {
-            fp.to_string()
-        } else if let Some(pat) = args["pattern"].as_str() {
-            format!("\"{}\"", truncate(pat, 60))
-        } else {
-            String::new()
-        };
-
-        // Header chip — tool name, max 12 chars
-        let header_raw = tool_name.replace('_', " ");
-        let header: String = header_raw.chars().take(12).collect();
-
-        let mut warning_text = String::new();
-        if tool_name == "bash"
-            && let Some(cmd) = args["command"].as_str()
-            && cade_core::permissions::bash_command_is_suspicious(cmd)
-        {
-            warning_text = "\n⚠️  WARNING: Suspicious command detected (nested shell, network, or obfuscation)".to_string();
-        }
-
-        let question_text = if preview.is_empty() {
-            format!("Run {tool_name}?{warning_text}")
-        } else {
-            format!("{preview}{warning_text}")
-        };
-
-        let opts = vec![
-            QuestionOption {
-                label: "Yes".to_string(),
-                description: "Run this tool once".to_string(),
-            },
-            QuestionOption {
-                label: "Yes, don't ask again".to_string(),
-                description: "Allow this tool for the rest of the session".to_string(),
-            },
-            QuestionOption {
-                label: "No".to_string(),
-                description: "Deny this tool call".to_string(),
-            },
-        ];
-
-        let q = Question {
-            header: header.clone(),
-            text: question_text.clone(),
-            options: opts.clone(),
-            multi_select: false,
-            allow_other: false,
-            progress: None,
-        };
-
-        #[allow(deprecated)]
-        let rx = {
-            let mut app = self.app.lock();
-            app.ask_question_async(q)?
-        };
-
-        let qa = rx
-            .await
-            .map_err(|e| crate::Error::custom(format!("approval channel dropped: {e}")))?;
-        // Record close time so the tick task's I-01 Enter handler can apply
-        // a 300 ms grace period (mirrors the 200 ms Esc grace period).
-        self.last_modal_close_ms.store(
-            now_epoch_ms(),
-            std::sync::atomic::Ordering::SeqCst,
-        );
-
-        match qa {
-            None => {
-                // Esc / Ctrl+C = deny. Clear any cancel flag set while the
-                // blocking question was active — an Esc inside the modal must
-                // not abort the subsequent stream_turn.
-                self.cancel_turn
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                Ok(false)
-            }
-            Some(answer) => {
-                let label = answer.as_str();
-                // Clear any stale SIGINT cancel flag set while the blocking
-                // event loop ran (terminal may have converted Ctrl+Enter or
-                // a buffered Esc into an OS-level interrupt during the modal).
-                // Without this reset the next stream_turn would see
-                // cancel_turn == true and immediately abort with "Turn interrupted".
-                self.cancel_turn
-                    .store(false, std::sync::atomic::Ordering::SeqCst);
-                if label.starts_with("Yes, don't") {
-                    // Store allow rule BEFORE returning so that any immediately
-                    // following tool call of the same type is auto-approved (B3).
-                    self.permissions.add_session_allow(tool_name);
-                    Ok(true)
-                } else if label.starts_with("Yes") {
-                    Ok(true)
-                } else {
-                    Ok(false)
+    /// Check if a tool is a native intercept (requires &self). If so, execute
+    /// it immediately and return the result. Returns None for generic tools.
+    pub(crate) async fn sync_plan_tools(&self, enter_plan: bool) {
+        let agent_id = self.agent_id.lock().clone();
+        
+        if enter_plan {
+            // Strip write tools
+            if let Ok(attached) = self.client.get_agent_tools(&agent_id).await {
+                let mut new_ids = Vec::new();
+                for (id, name) in attached {
+                    let canonical_name = cade_agent::tools::manager::canonical_name(&name);
+                    let is_mcp = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
+                    let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
+                    if !is_write && canonical_name != "exitplanmode" {
+                        new_ids.push(id);
+                    }
                 }
+                let _ = self.client.attach_agent_tools(&agent_id, &new_ids).await;
+            }
+        } else {
+            // Restore write tools. To do this robustly without caching, we re-link all tools based on current caps.
+            // However, Repl does not know the current Toolset easily.
+            // Let's just fetch all tools from the server and link those that are write_tools (or we just link everything that should be there).
+            // Actually, an easier way is to just fetch all tools from the server and filter by what should be enabled.
+            // For simplicity, let's fetch all tools from the server, and if they match a known native/meta tool, or MCP, we link them.
+            // Actually, we can just do:
+            if let Ok(all_tools) = self.client.list_tools().await {
+                let mut new_ids = Vec::new();
+                for t in all_tools {
+                    // For now, let's just add everything back that isn't a known tool from a disabled capability.
+                    // This might be slightly loose but works for re-attaching.
+                    // To be safe, we only add back the write tools that exist on the server.
+                    // Wait, what if the write tool belongs to a capability that is disabled?
+                    // `write_file`, `edit_file`, `apply_patch`, `bash` are CORE tools, so they are always enabled.
+                    // `desktop_control`, `desktop_screenshot` are DESKTOP capability.
+                    // We can just add them back if their capability is enabled.
+                    
+                    let canonical_name = cade_agent::tools::manager::canonical_name(&t.name);
+                    let is_mcp = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
+                    let is_write_tool = cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
+                    if !is_write_tool {
+                        new_ids.push(t.id);
+                    } else {
+                        // It is a write tool. Should we add it?
+                        let caps = {
+                            let s = self.settings.lock();
+                            cade_core::capabilities::resolve_capabilities(
+                                &s.global().enable_capabilities,
+                                &s.global().disable_capabilities,
+                            )
+                        };
+                        let allowed = match t.name.as_str() {
+                            "desktop_control" | "desktop_screenshot" => caps.is_enabled(cade_core::capabilities::Capability::Desktop),
+                            _ => true, // core write tools
+                        };
+                        if allowed {
+                            new_ids.push(t.id);
+                        }
+                    }
+                }
+                
+                // Now we also need to get MCP tools and ensure they are attached. 
+                // MCP tools are fetched via list_tools() too since they are registered on the server.
+                let _ = self.client.attach_agent_tools(&agent_id, &new_ids).await;
             }
         }
     }
@@ -1258,143 +915,4 @@ impl Repl {
         Box::pin(self.dispatch_tool_calls(stdout, msgs, "", None, true, &mut turn_stats)).await
     }
 
-    /// Interactive `ask_user_question` tool intercept.
-    ///
-    /// Parses the LLM's structured questions, shows the `QuestionWidget` for
-    /// each one sequentially, then returns a formatted result string to the agent.
-    pub(crate) async fn handle_ask_user_question(
-        &self,
-        call_id: &str,
-        args: &serde_json::Value,
-    ) -> Result<cade_agent::tools::ToolResult> {
-        use crate::ui::question::{Question, QuestionOption};
-        use cade_agent::tools::AskUserQuestionTool;
-        use std::collections::HashMap;
-
-        // Parse and validate
-        let ask_questions = match AskUserQuestionTool::parse_questions(args) {
-            Ok(q) => q,
-            Err(e) => {
-                let msg = format!("Invalid ask_user_question args: {e}");
-                let _ = self
-                    .app
-                    .lock()
-                    .push(RenderLine::ToolResult {
-                        is_error: true,
-                        content: msg.clone(),
-                    });
-                return Ok(cade_agent::tools::ToolResult {
-                    tool_call_id: call_id.to_string(),
-                    tool_name: "ask_user_question".to_string(),
-                    output: msg,
-                    is_error: true,
-                });
-            }
-        };
-
-        let total = ask_questions.len();
-        let _ = self.app.lock().commit_streaming();
-
-        let mut answers: HashMap<String, String> = HashMap::new();
-        let mut answers_display: Vec<(String, String)> = Vec::new();
-
-        for (i, aq) in ask_questions.iter().enumerate() {
-            let opts: Vec<QuestionOption> = aq
-                .options
-                .iter()
-                .map(|o| QuestionOption {
-                    label: o.label.clone(),
-                    description: o.description.clone(),
-                })
-                .collect();
-
-            let q = Question {
-                header: aq.header.clone(),
-                text: aq.question.clone(),
-                options: opts.clone(),
-                multi_select: aq.multi_select,
-                allow_other: true,
-                progress: if total > 1 {
-                    Some((i + 1, total))
-                } else {
-                    None
-                },
-            };
-
-            // Use ask_question_async to avoid blocking the main event loop
-            // while awaiting user input. The app mutex is released during await.
-            #[allow(deprecated)]
-            let rx = {
-                let mut app = self.app.lock();
-                app.ask_question_async(q)?
-            };
-
-            let qa = rx.await.map_err(|e| {
-                crate::Error::custom(format!("ask_user_question channel dropped: {e}"))
-            })?;
-
-            self.last_modal_close_ms.store(
-                now_epoch_ms(),
-                std::sync::atomic::Ordering::SeqCst,
-            );
-
-            match qa {
-                None => {
-                    // User cancelled — clear any stale cancel flag so subsequent
-                    // stream_turn calls are not aborted immediately.
-                    self.cancel_turn
-                        .store(false, std::sync::atomic::Ordering::SeqCst);
-                    let msg = "User cancelled the question prompt.".to_string();
-                    let _ = self
-                        .app
-                        .lock()
-                        .push(RenderLine::ToolResult {
-                            is_error: true,
-                            content: msg.clone(),
-                        });
-                    return Ok(cade_agent::tools::ToolResult {
-                        tool_call_id: call_id.to_string(),
-                        tool_name: "ask_user_question".to_string(),
-                        output: msg,
-                        is_error: true,
-                    });
-                }
-                Some(answer) => {
-                    answers_display.push((aq.header.clone(), answer.as_str()));
-                    answers.insert(aq.question.clone(), answer.as_str());
-                }
-            }
-        }
-
-        // Show answers inline under the tool call header (⎿ answer / ⎿ h: a\n  h: b)
-        let result_content = if total == 1 {
-            answers_display[0].1.clone()
-        } else {
-            answers_display
-                .iter()
-                .map(|(h, a)| format!("{h}: {a}"))
-                .collect::<Vec<_>>()
-                .join("\n")
-        };
-        // Clear any stale cancel flag accumulated during the question loop so
-        // the following stream_turn is not aborted prematurely.
-        self.cancel_turn
-            .store(false, std::sync::atomic::Ordering::SeqCst);
-
-        // Removed internal ToolResult push since dispatch_tool_calls pushes it unconditionally.
-        {
-            let mut app = self.app.lock();
-            // Force a redraw to ensure the viewport updates immediately after the
-            // question modal is dismissed, fixing a race condition where the
-            // result of the next tool call would not be displayed.
-            let _ = app.draw();
-        }
-
-        Ok(cade_agent::tools::ToolResult {
-            tool_call_id: call_id.to_string(),
-            tool_name: "ask_user_question".to_string(),
-            output: result_content,
-            is_error: false,
-        })
-    }
 }
