@@ -1959,3 +1959,34 @@ Same runtime behavior. 19 callsites now delegate to 3 helper functions.
 
 ### Test Results
 - `cargo test --workspace` — all tests pass ✅
+
+---
+
+## 2025-XX-XX UTC — Phase 2: Extract modules from app/mod.rs
+
+### Summary
+Split app/mod.rs into 3 focused modules: render.rs, questions.rs, input.rs.
+
+### Files Modified
+- `crates/cade-tui/src/app/mod.rs` (3,137 → 1,167 lines)
+
+### Files Created
+- `crates/cade-tui/src/app/render.rs` (1,077 lines) — render_frame + all rendering helpers
+- `crates/cade-tui/src/app/questions.rs` (504 lines) — ask_question, handle_question_key
+- `crates/cade-tui/src/app/input.rs` (459 lines) — read_input, handle_key_input
+
+### Reason
+mod.rs was 3,137 lines — too large for effective navigation and review.
+
+### Previous Behavior
+All rendering, question, and input code lived in one file.
+
+### New Behavior
+Same runtime behavior. Code is now organized by responsibility.
+
+### Rollback
+- `git checkout crates/cade-tui/src/app/`
+
+### Test Results
+- `cargo test --workspace` — all tests pass ✅
+- `cargo check --workspace` — 0 errors, 0 warnings ✅
