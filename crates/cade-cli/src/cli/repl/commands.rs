@@ -10,11 +10,10 @@ use std::sync::Arc;
 use crate::Result;
 use crate::ui::{RenderLine, ToastLevel};
 use super::{
-    mode_display, AgentPickerResult,
+    mode_display,
     SubagentPickerResult, Repl,
 };
 use super::slash::SlashCmd;
-use super::stats::ModelStats;
 use cade_agent::subagents::discover_all_subagents;
 use cade_core::permissions::PermissionMode;
 use cade_core::toolsets::Toolset;
@@ -630,133 +629,8 @@ impl Repl {
             },
 
             SlashCmd::Cost => {
-                let (total_cost, by_model) = {
-                    let stats = self.session_stats.lock();
-                    stats.compute_cost()
-                };
-                let (wall_ms, api_ms, lines_added, lines_removed) = {
-                    let stats = self.session_stats.lock();
-                    (
-                        stats.started_at.elapsed().as_millis() as u64,
-                        stats.agent_active_ms,
-                        stats.lines_added,
-                        stats.lines_removed,
-                    )
-                };
-                let per_model_snap: Vec<(String, ModelStats)> = {
-                    let stats = self.session_stats.lock();
-                    stats
-                        .per_model
-                        .iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect()
-                };
-
-                let fmt_dur = |ms: u64| -> String {
-                    let s = ms / 1000;
-                    if s >= 3600 {
-                        format!("{}h {}m {}s", s / 3600, (s % 3600) / 60, s % 60)
-                    } else if s >= 60 {
-                        format!("{}m {}s", s / 60, s % 60)
-                    } else {
-                        format!("{}s", s)
-                    }
-                };
-                let fmt_tok = |n: u64| -> String {
-                    if n >= 1_000_000 {
-                        format!("{:.1}M", n as f64 / 1_000_000.0)
-                    } else if n >= 1_000 {
-                        format!("{:.1}k", n as f64 / 1_000.0)
-                    } else {
-                        n.to_string()
-                    }
-                };
-
-                let mut lines: Vec<crate::ui::RenderLine> = vec![
-                    crate::ui::RenderLine::Blank,
-                    crate::ui::RenderLine::InfoHeader("  ◆ Session Cost".to_string()),
-                    crate::ui::RenderLine::Blank,
-                    crate::ui::RenderLine::Pair {
-                        label: "Total cost".to_string(),
-                        value: format!("${:.2}", total_cost),
-                    },
-                    crate::ui::RenderLine::Pair {
-                        label: "Total duration (API)".to_string(),
-                        value: fmt_dur(api_ms),
-                    },
-                    crate::ui::RenderLine::Pair {
-                        label: "Total duration (wall)".to_string(),
-                        value: fmt_dur(wall_ms),
-                    },
-                ];
-                if lines_added != 0 || lines_removed != 0 {
-                    lines.push(crate::ui::RenderLine::Pair {
-                        label: "Total code changes".to_string(),
-                        value: format!(
-                            "{} lines added, {} lines removed",
-                            lines_added,
-                            lines_removed.abs()
-                        ),
-                    });
-                }
-                if !by_model.is_empty() {
-                    lines.push(crate::ui::RenderLine::Blank);
-                    lines.push(crate::ui::RenderLine::DimMsg(
-                        "  Usage by model:".to_string(),
-                    ));
-                    for (model, cost) in &by_model {
-                        if let Some(ms) = per_model_snap
-                            .iter()
-                            .find(|(k, _)| k == model)
-                            .map(|(_, v)| v)
-                        {
-                            let model_short =
-                                model.rsplit('/').next().unwrap_or(model.as_str());
-                            lines.push(crate::ui::RenderLine::DimMsg(format!(
-                                "     {}   (${:.2})",
-                                model_short, cost,
-                            )));
-                            let mut fields: Vec<String> = Vec::new();
-                            if ms.input_tokens > 0 {
-                                fields.push(format!("{} input", fmt_tok(ms.input_tokens)));
-                            }
-                            if ms.output_tokens > 0 {
-                                fields
-                                    .push(format!("{} output", fmt_tok(ms.output_tokens)));
-                            }
-                            if ms.cache_read_tokens > 0 {
-                                fields.push(format!(
-                                    "{} cache read",
-                                    fmt_tok(ms.cache_read_tokens)
-                                ));
-                            }
-                            if ms.cache_write_tokens > 0 {
-                                fields.push(format!(
-                                    "{} cache write",
-                                    fmt_tok(ms.cache_write_tokens)
-                                ));
-                            }
-                            if !fields.is_empty() {
-                                lines.push(crate::ui::RenderLine::DimMsg(format!(
-                                    "       {}",
-                                    fields.join(" · ")
-                                )));
-                            }
-                        }
-                    }
-                }
-                lines.push(crate::ui::RenderLine::Blank);
-                lines.push(crate::ui::RenderLine::DimMsg(
-                    "  Pricing estimates — check provider docs for current rates."
-                        .to_string(),
-                ));
-                lines.push(crate::ui::RenderLine::Blank);
-                let mut app = self.app.lock();
-                for line in lines {
-                    let _ = app.push(line);
-                }
+                return self.cmd_cost().await;
             }
-
             SlashCmd::Copy => {
                 let mut app = self.app.lock();
                 app.toggle_copy_mode();
@@ -1124,105 +998,8 @@ impl Repl {
             }
 
             SlashCmd::Agents => {
-                if self.require_capability(
-                    cade_core::capabilities::Capability::Agentic,
-                    "/agents",
-                ) {
-                    return Ok(false);
-                }
-                self.tui_dim("  Fetching agents…");
-                match self.client.list_agents().await {
-                    Ok(agents) if agents.is_empty() => {
-                        self.tui_dim("  (no agents found)");
-                    }
-                    Ok(mut agents) => {
-                        if let Some(result) = self
-                            .agent_picker(Arc::clone(&self.app), &mut agents)
-                            .await?
-                        {
-                            match result {
-                                AgentPickerResult::Switch(a) => {
-                                    *self.agent_id.lock() =
-                                        a.id.clone();
-                                    *self.agent_name.lock() =
-                                        a.name.clone();
-                                    { let mut s = self.settings.lock();
-                                        let _ = s.set_last_agent(&a.id);
-                                    }
-                                    self.tui_ok(format!(
-                                        "  ✓ Switched to: {} ({})",
-                                        a.name, a.id
-                                    ));
-                                }
-                                AgentPickerResult::Rename { agent, new_name } => match self
-                                    .client
-                                    .rename_agent(&agent.id, &new_name)
-                                    .await
-                                {
-                                    Ok(_) => {
-                                        if agent.id == self.agent_id() {
-                                            *self
-                                                .agent_name
-                                                .lock() = new_name.clone();
-                                        }
-                                        self.tui_ok(format!(
-                                            "  ✓ Renamed '{}' → '{new_name}'",
-                                            agent.name
-                                        ));
-                                    }
-                                    Err(e) => self.tui_err(e.to_string()),
-                                },
-                                AgentPickerResult::DeleteMany(to_delete) => {
-                                    let current_id = self.agent_id();
-                                    let mut deleted_active = false;
-                                    for a in &to_delete {
-                                        match self.client.delete_agent(&a.id).await {
-                                            Ok(_) => {
-                                                self.tui_ok(format!(
-                                                    "  ✓ Deleted: {}",
-                                                    a.name
-                                                ));
-                                                if a.id == current_id {
-                                                    deleted_active = true;
-                                                }
-                                            }
-                                            Err(e) => self.tui_err(e.to_string()),
-                                        }
-                                    }
-                                    if deleted_active {
-                                        match self.client.list_agents().await {
-                                            Ok(remaining) if !remaining.is_empty() => {
-                                                let first = &remaining[0];
-                                                *self
-                                                    .agent_id
-                                                    .lock() =
-                                                    first.id.clone();
-                                                *self
-                                                    .agent_name
-                                                    .lock() =
-                                                    first.name.clone();
-                                                { let mut s = self.settings.lock();
-                                                    let _ = s.set_last_agent(&first.id);
-                                                }
-                                                self.tui_dim(format!(
-                                                    "  → Now using: {}",
-                                                    first.name
-                                                ));
-                                            }
-                                            _ => {
-                                                self.tui_dim("  No remaining agents — run /new to create one");
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        let _ = self.app.lock().draw();
-                    }
-                    Err(e) => self.tui_err(e.to_string()),
-                }
+                return self.cmd_agents().await;
             }
-
             SlashCmd::Delete(target) => {
                 // /delete [name-or-id] — delete a specific agent by name/id prefix
                 let agents = match self.client.list_agents().await {
@@ -1296,93 +1073,8 @@ impl Repl {
             }
 
             SlashCmd::Init => {
-                self.tui_dim(format!("  Analysing project at {}…", self.cwd.display()));
-
-                let explore_prompt = format!(
-                    "Analyse the project at '{}'. \
-                     Read: README.md, Cargo.toml / package.json / pyproject.toml / go.mod (whichever exist), \
-                     src/ or lib/ directory structure (top-level only), .env.example if present. \
-                     Return a concise report covering: \
-                     (1) Project name and purpose (2 sentences), \
-                     (2) Language + framework / stack, \
-                     (3) Key source directories and their purpose, \
-                     (4) Build / test commands, \
-                     (5) Any important conventions or notes from README. \
-                     Be specific and factual. Maximum 400 words.",
-                    self.cwd.display()
-                );
-
-                let agent_id = self.agent_id();
-                let client = self.client.clone();
-                let cwd = self.cwd.clone();
-                let all_defs = cade_agent::subagents::discover_all_subagents(&cwd);
-                let explore_def =
-                    cade_agent::subagents::find_subagent("explore", &all_defs).cloned();
-                let main_model = self.model();
-                let hooks = self.hooks.clone();
-
-                // Run explore subagent synchronously
-                let summary = {
-                    use crate::cli::headless::run_headless;
-                    use cade_core::permissions::PermissionManager;
-
-                    let _system_prompt =
-                        explore_def.map(|d| d.system_prompt).unwrap_or_else(|| {
-                            "You are an expert code explorer. Be concise and precise."
-                                .to_string()
-                        });
-
-                    let req = cade_agent::agent::client::CreateAgentRequest {
-                        name: Some("init-explore".to_string()),
-                        model: main_model,
-                        description: Some("Ephemeral init analysis".to_string()),
-                        system_prompt: Some(
-                            "You are an expert code explorer. Be concise and precise."
-                                .to_string(),
-                        ),
-                        memory_blocks: vec![],
-                        tool_ids: vec![],
-                    };
-                    match client.create_agent(req).await {
-                        Ok(sub) => {
-                            let perm = PermissionManager::default();
-                            let mcp_empty =
-                                std::sync::Arc::new(cade_agent::mcp::McpManager::empty());
-                            let result = run_headless(
-                                &client,
-                                &sub.id,
-                                &explore_prompt,
-                                &perm,
-                                &mcp_empty,
-                                &hooks,
-                                None,
-                            )
-                            .await;
-                            let _ = client.delete_agent(&sub.id).await;
-                            result
-                                .map(|(s, _)| s)
-                                .unwrap_or_else(|e| format!("Analysis failed: {e}"))
-                        }
-                        Err(e) => format!("Could not spawn explore agent: {e}"),
-                    }
-                };
-
-                // Write summary into project memory block
-                let _ = self
-                    .client
-                    .upsert_memory(&agent_id, "project", &summary, None)
-                    .await;
-
-                // Tell the main agent what was discovered
-                let init_prompt = format!(
-                    "[/init completed] Project analysis summary:\n\n{summary}\n\n\
-                     I've stored this in your 'project' memory block. \
-                     Acknowledge and summarise what you learned in 2-3 sentences."
-                );
-                self.agent_turn(&mut stdout, &init_prompt).await?;
-                let _ = self.app.lock().commit_streaming();
+                return self.cmd_init(stdout).await;
             }
-
             SlashCmd::Remember(text) => {
                 // Route through the agent — it decides what to store and where.
                 // This matches CADE's /remember behaviour exactly.
@@ -1788,95 +1480,8 @@ impl Repl {
             }
 
             SlashCmd::Theme(theme_arg) => {
-                let new_theme = if let Some(t) = theme_arg {
-                    t.trim().to_string()
-                } else {
-                    String::new()
-                };
-
-                let name = if new_theme.is_empty() {
-                    let agent_dir = self
-                        .settings
-                        .lock()
-                        .global_path()
-                        .parent()
-                        .unwrap()
-                        .to_path_buf();
-                    let mut discovered =
-                        cade_core::resources::discover_themes(&self.cwd, &agent_dir);
-                    if !discovered.iter().any(|t| t.name == "dark") {
-                        discovered.insert(
-                            0,
-                            cade_core::resources::Theme {
-                                name: "dark".to_string(),
-                                vars: Default::default(),
-                                colors: Default::default(),
-                                source: std::path::PathBuf::from("builtin"),
-                            },
-                        );
-                    }
-                    if !discovered.iter().any(|t| t.name == "light") {
-                        discovered.insert(
-                            1,
-                            cade_core::resources::Theme {
-                                name: "light".to_string(),
-                                vars: Default::default(),
-                                colors: Default::default(),
-                                source: std::path::PathBuf::from("builtin"),
-                            },
-                        );
-                    }
-                    let current_colors =
-                        self.app.lock().colors.clone();
-                    self.app
-                        .lock()
-                        .open_theme_picker(discovered, current_colors);
-                    return Ok(false);
-                } else {
-                    new_theme
-                };
-
-                let (target_theme_colors, found_name) = if name == "dark" {
-                    (cade_tui::ThemeColors::dark(), "dark".to_string())
-                } else if name == "light" {
-                    (cade_tui::ThemeColors::light(), "light".to_string())
-                } else {
-                    let agent_dir = self
-                        .settings
-                        .lock()
-                        .global_path()
-                        .parent()
-                        .unwrap()
-                        .to_path_buf();
-                    let discovered =
-                        cade_core::resources::discover_themes(&self.cwd, &agent_dir);
-                    if let Some(t) = discovered.iter().find(|t| t.name == name) {
-                        (cade_tui::ThemeColors::from_theme(t), t.name.clone())
-                    } else {
-                        (cade_tui::ThemeColors::dark(), String::new())
-                    }
-                };
-
-                if found_name.is_empty() {
-                    self.tui_err(format!("  ✗ Theme '{name}' not found."));
-                } else {
-                    // Apply it dynamically
-                    {
-                        let mut app = self.app.lock();
-                        app.apply_theme(target_theme_colors);
-                    }
-
-                    // Save to settings
-                    {
-                        let mut s = self.settings.lock();
-                        s.global_settings_mut().theme = Some(found_name.clone());
-                        let _ = s.save_global();
-                    }
-
-                    self.tui_ok(format!("  ✓ Theme changed to '{found_name}'"));
-                }
+                return self.cmd_theme(theme_arg).await;
             }
-
             SlashCmd::Rename(new_name) => {
                 let id = self.agent_id();
                 let new_name = new_name.trim().to_string();

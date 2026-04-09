@@ -1,10 +1,14 @@
 pub mod capability_gate;
 pub mod commands;
+pub mod commands_agents;
 pub mod commands_context;
+pub mod commands_cost;
+pub mod commands_init;
 pub mod commands_memory;
 pub mod commands_newagent;
 pub mod commands_providers;
 pub mod commands_skills;
+pub mod commands_theme;
 pub mod commands_tree;
 pub mod format;
 pub mod pickers;
