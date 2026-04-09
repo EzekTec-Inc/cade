@@ -8,7 +8,7 @@ use crossterm::event::{
 use crate::Result;
 
 use super::{PickerState, ToastLevel, TuiApp};
-use super::timeline::{calc_visual_cursor, find_cursor_at_visual_row_col, input_mode_badge};
+use super::layout::cursor::{calc_visual_cursor, find_cursor_at_visual_row_col, input_mode_badge};
 
 impl TuiApp {
     // -- Input loop

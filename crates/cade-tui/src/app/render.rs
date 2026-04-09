@@ -24,10 +24,11 @@ use super::{
 };
 use super::timeline::{
     PreparedTimelineEntry, TimelineEntry, TimelineKey,
-    build_timeline_entries, calc_input_rows, input_mode_badge,
-    prepare_timeline_entries, render_sidebar, render_timeline_viewport,
-    render_toast,
+    build_timeline_entries, prepare_timeline_entries, render_timeline_viewport,
 };
+use super::layout::cursor::{calc_input_rows, input_mode_badge};
+use super::layout::sidebar::render_sidebar;
+use super::layout::toast::render_toast;
 
 // -- Scroll helpers
 

@@ -2,6 +2,7 @@ pub mod clipboard;
 pub mod input;
 pub mod questions;
 pub mod render;
+pub mod layout;
 pub mod timeline;
 pub(crate) use timeline::*;
 
