@@ -306,6 +306,14 @@ fn schema_run_subagent() -> Value {
                 "model": {
                     "type": "string",
                     "description": "Optional: override the subagent's model"
+                },
+                "system_prompt": {
+                    "type": "string",
+                    "description": "Optional: a custom system prompt to uniquely skill the subagent for the task"
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Optional: a short description of the subagent's role or purpose"
                 }
             },
             "required": ["prompt"]

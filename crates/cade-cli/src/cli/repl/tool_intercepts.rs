@@ -22,6 +22,8 @@ impl Repl {
             || self.settings.lock().silent_subagents();
         let agent_id_arg = args["agent_id"].as_str().map(|s| s.trim().to_string());
         let model_override = args["model"].as_str().map(|s| s.trim().to_string());
+        let custom_system_prompt = args["system_prompt"].as_str().map(|s| s.trim().to_string());
+        let custom_description = args["description"].as_str().map(|s| s.trim().to_string());
 
         if prompt.is_empty() {
             return Ok(cade_agent::tools::ToolResult {
@@ -146,13 +148,15 @@ impl Repl {
                     (existing_id, false)
                 } else {
                     // Create ephemeral agent
-                    let _system_prompt = def_opt
-                        .as_ref()
-                        .map(|d| d.system_prompt.clone())
+                    let final_system_prompt = custom_system_prompt
+                        .or_else(|| def_opt.as_ref().map(|d| d.system_prompt.clone()))
                         .unwrap_or_else(|| {
                             "You are a helpful coding assistant. Complete the task and report back."
                                 .to_string()
                         });
+
+                    let final_description = custom_description
+                        .unwrap_or_else(|| format!("Ephemeral subagent: {subagent_mode_c}"));
 
                     let model = model_override
                         .clone()
@@ -162,8 +166,8 @@ impl Repl {
                     let req = cade_agent::agent::client::CreateAgentRequest {
                         name: Some(format!("subagent-{}-{}", subagent_mode_c, task_id_c)),
                         model,
-                        description: Some(format!("Ephemeral subagent: {subagent_mode_c}")),
-                        system_prompt: None,
+                        description: Some(final_description),
+                        system_prompt: Some(final_system_prompt),
                         memory_blocks: seed_blocks,
                         tool_ids: vec![],
                     };

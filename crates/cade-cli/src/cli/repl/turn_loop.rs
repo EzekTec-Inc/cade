@@ -110,93 +110,6 @@ impl Repl {
         format!("<environment>\n{}\n</environment>", parts.join("\n"))
     }
 
-    /// Run the Heuristic Evaluation Layer on user input before tool execution.
-    /// This delegates a high-reasoning subagent to evaluate intent, safety, and pathfinding.
-    pub(crate) async fn heuristic_evaluate(&self, input: &str) {
-        if input.trim().is_empty() {
-            return;
-        }
-
-        // Token reduction measure: We only invoke the full subagent evaluation
-        // if the user input exceeds a certain character threshold, or contains
-        // explicit tool/file keywords indicating a complex task.
-        let is_complex = input.len() > 100
-            || input.contains("file")
-            || input.contains("code")
-            || input.contains("test")
-            || input.contains("implement");
-
-        if !is_complex {
-            self.tui_dim("  Input deemed simple: skipping full heuristic subagent evaluation to conserve tokens.");
-            return;
-        }
-
-        // Animate the evaluation using CADE's native braille spinner
-        let tick_app = self.app.clone();
-        let _bar_text = self.app.lock().start_thinking("Reaching into memory & synthesizing rules...");
-        let tick_handle = tokio::spawn(async move {
-            loop {
-                tokio::time::sleep(tokio::time::Duration::from_millis(16)).await;
-                if let Some(mut app) = tick_app.try_lock() {
-                    let _ = app.draw();
-                }
-            }
-        });
-
-        let prompt = format!(
-            "You are the Heuristic Evaluation Layer. Perform an evaluation on the current task: The user has requested to '{}'.\nExecute the following logic and then call `update_memory` on the `working_set` block to persist the evolved context:\n1. Semantic Extraction: Parse Intent, Entities, Constraints.\n2. Antivirus Heuristic: Compare against Safety Protocol. If deviating, generate a corrective warning.\n3. Pathfinding Heuristic: Analyze distance to goal and recalculate Next Steps.\n4. CoT State Update: Update `working_set` with Vision, Progress, and Directives.",
-            input
-        );
-
-        let args = serde_json::json!({
-            "subagent_type": "heuristic_evaluator",
-            "prompt": prompt,
-            "background": false,
-            "silent_stream": true
-        });
-
-        // Run the subagent tool synchronously for this turn
-        let _ = self.handle_run_subagent("heuristic_eval", &args).await;
-
-        // Fetch the updated working_set memory block
-        let mut intent = "Analyze user intent".to_string();
-        let mut safety = "Verified".to_string();
-        let mut directives = "Proceed with requested changes".to_string();
-
-        if let Ok(mems) = self.client.get_memory(&self.agent_id()).await {
-            if let Some(ws) = mems.into_iter().find(|m| m.label == "working_set") {
-                let val = ws.value;
-                let extract = |key: &str| -> String {
-                    if let Some(idx) = val.find(key) {
-                        let rest = &val[idx + key.len()..];
-                        let end = rest.find('\n').unwrap_or(rest.len());
-                        let extracted = rest[..end].trim().trim_start_matches(':').trim().to_string();
-                        if !extracted.is_empty() {
-                            return extracted;
-                        }
-                    }
-                    String::new()
-                };
-
-                let extracted_intent = extract("Intent");
-                if !extracted_intent.is_empty() { intent = extracted_intent; }
-                let extracted_safety = extract("Safety");
-                if !extracted_safety.is_empty() { safety = extracted_safety; }
-                let extracted_dir = extract("Directives");
-                if !extracted_dir.is_empty() { directives = extracted_dir; }
-            }
-        }
-
-        tick_handle.abort();
-        self.app.lock().stop_thinking();
-
-        let _ = self.app.lock().push(crate::ui::RenderLine::HeuristicSummary {
-            intent,
-            safety,
-            directives,
-        });
-    }
-
     /// Send a user message and drive the tool-call loop with live SSE streaming.
     /// Thin wrapper: start a turn, optionally attaching pasted images.
     pub(crate) async fn agent_turn_with_images(
@@ -225,9 +138,6 @@ impl Repl {
 
         // Mark turn as active so OS SIGINT watcher knows to cancel it
         self.turn_active.store(true, Ordering::SeqCst);
-
-        // Run Heuristic Evaluator Layer
-        self.heuristic_evaluate(input).await;
 
         // On the first real turn, prefix with environment context
         let effective_input = if self
@@ -1606,7 +1516,6 @@ impl Repl {
 
     /// Check if a tool is a native intercept (requires &self). If so, execute
     /// it immediately and return the result. Returns None for generic tools.
-
     async fn sync_plan_tools(&self, enter_plan: bool) {
         let agent_id = self.agent_id.lock().clone();
         
