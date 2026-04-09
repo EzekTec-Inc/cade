@@ -65,8 +65,9 @@ use crate::editor::{Editor, ImageEntry};
 pub(crate) use crate::editor::InputMode;
 use cade_core::permissions::PermissionMode;
 
-pub use render::{cycle_mode, cycle_mode_back, truncate_str};
-use render::{abbreviate_cwd, count_wrapped_rows, display_tool_name, mode_sep_color, render_frame};
+pub use layout::helpers::{cycle_mode, cycle_mode_back, truncate_str};
+use layout::helpers::{abbreviate_cwd, display_tool_name, mode_sep_color};
+use render::{count_wrapped_rows, render_frame};
 
 // -- Constants
 
