@@ -1925,3 +1925,37 @@ the developer's machine.
 - `cargo test -p cade-core -p cade-agent -p cade-server` — 367 passed ✅
 - `cargo test --test evaluator_tests --test approval_tests` — 18 passed ✅
 - Total: 385 tests pass ✅
+
+---
+
+## 2025-XX-XX UTC — Phase 1: Shared Helpers (turn_loop.rs dedup)
+
+### Summary
+Added shared helper functions to `turn_loop.rs` to eliminate repeated boilerplate patterns.
+
+### Files Modified
+- `crates/cade-cli/src/cli/repl/turn_loop.rs`
+
+### Reason
+Reduce duplication before module extraction phases. Preparatory step for the bloat-reduction refactor.
+
+### Changes
+1. **`now_epoch_ms()`** — Replaced 11 inline `SystemTime::now().duration_since(UNIX_EPOCH)…as_millis() as u64` blocks with a single helper call.
+2. **`blocked_result()`** — Replaced 4 inline `ToolPreflightResult::Blocked(ToolResult { … })` constructions with a single helper call.
+3. **`abort_stream_ui()`** — Replaced 4 identical `commit_reasoning + commit_streaming + push(ErrorMsg) + return Ok(vec![])` blocks with a single method call.
+
+### Previous Behavior
+Identical boilerplate repeated 11+4+4 = 19 times across the file.
+
+### New Behavior
+Same runtime behavior. 19 callsites now delegate to 3 helper functions.
+
+### Line Count
+- Before: 2,449 lines
+- After: 2,402 lines (−47 net)
+
+### Rollback
+- `git checkout crates/cade-cli/src/cli/repl/turn_loop.rs`
+
+### Test Results
+- `cargo test --workspace` — all tests pass ✅

@@ -13,7 +13,38 @@ pub(crate) struct TurnStats {
     pub cmds: u32,
 }
 
+/// Current wall-clock time as milliseconds since the Unix epoch.
+fn now_epoch_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+/// Build a `ToolPreflightResult::Blocked` with the given error message.
+fn blocked_result(
+    call_id: &str,
+    tool_name: &str,
+    output: impl Into<String>,
+) -> ToolPreflightResult {
+    ToolPreflightResult::Blocked(cade_agent::tools::ToolResult {
+        tool_call_id: call_id.to_string(),
+        tool_name: tool_name.to_string(),
+        output: output.into(),
+        is_error: true,
+    })
+}
+
 impl Repl {
+    /// Commit any in-progress streaming/reasoning, push an error line, and
+    /// return an empty message vec.  Shared cleanup path for stream errors.
+    fn abort_stream_ui(&self, msg: impl Into<String>) -> Vec<CadeMessage> {
+        let mut app = self.app.lock();
+        let _ = app.commit_reasoning();
+        let _ = app.commit_streaming();
+        let _ = app.push(RenderLine::ErrorMsg(msg.into()));
+        vec![]
+    }
     pub(crate) fn build_env_context(&self) -> String {
         use std::process::Command;
 
@@ -281,10 +312,7 @@ impl Repl {
                                                         app.editor.expand_pastes();
                                                         let msg = app.editor.text().trim().to_string();
                                                         if !msg.is_empty() {
-                                                            let now_ms = std::time::SystemTime::now()
-                                                                .duration_since(std::time::UNIX_EPOCH)
-                                                                .unwrap_or_default()
-                                                                .as_millis() as u64;
+                                                            let now_ms = now_epoch_ms();
                                                             let last_close = tick_modal_close_ms
                                                                 .load(std::sync::atomic::Ordering::SeqCst);
                                                             let post_modal = last_close > 0
@@ -308,10 +336,7 @@ impl Repl {
                                                         app.editor.expand_pastes();
                                                         let msg = app.editor.text().trim().to_string();
                                                         if !msg.is_empty() {
-                                                            let now_ms = std::time::SystemTime::now()
-                                                                .duration_since(std::time::UNIX_EPOCH)
-                                                                .unwrap_or_default()
-                                                                .as_millis() as u64;
+                                                            let now_ms = now_epoch_ms();
                                                             let last_close = tick_modal_close_ms
                                                                 .load(std::sync::atomic::Ordering::SeqCst);
                                                             let post_modal = last_close > 0
@@ -368,10 +393,7 @@ impl Repl {
                                                         // HTTP wait of Phase-2 tool-result sending
                                                         // and aborts the turn right after the user
                                                         // confirmed "Yes" in a question modal.
-                                                        let esc_now_ms = std::time::SystemTime::now()
-                                                            .duration_since(std::time::UNIX_EPOCH)
-                                                            .unwrap_or_default()
-                                                            .as_millis() as u64;
+                                                        let esc_now_ms = now_epoch_ms();
                                                         let esc_last_close = tick_modal_close_ms
                                                             .load(std::sync::atomic::Ordering::SeqCst);
                                                         let esc_post_modal = esc_last_close > 0
@@ -397,10 +419,7 @@ impl Repl {
                                                     // Also suppressed for 500 ms post-modal close
                                                     // (same reason as Esc above).
                                                     (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                                                        let cc_now_ms = std::time::SystemTime::now()
-                                                            .duration_since(std::time::UNIX_EPOCH)
-                                                            .unwrap_or_default()
-                                                            .as_millis() as u64;
+                                                        let cc_now_ms = now_epoch_ms();
                                                         let cc_last_close = tick_modal_close_ms
                                                             .load(std::sync::atomic::Ordering::SeqCst);
                                                         let cc_post_modal = cc_last_close > 0
@@ -830,21 +849,12 @@ impl Repl {
             {
                 Ok(m) => m,
                 Err(e) if is_cancel(&e) => {
-                    // Drop the sender so the UI task drains and exits.
                     ui_task.abort();
-                    let mut app = self.app.lock();
-                    let _ = app.commit_reasoning();
-                    let _ = app.commit_streaming();
-                    let _ = app.push(RenderLine::ErrorMsg("Turn interrupted".to_string()));
-                    return Ok(vec![]);
+                    return Ok(self.abort_stream_ui("Turn interrupted"));
                 }
                 Err(e) => {
                     ui_task.abort();
-                    let mut app = self.app.lock();
-                    let _ = app.commit_reasoning();
-                    let _ = app.commit_streaming();
-                    let _ = app.push(RenderLine::ErrorMsg(e.to_string()));
-                    return Ok(vec![]);
+                    return Ok(self.abort_stream_ui(e.to_string()));
                 }
             }
         } else {
@@ -876,19 +886,11 @@ impl Repl {
                     Ok(m) => m,
                     Err(e) if is_cancel(&e) => {
                         ui_task.abort();
-                        let mut app = self.app.lock();
-                        let _ = app.commit_reasoning();
-                        let _ = app.commit_streaming();
-                        let _ = app.push(RenderLine::ErrorMsg("Turn interrupted".to_string()));
-                        return Ok(vec![]);
+                        return Ok(self.abort_stream_ui("Turn interrupted"));
                     }
                     Err(e) => {
                         ui_task.abort();
-                        let mut app = self.app.lock();
-                        let _ = app.commit_reasoning();
-                        let _ = app.commit_streaming();
-                        let _ = app.push(RenderLine::ErrorMsg(e.to_string()));
-                        return Ok(vec![]);
+                        return Ok(self.abort_stream_ui(e.to_string()));
                     }
                 }
             } else {
@@ -1366,10 +1368,7 @@ impl Repl {
         self.cancel_turn
             .store(false, std::sync::atomic::Ordering::SeqCst);
         self.last_modal_close_ms.store(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
+            now_epoch_ms(),
             std::sync::atomic::Ordering::SeqCst,
         );
 
@@ -1425,10 +1424,7 @@ impl Repl {
             self.cancel_turn
                 .store(false, std::sync::atomic::Ordering::SeqCst);
             self.last_modal_close_ms.store(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
+                now_epoch_ms(),
                 std::sync::atomic::Ordering::SeqCst,
             );
         }
@@ -1455,10 +1451,7 @@ impl Repl {
             self.cancel_turn
                 .store(false, std::sync::atomic::Ordering::SeqCst);
             self.last_modal_close_ms.store(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
+                now_epoch_ms(),
                 std::sync::atomic::Ordering::SeqCst,
             );
         }
@@ -1482,10 +1475,7 @@ impl Repl {
         self.cancel_turn
             .store(false, std::sync::atomic::Ordering::SeqCst);
         self.last_modal_close_ms.store(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
+            now_epoch_ms(),
             std::sync::atomic::Ordering::SeqCst,
         );
 
@@ -1760,14 +1750,7 @@ impl Repl {
                     });
                 self.cancel_turn
                     .store(false, std::sync::atomic::Ordering::SeqCst);
-                return Ok(ToolPreflightResult::Blocked(
-                    cade_agent::tools::ToolResult {
-                        tool_call_id: call_id.to_string(),
-                        tool_name: tool_name.to_string(),
-                        output: msg,
-                        is_error: true,
-                    },
-                ));
+                return Ok(blocked_result(call_id, tool_name, msg));
             }
 
             Verdict::Ask(_reason) => {
@@ -1784,14 +1767,7 @@ impl Repl {
                     });
                 self.cancel_turn
                     .store(false, std::sync::atomic::Ordering::SeqCst);
-                return Ok(ToolPreflightResult::Blocked(
-                    cade_agent::tools::ToolResult {
-                        tool_call_id: call_id.to_string(),
-                        tool_name: tool_name.to_string(),
-                        output: format!("Hook denied: {reason}"),
-                        is_error: true,
-                    },
-                ));
+                return Ok(blocked_result(call_id, tool_name, format!("Hook denied: {reason}")));
             }
 
             // Prompt for approval
@@ -1809,14 +1785,7 @@ impl Repl {
                     });
                 self.cancel_turn
                     .store(false, std::sync::atomic::Ordering::SeqCst);
-                return Ok(ToolPreflightResult::Blocked(
-                    cade_agent::tools::ToolResult {
-                        tool_call_id: call_id.to_string(),
-                        tool_name: tool_name.to_string(),
-                        output: msg,
-                        is_error: true,
-                    },
-                ));
+                return Ok(blocked_result(call_id, tool_name, msg));
             }
             self.cancel_turn
                 .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -1830,10 +1799,7 @@ impl Repl {
                 self.cancel_turn
                     .store(false, std::sync::atomic::Ordering::SeqCst);
                 self.last_modal_close_ms.store(
-                    std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_millis() as u64,
+                    now_epoch_ms(),
                     std::sync::atomic::Ordering::SeqCst,
                 );
             }
@@ -1852,14 +1818,7 @@ impl Repl {
                 });
             self.cancel_turn
                 .store(false, std::sync::atomic::Ordering::SeqCst);
-            return Ok(ToolPreflightResult::Blocked(
-                cade_agent::tools::ToolResult {
-                    tool_call_id: call_id.to_string(),
-                    tool_name: tool_name.to_string(),
-                    output: format!("Blocked by hook: {reason}"),
-                    is_error: true,
-                },
-            ));
+            return Ok(blocked_result(call_id, tool_name, format!("Blocked by hook: {reason}")));
         }
 
         Ok(ToolPreflightResult::Approved)
@@ -2210,10 +2169,7 @@ impl Repl {
         // Record close time so the tick task's I-01 Enter handler can apply
         // a 300 ms grace period (mirrors the 200 ms Esc grace period).
         self.last_modal_close_ms.store(
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as u64,
+            now_epoch_ms(),
             std::sync::atomic::Ordering::SeqCst,
         );
 
@@ -2380,10 +2336,7 @@ impl Repl {
             })?;
 
             self.last_modal_close_ms.store(
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_millis() as u64,
+                now_epoch_ms(),
                 std::sync::atomic::Ordering::SeqCst,
             );
 
