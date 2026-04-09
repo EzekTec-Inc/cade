@@ -118,7 +118,7 @@ pub fn tool_first_arg(tool_name: &str, args: &serde_json::Value) -> Option<Strin
 
     // Known arg key names per tool type
     let keys = match base_name.to_lowercase().as_str() {
-        "bash" | "shell" | "run_command" | "execute_command" | "start_process" => {
+        "bash" | "shell" | "run_command" | "execute_command" | "start_process" | "RunShellCommand" => {
             &["command", "cmd"][..]
         }
         "read_file" | "write_file" | "edit_file" | "create_file" | "delete_file" | "move_file"
@@ -268,10 +268,7 @@ pub fn is_delete_action(
         return true;
     }
     // 3. Bash commands: rm, rmdir, unlink, shred
-    if matches!(
-        base_name,
-        "bash" | "shell" | "run_command" | "execute_command" | "start_process"
-    ) {
+    if matches!(base_name, "bash") {
         let cmd = args
             .get("command")
             .and_then(|v| v.as_str())
@@ -1319,10 +1316,7 @@ impl PermissionManager {
             tool_name
         };
 
-        let is_bash = matches!(
-            base_name,
-            "bash" | "shell" | "run_command" | "execute_command" | "start_process"
-        );
+        let is_bash = matches!(base_name, "bash");
 
         let is_write = is_write_schema(base_name) || is_mcp_write;
 

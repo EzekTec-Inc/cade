@@ -421,9 +421,7 @@ impl Repl {
                                                     (KeyCode::Enter, m)
                                                         if m == KeyModifiers::SHIFT =>
                                                     {
-                                                        let pos = app.editor.cursor_pos();
-                                                        app.editor.insert_char_at(pos, '\n');
-                                                        app.editor.set_cursor_pos(pos + 1);
+                                                        app.editor.insert_newline();
                                                         let _ = app.draw();
                                                     }
                                                     // Alt+Enter: queue as follow-up without
@@ -518,7 +516,8 @@ impl Repl {
                                                         }
                                                     }
                                                     (KeyCode::Char(_), _) | (KeyCode::Backspace, _) | (KeyCode::Delete, _) | (KeyCode::Left, _) | (KeyCode::Right, _) | (KeyCode::Home, _) | (KeyCode::End, _) | (KeyCode::Up, _) | (KeyCode::Down, _) => {
-                                                        app.editor.handle_key_event(k);
+                                                        let lw = app.last_input_width;
+                                                        app.editor.handle_key_event(k, lw);
                                                         let _ = app.draw();
                                                     }
                                                     _ => {}
@@ -1361,9 +1360,10 @@ impl Repl {
             } else {
                 tool_name
             };
+            let canonical_name = cade_agent::tools::manager::canonical_name(base_name);
 
-            let is_mcp_write = cade_agent::tools::is_mcp_write_tool(tool_name, &self.mcp).await;
-            let is_write = cade_core::permissions::is_write_schema(base_name) || is_mcp_write || base_name == "bash";
+            let is_mcp_write = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
+            let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp_write || canonical_name == "bash";
 
             if is_write {
                 write_indices.push(i);
@@ -1610,14 +1610,15 @@ impl Repl {
     async fn sync_plan_tools(&self, enter_plan: bool) {
         let agent_id = self.agent_id.lock().clone();
         
-        let write_tools = ["write_file", "edit_file", "apply_patch", "bash", "desktop_control", "desktop_screenshot"];
-        
         if enter_plan {
             // Strip write tools
             if let Ok(attached) = self.client.get_agent_tools(&agent_id).await {
                 let mut new_ids = Vec::new();
                 for (id, name) in attached {
-                    if !write_tools.contains(&name.as_str()) {
+                    let canonical_name = cade_agent::tools::manager::canonical_name(&name);
+                    let is_mcp = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
+                    let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
+                    if !is_write {
                         new_ids.push(id);
                     }
                 }
@@ -1641,7 +1642,9 @@ impl Repl {
                     // `desktop_control`, `desktop_screenshot` are DESKTOP capability.
                     // We can just add them back if their capability is enabled.
                     
-                    let is_write_tool = write_tools.contains(&t.name.as_str());
+                    let canonical_name = cade_agent::tools::manager::canonical_name(&t.name);
+                    let is_mcp = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
+                    let is_write_tool = cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
                     if !is_write_tool {
                         new_ids.push(t.id);
                     } else {
@@ -1832,11 +1835,12 @@ impl Repl {
         tool_name: &str,
         args: &serde_json::Value,
     ) -> Result<ToolPreflightResult> {
-        let is_mcp_write = cade_agent::tools::is_mcp_write_tool(tool_name, &self.mcp).await;
+        let canonical_name = cade_agent::tools::manager::canonical_name(tool_name);
+        let is_mcp_write = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
 
         // Unified permission resolution
         use cade_core::permissions::Verdict;
-        match self.permissions.resolve(tool_name, args, is_mcp_write) {
+        match self.permissions.resolve(canonical_name, args, is_mcp_write) {
             Verdict::Deny(msg) => {
                 let _ = self
                     .app
