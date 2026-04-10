@@ -9,7 +9,7 @@ use tokio_stream::Stream;
 
 use super::{
     CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
-    bare_model, provider_error, retry_with_backoff,
+    bare_model, provider_error, retry_with_backoff, clean_openai_schema
 };
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
@@ -18,26 +18,6 @@ const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 /// Recursively fix JSON Schema fields that OpenAI rejects.
 /// OpenAI requires every object-type node to have a `properties` field.
 /// Missing `properties` on an object causes a 400 "object schema missing properties".
-fn clean_openai_schema(v: &mut Value) {
-    match v {
-        Value::Object(map) => {
-            if map.get("type").and_then(|t| t.as_str()) == Some("object")
-                && !map.contains_key("properties")
-            {
-                map.insert("properties".to_string(), json!({}));
-            }
-            for val in map.values_mut() {
-                clean_openai_schema(val);
-            }
-        }
-        Value::Array(arr) => {
-            for val in arr.iter_mut() {
-                clean_openai_schema(val);
-            }
-        }
-        _ => {}
-    }
-}
 
 fn needs_max_completion_tokens(model: &str) -> bool {
     let bare = model.to_lowercase();

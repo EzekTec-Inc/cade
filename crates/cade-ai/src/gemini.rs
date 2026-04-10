@@ -12,7 +12,7 @@ use tokio_stream::Stream;
 
 use super::{
     CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
-    bare_model, provider_error, retry_with_backoff,
+    bare_model, provider_error, retry_with_backoff, clean_gemini_schema
 };
 
 /// Recursively strip JSON Schema fields that Gemini's functionDeclarations format rejects.
@@ -23,23 +23,6 @@ use super::{
 ///   - `additionalProperties` — not supported in Gemini's schema dialect
 ///
 /// This function walks the entire Value tree and removes those keys in-place.
-fn clean_gemini_schema(v: &mut Value) {
-    match v {
-        Value::Object(map) => {
-            map.remove("$schema");
-            map.remove("additionalProperties");
-            for val in map.values_mut() {
-                clean_gemini_schema(val);
-            }
-        }
-        Value::Array(arr) => {
-            for val in arr.iter_mut() {
-                clean_gemini_schema(val);
-            }
-        }
-        _ => {}
-    }
-}
 
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_LIST_URL: &str =
