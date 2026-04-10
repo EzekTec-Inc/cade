@@ -256,12 +256,7 @@ impl TuiApp {
             // Alt+Enter  — universal cross-terminal newline.
             // Shift+Enter — kitty keyboard protocol terminals (Kitty, WezTerm, Ghostty).
             // Ctrl+Enter  — Windows Terminal (which reports this as CONTROL+Enter).
-            (KeyCode::Enter, m)
-                if m == KeyModifiers::ALT
-                    || m == KeyModifiers::SHIFT
-                    || m == KeyModifiers::CONTROL
-                    || m == (KeyModifiers::SHIFT | KeyModifiers::ALT)
-                    || m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT) =>
+            (KeyCode::Enter, m) if is_newline_shortcut(m) =>
             {
                 self.editor.insert_newline();
             }
@@ -455,5 +450,29 @@ impl TuiApp {
             }
         }
         Ok(None)
+    }
+}
+
+pub(crate) fn is_newline_shortcut(m: KeyModifiers) -> bool {
+    m == KeyModifiers::ALT
+        || m == KeyModifiers::SHIFT
+        || m == KeyModifiers::CONTROL
+        || m == (KeyModifiers::SHIFT | KeyModifiers::ALT)
+        || m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crossterm::event::KeyModifiers;
+
+    #[test]
+    fn test_is_newline_shortcut() {
+        assert!(is_newline_shortcut(KeyModifiers::SHIFT), "Shift+Enter should be recognized as a newline shortcut");
+        assert!(is_newline_shortcut(KeyModifiers::ALT), "Alt+Enter should be recognized as a newline shortcut");
+        assert!(is_newline_shortcut(KeyModifiers::CONTROL), "Ctrl+Enter should be recognized as a newline shortcut");
+        assert!(is_newline_shortcut(KeyModifiers::SHIFT | KeyModifiers::CONTROL), "Ctrl+Shift+Enter should be recognized");
+        assert!(is_newline_shortcut(KeyModifiers::SHIFT | KeyModifiers::ALT), "Alt+Shift+Enter should be recognized");
+        assert!(!is_newline_shortcut(KeyModifiers::NONE), "Plain Enter should not be recognized as a newline shortcut");
     }
 }
