@@ -50,9 +50,9 @@ pub(crate) const SHORT_BUDGET: usize = 25_000;
 /// Character budget for the long-term archived index (label + 80-char excerpt).
 pub(crate) const LONG_BUDGET: usize = 5_000;
 /// Turns of inactivity before a short-term block is promoted to long-term.
-pub(crate) const STALE_THRESHOLD: i64 = 25;
+pub(crate) const STALE_THRESHOLD: i64 = 80;
 /// Awareness footer appended to system prompt when any memory tier is present.
-pub(crate) const MEMORY_AWARENESS_FOOTER: &str = "\n\nMemory system: blocks idle for 25+ turns are \
+pub(crate) const MEMORY_AWARENESS_FOOTER: &str = "\n\nMemory system: blocks idle for 80+ turns are \
 archived. The Archived Memory section above lists them with label + excerpt only. \
 To retrieve a full archived block, call the `search_memory` tool with a keyword — \
 matched blocks are automatically promoted back to active memory. \
@@ -76,13 +76,6 @@ pub(crate) const MIN_CONTEXT_CHARS: usize = 8_000;
 /// which fully covers Gemini 2 M.  Claude 200 K is unaffected
 /// (200_000 × 3 = 600_000 < cap).
 pub(crate) const MAX_CONTEXT_CHARS: usize = 6_000_000;
-
-/// Maximum character budget for older conversation history.
-/// Limits the sliding window of past turns to prevent models with massive
-/// context windows (e.g. 1M tokens) from causing quadratic API costs by
-/// sending 800+ turns on every request. The most recent turn is always
-/// included regardless of size (allowing large file uploads).
-pub(crate) const MAX_HISTORY_CHARS: usize = 200_000;
 
 /// Fraction of the context window reserved for the model's output (including
 /// reasoning/thinking tokens).  0.15 means 15% of the total window is off-limits

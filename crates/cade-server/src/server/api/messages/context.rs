@@ -165,7 +165,7 @@ pub(crate) async fn build_context(
         &state.db,
         agent_id,
         conversation_id,
-        context_char_budget.min(MAX_HISTORY_CHARS),
+        context_char_budget,
     )
     .unwrap_or_default();
 
