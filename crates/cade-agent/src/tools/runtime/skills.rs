@@ -1,17 +1,9 @@
 use super::*;
-use std::path::PathBuf;
-use std::sync::Arc;
 use serde_json::Value;
 use cade_core::skills::discover_all_skills;
-use cade_core::tool_ids::*;
-use crate::agent::client::HttpTransport;
-use crate::backends::{ExecutionBackend, LocalBackend};
-use crate::mcp::McpManager;
-use crate::tools::git_checkpoint;
-use crate::tools::{dispatch, memory};
 
 impl ToolRuntime {
-    async fn handle_install_skill(&self, args: &Value) -> (String, bool) {
+    pub(crate) async fn handle_install_skill(&self, args: &Value) -> (String, bool) {
         let url = args["url"].as_str().unwrap_or("").trim().to_string();
         let scope = args["scope"].as_str().unwrap_or("project");
         if url.is_empty() {
@@ -36,7 +28,7 @@ impl ToolRuntime {
         }
     }
 
-    async fn handle_run_skill_script(&self, args: &Value) -> (String, bool) {
+    pub(crate) async fn handle_run_skill_script(&self, args: &Value) -> (String, bool) {
         let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
         let script = args["script"].as_str().unwrap_or("").trim().to_string();
         let script_args: Vec<String> = args["args"]
@@ -91,7 +83,7 @@ impl ToolRuntime {
         }
     }
 
-    fn handle_load_skill_ref(&self, args: &Value) -> (String, bool) {
+    pub(crate) fn handle_load_skill_ref(&self, args: &Value) -> (String, bool) {
         let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
         let doc = args["doc"].as_str().unwrap_or("").trim().to_string();
 

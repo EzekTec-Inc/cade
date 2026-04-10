@@ -1,17 +1,8 @@
 use super::*;
-use std::path::PathBuf;
-use std::sync::Arc;
 use serde_json::Value;
-use cade_core::skills::discover_all_skills;
-use cade_core::tool_ids::*;
-use crate::agent::client::HttpTransport;
-use crate::backends::{ExecutionBackend, LocalBackend};
-use crate::mcp::McpManager;
-use crate::tools::git_checkpoint;
-use crate::tools::{dispatch, memory};
 
 impl ToolRuntime {
-    async fn handle_bash_via_backend(&self, args: &Value) -> (String, bool) {
+    pub(crate) async fn handle_bash_via_backend(&self, args: &Value) -> (String, bool) {
         let command = args["command"].as_str().unwrap_or("").to_string();
         let timeout_secs = args["timeout"].as_u64().unwrap_or(120);
 
@@ -36,7 +27,7 @@ impl ToolRuntime {
         }
     }
 
-    async fn handle_read_via_backend(&self, args: &Value) -> (String, bool) {
+    pub(crate) async fn handle_read_via_backend(&self, args: &Value) -> (String, bool) {
         let path_str = args["path"].as_str().unwrap_or("").trim().to_string();
         if path_str.is_empty() {
             return ("Error: 'path' is required".to_string(), true);

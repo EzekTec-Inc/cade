@@ -1,17 +1,8 @@
 use super::*;
-use std::path::PathBuf;
-use std::sync::Arc;
 use serde_json::Value;
-use cade_core::skills::discover_all_skills;
-use cade_core::tool_ids::*;
-use crate::agent::client::HttpTransport;
-use crate::backends::{ExecutionBackend, LocalBackend};
-use crate::mcp::McpManager;
-use crate::tools::git_checkpoint;
-use crate::tools::{dispatch, memory};
 
 impl ToolRuntime {
-    async fn handle_message_agent(&self, args: &Value) -> (String, bool) {
+    pub(crate) async fn handle_message_agent(&self, args: &Value) -> (String, bool) {
         let target = args["target"].as_str().unwrap_or("").trim().to_string();
         let message = args["message"].as_str().unwrap_or("").to_string();
 

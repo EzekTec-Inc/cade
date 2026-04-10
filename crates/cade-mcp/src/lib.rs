@@ -681,11 +681,15 @@ impl McpManager {
                     true // conservative default
                 };
 
-                let schema = json!({
+                let mut schema = json!({
                     "name":        prefixed,
                     "description": description,
                     "parameters":  parameters,
                 });
+
+                if config.core_server {
+                    schema["_is_core"] = json!(true);
+                }
 
                 McpToolSchema {
                     server_key: key.to_string(),

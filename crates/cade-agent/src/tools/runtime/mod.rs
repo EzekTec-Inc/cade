@@ -23,7 +23,7 @@ use cade_core::tool_ids::*;
 use crate::agent::client::HttpTransport;
 use crate::backends::{ExecutionBackend, LocalBackend};
 use crate::mcp::McpManager;
-use crate::tools::git_checkpoint;
+// use crate::tools::git_checkpoint;
 use crate::tools::dispatch;
 use crate::tools::memory as store_memory;
 
@@ -138,7 +138,7 @@ impl ToolRuntime {
         let canonical = canonical_owned.as_str();
 
         let t0 = std::time::Instant::now();
-        let (output, is_error) = match canonical {
+        let (output, is_error): (String, bool) = match canonical {
             // -- Memory tools (intercepted; use REST client)
             UPDATE_MEMORY => self.handle_update_memory(args).await,
             MEMORY_APPLY_PATCH => self.handle_memory_apply_patch(args).await,

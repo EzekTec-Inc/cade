@@ -348,6 +348,20 @@ pub(crate) async fn build_context(
     // Tool schemas — use agent-specific tools if wired, else all tools
     let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, agent_id).unwrap_or_default();
     let all_tools = sqlite::list_tools(&state.db).unwrap_or_default();
+    let budget_exhausted = omitted_turns > 0;
+
+    let mut recently_used = std::collections::HashSet::new();
+    if budget_exhausted {
+        let recent_start = messages.len().saturating_sub(RECENT_WINDOW);
+        for msg in &messages[recent_start..] {
+            if let Some(calls) = &msg.tool_calls {
+                for tc in calls {
+                    recently_used.insert(tc.name.as_str());
+                }
+            }
+        }
+    }
+
     let tool_schemas: Vec<Value> = if agent_tool_ids.is_empty() {
         // Not yet wired → provide all registered tools (backwards-compatible)
         all_tools
@@ -358,48 +372,35 @@ pub(crate) async fn build_context(
         all_tools
             .into_iter()
             .filter(|t| agent_tool_ids.contains(&t.id))
-            .filter_map(|t| t.json_schema)
-            .collect()
-    };
-
-    // Lazy tool schema pruning: MCP tools (identified by the `__` namespace
-    // separator, e.g. `github__create_branch`) are pruned from the schema unless
-    // they were called in the recent message window.  This prevents 60-100+ MCP
-    // tool schemas from consuming ~20K tokens on every turn.
-    //
-    // Native tools (bash, read_file, etc.) are never pruned.
-    // ALWAYS_INCLUDE_TOOL_NAMES are never pruned.
-    //
-    // Pruning activates after MCP_PRUNE_AFTER messages to give the LLM a few
-    // turns to discover available tools before they start getting dropped.
-    const MCP_PRUNE_AFTER: usize = 5;
-    let tool_schemas: Vec<Value> = if messages.len() > MCP_PRUNE_AFTER {
-        // Collect tool names called in the recent window.
-        let recent_start = messages.len().saturating_sub(RECENT_WINDOW);
-        let mut recently_used: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for msg in &messages[recent_start..] {
-            if let Some(calls) = &msg.tool_calls {
-                for tc in calls {
-                    recently_used.insert(tc.name.as_str());
-                }
-            }
-        }
-        tool_schemas
-            .into_iter()
-            .filter(|schema| {
+            .filter_map(|t| {
+                let schema = t.json_schema?;
+                let is_core = t.tags.contains(&"core_mcp".to_string());
+                
                 let name = schema["name"].as_str().unwrap_or("");
+                
                 // Memory/retrieval tools are always included.
                 if ALWAYS_INCLUDE_TOOL_NAMES.contains(&name) {
-                    return true;
+                    return Some(schema);
                 }
-                // MCP tools use "server__tool" naming convention.
-                // Prune them unless recently used.
+                
+                // Native tools are never pruned (no "__" in name).
                 let is_mcp = name.contains("__");
-                !is_mcp || recently_used.contains(name)
+                if !is_mcp || is_core {
+                    return Some(schema);
+                }
+                
+                // If budget is NOT exhausted, keep all MCP tools
+                if !budget_exhausted {
+                    return Some(schema);
+                }
+                
+                if recently_used.contains(name) {
+                    Some(schema)
+                } else {
+                    None
+                }
             })
             .collect()
-    } else {
-        tool_schemas
     };
 
     // ── Intelligent tool selection ────────────────────────────────────────────

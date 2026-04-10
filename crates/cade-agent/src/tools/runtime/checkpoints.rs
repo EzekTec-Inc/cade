@@ -1,17 +1,9 @@
 use super::*;
-use std::path::PathBuf;
-use std::sync::Arc;
 use serde_json::Value;
-use cade_core::skills::discover_all_skills;
-use cade_core::tool_ids::*;
-use crate::agent::client::HttpTransport;
-use crate::backends::{ExecutionBackend, LocalBackend};
-use crate::mcp::McpManager;
 use crate::tools::git_checkpoint;
-use crate::tools::{dispatch, memory};
 
 impl ToolRuntime {
-    async fn handle_create_checkpoint(&self, args: &Value) -> (String, bool) {
+    pub(crate) async fn handle_create_checkpoint(&self, args: &Value) -> (String, bool) {
         let label = args["label"]
             .as_str()
             .unwrap_or("checkpoint")
@@ -58,7 +50,7 @@ impl ToolRuntime {
         }
     }
 
-    async fn handle_restore_checkpoint(&self, args: &Value) -> (String, bool) {
+    pub(crate) async fn handle_restore_checkpoint(&self, args: &Value) -> (String, bool) {
         let cp_id = args["checkpoint_id"]
             .as_str()
             .unwrap_or("")

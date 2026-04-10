@@ -22,7 +22,7 @@ impl Repl {
             } else {
                 self.tui_hdr("  Hooks");
                 self.tui_blank();
-                let show_section = |name: &str, entries: &[cade_core::settings::manager::HookEntry]| {
+                let show_section = |name: &str, entries: &[cade_core::settings::HookEntry]| {
                     if !entries.is_empty() {
                         self.tui_hdr(format!("  {name}  ({}):", entries.len()));
                         for entry in entries {

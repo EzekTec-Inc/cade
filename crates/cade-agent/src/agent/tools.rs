@@ -16,20 +16,30 @@ pub async fn register_mcp_tools(client: &HttpTransport, schemas: Vec<Value>) -> 
 
     let mut registered = Vec::new();
 
-    for schema in schemas {
+    for mut schema in schemas {
         let name = schema["name"].as_str().unwrap_or("").to_string();
         let description = schema["description"].as_str().unwrap_or("").to_string();
+        
+        let is_core = schema["_is_core"].as_bool().unwrap_or(false);
+        if let Some(obj) = schema.as_object_mut() {
+            obj.remove("_is_core");
+        }
 
         if name.is_empty() {
             continue;
         }
 
         let stub = build_python_stub_from_schema(&name, &description, &schema["parameters"]);
+        let mut tags = vec!["cade".to_string(), "mcp".to_string()];
+        if is_core {
+            tags.push("core_mcp".to_string());
+        }
+        
         let req = CreateToolRequest {
             source_code: stub,
             source_type: "python".to_string(),
             json_schema: Some(schema),
-            tags: vec!["cade".to_string(), "mcp".to_string()],
+            tags,
         };
         match client.create_tool(req).await {
             Ok(tool) => {

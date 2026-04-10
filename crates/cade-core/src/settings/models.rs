@@ -64,6 +64,9 @@ pub struct McpServerConfig {
     /// If true, skip this server on startup (disabled without removing the entry).
     #[serde(default)]
     pub disabled: bool,
+    /// If true, tools from this server are considered "core" and never pruned from the LLM context.
+    #[serde(default)]
+    pub core_server: bool,
 }
 
 /// Global settings stored in ~/.cade/settings.json

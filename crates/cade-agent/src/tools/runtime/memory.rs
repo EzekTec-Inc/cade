@@ -1,17 +1,8 @@
 use super::*;
-use std::path::PathBuf;
-use std::sync::Arc;
 use serde_json::Value;
-use cade_core::skills::discover_all_skills;
-use cade_core::tool_ids::*;
-use crate::agent::client::HttpTransport;
-use crate::backends::{ExecutionBackend, LocalBackend};
-use crate::mcp::McpManager;
-use crate::tools::git_checkpoint;
-use crate::tools::{dispatch, memory};
 
 impl ToolRuntime {
-    async fn handle_update_memory(&self, args: &Value) -> (String, bool) {
+    pub(crate) async fn handle_update_memory(&self, args: &Value) -> (String, bool) {
         let label = args["label"].as_str().unwrap_or("").trim().to_string();
         let value = args["value"].as_str().unwrap_or("").to_string();
         let operation = args["operation"].as_str().unwrap_or("set");
@@ -84,7 +75,7 @@ impl ToolRuntime {
         }
     }
 
-    async fn handle_memory_apply_patch(&self, args: &Value) -> (String, bool) {
+    pub(crate) async fn handle_memory_apply_patch(&self, args: &Value) -> (String, bool) {
         let label = args["label"].as_str().unwrap_or("").trim().to_string();
         let patch = args["patch"].as_str().unwrap_or("").to_string();
         let description = args["description"].as_str().map(String::from);
@@ -123,7 +114,7 @@ impl ToolRuntime {
         }
     }
 
-    async fn handle_store_artifact(&self, args: &Value) -> (String, bool) {
+    pub(crate) async fn handle_store_artifact(&self, args: &Value) -> (String, bool) {
         let kind = args["kind"].as_str().unwrap_or("other");
         let content = args["content"].as_str().unwrap_or("");
         let label = args["label"].as_str().unwrap_or("");
@@ -156,7 +147,7 @@ impl ToolRuntime {
         }
     }
 
-    async fn handle_update_memory_typed(&self, args: &Value) -> (String, bool) {
+    pub(crate) async fn handle_update_memory_typed(&self, args: &Value) -> (String, bool) {
         let label = args["label"].as_str().unwrap_or("").trim().to_string();
         let value = args["value"].as_str().unwrap_or("").to_string();
         let memory_type = args["memory_type"].as_str().unwrap_or("generic");
@@ -198,7 +189,7 @@ impl ToolRuntime {
         }
     }
 
-    async fn handle_link_memory_evidence(&self, args: &Value) -> (String, bool) {
+    pub(crate) async fn handle_link_memory_evidence(&self, args: &Value) -> (String, bool) {
         let label = args["label"].as_str().unwrap_or("").trim().to_string();
         let kind = args["kind"].as_str().unwrap_or("user_assertion");
         let reference = args["reference"].as_str().unwrap_or("").trim().to_string();

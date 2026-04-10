@@ -65,7 +65,7 @@ impl PermissionManager {
 
     /// Clear all rules, then load new ones from the given settings.
     /// Note: This resets any session-level allow rules.
-    pub fn reload_from_settings(&self, settings: &crate::settings::manager::PermissionSettings) {
+    pub fn reload_from_settings(&self, settings: &crate::settings::models::PermissionSettings) {
         self.allow_rules.lock().clear();
         self.deny_rules.lock().clear();
         for raw in &settings.allow {

@@ -109,7 +109,8 @@ impl Repl {
                 };
                 if save {
                     let mut settings = self.settings.lock();
-                    match settings.save_allow_rule(&pattern) {
+                    let res: std::result::Result<(), cade_core::Error> = settings.save_allow_rule(&pattern);
+                    match res {
                         Ok(_) => self.tui_ok("  ✓ Saved"),
                         Err(e) => self.tui_err(e.to_string()),
                     }
@@ -166,7 +167,8 @@ impl Repl {
                 };
                 if save {
                     let mut settings = self.settings.lock();
-                    match settings.save_deny_rule(&pattern) {
+                    let res: std::result::Result<(), cade_core::Error> = settings.save_deny_rule(&pattern);
+                    match res {
                         Ok(_) => self.tui_ok("  ✓ Saved"),
                         Err(e) => self.tui_err(e.to_string()),
                     }
