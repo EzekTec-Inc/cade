@@ -104,7 +104,9 @@ impl Repl {
             // Auto-reprompt: if the LLM produced nothing at all this entire turn,
             // inject a single follow-up user message so it knows it must respond.
             // `reprompt_done` guards against infinite loops — we only inject once.
-            if assistant_msg.trim().is_empty() && !reprompt_done {
+            // If `messages` is empty, it means the stream failed (e.g. HTTP 429 error)
+            // and we should NOT reprompt.
+            if assistant_msg.trim().is_empty() && !messages.is_empty() && !reprompt_done {
                 tracing::warn!("Empty agent response after tool return — injecting re-prompt");
                 let _ = self
                     .app

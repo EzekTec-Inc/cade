@@ -95,10 +95,16 @@ pub async fn fetch_openai_chat_models(api_key: &str) -> Vec<String> {
 
 pub async fn fetch_model_ids(models_url: &str, api_key: &str) -> Vec<String> {
     let client = Client::new();
-    let req = client
+    let mut req_builder = client
         .get(models_url)
-        .header("Authorization", format!("Bearer {api_key}"))
-        .send();
+        .header("Authorization", format!("Bearer {api_key}"));
+    
+    if models_url.contains("openrouter.ai") {
+        req_builder = req_builder
+            .header("HTTP-Referer", "https://github.com/EzekTec-Inc/CADE")
+            .header("X-Title", "CADE");
+    }
+    let req = req_builder.send();
     let resp = match tokio::time::timeout(std::time::Duration::from_secs(5), req).await {
         Ok(Ok(r)) => r,
         Ok(Err(_)) | Err(_) => return vec![],
@@ -140,13 +146,20 @@ pub struct OpenAiProvider {
 
 impl OpenAiProvider {
     pub fn new(api_key: String, base_url: Option<String>) -> Self {
+        let base = base_url.unwrap_or_else(|| OPENAI_URL.to_string());
+        let mut builder = Client::builder()
+            .tcp_keepalive(std::time::Duration::from_secs(60));
+        
+        if base.contains("openrouter.ai") {
+            let mut headers = reqwest::header::HeaderMap::new();
+            headers.insert("HTTP-Referer", reqwest::header::HeaderValue::from_static("https://github.com/EzekTec-Inc/CADE"));
+            headers.insert("X-Title", reqwest::header::HeaderValue::from_static("CADE"));
+            builder = builder.default_headers(headers);
+        }
         Self {
-            client: Client::builder()
-                .tcp_keepalive(std::time::Duration::from_secs(60))
-                .build()
-                .unwrap_or_else(|_| Client::new()),
+            client: builder.build().unwrap_or_else(|_| Client::new()),
             api_key,
-            base_url: base_url.unwrap_or_else(|| OPENAI_URL.to_string()),
+            base_url: base,
         }
     }
 
@@ -209,7 +222,14 @@ impl OpenAiProvider {
             .unwrap_or("stop")
             .to_string();
         let msg = &choice["message"];
-        let content = msg["content"].as_str().map(|s| s.to_string());
+        let mut content = msg["content"].as_str().filter(|s| !s.is_empty()).map(|s| s.to_string());
+        if let Some(reasoning) = msg["reasoning"].as_str().filter(|s| !s.is_empty()) {
+            if let Some(c) = &mut content {
+                *c = format!("<reasoning>\n{}\n</reasoning>\n\n{}", reasoning, c);
+            } else {
+                content = Some(format!("<reasoning>\n{}\n</reasoning>", reasoning));
+            }
+        }
         let tool_calls: Vec<LlmToolCall> = msg["tool_calls"]
             .as_array()
             .unwrap_or(&vec![])
@@ -365,7 +385,11 @@ impl OpenAiProvider {
 #[async_trait]
 impl LlmProvider for OpenAiProvider {
     async fn complete(&self, req: &CompletionRequest) -> Result<CompletionResponse> {
-        let bare_model_id = bare_model(&req.model);
+        let bare_model_id = if self.base_url == OPENAI_URL {
+            bare_model(&req.model)
+        } else {
+            &req.model
+        };
         let use_responses = needs_responses_api(bare_model_id) && self.base_url == OPENAI_URL;
 
         if use_responses {
@@ -429,6 +453,9 @@ impl LlmProvider for OpenAiProvider {
         {
             body["reasoning_effort"] = effort.clone().into();
         }
+        if self.base_url.contains("openrouter.ai") {
+            body["include_reasoning"] = true.into();
+        }
 
         retry_with_backoff(
             "OpenAI::complete",
@@ -462,7 +489,11 @@ impl LlmProvider for OpenAiProvider {
         req: &CompletionRequest,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamChunk>> + Send>>> {
         let req_model = req.model.clone();
-        let bare_model_id = bare_model(&req_model);
+        let bare_model_id = if self.base_url == OPENAI_URL {
+            bare_model(&req_model)
+        } else {
+            &req_model
+        };
         let use_responses = needs_responses_api(bare_model_id) && self.base_url == OPENAI_URL;
 
         if use_responses {
@@ -517,17 +548,19 @@ impl LlmProvider for OpenAiProvider {
                     buf.extend_from_slice(&chunk);
 
                     let mut start = 0;
-                    while let Some((pos, len)) = {
-                        let mut earliest = None;
-                        if let Some(p) = buf[start..].windows(2).position(|w| w == b"\n\n") {
-                            earliest = Some((p, 2));
-                        }
-                        if let Some(p) = buf[start..].windows(4).position(|w| w == b"\r\n\r\n")
-                            && earliest.is_none_or(|(ep, _)| p < ep) {
-                                earliest = Some((p, 4));
+                    while start < buf.len() {
+                        let Some((pos, len)) = ({
+                            let slice = &buf[start..];
+                            let mut earliest = None;
+                            if let Some(p) = slice.windows(2).position(|w| w == b"\n\n") {
+                                earliest = Some((p, 2));
                             }
-                        earliest
-                    } {
+                            if let Some(p) = slice.windows(4).position(|w| w == b"\r\n\r\n")
+                                && earliest.is_none_or(|(ep, _)| p < ep) {
+                                    earliest = Some((p, 4));
+                                }
+                            earliest
+                        }) else { break };
                         let end = start + pos;
                         let next_start = end + len;
 
@@ -649,6 +682,9 @@ impl LlmProvider for OpenAiProvider {
         {
             body["reasoning_effort"] = effort.clone().into();
         }
+        if self.base_url.contains("openrouter.ai") {
+            body["include_reasoning"] = true.into();
+        }
 
         let resp = retry_with_backoff(
             "OpenAI::stream",
@@ -691,7 +727,8 @@ impl LlmProvider for OpenAiProvider {
                 buf.extend_from_slice(&chunk);
 
                 let mut start = 0;
-                while let Some(pos) = buf[start..].iter().position(|&b| b == b'\n') {
+                while start <= buf.len() {
+                    let Some(pos) = buf.get(start..).and_then(|s| s.iter().position(|&b| b == b'\n')) else { break };
                     let end = start + pos;
                     if let Ok(line_str) = std::str::from_utf8(&buf[start..end]) {
                         let line = line_str.trim();
@@ -716,6 +753,8 @@ impl LlmProvider for OpenAiProvider {
 
                     if let Some(text) = delta["content"].as_str()
                         && !text.is_empty() { yield Ok(StreamChunk::Text(text.to_string())); }
+                    if let Some(reasoning) = delta["reasoning"].as_str()
+                        && !reasoning.is_empty() { yield Ok(StreamChunk::Reasoning(reasoning.to_string())); }
                     if let Some(tcs) = delta["tool_calls"].as_array() {
                         for tc in tcs {
                             // `index` distinguishes parallel tool calls in one stream
@@ -767,9 +806,9 @@ impl LlmProvider for OpenAiProvider {
                         }
                         start = end + 1;
                     }
-                    if start > 0 {
-                        buf.drain(..start);
-                    }
+                }
+                if start > 0 {
+                    buf.drain(..start);
                 }
             }
             // Byte stream exhausted without explicit [DONE] — always send Done

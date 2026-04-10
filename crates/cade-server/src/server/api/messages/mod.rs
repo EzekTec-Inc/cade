@@ -485,7 +485,7 @@ pub async fn stream_message(
         }
     };
 
-    let acc = std::sync::Arc::new(std::sync::Mutex::new((String::new(), Vec::<Value>::new())));
+    let acc = std::sync::Arc::new(std::sync::Mutex::new((String::new(), Vec::<Value>::new(), String::new())));
     let acc_clone = acc.clone();
     // Accumulate token usage across chunks
     let usage_acc = std::sync::Arc::new(std::sync::Mutex::new(TokenUsage::default()));
@@ -522,6 +522,9 @@ pub async fn stream_message(
 
             let event = match chunk {
                 Ok(StreamChunk::Reasoning(text)) => {
+                    if let Ok(mut g) = acc_clone.lock() {
+                        g.2.push_str(&text);
+                    }
                     emit(json!({ "message_type": "reasoning_message", "reasoning": text }))
                 }
                 Ok(StreamChunk::Text(text)) => {
@@ -565,14 +568,18 @@ pub async fn stream_message(
                         // Skip persisting empty assistant responses — they clutter
                         // the conversation and produce invalid turn ordering on
                         // next context load (e.g. Gemini consecutive-user-turn 400).
-                        if !g.0.is_empty() || !g.1.is_empty() {
+                        if !g.0.is_empty() || !g.1.is_empty() || !g.2.is_empty() {
+                            let mut content = g.0.clone();
+                            if !g.2.is_empty() {
+                                content = format!("<reasoning>\n{}\n</reasoning>\n\n{}", g.2, content);
+                            }
                             persist(
                                 &state_clone,
                                 &agent_id_clone,
                                 conv_id_clone.as_deref(),
                                 "assistant",
                                 json!({
-                                    "content": g.0,
+                                    "content": content,
                                     "tool_calls": g.1
                                 }),
                             );

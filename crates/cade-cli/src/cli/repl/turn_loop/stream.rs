@@ -119,7 +119,6 @@ impl Repl {
         let ui_task = tokio::spawn(async move {
             let mut ui_rx = ui_rx;
             let mut in_reasoning = false;
-            let mut in_assistant = false;
             while let Some(msg) = ui_rx.recv().await {
                 match msg.msg_type() {
                     "reasoning_message" => {
@@ -136,7 +135,6 @@ impl Repl {
                             assistant_buf.lock().push_str(text);
                             if !text.is_empty() {
                                 in_reasoning = false;
-                                in_assistant = true;
                                 let line_count = {
                                     let mut app = app_arc.lock();
                                     app.commit_reasoning_inner();
@@ -163,7 +161,6 @@ impl Repl {
                             app.commit_reasoning_inner();
                             let _ = app.commit_streaming();
                         }
-                        in_assistant = false;
                         if let Some(bar) = &bar_text_arc {
                             let tool_name = msg.data["tool_calls"][0]["function"]["name"]
                                 .as_str()
@@ -245,8 +242,10 @@ impl Repl {
                     _ => {}
                 }
             }
-            // Channel closed — suppress unused-variable warnings.
-            let _ = (in_reasoning, in_assistant);
+            // Channel closed — flush any pending reasoning if no assistant message arrived
+            if in_reasoning {
+                let _ = app_arc.lock().commit_reasoning();
+            }
         });
 
         // -- Streaming call (network I/O — on_event never touches TuiApp)
