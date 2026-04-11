@@ -216,6 +216,8 @@ pub async fn resolve_agent_and_conversation(
         match client.create_conversation(&agent.id, "").await {
             Ok(conv) => {
                 let cid = conv["id"].as_str().unwrap_or("").to_string();
+                // Clear the working_set memory block so the agent forgets the previous task
+                let _ = client.delete_memory(&agent.id, "working_set").await;
                 session
                     .set_conversation(Some(cid.clone()))
                     .map_err(|e| Error::custom(format!("save conversation: {e}")))?;
@@ -250,6 +252,8 @@ pub async fn resolve_agent_and_conversation(
                         .await
                         .map_err(|e| Error::custom(format!("create conversation: {e}")))?;
                     let cid = conv["id"].as_str().unwrap_or("").to_string();
+                    // Clear the working_set memory block so the agent forgets the previous task
+                    let _ = client.delete_memory(&agent.id, "working_set").await;
                     session
                         .set_conversation(Some(cid.clone()))
                         .map_err(|e| Error::custom(format!("save conversation: {e}")))?;

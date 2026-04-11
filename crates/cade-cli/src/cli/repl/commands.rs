@@ -267,6 +267,8 @@ impl Repl {
                 match self.client.create_conversation(&agent_id, "").await {
                     Ok(conv) => {
                         let cid = conv["id"].as_str().unwrap_or("").to_string();
+                        // Clear the working_set memory block so the agent forgets the previous task
+                        let _ = self.client.delete_memory(&agent_id, "working_set").await;
                         *self.conversation_id.lock() =
                             Some(cid.clone());
                         { let mut s = self.session.lock();
