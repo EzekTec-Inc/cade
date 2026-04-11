@@ -49,7 +49,6 @@ use crossterm::event::{
     KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
     PushKeyboardEnhancementFlags,
 };
-use crossterm::terminal::supports_keyboard_enhancement;
 use ratatui::{
     DefaultTerminal, Frame,
     layout::Rect,
@@ -397,12 +396,18 @@ impl TuiApp {
             EnableBracketedPaste,
             EnableFocusChange
         );
-        if supports_keyboard_enhancement().unwrap_or(false) {
-            let _ = crossterm::execute!(
-                std::io::stdout(),
-                PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES)
-            );
-        }
+        // Many terminals (including Ghostty and WezTerm in some configs) fail to respond
+        // to `supports_keyboard_enhancement()` within the timeout, or the user's setup
+        // swallows the query. Unrecognized escape codes are safely ignored by VT100
+        // terminals, so we unconditionally push the enhancement flags to ensure
+        // Shift+Enter works where supported.
+        let _ = crossterm::execute!(
+            std::io::stdout(),
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                    | KeyboardEnhancementFlags::REPORT_ALL_KEYS_AS_ESCAPE_CODES
+            )
+        );
         Self {
             terminal,
             lines: Vec::new(),
@@ -624,9 +629,7 @@ impl TuiApp {
 
 impl Drop for TuiApp {
     fn drop(&mut self) {
-        if supports_keyboard_enhancement().unwrap_or(false) {
-            let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
-        }
+        let _ = crossterm::execute!(std::io::stdout(), PopKeyboardEnhancementFlags);
         let _ = crossterm::execute!(
             std::io::stdout(),
             DisableBracketedPaste,

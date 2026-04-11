@@ -453,7 +453,7 @@ impl TuiApp {
     }
 }
 
-pub(crate) fn is_newline_shortcut(m: KeyModifiers) -> bool {
+pub fn is_newline_shortcut(m: KeyModifiers) -> bool {
     m == KeyModifiers::ALT
         || m == KeyModifiers::SHIFT
         || m == KeyModifiers::CONTROL
