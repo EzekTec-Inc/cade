@@ -242,3 +242,14 @@ impl<'a> Editor<'a> {
         }
     }
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_textarea_newline() {
+        let mut e = Editor::new();
+        e.insert_newline();
+        assert_eq!(e.text(), "\n");
+    }
+}

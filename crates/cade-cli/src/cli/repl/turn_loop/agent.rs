@@ -203,12 +203,29 @@ impl Repl {
                                                             }
                                                         }
                                                     }
-                                                    // Multi-line input (mirrors idle-mode behaviour).
+                                                    // Shift+Enter: insert newline at cursor for
+                                                    // multi-line input (mirrors idle-mode behaviour).
                                                     (KeyCode::Enter, m)
-                                                        if cade_tui::app::input::is_newline_shortcut(m) =>
+                                                        if m == KeyModifiers::SHIFT =>
                                                     {
                                                         app.editor.insert_newline();
                                                         let _ = app.draw();
+                                                    }
+                                                    // Alt+Enter: queue as follow-up without
+                                                    // cancelling the current turn.
+                                                    (KeyCode::Enter, m)
+                                                        if m == KeyModifiers::ALT
+                                                        || m == (KeyModifiers::SHIFT | KeyModifiers::ALT) =>
+                                                    {
+                                                        app.editor.expand_pastes();
+                                                        let msg = app.editor.text().trim().to_string();
+                                                        if !msg.is_empty() {
+                                                            tick_queued_followup.lock().push_back(msg);
+                                                            app.queued_count = tick_queued_followup.lock().len();
+                                                            app.editor.clear();
+                                                            app.editor.set_cursor_pos(0);
+                                                            let _ = app.draw();
+                                                        }
                                                     }
                                                     (KeyCode::Esc, _) => {
                                                         // Ignore Esc events that arrive within
