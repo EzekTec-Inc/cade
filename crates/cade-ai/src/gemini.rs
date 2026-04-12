@@ -12,7 +12,7 @@ use tokio_stream::Stream;
 
 use super::{
     CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
-    bare_model, provider_error, retry_with_backoff, clean_gemini_schema
+    bare_model, provider_error, retry_with_backoff, clean_gemini_schema, inline_schema_refs
 };
 
 /// Recursively strip JSON Schema fields that Gemini's functionDeclarations format rejects.
@@ -626,6 +626,7 @@ impl LlmProvider for GeminiProvider {
                     .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
                     .cloned()
                     .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
+                inline_schema_refs(&mut params);
                 clean_gemini_schema(&mut params);
                 json!({
                     "name": s["name"],
@@ -679,6 +680,7 @@ impl LlmProvider for GeminiProvider {
                     .or_else(|| s.get("input_schema").filter(|v| !v.is_null()))
                     .cloned()
                     .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
+                inline_schema_refs(&mut params);
                 clean_gemini_schema(&mut params);
                 json!({"name": s["name"], "description": s["description"], "parameters": params})
             })

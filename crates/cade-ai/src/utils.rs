@@ -107,12 +107,86 @@ pub fn clean_openai_schema(v: &mut Value) {
     }
 }
 
-/// Recursively fix JSON Schema fields that Gemini rejects.
+/// Resolve all local `#/$defs/<Name>` JSON Schema references by inlining the
+/// referenced definition.  Must be called **before** `clean_gemini_schema` —
+/// stripping `$defs` first would leave dangling `$ref` pointers.
+///
+/// Only handles local `#/$defs/...` refs.  External URL refs are left as-is
+/// and will be stripped by `clean_gemini_schema`.
+pub fn inline_schema_refs(v: &mut Value) {
+    let defs = match v
+        .as_object()
+        .and_then(|m| m.get("$defs"))
+        .and_then(|d| d.as_object())
+    {
+        Some(d) => d.clone(),
+        None => return,
+    };
+    inline_refs_with_defs(v, &defs, 0);
+}
+
+/// Recursive workhorse for `inline_schema_refs`.  `depth` guards against
+/// circular `$ref` chains — bails at depth > 10 to prevent stack overflow.
+fn inline_refs_with_defs(v: &mut Value, defs: &serde_json::Map<String, Value>, depth: u32) {
+    if depth > 10 {
+        return;
+    }
+    match v {
+        Value::Object(map) => {
+            // Clone the ref string to release the immutable borrow on `map`
+            // before we mutate `*v`.
+            if let Some(ref_str) = map.get("$ref").and_then(|r| r.as_str()).map(String::from) {
+                if let Some(type_name) = ref_str.strip_prefix("#/$defs/") {
+                    if let Some(def) = defs.get(type_name) {
+                        *v = def.clone();
+                        inline_refs_with_defs(v, defs, depth + 1);
+                        return;
+                    }
+                }
+            }
+            for val in map.values_mut() {
+                inline_refs_with_defs(val, defs, depth);
+            }
+        }
+        Value::Array(arr) => {
+            for val in arr.iter_mut() {
+                inline_refs_with_defs(val, defs, depth);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Recursively strip JSON Schema fields that Gemini's `functionDeclarations`
+/// format rejects.
+///
+/// Gemini accepts a strict subset of JSON Schema.  The following cause 400s:
+/// - `$schema`, `$ref`, `$defs`  — JSON Schema meta/reference fields
+/// - `additionalProperties`      — not supported in Gemini function schemas
+/// - `nullable`                  — defensive; not confirmed to cause errors
+/// - `x-google-*`               — Google API extension annotations (e.g.
+///   `x-google-identifier`, `x-google-enum-descriptions`) that appear in MCP
+///   tool schemas from Google services like Stitch
+///
+/// Call `inline_schema_refs` first to resolve `$ref` pointers before stripping
+/// `$defs`.
 pub fn clean_gemini_schema(v: &mut Value) {
     match v {
         Value::Object(map) => {
             map.remove("$schema");
+            map.remove("$ref");
+            map.remove("$defs");
             map.remove("additionalProperties");
+            map.remove("nullable");
+            // Strip all x-google-* extension fields
+            let x_google_keys: Vec<String> = map
+                .keys()
+                .filter(|k| k.starts_with("x-google-"))
+                .cloned()
+                .collect();
+            for k in x_google_keys {
+                map.remove(&k);
+            }
             for val in map.values_mut() {
                 clean_gemini_schema(val);
             }

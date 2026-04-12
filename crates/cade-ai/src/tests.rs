@@ -399,3 +399,211 @@ fn provider_from_row_unknown() {
     let p = LlmRouter::provider_from_row("unknown-provider", None, None, &config);
     assert!(p.is_none());
 }
+
+// -- inline_schema_refs
+
+#[test]
+fn inline_schema_refs_resolves_single_ref() {
+    let mut schema = json!({
+        "$defs": {
+            "Foo": {
+                "type": "object",
+                "properties": { "bar": { "type": "string" } }
+            }
+        },
+        "type": "object",
+        "properties": {
+            "item": { "$ref": "#/$defs/Foo" }
+        }
+    });
+    inline_schema_refs(&mut schema);
+
+    // $ref replaced with Foo's definition
+    let item = &schema["properties"]["item"];
+    assert_eq!(item["type"], "object");
+    assert!(item["properties"]["bar"].is_object());
+    // $ref itself is gone from the inlined property
+    assert!(item.get("$ref").is_none());
+}
+
+#[test]
+fn inline_schema_refs_resolves_nested_chain() {
+    // Mirrors real Stitch pattern: DesignSystem → DesignTheme → Typography
+    let mut schema = json!({
+        "$defs": {
+            "Typography": {
+                "type": "object",
+                "properties": { "fontSize": { "type": "string" } }
+            },
+            "DesignTheme": {
+                "type": "object",
+                "properties": {
+                    "font": { "$ref": "#/$defs/Typography" }
+                }
+            },
+            "DesignSystem": {
+                "type": "object",
+                "properties": {
+                    "theme": { "$ref": "#/$defs/DesignTheme" }
+                }
+            }
+        },
+        "type": "object",
+        "properties": {
+            "designSystem": { "$ref": "#/$defs/DesignSystem" }
+        }
+    });
+    inline_schema_refs(&mut schema);
+
+    // Full chain resolved: designSystem.theme.font.fontSize
+    let font_size = &schema["properties"]["designSystem"]["properties"]["theme"]
+        ["properties"]["font"]["properties"]["fontSize"];
+    assert_eq!(font_size["type"], "string");
+}
+
+#[test]
+fn inline_schema_refs_resolves_array_items() {
+    // Mirrors Stitch apply_design_system: array items reference a $def
+    let mut schema = json!({
+        "$defs": {
+            "ScreenInstance": {
+                "type": "object",
+                "properties": { "id": { "type": "string" } }
+            }
+        },
+        "type": "object",
+        "properties": {
+            "screens": {
+                "type": "array",
+                "items": { "$ref": "#/$defs/ScreenInstance" }
+            }
+        }
+    });
+    inline_schema_refs(&mut schema);
+
+    let items = &schema["properties"]["screens"]["items"];
+    assert_eq!(items["type"], "object");
+    assert!(items["properties"]["id"].is_object());
+}
+
+#[test]
+fn inline_schema_refs_depth_guard() {
+    // Circular ref — should not infinite loop
+    let mut schema = json!({
+        "$defs": {
+            "Node": {
+                "type": "object",
+                "properties": {
+                    "child": { "$ref": "#/$defs/Node" }
+                }
+            }
+        },
+        "type": "object",
+        "properties": {
+            "root": { "$ref": "#/$defs/Node" }
+        }
+    });
+    // Should complete without stack overflow
+    inline_schema_refs(&mut schema);
+    // Root is resolved at least once
+    assert_eq!(schema["properties"]["root"]["type"], "object");
+}
+
+// -- clean_gemini_schema
+
+#[test]
+fn clean_gemini_schema_strips_all_bad_fields() {
+    let mut schema = json!({
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$ref": "#/$defs/leftover",
+        "$defs": { "leftover": { "type": "string" } },
+        "type": "object",
+        "additionalProperties": false,
+        "nullable": true,
+        "x-google-identifier": true,
+        "x-google-enum-descriptions": ["a", "b"],
+        "x-google-enum-deprecated": [false, true],
+        "properties": {
+            "name": {
+                "type": "string",
+                "x-google-identifier": true,
+                "description": "A name"
+            }
+        }
+    });
+    clean_gemini_schema(&mut schema);
+
+    // All bad fields removed
+    let map = schema.as_object().unwrap();
+    assert!(!map.contains_key("$schema"));
+    assert!(!map.contains_key("$ref"));
+    assert!(!map.contains_key("$defs"));
+    assert!(!map.contains_key("additionalProperties"));
+    assert!(!map.contains_key("nullable"));
+    assert!(!map.contains_key("x-google-identifier"));
+    assert!(!map.contains_key("x-google-enum-descriptions"));
+    assert!(!map.contains_key("x-google-enum-deprecated"));
+
+    // Valid fields preserved
+    assert_eq!(map["type"], "object");
+    assert!(map.contains_key("properties"));
+
+    // Nested x-google-* also removed
+    let name_props = schema["properties"]["name"].as_object().unwrap();
+    assert!(!name_props.contains_key("x-google-identifier"));
+    assert_eq!(name_props["type"], "string");
+    assert_eq!(name_props["description"], "A name");
+}
+
+#[test]
+fn gemini_tool_prep_end_to_end() {
+    // Realistic Stitch-shaped schema: inline + clean produces valid output
+    let mut params = json!({
+        "$defs": {
+            "Typography": {
+                "type": "object",
+                "properties": {
+                    "fontSize": { "type": "string" },
+                    "fontWeight": { "type": "string" }
+                }
+            },
+            "DesignTheme": {
+                "type": "object",
+                "x-google-enum-descriptions": ["light", "dark"],
+                "properties": {
+                    "bodyFont": {
+                        "type": "string",
+                        "enum": ["INTER", "ROBOTO"],
+                        "x-google-enum-deprecated": [false, false]
+                    },
+                    "typography": {
+                        "additionalProperties": { "$ref": "#/$defs/Typography" }
+                    }
+                }
+            }
+        },
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "x-google-identifier": true
+            },
+            "theme": { "$ref": "#/$defs/DesignTheme" }
+        }
+    });
+    inline_schema_refs(&mut params);
+    clean_gemini_schema(&mut params);
+
+    let result = serde_json::to_string(&params).unwrap();
+
+    // No bad fields survive
+    assert!(!result.contains("$ref"), "no $ref should remain");
+    assert!(!result.contains("$defs"), "no $defs should remain");
+    assert!(!result.contains("x-google"), "no x-google-* should remain");
+    assert!(!result.contains("additionalProperties"), "no additionalProperties should remain");
+
+    // Valid content preserved
+    assert!(result.contains("bodyFont"));
+    assert!(result.contains("INTER"));
+    assert!(result.contains("\"type\":\"object\""));
+}
