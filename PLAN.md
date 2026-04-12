@@ -72,3 +72,25 @@
 **Previous behavior:** Crashed with slice indexing bounds panic; OpenRouter models failed to load; 429 errors created an infinite loop; reasoning streams were lost between turns.
 **New behavior:** Safely parses SSE streams; injects `include_reasoning`, `HTTP-Referer`, and `X-Title` headers; preserves `google/` prefixes; flushes and persists reasoning streams in `<reasoning>` XML tags; exits gracefully on empty API responses.
 **Rollback steps:** `git revert 0f3e290`
+
+## 2026-04-12T18:21:00Z — cade.nvim: agent_id settings.json fallback
+**Summary:** `config.lua` now falls back to `~/.cade/settings.json → last_agent` when `$CADE_AGENT_ID` is unset, making the plugin zero-config for users who already run the CADE TUI.
+**Files modified:**
+- `plugins/cade.nvim/lua/cade/config.lua` — Added `resolve_agent_id()` function: checks env var first, then reads and decodes `~/.cade/settings.json`, falls back to `""`. `setup()` accepts internal `_settings_path` key for test injection.
+- `plugins/cade.nvim/spec/minimal_init.lua` — New. Minimal test init that adds lua/ to rtp and prevents plugin/cade.lua serverstart conflict.
+- `plugins/cade.nvim/spec/config_spec.lua` — New. 3 plenary tests: file fallback, env-var priority, missing file graceful fallback.
+**Previous behavior:** `agent_id` defaulted to `$CADE_AGENT_ID` only; plugin was silent/inert when the env var was unset.
+**New behavior:** `agent_id` resolves via `$CADE_AGENT_ID → settings.json.last_agent → ""`.
+**Tests:** 3/3 pass (plenary busted).
+**Rollback steps:** Restore `config.lua` from commit `470989d`.
+
+## 2026-04-12T18:35:00Z — cade.nvim: :CadeStatus command
+**Summary:** Added `require("cade").status()` function and `:CadeStatus` user command. Displays completion status, agent ID, server reachability (via sync curl probe), API key presence, debounce, and current filetype.
+**Files modified:**
+- `plugins/cade.nvim/lua/cade/init.lua` — Added `_probe_server()` (uses `vim.system` sync curl) and `status()` (builds info string, calls `vim.notify()`). `_probe_server` is overridable for test injection.
+- `plugins/cade.nvim/plugin/cade.lua` — Registered `CadeStatus` user command.
+- `plugins/cade.nvim/spec/status_spec.lua` — New. 3 plenary tests: field presence, reachable icon, unreachable icon.
+**Previous behavior:** No way to check plugin state or server reachability.
+**New behavior:** `:CadeStatus` displays a formatted status block in `vim.notify()`.
+**Tests:** 6/6 pass (3 config + 3 status).
+**Rollback steps:** Revert `init.lua` and `plugin/cade.lua` from commit `470989d`.

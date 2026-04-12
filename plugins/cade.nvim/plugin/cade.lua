@@ -64,3 +64,8 @@ imap("<C-e>",  cade.dismiss,     "CADE: dismiss completion")
 
 -- Normal-mode toggle
 vim.keymap.set("n", "<leader>ct", cade.toggle, { desc = "CADE: toggle completions" })
+
+-- User commands
+vim.api.nvim_create_user_command("CadeStatus", function()
+  cade.status()
+end, { desc = "CADE: show completion status and server reachability" })
