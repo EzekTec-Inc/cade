@@ -230,7 +230,7 @@ pub async fn run_headless_stream_json(
 /// Execute a single tool call, respecting permissions and intercepting
 /// native tools (update_memory, load_skill).
 ///
-/// Returns `(call_id, output, is_error)`.
+/// Returns `(call_id, tool_name, output, is_error)`.
 async fn run_one_tool(
     client: &HttpTransport,
     agent_id: &str,
@@ -240,7 +240,7 @@ async fn run_one_tool(
     permissions: &PermissionManager,
     mcp: &std::sync::Arc<McpManager>,
     hooks: &HookEngine,
-) -> (String, String, bool) {
+) -> (String, String, String, bool) {
     let canonical_name = cade_agent::tools::manager::canonical_name(&tool_name);
     let is_mcp_write = cade_agent::tools::is_mcp_write_tool(canonical_name, mcp).await;
     // -- Unified permission resolution
@@ -248,12 +248,12 @@ async fn run_one_tool(
     match permissions.resolve(canonical_name, &args, is_mcp_write) {
         Verdict::Deny(reason) => {
             tracing::warn!("{reason}");
-            return (call_id, reason, true);
+            return (call_id, tool_name, reason, true);
         }
         Verdict::Ask(reason) => {
             // Headless mode cannot prompt — treat Ask as Deny
             tracing::warn!("headless: cannot prompt for approval, denying: {reason}");
-            return (call_id, reason, true);
+            return (call_id, tool_name, reason, true);
         }
         Verdict::Allow => {}
     }
@@ -264,7 +264,7 @@ async fn run_one_tool(
     {
         let msg = format!("Blocked by hook: {reason}");
         tracing::warn!("{msg}");
-        return (call_id, msg, true);
+        return (call_id, tool_name, msg, true);
     }
 
     // -- Unified dispatch via ToolRuntime (memory, skills, checkpoints, native tools)
@@ -315,7 +315,7 @@ async fn finalize_tool_result(
     args: serde_json::Value,
     mut output: String,
     is_error: bool,
-) -> (String, String, bool) {
+) -> (String, String, String, bool) {
     if !is_error {
         match tool_name.as_str() {
             "write_file" | "edit_file" | "apply_patch" | "Replace" | "WriteFileGemini" => {
@@ -337,7 +337,7 @@ async fn finalize_tool_result(
     }
 
     if hooks.is_empty() {
-        return (call_id, output, is_error);
+        return (call_id, tool_name, output, is_error);
     }
 
     let preceding_reasoning: Option<&str> = None;
@@ -366,7 +366,7 @@ async fn finalize_tool_result(
         output = format!("{}\n\n[Hook context: {extra}]", output);
     }
 
-    (call_id, output, is_error)
+    (call_id, tool_name, output, is_error)
 }
 
 // -- Text-mode tool loop
@@ -400,7 +400,7 @@ async fn process_tool_calls(
     if all_sequential || tool_calls.len() == 1 {
         // -- Sequential path
         for (call_id, tool_name, args) in tool_calls {
-            let (cid, out, is_err) = run_one_tool(
+            let (cid, tname, out, is_err) = run_one_tool(
                 client,
                 agent_id,
                 call_id,
@@ -414,7 +414,7 @@ async fn process_tool_calls(
 
             let on_out_clone = on_output.clone();
             let follow = client
-                .stream_tool_return(agent_id, &cid, &out, is_err, move |msg| {
+                .stream_tool_return(agent_id, &cid, &tname, &out, is_err, move |msg: &CadeMessage| {
                     if let Some(text) = msg.assistant_text() {
                         if let Some(ref cb) = on_out_clone {
                             cb(text);
@@ -480,7 +480,7 @@ async fn process_tool_calls(
             })
             .collect();
 
-        let results: Vec<(String, String, bool)> = join_all(futures).await;
+        let results: Vec<(String, String, String, bool)> = join_all(futures).await;
         stats.tool_count += results.len() as u32;
 
         // Submit all parallel results back.
@@ -491,13 +491,13 @@ async fn process_tool_calls(
         let result_count = results.len();
         let mut follow_msgs: Vec<CadeMessage> = Vec::new();
 
-        for (i, (call_id, out, is_err)) in results.into_iter().enumerate() {
+        for (i, (call_id, tname, out, is_err)) in results.into_iter().enumerate() {
             let is_last = i == result_count - 1 && sequential_remainder.is_empty();
             if is_last {
                 // Last result — triggers LLM response
                 let on_out_clone = on_output.clone();
                 let follow = client
-                    .stream_tool_return(agent_id, &call_id, &out, is_err, move |msg| {
+                    .stream_tool_return(agent_id, &call_id, &tname, &out, is_err, move |msg| {
                         if let Some(text) = msg.assistant_text() {
                             if let Some(ref cb) = on_out_clone {
                                 cb(text);
@@ -512,14 +512,14 @@ async fn process_tool_calls(
             } else {
                 // Non-last results — server buffers them, returns []
                 client
-                    .send_tool_return(agent_id, &call_id, &out, is_err)
+                    .send_tool_return(agent_id, &call_id, &tname, &out, is_err)
                     .await?;
             }
         }
 
         // Now handle any sequential tools that were in this batch
         for (call_id, tool_name, args) in sequential_remainder {
-            let (cid, out, is_err) = run_one_tool(
+            let (cid, tname, out, is_err) = run_one_tool(
                 client,
                 agent_id,
                 call_id,
@@ -533,7 +533,7 @@ async fn process_tool_calls(
 
             let on_out_clone = on_output.clone();
             let follow = client
-                .stream_tool_return(agent_id, &cid, &out, is_err, move |msg| {
+                .stream_tool_return(agent_id, &cid, &tname, &out, is_err, move |msg| {
                     if let Some(text) = msg.assistant_text() {
                         if let Some(ref cb) = on_out_clone {
                             cb(text);
@@ -596,7 +596,7 @@ async fn process_tool_calls_stream_json(
         for (call_id, tool_name, args) in tool_calls {
             emit(json!({ "type": "tool_call", "tool": tool_name, "args": args }));
 
-            let (cid, result_output, is_error) = run_one_tool(
+            let (cid, tname, result_output, is_error) = run_one_tool(
                 client,
                 agent_id,
                 call_id,
@@ -617,7 +617,7 @@ async fn process_tool_calls_stream_json(
 
             stats.tool_count += 1;
             let follow = client
-                .stream_tool_return(agent_id, &cid, &result_output, is_error, |msg| {
+                .stream_tool_return(agent_id, &cid, &tname, &result_output, is_error, |msg: &CadeMessage| {
                     if let Some(text) = msg.assistant_text() {
                         emit(json!({
                             "type": "message",
@@ -687,11 +687,11 @@ async fn process_tool_calls_stream_json(
             })
             .collect();
 
-        let results: Vec<(String, (String, String, bool))> = join_all(futures).await;
+        let results: Vec<(String, (String, String, String, bool))> = join_all(futures).await;
         stats.tool_count += results.len() as u32;
 
         // Emit tool results
-        for (tool_name, (_, out, is_err)) in &results {
+        for (tool_name, (_, _, out, is_err)) in &results {
             emit(json!({
                 "type": "tool_result",
                 "tool": tool_name,
@@ -704,11 +704,11 @@ async fn process_tool_calls_stream_json(
         let result_count = results.len();
         let mut follow_msgs: Vec<CadeMessage> = Vec::new();
 
-        for (i, (_, (call_id, out, is_err))) in results.into_iter().enumerate() {
+        for (i, (_, (call_id, tname, out, is_err))) in results.into_iter().enumerate() {
             let is_last = i == result_count - 1 && sequential_remainder.is_empty();
             if is_last {
                 let follow = client
-                    .stream_tool_return(agent_id, &call_id, &out, is_err, |msg| {
+                    .stream_tool_return(agent_id, &call_id, &tname, &out, is_err, |msg| {
                         if let Some(text) = msg.assistant_text() {
                             emit(json!({
                                 "type": "message",
@@ -721,14 +721,14 @@ async fn process_tool_calls_stream_json(
                 follow_msgs = follow;
             } else {
                 client
-                    .send_tool_return(agent_id, &call_id, &out, is_err)
+                    .send_tool_return(agent_id, &call_id, &tname, &out, is_err)
                     .await?;
             }
         }
 
         for (call_id, tool_name, args) in sequential_remainder {
             emit(json!({ "type": "tool_call", "tool": tool_name, "args": args }));
-            let (cid, out, is_err) = run_one_tool(
+            let (cid, tname, out, is_err) = run_one_tool(
                 client,
                 agent_id,
                 call_id,
@@ -744,7 +744,7 @@ async fn process_tool_calls_stream_json(
                 "output": out, "is_error": is_err
             }));
             let follow = client
-                .stream_tool_return(agent_id, &cid, &out, is_err, |msg| {
+                .stream_tool_return(agent_id, &cid, &tname, &out, is_err, |msg| {
                     if let Some(text) = msg.assistant_text() {
                         emit(json!({
                             "type": "message",

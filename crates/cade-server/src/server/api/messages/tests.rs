@@ -257,6 +257,112 @@ fn always_include_list_covers_all_retrieval_tools() {
     }
 }
 
+// ── tool_output_limit + db_row_to_llm per-tool truncation ────────────────
+
+fn tool_row(tool_name: &str, content: &str) -> cade_store::sqlite::MessageRow {
+    cade_store::sqlite::MessageRow {
+        id: "t1".into(),
+        agent_id: "a1".into(),
+        conversation_id: None,
+        role: "tool".into(),
+        content: serde_json::json!({
+            "content": content,
+            "tool_call_id": "tc1",
+            "tool_name": tool_name
+        }),
+        char_count: content.len(),
+    }
+}
+
+#[test]
+fn tool_output_limit_bash_is_4k() {
+    assert_eq!(tool_output_limit("bash"), 4_096);
+    assert_eq!(tool_output_limit("RunShellCommand"), 4_096);
+    assert_eq!(tool_output_limit("developer__shell"), 4_096);
+}
+
+#[test]
+fn tool_output_limit_read_file_is_12k() {
+    assert_eq!(tool_output_limit("read_file"), 12_288);
+    assert_eq!(tool_output_limit("ReadFileGemini"), 12_288);
+    assert_eq!(tool_output_limit("developer__read_file"), 12_288);
+}
+
+#[test]
+fn tool_output_limit_grep_is_3k() {
+    assert_eq!(tool_output_limit("grep"), 3_072);
+    assert_eq!(tool_output_limit("SearchFileContent"), 3_072);
+    assert_eq!(tool_output_limit("glob"), 3_072);
+    assert_eq!(tool_output_limit("GlobGemini"), 3_072);
+}
+
+#[test]
+fn tool_output_limit_memory_search_is_2k() {
+    assert_eq!(tool_output_limit("search_memory"), 2_048);
+    assert_eq!(tool_output_limit("archival_memory_search"), 2_048);
+    assert_eq!(tool_output_limit("conversation_search"), 2_048);
+}
+
+#[test]
+fn tool_output_limit_unknown_is_default() {
+    let default = tool_output_limit("");
+    assert!(default >= 6_000, "default should be at least 6k");
+    assert_eq!(tool_output_limit("some_mcp_tool"), default);
+}
+
+#[test]
+fn db_row_to_llm_applies_bash_cap() {
+    // bash cap is 4_096 chars — a 6_000-char output should be truncated
+    let big = "x".repeat(6_000);
+    let row = tool_row("bash", &big);
+    let msgs = db_row_to_llm(&row);
+    assert_eq!(msgs.len(), 1);
+    assert!(
+        msgs[0].content.chars().count() <= tool_output_limit("bash") + 200,
+        "bash output should be capped at ~4096 chars"
+    );
+    assert!(msgs[0].content.contains("[... truncated"));
+}
+
+#[test]
+fn db_row_to_llm_applies_read_file_cap() {
+    // read_file cap is 12_288 chars — a 15_000-char file should be truncated
+    let big = "y".repeat(15_000);
+    let row = tool_row("read_file", &big);
+    let msgs = db_row_to_llm(&row);
+    assert_eq!(msgs.len(), 1);
+    assert!(msgs[0].content.contains("[... truncated"));
+}
+
+#[test]
+fn db_row_to_llm_no_truncation_when_within_limit() {
+    // A 100-char bash output is well within the 4k cap
+    let row = tool_row("bash", "short output");
+    let msgs = db_row_to_llm(&row);
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].content, "short output");
+}
+
+#[test]
+fn db_row_to_llm_falls_back_to_default_when_no_tool_name() {
+    // Old DB rows without tool_name field should use default limit (no crash)
+    let row = cade_store::sqlite::MessageRow {
+        id: "t1".into(),
+        agent_id: "a1".into(),
+        conversation_id: None,
+        role: "tool".into(),
+        content: serde_json::json!({
+            "content": "short output",
+            "tool_call_id": "tc1"
+            // no "tool_name" field
+        }),
+        char_count: 12,
+    };
+    let msgs = db_row_to_llm(&row);
+    assert_eq!(msgs.len(), 1);
+    assert_eq!(msgs[0].content, "short output");
+}
+
 // ── Constants sanity ─────────────────────────────────────────────────────
 
 #[test]

@@ -333,6 +333,7 @@ impl Repl {
                 false,
                 "",
                 "",
+                "",
                 false,
                 None,
                 Some(bar_text.clone()),

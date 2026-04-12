@@ -393,6 +393,7 @@ impl HttpTransport {
         &self,
         agent_id: &str,
         tool_call_id: &str,
+        tool_name: &str,
         output: &str,
         is_error: bool,
     ) -> Result<Vec<CadeMessage>> {
@@ -400,6 +401,7 @@ impl HttpTransport {
             "role": "tool",
             "tool_return": {
                 "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
                 "content": output,
                 "status": if is_error { "error" } else { "success" }
             }
@@ -412,6 +414,7 @@ impl HttpTransport {
         &self,
         agent_id: &str,
         tool_call_id: &str,
+        tool_name: &str,
         output: &str,
         is_error: bool,
         on_event: F,
@@ -422,6 +425,7 @@ impl HttpTransport {
         self.stream_tool_return_cancellable(
             agent_id,
             tool_call_id,
+            tool_name,
             output,
             is_error,
             None,
@@ -437,6 +441,7 @@ impl HttpTransport {
         &self,
         agent_id: &str,
         tool_call_id: &str,
+        tool_name: &str,
         output: &str,
         is_error: bool,
         conversation_id: Option<&str>,
@@ -451,6 +456,7 @@ impl HttpTransport {
             "role": "tool",
             "tool_return": {
                 "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
                 "content": output,
                 "status": if is_error { "error" } else { "success" }
             }
@@ -525,7 +531,7 @@ impl HttpTransport {
                     // Fallback to non-streaming
                     es.close();
                     let fallback = self
-                        .send_tool_return(agent_id, tool_call_id, output, is_error)
+                        .send_tool_return(agent_id, tool_call_id, tool_name, output, is_error)
                         .await?;
                     for lm in &fallback {
                         on_event(lm);

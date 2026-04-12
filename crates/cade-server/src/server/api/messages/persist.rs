@@ -6,25 +6,24 @@ pub(crate) fn db_row_to_llm(row: &MessageRow) -> Vec<LlmMessage> {
         "compaction" => vec![],
         "tool" => {
             let raw = row.content["content"].as_str().unwrap_or("");
-            // Truncate very large tool results (e.g. raw base64 images, enormous logs)
-            // to prevent context window overflows.
-            // Truncate at a char boundary, not a byte boundary.
-            // TOOL_RESULT_MAX_CHARS is a *char* limit; raw.len() is bytes.
-            // Slicing `&raw[..N]` at a bare byte index panics when a multibyte
-            // codepoint (e.g. '─' = 3 bytes: E2 94 80) straddles position N.
-            let content = if raw.len() > TOOL_RESULT_MAX_CHARS {
-                // Find the byte offset of the TOOL_RESULT_MAX_CHARS-th char.
+            // Look up the per-tool char limit.  The tool_name field was added to
+            // persisted tool-result content in P3-A wiring; older rows without it
+            // fall back to the global TOOL_RESULT_MAX_CHARS default.
+            let tool_name = row.content["tool_name"].as_str().unwrap_or("");
+            let limit = tool_output_limit(tool_name);
+            let content = if raw.len() > limit {
+                // Find the byte offset of the limit-th char (safe multibyte boundary).
                 let byte_end = raw
                     .char_indices()
-                    .nth(TOOL_RESULT_MAX_CHARS)
+                    .nth(limit)
                     .map(|(i, _)| i)
-                    .unwrap_or(raw.len()); // fewer chars than the limit → keep all
+                    .unwrap_or(raw.len());
                 if byte_end < raw.len() {
                     format!(
                         "{}\n[... truncated: {} bytes total, showing first {} chars]",
                         &raw[..byte_end],
                         raw.len(),
-                        TOOL_RESULT_MAX_CHARS,
+                        limit,
                     )
                 } else {
                     raw.to_string()

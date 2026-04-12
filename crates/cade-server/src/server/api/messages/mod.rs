@@ -71,10 +71,8 @@ const TOOL_RESULT_MAX_CHARS: usize = 8_192;
 ///   - read_file: files need more space to be useful, 12k allows full small files
 ///   - archival/conversation search: returns excerpts, 2k is ample
 ///
-/// NOTE: Currently used by tests and available for integration when tool names
-/// are propagated through the persist path. The default TOOL_RESULT_MAX_CHARS
-/// is used until then.
-#[allow(dead_code)]
+/// NOTE: wired into `db_row_to_llm` via the `tool_name` field stored in tool
+/// result content. Older DB rows without `tool_name` fall back to the default.
 pub(crate) fn tool_output_limit(tool_name: &str) -> usize {
     match tool_name {
         // Shell / command execution
@@ -298,6 +296,7 @@ async fn handle_tool_return_blocking(
     let tr = &body["tool_return"];
     let call_id = tr["tool_call_id"].as_str().unwrap_or("").to_string();
     let content = tr["content"].as_str().unwrap_or("").to_string();
+    let tool_name = tr["tool_name"].as_str().unwrap_or("").to_string();
 
     persist(
         state,
@@ -305,7 +304,9 @@ async fn handle_tool_return_blocking(
         conv_id,
         "tool",
         json!({
-            "content": content, "tool_call_id": call_id
+            "content": content,
+            "tool_call_id": call_id,
+            "tool_name": tool_name
         }),
     );
 
@@ -414,7 +415,8 @@ pub async fn stream_message(
             "tool",
             json!({
                 "content": tr["content"].as_str().unwrap_or(""),
-                "tool_call_id": tr["tool_call_id"].as_str().unwrap_or("")
+                "tool_call_id": tr["tool_call_id"].as_str().unwrap_or(""),
+                "tool_name": tr["tool_name"].as_str().unwrap_or("")
             }),
         );
     } else {

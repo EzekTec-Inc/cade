@@ -18,6 +18,7 @@ impl Repl {
         input: &str,
         is_tool_return: bool,
         tool_call_id: &str,
+        tool_name: &str,
         tool_output: &str,
         // When true, user message is sent to LLM but NOT persisted to DB.
         // Used for system-injected re-prompts (EMPTY_YIELD_REPROMPT) so they
@@ -266,6 +267,7 @@ impl Repl {
                 .stream_tool_return_cancellable(
                     &agent_id,
                     tool_call_id,
+                    tool_name,
                     tool_output,
                     false,
                     conv_ref,

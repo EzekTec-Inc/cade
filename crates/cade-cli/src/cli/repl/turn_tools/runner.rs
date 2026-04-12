@@ -123,6 +123,7 @@ impl Repl {
                         false,
                         "",
                         "",
+                        "",
                         true,
                         None,
                         bar_text.clone(),
@@ -168,6 +169,7 @@ impl Repl {
                         stdout,
                         &reason,
                         false,
+                        "",
                         "",
                         "",
                         false,
@@ -486,6 +488,7 @@ impl Repl {
                     "",
                     true,
                     &result.tool_call_id,
+                    &result.tool_name,
                     &result.output,
                     false,
                     None,
@@ -908,7 +911,7 @@ impl Repl {
         // conversation history but the agent still sees it and can respond
         // with an update_memory call.
         let msgs = self
-            .stream_turn(stdout, reminder, false, "", "", true, None, None)
+            .stream_turn(stdout, reminder, false, "", "", "", true, None, None)
             .await?;
 
         // Dispatch any tool calls the model makes in response (usually update_memory).
