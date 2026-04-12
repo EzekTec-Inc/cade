@@ -102,3 +102,12 @@
 **Previous behavior:** ghost.lua had zero test coverage.
 **New behavior:** All 9 ghost behaviours verified. 9/9 pass.
 **Rollback steps:** Delete `spec/ghost_spec.lua`.
+
+## 2026-04-12T19:25:00Z — cade.nvim: http.lua test coverage + _parse_sse_line extraction
+**Summary:** Extracted SSE parsing logic from the inline stdout callback into a public `_parse_sse_line()` pure function. Added 7 plenary tests covering all parse cases and fetch() guards.
+**Files modified:**
+- `plugins/cade.nvim/lua/cade/http.lua` — Added `M._parse_sse_line(line)` pure function (stream_delta, [DONE], error, nil-for-noise). Rewired stdout callback to call it. Zero behaviour change.
+- `plugins/cade.nvim/spec/http_spec.lua` — New. 7 tests: 5 _parse_sse_line cases + fetch() empty-agent guard + fetch() cancel contract.
+**Previous behavior:** SSE parsing was inline and untestable. http.lua had zero test coverage.
+**New behavior:** All SSE parse logic testable in isolation. 7/7 pass. Full suite 22/22.
+**Rollback steps:** Revert `http.lua` from commit `2482c51`. Delete `spec/http_spec.lua`.

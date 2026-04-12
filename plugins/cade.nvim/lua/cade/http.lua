@@ -3,6 +3,33 @@
 
 local M = {}
 
+--- Parse a single SSE line and return a typed result, or nil if not actionable.
+--- This is a pure function — no I/O, no state. Exported for testing.
+---@param line string  A raw SSE line (may include leading/trailing whitespace)
+---@return table|nil  {type="delta",content=string} | {type="done"} | {type="error",message=string} | nil
+function M._parse_sse_line(line)
+  line = vim.trim(line)
+  if line:sub(1, 6) ~= "data: " then return nil end
+  local payload = line:sub(7)
+
+  if payload == "[DONE]" then
+    return { type = "done" }
+  end
+
+  local ok, obj = pcall(vim.json.decode, payload)
+  if not ok or type(obj) ~= "table" then return nil end
+
+  if obj.message_type == "stream_delta" and obj.content then
+    return { type = "delta", content = obj.content }
+  end
+
+  if obj.error then
+    return { type = "error", message = obj.error }
+  end
+
+  return nil
+end
+
 --- Stream a completion from the CADE server.
 ---@param prefix   string  Code before cursor
 ---@param suffix   string  Code after cursor
@@ -69,27 +96,20 @@ function M.fetch(prefix, suffix, language, on_token, on_done, on_error)
       sse_buffer = table.remove(lines) or ""
 
       for _, line in ipairs(lines) do
-        line = vim.trim(line)
-        if line:sub(1, 6) == "data: " then
-          local payload = line:sub(7)
-
-          if payload == "[DONE]" then
+        local parsed = M._parse_sse_line(line)
+        if parsed then
+          if parsed.type == "done" then
             done = true
             vim.schedule(on_done)
             return
-          end
-
-          local ok, obj = pcall(vim.json.decode, payload)
-          if ok and obj then
-            if obj.message_type == "stream_delta" and obj.content then
-              accumulated = accumulated .. obj.content
-              local snap = accumulated
-              vim.schedule(function() on_token(snap) end)
-            elseif obj.error then
-              done = true
-              vim.schedule(function() on_error(obj.error) end)
-              return
-            end
+          elseif parsed.type == "delta" then
+            accumulated = accumulated .. parsed.content
+            local snap = accumulated
+            vim.schedule(function() on_token(snap) end)
+          elseif parsed.type == "error" then
+            done = true
+            vim.schedule(function() on_error(parsed.message) end)
+            return
           end
         end
       end
