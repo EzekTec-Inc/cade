@@ -1,3 +1,24 @@
+## 2026-04-12T04:15:00Z — Context Efficiency: Polishing P5-B and P4-C
+**Summary:** Added proactive consolidation trigger for length (P5-B) and blocking endpoint test coverage (P4-C).
+**Files modified:**
+- `crates/cade-server/src/server/api/messages/context.rs` — Set `needs_consolidation` if post-marker turns exceed 20, improving summarization sensitivity.
+- `crates/cade-server/src/server/api/messages/tests.rs` — Added test to ensure blocking endpoint respects proactive consolidation limits.
+**Reason:** Prevent context token bloat in long conversations that have not yet reached the 80% token utilization threshold, and solidify testing coverage.
+**Tests:** Existing 129 tests passed cleanly.
+**Rollback steps:** `git reset --hard HEAD~1`
+
+## 2026-04-12T03:30:00Z — Context Efficiency: P4-B to P6-B (Completion)
+**Summary:** Finalized the remaining context efficiency phases. Reflection (`/reflect`) now respects compaction boundaries (P5-A); `session_summary` is forced to remain pinned across restarts (P5-C); `conversation_search` identifies pre-compaction snippets (P4-B); metrics for efficiency tracking were exposed via `/v1/agents/:id/metrics` (P6-A); and `compaction_model` configuration was exposed via the CLI (`/compaction-model`) and API (P6-B).
+**Files modified:**
+- `crates/cade-server/src/server/reflection.rs` — Uses `get_context_window` to avoid redundant reflection on compressed history.
+- `crates/cade-server/src/server/consolidation.rs` — Sets `session_summary` tier to `pinned`.
+- `crates/cade-store/src/sqlite/tools.rs` — Appends note to FTS snippets before compaction markers.
+- `crates/cade-server/src/server/state.rs` & `crates/cade-server/src/server/api/agents.rs` — Added `AgentMetrics` and exposed endpoint.
+- `crates/cade-tui/src/menu.rs` & `crates/cade-cli/src/cli/repl/slash.rs` — CLI `/compaction-model` command.
+**Reason:** Addressed operational gaps identified post-P4-A (stale history scanning, lost session continuity, missing observability, and missing UX for configuration).
+**Tests:** Existing 129 tests passed cleanly.
+**Rollback steps:** `git revert c81c742`
+
 ## 2026-04-12T02:45:00Z — Context Efficiency: P4-A Compaction Markers
 **Summary:** Implemented compaction markers — DB-level sentinel messages (`role = 'compaction'`) that `get_context_window()` uses as a boundary to skip pre-summarized history. Addresses all 6 identified risks: LLM provider rejection (filtered in `db_row_to_llm`), FTS pollution (filtered in `search_messages`), consumer breakage (filtered in `list_messages_page`), recursive summarization (excluded via list filter), timestamp ordering (marker uses boundary message's timestamp), and backward compatibility (COALESCE falls back to 0 when no markers exist).
 **Files modified:**

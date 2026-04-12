@@ -279,7 +279,13 @@ pub(crate) async fn build_context(
     };
     let needs_proactive = usage_fraction >= PROACTIVE_CONSOLIDATION_THRESHOLD;
 
-    if omitted_turns > 0 || needs_proactive {
+    // P5-B: Trigger consolidation if there are too many turns since the last compaction marker.
+    // This handles the case where the context budget is large enough to fit many turns, but
+    // the growing history causes token bloat even before hitting 80% usage.
+    const PROACTIVE_MAX_TURNS: usize = 20;
+    let needs_proactive_length = turns_len >= PROACTIVE_MAX_TURNS;
+
+    if omitted_turns > 0 || needs_proactive || needs_proactive_length {
         if omitted_turns > 0 {
             tracing::debug!(
                 "build_context [{}]: {}/{} turns fit in budget \
@@ -294,10 +300,11 @@ pub(crate) async fn build_context(
             );
         } else {
             tracing::debug!(
-                "build_context [{}]: proactive consolidation signal at {:.0}% usage \
+                "build_context [{}]: proactive consolidation signal at {:.0}% usage, {} turns \
                  ({} chars / {} budget)",
                 agent_id,
                 usage_fraction * 100.0,
+                turns_len,
                 budget_used,
                 message_budget,
             );

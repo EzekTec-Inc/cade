@@ -383,3 +383,96 @@ fn constants_are_sane() {
     assert!(MIN_CONTEXT_CHARS < MAX_CONTEXT_CHARS);
     assert!(OUTPUT_RESERVE_FRACTION > 0.0 && OUTPUT_RESERVE_FRACTION < 0.5);
 }
+
+// ── End-to-end integration logic for P4-C ────────────────────────────────
+
+#[tokio::test]
+async fn send_message_blocking_triggers_needs_consolidation() {
+    let db = cade_store::sqlite::open(":memory:").unwrap();
+    
+    // Create agent
+    let agent_id = "test_agent_1";
+    cade_store::sqlite::create_agent(
+        &db,
+        &cade_store::sqlite::AgentRow {
+            id: agent_id.to_string(),
+            name: "A".to_string(),
+            model: "m".to_string(),
+            description: None,
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+        }
+    ).unwrap();
+    
+    // Insert 50 messages to trigger P5-B (turns_len > 20)
+    for i in 0..50 {
+        db.lock().unwrap().execute(
+            "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                format!("m{i}"),
+                agent_id,
+                if i % 2 == 0 { "user" } else { "assistant" },
+                serde_json::json!({"content": "test"}).to_string(),
+                4,
+                0i64
+            ]
+        ).unwrap();
+    }
+    
+    let config = std::sync::Arc::new(crate::server::config::ServerConfig {
+        addr: "127.0.0.1:0".parse().unwrap(),
+        db_path: ":memory:".into(),
+        llm_provider: crate::server::config::LlmProviderKind::Anthropic,
+        default_model: "test".into(),
+        anthropic_api_key: None,
+        openai_api_key: None,
+        google_api_key: None,
+        ollama_base_url: String::new(),
+        api_key: None,
+    });
+    
+    let state = AppState {
+        db: db.clone(),
+        llm: std::sync::Arc::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
+            anthropic_api_key: None,
+            openai_api_key: None,
+            google_api_key: None,
+            ollama_base_url: String::new(),
+            llm_provider: String::new(),
+        })),
+        llm_router: std::sync::Arc::new(tokio::sync::RwLock::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
+            anthropic_api_key: None,
+            openai_api_key: None,
+            google_api_key: None,
+            ollama_base_url: String::new(),
+            llm_provider: String::new(),
+        }))),
+        config,
+        rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
+        memory_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+    };
+    
+    // Call blocking endpoint
+    let res = super::send_message(
+        axum::extract::State(state.clone()),
+        axum::extract::Path(agent_id.to_string()),
+        axum::extract::Json(serde_json::json!({"input": "test"}))
+    ).await;
+    
+    // Check what was saved in the db
+    let count: i64 = db.lock().unwrap().query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0)).unwrap();
+    println!("Total messages in DB: {}", count);
+    
+    let (parts, body) = res.into_parts();
+    let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
+    println!("Response status: {}", parts.status);
+    println!("Response body: {}", String::from_utf8_lossy(&bytes));
+    
+    let activity = state.agent_activity.read().await;
+    let entry = activity.get(agent_id).unwrap();
+    assert!(entry.needs_consolidation, "blocking endpoint must trigger needs_consolidation when turns_len >= 20");
+}
