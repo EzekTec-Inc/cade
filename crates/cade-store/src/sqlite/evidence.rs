@@ -198,6 +198,7 @@ mod tests {
                 description: None,
                 system_prompt: None,
                 created_at: None,
+                compaction_model: None,
             },
         )?;
         create_agent(
@@ -209,6 +210,7 @@ mod tests {
                 description: None,
                 system_prompt: None,
                 created_at: None,
+                compaction_model: None,
             },
         )?;
 
@@ -260,6 +262,7 @@ mod tests {
                 description: None,
                 system_prompt: None,
                 created_at: None,
+                compaction_model: None,
             },
         )?;
 

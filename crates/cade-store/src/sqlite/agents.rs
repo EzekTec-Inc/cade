@@ -24,7 +24,7 @@ pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
         .lock()
         .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, model, description, system_prompt, created_at FROM agents WHERE id = ?1",
+        "SELECT id, name, model, description, system_prompt, created_at, compaction_model FROM agents WHERE id = ?1",
     )?;
     let mut rows = stmt.query(params![id])?;
     if let Some(row) = rows.next()? {
@@ -35,6 +35,7 @@ pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
             description: row.get(3)?,
             system_prompt: row.get(4)?,
             created_at: row.get(5)?,
+            compaction_model: row.get(6)?,
         }))
     } else {
         Ok(None)
@@ -46,7 +47,7 @@ pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
         .lock()
         .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, model, description, system_prompt, created_at FROM agents ORDER BY created_at DESC"
+        "SELECT id, name, model, description, system_prompt, created_at, compaction_model FROM agents ORDER BY created_at DESC"
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(AgentRow {
@@ -56,6 +57,7 @@ pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
             description: row.get(3)?,
             system_prompt: row.get(4)?,
             created_at: row.get(5)?,
+            compaction_model: row.get(6)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -99,6 +101,19 @@ pub fn update_agent_system_prompt(db: &Db, id: &str, prompt: &str) -> Result<boo
     let n = conn.execute(
         "UPDATE agents SET system_prompt = ?1 WHERE id = ?2",
         params![prompt, id],
+    )?;
+    Ok(n > 0)
+}
+
+/// Update the compaction (summarization) model for an agent.
+/// Pass `None` to clear the override and fall back to the main model.
+pub fn update_agent_compaction_model(db: &Db, id: &str, model: Option<&str>) -> Result<bool> {
+    let conn = db
+        .lock()
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+    let n = conn.execute(
+        "UPDATE agents SET compaction_model = ?1 WHERE id = ?2",
+        params![model, id],
     )?;
     Ok(n > 0)
 }
@@ -193,6 +208,7 @@ mod tests {
             description: None,
             system_prompt: None,
             created_at: None,
+            compaction_model: None,
         }
     }
 
@@ -343,6 +359,35 @@ mod tests {
         attach_tools_to_agent(&db, "a1", &["t1".into()])?;
         assert_eq!(detach_all_tools_from_agent(&db, "a1")?, 1);
         assert!(get_agent_tool_ids(&db, "a1")?.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_compaction_model_default_is_none() -> Result<()> {
+        let db = setup_mem_db()?;
+        create_agent(&db, &test_agent("a1"))?;
+        let agent = get_agent(&db, "a1")?.unwrap();
+        assert!(agent.compaction_model.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn test_update_and_clear_compaction_model() -> Result<()> {
+        let db = setup_mem_db()?;
+        create_agent(&db, &test_agent("a1"))?;
+
+        // Set compaction model
+        assert!(update_agent_compaction_model(&db, "a1", Some("gpt-4o-mini"))?);
+        let agent = get_agent(&db, "a1")?.unwrap();
+        assert_eq!(agent.compaction_model.as_deref(), Some("gpt-4o-mini"));
+
+        // Clear compaction model
+        assert!(update_agent_compaction_model(&db, "a1", None)?);
+        let agent = get_agent(&db, "a1")?.unwrap();
+        assert!(agent.compaction_model.is_none());
+
+        // Non-existent agent returns false
+        assert!(!update_agent_compaction_model(&db, "nope", Some("x"))?);
         Ok(())
     }
 }

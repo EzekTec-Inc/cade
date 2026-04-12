@@ -92,6 +92,7 @@ pub async fn create_agent(
         description: body.description.clone(),
         system_prompt: Some(system_prompt),
         created_at: None, // populated by DB via now_ts()
+        compaction_model: None,
     };
 
     sqlite::create_agent(&state.db, &row).map_err(|e| server_err(e.to_string()))?;

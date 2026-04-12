@@ -123,13 +123,14 @@ pub fn list_messages_page(
         .lock()
         .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     // Filter: conversation_id IS NULL for legacy messages, or matches given id.
+    // Exclude compaction markers — they are DB-level sentinels, not real messages.
     let sql = if conversation_id.is_some() {
         "SELECT id, agent_id, conversation_id, role, content, char_count FROM messages
-         WHERE agent_id = ?1 AND conversation_id = ?2
+         WHERE agent_id = ?1 AND conversation_id = ?2 AND role != 'compaction'
          ORDER BY created_at DESC, rowid DESC LIMIT ?3 OFFSET ?4"
     } else {
         "SELECT id, agent_id, conversation_id, role, content, char_count FROM messages
-         WHERE agent_id = ?1 AND conversation_id IS NULL
+         WHERE agent_id = ?1 AND conversation_id IS NULL AND role != 'compaction'
          ORDER BY created_at DESC, rowid DESC LIMIT ?3 OFFSET ?4"
     };
 
@@ -168,6 +169,11 @@ pub fn list_messages_page(
 
 /// Fetch messages backwards until the cumulative char_count exceeds the budget.
 /// This offloads context assembly math into SQLite using a window function.
+///
+/// When compaction markers exist (`role = 'compaction'`), the query only scans
+/// messages AFTER the most recent marker — everything before it is already
+/// captured in the marker's summary (stored in `session_summary`).
+/// Compaction markers themselves are excluded from the returned messages.
 pub fn get_context_window(
     db: &Db,
     agent_id: &str,
@@ -177,23 +183,48 @@ pub fn get_context_window(
     let conn = db
         .lock()
         .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+
+    // The CTE `boundary` finds the rowid of the most recent compaction marker.
+    // If none exists, COALESCE falls back to 0 (scan all messages).
+    // The `ranked` CTE then only considers messages with rowid > boundary
+    // and role != 'compaction', applying the usual char_budget windowing.
     let sql = if conversation_id.is_some() {
-        "WITH ranked AS (
+        "WITH boundary AS (
+             SELECT COALESCE(
+                 (SELECT rowid FROM messages
+                  WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'compaction'
+                  ORDER BY created_at DESC, rowid DESC LIMIT 1),
+                 0
+             ) AS marker_rowid
+         ),
+         ranked AS (
              SELECT id, agent_id, conversation_id, role, content, char_count, created_at, rowid,
                     SUM(char_count) OVER (ORDER BY created_at DESC, rowid DESC) as running_total
              FROM messages
              WHERE agent_id = ?1 AND conversation_id = ?2
+               AND role != 'compaction'
+               AND rowid > (SELECT marker_rowid FROM boundary)
          )
          SELECT id, agent_id, conversation_id, role, content, char_count
          FROM ranked
          WHERE running_total - char_count <= ?3
          ORDER BY created_at DESC, rowid DESC"
     } else {
-        "WITH ranked AS (
+        "WITH boundary AS (
+             SELECT COALESCE(
+                 (SELECT rowid FROM messages
+                  WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'compaction'
+                  ORDER BY created_at DESC, rowid DESC LIMIT 1),
+                 0
+             ) AS marker_rowid
+         ),
+         ranked AS (
              SELECT id, agent_id, conversation_id, role, content, char_count, created_at, rowid,
                     SUM(char_count) OVER (ORDER BY created_at DESC, rowid DESC) as running_total
              FROM messages
              WHERE agent_id = ?1 AND conversation_id IS NULL
+               AND role != 'compaction'
+               AND rowid > (SELECT marker_rowid FROM boundary)
          )
          SELECT id, agent_id, conversation_id, role, content, char_count
          FROM ranked
@@ -237,6 +268,88 @@ pub fn get_context_window(
     Ok(result)
 }
 
+/// Compact old tool-result message content in the DB.
+///
+/// Walks tool messages backwards (newest → oldest). Keeps the most recent
+/// `protect_chars` worth of tool output at full fidelity. Any older tool
+/// messages with `char_count > min_chars` have their content replaced with
+/// a compact placeholder, freeing context space without deleting the message.
+///
+/// Returns the number of rows compacted.
+pub fn compact_old_tool_outputs(
+    db: &Db,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+    protect_chars: usize,
+    min_chars: usize,
+) -> Result<usize> {
+    let conn = db
+        .lock()
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+
+    // Find all tool messages ordered newest-first.
+    let sql = if conversation_id.is_some() {
+        "SELECT rowid, char_count FROM messages
+         WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'tool'
+         ORDER BY created_at DESC, rowid DESC"
+    } else {
+        "SELECT rowid, char_count FROM messages
+         WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'tool'
+         ORDER BY created_at DESC, rowid DESC"
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+    let conv = conversation_id.unwrap_or("");
+    let rows: Vec<(i64, i64)> = if conversation_id.is_some() {
+        let mapped = stmt.query_map(params![agent_id, conv], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        mapped.filter_map(|r| r.ok()).collect()
+    } else {
+        let mapped = stmt.query_map(params![agent_id], |r| {
+            Ok((r.get::<_, i64>(0)?, r.get::<_, i64>(1)?))
+        })?;
+        mapped.filter_map(|r| r.ok()).collect()
+    };
+
+    // Walk newest-first, accumulating total chars. Once we exceed protect_chars,
+    // everything older with char_count > min_chars is eligible for compaction.
+    let mut cumulative = 0usize;
+    let mut to_compact: Vec<(i64, i64)> = Vec::new();
+
+    for &(rowid, char_count) in &rows {
+        let cc = char_count as usize;
+        cumulative += cc;
+        if cumulative > protect_chars && cc > min_chars {
+            to_compact.push((rowid, char_count));
+        }
+    }
+
+    if to_compact.is_empty() {
+        return Ok(0);
+    }
+
+    // Compact each eligible row: replace content with a placeholder.
+    let update_sql =
+        "UPDATE messages SET content = ?1, char_count = ?2 WHERE rowid = ?3";
+    let mut compacted = 0usize;
+    for (rowid, original_chars) in &to_compact {
+        let placeholder = serde_json::json!({
+            "content": format!("[tool output compacted — {} chars]", original_chars),
+            "tool_call_id": null
+        });
+        let placeholder_str = placeholder.to_string();
+        let new_char_count = placeholder_str.len() as i64;
+        conn.execute(
+            update_sql,
+            params![placeholder_str, new_char_count, rowid],
+        )?;
+        compacted += 1;
+    }
+
+    Ok(compacted)
+}
+
 // region:    --- Tests
 
 #[cfg(test)]
@@ -265,6 +378,7 @@ mod tests {
                 description: None,
                 system_prompt: None,
                 created_at: None,
+                compaction_model: None,
             },
         )?;
         Ok(())
@@ -399,6 +513,261 @@ mod tests {
         let few = get_context_window(&db, "a1", None, 50)?;
         assert!(few.len() < 10);
         assert!(!few.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn test_compact_old_tool_outputs_basic() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        // Insert a user message and several tool messages with large content
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m0".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": "hello"}),
+                char_count: 5,
+            },
+        )?;
+
+        let big_content = "x".repeat(500);
+        for i in 1..=5 {
+            insert_message(
+                &db,
+                &MessageRow {
+                    id: format!("t{i}"),
+                    agent_id: "a1".into(),
+                    conversation_id: None,
+                    role: "tool".into(),
+                    content: json!({"content": big_content, "tool_call_id": format!("tc{i}")}),
+                    char_count: 500,
+                },
+            )?;
+        }
+
+        // protect_chars=1000 → keeps ~2 recent tool outputs; older 3 get compacted
+        // min_chars=100 → all 500-char tool outputs are eligible
+        let compacted = compact_old_tool_outputs(&db, "a1", None, 1000, 100)?;
+        assert!(compacted > 0, "should have compacted some tool outputs");
+        assert!(compacted <= 5, "should not exceed total tool messages");
+
+        // Verify compacted messages have placeholder content
+        let msgs = list_messages(&db, "a1", None, 100)?;
+        let tool_msgs: Vec<_> = msgs.iter().filter(|m| m.role == "tool").collect();
+        let compacted_count = tool_msgs
+            .iter()
+            .filter(|m| {
+                m.content["content"]
+                    .as_str()
+                    .unwrap_or("")
+                    .contains("compacted")
+            })
+            .count();
+        assert_eq!(compacted_count, compacted);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_compact_skips_small_outputs() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        // Insert tool messages with small content
+        for i in 1..=3 {
+            insert_message(
+                &db,
+                &MessageRow {
+                    id: format!("t{i}"),
+                    agent_id: "a1".into(),
+                    conversation_id: None,
+                    role: "tool".into(),
+                    content: json!({"content": "ok", "tool_call_id": format!("tc{i}")}),
+                    char_count: 2,
+                },
+            )?;
+        }
+
+        // min_chars=100 → none qualify (all are 2 chars)
+        let compacted = compact_old_tool_outputs(&db, "a1", None, 0, 100)?;
+        assert_eq!(compacted, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn test_compact_noop_when_no_tool_messages() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        insert_message(
+            &db,
+            &MessageRow {
+                id: "m1".into(),
+                agent_id: "a1".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": "hello"}),
+                char_count: 5,
+            },
+        )?;
+
+        let compacted = compact_old_tool_outputs(&db, "a1", None, 0, 0)?;
+        assert_eq!(compacted, 0);
+        Ok(())
+    }
+
+    // ── Compaction marker tests ───────────────────────────────────────────
+
+    /// Helper: insert a message with a specific created_at timestamp.
+    fn insert_message_at(db: &Db, row: &MessageRow, ts: i64) -> Result<()> {
+        let conn = db.lock().map_err(|e| {
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+                as Box<dyn std::error::Error>
+        })?;
+        conn.execute(
+            "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at, char_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                row.id,
+                row.agent_id,
+                row.conversation_id,
+                row.role,
+                row.content.to_string(),
+                ts,
+                row.char_count as i64,
+            ],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_list_messages_excludes_compaction_markers() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        // Insert user, assistant, compaction marker, then another user
+        insert_message_at(&db, &MessageRow {
+            id: "m1".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "user".into(), content: json!({"content": "hello"}), char_count: 5,
+        }, 100)?;
+        insert_message_at(&db, &MessageRow {
+            id: "m2".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "assistant".into(), content: json!({"content": "hi"}), char_count: 2,
+        }, 101)?;
+        insert_message_at(&db, &MessageRow {
+            id: "c1".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "compaction".into(),
+            content: json!({"content": "[Compaction marker: 1 turn]"}), char_count: 0,
+        }, 102)?;
+        insert_message_at(&db, &MessageRow {
+            id: "m3".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "user".into(), content: json!({"content": "next"}), char_count: 4,
+        }, 103)?;
+
+        // list_messages_page should return 3 messages (no compaction)
+        let msgs = list_messages_page(&db, "a1", None, 100, 0)?;
+        assert_eq!(msgs.len(), 3, "compaction marker should be excluded");
+        assert!(msgs.iter().all(|m| m.role != "compaction"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_context_window_stops_at_compaction_marker() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        // Insert 3 old messages, then a compaction marker, then 2 new messages.
+        for i in 1..=3 {
+            insert_message_at(&db, &MessageRow {
+                id: format!("old{i}"), agent_id: "a1".into(), conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": format!("old message {i}")}),
+                char_count: 15,
+            }, 100 + i as i64)?;
+        }
+        insert_message_at(&db, &MessageRow {
+            id: "compact1".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "compaction".into(),
+            content: json!({"content": "[Compaction marker]"}), char_count: 0,
+        }, 104)?;
+        for i in 1..=2 {
+            insert_message_at(&db, &MessageRow {
+                id: format!("new{i}"), agent_id: "a1".into(), conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": format!("new message {i}")}),
+                char_count: 15,
+            }, 104 + i as i64)?;
+        }
+
+        // With a large budget, should only get the 2 new messages (after marker)
+        let window = get_context_window(&db, "a1", None, 999_999)?;
+        assert_eq!(window.len(), 2, "should only load messages after compaction marker");
+        assert!(window.iter().all(|m| m.id.starts_with("new")));
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_context_window_no_marker_loads_all() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        // Insert 5 messages with no compaction marker
+        for i in 1..=5 {
+            insert_message_at(&db, &MessageRow {
+                id: format!("m{i}"), agent_id: "a1".into(), conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": format!("msg {i}")}),
+                char_count: 5,
+            }, 100 + i as i64)?;
+        }
+
+        // All 5 should load (backward compatible)
+        let window = get_context_window(&db, "a1", None, 999_999)?;
+        assert_eq!(window.len(), 5);
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_context_window_multiple_markers_uses_latest() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        // Old messages
+        insert_message_at(&db, &MessageRow {
+            id: "old1".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "user".into(), content: json!({"content": "old"}), char_count: 3,
+        }, 100)?;
+        // First compaction marker
+        insert_message_at(&db, &MessageRow {
+            id: "c1".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "compaction".into(),
+            content: json!({"content": "[marker 1]"}), char_count: 0,
+        }, 101)?;
+        // Middle messages
+        insert_message_at(&db, &MessageRow {
+            id: "mid1".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "user".into(), content: json!({"content": "middle"}), char_count: 6,
+        }, 102)?;
+        // Second (latest) compaction marker
+        insert_message_at(&db, &MessageRow {
+            id: "c2".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "compaction".into(),
+            content: json!({"content": "[marker 2]"}), char_count: 0,
+        }, 103)?;
+        // New messages
+        insert_message_at(&db, &MessageRow {
+            id: "new1".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "user".into(), content: json!({"content": "new"}), char_count: 3,
+        }, 104)?;
+
+        // Should only get the 1 message after the latest marker
+        let window = get_context_window(&db, "a1", None, 999_999)?;
+        assert_eq!(window.len(), 1);
+        assert_eq!(window[0].id, "new1");
         Ok(())
     }
 }

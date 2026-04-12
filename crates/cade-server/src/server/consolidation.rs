@@ -177,8 +177,15 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
          {history_text}"
     );
 
+    // Use the compaction model if configured, otherwise fall back to the main model.
+    let compaction_model = agent
+        .compaction_model
+        .as_deref()
+        .filter(|m| !m.is_empty())
+        .unwrap_or(&agent.model);
+
     let req = CompletionRequest {
-        model: agent.model.clone(),
+        model: compaction_model.to_string(),
         messages: vec![LlmMessage {
             role: "user".to_string(),
             content: prompt,
@@ -201,6 +208,19 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
 
     if summary.is_empty() {
         tracing::debug!("consolidate [{}]: LLM returned empty summary", agent_id);
+        return;
+    }
+
+    // ── 4b. Inflation guard — reject summary if it's larger than the dropped content ──
+    let dropped_chars = history_text.chars().count();
+    let summary_chars = summary.chars().count();
+    if is_summary_inflated(summary_chars, dropped_chars) {
+        tracing::warn!(
+            "consolidate [{}]: summary inflated ({} chars) vs dropped ({} chars) — skipping",
+            agent_id,
+            summary_chars,
+            dropped_chars,
+        );
         return;
     }
 
@@ -247,9 +267,97 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
         new_value.chars().count(),
         dropped,
     );
+
+    // ── 6. Insert a compaction marker into message history ───────────────────
+    // The marker acts as a boundary: `get_context_window()` only loads messages
+    // after the most recent marker, drastically reducing the scan set.
+    //
+    // Use the newest dropped message's ID to anchor the marker's timestamp.
+    // The dropped turns are all_rows[0..dropped_msg_count] (oldest-first).
+    // We want the marker's created_at to be equal to the newest dropped message.
+    let dropped_msg_count: usize = turns[..dropped]
+        .iter()
+        .map(|t| t.len())
+        .sum();
+
+    // Look up the created_at of the boundary message from the DB.
+    // all_rows is oldest-first; the boundary is at index dropped_msg_count - 1.
+    let boundary_msg_id = if dropped_msg_count > 0 && dropped_msg_count <= all_rows.len() {
+        Some(all_rows[dropped_msg_count - 1].id.clone())
+    } else {
+        None
+    };
+
+    if let Some(ref bid) = boundary_msg_id {
+        let marker_ts = {
+            let conn = state.db.lock().map_err(|e| {
+                tracing::warn!("consolidate [{}]: DB lock: {}", agent_id, e);
+            });
+            match conn {
+                Ok(c) => c
+                    .query_row(
+                        "SELECT created_at FROM messages WHERE id = ?1",
+                        rusqlite::params![bid],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .unwrap_or_else(|_| {
+                        std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64
+                    }),
+                Err(_) => return,
+            }
+        };
+
+        let marker_content = serde_json::json!({
+            "content": format!(
+                "[Compaction marker: {} turns summarised into session_summary]",
+                dropped,
+            ),
+        });
+
+        let marker = sqlite::MessageRow {
+            id: format!("compact-{}", uuid::Uuid::new_v4()),
+            agent_id: agent_id.to_string(),
+            conversation_id: conversation_id.map(String::from),
+            role: "compaction".to_string(),
+            content: marker_content,
+            char_count: 0,
+        };
+
+        // Insert with the boundary timestamp so ordering is correct.
+        if let Ok(conn) = state.db.lock() {
+            let _ = conn.execute(
+                "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at, char_count)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                rusqlite::params![
+                    marker.id,
+                    marker.agent_id,
+                    marker.conversation_id,
+                    marker.role,
+                    marker.content.to_string(),
+                    marker_ts,
+                    0i64,
+                ],
+            );
+            tracing::debug!(
+                "consolidate [{}]: inserted compaction marker '{}' at ts={}",
+                agent_id,
+                marker.id,
+                marker_ts,
+            );
+        }
+    }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+/// Returns `true` if the summary is inflated relative to the source text — i.e.,
+/// the summary is ≥ 80% of the dropped-content size and should be rejected.
+fn is_summary_inflated(summary_chars: usize, dropped_chars: usize) -> bool {
+    dropped_chars > 0 && summary_chars > ((dropped_chars as f64) * 0.8) as usize
+}
 
 /// Group `(role, text)` pairs into logical turns.
 /// A turn starts at each `user` message and includes all following non-`user`
@@ -317,5 +425,33 @@ mod tests {
         assert_eq!(turns.len(), 2);
         // First turn: user + assistant + tool + assistant = 4 messages
         assert_eq!(turns[0].len(), 4);
+    }
+
+    // ── Inflation guard tests ─────────────────────────────────────────────
+
+    #[test]
+    fn inflation_guard_rejects_when_summary_is_large() {
+        assert!(is_summary_inflated(900, 1000));
+    }
+
+    #[test]
+    fn inflation_guard_accepts_when_summary_is_compact() {
+        assert!(!is_summary_inflated(200, 1000));
+    }
+
+    #[test]
+    fn inflation_guard_boundary_at_80_percent() {
+        assert!(!is_summary_inflated(800, 1000));
+        assert!(is_summary_inflated(801, 1000));
+    }
+
+    #[test]
+    fn inflation_guard_handles_zero_dropped() {
+        assert!(!is_summary_inflated(100, 0));
+    }
+
+    #[test]
+    fn inflation_guard_handles_empty_summary() {
+        assert!(!is_summary_inflated(0, 1000));
     }
 }

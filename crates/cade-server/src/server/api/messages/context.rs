@@ -267,18 +267,41 @@ pub(crate) async fn build_context(
         }
     }
 
-    if omitted_turns > 0 {
-        tracing::debug!(
-            "build_context [{}]: {}/{} turns fit in budget \
-             ({} chars used / {} budget); {} older turn(s) omitted — \
-             agent can recover them via conversation_search / search_memory",
-            agent_id,
-            selected.len(),
-            turns_len,
-            budget_used,
-            message_budget,
-            omitted_turns,
-        );
+    // ── Proactive overflow signal ──────────────────────────────────────────
+    // Trigger consolidation early when context usage ≥ 80%, even if no turns
+    // were dropped yet.  This gives the Sleeptime task time to produce a
+    // summary before the next request actually overflows.
+    const PROACTIVE_CONSOLIDATION_THRESHOLD: f64 = 0.80;
+    let usage_fraction = if message_budget > 0 {
+        budget_used as f64 / message_budget as f64
+    } else {
+        0.0
+    };
+    let needs_proactive = usage_fraction >= PROACTIVE_CONSOLIDATION_THRESHOLD;
+
+    if omitted_turns > 0 || needs_proactive {
+        if omitted_turns > 0 {
+            tracing::debug!(
+                "build_context [{}]: {}/{} turns fit in budget \
+                 ({} chars used / {} budget); {} older turn(s) omitted — \
+                 agent can recover them via conversation_search / search_memory",
+                agent_id,
+                selected.len(),
+                turns_len,
+                budget_used,
+                message_budget,
+                omitted_turns,
+            );
+        } else {
+            tracing::debug!(
+                "build_context [{}]: proactive consolidation signal at {:.0}% usage \
+                 ({} chars / {} budget)",
+                agent_id,
+                usage_fraction * 100.0,
+                budget_used,
+                message_budget,
+            );
+        }
         // Signal the Sleeptime consolidation task.  After 60 s of inactivity
         // it will summarise the dropped turns into the `session_summary` block.
         let mut activity = state.agent_activity.write().await;
@@ -293,6 +316,37 @@ pub(crate) async fn build_context(
         entry.needs_consolidation = true;
         if conversation_id.is_some() {
             entry.conversation_id = conversation_id.map(String::from);
+        }
+
+        // ── Surgical tool-output pruning ───────────────────────────────────
+        // When turns are being dropped, compact old tool outputs in the DB so
+        // future requests can fit more turns.  Keeps the last PRUNE_PROTECT_CHARS
+        // of tool output at full fidelity; older large outputs are replaced with
+        // a "[tool output compacted — N chars]" placeholder.
+        if omitted_turns > 0 {
+            const PRUNE_PROTECT_CHARS: usize = 120_000; // ~40k tokens × 3 chars/token
+            const PRUNE_MIN_CHARS: usize = 200;         // only compact outputs > 200 chars
+            match sqlite::compact_old_tool_outputs(
+                &state.db,
+                agent_id,
+                conversation_id,
+                PRUNE_PROTECT_CHARS,
+                PRUNE_MIN_CHARS,
+            ) {
+                Ok(n) if n > 0 => {
+                    tracing::info!(
+                        "build_context [{}]: pruned {} old tool outputs",
+                        agent_id, n,
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "build_context [{}]: tool-output pruning failed: {}",
+                        agent_id, e,
+                    );
+                }
+                _ => {}
+            }
         }
     }
 

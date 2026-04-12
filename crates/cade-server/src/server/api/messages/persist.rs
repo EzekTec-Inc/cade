@@ -2,6 +2,8 @@ use super::*;
 
 pub(crate) fn db_row_to_llm(row: &MessageRow) -> Vec<LlmMessage> {
     match row.role.as_str() {
+        // Compaction markers are DB-level sentinels only — never sent to LLM providers.
+        "compaction" => vec![],
         "tool" => {
             let raw = row.content["content"].as_str().unwrap_or("");
             // Truncate very large tool results (e.g. raw base64 images, enormous logs)

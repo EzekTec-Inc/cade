@@ -389,10 +389,16 @@ fn run_migrations(conn: &Connection) -> Result<()> {
     }
 
     // Future migrations go here:
-    // if current_version < 2 {
-    //     ...
-    //     conn.execute("PRAGMA user_version = 2", [])?;
-    // }
+    if current_version < 2 {
+        // P1-C: Add optional compaction_model column to agents table.
+        // When set, Sleeptime consolidation uses this (cheaper) model instead
+        // of the agent's main model.
+        let _ = conn.execute(
+            "ALTER TABLE agents ADD COLUMN compaction_model TEXT",
+            [],
+        );
+        conn.execute("PRAGMA user_version = 2", [])?;
+    }
 
     Ok(())
 }
@@ -417,6 +423,9 @@ pub struct AgentRow {
     pub system_prompt: Option<String>,
     /// Unix timestamp (seconds) when the agent was created.
     pub created_at: Option<i64>,
+    /// Optional cheaper model used for Sleeptime consolidation summaries.
+    /// When `None`, consolidation falls back to `model`.
+    pub compaction_model: Option<String>,
 }
 
 pub mod agents;

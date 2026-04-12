@@ -91,6 +91,8 @@ pub fn search_messages(
     // FTS5 bm25() returns negative values; ORDER BY bm25 ASC = best match first.
     // snippet() extracts up to 32 tokens around the best match:
     //   args: (fts_table, col_idx, before_match, after_match, ellipsis, max_tokens)
+    // Exclude compaction markers from search results — they are meta-content, not
+    // real conversation messages.
     let sql = if conversation_id.is_some() {
         "SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content,
                 bm25(messages_fts) AS score,
@@ -98,6 +100,7 @@ pub fn search_messages(
          FROM messages m
          JOIN messages_fts ON messages_fts.rowid = m.rowid
          WHERE m.agent_id = ?1 AND m.conversation_id = ?2
+           AND m.role != 'compaction'
            AND messages_fts MATCH ?3
          ORDER BY score ASC
          LIMIT 20"
@@ -108,6 +111,7 @@ pub fn search_messages(
          FROM messages m
          JOIN messages_fts ON messages_fts.rowid = m.rowid
          WHERE m.agent_id = ?1
+           AND m.role != 'compaction'
            AND messages_fts MATCH ?2
          ORDER BY score ASC
          LIMIT 20"
@@ -376,6 +380,7 @@ mod tests {
                 description: None,
                 system_prompt: None,
                 created_at: None,
+                compaction_model: None,
             },
         )?;
         Ok(())

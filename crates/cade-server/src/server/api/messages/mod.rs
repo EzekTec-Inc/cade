@@ -63,6 +63,46 @@ To keep a critical block permanently active, ask the user to run `/memory pin <l
 /// 8 192 chars covers the vast majority of useful tool outputs (diffs, file
 /// excerpts, command output) while cutting worst-case cost by 75% vs 32 768.
 const TOOL_RESULT_MAX_CHARS: usize = 8_192;
+
+/// Per-tool output limits (chars). Tools not listed here use TOOL_RESULT_MAX_CHARS.
+/// Rationale:
+///   - bash/shell: logs are noisy, 4k is usually enough for error context
+///   - grep/search: results are compact summaries, 3k covers most searches
+///   - read_file: files need more space to be useful, 12k allows full small files
+///   - archival/conversation search: returns excerpts, 2k is ample
+///
+/// NOTE: Currently used by tests and available for integration when tool names
+/// are propagated through the persist path. The default TOOL_RESULT_MAX_CHARS
+/// is used until then.
+#[allow(dead_code)]
+pub(crate) fn tool_output_limit(tool_name: &str) -> usize {
+    match tool_name {
+        // Shell / command execution
+        "bash" | "developer__shell" | "RunShellCommand"
+        | "desktop-commander__start_process"
+        | "desktop-commander__read_process_output" => 4_096,
+
+        // File reading tools — need more room
+        "read_file" | "ReadFileGemini" | "developer__read_file"
+        | "desktop-commander__read_file"
+        | "desktop-commander__read_multiple_files" => 12_288,
+
+        // Search / grep — compact results
+        "grep" | "SearchFileContent" | "developer__grep_search"
+        | "desktop-commander__start_search"
+        | "desktop-commander__get_more_search_results" => 3_072,
+
+        // Memory retrieval — excerpts only
+        "archival_memory_search" | "conversation_search" | "search_memory" => 2_048,
+
+        // Glob / list — compact
+        "glob" | "GlobGemini" | "developer__list_directory"
+        | "desktop-commander__list_directory" => 3_072,
+
+        // Everything else: default
+        _ => TOOL_RESULT_MAX_CHARS,
+    }
+}
 /// Chars-per-token approximation used to convert a model's token context window
 /// into a character budget.  The budget formula is:
 ///   char_budget = input_budget_tokens × CHARS_PER_TOKEN

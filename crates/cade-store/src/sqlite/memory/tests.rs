@@ -21,6 +21,7 @@ fn make_agent(db: &Db, id: &str) -> Result<()> {
             description: None,
             system_prompt: None,
             created_at: None,
+            compaction_model: None,
         },
     )?;
     Ok(())
