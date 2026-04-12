@@ -1,4 +1,5 @@
 pub mod clipboard;
+pub mod command_palette;
 pub mod input;
 pub mod questions;
 pub mod render;
@@ -320,6 +321,8 @@ pub struct TuiApp {
     pub picker: Option<PickerState>,
     /// Active `/theme` picker overlay. `None` when inactive.
     pub theme_picker: Option<ThemePickerState>,
+    /// Active command palette overlay (`Ctrl+P`). `None` when inactive.
+    pub command_palette: Option<command_palette::CommandPaletteState>,
 
     // -- Image paste staging
     /// Images drained from the editor on the last submission.
@@ -438,6 +441,7 @@ impl TuiApp {
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
             picker: None,
             theme_picker: None,
+            command_palette: None,
             pending_submit_images: Vec::new(),
             header_lines: Vec::new(),
             footer_extra: None,
@@ -545,6 +549,7 @@ impl TuiApp {
         let context_pct = self.context_pct;
         let picker = self.picker.clone();
         let theme_picker = self.theme_picker.clone();
+        let command_palette = self.command_palette.clone();
         let header_lines = self.header_lines.clone();
         let footer_extra = self.footer_extra.clone();
         let reasoning_effort = self.reasoning_effort.clone();
@@ -594,6 +599,7 @@ impl TuiApp {
                 context_pct,
                 picker.as_ref(),
                 theme_picker.as_ref(),
+                command_palette.as_ref(),
                 &header_lines,
                 footer_extra.as_deref(),
                 reasoning_effort.as_deref(),

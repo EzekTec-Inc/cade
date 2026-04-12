@@ -102,6 +102,51 @@ impl TuiApp {
         // Some(Some(s))     = line submitted
         // None              = continue reading
 
+        // -- Command palette routing (Ctrl+P overlay)
+        if self.command_palette.is_some() {
+            match (k.code, k.modifiers) {
+                (KeyCode::Esc, _)
+                | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                    self.command_palette = None;
+                }
+                (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
+                    if let Some(cp) = &mut self.command_palette {
+                        cp.cursor_up();
+                    }
+                }
+                (KeyCode::Down, _) | (KeyCode::Tab, _) => {
+                    if let Some(cp) = &mut self.command_palette {
+                        cp.cursor_down();
+                    }
+                }
+                (KeyCode::Enter, _) => {
+                    if let Some(cp) = self.command_palette.take() {
+                        if let Some(cmd) = cp.selected_command() {
+                            let cmd = cmd.to_string();
+                            return Ok(Some(Some(cmd)));
+                        }
+                    }
+                }
+                (KeyCode::Backspace, _) => {
+                    if let Some(cp) = &mut self.command_palette {
+                        if cp.query.is_empty() {
+                            self.command_palette = None;
+                        } else {
+                            cp.pop_char();
+                        }
+                    }
+                }
+                (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+                    if let Some(cp) = &mut self.command_palette {
+                        cp.push_char(c);
+                    }
+                }
+                _ => {}
+            }
+            let _ = self.draw();
+            return Ok(None);
+        }
+
         // -- A-01b: theme picker routing
         if self.theme_picker.is_some() {
             match (k.code, k.modifiers) {
@@ -440,6 +485,11 @@ impl TuiApp {
                     },
                     ToastLevel::Info,
                 );
+            }
+
+            // -- Command Palette (Ctrl+P)
+            (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
+                self.command_palette = Some(super::command_palette::CommandPaletteState::new());
             }
 
             // -- Image / clipboard paste

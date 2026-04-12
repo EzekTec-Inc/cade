@@ -1,5 +1,6 @@
 use crate::app::layout::question::{question_height, render_question_inline};
 use crate::app::layout::pickers::{render_picker, render_theme_picker};
+use crate::app::layout::command_palette::render_command_palette;
 use crate::app::layout::helpers::{mode_sep_color, mode_footer_left, truncate_str};
 // Rendering helpers for the TuiApp full-screen layout.
 //
@@ -25,6 +26,7 @@ use super::{
     BRAILLE, DOTS, FIXED_ROWS,
     MAX_INPUT_ROWS, SIDEBAR_BREAKPOINT, SIDEBAR_WIDTH,
 };
+use super::command_palette::CommandPaletteState;
 use super::timeline::{
     PreparedTimelineEntry, TimelineEntry, TimelineKey,
     build_timeline_entries, prepare_timeline_entries, render_timeline_viewport,
@@ -114,6 +116,7 @@ pub(crate) fn render_frame(
     context_pct: Option<u8>,
     picker: Option<&PickerState>,
     theme_picker: Option<&ThemePickerState>,
+    command_palette: Option<&CommandPaletteState>,
     header_lines: &[RenderLine],
     footer_extra: Option<&str>,
     reasoning_effort: Option<&str>,
@@ -560,6 +563,11 @@ pub(crate) fn render_frame(
 
     if let Some(toast) = toast {
         render_toast(frame, main_area, toast, colors);
+    }
+
+    // -- Command palette overlay (renders on top of everything)
+    if let Some(cp) = command_palette {
+        render_command_palette(frame, cp, frame.area(), colors);
     }
 
     if let Some(plan) = active_plan
