@@ -188,13 +188,15 @@ pub(crate) fn render_tool_call_item(
     expand_all: bool,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
+    nerd: bool,
 ) {
     out.push(Line::from(""));
     let display = display_tool_name(name);
+    let icon = crate::icons::tool_icon(&display, nerd);
     let name_style = Style::default()
         .add_modifier(Modifier::BOLD)
         .fg(colors.tool_title);
-    let budget = width.saturating_sub(display.len() + 14);
+    let budget = width.saturating_sub(display.len() + icon.len() + 15);
     let args_span = if preview.is_empty() {
         Span::styled(")", Style::default().fg(colors.dim))
     } else if expand_all || preview.len() < budget {
@@ -205,7 +207,7 @@ pub(crate) fn render_tool_call_item(
     };
     let spans: Vec<Span<'static>> = vec![
         Span::styled(
-            "▶ TOOL ",
+            format!("{icon} "),
             Style::default()
                 .fg(colors.assistant_accent)
                 .add_modifier(Modifier::BOLD),
@@ -224,11 +226,17 @@ pub(crate) fn render_tool_result_item(
     expand_all: bool,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
+    nerd: bool,
 ) {
     let color = if is_error {
         colors.diff_removed
     } else {
         colors.diff_added
+    };
+    let status_label = if is_error {
+        format!("{} ERR ", crate::icons::error_icon(nerd))
+    } else {
+        format!("{} OK ", crate::icons::success_icon(nerd))
     };
     let inner_w = width.saturating_sub(11);
     let lns: Vec<&str> = content.lines().collect();
@@ -236,7 +244,7 @@ pub(crate) fn render_tool_result_item(
         out.push(Line::from(vec![
             Span::styled("│ ", Style::default().fg(colors.border)),
             Span::styled(
-                if is_error { "✗ ERR " } else { "✓ OK " },
+                status_label,
                 Style::default()
                     .fg(color)
                     .add_modifier(Modifier::BOLD),
@@ -257,7 +265,7 @@ pub(crate) fn render_tool_result_item(
             if i == 0 {
                 spans.push(Span::styled("│ ", Style::default().fg(colors.border)));
                 spans.push(Span::styled(
-                    if is_error { "✗ ERR " } else { "✓ OK " },
+                    status_label.clone(),
                     Style::default()
                         .fg(color)
                         .add_modifier(Modifier::BOLD),

@@ -1,3 +1,20 @@
+## 2026-04-12T21:09:00Z — TUI: Nerd Font icons for tool calls and results
+
+**Summary:** Added Nerd Font glyph icons for all tool call types (bash, file read/write, git, GitHub, memory, skills, subagents, web, etc.) and tool result status badges (success/error). Icons render automatically when `use_nerd_fonts` is true (default). Falls back to plain ASCII/Unicode (`▶`, `✓`, `✗`) when disabled.
+**Files modified:**
+- `crates/cade-tui/src/icons.rs` — NEW: const icon map with `tool_icon()`, `success_icon()`, `error_icon()` functions + 5 unit tests
+- `crates/cade-tui/src/lib.rs` — registered `icons` module
+- `crates/cade-tui/src/app/mod.rs` — added `use_nerd_fonts: bool` field to `TuiApp`, threaded `nerd` through `render_frame` call and test callsites
+- `crates/cade-tui/src/app/render.rs` — added `nerd: bool` param to `render_frame`, passed through to timeline rendering
+- `crates/cade-tui/src/app/state.rs` — passed `use_nerd_fonts` to `visual_rows_with_state`
+- `crates/cade-tui/src/app/timeline/render_item.rs` — `render_tool_call_item` uses `tool_icon()` instead of hardcoded `"▶ TOOL "`; `render_tool_result_item` uses `success_icon()`/`error_icon()`
+- `crates/cade-tui/src/app/timeline/mod.rs` — threaded `nerd: bool` through `render_into`, `visual_rows`, `render_with_state`, `visual_rows_with_state`, `prepare_timeline_entries`
+**Reason:** Nerd Font icons provide instant visual differentiation of tool call types without reading the tool name.
+**Previous behavior:** All tool calls showed `▶ TOOL <name>(...)`. Results showed `✓ OK` / `✗ ERR`.
+**New behavior:** Tool calls show a type-specific Nerd Font icon (e.g. `` for bash, `` for file read, `` for git). Results show `` / `` in nerd mode. ASCII fallback preserved when `use_nerd_fonts = false`.
+**Tests:** 26/26 cade-tui tests pass (5 new icon tests). Binary size unchanged (15M release).
+**Rollback steps:** `git revert HEAD`
+
 ## 2026-04-12T20:51:00Z — TUI: Rounded borders on all bordered panels
 
 **Summary:** Applied `BorderType::Rounded` to all 9 `Borders::ALL` callsites across the TUI. Sidebar panels (`Borders::LEFT` only) intentionally left unchanged — rounding a single edge produces broken glyphs.

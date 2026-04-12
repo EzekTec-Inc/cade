@@ -55,6 +55,7 @@ impl TuiApp {
                 self.expand_all,
                 &self.expanded_items,
                 &self.colors,
+                self.use_nerd_fonts,
             ));
             if entry.is_tool_call() {
                 return total as usize;

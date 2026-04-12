@@ -18,6 +18,7 @@ pub mod autocomplete;
 pub mod colors;
 pub mod component;
 pub mod editor;
+pub mod icons;
 pub mod markdown;
 pub mod mcp_picker;
 pub mod menu;

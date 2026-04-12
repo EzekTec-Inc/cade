@@ -192,6 +192,7 @@ impl<'a> TimelineItem<'a> {
         expand_all: bool,
         out: &mut Vec<Line<'static>>,
         colors: &ThemeColors,
+        nerd: bool,
     ) {
         match self {
             Self::Separator => render_separator_item(width, out),
@@ -205,10 +206,10 @@ impl<'a> TimelineItem<'a> {
             Self::User(text) => render_user_message_item(text, width, out, colors),
             Self::Assistant(text) => render_assistant_item(text, out, colors),
             Self::ToolCall { name, preview } => {
-                render_tool_call_item(name, preview, width, expand_all, out, colors)
+                render_tool_call_item(name, preview, width, expand_all, out, colors, nerd)
             }
             Self::ToolResult { is_error, content } => {
-                render_tool_result_item(*is_error, content, width, expand_all, out, colors)
+                render_tool_result_item(*is_error, content, width, expand_all, out, colors, nerd)
             }
             Self::LiveOutput {
                 lines,
@@ -242,9 +243,10 @@ impl<'a> TimelineItem<'a> {
         content_w: u16,
         expand_all: bool,
         colors: &ThemeColors,
+        nerd: bool,
     ) -> u16 {
         let mut lines = Vec::new();
-        self.render_into(content_w as usize, expand_all, &mut lines, colors);
+        self.render_into(content_w as usize, expand_all, &mut lines, colors, nerd);
         lines.iter().map(|l| count_wrapped_rows(l, content_w)).sum()
     }
 }
@@ -288,8 +290,9 @@ impl<'a> TimelineEntry<'a> {
         expand_all: bool,
         out: &mut Vec<Line<'static>>,
         colors: &ThemeColors,
+        nerd: bool,
     ) {
-        self.item.render_into(width, expand_all, out, colors)
+        self.item.render_into(width, expand_all, out, colors, nerd)
     }
 
     pub(crate) fn render_with_state(
@@ -299,12 +302,14 @@ impl<'a> TimelineEntry<'a> {
         expanded_items: &std::collections::HashSet<TimelineKey>,
         out: &mut Vec<Line<'static>>,
         colors: &ThemeColors,
+        nerd: bool,
     ) {
         self.item.render_into(
             width,
             self.is_expanded(expand_all, expanded_items),
             out,
             colors,
+            nerd,
         );
     }
 
@@ -314,6 +319,7 @@ impl<'a> TimelineEntry<'a> {
         expand_all: bool,
         expanded_items: &std::collections::HashSet<TimelineKey>,
         colors: &ThemeColors,
+        nerd: bool,
     ) -> u16 {
         let card_style = match self.key.kind {
             TimelineItemKind::User => CardStyle::User,
@@ -331,6 +337,7 @@ impl<'a> TimelineEntry<'a> {
             effective_width,
             self.is_expanded(expand_all, expanded_items),
             colors,
+            nerd,
         )
     }
 
@@ -353,6 +360,7 @@ pub(crate) fn prepare_timeline_entries(
     expand_all: bool,
     expanded_items: &std::collections::HashSet<TimelineKey>,
     colors: &ThemeColors,
+    nerd: bool,
 ) -> Vec<PreparedTimelineEntry> {
     entries
         .iter()
@@ -375,6 +383,7 @@ pub(crate) fn prepare_timeline_entries(
                 expanded_items,
                 &mut lines,
                 colors,
+                nerd,
             );
             let rows = lines
                 .iter()

@@ -123,6 +123,7 @@ pub(crate) fn render_frame(
     expanded_items: &std::collections::HashSet<TimelineKey>,
     colors: &ThemeColors,
     last_input_width: &mut u16,
+    nerd: bool,
 ) -> u16 {
     // returns max_skip for V-04 scroll clamping
     let area = frame.area();
@@ -207,7 +208,7 @@ pub(crate) fn render_frame(
     let (header_area_opt, messages_area) = {
         let mut header_text: Vec<Line<'static>> = Vec::new();
         for entry in build_timeline_entries(header_lines) {
-            entry.render_into(w, false, &mut header_text, colors);
+            entry.render_into(w, false, &mut header_text, colors, nerd);
         }
         if header_text.is_empty() {
             (None, chunks[0])
@@ -239,6 +240,7 @@ pub(crate) fn render_frame(
         expand_all,
         expanded_items,
         colors,
+        nerd,
     );
     if let Some(s) = streaming {
         let next_index = timeline_entries
@@ -254,6 +256,7 @@ pub(crate) fn render_frame(
             expanded_items,
             &mut lines,
             colors,
+            nerd,
         );
         let rows = lines
             .iter()

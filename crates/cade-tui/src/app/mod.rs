@@ -361,6 +361,10 @@ pub struct TuiApp {
 
     /// Active color theme — replaces hardcoded RC::Rgb values at render time.
     pub colors: ThemeColors,
+
+    /// When true, render Nerd Font glyphs for tool icons and status badges.
+    /// When false, fall back to plain ASCII/Unicode symbols.
+    pub use_nerd_fonts: bool,
 }
 
 impl TuiApp {
@@ -444,6 +448,7 @@ impl TuiApp {
             draw_dirty: false,
             last_draw_at: Instant::now(),
             colors,
+            use_nerd_fonts: true,
         }
     }
 
@@ -554,6 +559,7 @@ impl TuiApp {
         let toast = self.toast.clone();
         let copy_mode = self.copy_mode;
         let colors = self.colors.clone();
+        let nerd = self.use_nerd_fonts;
 
         // V-04: capture max_skip returned by render_frame to clamp self.scroll.
         let mut max_skip: u16 = 0;
@@ -597,6 +603,7 @@ impl TuiApp {
                 &expanded_items,
                 &colors,
                 &mut self.last_input_width,
+                nerd,
             );
         })?;
 
@@ -687,7 +694,7 @@ mod tests {
         };
         let item = TimelineItem::from_render_line(&line);
         assert_eq!(item.kind(), TimelineItemKind::ToolCall);
-        assert!(item.visual_rows(80, false, &ThemeColors::dark()) >= 1);
+        assert!(item.visual_rows(80, false, &ThemeColors::dark(), true) >= 1);
     }
 
     #[test]
@@ -741,12 +748,12 @@ mod tests {
         let entry = TimelineEntry::from_render_line(0, &line);
         let colors = ThemeColors::dark();
         let expanded: std::collections::HashSet<TimelineKey> = std::collections::HashSet::new();
-        let collapsed_rows = entry.visual_rows_with_state(80, false, &expanded, &colors);
+        let collapsed_rows = entry.visual_rows_with_state(80, false, &expanded, &colors, true);
 
         let mut expanded = std::collections::HashSet::new();
         expanded.insert(entry.key);
         assert!(timeline_key_expanded(false, &expanded, &entry.key));
-        let expanded_rows = entry.visual_rows_with_state(80, false, &expanded, &colors);
+        let expanded_rows = entry.visual_rows_with_state(80, false, &expanded, &colors, true);
         assert!(expanded_rows > collapsed_rows);
     }
 
@@ -760,7 +767,7 @@ mod tests {
         let entries = build_timeline_entries(&lines);
         let colors = ThemeColors::dark();
         let expanded = std::collections::HashSet::new();
-        let prepared = prepare_timeline_entries(&entries, 80, false, &expanded, &colors);
+        let prepared = prepare_timeline_entries(&entries, 80, false, &expanded, &colors, true);
         assert_eq!(prepared.len(), 3);
         let total: u16 = prepared.iter().map(|p| p.rows).sum();
         assert!(total >= 3, "at least 1 row per item; got {total}");
