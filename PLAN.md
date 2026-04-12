@@ -111,3 +111,14 @@
 **Previous behavior:** SSE parsing was inline and untestable. http.lua had zero test coverage.
 **New behavior:** All SSE parse logic testable in isolation. 7/7 pass. Full suite 22/22.
 **Rollback steps:** Revert `http.lua` from commit `2482c51`. Delete `spec/http_spec.lua`.
+
+## 2026-04-12T19:45:00Z — cade.nvim: completion latency telemetry
+**Summary:** http.lua now records os.clock() timestamps for each fetch() call. status() / :CadeStatus displays a Latency line showing ttft (time-to-first-token) and total duration after at least one completion has fired.
+**Files modified:**
+- `plugins/cade.nvim/lua/cade/http.lua` — Added `M._last_request_at`, `M._last_first_token`, `M._last_done_at` module-level fields. Set in fetch(): request_at on entry, first_token on first delta, done_at on stream end or error.
+- `plugins/cade.nvim/lua/cade/init.lua` — status() reads http telemetry fields and appends "Latency: ttft=Xms total=Xms" or "(no data)".
+- `plugins/cade.nvim/spec/http_spec.lua` — +1 test: _last_request_at is a number after fetch() fires.
+- `plugins/cade.nvim/spec/status_spec.lua` — +2 tests: Latency "(no data)" when no fetch, ttft=/total= when telemetry present.
+**Previous behavior:** No timing data available. :CadeStatus showed no latency.
+**New behavior:** After each completion, ttft and total latency visible in :CadeStatus. Full suite: 25/25.
+**Rollback steps:** Revert `http.lua` and `init.lua`. Remove telemetry tests from specs.

@@ -50,4 +50,40 @@ describe("cade.status()", function()
 
     assert.truthy(result:find("✗"), "expected '✗' in status when server is unreachable")
   end)
+
+  -- ── Telemetry ──────────────────────────────────────────────────────────────
+
+  it("status() includes a Latency line showing '(no data)' when no fetch has run", function()
+    package.loaded["cade.http"] = nil
+    local http = require("cade.http")
+    http._last_request_at  = nil
+    http._last_first_token = nil
+    http._last_done_at     = nil
+
+    local cade = require("cade")
+    cade._probe_server = function() return false end
+
+    local result = cade.status()
+
+    assert.truthy(result:find("Latency"), "expected 'Latency' in status output")
+    assert.truthy(result:find("no data"), "expected '(no data)' when no fetch has run")
+  end)
+
+  it("status() includes ttft and total when telemetry data is present", function()
+    package.loaded["cade.http"] = nil
+    local http = require("cade.http")
+    -- Simulate a completed request: 200ms ttft, 800ms total
+    local t0 = os.clock()
+    http._last_request_at  = t0
+    http._last_first_token = t0 + 0.200
+    http._last_done_at     = t0 + 0.800
+
+    local cade = require("cade")
+    cade._probe_server = function() return false end
+
+    local result = cade.status()
+
+    assert.truthy(result:find("ttft="),  "expected 'ttft=' in status when telemetry is set")
+    assert.truthy(result:find("total="), "expected 'total=' in status when telemetry is set")
+  end)
 end)

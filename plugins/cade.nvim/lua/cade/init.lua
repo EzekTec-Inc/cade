@@ -69,6 +69,23 @@ function M.status()
   local agent_display = cfg.agent_id ~= "" and cfg.agent_id or "(not set)"
   local key_display   = (cfg.api_key ~= "" and cfg.api_key ~= nil) and "SET" or "NOT SET"
 
+  -- Telemetry line
+  local http = require("cade.http")
+  local latency_str
+  if http._last_request_at and http._last_done_at then
+    local ttft  = http._last_first_token
+      and math.floor((http._last_first_token - http._last_request_at) * 1000)
+      or  nil
+    local total = math.floor((http._last_done_at - http._last_request_at) * 1000)
+    if ttft then
+      latency_str = string.format("ttft=%dms total=%dms", ttft, total)
+    else
+      latency_str = string.format("total=%dms", total)
+    end
+  else
+    latency_str = "(no data)"
+  end
+
   local lines = {
     "CADE Completions",
     string.format("  Status:     %s", cfg.enabled and "enabled" or "disabled"),
@@ -77,6 +94,7 @@ function M.status()
     string.format("  API key:    %s", key_display),
     string.format("  Debounce:   %dms", cfg.debounce_ms),
     string.format("  Filetype:   %s", vim.bo.filetype ~= "" and vim.bo.filetype or "(any)"),
+    string.format("  Latency:    %s", latency_str),
   }
 
   local text = table.concat(lines, "\n")

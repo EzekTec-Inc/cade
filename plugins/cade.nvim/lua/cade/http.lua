@@ -3,6 +3,11 @@
 
 local M = {}
 
+--- Telemetry: timestamps (os.clock()) set by the most recent fetch() call.
+M._last_request_at  = nil  -- when fetch() fired
+M._last_first_token = nil  -- when first stream_delta arrived
+M._last_done_at     = nil  -- when stream ended (done or error)
+
 --- Parse a single SSE line and return a typed result, or nil if not actionable.
 --- This is a pure function — no I/O, no state. Exported for testing.
 ---@param line string  A raw SSE line (may include leading/trailing whitespace)
@@ -45,6 +50,11 @@ function M.fetch(prefix, suffix, language, on_token, on_done, on_error)
     on_error("cade.nvim: agent_id not configured")
     return function() end
   end
+
+  -- Record request start time
+  M._last_request_at  = os.clock()
+  M._last_first_token = nil
+  M._last_done_at     = nil
 
   local url = string.format(
     "http://127.0.0.1:%d/v1/agents/%s/complete",
@@ -100,14 +110,19 @@ function M.fetch(prefix, suffix, language, on_token, on_done, on_error)
         if parsed then
           if parsed.type == "done" then
             done = true
+            M._last_done_at = os.clock()
             vim.schedule(on_done)
             return
           elseif parsed.type == "delta" then
+            if M._last_first_token == nil then
+              M._last_first_token = os.clock()
+            end
             accumulated = accumulated .. parsed.content
             local snap = accumulated
             vim.schedule(function() on_token(snap) end)
           elseif parsed.type == "error" then
             done = true
+            M._last_done_at = os.clock()
             vim.schedule(function() on_error(parsed.message) end)
             return
           end

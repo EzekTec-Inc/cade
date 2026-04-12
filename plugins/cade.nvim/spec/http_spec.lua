@@ -109,4 +109,21 @@ describe("http", function()
     local ok = pcall(cancel)
     assert.is_true(ok)
   end)
+
+  -- ── Telemetry ──────────────────────────────────────────────────────────────
+
+  it("fetch() sets _last_request_at to a number when called", function()
+    config.setup({ agent_id = "agent-test", api_key = "sk-test", server_port = 19997 })
+    http = require("cade.http")
+
+    http._last_request_at = nil
+    local cancel = http.fetch("prefix", "suffix", "lua",
+      function(_) end,
+      function() end,
+      function(_) end
+    )
+    cancel()
+
+    assert.is_number(http._last_request_at)
+  end)
 end)
