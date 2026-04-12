@@ -1,0 +1,72 @@
+{
+  "name": "cade-complete",
+  "displayName": "CADE Inline Completions",
+  "description": "AI code completions powered by CADE — Copilot-style ghost text from your local CADE server.",
+  "version": "0.1.0",
+  "publisher": "EzekTec-Inc",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Machine Learning"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "CADE Completions",
+      "properties": {
+        "cade.serverPort": {
+          "type": "number",
+          "default": 8284,
+          "description": "Port of the local CADE server."
+        },
+        "cade.agentId": {
+          "type": "string",
+          "default": "",
+          "description": "CADE agent ID used for completion requests. Falls back to CADE_AGENT_ID env var."
+        },
+        "cade.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "Bearer token for CADE server auth. Falls back to CADE_API_KEY env var."
+        },
+        "cade.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable inline completions."
+        },
+        "cade.linesBefore": {
+          "type": "number",
+          "default": 50,
+          "description": "Number of lines before the cursor to include as prefix context."
+        },
+        "cade.linesAfter": {
+          "type": "number",
+          "default": 20,
+          "description": "Number of lines after the cursor to include as suffix context."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "cade.toggleCompletions",
+        "title": "CADE: Toggle Inline Completions"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "npx @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}
