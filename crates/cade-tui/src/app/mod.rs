@@ -286,6 +286,9 @@ pub struct TuiApp {
     pub lines: Vec<RenderLine>,
     /// Lines scrolled up from the bottom.  0 = show latest content.
     pub scroll: usize,
+    /// Target scroll position for smooth-scroll animation.
+    /// When different from `scroll`, the tick loop interpolates toward it.
+    scroll_target: usize,
     /// When true, snap to bottom on new content; disabled by manual scroll.
     pub follow: bool,
     pub expand_all: bool,
@@ -435,6 +438,7 @@ impl TuiApp {
             terminal,
             lines: Vec::new(),
             scroll: 0,
+            scroll_target: 0,
             follow: true,
             expand_all: false,
             expanded_items: std::collections::HashSet::new(),
@@ -525,7 +529,50 @@ impl TuiApp {
         self.draw_dirty = false;
         self.last_draw_at = Instant::now();
         self.tick_streaming_reveal();
+        self.tick_smooth_scroll();
         self.draw_impl()
+    }
+
+    /// Advance smooth-scroll animation: interpolate `scroll` toward `scroll_target`.
+    /// Called every draw cycle (~50ms). Moves ~40% of the remaining distance each
+    /// tick, producing an ease-out deceleration curve.
+    fn tick_smooth_scroll(&mut self) {
+        if self.scroll == self.scroll_target {
+            return;
+        }
+        let diff = if self.scroll_target > self.scroll {
+            let d = self.scroll_target - self.scroll;
+            let step = (d * 2 / 5).max(1); // ~40% of distance, min 1
+            self.scroll = self.scroll.saturating_add(step);
+            if self.scroll > self.scroll_target {
+                self.scroll = self.scroll_target;
+            }
+            self.scroll_target - self.scroll
+        } else {
+            let d = self.scroll - self.scroll_target;
+            let step = (d * 2 / 5).max(1);
+            self.scroll = self.scroll.saturating_sub(step);
+            if self.scroll < self.scroll_target {
+                self.scroll = self.scroll_target;
+            }
+            self.scroll.abs_diff(self.scroll_target)
+        };
+        // Keep animating if not yet at target.
+        if diff > 0 {
+            self.draw_dirty = true;
+        }
+        // Snap follow state when we reach bottom.
+        if self.scroll == 0 && self.scroll_target == 0 {
+            self.follow = true;
+            self.pending_lines = 0;
+        }
+    }
+
+    /// Instantly set scroll position (no animation). Used by programmatic
+    /// scroll changes (e.g. submit, follow, tool result auto-scroll).
+    pub fn scroll_instant(&mut self, pos: usize) {
+        self.scroll = pos;
+        self.scroll_target = pos;
     }
 
     /// Advance the typewriter reveal cursor toward the full streaming text length.
@@ -586,6 +633,7 @@ impl TuiApp {
         let mut scroll = self.scroll;
         if self.follow {
             self.scroll = 0;
+            self.scroll_target = 0;
             scroll = 0;
         }
         let mut textarea = self.editor.textarea.clone();
@@ -683,6 +731,9 @@ impl TuiApp {
         // V-04: clamp self.scroll so stale over-scroll doesn't trap the user.
         if self.scroll > max_skip as usize {
             self.scroll = max_skip as usize;
+        }
+        if self.scroll_target > max_skip as usize {
+            self.scroll_target = max_skip as usize;
         }
         // Keep term_width in sync so Up/Down cursor navigation is accurate.
         if let Ok(sz) = crossterm::terminal::size() {

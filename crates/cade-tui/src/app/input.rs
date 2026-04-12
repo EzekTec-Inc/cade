@@ -72,17 +72,17 @@ impl TuiApp {
                 Event::Mouse(m) => match m.kind {
                     MouseEventKind::ScrollUp => {
                         self.follow = false;
-                        self.scroll = self.scroll.saturating_add(1);
+                        self.scroll_target = self.scroll_target.saturating_add(3);
+                        self.draw_dirty = true;
                         self.draw()?;
                     }
                     MouseEventKind::ScrollDown => {
-                        if self.scroll > 0 {
-                            self.scroll = self.scroll.saturating_sub(1);
-                        }
-                        if self.scroll == 0 {
+                        self.scroll_target = self.scroll_target.saturating_sub(3);
+                        if self.scroll_target == 0 {
                             self.follow = true;
                             self.pending_lines = 0;
                         }
+                        self.draw_dirty = true;
                         self.draw()?;
                     }
                     _ => {}
@@ -313,7 +313,7 @@ impl TuiApp {
                 self.pending_submit_images = self.editor.drain_images();
                 let line = self.editor.text();
                 self.editor.clear();
-                self.scroll = 0; // snap to bottom on submit
+                self.scroll_instant(0); // snap to bottom on submit
                 self.pending_lines = 0; // user is following the conversation
                 return Ok(Some(Some(line)));
             }
@@ -340,7 +340,7 @@ impl TuiApp {
 
             // -- Edit shortcuts
             (KeyCode::Char('l'), KeyModifiers::CONTROL) => {
-                self.scroll = 0;
+                self.scroll_instant(0);
                 self.follow = true;
                 self.pending_lines = 0;
                 let _ = self.draw();
@@ -427,30 +427,34 @@ impl TuiApp {
             // -- Timeline navigation / content scroll
             (KeyCode::Char('K'), _) => {
                 self.follow = false;
-                self.scroll = self.scroll.saturating_add(10);
+                self.scroll_target = self.scroll_target.saturating_add(10);
+                self.draw_dirty = true;
             }
             (KeyCode::Char('J'), _) => {
-                self.scroll = 0;
+                self.scroll_target = 0;
                 self.follow = true;
                 self.pending_lines = 0;
+                self.draw_dirty = true;
             }
             (KeyCode::PageUp, _) => {
                 self.follow = false;
                 let vh = crossterm::terminal::size()
                     .map(|(_, h)| h.saturating_sub(FIXED_ROWS + MAX_INPUT_ROWS))
                     .unwrap_or(20);
-                self.scroll = scroll_page_up(self.scroll, vh);
+                self.scroll_target = scroll_page_up(self.scroll_target, vh);
+                self.draw_dirty = true;
             }
             (KeyCode::PageDown, _) => {
                 let vh = crossterm::terminal::size()
                     .map(|(_, h)| h.saturating_sub(FIXED_ROWS + MAX_INPUT_ROWS))
                     .unwrap_or(20);
-                let (new_scroll, should_follow) = scroll_page_down(self.scroll, vh);
-                self.scroll = new_scroll;
+                let (new_target, should_follow) = scroll_page_down(self.scroll_target, vh);
+                self.scroll_target = new_target;
                 if should_follow {
                     self.follow = true;
                     self.pending_lines = 0;
                 }
+                self.draw_dirty = true;
             }
 
             // -- Mode cycle / path completion
@@ -465,12 +469,12 @@ impl TuiApp {
                     self.editor.set_text(new_input);
                     self.editor.set_cursor_pos(new_cursor);
                 } else {
-                    self.scroll = 0;
+                    self.scroll_instant(0);
                     return Ok(Some(Some("__TAB__".to_string())));
                 }
             }
             (KeyCode::BackTab, _) => {
-                self.scroll = 0;
+                self.scroll_instant(0);
                 return Ok(Some(Some("__BACKTAB__".to_string())));
             }
 

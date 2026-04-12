@@ -9,26 +9,16 @@ impl TuiApp {
         self.lines.push(line);
 
         if is_tool_result {
-            // Scroll to show the associated ToolCall header at the top of the
-            // visible area.  When diff-preview lines sit between the ToolCall
-            // and ToolResult (e.g. for file edits), a plain scroll=0 would
-            // show only the bottom of the diff and clip the ToolCall off-screen.
-            // rows_from_last_tool_call() counts visual rows from the most recent
-            // ToolCall to the end of lines so the whole tool group scrolls into
-            // view as a unit.
-            self.scroll = self.rows_from_last_tool_call();
+            self.scroll_instant(self.rows_from_last_tool_call());
         } else {
-            self.scroll = 0;
+            self.scroll_instant(0);
         }
         if self.follow {
-            self.scroll = 0;
+            self.scroll_instant(0);
         }
         self.pending_lines = 0;
         let scroll_before = self.scroll;
         self.draw()?;
-        // V-05: If V-04 clamped self.scroll during draw (rows_from_last_tool_call
-        // overshot max_skip in short conversations), redraw immediately so the
-        // first visible frame always uses the correct scroll value.
         if is_tool_result && self.scroll != scroll_before {
             return self.draw();
         }
@@ -81,7 +71,7 @@ impl TuiApp {
             // was running, but as soon as the agent starts responding the viewport
             // must follow the output.
             if self.follow {
-                self.scroll = 0;
+                self.scroll_instant(0);
                 self.pending_lines = 0;
             }
         }
@@ -184,7 +174,7 @@ impl TuiApp {
         // the user's scroll position; once the response is fully committed here
         // we always show it.
         if self.follow {
-            self.scroll = 0;
+            self.scroll_instant(0);
             self.pending_lines = 0;
         }
         self.draw()
@@ -237,7 +227,7 @@ impl TuiApp {
         self.lines.clear();
         self.expanded_items.clear();
         self.discard_streaming();
-        self.scroll = 0;
+        self.scroll_instant(0);
         self.follow = true;
         self.draw()
     }
@@ -292,7 +282,7 @@ impl TuiApp {
             lines.push(line);
         }
         if self.follow {
-            self.scroll = 0;
+            self.scroll_instant(0);
         }
         self.draw_throttled()
     }
@@ -304,7 +294,7 @@ impl TuiApp {
             *done = true;
         }
         if self.follow {
-            self.scroll = 0;
+            self.scroll_instant(0);
         }
         self.draw()
     }
@@ -355,7 +345,7 @@ impl TuiApp {
     /// Start the thinking animation.  Returns the shared text Arc so callers
     /// can update the status text (e.g. assessing timer, tool name updates).
     pub fn start_thinking(&mut self, text: impl Into<String>) -> Arc<Mutex<String>> {
-        self.scroll = 0; // snap to bottom at the start of every agent turn
+        self.scroll_instant(0); // snap to bottom at the start of every agent turn
         let arc = Arc::new(Mutex::new(text.into()));
         self.thinking = Some(ThinkingState {
             text: arc.clone(),
