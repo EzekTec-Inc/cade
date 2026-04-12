@@ -11,7 +11,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -585,6 +585,7 @@ pub(crate) fn render_frame(
         let list = List::new(items).block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .title(" Todos ")
                 .border_style(Style::default().fg(colors.overlay_border)),
         );

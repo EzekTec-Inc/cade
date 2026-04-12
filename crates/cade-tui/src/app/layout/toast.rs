@@ -31,6 +31,7 @@ pub(crate) fn render_toast(
         .block(
             Block::default()
                 .borders(Borders::ALL)
+                .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(border))
                 .style(Style::default().bg(colors.overlay_bg)),
         ),

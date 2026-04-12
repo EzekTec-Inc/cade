@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
 
 pub enum SkillsAction {
@@ -147,6 +147,7 @@ pub fn show_skills_manager(
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .title(format!(" Skills {hint}"))
                     .border_style(Style::default().fg(colors.overlay_border)),
             );
@@ -180,6 +181,7 @@ Triggers: {}
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
                         .title(" Preview ")
                         .border_style(Style::default().fg(colors.overlay_border)),
                 );

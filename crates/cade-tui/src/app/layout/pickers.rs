@@ -125,6 +125,7 @@ pub(crate) fn render_theme_picker(
     .block(
         Block::default()
             .borders(Borders::ALL)
+            .border_type(BorderType::Rounded)
             .title(format!(" Themes {hint}"))
             .border_style(Style::default().fg(colors.overlay_border)),
     );
@@ -141,6 +142,7 @@ pub(crate) fn render_theme_picker(
 
     let filter_block = Block::default()
         .borders(Borders::ALL)
+        .border_type(BorderType::Rounded)
         .title(" Filter (Type to search) ")
         .border_style(Style::default().fg(colors.overlay_border));
     let filter_text = Paragraph::new(format!("> {}█", tp.query))

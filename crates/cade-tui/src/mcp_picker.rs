@@ -6,7 +6,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
 
 pub enum McpAction {
@@ -184,6 +184,7 @@ pub fn show_mcp_manager(
             .block(
                 Block::default()
                     .borders(Borders::ALL)
+                    .border_type(BorderType::Rounded)
                     .title(format!(" MCP Servers {hint}"))
                     .border_style(Style::default().fg(colors.overlay_border)),
             );
@@ -254,6 +255,7 @@ pub fn show_mcp_manager(
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
+                        .border_type(BorderType::Rounded)
                         .title(" Configuration ")
                         .border_style(Style::default().fg(colors.overlay_border)),
                 );
