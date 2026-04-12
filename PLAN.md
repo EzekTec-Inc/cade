@@ -122,3 +122,13 @@
 **Previous behavior:** No timing data available. :CadeStatus showed no latency.
 **New behavior:** After each completion, ttft and total latency visible in :CadeStatus. Full suite: 25/25.
 **Rollback steps:** Revert `http.lua` and `init.lua`. Remove telemetry tests from specs.
+
+## 2026-04-12T20:05:00Z — cade.nvim: customizable keymaps
+**Summary:** Keymaps are now driven by config. Users can override individual keys or set keymaps=false to disable all bindings. plugin/cade.lua replaced hardcoded imap calls with a config-driven loop.
+**Files modified:**
+- `plugins/cade.nvim/lua/cade/config.lua` — Added `keymaps` table to M.defaults with 5 keys: accept, accept_line, accept_word, dismiss, toggle. Defaults match previous hardcoded values.
+- `plugins/cade.nvim/plugin/cade.lua` — Replaced 5 hardcoded keymap calls with a loop over cfg.keymaps. Guards: `if cfg.keymaps ~= false` for the block, `if lhs` per binding (nil keys are skipped).
+- `plugins/cade.nvim/spec/config_spec.lua` — +3 tests: default keys present, partial merge, keymaps=false.
+**Previous behavior:** Keymaps were hardcoded. No way to remap or disable without editing the plugin file.
+**New behavior:** Pass keymaps={accept="<C-y>"} to override one key; keymaps=false to disable all. Full suite: 28/28.
+**Rollback steps:** Revert `config.lua` and `plugin/cade.lua`. Remove keymap tests from config_spec.

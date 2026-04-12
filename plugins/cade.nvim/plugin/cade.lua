@@ -46,24 +46,33 @@ vim.api.nvim_create_autocmd("InsertLeave", {
   callback = trigger.on_insert_leave,
 })
 
--- Keymaps (insert mode)
-local function imap(lhs, fn, desc)
-  vim.keymap.set("i", lhs, function()
-    if cade.is_visible() then
-      fn()
-      return ""
+-- Keymaps — driven by config; set keymaps=false in setup() to disable all
+local cfg = require("cade.config").get()
+if cfg.keymaps ~= false then
+  local km = cfg.keymaps
+
+  -- Insert-mode bindings: fall through when no ghost text is visible
+  local insert_bindings = {
+    { km.accept,      cade.accept,      "CADE: accept full completion" },
+    { km.accept_line, cade.accept_line, "CADE: accept one line"        },
+    { km.accept_word, cade.accept_word, "CADE: accept next word"       },
+    { km.dismiss,     cade.dismiss,     "CADE: dismiss completion"     },
+  }
+  for _, b in ipairs(insert_bindings) do
+    local lhs, fn, desc = b[1], b[2], b[3]
+    if lhs then
+      vim.keymap.set("i", lhs, function()
+        if cade.is_visible() then fn(); return "" end
+        return lhs
+      end, { expr = true, noremap = true, desc = desc })
     end
-    return lhs
-  end, { expr = true, noremap = true, desc = desc })
+  end
+
+  -- Normal-mode toggle
+  if km.toggle then
+    vim.keymap.set("n", km.toggle, cade.toggle, { desc = "CADE: toggle completions" })
+  end
 end
-
-imap("<Tab>",  cade.accept,      "CADE: accept full completion")
-imap("<C-]>",  cade.accept_line, "CADE: accept one line")
-imap("<M-]>",  cade.accept_word, "CADE: accept next word")
-imap("<C-e>",  cade.dismiss,     "CADE: dismiss completion")
-
--- Normal-mode toggle
-vim.keymap.set("n", "<leader>ct", cade.toggle, { desc = "CADE: toggle completions" })
 
 -- User commands
 vim.api.nvim_create_user_command("CadeStatus", function()

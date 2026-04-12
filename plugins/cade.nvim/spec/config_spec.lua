@@ -80,3 +80,39 @@ describe("config.agent_id resolution", function()
     assert.are.equal("", config.get().agent_id)
   end)
 end)
+
+describe("config.keymaps", function()
+  before_each(function()
+    package.loaded["cade.config"] = nil
+    vim.env.CADE_AGENT_ID = nil
+  end)
+
+  it("default keymaps table has all five expected keys", function()
+    local config = require("cade.config")
+    config.setup({})
+    local km = config.get().keymaps
+    assert.is_table(km)
+    assert.is_string(km.accept)
+    assert.is_string(km.accept_line)
+    assert.is_string(km.accept_word)
+    assert.is_string(km.dismiss)
+    assert.is_string(km.toggle)
+  end)
+
+  it("partial override merges correctly, unspecified keys keep defaults", function()
+    local config = require("cade.config")
+    config.setup({ keymaps = { accept = "<C-y>" } })
+    local km = config.get().keymaps
+    assert.are.equal("<C-y>",       km.accept)
+    assert.are.equal("<C-]>",       km.accept_line)
+    assert.are.equal("<M-]>",       km.accept_word)
+    assert.are.equal("<C-e>",       km.dismiss)
+    assert.are.equal("<leader>ct",  km.toggle)
+  end)
+
+  it("setup({ keymaps = false }) sets keymaps to false", function()
+    local config = require("cade.config")
+    config.setup({ keymaps = false })
+    assert.is_false(config.get().keymaps)
+  end)
+end)

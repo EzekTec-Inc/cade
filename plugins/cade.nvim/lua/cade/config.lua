@@ -43,6 +43,13 @@ M.defaults = {
   model         = "",       -- optional model override (empty = agent default)
   filetypes     = {},       -- allowlist; empty = all filetypes
   hl_group      = "Comment", -- ghost-text highlight group
+  keymaps       = {         -- set to false to disable all bindings
+    accept      = "<Tab>",
+    accept_line = "<C-]>",
+    accept_word = "<M-]>",
+    dismiss     = "<C-e>",
+    toggle      = "<leader>ct",
+  },
 }
 
 M.current = vim.deepcopy(M.defaults)
