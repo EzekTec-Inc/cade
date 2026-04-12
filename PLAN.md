@@ -1,3 +1,31 @@
+## 2026-04-12T20:51:00Z — TUI: Rounded borders on all bordered panels
+
+**Summary:** Applied `BorderType::Rounded` to all 9 `Borders::ALL` callsites across the TUI. Sidebar panels (`Borders::LEFT` only) intentionally left unchanged — rounding a single edge produces broken glyphs.
+**Files modified:**
+- `crates/cade-tui/src/overlay.rs` — overlay shell border
+- `crates/cade-tui/src/app/mod.rs` — added `BorderType` to ratatui widget import
+- `crates/cade-tui/src/app/render.rs` — Todos/plan panel border + added `BorderType` import
+- `crates/cade-tui/src/app/layout/toast.rs` — toast notification border
+- `crates/cade-tui/src/app/layout/pickers.rs` — theme picker table + filter borders
+- `crates/cade-tui/src/skills.rs` — skills table + preview borders
+- `crates/cade-tui/src/mcp_picker.rs` — MCP servers table + config preview borders
+**Reason:** Rounded borders (╭╮╰╯) are the modern TUI standard; sharp borders (┌┐└┘) look dated.
+**Previous behavior:** All bordered blocks used default sharp corners (`BorderType::Plain`).
+**New behavior:** All `Borders::ALL` blocks use `BorderType::Rounded`. `Borders::LEFT`-only sidebar blocks unchanged.
+**Tests:** 14/14 cade-tui tests pass. Binary size unchanged (15M release).
+**Rollback steps:** `git revert 596a208`
+
+## 2026-04-12T20:51:00Z — TUI: PageUp/PageDown viewport-aware scroll
+
+**Summary:** Added `PageUp`/`PageDown` key handlers to the main conversation timeline. Scroll step equals the actual viewport content height (terminal height minus fixed UI rows), matching user expectation for page-based navigation. Extracted `scroll_page_up()` and `scroll_page_down()` pure functions with 7 unit tests covering all edge cases.
+**Files modified:**
+- `crates/cade-tui/src/app/input.rs` — Added `PageUp`/`PageDown` match arms in `handle_key_input`; added `scroll_page_up()`/`scroll_page_down()` helper functions; added 7 new unit tests; imported `FIXED_ROWS`/`MAX_INPUT_ROWS` constants.
+**Reason:** Existing scroll keys (`K`=+10 lines, `J`=snap to bottom) are coarse. PageUp/PageDown provide standard, viewport-proportional scrolling with no keystroke collision risk.
+**Previous behavior:** Only `Shift+K` (+10 lines), `Shift+J` (snap to bottom), and mouse wheel (±1 line) for timeline scrolling.
+**New behavior:** `PageUp` scrolls up by one viewport height. `PageDown` scrolls down by one viewport height; reaching scroll=0 re-enables auto-follow. Viewport height = terminal rows − FIXED_ROWS − MAX_INPUT_ROWS.
+**Tests:** 7 new tests (page_up from_bottom, already_scrolled, zero_viewport; page_down to_bottom, partial, already_at_bottom, zero_viewport). 21/21 cade-tui tests pass. Binary size unchanged (15M).
+**Rollback steps:** `git revert HEAD`
+
 ## 2026-04-13T12:00:00Z — CADE-nvim Option B: Inline Completions Implementation
 **Summary:** Implemented direct-HTTP inline code completions for the CADE-nvim Neovim plugin. Lua modules call the existing `POST /v1/agents/:id/complete` SSE endpoint — same backend as the VS Code extension — eliminating the MCP round-trip proposed in the original Option A plan.
 **Files modified:**

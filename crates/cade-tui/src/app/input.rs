@@ -7,7 +7,7 @@ use crossterm::event::{
 
 use crate::Result;
 
-use super::{PickerState, ToastLevel, TuiApp};
+use super::{FIXED_ROWS, MAX_INPUT_ROWS, PickerState, ToastLevel, TuiApp};
 use super::layout::cursor::{calc_visual_cursor, find_cursor_at_visual_row_col, input_mode_badge};
 
 impl TuiApp {
@@ -389,6 +389,24 @@ impl TuiApp {
                 self.follow = true;
                 self.pending_lines = 0;
             }
+            (KeyCode::PageUp, _) => {
+                self.follow = false;
+                let vh = crossterm::terminal::size()
+                    .map(|(_, h)| h.saturating_sub(FIXED_ROWS + MAX_INPUT_ROWS))
+                    .unwrap_or(20);
+                self.scroll = scroll_page_up(self.scroll, vh);
+            }
+            (KeyCode::PageDown, _) => {
+                let vh = crossterm::terminal::size()
+                    .map(|(_, h)| h.saturating_sub(FIXED_ROWS + MAX_INPUT_ROWS))
+                    .unwrap_or(20);
+                let (new_scroll, should_follow) = scroll_page_down(self.scroll, vh);
+                self.scroll = new_scroll;
+                if should_follow {
+                    self.follow = true;
+                    self.pending_lines = 0;
+                }
+            }
 
             // -- Mode cycle / path completion
             (KeyCode::Tab, _) => {
@@ -461,6 +479,21 @@ pub fn is_newline_shortcut(m: KeyModifiers) -> bool {
         || m == (KeyModifiers::CONTROL | KeyModifiers::SHIFT)
 }
 
+/// Compute the new scroll position after a PageUp keypress.
+/// `viewport_h` is the visible content height in terminal rows.
+pub(crate) fn scroll_page_up(current: usize, viewport_h: u16) -> usize {
+    let step = (viewport_h as usize).max(1);
+    current.saturating_add(step)
+}
+
+/// Compute the new scroll position after a PageDown keypress.
+/// Returns `(new_scroll, should_follow)`.
+pub(crate) fn scroll_page_down(current: usize, viewport_h: u16) -> (usize, bool) {
+    let step = (viewport_h as usize).max(1);
+    let new = current.saturating_sub(step);
+    (new, new == 0)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -474,5 +507,55 @@ mod tests {
         assert!(is_newline_shortcut(KeyModifiers::SHIFT | KeyModifiers::CONTROL), "Ctrl+Shift+Enter should be recognized");
         assert!(is_newline_shortcut(KeyModifiers::SHIFT | KeyModifiers::ALT), "Alt+Shift+Enter should be recognized");
         assert!(!is_newline_shortcut(KeyModifiers::NONE), "Plain Enter should not be recognized as a newline shortcut");
+    }
+
+    #[test]
+    fn test_scroll_page_up_from_bottom() {
+        // At bottom (scroll=0), PageUp should jump up by viewport height.
+        assert_eq!(scroll_page_up(0, 40), 40);
+    }
+
+    #[test]
+    fn test_scroll_page_up_already_scrolled() {
+        // Already scrolled 20 lines up, viewport=40 → should be at 60.
+        assert_eq!(scroll_page_up(20, 40), 60);
+    }
+
+    #[test]
+    fn test_scroll_page_up_zero_viewport() {
+        // Edge case: viewport_h=0 → step should be at least 1.
+        assert_eq!(scroll_page_up(5, 0), 6);
+    }
+
+    #[test]
+    fn test_scroll_page_down_to_bottom() {
+        // Scrolled up 30, viewport=40 → should snap to 0 (bottom), follow=true.
+        let (new, follow) = scroll_page_down(30, 40);
+        assert_eq!(new, 0);
+        assert!(follow);
+    }
+
+    #[test]
+    fn test_scroll_page_down_partial() {
+        // Scrolled up 60, viewport=40 → should be at 20, follow=false.
+        let (new, follow) = scroll_page_down(60, 40);
+        assert_eq!(new, 20);
+        assert!(!follow);
+    }
+
+    #[test]
+    fn test_scroll_page_down_already_at_bottom() {
+        // Already at bottom → stays at 0, follow=true.
+        let (new, follow) = scroll_page_down(0, 40);
+        assert_eq!(new, 0);
+        assert!(follow);
+    }
+
+    #[test]
+    fn test_scroll_page_down_zero_viewport() {
+        // Edge case: viewport_h=0 → step=1, scroll 5→4.
+        let (new, follow) = scroll_page_down(5, 0);
+        assert_eq!(new, 4);
+        assert!(!follow);
     }
 }
