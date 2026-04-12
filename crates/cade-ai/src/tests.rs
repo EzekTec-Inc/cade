@@ -520,6 +520,7 @@ fn clean_gemini_schema_strips_all_bad_fields() {
         "type": "object",
         "additionalProperties": false,
         "nullable": true,
+        "deprecated": true,
         "x-google-identifier": true,
         "x-google-enum-descriptions": ["a", "b"],
         "x-google-enum-deprecated": [false, true],
@@ -527,6 +528,7 @@ fn clean_gemini_schema_strips_all_bad_fields() {
             "name": {
                 "type": "string",
                 "x-google-identifier": true,
+                "deprecated": true,
                 "description": "A name"
             }
         }
@@ -540,6 +542,7 @@ fn clean_gemini_schema_strips_all_bad_fields() {
     assert!(!map.contains_key("$defs"));
     assert!(!map.contains_key("additionalProperties"));
     assert!(!map.contains_key("nullable"));
+    assert!(!map.contains_key("deprecated"));
     assert!(!map.contains_key("x-google-identifier"));
     assert!(!map.contains_key("x-google-enum-descriptions"));
     assert!(!map.contains_key("x-google-enum-deprecated"));
@@ -606,4 +609,46 @@ fn gemini_tool_prep_end_to_end() {
     assert!(result.contains("bodyFont"));
     assert!(result.contains("INTER"));
     assert!(result.contains("\"type\":\"object\""));
+}
+
+// -- pricing rules: gap models
+
+#[test]
+fn pricing_gemini_25_flash() {
+    let registry = crate::ModelRegistry::new();
+    let p = registry.pricing_for_model("gemini/gemini-2.5-flash");
+    assert_eq!(p.input, 0.15);
+    assert_eq!(p.output, 0.6);
+}
+
+#[test]
+fn pricing_gpt_41_mini() {
+    let registry = crate::ModelRegistry::new();
+    let p = registry.pricing_for_model("openai/gpt-4.1-mini");
+    assert_eq!(p.input, 0.4);
+    assert_eq!(p.output, 1.6);
+}
+
+#[test]
+fn pricing_gpt_41_full_excludes_mini() {
+    let registry = crate::ModelRegistry::new();
+    let p = registry.pricing_for_model("openai/gpt-4.1");
+    assert_eq!(p.input, 2.0);
+    assert_eq!(p.output, 8.0);
+}
+
+#[test]
+fn pricing_o1() {
+    let registry = crate::ModelRegistry::new();
+    let p = registry.pricing_for_model("openai/o1");
+    assert_eq!(p.input, 15.0);
+    assert_eq!(p.output, 60.0);
+}
+
+#[test]
+fn pricing_o1_mini_not_matched_by_o1_rule() {
+    let registry = crate::ModelRegistry::new();
+    let p = registry.pricing_for_model("openai/o1-mini");
+    // Should NOT get o1 pricing ($15/$60) — the not_contains_any guard excludes "mini"
+    assert!(p.input < 15.0, "o1-mini should not get o1 pricing");
 }

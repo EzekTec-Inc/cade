@@ -13,8 +13,12 @@
   },
   {
     "contains_any": ["gpt-4.1"],
-    "not_contains_any": ["mini"],
+    "not_contains_any": ["mini", "nano"],
     "pricing": { "input": 2.0, "output": 8.0, "cache_read": 0.5, "cache_write": 0.0 }
+  },
+  {
+    "contains_any": ["gpt-4.1-mini"],
+    "pricing": { "input": 0.4, "output": 1.6, "cache_read": 0.1, "cache_write": 0.0 }
   },
   {
     "contains_any": ["gpt-4o-mini"],
@@ -34,8 +38,17 @@
     "pricing": { "input": 10.0, "output": 40.0, "cache_read": 2.5, "cache_write": 0.0 }
   },
   {
+    "contains_any": ["/o1"],
+    "not_contains_any": ["mini"],
+    "pricing": { "input": 15.0, "output": 60.0, "cache_read": 3.75, "cache_write": 0.0 }
+  },
+  {
     "contains_any": ["gemini-2.5-pro"],
     "pricing": { "input": 1.25, "output": 10.0, "cache_read": 0.31, "cache_write": 0.0 }
+  },
+  {
+    "contains_any": ["gemini-2.5-flash"],
+    "pricing": { "input": 0.15, "output": 0.6, "cache_read": 0.0375, "cache_write": 0.0 }
   },
   {
     "contains_any": ["gemini-2.0-flash", "gemini-1.5-flash"],

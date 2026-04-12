@@ -178,6 +178,7 @@ pub fn clean_gemini_schema(v: &mut Value) {
             map.remove("$defs");
             map.remove("additionalProperties");
             map.remove("nullable");
+            map.remove("deprecated");
             // Strip all x-google-* extension fields
             let x_google_keys: Vec<String> = map
                 .keys()
