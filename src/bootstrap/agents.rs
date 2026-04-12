@@ -148,7 +148,7 @@ pub async fn resolve_agent_and_conversation(
                 )));
             }
         }
-    } else if let Some(last_id) = session.session.agent_id.clone() {
+    } else if let Some(last_id) = settings.last_agent().map(|s| s.to_string()) {
         match client.get_agent(&last_id).await {
             Ok(a) => a,
             Err(_) => {
