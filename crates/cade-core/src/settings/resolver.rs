@@ -54,8 +54,8 @@ impl SettingsManager {
         for (k, v) in &self.local.mcp_servers {
             merged.insert(k.clone(), v.clone());
         }
-        // Remove disabled entries
-        merged.retain(|_, v| !v.disabled && !v.command.is_empty());
+        // Remove disabled entries and entries with no transport configured
+        merged.retain(|_, v| !v.disabled && (!v.command.is_empty() || v.url.is_some()));
         merged
     }
 

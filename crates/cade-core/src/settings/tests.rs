@@ -256,6 +256,44 @@ fn settings_manager_disabled_mcp_server_excluded() -> Result<()> {
 }
 
 #[test]
+fn settings_manager_remote_url_mcp_server_retained() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let cade_dir = dir.path().join(".cade");
+    fs::create_dir_all(&cade_dir)?;
+
+    let project_json = r#"{
+        "mcpServers": {
+            "stitch": {
+                "command": "",
+                "url": "https://stitch.googleapis.com/mcp",
+                "headers": {"X-Goog-Api-Key": "${GOOGLE_STITCH_API_KEY}"}
+            },
+            "local-srv": {"command": "/bin/local", "args": []},
+            "empty-both": {"command": "", "args": []}
+        }
+    }"#;
+    fs::write(cade_dir.join("settings.json"), project_json)?;
+
+    let mgr = SettingsManager::new(dir.path())?;
+    let servers = mgr.merged_mcp_servers();
+
+    // Remote URL-based server is retained even though command is empty
+    assert!(servers.contains_key("stitch"), "remote URL server should be retained");
+    assert_eq!(
+        servers["stitch"].url.as_deref(),
+        Some("https://stitch.googleapis.com/mcp")
+    );
+
+    // Local command-based server is retained
+    assert!(servers.contains_key("local-srv"));
+
+    // Entry with neither command nor url is filtered out
+    assert!(!servers.contains_key("empty-both"), "entry with no command and no url should be dropped");
+
+    Ok(())
+}
+
+#[test]
 fn settings_manager_set_and_get_last_agent() -> Result<()> {
     let dir = tempfile::tempdir()?;
     let cade_dir = dir.path().join(".cade");
