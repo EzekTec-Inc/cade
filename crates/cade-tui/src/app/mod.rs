@@ -267,6 +267,15 @@ fn done_regex() -> &'static Regex {
     RE.get_or_init(|| Regex::new(r"(?i)\[DONE:(\d+)\]").expect("valid regex"))
 }
 
+/// Snap a byte offset to the nearest valid UTF-8 character boundary (rounding down).
+fn snap_to_char_boundary(s: &str, byte_offset: usize) -> usize {
+    let mut pos = byte_offset.min(s.len());
+    while pos > 0 && !s.is_char_boundary(pos) {
+        pos -= 1;
+    }
+    pos
+}
+
 // -- TuiApp
 
 pub struct TuiApp {
@@ -288,6 +297,9 @@ pub struct TuiApp {
     // -- Streaming state
     streaming_text: String,
     streaming_active: bool,
+    /// Typewriter reveal: number of bytes of `streaming_text` currently visible.
+    /// Advances progressively each tick for smooth character-by-character output.
+    streaming_reveal_len: usize,
     reasoning_text: String,
     reasoning_active: bool,
 
@@ -430,6 +442,7 @@ impl TuiApp {
             active_plan: None,
             streaming_text: String::new(),
             streaming_active: false,
+            streaming_reveal_len: 0,
             reasoning_text: String::new(),
             reasoning_active: false,
             editor: Editor::new(),
@@ -511,7 +524,37 @@ impl TuiApp {
     pub fn draw(&mut self) -> Result<()> {
         self.draw_dirty = false;
         self.last_draw_at = Instant::now();
+        self.tick_streaming_reveal();
         self.draw_impl()
+    }
+
+    /// Advance the typewriter reveal cursor toward the full streaming text length.
+    /// Called every draw cycle (~50ms). Reveals ~8 chars per tick (~160 chars/sec)
+    /// which feels smooth without lagging behind fast model output.
+    fn tick_streaming_reveal(&mut self) {
+        if !self.streaming_active {
+            return;
+        }
+        let target = self.streaming_text.len();
+        if self.streaming_reveal_len < target {
+            // Reveal rate: adaptive — faster when we're far behind, slower when close.
+            let behind = target - self.streaming_reveal_len;
+            let step = if behind > 200 {
+                // Very far behind: catch up quickly (whole chunks at a time)
+                behind / 2
+            } else if behind > 50 {
+                // Moderately behind: reveal ~20 chars per tick
+                20
+            } else {
+                // Close to caught up: smooth typewriter at ~8 chars/tick
+                8
+            };
+            self.streaming_reveal_len = (self.streaming_reveal_len + step).min(target);
+            // If still not fully revealed, keep dirty so next tick continues.
+            if self.streaming_reveal_len < target {
+                self.draw_dirty = true;
+            }
+        }
     }
 
     /// R-01: Throttled redraw — skips the draw if less than DRAW_MIN_INTERVAL
@@ -527,7 +570,16 @@ impl TuiApp {
         // Snapshot all rendering data (avoids borrow conflicts).
         let lines = self.lines.clone();
         let streaming = if self.streaming_active {
-            Some(crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned())
+            let full = crate::app::strip_orchestrator_prompts(&self.streaming_text).into_owned();
+            // Typewriter effect: only reveal up to streaming_reveal_len bytes.
+            let reveal = self.streaming_reveal_len.min(full.len());
+            // Snap to a valid char boundary.
+            let end = snap_to_char_boundary(&full, reveal);
+            if end > 0 {
+                Some(full[..end].to_string())
+            } else {
+                Some(String::new())
+            }
         } else {
             None
         };
@@ -788,6 +840,34 @@ mod tests {
         assert_eq!(prepared.len(), 3);
         let total: u16 = prepared.iter().map(|p| p.rows).sum();
         assert!(total >= 3, "at least 1 row per item; got {total}");
+    }
+
+    #[test]
+    fn test_snap_to_char_boundary_ascii() {
+        let s = "hello world";
+        assert_eq!(snap_to_char_boundary(s, 5), 5);
+        assert_eq!(snap_to_char_boundary(s, 0), 0);
+        assert_eq!(snap_to_char_boundary(s, 100), s.len());
+    }
+
+    #[test]
+    fn test_snap_to_char_boundary_multibyte() {
+        let s = "héllo"; // 'é' is 2 bytes in UTF-8
+        // Byte layout: h(1) é(2) l(1) l(1) o(1) = 6 bytes
+        assert_eq!(snap_to_char_boundary(s, 1), 1); // after 'h' — valid boundary
+        assert_eq!(snap_to_char_boundary(s, 2), 1); // mid-'é' — snaps back to after 'h'
+        assert_eq!(snap_to_char_boundary(s, 3), 3); // after 'é' — valid boundary
+    }
+
+    #[test]
+    fn test_snap_to_char_boundary_emoji() {
+        let s = "a🎉b";  // 🎉 is 4 bytes
+        // Byte layout: a(1) 🎉(4) b(1) = 6 bytes
+        assert_eq!(snap_to_char_boundary(s, 1), 1);  // after 'a'
+        assert_eq!(snap_to_char_boundary(s, 2), 1);  // inside emoji, snap back to after 'a'
+        assert_eq!(snap_to_char_boundary(s, 3), 1);  // still inside emoji
+        assert_eq!(snap_to_char_boundary(s, 4), 1);  // still inside emoji
+        assert_eq!(snap_to_char_boundary(s, 5), 5);  // after emoji — valid
     }
 }
 
