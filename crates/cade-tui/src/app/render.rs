@@ -1,6 +1,7 @@
 use crate::app::layout::question::{question_height, render_question_inline};
 use crate::app::layout::pickers::{render_picker, render_theme_picker};
 use crate::app::layout::command_palette::render_command_palette;
+use crate::app::layout::breadcrumb::render_breadcrumb;
 use crate::app::layout::helpers::{mode_sep_color, mode_footer_left, truncate_str};
 // Rendering helpers for the TuiApp full-screen layout.
 //
@@ -114,6 +115,8 @@ pub(crate) fn render_frame(
     queued_count: usize,
     cwd: &str,
     context_pct: Option<u8>,
+    turn_count: u32,
+    token_history: &[u8],
     picker: Option<&PickerState>,
     theme_picker: Option<&ThemePickerState>,
     command_palette: Option<&CommandPaletteState>,
@@ -233,6 +236,28 @@ pub(crate) fn render_frame(
         }
     };
     let _ = header_area_opt; // used above for rendering
+
+    // -- Breadcrumb bar (only on narrow terminals where sidebar is absent)
+    let messages_area = if sidebar_area.is_none() && messages_area.height > 4 {
+        let [breadcrumb_rect, rest] = Layout::vertical([
+            Constraint::Length(1),
+            Constraint::Fill(1),
+        ])
+        .areas(messages_area);
+        render_breadcrumb(
+            frame,
+            breadcrumb_rect,
+            model,
+            turn_count,
+            context_pct,
+            token_history,
+            colors,
+            nerd,
+        );
+        rest
+    } else {
+        messages_area
+    };
 
     // -- Content area
     let timeline_w = messages_area.width.saturating_sub(4).max(1) as usize;
@@ -552,6 +577,8 @@ pub(crate) fn render_frame(
             reasoning_effort,
             cwd,
             context_pct,
+            turn_count,
+            token_history,
             queued_count,
             thinking_text,
             thinking_elapsed,

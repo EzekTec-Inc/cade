@@ -430,7 +430,18 @@ impl TuiApp {
     }
 
     pub fn set_context_pct(&mut self, pct: u8) {
-        self.context_pct = Some(pct.min(99));
+        let p = pct.min(99);
+        self.context_pct = Some(p);
+        // Record in history for sparkline (keep last 50 entries).
+        self.token_history.push(p);
+        if self.token_history.len() > 50 {
+            self.token_history.remove(0);
+        }
+    }
+
+    /// Increment the turn counter (called when a user message is submitted).
+    pub fn increment_turn(&mut self) {
+        self.turn_count = self.turn_count.saturating_add(1);
     }
 
 }

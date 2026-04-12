@@ -12,6 +12,8 @@ pub(crate) fn render_sidebar(
     reasoning_effort: Option<&str>,
     cwd: &str,
     context_pct: Option<u8>,
+    turn_count: u32,
+    token_history: &[u8],
     queued_count: usize,
     thinking_text: Option<&str>,
     thinking_elapsed: Option<std::time::Duration>,
@@ -112,6 +114,10 @@ pub(crate) fn render_sidebar(
             Span::styled(queued_count.to_string(), Style::default().fg(colors.text)),
         ]),
         Line::from(vec![
+            Span::styled(" turns   ", Style::default().fg(colors.muted)),
+            Span::styled(turn_count.to_string(), Style::default().fg(colors.text)),
+        ]),
+        Line::from(vec![
             Span::styled(" copy    ", Style::default().fg(colors.muted)),
             Span::styled(
                 if copy_mode { "ON" } else { "OFF" },
@@ -186,8 +192,42 @@ pub(crate) fn render_sidebar(
             " / commands menu",
             Style::default().fg(colors.muted),
         )),
+        Line::from(Span::styled(
+            " Ctrl+P command palette",
+            Style::default().fg(colors.muted),
+        )),
     ];
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), inner);
+    // Split inner into text content area + sparkline area at bottom.
+    let sparkline_h: u16 = if token_history.len() >= 2 { 4 } else { 0 };
+    let [text_area, spark_area] = ratatui::layout::Layout::vertical([
+        ratatui::layout::Constraint::Fill(1),
+        ratatui::layout::Constraint::Length(sparkline_h),
+    ])
+    .areas(inner);
+
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), text_area);
+
+    // -- Sparkline: context window usage trend
+    if sparkline_h > 0 {
+        let data: Vec<u64> = token_history.iter().map(|&p| p as u64).collect();
+        let spark = ratatui::widgets::Sparkline::default()
+            .block(
+                Block::default()
+                    .borders(Borders::TOP)
+                    .border_style(Style::default().fg(colors.border_muted))
+                    .title(Span::styled(
+                        " Context % ",
+                        Style::default()
+                            .fg(colors.overlay_title)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                    .padding(Padding::new(1, 1, 0, 0)),
+            )
+            .data(&data)
+            .max(100)
+            .style(Style::default().fg(context_severity_color(context_pct, colors)));
+        frame.render_widget(spark, spark_area);
+    }
 }
 

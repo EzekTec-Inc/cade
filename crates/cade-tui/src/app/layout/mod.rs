@@ -1,3 +1,4 @@
+pub mod breadcrumb;
 pub mod command_palette;
 pub mod cursor;
 pub mod helpers;

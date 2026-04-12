@@ -310,6 +310,11 @@ pub struct TuiApp {
     pub cwd: String,
     /// Context window usage (0–99 %) updated after each turn's usage event.
     pub context_pct: Option<u8>,
+    /// Number of completed user→assistant turn pairs.
+    pub turn_count: u32,
+    /// Rolling history of context-window percentages (one per turn).
+    /// Used by the sidebar sparkline widget. Max 50 entries.
+    pub token_history: Vec<u8>,
 
     // -- Copy mode (disables mouse capture for OS text selection)
     pub copy_mode: bool,
@@ -437,6 +442,8 @@ impl TuiApp {
             reasoning_effort,
             cwd: abbreviate_cwd(&std::env::current_dir().unwrap_or_default()),
             context_pct: None,
+            turn_count: 0,
+            token_history: Vec::new(),
             copy_mode: false,
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
             picker: None,
@@ -547,6 +554,8 @@ impl TuiApp {
         let queued_count = self.queued_count;
         let cwd = self.cwd.clone();
         let context_pct = self.context_pct;
+        let turn_count = self.turn_count;
+        let token_history = self.token_history.clone();
         let picker = self.picker.clone();
         let theme_picker = self.theme_picker.clone();
         let command_palette = self.command_palette.clone();
@@ -597,6 +606,8 @@ impl TuiApp {
                 queued_count,
                 &cwd,
                 context_pct,
+                turn_count,
+                &token_history,
                 picker.as_ref(),
                 theme_picker.as_ref(),
                 command_palette.as_ref(),
