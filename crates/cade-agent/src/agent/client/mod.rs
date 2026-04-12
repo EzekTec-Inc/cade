@@ -438,6 +438,26 @@ impl HttpTransport {
         Ok(())
     }
 
+    /// Update the compaction model for an existing agent.
+    pub async fn patch_agent_compaction_model(&self, agent_id: &str, model: Option<&str>) -> Result<()> {
+        let resp = self
+            .client
+            .patch(self.url(&format!("/agents/{agent_id}")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&json!({ "compaction_model": model.unwrap_or("") }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let text = resp.text().await.unwrap_or_default();
+            let msg = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v["detail"].as_str().map(String::from))
+                .unwrap_or(text);
+            return Err(crate::Error::custom(msg.to_string()));
+        }
+        Ok(())
+    }
+
     pub async fn create_agent(&self, req: CreateAgentRequest) -> Result<AgentState> {
         let resp = self
             .client

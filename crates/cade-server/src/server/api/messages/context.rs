@@ -338,6 +338,9 @@ pub(crate) async fn build_context(
                         "build_context [{}]: pruned {} old tool outputs",
                         agent_id, n,
                     );
+                    // P6-A: Track tool outputs compacted
+                    let mut metrics = state.agent_metrics.write().await;
+                    metrics.entry(agent_id.to_string()).or_default().tool_outputs_compacted += n;
                 }
                 Err(e) => {
                     tracing::warn!(

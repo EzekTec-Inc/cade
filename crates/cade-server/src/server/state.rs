@@ -13,6 +13,15 @@ pub struct AgentActivity {
     pub conversation_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct AgentMetrics {
+    pub tool_outputs_compacted: usize,
+    pub consolidation_runs: usize,
+    pub chars_summarised: usize,
+    pub chars_produced: usize,
+    pub inflation_guard_hits: usize,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Db,
@@ -31,4 +40,6 @@ pub struct AppState {
     /// dropped from the context window — the Sleeptime background task picks it
     /// up after 60 s of inactivity and summarises the dropped turns.
     pub agent_activity: Arc<RwLock<std::collections::HashMap<String, AgentActivity>>>,
+    /// Tracks lifetime context efficiency metrics per agent.
+    pub agent_metrics: Arc<RwLock<std::collections::HashMap<String, AgentMetrics>>>,
 }

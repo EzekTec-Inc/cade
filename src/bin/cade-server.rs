@@ -113,6 +113,7 @@ async fn main() -> Result<()> {
         rate_limiter: RateLimiter::from_env(),
         memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
     };
 
     // ── Sleeptime consolidation task ─────────────────────────────────────────

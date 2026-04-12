@@ -195,6 +195,22 @@ impl Repl {
             SlashCmd::Model(m) => {
                 return self.cmd_model(m, stdout).await;
             }
+            SlashCmd::CompactionModel(m) => {
+                let m_opt = if m.trim().is_empty() { None } else { Some(m.trim()) };
+                match self.client.patch_agent_compaction_model(&self.agent_id(), m_opt).await {
+                    Ok(_) => {
+                        let msg = if let Some(model) = m_opt {
+                            format!("✅ Compaction model set to {model}")
+                        } else {
+                            "✅ Compaction model cleared (using main model)".to_string()
+                        };
+                        self.app.lock().show_toast(&msg, ToastLevel::Success);
+                        self.tui_ok(msg);
+                    }
+                    Err(e) => self.tui_err(format!("Failed to set compaction model: {e}")),
+                }
+                return Ok(false);
+            }
             SlashCmd::Reasoning(r) => {
                 let r = if r.is_empty() {
                     match self

@@ -221,6 +221,8 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
             summary_chars,
             dropped_chars,
         );
+        let mut metrics = state.agent_metrics.write().await;
+        metrics.entry(agent_id.to_string()).or_default().inflation_guard_hits += 1;
         return;
     }
 
@@ -260,6 +262,9 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
         );
         return;
     }
+
+    // P5-C: Ensure session_summary remains pinned across restarts.
+    let _ = sqlite::set_memory_tier(&state.db, agent_id, "session_summary", "pinned", true);
 
     tracing::info!(
         "consolidate [{}]: session_summary updated ({} chars; {} dropped turns summarised)",
@@ -349,6 +354,12 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
             );
         }
     }
+
+    let mut metrics = state.agent_metrics.write().await;
+    let m = metrics.entry(agent_id.to_string()).or_default();
+    m.consolidation_runs += 1;
+    m.chars_summarised += dropped_chars;
+    m.chars_produced += summary_chars;
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

@@ -94,6 +94,10 @@ const SECTIONS: &[Section] = &[
                 desc: "Interactive model picker  (or /model provider/name)",
             },
             CmdEntry {
+                cmd: "/compaction-model",
+                desc: "Set the cheaper model to use for history summarization",
+            },
+            CmdEntry {
                 cmd: "/reasoning",
                 desc: "Set reasoning effort (none, low, medium, high, xhigh)",
             },

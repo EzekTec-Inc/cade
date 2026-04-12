@@ -36,7 +36,14 @@ pub async fn reflect_agent(
     let mut result = ReflectionResult::default();
 
     // -- 1. Fetch recent messages
-    let rows = sqlite::list_messages_page(&state.db, agent_id, conv_id, 200, 0).unwrap_or_default();
+    // Use get_context_window to respect the compaction boundary. We don't want
+    // to re-reflect on history that has already been compressed.
+    let mut rows = sqlite::get_context_window(&state.db, agent_id, conv_id, 999_999).unwrap_or_default();
+    
+    // limit to most recent 200 just in case
+    if rows.len() > 200 {
+        rows = rows[rows.len()-200..].to_vec();
+    }
 
     if rows.len() < MIN_MESSAGES_FOR_REFLECTION {
         result.summary = "Not enough conversation history to reflect on yet.".to_string();

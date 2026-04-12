@@ -66,6 +66,7 @@ pub fn router(state: AppState) -> Router {
                 .delete(agents::delete_agent)
                 .patch(agents::patch_agent),
         )
+        .route("/v1/agents/:id/metrics", get(agents::get_agent_metrics))
         // Agent tools
         .route(
             "/v1/agents/:id/tools",

@@ -51,6 +51,8 @@ pub struct AgentResponse {
     /// ISO-8601 creation timestamp (e.g. "2026-03-06T14:22:01Z").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub compaction_model: Option<String>,
 }
 
 impl From<AgentRow> for AgentResponse {
@@ -68,6 +70,7 @@ impl From<AgentRow> for AgentResponse {
             description: r.description,
             system_prompt: r.system_prompt,
             created_at,
+            compaction_model: r.compaction_model,
         }
     }
 }
@@ -166,6 +169,7 @@ pub struct PatchAgentBody {
     pub name: Option<String>,
     pub model: Option<String>,
     pub system_prompt: Option<String>,
+    pub compaction_model: Option<String>,
 }
 
 /// PATCH /v1/agents/:id — update model and/or system_prompt
@@ -236,11 +240,31 @@ pub async fn patch_agent(
         );
     }
 
+    let mut updated_compaction_model = existing.compaction_model.clone();
+    if let Some(c_model) = &body.compaction_model {
+        let c_model_val = if c_model.trim().is_empty() { None } else { Some(c_model.trim()) };
+        sqlite::update_agent_compaction_model(&state.db, &agent_id, c_model_val)
+            .map_err(|e| server_err(e.to_string()))?;
+        tracing::info!("Agent {agent_id}: compaction_model → {:?}", c_model_val);
+        updated_compaction_model = c_model_val.map(|s| s.to_string());
+    }
+
     Ok(Json(json!({
         "id": agent_id,
         "name": updated_name,
-        "model": updated_model
+        "model": updated_model,
+        "compaction_model": updated_compaction_model
     })))
+}
+
+/// GET /v1/agents/:id/metrics
+pub async fn get_agent_metrics(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let metrics = state.agent_metrics.read().await;
+    let m = metrics.get(&agent_id).cloned().unwrap_or_default();
+    Ok(Json(json!(m)))
 }
 
 // -- Memory endpoints

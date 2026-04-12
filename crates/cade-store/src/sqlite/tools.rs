@@ -93,10 +93,22 @@ pub fn search_messages(
     //   args: (fts_table, col_idx, before_match, after_match, ellipsis, max_tokens)
     // Exclude compaction markers from search results — they are meta-content, not
     // real conversation messages.
+    // P4-B: Identify pre-compaction messages so the agent knows their context might be truncated.
     let sql = if conversation_id.is_some() {
-        "SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content,
+        "WITH boundary AS (
+             SELECT COALESCE(
+                 (SELECT rowid FROM messages
+                  WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'compaction'
+                  ORDER BY created_at DESC, rowid DESC LIMIT 1),
+                 0
+             ) AS marker_rowid
+         )
+         SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content,
                 bm25(messages_fts) AS score,
-                snippet(messages_fts, 0, '**', '**', '…', 32) AS snip
+                CASE WHEN m.rowid <= (SELECT marker_rowid FROM boundary)
+                     THEN snippet(messages_fts, 0, '**', '**', '…', 32) || '\n[pre-compaction, summary available in session_summary]'
+                     ELSE snippet(messages_fts, 0, '**', '**', '…', 32)
+                END AS snip
          FROM messages m
          JOIN messages_fts ON messages_fts.rowid = m.rowid
          WHERE m.agent_id = ?1 AND m.conversation_id = ?2
@@ -105,9 +117,20 @@ pub fn search_messages(
          ORDER BY score ASC
          LIMIT 20"
     } else {
-        "SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content,
+        "WITH boundary AS (
+             SELECT COALESCE(
+                 (SELECT rowid FROM messages
+                  WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'compaction'
+                  ORDER BY created_at DESC, rowid DESC LIMIT 1),
+                 0
+             ) AS marker_rowid
+         )
+         SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content,
                 bm25(messages_fts) AS score,
-                snippet(messages_fts, 0, '**', '**', '…', 32) AS snip
+                CASE WHEN m.rowid <= (SELECT marker_rowid FROM boundary)
+                     THEN snippet(messages_fts, 0, '**', '**', '…', 32) || '\n[pre-compaction, summary available in session_summary]'
+                     ELSE snippet(messages_fts, 0, '**', '**', '…', 32)
+                END AS snip
          FROM messages m
          JOIN messages_fts ON messages_fts.rowid = m.rowid
          WHERE m.agent_id = ?1
