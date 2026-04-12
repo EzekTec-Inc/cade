@@ -4,6 +4,7 @@ pub mod agents;
 pub mod artifacts;
 pub mod auth;
 pub mod checkpoints;
+pub mod complete;
 pub mod evals;
 pub mod health;
 pub mod memory_evidence;
@@ -39,6 +40,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/agents/:id/messages/stream",
             post(messages::stream_message),
+        )
+        .route(
+            "/v1/agents/:id/complete",
+            post(complete::complete),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),
