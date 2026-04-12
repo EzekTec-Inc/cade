@@ -177,3 +177,19 @@
 **Previous behavior:** Keymaps were hardcoded. No way to remap or disable without editing the plugin file.
 **New behavior:** Pass keymaps={accept="<C-y>"} to override one key; keymaps=false to disable all. Full suite: 28/28.
 **Rollback steps:** Revert `config.lua` and `plugin/cade.lua`. Remove keymap tests from config_spec.
+
+---
+
+## 2026-04-12 — TUI: Refactor sidebar into SidebarState
+
+**Summary:** Eliminated the 21-argument `render_sidebar` free-function signature by introducing a `SidebarState<'a>` struct. Extracted three formatting helpers (`format_activity`, `format_context`, `format_plan_summary`) as `pub(crate)` methods on the struct, making them independently unit-testable without a Ratatui frame. Added 7 unit tests covering all formatting branches. Removed the `#[allow(clippy::too_many_arguments)]` suppressor from `render_sidebar`.
+
+**Files modified:**
+- `crates/cade-tui/src/app/layout/sidebar.rs` — Added `SidebarState<'a>` struct; rewrote `render_sidebar` signature to `(frame, area, &SidebarState, colors)`; added `#[cfg(test)]` module with 7 tests.
+- `crates/cade-tui/src/app/render.rs` — Updated import to include `SidebarState`; replaced 19-argument `render_sidebar(...)` call with `SidebarState { .. }` construction + 4-argument call.
+
+**Reason:** Argument bloat, mixed concerns (formatting logic coupled to frame rendering), and zero unit-test coverage on sidebar formatting logic.
+
+**Previous behaviour → New behaviour:** Identical visual output. `render_sidebar` now delegates formatting to `SidebarState` methods rather than computing strings inline.
+
+**Rollback:** `git revert HEAD` or restore checkpoint `cp-abe2880d` (label: `before-sidebar-refactor`).

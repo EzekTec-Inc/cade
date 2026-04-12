@@ -33,7 +33,7 @@ use super::timeline::{
     build_timeline_entries, prepare_timeline_entries, render_timeline_viewport,
 };
 use super::layout::cursor::{calc_input_rows, input_mode_badge};
-use super::layout::sidebar::render_sidebar;
+use super::layout::sidebar::{render_sidebar, SidebarState};
 use super::layout::toast::render_toast;
 
 // -- Scroll helpers
@@ -567,9 +567,7 @@ pub(crate) fn render_frame(
     }
 
     if let Some(sidebar) = sidebar_area {
-        render_sidebar(
-            frame,
-            sidebar,
+        let sidebar_state = SidebarState {
             mode,
             input_mode,
             agent_name,
@@ -584,8 +582,8 @@ pub(crate) fn render_frame(
             thinking_elapsed,
             active_plan,
             copy_mode,
-            colors,
-        );
+        };
+        render_sidebar(frame, sidebar, &sidebar_state, colors);
     }
 
     if let Some(toast) = toast {
