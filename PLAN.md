@@ -94,3 +94,11 @@
 **New behavior:** `:CadeStatus` displays a formatted status block in `vim.notify()`.
 **Tests:** 6/6 pass (3 config + 3 status).
 **Rollback steps:** Revert `init.lua` and `plugin/cade.lua` from commit `470989d`.
+
+## 2026-04-12T19:10:00Z — cade.nvim: ghost.lua test coverage
+**Summary:** Added 9 plenary tests covering all public functions in ghost.lua. No implementation changes — tests confirm existing behaviour is correct.
+**Files modified:**
+- `plugins/cade.nvim/spec/ghost_spec.lua` — New. 9 tests: show() state tracking, show(nil/empty) no-op guards, clear() full reset, accept() no-pending guard, accept() full buffer insertion, accept_line() multi-line partial, accept_line() single-line clear, accept_word() leading-space inclusion.
+**Previous behavior:** ghost.lua had zero test coverage.
+**New behavior:** All 9 ghost behaviours verified. 9/9 pass.
+**Rollback steps:** Delete `spec/ghost_spec.lua`.
