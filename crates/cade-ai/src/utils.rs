@@ -188,6 +188,20 @@ pub fn clean_gemini_schema(v: &mut Value) {
             for k in x_google_keys {
                 map.remove(&k);
             }
+            if let Some(Value::Array(types)) = map.get("type") {
+                if let Some(primary_type) = types.iter().find(|t| t.as_str() != Some("null")) {
+                    if let Some(s) = primary_type.as_str() {
+                        map.insert("type".to_string(), Value::String(s.to_uppercase()));
+                    } else {
+                        map.insert("type".to_string(), primary_type.clone());
+                    }
+                } else {
+                    map.remove("type");
+                }
+            } else if let Some(Value::String(s)) = map.get("type") {
+                let up = s.to_uppercase();
+                map.insert("type".to_string(), Value::String(up));
+            }
             for val in map.values_mut() {
                 clean_gemini_schema(val);
             }

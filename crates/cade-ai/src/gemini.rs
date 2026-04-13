@@ -682,7 +682,11 @@ impl LlmProvider for GeminiProvider {
                     .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
                 inline_schema_refs(&mut params);
                 clean_gemini_schema(&mut params);
-                json!({"name": s["name"], "description": s["description"], "parameters": params})
+                json!({
+                    "name": s["name"],
+                    "description": s["description"],
+                    "parameters": params
+                })
             })
             .collect();
 

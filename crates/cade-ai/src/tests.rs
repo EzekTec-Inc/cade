@@ -530,6 +530,9 @@ fn clean_gemini_schema_strips_all_bad_fields() {
                 "x-google-identifier": true,
                 "deprecated": true,
                 "description": "A name"
+            },
+            "age": {
+                "type": ["integer", "null"]
             }
         }
     });
@@ -548,14 +551,18 @@ fn clean_gemini_schema_strips_all_bad_fields() {
     assert!(!map.contains_key("x-google-enum-deprecated"));
 
     // Valid fields preserved
-    assert_eq!(map["type"], "object");
+    assert_eq!(map["type"], "OBJECT");
     assert!(map.contains_key("properties"));
 
     // Nested x-google-* also removed
     let name_props = schema["properties"]["name"].as_object().unwrap();
     assert!(!name_props.contains_key("x-google-identifier"));
-    assert_eq!(name_props["type"], "string");
+    assert_eq!(name_props["type"], "STRING");
     assert_eq!(name_props["description"], "A name");
+
+    // Array type normalized to single string
+    let age_props = schema["properties"]["age"].as_object().unwrap();
+    assert_eq!(age_props["type"], "INTEGER");
 }
 
 #[test]
@@ -608,7 +615,7 @@ fn gemini_tool_prep_end_to_end() {
     // Valid content preserved
     assert!(result.contains("bodyFont"));
     assert!(result.contains("INTER"));
-    assert!(result.contains("\"type\":\"object\""));
+    assert!(result.contains("\"type\":\"OBJECT\""));
 }
 
 // -- pricing rules: gap models
