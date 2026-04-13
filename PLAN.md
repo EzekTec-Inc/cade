@@ -193,3 +193,10 @@
 **Previous behaviour → New behaviour:** Identical visual output. `render_sidebar` now delegates formatting to `SidebarState` methods rather than computing strings inline.
 
 **Rollback:** `git revert HEAD` or restore checkpoint `cp-abe2880d` (label: `before-sidebar-refactor`).
+- **Timestamp (UTC)**: 2026-04-13T15:34:30Z
+- **Summary of change**: Fixed Gemini API payload errors when caching tool schemas.
+- **Files modified**: `crates/cade-ai/src/utils.rs`, `crates/cade-ai/src/gemini.rs`, `crates/cade-ai/src/tests.rs`
+- **Exact reason**: The Gemini backend rejects JSON schemas with lowercase `type` strings when generating cached content (though it accepts them directly on standard completions). The schemas are now converted to uppercase (e.g. `STRING`, `OBJECT`) to fix `Proto field is not repeating` errors.
+- **Previous behavior**: `clean_gemini_schema` mapped schema types to lowercase strings.
+- **New behavior**: `clean_gemini_schema` casts schema types to uppercase strings.
+- **Rollback instructions**: Revert `crates/cade-ai/src/utils.rs` and `crates/cade-ai/src/tests.rs` using git checkout.
