@@ -102,6 +102,38 @@ impl TuiApp {
         // Some(Some(s))     = line submitted
         // None              = continue reading
 
+        // -- Summary overlay routing
+        if self.summary_overlay.is_some() {
+            match (k.code, k.modifiers) {
+                (KeyCode::Esc, _) | (KeyCode::Enter, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                    self.summary_overlay = None;
+                }
+                (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
+                    if let Some(su) = &mut self.summary_overlay {
+                        su.scroll_y = su.scroll_y.saturating_sub(1);
+                    }
+                }
+                (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
+                    if let Some(su) = &mut self.summary_overlay {
+                        su.scroll_y = su.scroll_y.saturating_add(1);
+                    }
+                }
+                (KeyCode::PageUp, _) => {
+                    if let Some(su) = &mut self.summary_overlay {
+                        su.scroll_y = su.scroll_y.saturating_sub(20);
+                    }
+                }
+                (KeyCode::PageDown, _) => {
+                    if let Some(su) = &mut self.summary_overlay {
+                        su.scroll_y = su.scroll_y.saturating_add(20);
+                    }
+                }
+                _ => {}
+            }
+            let _ = self.draw();
+            return Ok(None);
+        }
+
         // -- Command palette routing (Ctrl+P overlay)
         if self.command_palette.is_some() {
             match (k.code, k.modifiers) {

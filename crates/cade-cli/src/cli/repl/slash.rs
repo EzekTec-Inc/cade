@@ -70,6 +70,8 @@ pub(crate) enum SlashCmd {
     Artifacts,
     /// Trigger reflection to extract memory from conversation history.
     Reflect(Option<String>),
+    /// Show the background-computed session summary.
+    Summarize,
     /// Show or change the execution backend.
     Backend(Option<String>),
     CompactionModel(String),
@@ -91,6 +93,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "help" | "?" | "menu" => Some(SlashCmd::Help),
         "exit" | "quit" | "q" => Some(SlashCmd::Exit),
         "clear" => Some(SlashCmd::Clear),
+        "summarize" | "summary" => Some(SlashCmd::Summarize),
         "agent" => Some(SlashCmd::Agent),
         "info" => Some(SlashCmd::Info),
         "new" => Some(SlashCmd::New),

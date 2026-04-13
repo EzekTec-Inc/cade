@@ -73,6 +73,38 @@ impl Repl {
             SlashCmd::Help => {
                 return self.cmd_help(pending_input).await;
             }
+            SlashCmd::Summarize => {
+                let memory_blocks = match self.client.get_memory(&self.agent_id()).await {
+                    Ok(blocks) => blocks,
+                    Err(e) => {
+                        self.tui_err(format!("Failed to retrieve memory blocks: {e}"));
+                        return Ok(false);
+                    }
+                };
+
+                let summary = memory_blocks
+                    .into_iter()
+                    .find(|b| b.label == "session_summary")
+                    .map(|b| b.value);
+
+                match summary {
+                    Some(text) if !text.is_empty() => {
+                        self.app.lock().summary_overlay = Some(crate::ui::app::SummaryState {
+                            text,
+                            scroll_y: 0,
+                        });
+                        let _ = self.app.lock().draw();
+                    }
+                    _ => {
+                        self.app.lock().show_toast(
+                            "Conversation is too short for a background summary.",
+                            ToastLevel::Warning,
+                        );
+                        let _ = self.app.lock().draw();
+                    }
+                }
+                return Ok(false);
+            }
             SlashCmd::Agent => {
                 let msg = format!("  Agent: {} ({})", self.agent_name(), self.agent_id());
                 let _ = self

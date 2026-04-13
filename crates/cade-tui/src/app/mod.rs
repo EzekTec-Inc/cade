@@ -197,6 +197,15 @@ pub struct ThemePickerState {
     pub original_theme: crate::colors::ThemeColors,
 }
 
+// -- SummaryState
+
+/// State for the `/summarize` floating modal.
+#[derive(Debug, Clone)]
+pub struct SummaryState {
+    pub text: String,
+    pub scroll_y: u16,
+}
+
 // -- ThinkingState
 
 /// Active thinking animation state.
@@ -343,6 +352,8 @@ pub struct TuiApp {
     pub theme_picker: Option<ThemePickerState>,
     /// Active command palette overlay (`Ctrl+P`). `None` when inactive.
     pub command_palette: Option<command_palette::CommandPaletteState>,
+    /// Active `/summarize` overlay. `None` when inactive.
+    pub summary_overlay: Option<SummaryState>,
 
     // -- Image paste staging
     /// Images drained from the editor on the last submission.
@@ -466,6 +477,7 @@ impl TuiApp {
             picker: None,
             theme_picker: None,
             command_palette: None,
+            summary_overlay: None,
             pending_submit_images: Vec::new(),
             header_lines: Vec::new(),
             footer_extra: None,
@@ -659,6 +671,7 @@ impl TuiApp {
         let picker = self.picker.clone();
         let theme_picker = self.theme_picker.clone();
         let command_palette = self.command_palette.clone();
+        let summary_overlay = self.summary_overlay.clone();
         let header_lines = self.header_lines.clone();
         let footer_extra = self.footer_extra.clone();
         let reasoning_effort = self.reasoning_effort.clone();
@@ -712,6 +725,7 @@ impl TuiApp {
                 picker.as_ref(),
                 theme_picker.as_ref(),
                 command_palette.as_ref(),
+                summary_overlay.as_ref(),
                 &header_lines,
                 footer_extra.as_deref(),
                 reasoning_effort.as_deref(),

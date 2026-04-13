@@ -2,6 +2,7 @@ use crate::app::layout::question::{question_height, render_question_inline};
 use crate::app::layout::pickers::{render_picker, render_theme_picker};
 use crate::app::layout::command_palette::render_command_palette;
 use crate::app::layout::breadcrumb::render_breadcrumb;
+use crate::app::layout::summary::render_summary;
 use crate::app::layout::helpers::{mode_sep_color, mode_footer_left, truncate_str};
 // Rendering helpers for the TuiApp full-screen layout.
 //
@@ -23,7 +24,7 @@ use cade_core::permissions::PermissionMode;
 
 use super::{
     ActiveQuestionDrawState, PlanState, PickerState, RenderLine,
-    ThemePickerState, Toast,
+    ThemePickerState, Toast, SummaryState,
     BRAILLE, DOTS, FIXED_ROWS,
     MAX_INPUT_ROWS, SIDEBAR_BREAKPOINT, SIDEBAR_WIDTH,
 };
@@ -120,6 +121,7 @@ pub(crate) fn render_frame(
     picker: Option<&PickerState>,
     theme_picker: Option<&ThemePickerState>,
     command_palette: Option<&CommandPaletteState>,
+    summary_overlay: Option<&SummaryState>,
     header_lines: &[RenderLine],
     footer_extra: Option<&str>,
     reasoning_effort: Option<&str>,
@@ -598,6 +600,10 @@ pub(crate) fn render_frame(
     // -- Command palette overlay (renders on top of everything)
     if let Some(cp) = command_palette {
         render_command_palette(frame, cp, frame.area(), colors);
+    }
+
+    if let Some(su) = summary_overlay {
+        render_summary(frame, su, frame.area(), colors);
     }
 
     if let Some(plan) = active_plan
