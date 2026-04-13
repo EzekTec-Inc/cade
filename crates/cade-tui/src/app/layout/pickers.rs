@@ -10,7 +10,7 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
     // Top dashed separator (matches question-panel style)
     lines.push(Line::from(Span::styled(
         "╌".repeat(w),
-        Style::default().fg(colors.border),
+        Style::default().fg(colors.border_base),
     )));
 
     // Header: "@ <query>" + no-match hint
@@ -26,7 +26,7 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
                 .fg(colors.thinking_minimal)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(no_match, Style::default().fg(colors.muted)),
+        Span::styled(no_match, Style::default().fg(colors.text_muted)),
     ]));
 
     // Match entries — fill remaining rows (minus sep + header already pushed)
@@ -36,16 +36,16 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
         let (glyph, style) = if selected {
             (
                 "❯",
-                Style::default().fg(colors.text).add_modifier(Modifier::BOLD),
+                Style::default().fg(colors.text_primary).add_modifier(Modifier::BOLD),
             )
         } else {
-            (" ", Style::default().fg(colors.muted))
+            (" ", Style::default().fg(colors.text_muted))
         };
         lines.push(Line::from(Span::styled(format!(" {glyph} {m}"), style)));
     }
 
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(colors.tool_pending_bg)),
+        Paragraph::new(lines).style(Style::default().bg(colors.bg_surface1)),
         area,
     );
 }
@@ -75,7 +75,7 @@ pub(crate) fn render_theme_picker(
 
             let style = if is_sel {
                 Style::default()
-                    .bg(colors.overlay_selected_bg)
+                    .bg(colors.bg_surface1)
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()
@@ -85,22 +85,22 @@ pub(crate) fn render_theme_picker(
                 Cell::from(ratatui::text::Span::styled(
                     if is_sel { "▶ " } else { "  " },
                     Style::default().fg(if is_sel {
-                        colors.overlay_selected_fg
+                        colors.primary
                     } else {
-                        colors.overlay_hint
+                        colors.text_muted
                     }),
                 )),
                 Cell::from(ratatui::text::Span::styled(
                     t.name.clone(),
                     Style::default().fg(if is_sel {
-                        crate::colors::ThemeColors::dark().text
+                        crate::colors::ThemeColors::dark().text_primary
                     } else {
-                        colors.text
+                        colors.text_primary
                     }),
                 )),
                 Cell::from(ratatui::text::Span::styled(
                     format!("{:?}", t.source),
-                    Style::default().fg(colors.overlay_hint),
+                    Style::default().fg(colors.text_muted),
                 )),
             ])
             .style(style)
@@ -118,7 +118,7 @@ pub(crate) fn render_theme_picker(
     .header(
         Row::new(vec!["", "Theme", "Source"]).style(
             Style::default()
-                .fg(colors.overlay_title)
+                .fg(colors.primary)
                 .add_modifier(Modifier::BOLD),
         ),
     )
@@ -127,7 +127,7 @@ pub(crate) fn render_theme_picker(
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(format!(" Themes {hint}"))
-            .border_style(Style::default().fg(colors.overlay_border)),
+            .border_style(Style::default().fg(colors.border_base)),
     );
 
     let mut ts = ratatui::widgets::TableState::default().with_selected(Some(tp.cursor));
@@ -144,10 +144,10 @@ pub(crate) fn render_theme_picker(
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(" Filter (Type to search) ")
-        .border_style(Style::default().fg(colors.overlay_border));
+        .border_style(Style::default().fg(colors.border_base));
     let filter_text = Paragraph::new(format!("> {}█", tp.query))
         .block(filter_block)
-        .style(Style::default().fg(colors.text));
+        .style(Style::default().fg(colors.text_primary));
     frame.render_widget(filter_text, main_chunks[1]);
 }
 

@@ -482,18 +482,18 @@ pub fn show_command_menu_with_caps(
                         Span::styled(
                             if is_sel { "  ▶ " } else { "    " }.to_string(),
                             Style::default().fg(if is_sel {
-                                colors.overlay_selected_fg
+                                colors.primary
                             } else {
-                                colors.overlay_hint
+                                colors.text_muted
                             }),
                         ),
                         Span::styled(
                             format!("{cmd:<22}"),
                             Style::default()
                                 .fg(if is_sel {
-                                    colors.text
+                                    colors.text_primary
                                 } else {
-                                    colors.overlay_selected_fg
+                                    colors.primary
                                 })
                                 .add_modifier(if is_sel {
                                     Modifier::BOLD
@@ -533,7 +533,7 @@ pub fn show_command_menu_with_caps(
 
             // Filter bar — shows placeholder when empty, query text when active
             let filter_line = Line::from(vec![
-                Span::styled(" / ", Style::default().fg(colors.overlay_hint)),
+                Span::styled(" / ", Style::default().fg(colors.text_muted)),
                 Span::styled(
                     if query_display.is_empty() {
                         "type to filter…".to_string()
@@ -541,16 +541,16 @@ pub fn show_command_menu_with_caps(
                         query_display.clone()
                     },
                     Style::default().fg(if query_display.is_empty() {
-                        colors.overlay_hint
+                        colors.text_muted
                     } else {
-                        colors.text
+                        colors.text_primary
                     }),
                 ),
             ]);
             f.render_widget(Paragraph::new(filter_line), filter_area);
 
             let list = List::new(list_items)
-                .block(Block::default().style(Style::default().bg(colors.overlay_bg)))
+                .block(Block::default().style(Style::default().bg(colors.bg_surface2)))
                 .highlight_style(overlay::overlay_selected_style(colors));
             f.render_stateful_widget(list, list_area, &mut ls);
 
@@ -559,7 +559,7 @@ pub fn show_command_menu_with_caps(
                     Span::raw(" "),
                     Span::styled(cmd.clone(), overlay::overlay_badge_style(colors)),
                     Span::raw(" "),
-                    Span::styled(desc.clone(), Style::default().fg(colors.text)),
+                    Span::styled(desc.clone(), Style::default().fg(colors.text_primary)),
                 ])
             } else {
                 Line::from("")

@@ -105,7 +105,7 @@ pub fn show_skills_manager(
 
                     let style = if is_sel {
                         Style::default()
-                            .bg(colors.overlay_selected_bg)
+                            .bg(colors.bg_surface1)
                             .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
@@ -114,15 +114,15 @@ pub fn show_skills_manager(
                     Row::new(vec![
                         Cell::from(Span::styled(
                             s.scope.to_string(),
-                            Style::default().fg(if is_sel { RC::White } else { colors.badge_fg }),
+                            Style::default().fg(if is_sel { RC::White } else { colors.text_primary }),
                         )),
                         Cell::from(Span::styled(
                             s.name.clone(),
-                            Style::default().fg(if is_sel { RC::White } else { colors.text }),
+                            Style::default().fg(if is_sel { RC::White } else { colors.text_primary }),
                         )),
                         Cell::from(Span::styled(
                             s.category.clone().unwrap_or_default(),
-                            Style::default().fg(colors.overlay_hint),
+                            Style::default().fg(colors.text_muted),
                         )),
                     ])
                     .style(style)
@@ -140,7 +140,7 @@ pub fn show_skills_manager(
             .header(
                 Row::new(vec!["Scope", "Name", "Category"]).style(
                     Style::default()
-                        .fg(colors.overlay_title)
+                        .fg(colors.primary)
                         .add_modifier(Modifier::BOLD),
                 ),
             )
@@ -149,7 +149,7 @@ pub fn show_skills_manager(
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title(format!(" Skills {hint}"))
-                    .border_style(Style::default().fg(colors.overlay_border)),
+                    .border_style(Style::default().fg(colors.border_base)),
             );
 
             let mut ts = TableState::default().with_selected(Some(selected_idx));
@@ -183,7 +183,7 @@ Triggers: {}
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
                         .title(" Preview ")
-                        .border_style(Style::default().fg(colors.overlay_border)),
+                        .border_style(Style::default().fg(colors.border_base)),
                 );
             f.render_widget(preview, top_chunks[1]);
 

@@ -43,13 +43,13 @@ pub(crate) fn render_command_palette(
             Span::styled(
                 "Command Palette",
                 Style::default()
-                    .fg(colors.overlay_title)
+                    .fg(colors.primary)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
         ]))
-        .border_style(Style::default().fg(colors.overlay_border))
-        .style(Style::default().bg(colors.overlay_bg));
+        .border_style(Style::default().fg(colors.border_base))
+        .style(Style::default().bg(colors.bg_surface2));
 
     let inner = block.inner(r);
     frame.render_widget(block, r);
@@ -79,10 +79,10 @@ pub(crate) fn render_command_palette(
             Span::styled(
                 search_text,
                 Style::default()
-                    .fg(colors.text)
+                    .fg(colors.text_primary)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(no_match, Style::default().fg(colors.muted)),
+            Span::styled(no_match, Style::default().fg(colors.text_muted)),
         ])),
         search_area,
     );
@@ -90,7 +90,7 @@ pub(crate) fn render_command_palette(
     // -- Separator
     let sep = "─".repeat(sep_area.width as usize);
     frame.render_widget(
-        Paragraph::new(Span::styled(sep, Style::default().fg(colors.border_muted))),
+        Paragraph::new(Span::styled(sep, Style::default().fg(colors.border_base))),
         sep_area,
     );
 
@@ -125,21 +125,21 @@ pub(crate) fn render_command_palette(
         let (label_style, desc_style, glyph_style) = if is_selected {
             (
                 Style::default()
-                    .fg(colors.overlay_selected_fg)
-                    .bg(colors.overlay_selected_bg)
+                    .fg(colors.primary)
+                    .bg(colors.bg_surface1)
                     .add_modifier(Modifier::BOLD),
                 Style::default()
-                    .fg(colors.overlay_selected_fg)
-                    .bg(colors.overlay_selected_bg),
+                    .fg(colors.primary)
+                    .bg(colors.bg_surface1),
                 Style::default()
-                    .fg(colors.overlay_selected_fg)
-                    .bg(colors.overlay_selected_bg),
+                    .fg(colors.primary)
+                    .bg(colors.bg_surface1),
             )
         } else {
             (
-                Style::default().fg(colors.accent),
-                Style::default().fg(colors.muted),
-                Style::default().fg(colors.dim),
+                Style::default().fg(colors.primary),
+                Style::default().fg(colors.text_muted),
+                Style::default().fg(colors.text_dim),
             )
         };
 
@@ -150,7 +150,7 @@ pub(crate) fn render_command_palette(
             Span::styled(format!(" {} ", glyph), glyph_style),
             Span::styled(label_padded, label_style),
             Span::styled("  ", if is_selected {
-                Style::default().bg(colors.overlay_selected_bg)
+                Style::default().bg(colors.bg_surface1)
             } else {
                 Style::default()
             }),
@@ -172,7 +172,7 @@ pub(crate) fn render_command_palette(
         Paragraph::new(Span::styled(
             hint,
             Style::default()
-                .fg(colors.overlay_hint)
+                .fg(colors.text_muted)
                 .add_modifier(Modifier::DIM),
         )),
         hint_area,

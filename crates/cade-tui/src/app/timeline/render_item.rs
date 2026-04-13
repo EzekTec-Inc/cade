@@ -64,17 +64,17 @@ pub(crate) fn render_context_bar_item(
         Span::styled(
             "  ◆ Context  ",
             Style::default()
-                .fg(colors.accent)
+                .fg(colors.primary)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
             model.to_string(),
             Style::default().fg(RC::White).add_modifier(Modifier::BOLD),
         ),
-        Span::styled("  ·  ", Style::default().fg(colors.muted)),
+        Span::styled("  ·  ", Style::default().fg(colors.text_muted)),
         Span::styled(
             format!("{}/{} tokens", fmt_tok(total_used), fmt_tok(window)),
-            Style::default().fg(colors.muted),
+            Style::default().fg(colors.text_muted),
         ),
         Span::styled(
             format!("  ({}%)", pct),
@@ -96,7 +96,7 @@ pub(crate) fn render_context_bar_item(
     if window == 0 {
         bar_spans.push(Span::styled(
             "?".repeat(bar_width),
-            Style::default().fg(colors.muted),
+            Style::default().fg(colors.text_muted),
         ));
     } else {
         let mut filled = 0usize;
@@ -138,11 +138,11 @@ pub(crate) fn render_context_bar_item(
             Span::styled(glyph.to_string(), Style::default().fg(color)),
             Span::styled(
                 format!("  {:<18}", label),
-                Style::default().fg(colors.muted),
+                Style::default().fg(colors.text_muted),
             ),
             Span::styled(
                 format!("{:>7}  {:>6}", fmt_tok(tok), pct_cat),
-                Style::default().fg(colors.muted),
+                Style::default().fg(colors.text_muted),
             ),
         ]));
     }
@@ -158,7 +158,7 @@ pub(crate) fn render_user_message_item(
     out.push(Line::from(vec![Span::styled(
         "You",
         Style::default()
-            .fg(colors.text)
+            .fg(colors.text_primary)
             .add_modifier(Modifier::BOLD),
     )]));
     out.extend(crate::markdown::parse_markdown_lines_with_theme(
@@ -170,7 +170,7 @@ pub(crate) fn render_assistant_item(text: &str, out: &mut Vec<Line<'static>>, co
     out.push(Line::from(vec![Span::styled(
         "▍ CADE",
         Style::default()
-            .fg(colors.assistant_accent)
+            .fg(colors.primary)
             .add_modifier(Modifier::BOLD),
     )]));
     let md_lines = crate::markdown::parse_markdown_lines_with_theme(text, colors);
@@ -195,25 +195,25 @@ pub(crate) fn render_tool_call_item(
     let icon = crate::icons::tool_icon(&display, nerd);
     let name_style = Style::default()
         .add_modifier(Modifier::BOLD)
-        .fg(colors.tool_title);
+        .fg(colors.primary);
     let budget = width.saturating_sub(display.len() + icon.len() + 15);
     let args_span = if preview.is_empty() {
-        Span::styled(")", Style::default().fg(colors.dim))
+        Span::styled(")", Style::default().fg(colors.text_dim))
     } else if expand_all || preview.len() < budget {
-        Span::styled(format!("{})", preview), Style::default().fg(colors.dim))
+        Span::styled(format!("{})", preview), Style::default().fg(colors.text_dim))
     } else {
         let truncated = truncate_str(preview, budget.saturating_sub(1));
-        Span::styled(format!("{truncated}…)"), Style::default().fg(colors.dim))
+        Span::styled(format!("{truncated}…)"), Style::default().fg(colors.text_dim))
     };
     let spans: Vec<Span<'static>> = vec![
         Span::styled(
             format!("{icon} "),
             Style::default()
-                .fg(colors.assistant_accent)
+                .fg(colors.primary)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(display.to_string(), name_style.add_modifier(Modifier::BOLD)),
-        Span::styled("(", Style::default().fg(colors.dim)),
+        Span::styled("(", Style::default().fg(colors.text_dim)),
         args_span,
     ];
     out.push(Line::from(spans));
@@ -242,7 +242,7 @@ pub(crate) fn render_tool_result_item(
     let lns: Vec<&str> = content.lines().collect();
     if lns.is_empty() {
         out.push(Line::from(vec![
-            Span::styled("│ ", Style::default().fg(colors.border)),
+            Span::styled("│ ", Style::default().fg(colors.border_base)),
             Span::styled(
                 status_label,
                 Style::default()
@@ -263,7 +263,7 @@ pub(crate) fn render_tool_result_item(
         for (i, ln) in lns.iter().take(show).enumerate() {
             let mut spans = Vec::new();
             if i == 0 {
-                spans.push(Span::styled("│ ", Style::default().fg(colors.border)));
+                spans.push(Span::styled("│ ", Style::default().fg(colors.border_base)));
                 spans.push(Span::styled(
                     status_label.clone(),
                     Style::default()
@@ -272,7 +272,7 @@ pub(crate) fn render_tool_result_item(
                 ));
                 spans.push(Span::raw(" "));
             } else {
-                spans.push(Span::styled("│      ", Style::default().fg(colors.border)));
+                spans.push(Span::styled("│      ", Style::default().fg(colors.border_base)));
             }
 
             let parsed_text = ln
@@ -321,11 +321,11 @@ pub(crate) fn render_tool_result_item(
                 format!("… +{remaining} lines (ctrl+o to expand)")
             };
             out.push(Line::from(vec![
-                Span::styled("       ", Style::default().fg(colors.border)),
+                Span::styled("       ", Style::default().fg(colors.border_base)),
                 Span::styled(
                     hint,
                     Style::default()
-                        .fg(colors.dim)
+                        .fg(colors.text_dim)
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -343,34 +343,34 @@ pub(crate) fn render_reasoning_item(
 ) {
     out.push(Line::from(""));
     out.push(Line::from(vec![
-        Span::styled("╭ ", Style::default().fg(colors.border_muted)),
+        Span::styled("╭ ", Style::default().fg(colors.border_base)),
         Span::styled(
             " THINKING ",
             Style::default()
-                .fg(colors.badge_fg)
-                .bg(colors.reasoning_bg)
+                .fg(colors.text_primary)
+                .bg(colors.bg_surface1)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
-        Span::styled(format!("{words} words"), Style::default().fg(colors.muted)),
+        Span::styled(format!("{words} words"), Style::default().fg(colors.text_muted)),
         Span::styled(
             if expand_all {
                 " · expanded"
             } else {
                 " · ctrl+o to expand"
             },
-            Style::default().fg(colors.dim),
+            Style::default().fg(colors.text_dim),
         ),
     ]));
     if expand_all {
         let inner_w = width.saturating_sub(4);
         for ln in content.lines() {
             out.push(Line::from(vec![
-                Span::styled("│ ", Style::default().fg(colors.border_muted)),
+                Span::styled("│ ", Style::default().fg(colors.border_base)),
                 Span::styled(
                     truncate_str(ln, inner_w),
                     Style::default()
-                        .fg(colors.thinking_text)
+                        .fg(colors.text_muted)
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -392,19 +392,19 @@ pub(crate) fn render_live_output_item(
 
     if lines.is_empty() {
         out.push(Line::from(vec![
-            Span::styled("│ ", Style::default().fg(colors.border)),
+            Span::styled("│ ", Style::default().fg(colors.border_base)),
             Span::styled(
                 " LIVE ",
                 Style::default()
                     .fg(color)
-                    .bg(colors.tool_pending_bg)
+                    .bg(colors.bg_surface1)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled(
                 "(starting…)",
                 Style::default()
-                    .fg(colors.dim)
+                    .fg(colors.text_dim)
                     .add_modifier(Modifier::ITALIC),
             ),
         ]));
@@ -422,11 +422,11 @@ pub(crate) fn render_live_output_item(
     if hidden > 0 {
         let hint = format!("… {hidden} earlier lines (ctrl+o to expand)");
         out.push(Line::from(vec![
-            Span::styled("│ ", Style::default().fg(colors.border)),
+            Span::styled("│ ", Style::default().fg(colors.border_base)),
             Span::styled(
                 hint,
                 Style::default()
-                    .fg(colors.dim)
+                    .fg(colors.text_dim)
                     .add_modifier(Modifier::ITALIC),
             ),
         ]));
@@ -436,17 +436,17 @@ pub(crate) fn render_live_output_item(
     for (i, ln) in lines[start..].iter().enumerate() {
         let mut spans = Vec::new();
         if i == 0 && hidden == 0 {
-            spans.push(Span::styled("│ ", Style::default().fg(colors.border)));
+            spans.push(Span::styled("│ ", Style::default().fg(colors.border_base)));
             spans.push(Span::styled(
                 " LIVE ",
                 Style::default()
                     .fg(color)
-                    .bg(colors.tool_pending_bg)
+                    .bg(colors.bg_surface1)
                     .add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::raw(" "));
         } else {
-            spans.push(Span::styled("│      ", Style::default().fg(colors.border)));
+            spans.push(Span::styled("│      ", Style::default().fg(colors.border_base)));
         }
 
         let parsed_text = ln
@@ -494,12 +494,12 @@ pub(crate) fn render_system_item(text: &str, out: &mut Vec<Line<'static>>, color
             Span::styled(
                 if i == 0 { " INFO " } else { "      " },
                 Style::default()
-                    .fg(colors.overlay_title)
-                    .bg(colors.custom_message_bg)
+                    .fg(colors.primary)
+                    .bg(colors.bg_base)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
-            Span::styled(ln.to_string(), Style::default().fg(colors.muted)),
+            Span::styled(ln.to_string(), Style::default().fg(colors.text_muted)),
         ]));
     }
 }
@@ -511,7 +511,7 @@ pub(crate) fn render_success_item(text: &str, out: &mut Vec<Line<'static>>, colo
                 if i == 0 { " OK " } else { "    " },
                 Style::default()
                     .fg(colors.success)
-                    .bg(colors.tool_success_bg)
+                    .bg(colors.bg_surface1)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -525,7 +525,7 @@ pub(crate) fn render_info_header_item(text: &str, out: &mut Vec<Line<'static>>, 
         out.push(Line::from(Span::styled(
             ln.to_string(),
             Style::default()
-                .fg(colors.overlay_title)
+                .fg(colors.primary)
                 .add_modifier(Modifier::BOLD),
         )));
     }
@@ -535,15 +535,15 @@ pub(crate) fn render_dim_item(text: &str, out: &mut Vec<Line<'static>>, colors: 
     for ln in text.lines() {
         out.push(Line::from(Span::styled(
             ln.to_string(),
-            Style::default().fg(colors.dim).add_modifier(Modifier::DIM),
+            Style::default().fg(colors.text_dim).add_modifier(Modifier::DIM),
         )));
     }
 }
 
 pub(crate) fn render_pair_item(label: &str, value: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
     out.push(Line::from(vec![
-        Span::styled(format!("  {label:<24}"), Style::default().fg(colors.dim)),
-        Span::styled(value.to_string(), Style::default().fg(colors.text)),
+        Span::styled(format!("  {label:<24}"), Style::default().fg(colors.text_dim)),
+        Span::styled(value.to_string(), Style::default().fg(colors.text_primary)),
     ]));
 }
 
@@ -554,7 +554,7 @@ pub(crate) fn render_error_item(text: &str, out: &mut Vec<Line<'static>>, colors
                 if i == 0 { " ERR " } else { "     " },
                 Style::default()
                     .fg(colors.error)
-                    .bg(colors.tool_error_bg)
+                    .bg(colors.bg_surface1)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -574,17 +574,17 @@ pub(crate) fn render_question_result_item(
             " DONE ",
             Style::default()
                 .fg(colors.success)
-                .bg(colors.tool_success_bg)
+                .bg(colors.bg_surface1)
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         Span::styled(
             format!("{header}: "),
             Style::default()
-                .fg(colors.overlay_title)
+                .fg(colors.primary)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(answer.to_string(), Style::default().fg(colors.text)),
+        Span::styled(answer.to_string(), Style::default().fg(colors.text_primary)),
     ]));
 }
 
@@ -598,7 +598,7 @@ pub(crate) fn render_heuristic_summary_item(
 ) {
     let w = width.max(40).saturating_sub(4);
     let top = format!("╭── ⚡ Context & Memory Synchronized {}╮", "─".repeat(w.saturating_sub(35)));
-    out.push(Line::from(Span::styled(top, Style::default().fg(colors.dim))));
+    out.push(Line::from(Span::styled(top, Style::default().fg(colors.text_dim))));
 
     let mut render_row = |label: &str, value: &str, val_color: ratatui::style::Color| {
         let label_pad = format!("│  {label:<10} │ ");
@@ -606,18 +606,18 @@ pub(crate) fn render_heuristic_summary_item(
         let val_str = crate::truncate_str(value, val_w);
         let pad = " ".repeat(val_w.saturating_sub(val_str.width()));
         out.push(Line::from(vec![
-            Span::styled(label_pad, Style::default().fg(colors.dim)),
+            Span::styled(label_pad, Style::default().fg(colors.text_dim)),
             Span::styled(val_str, Style::default().fg(val_color)),
-            Span::styled(format!("{pad} │"), Style::default().fg(colors.dim)),
+            Span::styled(format!("{pad} │"), Style::default().fg(colors.text_dim)),
         ]));
     };
 
-    render_row("Intent", intent, colors.text);
+    render_row("Intent", intent, colors.text_primary);
     render_row("Safety", safety, colors.success);
-    render_row("Directives", directives, colors.text);
+    render_row("Directives", directives, colors.text_primary);
 
     let bot = format!("╰{}╯", "─".repeat(w));
-    out.push(Line::from(Span::styled(bot, Style::default().fg(colors.dim))));
+    out.push(Line::from(Span::styled(bot, Style::default().fg(colors.text_dim))));
 }
 
 pub(crate) fn render_table_item(
@@ -647,7 +647,7 @@ pub(crate) fn render_table_item(
         header_spans.push(Span::styled(
             format!("  {:<width$}  ", h, width = widths[i]),
             Style::default()
-                .fg(colors.overlay_title)
+                .fg(colors.primary)
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         ));
     }
@@ -659,7 +659,7 @@ pub(crate) fn render_table_item(
             if i < n_cols {
                 row_spans.push(Span::styled(
                     format!("  {:<width$}  ", cell, width = widths[i]),
-                    Style::default().fg(colors.text),
+                    Style::default().fg(colors.text_primary),
                 ));
             }
         }

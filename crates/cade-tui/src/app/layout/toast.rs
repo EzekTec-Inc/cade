@@ -14,10 +14,10 @@ pub(crate) fn render_toast(
         height: 3,
     };
     let (fg, border) = match toast.level {
-        ToastLevel::Info => (colors.text, colors.accent),
-        ToastLevel::Success => (colors.text, colors.success),
-        ToastLevel::Warning => (colors.text, colors.warning),
-        ToastLevel::Error => (colors.text, colors.error),
+        ToastLevel::Info => (colors.text_primary, colors.primary),
+        ToastLevel::Success => (colors.text_primary, colors.success),
+        ToastLevel::Warning => (colors.text_primary, colors.warning),
+        ToastLevel::Error => (colors.text_primary, colors.error),
     };
     frame.render_widget(ratatui::widgets::Clear, rect);
     frame.render_widget(
@@ -33,7 +33,7 @@ pub(crate) fn render_toast(
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .border_style(Style::default().fg(border))
-                .style(Style::default().bg(colors.overlay_bg)),
+                .style(Style::default().bg(colors.bg_surface2)),
         ),
         rect,
     );
@@ -43,8 +43,8 @@ pub(crate) fn context_severity_color(context_pct: Option<u8>, colors: &ThemeColo
     match context_pct {
         Some(p) if p >= 90 => colors.error,
         Some(p) if p >= 80 => colors.warning,
-        Some(_) => colors.muted,
-        None => colors.dim,
+        Some(_) => colors.text_muted,
+        None => colors.text_dim,
     }
 }
 

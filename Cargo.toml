@@ -155,6 +155,7 @@ axum.workspace         = true
 tower-http.workspace   = true
 cade-tui = { version = "0.2.0", path = "crates/cade-tui" }
 ratatui.workspace = true
+rmcp.workspace = true
 
 [dev-dependencies]
 tokio-test = "0.4"

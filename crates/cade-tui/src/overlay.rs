@@ -18,14 +18,14 @@ pub fn render_overlay_shell(
     let block = Block::default()
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
-        .style(Style::default().bg(colors.overlay_bg))
-        .border_style(Style::default().fg(colors.overlay_border))
+        .style(Style::default().bg(colors.bg_surface2))
+        .border_style(Style::default().fg(colors.border_base))
         .title(Line::from(vec![
             Span::raw(" "),
             Span::styled(
                 title.to_string(),
                 Style::default()
-                    .fg(colors.overlay_title)
+                    .fg(colors.primary)
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -50,7 +50,7 @@ pub fn render_overlay_hint(frame: &mut Frame, area: Rect, hint: &str, colors: &T
             Span::styled(
                 hint.to_string(),
                 Style::default()
-                    .fg(colors.overlay_hint)
+                    .fg(colors.text_muted)
                     .add_modifier(Modifier::DIM),
             ),
         ])),
@@ -60,23 +60,23 @@ pub fn render_overlay_hint(frame: &mut Frame, area: Rect, hint: &str, colors: &T
 
 pub fn overlay_selected_style(colors: &ThemeColors) -> Style {
     Style::default()
-        .bg(colors.overlay_selected_bg)
-        .fg(colors.overlay_selected_fg)
+        .bg(colors.bg_surface1)
+        .fg(colors.primary)
 }
 
 pub fn overlay_section_style(colors: &ThemeColors) -> Style {
     Style::default()
-        .fg(colors.overlay_section)
+        .fg(colors.md_heading)
         .add_modifier(Modifier::BOLD)
 }
 
 pub fn overlay_muted_style(colors: &ThemeColors) -> Style {
-    Style::default().fg(colors.overlay_hint)
+    Style::default().fg(colors.text_muted)
 }
 
 pub fn overlay_badge_style(colors: &ThemeColors) -> Style {
     Style::default()
-        .fg(colors.badge_fg)
-        .bg(colors.badge_bg)
+        .fg(colors.text_primary)
+        .bg(colors.bg_surface2)
         .add_modifier(Modifier::BOLD)
 }

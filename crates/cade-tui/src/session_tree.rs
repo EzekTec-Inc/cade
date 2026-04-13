@@ -158,17 +158,17 @@ fn draw_tree(
                     label.to_string(),
                     if list_state.selected() == Some(i) {
                         Style::default()
-                            .fg(colors.overlay_selected_fg)
+                            .fg(colors.primary)
                             .add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(colors.text)
+                        Style::default().fg(colors.text_primary)
                     },
                 ),
                 Span::styled(format!("  {dt}"), overlay::overlay_muted_style(colors)),
-                Span::styled(git_str, Style::default().fg(colors.dim)),
+                Span::styled(git_str, Style::default().fg(colors.text_dim)),
                 Span::styled(
                     format!("  ({})", &id[..8.min(id.len())]),
-                    Style::default().fg(colors.overlay_border),
+                    Style::default().fg(colors.border_base),
                 ),
             ]);
             ListItem::new(line)
@@ -176,7 +176,7 @@ fn draw_tree(
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().style(Style::default().bg(colors.overlay_bg)))
+        .block(Block::default().style(Style::default().bg(colors.bg_surface2)))
         .highlight_style(overlay::overlay_selected_style(colors))
         .highlight_symbol("▶ ");
     frame.render_stateful_widget(list, list_area, list_state);

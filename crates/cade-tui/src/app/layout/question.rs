@@ -66,7 +66,7 @@ pub(crate) fn render_question_inline(
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             dash_str,
-            Style::default().fg(colors.border),
+            Style::default().fg(colors.border_base),
         ))),
         sep_area,
     );
@@ -76,11 +76,11 @@ pub(crate) fn render_question_inline(
 
     // Header chip — left-aligned, yellow bold with a diamond glyph
     lines.push(Line::from(vec![
-        Span::styled("◆ ", Style::default().fg(colors.overlay_section)),
+        Span::styled("◆ ", Style::default().fg(colors.md_heading)),
         Span::styled(
             q.header.clone(),
             Style::default()
-                .fg(colors.overlay_section)
+                .fg(colors.md_heading)
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -89,7 +89,7 @@ pub(crate) fn render_question_inline(
     // Question text
     lines.push(Line::from(Span::styled(
         q.text.clone(),
-        Style::default().fg(colors.text),
+        Style::default().fg(colors.text_primary),
     )));
     lines.push(Line::from(""));
 
@@ -97,7 +97,7 @@ pub(crate) fn render_question_inline(
     if let Some((cur, tot)) = q.progress {
         lines.push(Line::from(Span::styled(
             format!("Question {cur} of {tot}"),
-            Style::default().fg(colors.muted),
+            Style::default().fg(colors.text_muted),
         )));
         lines.push(Line::from(""));
     }
@@ -114,7 +114,7 @@ pub(crate) fn render_question_inline(
                     .fg(colors.success)
                     .add_modifier(Modifier::BOLD)
             } else {
-                Style::default().fg(colors.muted)
+                Style::default().fg(colors.text_muted)
             };
             lines.push(Line::from(Span::styled(
                 format!(" {selector} {}.  Submit", idx + 1),
@@ -143,13 +143,13 @@ pub(crate) fn render_question_inline(
                     Style::default().fg(if is_selected {
                         colors.success
                     } else {
-                        colors.muted
+                        colors.text_muted
                     }),
                 ),
                 Span::styled(
                     display,
                     Style::default()
-                        .fg(colors.dim)
+                        .fg(colors.text_dim)
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -167,14 +167,14 @@ pub(crate) fn render_question_inline(
         let num_style = if is_selected {
             Style::default().fg(colors.success)
         } else {
-            Style::default().fg(colors.muted)
+            Style::default().fg(colors.text_muted)
         };
         let label_style = if is_selected {
             Style::default()
-                .fg(colors.text)
+                .fg(colors.text_primary)
                 .add_modifier(Modifier::BOLD)
         } else {
-            Style::default().fg(colors.text)
+            Style::default().fg(colors.text_primary)
         };
 
         lines.push(Line::from(vec![
@@ -186,7 +186,7 @@ pub(crate) fn render_question_inline(
         if !opt.description.is_empty() {
             lines.push(Line::from(Span::styled(
                 format!("       {}", opt.description),
-                Style::default().fg(colors.muted),
+                Style::default().fg(colors.text_muted),
             )));
         }
     }
@@ -200,7 +200,7 @@ pub(crate) fn render_question_inline(
     };
     lines.push(Line::from(Span::styled(
         hint,
-        Style::default().fg(colors.dim).add_modifier(Modifier::DIM),
+        Style::default().fg(colors.text_dim).add_modifier(Modifier::DIM),
     )));
 
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), body_area);

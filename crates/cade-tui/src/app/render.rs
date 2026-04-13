@@ -350,7 +350,7 @@ pub(crate) fn render_frame(
                 ratatui::style::Color::Rgb(r, g, b),
             )
         } else {
-            (t.to_string(), colors.accent)
+            (t.to_string(), colors.primary)
         };
         (
             spinner_text,
@@ -418,7 +418,7 @@ pub(crate) fn render_frame(
         RC::Rgb(r, g, b)
     } else if streaming.is_some() {
         // Pure text streaming (thinking animation already stopped): fixed bright cyan.
-        colors.accent
+        colors.primary
     } else {
         mode_color
     };
@@ -450,10 +450,10 @@ pub(crate) fn render_frame(
         let prefix_spans = vec![
             Span::styled(
                 badge_text.to_string(),
-                Style::default().fg(colors.badge_fg).bg(badge_color).add_modifier(Modifier::BOLD),
+                Style::default().fg(colors.text_primary).bg(badge_color).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
-            Span::styled("> ", Style::default().fg(colors.dim)),
+            Span::styled("> ", Style::default().fg(colors.text_dim)),
         ];
         frame.render_widget(Paragraph::new(Line::from(prefix_spans)), input_chunks[0]);
 
@@ -464,7 +464,7 @@ pub(crate) fn render_frame(
         };
 
         textarea.set_placeholder_text(input_placeholder);
-        textarea.set_placeholder_style(Style::default().fg(colors.muted));
+        textarea.set_placeholder_style(Style::default().fg(colors.text_muted));
         textarea.set_cursor_line_style(Style::default());
         textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
 
@@ -495,8 +495,8 @@ pub(crate) fn render_frame(
     let (right_ctx, right_ctx_color) = match context_pct {
         Some(p) if p >= 90 => (format!(" {p}%"), colors.error),
         Some(p) if p >= 80 => (format!(" {p}%"), colors.warning),
-        Some(p) => (format!(" {p}%"), colors.muted),
-        None => (String::new(), colors.muted),
+        Some(p) => (format!(" {p}%"), colors.text_muted),
+        None => (String::new(), colors.text_muted),
     };
     let mid_cwd = format!("  {cwd}  ");
 
@@ -524,7 +524,7 @@ pub(crate) fn render_frame(
         ));
     }
     footer.push(Span::raw(" ".repeat(pad)));
-    footer.push(Span::styled(mid_cwd, Style::default().fg(colors.muted)));
+    footer.push(Span::styled(mid_cwd, Style::default().fg(colors.text_muted)));
     if !right_agent.is_empty() {
         footer.push(Span::styled(
             right_agent,
@@ -532,7 +532,7 @@ pub(crate) fn render_frame(
         ));
     }
     if !right_model.is_empty() {
-        footer.push(Span::styled(right_model, Style::default().fg(colors.dim)));
+        footer.push(Span::styled(right_model, Style::default().fg(colors.text_dim)));
     }
     if !right_reasoning.is_empty() {
         footer.push(Span::styled(
@@ -560,7 +560,7 @@ pub(crate) fn render_frame(
         frame.render_widget(
             Paragraph::new(Span::styled(
                 truncate_str(extra, extra_rect.width.saturating_sub(1) as usize),
-                Style::default().fg(colors.dim),
+                Style::default().fg(colors.text_dim),
             )),
             extra_rect,
         );
@@ -602,7 +602,7 @@ pub(crate) fn render_frame(
         let mut items = Vec::new();
         for step in &plan.steps {
             let (prefix, color) = if step.is_done {
-                ("[✓] ", colors.muted)
+                ("[✓] ", colors.text_muted)
             } else {
                 ("[ ] ", colors.success)
             };
@@ -611,9 +611,9 @@ pub(crate) fn render_frame(
                 Span::styled(
                     format!("{}. {}", step.id, step.description),
                     Style::default().fg(if step.is_done {
-                        colors.muted
+                        colors.text_muted
                     } else {
-                        colors.text
+                        colors.text_primary
                     }),
                 ),
             ])));
@@ -623,7 +623,7 @@ pub(crate) fn render_frame(
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title(" Todos ")
-                .border_style(Style::default().fg(colors.overlay_border)),
+                .border_style(Style::default().fg(colors.border_base)),
         );
         frame.render_widget(list, chunks[2]); // chunks[2] is plan panel in my new chunks array
     }

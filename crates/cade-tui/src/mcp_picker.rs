@@ -114,7 +114,7 @@ pub fn show_mcp_manager(
 
                     let style = if is_sel {
                         Style::default()
-                            .bg(colors.overlay_selected_bg)
+                            .bg(colors.bg_surface1)
                             .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
@@ -129,7 +129,7 @@ pub fn show_mcp_manager(
                     };
 
                     let status_color = if s.config.disabled {
-                        colors.overlay_hint
+                        colors.text_muted
                     } else if s.tool_count.is_some() {
                         colors.success
                     } else {
@@ -146,18 +146,18 @@ pub fn show_mcp_manager(
                         Cell::from(Span::styled(
                             if is_sel { "▶ " } else { "  " },
                             Style::default().fg(if is_sel {
-                                colors.overlay_selected_fg
+                                colors.primary
                             } else {
-                                colors.overlay_hint
+                                colors.text_muted
                             }),
                         )),
                         Cell::from(Span::styled(
                             s.key.clone(),
-                            Style::default().fg(if is_sel { colors.text } else { colors.text }),
+                            Style::default().fg(if is_sel { colors.text_primary } else { colors.text_primary }),
                         )),
                         Cell::from(Span::styled(
                             kind_str,
-                            Style::default().fg(colors.overlay_hint),
+                            Style::default().fg(colors.text_muted),
                         )),
                         Cell::from(Span::styled(status_str, Style::default().fg(status_color))),
                     ])
@@ -177,7 +177,7 @@ pub fn show_mcp_manager(
             .header(
                 Row::new(vec!["", "Server", "Type", "Status"]).style(
                     Style::default()
-                        .fg(colors.overlay_title)
+                        .fg(colors.primary)
                         .add_modifier(Modifier::BOLD),
                 ),
             )
@@ -186,7 +186,7 @@ pub fn show_mcp_manager(
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title(format!(" MCP Servers {hint}"))
-                    .border_style(Style::default().fg(colors.overlay_border)),
+                    .border_style(Style::default().fg(colors.border_base)),
             );
 
             let mut ts = TableState::default().with_selected(Some(selected_idx));
@@ -257,7 +257,7 @@ pub fn show_mcp_manager(
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
                         .title(" Configuration ")
-                        .border_style(Style::default().fg(colors.overlay_border)),
+                        .border_style(Style::default().fg(colors.border_base)),
                 );
             f.render_widget(preview, top_chunks[1]);
 

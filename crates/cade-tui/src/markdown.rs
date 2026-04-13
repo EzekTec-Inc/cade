@@ -231,7 +231,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .fg(colors.text)
+                        .fg(colors.text_primary)
                         .add_modifier(Modifier::BOLD);
                     style_stack.push(s);
                 }
@@ -373,7 +373,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                             ));
                             current_spans.push(Span::styled(
                                 raw_line.to_string(),
-                                Style::default().fg(colors.text),
+                                Style::default().fg(colors.text_primary),
                             ));
                             push_line(&mut lines, &mut current_spans, in_blockquote);
                         }
@@ -388,7 +388,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                     current_cell.push_str(&format!("`{text}`"));
                 } else {
                     // Inline code: bright on a subtle background via reversed dim
-                    let style = Style::default().fg(colors.md_code).bg(colors.reasoning_bg);
+                    let style = Style::default().fg(colors.md_code).bg(colors.bg_surface1);
                     current_spans.push(Span::styled(format!(" {text} "), style));
                 }
             }

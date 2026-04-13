@@ -72,7 +72,7 @@ impl SetPlanTool {
     pub fn schema() -> Value {
         json!({
             "name": "set_plan",
-            "description": "Set the numbered steps shown in the TUI plan panel. Call once at the start of a multi-step task. Each step appears as a checklist item the user can track in real time.",
+            "description": "Set the numbered steps shown in the TUI plan panel. Call once at the start of a multi-step task. Each step appears as a checklist item the user can track in real time. CRITICAL: You MUST use the UpdatePlan tool to mark steps as done immediately as you finish them.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -95,7 +95,7 @@ impl UpdatePlanTool {
     pub fn schema() -> Value {
         json!({
             "name": "UpdatePlan",
-            "description": "Mark a step in the TUI plan panel as done or not done. step_id is 1-based.",
+            "description": "Mark a step in the TUI plan panel as done or not done. step_id is 1-based. CRITICAL: You MUST call this tool immediately upon finishing the work for a step. Never conclude a response with unfinished steps if the work is actually complete.",
             "parameters": {
                 "type": "object",
                 "properties": {

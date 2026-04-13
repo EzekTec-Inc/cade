@@ -1,10 +1,5 @@
 /// Theme color palette for the CADE TUI.
-///
-/// All hardcoded `RC::Rgb(...)` values in `app.rs` derive from one of these
-/// tokens.  The `ThemeColors::dark()` and `ThemeColors::light()` constructors
-/// reproduce the current defaults so no visual change occurs unless the user
-/// explicitly selects a custom theme.
-use ratatui::style::Color as RC;
+use ratatui::style::{Color as RC, Style, Modifier};
 
 // region:    --- ThemeColors
 
@@ -16,46 +11,24 @@ use ratatui::style::Color as RC;
 pub struct ThemeColors {
     // -- Core
     pub source_path: Option<std::path::PathBuf>,
-    pub accent: RC,
-    pub border: RC,
-    pub border_accent: RC,
-    pub border_muted: RC,
+
+    // -- Semantic Palette (Phase 1)
+    pub bg_base: RC,
+    pub bg_surface0: RC,
+    pub bg_surface1: RC,
+    pub bg_surface2: RC,
+
+    pub primary: RC,
     pub success: RC,
     pub error: RC,
     pub warning: RC,
-    pub muted: RC,
-    pub dim: RC,
-    pub text: RC,
-    pub thinking_text: RC,
 
-    // -- Tool boxes
-    pub tool_pending_bg: RC,
-    pub tool_success_bg: RC,
-    pub tool_error_bg: RC,
-    pub tool_title: RC,
-    pub tool_output: RC,
+    pub text_primary: RC,
+    pub text_muted: RC,
+    pub text_dim: RC,
 
-    // -- User / custom message areas
-    pub user_message_bg: RC,
-    pub user_message_text: RC,
-    pub custom_message_bg: RC,
-    pub custom_message_text: RC,
-    pub custom_message_label: RC,
-    pub selected_bg: RC,
-
-    // -- Modern UI surfaces
-    pub overlay_bg: RC,
-    pub overlay_border: RC,
-    pub overlay_title: RC,
-    pub overlay_section: RC,
-    pub overlay_hint: RC,
-    pub overlay_selected_bg: RC,
-    pub overlay_selected_fg: RC,
-    pub badge_bg: RC,
-    pub badge_fg: RC,
-    pub tool_badge_fg: RC,
-    pub assistant_accent: RC,
-    pub reasoning_bg: RC,
+    pub border_base: RC,
+    pub border_focus: RC,
 
     // -- Diffs
     pub diff_added: RC,
@@ -101,51 +74,56 @@ pub struct ThemeColors {
 }
 
 impl ThemeColors {
+    // -- Style Builders (Phase 2)
+    pub fn style_base(&self) -> Style { Style::default().bg(self.bg_base).fg(self.text_primary) }
+    pub fn style_surface0(&self) -> Style { Style::default().bg(self.bg_surface0).fg(self.text_primary) }
+    pub fn style_surface1(&self) -> Style { Style::default().bg(self.bg_surface1).fg(self.text_primary) }
+    pub fn style_surface2(&self) -> Style { Style::default().bg(self.bg_surface2).fg(self.text_primary) }
+
+    pub fn text_primary(&self) -> Style { Style::default().fg(self.text_primary) }
+    pub fn text_muted(&self) -> Style { Style::default().fg(self.text_muted) }
+    pub fn text_dim(&self) -> Style { Style::default().fg(self.text_dim) }
+    
+    pub fn text_primary_bold(&self) -> Style { Style::default().fg(self.text_primary).add_modifier(Modifier::BOLD) }
+    pub fn text_muted_bold(&self) -> Style { Style::default().fg(self.text_muted).add_modifier(Modifier::BOLD) }
+
+    pub fn border_base(&self) -> Style { Style::default().fg(self.border_base) }
+    pub fn border_focus(&self) -> Style { Style::default().fg(self.border_focus) }
+    
+    pub fn primary(&self) -> Style { Style::default().fg(self.primary) }
+    pub fn primary_bold(&self) -> Style { Style::default().fg(self.primary).add_modifier(Modifier::BOLD) }
+    pub fn success(&self) -> Style { Style::default().fg(self.success) }
+    pub fn error(&self) -> Style { Style::default().fg(self.error) }
+    pub fn warning(&self) -> Style { Style::default().fg(self.warning) }
+
+    pub fn badge(&self) -> Style { Style::default().bg(self.bg_surface2).fg(self.primary) }
+
     // -- Built-in themes
 
-    /// Dark theme (current default — all values match the previous hardcoded colors).
+    /// Dark theme (modern tonal scaling).
     pub fn dark() -> Self {
         Self {
             source_path: None,
             #[cfg(feature = "syntax-highlighting")]
             syntect_theme: None,
-            accent: RC::Rgb(100, 180, 255),
-            border: RC::Rgb(60, 70, 90),
-            border_accent: RC::Rgb(100, 180, 255),
-            border_muted: RC::Rgb(45, 50, 65),
+
+            // Semantic Elevation
+            bg_base: RC::Rgb(10, 10, 18),
+            bg_surface0: RC::Rgb(18, 22, 32),
+            bg_surface1: RC::Rgb(22, 26, 40),
+            bg_surface2: RC::Rgb(28, 32, 48),
+
+            primary: RC::Rgb(100, 180, 255),
             success: RC::Rgb(80, 200, 120),
             error: RC::Rgb(220, 80, 80),
             warning: RC::Rgb(240, 180, 60),
-            muted: RC::Rgb(130, 140, 160),
-            dim: RC::Rgb(80, 88, 110),
-            text: RC::Reset,
-            thinking_text: RC::Rgb(130, 140, 160),
 
-            tool_pending_bg: RC::Rgb(22, 26, 40),
-            tool_success_bg: RC::Rgb(18, 32, 24),
-            tool_error_bg: RC::Rgb(38, 18, 18),
-            tool_title: RC::Rgb(100, 180, 255),
-            tool_output: RC::Reset,
+            text_primary: RC::Reset,
+            text_muted: RC::Rgb(130, 140, 160),
+            text_dim: RC::Rgb(80, 88, 110),
 
-            user_message_bg: RC::Rgb(28, 32, 48),
-            user_message_text: RC::Reset,
-            custom_message_bg: RC::Rgb(22, 28, 44),
-            custom_message_text: RC::Reset,
-            custom_message_label: RC::Rgb(100, 180, 255),
-            selected_bg: RC::Rgb(38, 42, 60),
-
-            overlay_bg: RC::Rgb(10, 10, 18),
-            overlay_border: RC::Rgb(60, 70, 90),
-            overlay_title: RC::Rgb(100, 180, 255),
-            overlay_section: RC::Rgb(240, 180, 60),
-            overlay_hint: RC::Rgb(100, 108, 128),
-            overlay_selected_bg: RC::Rgb(28, 32, 48),
-            overlay_selected_fg: RC::Rgb(100, 180, 255),
-            badge_bg: RC::Rgb(28, 32, 48),
-            badge_fg: RC::Rgb(100, 180, 255),
-            tool_badge_fg: RC::Rgb(38, 42, 60),
-            assistant_accent: RC::Rgb(100, 180, 255),
-            reasoning_bg: RC::Rgb(18, 22, 32),
+            border_base: RC::Rgb(45, 50, 65),
+            border_focus: RC::Rgb(100, 180, 255),
 
             diff_added: RC::Rgb(80, 200, 120),
             diff_removed: RC::Rgb(220, 80, 80),
@@ -188,43 +166,24 @@ impl ThemeColors {
             source_path: None,
             #[cfg(feature = "syntax-highlighting")]
             syntect_theme: None,
-            accent: RC::Rgb(0, 100, 200),
-            border: RC::Rgb(180, 190, 210),
-            border_accent: RC::Rgb(0, 100, 200),
-            border_muted: RC::Rgb(200, 208, 220),
+
+            // Semantic Elevation
+            bg_base: RC::Rgb(250, 252, 255),
+            bg_surface0: RC::Rgb(244, 248, 255),
+            bg_surface1: RC::Rgb(240, 244, 255),
+            bg_surface2: RC::Rgb(230, 236, 250),
+
+            primary: RC::Rgb(0, 100, 200),
             success: RC::Rgb(0, 140, 60),
             error: RC::Rgb(180, 30, 30),
             warning: RC::Rgb(160, 100, 0),
-            muted: RC::Rgb(100, 110, 130),
-            dim: RC::Rgb(150, 158, 175),
-            text: RC::Reset,
-            thinking_text: RC::Rgb(100, 110, 130),
 
-            tool_pending_bg: RC::Rgb(240, 244, 255),
-            tool_success_bg: RC::Rgb(230, 248, 236),
-            tool_error_bg: RC::Rgb(255, 236, 236),
-            tool_title: RC::Rgb(0, 100, 200),
-            tool_output: RC::Reset,
+            text_primary: RC::Reset,
+            text_muted: RC::Rgb(100, 110, 130),
+            text_dim: RC::Rgb(150, 158, 175),
 
-            user_message_bg: RC::Rgb(240, 244, 255),
-            user_message_text: RC::Reset,
-            custom_message_bg: RC::Rgb(244, 248, 255),
-            custom_message_text: RC::Reset,
-            custom_message_label: RC::Rgb(0, 100, 200),
-            selected_bg: RC::Rgb(220, 228, 248),
-
-            overlay_bg: RC::Rgb(250, 252, 255),
-            overlay_border: RC::Rgb(180, 190, 210),
-            overlay_title: RC::Rgb(0, 100, 200),
-            overlay_section: RC::Rgb(160, 100, 0),
-            overlay_hint: RC::Rgb(100, 110, 130),
-            overlay_selected_bg: RC::Rgb(220, 228, 248),
-            overlay_selected_fg: RC::Rgb(0, 100, 200),
-            badge_bg: RC::Rgb(230, 236, 250),
-            badge_fg: RC::Rgb(0, 100, 200),
-            tool_badge_fg: RC::Rgb(220, 228, 248),
-            assistant_accent: RC::Rgb(0, 100, 200),
-            reasoning_bg: RC::Rgb(238, 242, 250),
+            border_base: RC::Rgb(200, 208, 220),
+            border_focus: RC::Rgb(0, 100, 200),
 
             diff_added: RC::Rgb(0, 140, 60),
             diff_removed: RC::Rgb(180, 30, 30),
@@ -265,7 +224,7 @@ impl ThemeColors {
 
     /// Build `ThemeColors` from a loaded `cade_core::resources::themes::Theme`.
     ///
-    /// Returns the dark default for any token that is missing or unresolvable.
+    /// Maps the legacy 50+ token schema into the new Semantic tokens.
     pub fn from_theme(theme: &cade_core::resources::themes::Theme) -> Self {
         let mut base = Self::dark();
         base.source_path = Some(theme.source.clone());
@@ -280,23 +239,31 @@ impl ThemeColors {
         let resolve =
             |c: &cade_core::resources::themes::ThemeColor| -> RC { resolve_color(c, &theme.vars) };
         let t = &theme.colors;
-        base.accent = resolve(&t.accent);
-        base.border = resolve(&t.border);
-        base.border_accent = resolve(&t.border_accent);
-        base.border_muted = resolve(&t.border_muted);
+        
+        base.primary = resolve(&t.accent);
+        
+        // Map legacy UI backgrounds to semantic elevations
+        // If a user had customized these, we pick approximate matches.
+        base.bg_base = resolve(&t.custom_message_bg); 
+        base.bg_surface0 = resolve(&t.user_message_bg);
+        base.bg_surface1 = resolve(&t.tool_pending_bg);
+        base.bg_surface2 = resolve(&t.selected_bg);
+        
+        base.border_base = resolve(&t.border);
+        base.border_focus = resolve(&t.border_accent);
+        
+        base.text_primary = resolve(&t.text);
+        base.text_muted = resolve(&t.muted);
+        base.text_dim = resolve(&t.dim);
+
         base.success = resolve(&t.success);
         base.error = resolve(&t.error);
         base.warning = resolve(&t.warning);
-        base.muted = resolve(&t.muted);
-        base.dim = resolve(&t.dim);
-        base.thinking_text = resolve(&t.thinking_text);
-        base.tool_pending_bg = resolve(&t.tool_pending_bg);
-        base.tool_success_bg = resolve(&t.tool_success_bg);
-        base.tool_error_bg = resolve(&t.tool_error_bg);
-        base.tool_title = resolve(&t.tool_title);
+
         base.diff_added = resolve(&t.tool_diff_added);
         base.diff_removed = resolve(&t.tool_diff_removed);
         base.diff_context = resolve(&t.tool_diff_context);
+        
         base.md_heading = resolve(&t.md_heading);
         base.md_link = resolve(&t.md_link);
         base.md_code = resolve(&t.md_code);
@@ -305,37 +272,6 @@ impl ThemeColors {
         base.thinking_xhigh = resolve(&t.thinking_xhigh);
         base.bash_mode = resolve(&t.bash_mode);
 
-        // TUI-only derived surfaces not present in the external theme schema.
-        base.overlay_bg = base.custom_message_bg;
-        base.overlay_border = base.border;
-        base.overlay_title = base.accent;
-        base.overlay_section = base.md_heading;
-        base.overlay_hint = base.muted;
-        base.overlay_selected_bg = base.selected_bg;
-
-        let dark_text = RC::Rgb(20, 20, 20); // Dark text for bright backgrounds
-
-        if is_bright(&base.overlay_selected_bg) {
-            base.overlay_selected_fg = dark_text;
-        } else {
-            base.overlay_selected_fg = base.accent;
-        }
-
-        base.badge_bg = base.selected_bg;
-        if is_bright(&base.selected_bg) {
-            base.badge_fg = dark_text;
-        } else {
-            base.badge_fg = base.accent;
-        }
-
-        if is_bright(&base.tool_pending_bg) {
-            base.tool_badge_fg = dark_text;
-        } else {
-            base.tool_badge_fg = base.selected_bg;
-        }
-
-        base.assistant_accent = base.tool_title;
-        base.reasoning_bg = base.tool_pending_bg;
         base
     }
 }
@@ -343,16 +279,6 @@ impl ThemeColors {
 // endregion: --- ThemeColors
 
 // region:    --- Support
-
-fn is_bright(color: &RC) -> bool {
-    if let RC::Rgb(r, g, b) = color {
-        // Standard relative luminance formula
-        let luminance = 0.299 * (*r as f32) + 0.587 * (*g as f32) + 0.114 * (*b as f32);
-        luminance > 128.0
-    } else {
-        false
-    }
-}
 
 fn resolve_color(
     c: &cade_core::resources::themes::ThemeColor,
@@ -397,34 +323,27 @@ mod tests {
 
     #[test]
     fn test_dark_theme_smoke() {
-        // -- Exec
         let colors = ThemeColors::dark();
-        // -- Check — spot check a few fields are not Reset (accent should be a real color)
-        assert_ne!(colors.accent, RC::Reset);
+        assert_ne!(colors.primary, RC::Reset);
         assert_ne!(colors.success, RC::Reset);
     }
 
     #[test]
     fn test_light_theme_smoke() {
-        // -- Exec
         let colors = ThemeColors::light();
-        // -- Check
-        assert_ne!(colors.accent, RC::Reset);
+        assert_ne!(colors.primary, RC::Reset);
     }
 
     #[test]
     fn test_parse_hex_valid() {
-        // -- Exec & Check
         assert_eq!(parse_hex("#ff0000"), Some((255, 0, 0)));
         assert_eq!(parse_hex("00ff00"), Some((0, 255, 0)));
     }
 
     #[test]
     fn test_parse_hex_invalid() {
-        // -- Exec & Check
         assert!(parse_hex("xyz").is_none());
         assert!(parse_hex("#12345").is_none());
     }
 }
-
 // endregion: --- Tests

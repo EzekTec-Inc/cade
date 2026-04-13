@@ -128,14 +128,14 @@ impl QuestionWidget {
                 // Separator
                 lines.push(Line::from(Span::styled(
                     sep.clone(),
-                    Style::default().fg(colors.border),
+                    Style::default().fg(colors.border_base),
                 )));
 
                 // Header chip
                 lines.push(Line::from(Span::styled(
                     question.header.to_string(),
                     Style::default()
-                        .fg(colors.overlay_section)
+                        .fg(colors.md_heading)
                         .add_modifier(Modifier::BOLD),
                 )));
                 lines.push(Line::from(""));
@@ -143,7 +143,7 @@ impl QuestionWidget {
                 // Question text
                 lines.push(Line::from(Span::styled(
                     question.text.to_string(),
-                    Style::default().fg(colors.text),
+                    Style::default().fg(colors.text_primary),
                 )));
                 lines.push(Line::from(""));
 
@@ -151,7 +151,7 @@ impl QuestionWidget {
                 if let Some((cur, tot)) = question.progress {
                     lines.push(Line::from(Span::styled(
                         format!("Question {cur} of {tot}"),
-                        Style::default().fg(colors.muted),
+                        Style::default().fg(colors.text_muted),
                     )));
                     lines.push(Line::from(""));
                 }
@@ -167,7 +167,7 @@ impl QuestionWidget {
                                 .fg(colors.success)
                                 .add_modifier(Modifier::BOLD)
                         } else {
-                            Style::default().fg(colors.muted)
+                            Style::default().fg(colors.text_muted)
                         };
                         lines.push(Line::from(Span::styled(
                             format!("{selector} {}.    Submit", idx + 1),
@@ -190,7 +190,7 @@ impl QuestionWidget {
                             "Type something.".to_string()
                         };
                         let other_style = Style::default()
-                            .fg(colors.dim)
+                            .fg(colors.text_dim)
                             .add_modifier(Modifier::ITALIC);
 
                         let prefix = format!(" {}.    ", idx + 1);
@@ -234,15 +234,15 @@ impl QuestionWidget {
                     };
                     let label_style = if is_selected {
                         Style::default()
-                            .fg(colors.text)
+                            .fg(colors.text_primary)
                             .add_modifier(Modifier::BOLD)
                     } else {
-                        Style::default().fg(colors.text)
+                        Style::default().fg(colors.text_primary)
                     };
                     let num_style = if is_selected {
                         Style::default().fg(colors.success)
                     } else {
-                        Style::default().fg(colors.muted)
+                        Style::default().fg(colors.text_muted)
                     };
 
                     lines.push(Line::from(vec![
@@ -253,7 +253,7 @@ impl QuestionWidget {
                     ]));
                     lines.push(Line::from(Span::styled(
                         format!("     {}", opt.description),
-                        Style::default().fg(colors.dim),
+                        Style::default().fg(colors.text_dim),
                     )));
                 }
 
@@ -265,7 +265,7 @@ impl QuestionWidget {
                 };
                 lines.push(Line::from(Span::styled(
                     hint.to_string(),
-                    Style::default().fg(colors.dim).add_modifier(Modifier::DIM),
+                    Style::default().fg(colors.text_dim).add_modifier(Modifier::DIM),
                 )));
 
                 // Render: each line gets one row; clip to terminal height.
