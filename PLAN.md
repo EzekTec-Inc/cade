@@ -200,3 +200,52 @@
 - **Previous behavior**: `clean_gemini_schema` mapped schema types to lowercase strings.
 - **New behavior**: `clean_gemini_schema` casts schema types to uppercase strings.
 - **Rollback instructions**: Revert `crates/cade-ai/src/utils.rs` and `crates/cade-ai/src/tests.rs` using git checkout.
+- **Timestamp (UTC)**: 2026-04-13T16:45:54Z
+- **Summary of change**: Drafted a comprehensive TUI refactor plan inspired by pi-coding-agent.
+- **Files modified**: `docs/tui-refactor-plan.md` (created)
+- **Reason**: The user requested a review of pi-coding-agent's TUI and a refactor plan for CADE based on those takeaways.
+- **Previous behavior**: N/A (new document)
+- **New behavior**: The repository now contains a formal blueprint for modernizing the TUI architecture (IME support, overlay stack, pluggable editor, UI slots).
+- **Rollback steps**: Remove `docs/tui-refactor-plan.md`.
+- **Timestamp (UTC)**: 2026-04-13T17:02:35Z
+- **Summary of change**: Drafted a concise implementation plan for the TUI refactor.
+- **Files modified**: `docs/tui-refactor-implementation.md` (created)
+- **Reason**: The user requested a concise implementation plan for the TUI refactor.
+- **Previous behavior**: N/A
+- **New behavior**: The repository contains a 4-phase implementation plan.
+- **Rollback steps**: Remove `docs/tui-refactor-implementation.md`.
+- **Timestamp (UTC)**: 2026-04-13T17:50:23Z
+- **Summary of change**: Implemented Phase 1 of the TUI refactor (hardware cursor sync).
+- **Files modified**: `crates/cade-tui/src/app/mod.rs`, `crates/cade-tui/src/app/render.rs`
+- **Reason**: The user asked me to implement Phase 1 from the refactor plan.
+- **Previous behavior**: The cursor was drawn purely visually by the TUI widget, meaning standard IMEs didn't know where to open candidate windows.
+- **New behavior**: CADE now queries the exact visual coordinate of the input prompt during the render step, and emits a `crossterm::cursor::MoveTo(x,y)` command immediately after terminal flush.
+- **Rollback steps**: Revert changes to `crates/cade-tui/src/app/mod.rs` and `crates/cade-tui/src/app/render.rs` using git checkout.
+- **Timestamp (UTC)**: 2026-04-13T18:36:57Z
+- **Summary of change**: Reviewed CADE's UI styling and formatting logic compared to pi-coding-agent.
+- **Files modified**: None
+- **Reason**: The user asked for a comparison of UI styling and formatting logic between CADE and pi-coding-agent, and to identify parts that can be adopted in CADE.
+- **Previous behavior**: N/A
+- **New behavior**: N/A
+- **Rollback steps**: N/A
+- **Timestamp (UTC)**: 2026-04-13T18:42:13Z
+- **Summary of change**: Drafted a concise implementation plan for Phase 2 of the TUI refactor.
+- **Files modified**: `docs/tui-style-builder-plan.md` (created)
+- **Reason**: The user requested an implementation plan to adopt pi's clean theme builder patterns inside CADE.
+- **Previous behavior**: N/A
+- **New behavior**: The repository contains a migration blueprint for CADE's Style Builders.
+- **Rollback steps**: Remove `docs/tui-style-builder-plan.md`.
+- **Timestamp (UTC)**: 2026-04-13T18:46:23Z
+- **Summary of change**: Migrated CADE TUI to use clean style builder methods (Phase 2).
+- **Files modified**: `crates/cade-tui/src/colors.rs`, `crates/cade-tui/src/app/render.rs`, and 14 other layout/component files.
+- **Exact reason**: The user requested that CADE adopt the clean theme builder patterns observed in `pi-coding-agent`'s UI architecture.
+- **Previous behavior**: The UI rendering logic relied on over 150 verbose instances of `Style::default().fg(colors.token)`.
+- **New behavior**: Extended `ThemeColors` with style builders for every semantic color token. Refactored the UI components to use the concise `colors.token()` builder format instead.
+- **Rollback instructions**: Use `git checkout` to revert the changes to `crates/cade-tui/src`.
+- **Timestamp (UTC)**: 2026-04-13T22:26:06Z
+- **Summary of change**: Halted TUI refactoring after Phase 2 to prevent architectural bloat.
+- **Files modified**: None (Decision logged)
+- **Exact reason**: Evaluated Phase 3 (Pluggable Editor) and Phase 4 (Overlay Stack) and determined they introduce unnecessary complexity (dynamic dispatch, borrow checker event routing, two-pass layout engines) into CADE's performant monolithic Rust loop.
+- **Previous behavior**: N/A
+- **New behavior**: N/A
+- **Rollback instructions**: N/A
