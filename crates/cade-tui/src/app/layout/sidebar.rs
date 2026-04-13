@@ -72,13 +72,13 @@ pub(crate) fn render_sidebar(
 ) {
     let inner = Block::default()
         .borders(Borders::LEFT)
-        .border_style(Style::default().fg(colors.border_base))
+        .border_style(colors.border_base())
         .padding(Padding::new(1, 1, 0, 0))
         .inner(area);
     frame.render_widget(
         Block::default()
             .borders(Borders::LEFT)
-            .border_style(Style::default().fg(colors.border_base)),
+            .border_style(colors.border_base()),
         area,
     );
 
@@ -96,24 +96,24 @@ pub(crate) fn render_sidebar(
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
-            Span::styled(" agent   ", Style::default().fg(colors.text_muted)),
+            Span::styled(" agent   ", colors.text_muted()),
             Span::styled(
                 truncate_str(state.agent_name, 28),
-                Style::default().fg(colors.text_primary),
+                colors.text_primary(),
             ),
         ]),
         Line::from(vec![
-            Span::styled(" model   ", Style::default().fg(colors.text_muted)),
+            Span::styled(" model   ", colors.text_muted()),
             Span::styled(
                 truncate_str(state.model, 28),
-                Style::default().fg(colors.text_primary),
+                colors.text_primary(),
             ),
         ]),
         Line::from(vec![
-            Span::styled(" cwd     ", Style::default().fg(colors.text_muted)),
+            Span::styled(" cwd     ", colors.text_muted()),
             Span::styled(
                 truncate_str(state.cwd, 28),
-                Style::default().fg(colors.text_primary),
+                colors.text_primary(),
             ),
         ]),
         Line::from(""),
@@ -124,42 +124,42 @@ pub(crate) fn render_sidebar(
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
-            Span::styled(" mode    ", Style::default().fg(colors.text_muted)),
+            Span::styled(" mode    ", colors.text_muted()),
             Span::styled(
                 mode_name,
                 Style::default().fg(mode_sep_color(state.mode, colors)),
             ),
         ]),
         Line::from(vec![
-            Span::styled(" input   ", Style::default().fg(colors.text_muted)),
+            Span::styled(" input   ", colors.text_muted()),
             Span::styled(
                 input_badge,
-                Style::default().fg(colors.text_primary).bg(colors.bg_surface2),
+                colors.text_primary().bg(colors.bg_surface2),
             ),
         ]),
         Line::from(vec![
-            Span::styled(" context ", Style::default().fg(colors.text_muted)),
+            Span::styled(" context ", colors.text_muted()),
             Span::styled(
                 context_text,
                 Style::default().fg(context_severity_color(state.context_pct, colors)),
             ),
         ]),
         Line::from(vec![
-            Span::styled(" queue   ", Style::default().fg(colors.text_muted)),
+            Span::styled(" queue   ", colors.text_muted()),
             Span::styled(
                 state.queued_count.to_string(),
-                Style::default().fg(colors.text_primary),
+                colors.text_primary(),
             ),
         ]),
         Line::from(vec![
-            Span::styled(" turns   ", Style::default().fg(colors.text_muted)),
+            Span::styled(" turns   ", colors.text_muted()),
             Span::styled(
                 state.turn_count.to_string(),
-                Style::default().fg(colors.text_primary),
+                colors.text_primary(),
             ),
         ]),
         Line::from(vec![
-            Span::styled(" copy    ", Style::default().fg(colors.text_muted)),
+            Span::styled(" copy    ", colors.text_muted()),
             Span::styled(
                 if state.copy_mode { "ON" } else { "OFF" },
                 Style::default().fg(if state.copy_mode {
@@ -171,13 +171,13 @@ pub(crate) fn render_sidebar(
         ]),
         if let Some(reason) = state.reasoning_effort {
             Line::from(vec![
-                Span::styled(" reason  ", Style::default().fg(colors.text_muted)),
-                Span::styled(reason.to_string(), Style::default().fg(colors.warning)),
+                Span::styled(" reason  ", colors.text_muted()),
+                Span::styled(reason.to_string(), colors.warning()),
             ])
         } else {
             Line::from(vec![
-                Span::styled(" reason  ", Style::default().fg(colors.text_muted)),
-                Span::styled("default", Style::default().fg(colors.warning)),
+                Span::styled(" reason  ", colors.text_muted()),
+                Span::styled("default", colors.warning()),
             ])
         },
         Line::from(""),
@@ -189,7 +189,7 @@ pub(crate) fn render_sidebar(
         )),
         Line::from(Span::styled(
             truncate_str(&think_text, 36),
-            Style::default().fg(colors.text_muted),
+            colors.text_muted(),
         )),
         Line::from(""),
         Line::from(Span::styled(
@@ -199,8 +199,8 @@ pub(crate) fn render_sidebar(
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(vec![
-            Span::styled(" todos   ", Style::default().fg(colors.text_muted)),
-            Span::styled(plan_summary, Style::default().fg(colors.text_primary)),
+            Span::styled(" todos   ", colors.text_muted()),
+            Span::styled(plan_summary, colors.text_primary()),
         ]),
         Line::from(""),
         Line::from(Span::styled(
@@ -211,31 +211,31 @@ pub(crate) fn render_sidebar(
         )),
         Line::from(Span::styled(
             " Ctrl+C abort / clear",
-            Style::default().fg(colors.text_muted),
+            colors.text_muted(),
         )),
         Line::from(Span::styled(
             " Ctrl+O expand/collapse all",
-            Style::default().fg(colors.text_muted),
+            colors.text_muted(),
         )),
         Line::from(Span::styled(
             " Tab cycle permissions",
-            Style::default().fg(colors.text_muted),
+            colors.text_muted(),
         )),
         Line::from(Span::styled(
             " ↑/↓ command history",
-            Style::default().fg(colors.text_muted),
+            colors.text_muted(),
         )),
         Line::from(Span::styled(
             " @ file picker",
-            Style::default().fg(colors.text_muted),
+            colors.text_muted(),
         )),
         Line::from(Span::styled(
             " / commands menu",
-            Style::default().fg(colors.text_muted),
+            colors.text_muted(),
         )),
         Line::from(Span::styled(
             " Ctrl+P command palette",
-            Style::default().fg(colors.text_muted),
+            colors.text_muted(),
         )),
     ];
 
@@ -256,7 +256,7 @@ pub(crate) fn render_sidebar(
             .block(
                 Block::default()
                     .borders(Borders::TOP)
-                    .border_style(Style::default().fg(colors.border_base))
+                    .border_style(colors.border_base())
                     .title(Span::styled(
                         " Context % ",
                         Style::default()

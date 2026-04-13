@@ -19,7 +19,7 @@ pub fn render_overlay_shell(
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .style(Style::default().bg(colors.bg_surface2))
-        .border_style(Style::default().fg(colors.border_base))
+        .border_style(colors.border_base())
         .title(Line::from(vec![
             Span::raw(" "),
             Span::styled(
@@ -71,7 +71,7 @@ pub fn overlay_section_style(colors: &ThemeColors) -> Style {
 }
 
 pub fn overlay_muted_style(colors: &ThemeColors) -> Style {
-    Style::default().fg(colors.text_muted)
+    colors.text_muted()
 }
 
 pub fn overlay_badge_style(colors: &ThemeColors) -> Style {

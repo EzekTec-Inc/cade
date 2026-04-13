@@ -533,7 +533,7 @@ pub fn show_command_menu_with_caps(
 
             // Filter bar — shows placeholder when empty, query text when active
             let filter_line = Line::from(vec![
-                Span::styled(" / ", Style::default().fg(colors.text_muted)),
+                Span::styled(" / ", colors.text_muted()),
                 Span::styled(
                     if query_display.is_empty() {
                         "type to filter…".to_string()
@@ -559,7 +559,7 @@ pub fn show_command_menu_with_caps(
                     Span::raw(" "),
                     Span::styled(cmd.clone(), overlay::overlay_badge_style(colors)),
                     Span::raw(" "),
-                    Span::styled(desc.clone(), Style::default().fg(colors.text_primary)),
+                    Span::styled(desc.clone(), colors.text_primary()),
                 ])
             } else {
                 Line::from("")

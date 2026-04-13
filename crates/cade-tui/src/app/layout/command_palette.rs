@@ -48,7 +48,7 @@ pub(crate) fn render_command_palette(
             ),
             Span::raw(" "),
         ]))
-        .border_style(Style::default().fg(colors.border_base))
+        .border_style(colors.border_base())
         .style(Style::default().bg(colors.bg_surface2));
 
     let inner = block.inner(r);
@@ -82,7 +82,7 @@ pub(crate) fn render_command_palette(
                     .fg(colors.text_primary)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(no_match, Style::default().fg(colors.text_muted)),
+            Span::styled(no_match, colors.text_muted()),
         ])),
         search_area,
     );
@@ -90,7 +90,7 @@ pub(crate) fn render_command_palette(
     // -- Separator
     let sep = "─".repeat(sep_area.width as usize);
     frame.render_widget(
-        Paragraph::new(Span::styled(sep, Style::default().fg(colors.border_base))),
+        Paragraph::new(Span::styled(sep, colors.border_base())),
         sep_area,
     );
 
@@ -137,9 +137,9 @@ pub(crate) fn render_command_palette(
             )
         } else {
             (
-                Style::default().fg(colors.primary),
-                Style::default().fg(colors.text_muted),
-                Style::default().fg(colors.text_dim),
+                colors.primary(),
+                colors.text_muted(),
+                colors.text_dim(),
             )
         };
 

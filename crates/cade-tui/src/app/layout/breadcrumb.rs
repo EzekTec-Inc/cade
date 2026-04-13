@@ -30,7 +30,7 @@ pub(crate) fn render_breadcrumb(
         return;
     }
 
-    let sep = Span::styled(" │ ", Style::default().fg(colors.border_base));
+    let sep = Span::styled(" │ ", colors.border_base());
 
     let mut spans: Vec<Span<'static>> = Vec::new();
 
@@ -38,7 +38,7 @@ pub(crate) fn render_breadcrumb(
     let turn_icon = if nerd { " " } else { " T" };
     spans.push(Span::styled(
         format!("{}{}",turn_icon, turn_count),
-        Style::default().fg(colors.text_muted),
+        colors.text_muted(),
     ));
 
     spans.push(sep.clone());
@@ -52,7 +52,7 @@ pub(crate) fn render_breadcrumb(
     };
     spans.push(Span::styled(
         model_display,
-        Style::default().fg(colors.text_dim),
+        colors.text_dim(),
     ));
 
     spans.push(sep.clone());
@@ -74,7 +74,7 @@ pub(crate) fn render_breadcrumb(
     } else {
         spans.push(Span::styled(
             "— ctx",
-            Style::default().fg(colors.text_dim),
+            colors.text_dim(),
         ));
     }
 

@@ -157,7 +157,7 @@ pub fn show_mcp_manager(
                         )),
                         Cell::from(Span::styled(
                             kind_str,
-                            Style::default().fg(colors.text_muted),
+                            colors.text_muted(),
                         )),
                         Cell::from(Span::styled(status_str, Style::default().fg(status_color))),
                     ])
@@ -186,7 +186,7 @@ pub fn show_mcp_manager(
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title(format!(" MCP Servers {hint}"))
-                    .border_style(Style::default().fg(colors.border_base)),
+                    .border_style(colors.border_base()),
             );
 
             let mut ts = TableState::default().with_selected(Some(selected_idx));
@@ -257,7 +257,7 @@ pub fn show_mcp_manager(
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
                         .title(" Configuration ")
-                        .border_style(Style::default().fg(colors.border_base)),
+                        .border_style(colors.border_base()),
                 );
             f.render_widget(preview, top_chunks[1]);
 

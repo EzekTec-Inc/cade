@@ -55,7 +55,7 @@ const CODE_INDENT: &str = "    ";
 
 /// Style for the dim code-block border lines (┌── / └──).
 fn code_border_style(colors: &ThemeColors) -> Style {
-    Style::default().fg(colors.md_code_block_border)
+    colors.md_code_block_border()
 }
 
 pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
@@ -99,7 +99,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                 if blockquote {
                     prefix_spans.push(Span::styled(
                         format!("{INDENT}▎ "),
-                        Style::default().fg(colors.md_quote_border),
+                        colors.md_quote_border(),
                     ));
                 }
                 prefix_spans.append(spans);
@@ -135,7 +135,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                         HeadingLevel::H3 => Style::default()
                             .fg(colors.md_heading)
                             .add_modifier(Modifier::BOLD),
-                        _ => Style::default().fg(colors.md_heading),
+                        _ => colors.md_heading(),
                     };
                     style_stack.push(style);
 
@@ -213,7 +213,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                             current_spans.push(Span::raw(format!("{INDENT}  {indent_padding}")));
                             current_spans.push(Span::styled(
                                 "• ",
-                                Style::default().fg(colors.md_list_bullet),
+                                colors.md_list_bullet(),
                             ));
                         }
                     }
@@ -373,7 +373,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                             ));
                             current_spans.push(Span::styled(
                                 raw_line.to_string(),
-                                Style::default().fg(colors.text_primary),
+                                colors.text_primary(),
                             ));
                             push_line(&mut lines, &mut current_spans, in_blockquote);
                         }
@@ -388,7 +388,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                     current_cell.push_str(&format!("`{text}`"));
                 } else {
                     // Inline code: bright on a subtle background via reversed dim
-                    let style = Style::default().fg(colors.md_code).bg(colors.bg_surface1);
+                    let style = colors.md_code().bg(colors.bg_surface1);
                     current_spans.push(Span::styled(format!(" {text} "), style));
                 }
             }
@@ -412,7 +412,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                 lines.push(Line::from(""));
                 lines.push(Line::from(Span::styled(
                     format!("{INDENT}{}", "─".repeat(40)),
-                    Style::default().fg(colors.md_hr),
+                    colors.md_hr(),
                 )));
                 lines.push(Line::from(""));
                 last_was_block_end = true;
@@ -444,7 +444,7 @@ fn render_table_data(data: &[Vec<String>], colors: &ThemeColors) -> Vec<Line<'st
         }
     }
 
-    let border_style = Style::default().fg(colors.md_code_block_border);
+    let border_style = colors.md_code_block_border();
     let mut lines = Vec::new();
 
     for (row_idx, row) in data.iter().enumerate() {

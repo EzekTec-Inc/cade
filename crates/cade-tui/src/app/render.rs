@@ -451,10 +451,10 @@ pub(crate) fn render_frame(
         let prefix_spans = vec![
             Span::styled(
                 badge_text.to_string(),
-                Style::default().fg(colors.text_primary).bg(badge_color).add_modifier(Modifier::BOLD),
+                colors.text_primary().bg(badge_color).add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
-            Span::styled("> ", Style::default().fg(colors.text_dim)),
+            Span::styled("> ", colors.text_dim()),
         ];
         frame.render_widget(Paragraph::new(Line::from(prefix_spans)), input_chunks[0]);
 
@@ -465,7 +465,7 @@ pub(crate) fn render_frame(
         };
 
         textarea.set_placeholder_text(input_placeholder);
-        textarea.set_placeholder_style(Style::default().fg(colors.text_muted));
+        textarea.set_placeholder_style(colors.text_muted());
         textarea.set_cursor_line_style(Style::default());
         textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
 
@@ -529,20 +529,20 @@ pub(crate) fn render_frame(
         ));
     }
     footer.push(Span::raw(" ".repeat(pad)));
-    footer.push(Span::styled(mid_cwd, Style::default().fg(colors.text_muted)));
+    footer.push(Span::styled(mid_cwd, colors.text_muted()));
     if !right_agent.is_empty() {
         footer.push(Span::styled(
             right_agent,
-            Style::default().fg(colors.thinking_minimal),
+            colors.thinking_minimal(),
         ));
     }
     if !right_model.is_empty() {
-        footer.push(Span::styled(right_model, Style::default().fg(colors.text_dim)));
+        footer.push(Span::styled(right_model, colors.text_dim()));
     }
     if !right_reasoning.is_empty() {
         footer.push(Span::styled(
             right_reasoning,
-            Style::default().fg(colors.warning),
+            colors.warning(),
         ));
     }
     if !right_ctx.is_empty() {
@@ -565,7 +565,7 @@ pub(crate) fn render_frame(
         frame.render_widget(
             Paragraph::new(Span::styled(
                 truncate_str(extra, extra_rect.width.saturating_sub(1) as usize),
-                Style::default().fg(colors.text_dim),
+                colors.text_dim(),
             )),
             extra_rect,
         );
@@ -628,7 +628,7 @@ pub(crate) fn render_frame(
                 .borders(Borders::ALL)
                 .border_type(BorderType::Rounded)
                 .title(" Todos ")
-                .border_style(Style::default().fg(colors.border_base)),
+                .border_style(colors.border_base()),
         );
         frame.render_widget(list, chunks[2]); // chunks[2] is plan panel in my new chunks array
     }

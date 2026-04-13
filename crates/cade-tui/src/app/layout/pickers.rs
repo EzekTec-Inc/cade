@@ -10,7 +10,7 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
     // Top dashed separator (matches question-panel style)
     lines.push(Line::from(Span::styled(
         "╌".repeat(w),
-        Style::default().fg(colors.border_base),
+        colors.border_base(),
     )));
 
     // Header: "@ <query>" + no-match hint
@@ -26,7 +26,7 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
                 .fg(colors.thinking_minimal)
                 .add_modifier(Modifier::BOLD),
         ),
-        Span::styled(no_match, Style::default().fg(colors.text_muted)),
+        Span::styled(no_match, colors.text_muted()),
     ]));
 
     // Match entries — fill remaining rows (minus sep + header already pushed)
@@ -36,10 +36,10 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
         let (glyph, style) = if selected {
             (
                 "❯",
-                Style::default().fg(colors.text_primary).add_modifier(Modifier::BOLD),
+                colors.text_primary().add_modifier(Modifier::BOLD),
             )
         } else {
-            (" ", Style::default().fg(colors.text_muted))
+            (" ", colors.text_muted())
         };
         lines.push(Line::from(Span::styled(format!(" {glyph} {m}"), style)));
     }
@@ -100,7 +100,7 @@ pub(crate) fn render_theme_picker(
                 )),
                 Cell::from(ratatui::text::Span::styled(
                     format!("{:?}", t.source),
-                    Style::default().fg(colors.text_muted),
+                    colors.text_muted(),
                 )),
             ])
             .style(style)
@@ -127,7 +127,7 @@ pub(crate) fn render_theme_picker(
             .borders(Borders::ALL)
             .border_type(BorderType::Rounded)
             .title(format!(" Themes {hint}"))
-            .border_style(Style::default().fg(colors.border_base)),
+            .border_style(colors.border_base()),
     );
 
     let mut ts = ratatui::widgets::TableState::default().with_selected(Some(tp.cursor));
@@ -144,10 +144,10 @@ pub(crate) fn render_theme_picker(
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .title(" Filter (Type to search) ")
-        .border_style(Style::default().fg(colors.border_base));
+        .border_style(colors.border_base());
     let filter_text = Paragraph::new(format!("> {}█", tp.query))
         .block(filter_block)
-        .style(Style::default().fg(colors.text_primary));
+        .style(colors.text_primary());
     frame.render_widget(filter_text, main_chunks[1]);
 }
 

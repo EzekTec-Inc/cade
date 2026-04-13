@@ -122,7 +122,7 @@ pub fn show_skills_manager(
                         )),
                         Cell::from(Span::styled(
                             s.category.clone().unwrap_or_default(),
-                            Style::default().fg(colors.text_muted),
+                            colors.text_muted(),
                         )),
                     ])
                     .style(style)
@@ -149,7 +149,7 @@ pub fn show_skills_manager(
                     .borders(Borders::ALL)
                     .border_type(BorderType::Rounded)
                     .title(format!(" Skills {hint}"))
-                    .border_style(Style::default().fg(colors.border_base)),
+                    .border_style(colors.border_base()),
             );
 
             let mut ts = TableState::default().with_selected(Some(selected_idx));
@@ -183,7 +183,7 @@ Triggers: {}
                         .borders(Borders::ALL)
                         .border_type(BorderType::Rounded)
                         .title(" Preview ")
-                        .border_style(Style::default().fg(colors.border_base)),
+                        .border_style(colors.border_base()),
                 );
             f.render_widget(preview, top_chunks[1]);
 

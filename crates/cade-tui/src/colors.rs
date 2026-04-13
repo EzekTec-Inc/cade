@@ -98,6 +98,40 @@ impl ThemeColors {
 
     pub fn badge(&self) -> Style { Style::default().bg(self.bg_surface2).fg(self.primary) }
 
+    pub fn diff_added(&self) -> Style { Style::default().fg(self.diff_added) }
+    pub fn diff_removed(&self) -> Style { Style::default().fg(self.diff_removed) }
+    pub fn diff_context(&self) -> Style { Style::default().fg(self.diff_context) }
+
+    pub fn md_heading(&self) -> Style { Style::default().fg(self.md_heading) }
+    pub fn md_link(&self) -> Style { Style::default().fg(self.md_link) }
+    pub fn md_link_url(&self) -> Style { Style::default().fg(self.md_link_url) }
+    pub fn md_code(&self) -> Style { Style::default().fg(self.md_code) }
+    pub fn md_code_block(&self) -> Style { Style::default().fg(self.md_code_block) }
+    pub fn md_code_block_border(&self) -> Style { Style::default().fg(self.md_code_block_border) }
+    pub fn md_quote(&self) -> Style { Style::default().fg(self.md_quote) }
+    pub fn md_quote_border(&self) -> Style { Style::default().fg(self.md_quote_border) }
+    pub fn md_hr(&self) -> Style { Style::default().fg(self.md_hr) }
+    pub fn md_list_bullet(&self) -> Style { Style::default().fg(self.md_list_bullet) }
+
+    pub fn syntax_comment(&self) -> Style { Style::default().fg(self.syntax_comment) }
+    pub fn syntax_keyword(&self) -> Style { Style::default().fg(self.syntax_keyword) }
+    pub fn syntax_function(&self) -> Style { Style::default().fg(self.syntax_function) }
+    pub fn syntax_variable(&self) -> Style { Style::default().fg(self.syntax_variable) }
+    pub fn syntax_string(&self) -> Style { Style::default().fg(self.syntax_string) }
+    pub fn syntax_number(&self) -> Style { Style::default().fg(self.syntax_number) }
+    pub fn syntax_type(&self) -> Style { Style::default().fg(self.syntax_type) }
+    pub fn syntax_operator(&self) -> Style { Style::default().fg(self.syntax_operator) }
+    pub fn syntax_punctuation(&self) -> Style { Style::default().fg(self.syntax_punctuation) }
+
+    pub fn thinking_off(&self) -> Style { Style::default().fg(self.thinking_off) }
+    pub fn thinking_minimal(&self) -> Style { Style::default().fg(self.thinking_minimal) }
+    pub fn thinking_low(&self) -> Style { Style::default().fg(self.thinking_low) }
+    pub fn thinking_medium(&self) -> Style { Style::default().fg(self.thinking_medium) }
+    pub fn thinking_high(&self) -> Style { Style::default().fg(self.thinking_high) }
+    pub fn thinking_xhigh(&self) -> Style { Style::default().fg(self.thinking_xhigh) }
+
+    pub fn bash_mode(&self) -> Style { Style::default().fg(self.bash_mode) }
+
     // -- Built-in themes
 
     /// Dark theme (modern tonal scaling).
