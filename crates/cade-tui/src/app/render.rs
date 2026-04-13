@@ -130,7 +130,7 @@ pub(crate) fn render_frame(
     colors: &ThemeColors,
     last_input_width: &mut u16,
     nerd: bool,
-) -> u16 {
+) -> (u16, Option<(u16, u16)>) {
     // returns max_skip for V-04 scroll clamping
     let area = frame.area();
     let (main_area, sidebar_area) = if area.width >= SIDEBAR_BREAKPOINT {
@@ -168,7 +168,7 @@ pub(crate) fn render_frame(
 
     if main_area.height <= bottom_rows + 1 {
         frame.render_widget(Paragraph::new("Terminal too small"), main_area);
-        return 0;
+        return (0, None);
     }
 
     let plan_h = if let Some(plan) = active_plan {
@@ -435,6 +435,7 @@ pub(crate) fn render_frame(
         chunks[6],
     );
 
+    let mut input_cursor_pos: Option<(u16, u16)> = None;
     // -- Input area or Question Panel
     if let Some(aq) = active_question {
         render_question_inline(frame, aq, chunks[5], chunks[5], colors);
@@ -469,6 +470,10 @@ pub(crate) fn render_frame(
         textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
 
         frame.render_widget(&*textarea, input_chunks[1]);
+        input_cursor_pos = Some((
+            input_chunks[1].x + textarea.cursor().1 as u16,
+            input_chunks[1].y + textarea.cursor().0 as u16,
+        ));
         *last_input_width = input_chunks[1].width;
     }
 
@@ -628,6 +633,6 @@ pub(crate) fn render_frame(
         frame.render_widget(list, chunks[2]); // chunks[2] is plan panel in my new chunks array
     }
 
-    max_skip // V-04: returned so draw_impl can clamp self.scroll
+    (max_skip, input_cursor_pos) // V-04: returned so draw_impl can clamp self.scroll
 }
 

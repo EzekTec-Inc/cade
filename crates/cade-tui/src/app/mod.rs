@@ -677,6 +677,7 @@ impl TuiApp {
 
         // V-04: capture max_skip returned by render_frame to clamp self.scroll.
         let mut max_skip: u16 = 0;
+        let mut input_cursor_pos: Option<(u16, u16)> = None;
 
         // CSI 2026: begin synchronized output — the terminal emulator buffers
         // all writes until the matching end sequence, then paints the entire
@@ -687,7 +688,7 @@ impl TuiApp {
         let _ = write!(std::io::stdout(), "\x1b[?2026h");
 
         self.terminal.draw(|frame| {
-            max_skip = render_frame(
+            let (m_skip, cur_pos) = render_frame(
                 frame,
                 &lines,
                 streaming.as_deref(),
@@ -722,7 +723,22 @@ impl TuiApp {
                 &mut self.last_input_width,
                 nerd,
             );
+            max_skip = m_skip;
+            input_cursor_pos = cur_pos;
         })?;
+
+        if let Some((x, y)) = input_cursor_pos {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::cursor::MoveTo(x, y),
+                crossterm::cursor::Show
+            );
+        } else {
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::cursor::Hide
+            );
+        }
 
         // CSI 2026: end synchronized output — terminal flushes the buffered
         // frame to the screen in one atomic paint.
