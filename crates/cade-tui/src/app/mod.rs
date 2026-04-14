@@ -340,8 +340,8 @@ pub struct TuiApp {
     /// Used by the sidebar sparkline widget. Max 50 entries.
     pub token_history: Vec<u8>,
 
-    // -- Copy mode (disables mouse capture for OS text selection)
-    pub copy_mode: bool,
+    // -- Mouse capture disable mode (for OS text selection)
+    pub mouse_capture_disabled: bool,
 
     // -- Autocomplete (A-01)
     /// File autocomplete provider (Tab path completion + `@` fuzzy picker).
@@ -472,7 +472,7 @@ impl TuiApp {
             context_pct: None,
             turn_count: 0,
             token_history: Vec::new(),
-            copy_mode: false,
+            mouse_capture_disabled: false,
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
             picker: None,
             theme_picker: None,
@@ -684,7 +684,7 @@ impl TuiApp {
             self.toast = None;
         }
         let toast = self.toast.clone();
-        let copy_mode = self.copy_mode;
+        let mouse_capture_disabled = self.mouse_capture_disabled;
         let colors = self.colors.clone();
         let nerd = self.use_nerd_fonts;
 
@@ -730,7 +730,7 @@ impl TuiApp {
                 footer_extra.as_deref(),
                 reasoning_effort.as_deref(),
                 active_plan_snap.as_ref(),
-                copy_mode,
+                mouse_capture_disabled,
                 toast.as_ref(),
                 &expanded_items,
                 &colors,

@@ -30,6 +30,9 @@ uuid.workspace         = true
 chrono.workspace       = true
 tempfile.workspace     = true
 parking_lot.workspace  = true
+base64.workspace       = true
+arboard = { workspace = true, optional = true }
+
 # -- CLI / TUI
 crossterm.workspace    = true
 ratatui.workspace      = true
@@ -43,3 +46,6 @@ notify.workspace       = true
 [lints.rust]
 unsafe_code = "forbid"
 # unused = { level = "allow", priority = -1 } # For exploratory dev.
+
+[features]
+clipboard-images = ["arboard"]

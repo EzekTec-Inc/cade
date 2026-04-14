@@ -126,7 +126,7 @@ pub(crate) fn render_frame(
     footer_extra: Option<&str>,
     reasoning_effort: Option<&str>,
     active_plan: Option<&PlanState>,
-    copy_mode: bool,
+    mouse_capture_disabled: bool,
     toast: Option<&Toast>,
     expanded_items: &std::collections::HashSet<TimelineKey>,
     colors: &ThemeColors,
@@ -588,7 +588,7 @@ pub(crate) fn render_frame(
             thinking_text,
             thinking_elapsed,
             active_plan,
-            copy_mode,
+            mouse_capture_disabled,
         };
         render_sidebar(frame, sidebar, &sidebar_state, colors);
     }

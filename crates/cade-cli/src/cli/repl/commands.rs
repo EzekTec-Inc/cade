@@ -286,6 +286,9 @@ impl Repl {
             SlashCmd::Copy => {
                 return self.cmd_copy().await;
             }
+            SlashCmd::Mouse => {
+                return self.cmd_mouse().await;
+            }
             SlashCmd::Export(out_arg) => {
                 return self.cmd_export(out_arg).await;
             }

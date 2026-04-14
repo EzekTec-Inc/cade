@@ -125,20 +125,72 @@ impl Repl {
         Ok(false)
     }
 
-    pub(crate) async fn cmd_copy(
+    pub(crate) async fn cmd_mouse(
         &mut self,
     ) -> Result<bool> {
             let mut app = self.app.lock();
-            app.toggle_copy_mode();
-            if app.copy_mode {
+            app.toggle_mouse_capture();
+            if app.mouse_capture_disabled {
                 let _ = app.push(RenderLine::SystemMsg(
-                    "Copy mode ON — mouse scroll disabled. Click and drag to select text. /copy to restore.".into()
+                    "Mouse capture disabled — scroll disabled. Click and drag to select text. /mouse to restore.".into()
                 ));
             } else {
                 let _ = app.push(RenderLine::SuccessMsg(
-                    "Copy mode OFF — mouse scroll restored.".into(),
+                    "Mouse capture restored — scroll enabled.".into(),
                 ));
             }
+        Ok(false)
+    }
+
+    pub(crate) async fn cmd_copy(
+        &mut self,
+    ) -> Result<bool> {
+        match self.client.last_assistant_message(&self.agent_id(), self.conversation_id.lock().as_deref()).await {
+            Ok(Some(msg)) => {
+                // Extract text from the message content array.
+                let mut text = String::new();
+                if let Some(content_arr) = msg["content"].as_array() {
+                    for part in content_arr {
+                        if part["type"].as_str() == Some("text") {
+                            if let Some(t) = part["text"].as_str() {
+                                text.push_str(t);
+                                text.push('\n');
+                            }
+                        }
+                    }
+                }
+                
+                let text = text.trim();
+                if text.is_empty() {
+                    self.app.lock().show_toast("No text found in last assistant message", ToastLevel::Warning);
+                    return Ok(false);
+                }
+
+                // 1. OSC 52 Universal Fallback
+                use base64::Engine;
+                let b64 = base64::prelude::BASE64_STANDARD.encode(text);
+                print!("\x1b]52;c;{}\x07", b64);
+                use std::io::Write;
+                let _ = std::io::stdout().flush();
+
+                // 2. Native OS clipboard (if clipboard-images feature is enabled)
+                #[cfg(feature = "clipboard-images")]
+                {
+                    if let Ok(mut cb) = arboard::Clipboard::new() {
+                        let _ = cb.set_text(text);
+                    }
+                }
+
+                self.app.lock().show_toast("Copied last message to clipboard", ToastLevel::Success);
+            }
+            Ok(None) => {
+                self.app.lock().show_toast("No assistant message found to copy", ToastLevel::Warning);
+            }
+            Err(e) => {
+                self.app.lock().show_toast(format!("Failed to fetch last message: {e}"), ToastLevel::Error);
+            }
+        }
+        let _ = self.app.lock().draw();
         Ok(false)
     }
 

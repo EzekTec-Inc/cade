@@ -199,17 +199,17 @@ impl TuiApp {
         self.streaming_active
     }
 
-    /// Toggle OS text-selection copy mode on/off.
-    /// When ON: mouse capture is disabled so the terminal lets the user select text.
-    /// When OFF: mouse capture is restored so scroll wheel works normally.
-    pub fn toggle_copy_mode(&mut self) {
-        self.copy_mode = !self.copy_mode;
-        if self.copy_mode {
+    /// Toggle OS text-selection mouse mode on/off.
+    /// When disabled: mouse capture is disabled so the terminal lets the user select text.
+    /// When enabled: mouse capture is restored so scroll wheel works normally.
+    pub fn toggle_mouse_capture(&mut self) {
+        self.mouse_capture_disabled = !self.mouse_capture_disabled;
+        if self.mouse_capture_disabled {
             let _ = crossterm::execute!(std::io::stdout(), DisableMouseCapture);
-            self.show_toast("Copy mode enabled", ToastLevel::Info);
+            self.show_toast("Mouse selection enabled (scroll disabled)", ToastLevel::Info);
         } else {
             let _ = crossterm::execute!(std::io::stdout(), EnableMouseCapture);
-            self.show_toast("Copy mode disabled", ToastLevel::Info);
+            self.show_toast("Mouse scroll enabled", ToastLevel::Info);
         }
     }
 

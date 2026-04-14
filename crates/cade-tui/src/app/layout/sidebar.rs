@@ -20,7 +20,7 @@ pub(crate) struct SidebarState<'a> {
     pub thinking_text: Option<&'a str>,
     pub thinking_elapsed: Option<std::time::Duration>,
     pub active_plan: Option<&'a PlanState>,
-    pub copy_mode: bool,
+    pub mouse_capture_disabled: bool,
 }
 
 impl<'a> SidebarState<'a> {
@@ -159,10 +159,10 @@ pub(crate) fn render_sidebar(
             ),
         ]),
         Line::from(vec![
-            Span::styled(" copy    ", colors.text_muted()),
+            Span::styled(" mouse   ", colors.text_muted()),
             Span::styled(
-                if state.copy_mode { "ON" } else { "OFF" },
-                Style::default().fg(if state.copy_mode {
+                if state.mouse_capture_disabled { "FREE" } else { "CAPTURED" },
+                Style::default().fg(if state.mouse_capture_disabled {
                     colors.success
                 } else {
                     colors.text_dim
@@ -291,7 +291,7 @@ mod tests {
             thinking_text: None,
             thinking_elapsed: None,
             active_plan: None,
-            copy_mode: false,
+            mouse_capture_disabled: false,
         }
     }
 
