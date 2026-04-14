@@ -249,3 +249,24 @@
 - **Previous behavior**: N/A
 - **New behavior**: N/A
 - **Rollback instructions**: N/A
+- **Timestamp (UTC)**: 2026-04-13T22:38:55Z
+- **Summary of change**: Drafted a new implementation plan for a `/summarize` TUI modal.
+- **Files modified**: `docs/tui-summarize-plan.md` (created)
+- **Reason**: The user requested a plan to implement a pi-coding-agent style summary modal using CADE's existing background consolidation system.
+- **Previous behavior**: N/A
+- **New behavior**: The repository contains a blueprint for an instantaneous, cost-free conversation summary overlay.
+- **Rollback steps**: Remove `docs/tui-summarize-plan.md`.
+- **Timestamp (UTC)**: 2026-04-13T23:16:53Z
+- **Summary of change**: Implemented an instant, zero-cost `/summarize` TUI modal.
+- **Files modified**: `crates/cade-tui/src/app/layout/summary.rs`, `crates/cade-tui/src/app/render.rs`, `crates/cade-tui/src/app/input.rs`, `crates/cade-tui/src/app/mod.rs`, `crates/cade-cli/src/cli/repl/slash.rs`, `crates/cade-cli/src/cli/repl/commands.rs`
+- **Exact reason**: The user requested a summarize mechanism similar to pi-coding-agent but built natively using CADE's existing background consolidation system.
+- **Previous behavior**: Users had no interactive way to view the background-computed session summary.
+- **New behavior**: Typing `/summarize` instantly pulls the `session_summary` memory block from the local SQLite database and displays it in a floating scrollable modal. If the conversation is too short for a summary, a toast notification is shown instead.
+- **Rollback instructions**: Revert the commit `feat(tui): implement instant zero-cost /summarize modal` using git.
+- **Timestamp (UTC)**: 2026-04-14T00:31:43Z
+- **Summary of change**: Drafted an implementation plan to repurpose the `/copy` command as a programmatic clipboard extractor, renaming the original mouse capture toggle to `/mouse`.
+- **Files modified**: `docs/copy-command-plan.md` (created)
+- **Reason**: The user asked for a plan to make CADE's `/copy` command behave like pi-coding-agent's, which grabs the last message and copies it to the clipboard using OSC 52 and native OS APIs.
+- **Previous behavior**: N/A
+- **New behavior**: The repository now contains a blueprint for the `/copy` command refactor.
+- **Rollback steps**: Remove `docs/copy-command-plan.md`.

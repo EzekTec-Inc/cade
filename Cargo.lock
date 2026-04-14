@@ -661,6 +661,8 @@ dependencies = [
 name = "cade-cli"
 version = "0.2.0"
 dependencies = [
+ "arboard",
+ "base64",
  "cade-agent",
  "cade-ai",
  "cade-core",
