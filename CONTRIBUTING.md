@@ -7,8 +7,8 @@ Thank you for your interest in contributing to CADE!
 ### Prerequisites
 
 - **Rust** (stable, 1.75+): `rustup default stable`
-- **Linux** (primary target): Wayland or X11
-- **Optional desktop deps**:
+- **Supported platforms**: Linux (primary), macOS, Windows
+- **Linux desktop deps** (optional — only needed for `--features desktop`):
   ```bash
   # Screen capture on Wayland
   sudo apt install libpipewire-0.3-dev libclang-dev libgbm-dev
@@ -16,6 +16,15 @@ Thank you for your interest in contributing to CADE!
   sudo apt install xdotool     # X11
   sudo apt install ydotool     # Wayland
   ```
+
+### Optional: Faster Builds (Linux)
+
+Install `sccache` and `mold` for significantly faster rebuilds:
+```bash
+cargo install sccache
+sudo apt install mold
+export RUSTC_WRAPPER=sccache   # add to your shell profile
+```
 
 ### Build
 

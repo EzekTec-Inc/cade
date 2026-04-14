@@ -26,7 +26,6 @@ A stateful, self-improving Rust CLI coding agent. CADE gives an AI agent full ac
 | `desktop_list_windows` | List all visible window titles |
 | `desktop_control` | Focus windows, type text, key presses, mouse control |
 | `desktop_notify` | Send OS desktop notifications |
-| System tray | Run CADE as a background service (`--tray`) |
 
 ### Meta tools (always available)
 | Tool | Description |
@@ -75,7 +74,6 @@ cade -p "..."                     # Headless prompt (non-interactive)
 cade -m <model>                   # Specify model (e.g. anthropic/claude-sonnet-4-5)
 cade --yolo                       # Bypass all permission prompts
 cade --permission-mode plan       # Read-only mode
-cade --tray                       # Start with system tray icon
 cade --info                       # Show session info and exit
 cade --rename <name>              # Rename the current agent and exit
 cade --tools "bash,read_file"     # Restrict tools registered to the agent
@@ -457,8 +455,6 @@ sudo apt install ydotool     # Wayland
 
 **Notifications** use the system DBus notification daemon (pre-installed on most desktops).
 
-**System tray** requires a DBus-compatible desktop environment (GNOME, KDE, COSMIC, etc.).
-
 ---
 
 ## Build
@@ -495,7 +491,7 @@ crates/
 ├── cade-ai/                    # LLM providers (no crate deps)
 │   └── anthropic, openai, gemini, ollama, catalogue
 ├── cade-desktop/               # Desktop extensions (no crate deps)
-│   └── capture, control, notify, tray
+│   └── capture, control, notify
 ├── cade-server/                # HTTP API + SQLite (→ cade-core, cade-ai)
 │   └── api/, storage/, config, crypto, rate_limit
 ├── cade-agent/                 # Client + tools (→ cade-core, cade-desktop)
@@ -545,7 +541,7 @@ export CADE_PROFILE=pro
 {
   "profile": "pro",
   "enable_capabilities": ["web"],    // add individual capabilities
-  "disable_capabilities": ["tray"]   // remove individual capabilities
+  "disable_capabilities": ["desktop"]   // remove individual capabilities
 }
 ```
 

@@ -15,6 +15,7 @@ use clap::Parser;
 use serde_json::json;
 use std::path::PathBuf;
 
+use std::io::IsTerminal;
 use std::sync::Arc;
 use parking_lot::Mutex;
 
@@ -445,7 +446,7 @@ async fn main() -> Result<()> {
     }
 
     // Headless — --prompt flag OR piped stdin
-    let piped_stdin: Option<String> = if !atty::is(atty::Stream::Stdin) {
+    let piped_stdin: Option<String> = if !std::io::stdin().is_terminal() {
         use std::io::Read;
         let mut buf = String::new();
         std::io::stdin().read_to_string(&mut buf).ok();

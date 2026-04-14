@@ -61,7 +61,6 @@ tempfile       = "3"
 chrono         = { version = "0.4", features = ["serde"] }
 regex          = "1"
 dotenvy        = "0.15"
-atty           = "0.2"
 plist          = "1.7"
 parking_lot    = "0.12"
 
@@ -145,7 +144,6 @@ clap.workspace         = true
 serde_json.workspace   = true
 dotenvy.workspace      = true
 chrono.workspace       = true
-atty.workspace         = true
 dirs.workspace         = true
 parking_lot.workspace  = true
 # -- Used by cade-server binary (RouterAdapter)

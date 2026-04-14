@@ -12,13 +12,18 @@ env:
 
 jobs:
   check:
-    name: Build · Test · Lint
-    runs-on: ubuntu-latest
+    name: Build · Test · Lint (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install system dependencies
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
@@ -37,6 +42,8 @@ jobs:
           components: clippy, rustfmt
 
       - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}
 
       - name: Format check
         run: cargo fmt --all -- --check

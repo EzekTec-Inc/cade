@@ -40,7 +40,7 @@ CADE/
 ```
 cade-core       (standalone — permissions, settings, skills, hooks, toolsets)
 cade-ai         (standalone — LLM providers, registry, retry)
-cade-desktop    (standalone — screen capture, window control, notifications, tray)
+cade-desktop    (standalone — screen capture, window control, notifications)
 
 cade-server     → cade-core, cade-ai
 cade-agent      → cade-core, cade-desktop
@@ -91,7 +91,6 @@ Desktop integration extensions. No crate dependencies.
 | `capture.rs` | Screen capture via `xcap` → base64 PNG |
 | `control.rs` | Window focus, text typing, key presses, mouse control (`xdotool`/`ydotool`) |
 | `notify.rs` | OS desktop notifications via `notify-rust` |
-| `tray.rs` | System tray icon via `ksni` |
 
 ### `cade-server`
 
@@ -203,7 +202,7 @@ CADE organizes optional features into **capability packs** controlled by
 | Capability | Description |
 |---|---|
 | `agentic` | Subagents, agent messaging, reflection, artifacts |
-| `desktop` | Screenshots, window control, notifications, tray |
+| `desktop` | Screenshots, window control, notifications |
 | `web` | Web search, fetch docs, browser screenshot |
 | `mcp` | MCP server management and external tools |
 | `clipboard-images` | Image paste from clipboard |

@@ -1,13 +1,11 @@
-# CADE build configuration — sccache + mold linker for faster builds.
+# CADE build configuration
 #
-# sccache: Caches compiled crate artifacts across builds.
-#   Cold build with warm cache: ~2-3 min instead of >15 min.
+# Optional: For faster rebuilds on Linux, install sccache + mold:
+#   cargo install sccache && sudo apt install mold
+#   export RUSTC_WRAPPER=sccache
 #
-# mold: Faster linker than GNU ld (debug binary is 315 MB).
-#   Link time: ~2 sec instead of ~5 sec.
-
-[build]
-rustc-wrapper = "sccache"
+# The mold linker flag below is target-scoped to Linux only and
+# is silently ignored on Windows/macOS.
 
 [target.x86_64-unknown-linux-gnu]
 rustflags = ["-C", "link-arg=-fuse-ld=mold"]
