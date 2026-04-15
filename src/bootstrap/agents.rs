@@ -148,6 +148,58 @@ pub async fn resolve_agent_and_conversation(
                 )));
             }
         }
+    } else if let Some(local_id) = session.session.agent_id.clone() {
+        match client.get_agent(&local_id).await {
+            Ok(a) => a,
+            Err(_) => {
+                eprintln!("Local project agent {local_id} not found — falling back");
+                if let Some(last_id) = settings.last_agent().map(|s| s.to_string()) {
+                    match client.get_agent(&last_id).await {
+                        Ok(a) => a,
+                        Err(_) => {
+                            eprintln!("Previous global agent {last_id} not found — creating new agent");
+                            let a = client
+                                .create_agent(make_req(default_model.to_string(), "CADE coding agent"))
+                                .await
+                                .map_err(|e| Error::custom(format!("create agent: {e}")))?;
+                            register_and_attach_with_caps_filtered(
+                                client,
+                                &a.id,
+                                toolset,
+                                capabilities,
+                                tool_filter.as_deref(),
+                            )
+                            .await;
+                            seed_default_memory(client, &a.id).await;
+                            session.set_agent(a.id.clone(), Some(a.name.clone()))?;
+                            settings.set_last_agent(&a.id)?;
+                            a
+                        }
+                    }
+                } else {
+                    println!("No previous session — creating new agent…");
+                    let a = client
+                        .create_agent(make_req(
+                            default_model.to_string(),
+                            "CADE coding agent with desktop extensions",
+                        ))
+                        .await
+                        .map_err(|e| Error::custom(format!("create agent: {e}")))?;
+                    register_and_attach_with_caps_filtered(
+                        client,
+                        &a.id,
+                        toolset,
+                        capabilities,
+                        tool_filter.as_deref(),
+                    )
+                    .await;
+                    seed_default_memory(client, &a.id).await;
+                    session.set_agent(a.id.clone(), Some(a.name.clone()))?;
+                    settings.set_last_agent(&a.id)?;
+                    a
+                }
+            }
+        }
     } else if let Some(last_id) = settings.last_agent().map(|s| s.to_string()) {
         match client.get_agent(&last_id).await {
             Ok(a) => a,
