@@ -23,10 +23,11 @@ const MIN_ROWS_FOR_CONSOLIDATION: usize = 20;
 const MAX_SUMMARY_INPUT_CHARS: usize = 24_000;
 
 /// Maximum tokens the summarisation LLM is allowed to emit.
-const SUMMARY_MAX_TOKENS: u32 = 800;
+/// Budget: ~700 tokens for the narrative summary + ~100 tokens for search anchors.
+const SUMMARY_MAX_TOKENS: u32 = 900;
 
 /// Maximum chars stored in the `session_summary` memory block.
-const SESSION_SUMMARY_MAX_CHARS: usize = 4_000;
+const SESSION_SUMMARY_MAX_CHARS: usize = 4_500;
 
 /// Fraction of the estimated history budget used as the threshold: turns that
 /// fit within `char_budget * HISTORY_BUDGET_FRACTION` are considered "in
@@ -122,6 +123,10 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     }
 
     // ── 3. Format dropped turns into a text block for the LLM ────────────────
+    //
+    // Pre-processing extracts high-signal artifacts (file paths, error messages,
+    // function names) from each message *before* truncation so they survive the
+    // 600-char preview cut.  These are prepended as a structured prefix.
     let mut history_text = String::new();
     'outer: for turn in &turns[..dropped] {
         for (role, text) in turn {
@@ -133,17 +138,30 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
             if trimmed.is_empty() {
                 continue;
             }
-            // Skip noisy short tool results (already processed, low signal)
-            if role == "tool" && trimmed.len() < 15 {
+            // Skip noisy short tool results — but keep those that look like
+            // error codes or short meaningful outputs (contain digits or '/')
+            if role == "tool" && trimmed.len() < 15
+                && !trimmed.contains('/')
+                && !trimmed.chars().any(|c| c.is_ascii_digit())
+            {
                 continue;
             }
+            // Extract high-signal artifacts before truncation: file paths,
+            // function signatures, and error-like strings survive even when
+            // the full message is cut to 600 chars.
+            let artifacts = extract_artifacts(trimmed);
+            let artifact_prefix = if artifacts.is_empty() {
+                String::new()
+            } else {
+                format!(" | artifacts: {}", artifacts.join(", "))
+            };
             // Truncate very long individual messages (file dumps, base64, etc.)
             let preview: String = if trimmed.chars().count() > 600 {
                 format!("{}…", trimmed.chars().take(600).collect::<String>())
             } else {
                 trimmed.to_string()
             };
-            history_text.push_str(&format!("[{role}] {preview}\n"));
+            history_text.push_str(&format!("[{role}{artifact_prefix}] {preview}\n"));
         }
     }
 
@@ -163,15 +181,23 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
          \n\
          Extract only what the agent needs to remember for future turns:\n\
          1. The main task or goal being worked on\n\
-         2. Files read, created, or modified (be specific)\n\
-         3. Key decisions or approaches chosen and why\n\
-         4. Problems encountered and how they were resolved\n\
+         2. Files read, created, or modified — use exact paths (e.g. `src/server/consolidation.rs`), \
+            exact function names, exact variable names. Never paraphrase these.\n\
+         3. Key decisions or approaches chosen, the reasoning behind them, \
+            AND alternatives that were considered and rejected (with why)\n\
+         4. Problems encountered — include exact error messages (first 80 chars) and error codes\n\
          5. Work completed vs work still in progress\n\
          6. Any conventions, constraints, or preferences discovered\n\
          \n\
-         Write as a concise structured note (max 400 words). Be factual and specific. \
+         Write as a concise structured note (max 350 words). Be factual and specific. \
          Do not describe the conversation format or refer to 'the user said'. \
          Write in past tense from the perspective of what happened.\n\
+         \n\
+         After the summary, add a final section:\n\
+         SEARCH ANCHORS: [up to 8 comma-separated keywords — specific filenames, \
+         function names, error codes, or topic identifiers from the dropped history \
+         that are NOT already mentioned in the summary above. These help the agent \
+         recover granular detail via conversation_search.]\n\
          \n\
          HISTORY:\n\
          {history_text}"
@@ -265,6 +291,16 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
 
     // P5-C: Ensure session_summary remains pinned across restarts.
     let _ = sqlite::set_memory_tier(&state.db, agent_id, "session_summary", "pinned", true);
+
+    // P6: Ensure working_set (the agent's primary decision record) never ages
+    // out.  Pin it if it exists — the agent writes this block at decision time
+    // with full reasoning, so it must survive consolidation cycles.
+    let has_working_set = existing_blocks
+        .iter()
+        .any(|(label, val, _)| label == "working_set" && !val.trim().is_empty());
+    if has_working_set {
+        let _ = sqlite::set_memory_tier(&state.db, agent_id, "working_set", "pinned", true);
+    }
 
     tracing::info!(
         "consolidate [{}]: session_summary updated ({} chars; {} dropped turns summarised)",
@@ -370,6 +406,94 @@ fn is_summary_inflated(summary_chars: usize, dropped_chars: usize) -> bool {
     dropped_chars > 0 && summary_chars > ((dropped_chars as f64) * 0.8) as usize
 }
 
+/// Extract high-signal artifacts from a message that should survive truncation.
+///
+/// Scans the text for:
+///   - File paths (containing `/` and a file extension like `.rs`, `.ts`, `.py`, etc.)
+///   - Error-like patterns (lines starting with "error", "Error", "E0", "RUSTSEC-", etc.)
+///   - Function/method names (word followed by `(`)
+///
+/// Returns up to 6 unique artifact strings, each capped at 80 chars.
+fn extract_artifacts(text: &str) -> Vec<String> {
+    let mut artifacts: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for word in text.split_whitespace() {
+        if artifacts.len() >= 6 {
+            break;
+        }
+
+        let cleaned = word.trim_matches(|c: char| c == ',' || c == ';' || c == '`' || c == '\'' || c == '"');
+
+        // File paths: contains '/' and ends with a known extension
+        if cleaned.contains('/')
+            && (cleaned.ends_with(".rs")
+                || cleaned.ends_with(".ts")
+                || cleaned.ends_with(".js")
+                || cleaned.ends_with(".py")
+                || cleaned.ends_with(".toml")
+                || cleaned.ends_with(".json")
+                || cleaned.ends_with(".yaml")
+                || cleaned.ends_with(".yml")
+                || cleaned.ends_with(".md")
+                || cleaned.ends_with(".html")
+                || cleaned.ends_with(".css")
+                || cleaned.ends_with(".go")
+                || cleaned.ends_with(".java")
+                || cleaned.ends_with(".c")
+                || cleaned.ends_with(".h")
+                || cleaned.ends_with(".cpp"))
+        {
+            let artifact: String = cleaned.chars().take(80).collect();
+            if seen.insert(artifact.clone()) {
+                artifacts.push(artifact);
+            }
+            continue;
+        }
+
+        // Error identifiers: RUSTSEC-*, E0xxx, error[Exxxx]
+        if cleaned.starts_with("RUSTSEC-")
+            || cleaned.starts_with("error[")
+            || (cleaned.starts_with("E0") && cleaned.len() <= 6 && cleaned[2..].chars().all(|c| c.is_ascii_digit()))
+        {
+            let artifact: String = cleaned.chars().take(80).collect();
+            if seen.insert(artifact.clone()) {
+                artifacts.push(artifact);
+            }
+            continue;
+        }
+
+        // Function/method names: word ending with '(' or '()'
+        if (cleaned.ends_with('(') || cleaned.ends_with("()"))
+            && cleaned.len() > 2
+            && cleaned.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+        {
+            let artifact: String = cleaned.chars().take(80).collect();
+            if seen.insert(artifact.clone()) {
+                artifacts.push(artifact);
+            }
+        }
+    }
+
+    // Also scan for error-prefixed lines (e.g. "error: ...", "Error: ...")
+    for line in text.lines().take(100) {
+        if artifacts.len() >= 6 {
+            break;
+        }
+        let trimmed = line.trim();
+        if (trimmed.starts_with("error:") || trimmed.starts_with("Error:") || trimmed.starts_with("ERROR:"))
+            && trimmed.len() > 7
+        {
+            let artifact: String = trimmed.chars().take(80).collect();
+            if seen.insert(artifact.clone()) {
+                artifacts.push(artifact);
+            }
+        }
+    }
+
+    artifacts
+}
+
 /// Group `(role, text)` pairs into logical turns.
 /// A turn starts at each `user` message and includes all following non-`user`
 /// messages (assistant, tool) until the next `user` message.
@@ -464,5 +588,62 @@ mod tests {
     #[test]
     fn inflation_guard_handles_empty_summary() {
         assert!(!is_summary_inflated(0, 1000));
+    }
+
+    // ── extract_artifacts tests ───────────────────────────────────────────
+
+    #[test]
+    fn extracts_rust_file_paths() {
+        let text = "Modified src/server/consolidation.rs and crates/cade-core/src/lib.rs";
+        let arts = extract_artifacts(text);
+        assert!(arts.contains(&"src/server/consolidation.rs".to_string()));
+        assert!(arts.contains(&"crates/cade-core/src/lib.rs".to_string()));
+    }
+
+    #[test]
+    fn extracts_function_names() {
+        let text = "Called extract_artifacts() and build_context( with args";
+        let arts = extract_artifacts(text);
+        assert!(arts.iter().any(|a| a.contains("extract_artifacts")));
+        assert!(arts.iter().any(|a| a.contains("build_context")));
+    }
+
+    #[test]
+    fn extracts_error_identifiers() {
+        let text = "Found RUSTSEC-2025-0009 and error[E0433] in the build";
+        let arts = extract_artifacts(text);
+        assert!(arts.iter().any(|a| a.contains("RUSTSEC-2025-0009")));
+        assert!(arts.iter().any(|a| a.contains("error[E0433]")));
+    }
+
+    #[test]
+    fn extracts_error_lines() {
+        let text = "output:\nerror: cannot find type `Foo` in this scope\nmore stuff";
+        let arts = extract_artifacts(text);
+        assert!(arts.iter().any(|a| a.starts_with("error: cannot find")));
+    }
+
+    #[test]
+    fn caps_at_six_artifacts() {
+        let text = "src/a.rs src/b.rs src/c.rs src/d.rs src/e.rs src/f.rs src/g.rs src/h.rs";
+        let arts = extract_artifacts(text);
+        assert!(arts.len() <= 6);
+    }
+
+    #[test]
+    fn empty_text_yields_no_artifacts() {
+        assert!(extract_artifacts("").is_empty());
+    }
+
+    #[test]
+    fn plain_text_yields_no_artifacts() {
+        assert!(extract_artifacts("hello world this is a normal sentence").is_empty());
+    }
+
+    #[test]
+    fn deduplicates_artifacts() {
+        let text = "src/lib.rs and again src/lib.rs and src/lib.rs";
+        let arts = extract_artifacts(text);
+        assert_eq!(arts.len(), 1);
     }
 }
