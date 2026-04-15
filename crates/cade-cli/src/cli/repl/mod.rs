@@ -633,9 +633,9 @@ impl Repl {
                     (false, input.strip_prefix('!').unwrap_or("").trim())
                 };
                 if !cmd_str.is_empty() {
-                    let mut cmd = tokio::process::Command::new("sh");
+                    let mut cmd = cade_core::shell::shell_command(cmd_str);
                     cade_core::agent_env::apply_agent_env(&mut cmd);
-                    let run = cmd.arg("-c").arg(cmd_str).output().await;
+                    let run = cmd.output().await;
                     match run {
                         Ok(out) => {
                             let text = if out.stdout.is_empty() {

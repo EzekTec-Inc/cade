@@ -12,6 +12,7 @@ pub mod hooks;
 pub mod permissions;
 pub mod resources;
 pub mod settings;
+pub mod shell;
 pub mod skills;
 pub mod tool_ids;
 pub mod toolsets;

@@ -308,6 +308,24 @@ impl ApplyPatchTool {
 
         validate_patch_paths(patch_str)?;
 
+        // On Windows, the `patch` utility is not available natively.
+        // Users need Git for Windows (which bundles patch) or WSL.
+        #[cfg(windows)]
+        {
+            // Check if `patch` is reachable before attempting
+            let probe = tokio::process::Command::new("patch")
+                .arg("--version")
+                .output()
+                .await;
+            if probe.is_err() || !probe.unwrap().status.success() {
+                return Err(crate::Error::custom(
+                    "apply_patch: the `patch` utility was not found. \
+                     Install Git for Windows (includes `patch`) or use WSL."
+                        .to_string(),
+                ));
+            }
+        }
+
         // Write patch to a tempfile then apply with `patch -p1`
         use std::io::Write;
         let mut tmp_file = tempfile::NamedTempFile::new().map_err(|e| {

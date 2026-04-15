@@ -2,7 +2,6 @@ use crate::Result;
 use serde_json::{Value, json};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
@@ -39,9 +38,9 @@ impl BashTool {
         }
 
         let output = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
-            let mut cmd = Command::new("bash");
+            let mut cmd = cade_core::shell::shell_command(command);
             cade_core::agent_env::apply_agent_env(&mut cmd);
-            cmd.arg("-c").arg(command).output().await
+            cmd.output().await
         })
         .await
         .map_err(|_| crate::Error::custom(format!("Command timed out after {timeout_secs}s")))?
@@ -106,11 +105,9 @@ impl BashTool {
 
         use std::process::Stdio;
         let mut child = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
-            let mut cmd = Command::new("bash");
+            let mut cmd = cade_core::shell::shell_command(command);
             cade_core::agent_env::apply_agent_env(&mut cmd);
-            cmd.arg("-c")
-                .arg(command)
-                .stdout(Stdio::piped())
+            cmd.stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()
         })

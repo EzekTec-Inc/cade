@@ -183,6 +183,7 @@ pub fn backend_from_profile(profile: &ExecutionProfile) -> Box<dyn ExecutionBack
 fn whoami_user() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
+        .or_else(|_| std::env::var("USERNAME")) // Windows
         .unwrap_or_else(|_| "root".to_string())
 }
 

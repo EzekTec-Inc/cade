@@ -7,7 +7,6 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use tokio::io::{AsyncBufReadExt, BufReader};
-use tokio::process::Command;
 
 use super::{BashOutput, DirEntry, ExecutionBackend};
 
@@ -25,11 +24,9 @@ impl ExecutionBackend for LocalBackend {
     ) -> crate::Result<BashOutput> {
         use std::process::Stdio;
         let mut child = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
-            let mut cmd = Command::new("bash");
+            let mut cmd = cade_core::shell::shell_command(command);
             cade_core::agent_env::apply_agent_env(&mut cmd);
-            cmd.arg("-c")
-                .arg(command)
-                .current_dir(cwd)
+            cmd.current_dir(cwd)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()

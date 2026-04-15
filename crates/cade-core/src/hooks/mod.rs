@@ -10,7 +10,6 @@
 use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use serde_json::{Value, json};
-use tokio::process::Command;
 
 use crate::settings::HooksConfig;
 
@@ -448,11 +447,9 @@ async fn spawn_command(
     use tokio::io::AsyncWriteExt;
 
     let mut child = {
-        let mut cmd = Command::new("sh");
+        let mut cmd = crate::shell::shell_command(command);
         crate::agent_env::apply_agent_env(&mut cmd);
-        cmd.arg("-c")
-            .arg(command)
-            .current_dir(cwd)
+        cmd.current_dir(cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
