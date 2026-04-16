@@ -112,10 +112,13 @@ pub async fn resolve_agent_and_conversation(
             .map_err(|e| Error::custom(format!("save global session: {e}")))?;
         a
     } else if let Some(id) = &args.agent {
-        client
+        let a = client
             .get_agent(id)
             .await
-            .map_err(|e| Error::custom(format!("get agent {id}: {e}")))?
+            .map_err(|e| Error::custom(format!("get agent {id}: {e}")))?;
+        session.set_agent(a.id.clone(), Some(a.name.clone()))?;
+        settings.set_last_agent(&a.id)?;
+        a
     } else if let Some(name_query) = &args.name {
         // --name: find agent by name (partial, case-insensitive)
         let all = client
@@ -127,7 +130,7 @@ pub async fn resolve_agent_and_conversation(
             .iter()
             .filter(|a| a.name.to_lowercase().contains(&q))
             .collect();
-        match matched.len() {
+        let a = match matched.len() {
             0 => {
                 return Err(Error::custom(format!(
                     "No agent matching --name '{name_query}'"
@@ -147,7 +150,10 @@ pub async fn resolve_agent_and_conversation(
                         .join(", ")
                 )));
             }
-        }
+        };
+        session.set_agent(a.id.clone(), Some(a.name.clone()))?;
+        settings.set_last_agent(&a.id)?;
+        a
     } else if let Some(local_id) = session.session.agent_id.clone() {
         match client.get_agent(&local_id).await {
             Ok(a) => a,
