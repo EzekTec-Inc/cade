@@ -244,7 +244,8 @@ CADE remembers the last agent per directory:
 
 | File | Scope | Contents |
 |------|-------|----------|
-| `.cade/settings.local.json` | Per-project (gitignored) | Last agent for this directory |
+| `.cade/session.json` | Per-project (gitignored) | Agent ID, conversation ID, run state |
+| `.cade/settings.local.json` | Per-project (gitignored) | Last agent, pinned agents, local hooks & MCP |
 | `~/.cade/settings.json` | Global | API key, global last agent, permissions, hooks |
 
 ### Agent Resolution Order
@@ -252,7 +253,7 @@ CADE remembers the last agent per directory:
 On startup, CADE resolves the agent in this priority order:
 
 1. **CLI flags** — `--new-agent`, `--agent <id>`, or `--name <query>`
-2. **Local project agent** — `agent_id` from `.cade/settings.local.json`
+2. **Local project agent** — `agent_id` from `.cade/session.json`
 3. **Global last agent** — `last_agent_id` from `~/.cade/settings.json`
 4. **Create new** — fallback if no saved agent is found
 

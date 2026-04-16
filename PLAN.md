@@ -284,3 +284,21 @@
 - **Previous behavior**: N/A
 - **New behavior**: The repository now contains a blueprint for the `/copy` command refactor.
 - **Rollback steps**: Remove `docs/copy-command-plan.md`.
+## 2026-04-16T01:41:00Z — fix: dual-store file corruption causing agent not auto-loaded
+
+**Summary:** Fixed a critical bug where `SessionStore` and `SettingsManager` both read/wrote `.cade/settings.local.json` with disjoint schemas. Each `save()` overwrote the other's fields, causing agent identity loss across restarts and mid-session agent switches.
+
+**Root cause:** Two independent structs (`Session` with `agent_id`, `conversation_id` etc. and `LocalSettings` with `last_agent`, `pinned_agents` etc.) shared the same JSON file. Last writer won, destroying the other's data.
+
+**Files modified:**
+- `crates/cade-agent/src/agent/session.rs` — Moved `SessionStore` from `settings.local.json` to `session.json`; added backward-compat migration from legacy file; added `ensure_gitignore_entry()` helper; 5 new tests
+- `crates/cade-mcp/src/watcher.rs` — Added `session.json` to watched filenames
+- `crates/cade-core/src/permissions/manager.rs` — Added `session.json` to security guard for config file edits
+- `crates/cade-cli/src/cli/repl/commands_agents.rs` — `/agents` Switch and DeleteMany branches now call `session.set_agent()` alongside `settings.set_last_agent()`
+- `src/bootstrap/agents.rs` — `--agent` and `--name` branches now persist to both stores; happy-path lookups cross-sync between stores
+- `README.md`, `SECURITY.md`, `WINDOWS_SETUP.md` — Updated file layout references
+
+**Previous behavior:** Agent identity was randomly lost depending on which store saved last. `/agents` switch didn't persist to session. `--agent`/`--name` flags were forgotten on restart. Cross-project agent switching could load wrong agent.
+**New behavior:** Each store has its own file. All agent resolution branches persist to both stores. Happy-path lookups cross-sync so both stores stay consistent.
+**Rollback:** Restore checkpoint `before-dual-store-fix` (cp-ad662ffb).
+

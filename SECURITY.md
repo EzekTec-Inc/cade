@@ -34,7 +34,7 @@ CADE is a local-first coding agent that runs on your machine with full filesyste
 | API keys | SQLite (`cade-store`) | AES-GCM encryption with machine-derived key |
 | Conversation history | SQLite | Plaintext (local only) |
 | Memory blocks | SQLite | Plaintext (local only) |
-| Session state | `.cade/settings.local.json` | Plaintext (gitignored) |
+| Session state | `.cade/session.json` | Plaintext (gitignored) |
 
 ### Data in Transit
 
@@ -79,7 +79,7 @@ Hook exit codes:
 1. **Use `default` permission mode** — review tool calls before execution
 2. **Set up `PreToolUse` hooks** for sensitive commands (e.g., `rm -rf`, `git push --force`)
 3. **Use `--tools` flag** to restrict available tools for specific tasks
-4. **Review `.cade/settings.local.json`** — contains your agent ID (gitignored by default)
+4. **Review `.cade/session.json`** — contains your agent ID (gitignored by default)
 
 ### For Remote/Shared Deployments
 

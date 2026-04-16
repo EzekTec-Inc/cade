@@ -98,12 +98,12 @@ Output: Direct text response (no interactive UI).
 On first launch, CADE will:
 1. Create a `.cade/` directory in the current working directory with settings
 2. Create a `.cade/cade.db` file (SQLite database for agent state)
-3. Generate a random agent ID and remember it in `.cade/settings.local.json`
+3. Generate a random agent ID and remember it in `.cade/session.json`
 4. Load available tools (bash, read_file, write_file, edit_file, grep, glob, etc.)
 
 On subsequent launches, CADE resolves your agent in this order:
 1. **CLI flags** (`--agent <id>`, `--name <query>`, `--new-agent`)
-2. **Local project agent** from `.cade/settings.local.json`
+2. **Local project agent** from `.cade/session.json`
 3. **Global last agent** from `~/.cade/settings.json`
 4. **Create new** (fallback)
 
@@ -203,7 +203,7 @@ $env:CADE_MODEL = "anthropic/claude-opus"
 
 ## Configuration Files
 
-After first run, check `.cade/settings.local.json`:
+After first run, check `.cade/session.json`:
 
 ```json
 {
