@@ -138,7 +138,20 @@ async fn main() -> Result<()> {
     let client = HttpTransport::new(base_url.clone(), api_key)
         .map_err(|e| Error::custom(format!("create CADE server: {e}")))?;
 
+    // Determine early whether we are running interactively (affects progress UI).
+    // Headless = --prompt flag, piped stdin, --info, --export/--import, eval sub, etc.
+    let is_interactive = args.prompt.is_none()
+        && std::io::stdin().is_terminal()
+        && !args.info
+        && args.export_agent.is_none()
+        && args.import_agent.is_none()
+        && !is_eval_subcommand
+        && args.rename.is_none();
+    let progress = StartupProgress::new(is_interactive);
+
+    let sp_server = progress.start_server_connect();
     if !client.health().await.unwrap_or(false) {
+        sp_server.set_message("Starting cade-server…");
         auto_start_server(&base_url).await?;
     }
 
@@ -174,6 +187,10 @@ async fn main() -> Result<()> {
         let (prov, mdl) = resp.split_once('/').unwrap_or(("unknown", &resp));
         (prov.to_string(), mdl.to_string(), resp)
     };
+    StartupProgress::finish_ok(
+        &sp_server,
+        format!("Connected — {} | {}", server_info.0, server_info.1),
+    );
     tracing::info!(
         "Connected to cade-server at {base_url} | provider={} | model={}",
         server_info.0, server_info.1
@@ -258,6 +275,7 @@ async fn main() -> Result<()> {
     let skills_block = skills_listing(&initial_loaded_skills);
 
     // Agent resolution — helper closure avoids repeating the create logic
+    let sp_agent = progress.start_agent_resolve();
     let (agent, loaded_skills, conversation_id, effective_system_prompt) =
         resolve_agent_and_conversation(
             &client,
@@ -272,6 +290,7 @@ async fn main() -> Result<()> {
             &capabilities,
         )
         .await?;
+    StartupProgress::finish_ok(&sp_agent, format!("Agent: {}", agent.name));
 
     // -- MCP server startup (skipped when Mcp capability is off)
     let mcp_configs = settings.merged_mcp_servers();
@@ -285,13 +304,19 @@ async fn main() -> Result<()> {
         }
         std::sync::Arc::new(McpManager::empty())
     } else {
+        let sp_mcp = progress.start_mcp_boot(mcp_configs.len());
         tracing::info!("Starting {} MCP server(s)…", mcp_configs.len());
         let mgr = McpManager::start(&mcp_configs).await;
         let count = mgr.status().await.len();
         let total = mcp_configs.len();
         if count == 0 {
+            StartupProgress::finish_warn(&sp_mcp, "No MCP servers started");
             tracing::warn!("No MCP servers started successfully");
         } else {
+            StartupProgress::finish_ok(
+                &sp_mcp,
+                format!("MCP: {count}/{total} server(s) ready"),
+            );
             tracing::info!("MCP: {count}/{total} server(s) ready");
         }
         std::sync::Arc::new(mgr)
@@ -304,6 +329,7 @@ async fn main() -> Result<()> {
     // native and meta tools never do.  Snapshot the current non-MCP tool IDs,
     // detach everything, re-attach non-MCP IDs immediately, then let the block
     // below re-attach only this session's live MCP tools.
+    let sp_tools = progress.start_tool_sync();
     {
         let non_mcp_ids: Vec<String> = client
             .get_agent_tools(&agent.id)
@@ -322,6 +348,7 @@ async fn main() -> Result<()> {
     // Register MCP tool schemas with cade-server + attach to agent.
     // Only runs when at least one MCP server is live this session.
     if !mcp.is_empty().await {
+        sp_tools.set_message("Registering MCP tools…");
         use agent::tools::register_mcp_tools;
         let mcp_tool_ids: Vec<String> = register_mcp_tools(&client, mcp.all_tool_schemas().await)
             .await
@@ -338,6 +365,7 @@ async fn main() -> Result<()> {
             }
         }
     }
+    StartupProgress::finish_ok(&sp_tools, "Tools synced");
 
     // Build hook engine from merged settings (local > project > global)
     let hook_engine = HookEngine::new(settings.merged_hooks(), cwd.clone());
@@ -751,6 +779,11 @@ async fn main() -> Result<()> {
     if args.continue_last {
         repl.mark_continued();
     }
+
+    // Clear all spinners so the terminal is clean before ratatui enters
+    // the alternate screen inside repl.run().
+    progress.clear();
+
     repl.run().await?;
 
     Ok(())
