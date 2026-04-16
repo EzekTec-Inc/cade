@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ---
 
+## [Unreleased]
+
+### Changed
+- Replaced the `esc to interrupt` prompt text with `Ctrl+c to interrupt` in the REPL's thinking animation loop (`agent_turn`) for better clarity.
+- Updated `Cargo.lock` and `Cargo.toml` dependencies via `cargo update` to address identified security vulnerabilities in `ring` (RUSTSEC-2025-0009) and `rustls-webpki` (RUSTSEC-2026-0099).
+
+### Fixed
+- Fixed a dual-store file corruption bug where `SessionStore` and `SettingsManager` were overwriting each other's data in `.cade/settings.local.json`. The session store now uses a dedicated `.cade/session.json` file.
+- Fixed the `/agents` REPL command not updating the project's local session file.
+- Fixed `--agent` and `--name` CLI flags to properly persist the user's explicit selection.
+- Fixed missing cross-syncing between the global last agent and the local session agent during happy-path agent resolution.
+
+---
+
 ## [0.2.0] — 2026-03-07
 
 ### Added
