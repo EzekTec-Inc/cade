@@ -174,7 +174,7 @@ async fn main() -> Result<()> {
         let (prov, mdl) = resp.split_once('/').unwrap_or(("unknown", &resp));
         (prov.to_string(), mdl.to_string(), resp)
     };
-    eprintln!(
+    tracing::info!(
         "Connected to cade-server at {base_url} | provider={} | model={}",
         server_info.0, server_info.1
     );
@@ -285,14 +285,14 @@ async fn main() -> Result<()> {
         }
         std::sync::Arc::new(McpManager::empty())
     } else {
-        println!("Starting {} MCP server(s)…", mcp_configs.len());
+        tracing::info!("Starting {} MCP server(s)…", mcp_configs.len());
         let mgr = McpManager::start(&mcp_configs).await;
         let count = mgr.status().await.len();
         let total = mcp_configs.len();
         if count == 0 {
-            eprintln!("Warning: no MCP servers started successfully");
+            tracing::warn!("No MCP servers started successfully");
         } else {
-            println!("MCP: {count}/{total} server(s) ready");
+            tracing::info!("MCP: {count}/{total} server(s) ready");
         }
         std::sync::Arc::new(mgr)
     };
@@ -334,7 +334,7 @@ async fn main() -> Result<()> {
             if let Err(e) = client.attach_agent_tools(&agent.id, &mcp_tool_ids).await {
                 tracing::warn!("Failed to attach MCP tools to agent: {e}");
             } else {
-                println!("Attached {} MCP tool(s) to agent", mcp_tool_ids.len());
+                tracing::info!("Attached {} MCP tool(s) to agent", mcp_tool_ids.len());
             }
         }
     }
@@ -352,8 +352,8 @@ async fn main() -> Result<()> {
     // --unlink: detach all tools from agent, then continue
     if args.unlink {
         match client.detach_agent_tools(&agent.id).await {
-            Ok(n) => println!("✓ Detached {n} tool(s) from agent"),
-            Err(e) => eprintln!("Warning: detach failed: {e}"),
+            Ok(n) => tracing::info!("Detached {n} tool(s) from agent"),
+            Err(e) => tracing::warn!("Detach failed: {e}"),
         }
     }
 
@@ -372,7 +372,7 @@ async fn main() -> Result<()> {
                 let _ = client.attach_agent_tools(&agent.id, &mcp_ids).await;
             }
         }
-        println!("✓ Tools linked to agent");
+        tracing::info!("Tools linked to agent");
     }
 
     // --rename <new-name>: rename the resolved agent and exit (no REPL)
@@ -716,7 +716,7 @@ async fn main() -> Result<()> {
         let b = cade_agent::backends::backend_from_profile(&profile);
         let backend_name = b.name();
         if backend_name != "local" {
-            eprintln!("  Execution backend: {backend_name}");
+            tracing::info!("Execution backend: {backend_name}");
         }
         std::sync::Arc::from(b)
     };
