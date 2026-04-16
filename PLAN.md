@@ -302,3 +302,7 @@
 **New behavior:** Each store has its own file. All agent resolution branches persist to both stores. Happy-path lookups cross-sync so both stores stay consistent.
 **Rollback:** Restore checkpoint `before-dual-store-fix` (cp-ad662ffb).
 
+
+## 2026-04-16T02:05:00Z — docs: update CHANGELOG.md
+
+**Summary:** Updated `CHANGELOG.md` to reflect the session persistence fixes, the UI interrupt message refactoring, and the security dependency updates.
