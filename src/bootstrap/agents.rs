@@ -156,7 +156,11 @@ pub async fn resolve_agent_and_conversation(
         a
     } else if let Some(local_id) = session.session.agent_id.clone() {
         match client.get_agent(&local_id).await {
-            Ok(a) => a,
+            Ok(a) => {
+                // Cross-sync: local session agent → global last_agent
+                let _ = settings.set_last_agent(&a.id);
+                a
+            }
             Err(_) => {
                 eprintln!("Local project agent {local_id} not found — falling back");
                 if let Some(last_id) = settings.last_agent().map(|s| s.to_string()) {
@@ -208,7 +212,11 @@ pub async fn resolve_agent_and_conversation(
         }
     } else if let Some(last_id) = settings.last_agent().map(|s| s.to_string()) {
         match client.get_agent(&last_id).await {
-            Ok(a) => a,
+            Ok(a) => {
+                // Cross-sync: global last_agent → local session
+                let _ = session.set_agent(a.id.clone(), Some(a.name.clone()));
+                a
+            }
             Err(_) => {
                 eprintln!("Previous agent {last_id} not found — creating new agent");
                 let a = client
