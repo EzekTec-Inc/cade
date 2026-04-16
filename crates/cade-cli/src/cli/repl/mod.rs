@@ -477,6 +477,23 @@ impl Repl {
             app.draw()?;
         }
 
+        // Show session context summary when resuming an existing agent.
+        {
+            let agent_id = self.agent_id();
+            let blocks = self.client.get_memory(&agent_id).await.unwrap_or_default();
+            let working_set = blocks.iter().find(|b| b.label == "working_set");
+            if let Some(ws) = working_set {
+                let summary = ws.value.lines().take(3).collect::<Vec<_>>().join("\n");
+                if !summary.trim().is_empty() {
+                    let mut app = self.app.lock();
+                    app.push_silent(RenderLine::SystemMsg(
+                        format!("  Context: {}", summary.trim()),
+                    ));
+                    app.draw()?;
+                }
+            }
+        }
+
         // SessionStart hook (non-blocking)
         self.hooks.session_start(&self.agent_id()).await;
 
