@@ -146,6 +146,20 @@ pub(crate) fn render_command_palette(
         // Pad label to fixed width for alignment
         let label_padded = format!("{:<width$}", label, width = max_label_w);
 
+        // Section tag — shown when query is active to help orient results
+        let section_tag = if !cp.query.is_empty() {
+            format!("  [{}]", cmd.section)
+        } else {
+            String::new()
+        };
+        let section_style = if is_selected {
+            Style::default()
+                .fg(colors.text_dim)
+                .bg(colors.bg_surface1)
+        } else {
+            colors.text_dim()
+        };
+
         lines.push(Line::from(vec![
             Span::styled(format!(" {} ", glyph), glyph_style),
             Span::styled(label_padded, label_style),
@@ -155,6 +169,7 @@ pub(crate) fn render_command_palette(
                 Style::default()
             }),
             Span::styled(desc, desc_style),
+            Span::styled(section_tag, section_style),
         ]));
     }
 

@@ -472,10 +472,17 @@ pub fn show_command_menu_with_caps(
             .iter()
             .enumerate()
             .map(|(i, item)| match item {
-                MenuItem::Header(name) => ListItem::new(Line::from(vec![
-                    Span::raw("  "),
-                    Span::styled(name.clone(), overlay::overlay_section_style(colors)),
-                ])),
+                MenuItem::Header(name) => {
+                    let rule_len = 40usize.saturating_sub(name.len() + 3);
+                    ListItem::new(Line::from(vec![
+                        Span::raw("  "),
+                        Span::styled(name.clone(), overlay::overlay_section_style(colors)),
+                        Span::styled(
+                            format!(" {}", "─".repeat(rule_len)),
+                            Style::default().fg(colors.border_base),
+                        ),
+                    ]))
+                },
                 MenuItem::Cmd { cmd, desc } => {
                     let is_sel = i == sel;
                     ListItem::new(Line::from(vec![
