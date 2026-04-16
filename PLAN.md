@@ -319,3 +319,28 @@
 **Previous behavior:** No integration test existed for dual-store safety.
 **New behavior:** 31 tests total (25 original + 6 session tests), all passing.
 **Rollback:** Remove the test function from session.rs.
+
+
+## 2026-04-16T03:15:00Z — feat(tui): UI/UX polish batch (4 items)
+
+**Summary:** Four low-effort, high-impact UI/UX improvements:
+
+1. **Toast auto-dismiss** — Toasts now expire after their TTL (3s default). Added `Toast::is_expired()`, hooked into `draw()`, the REPL idle input loop, and the turn-loop tick task.
+2. **Footer token counter** — Cumulative session token count shown in the footer bar in compact form (e.g. "1.2k↑", "50k↑"). Added `session_tokens` field to TuiApp, `format_token_count()` helper, and REPL sync.
+3. **Startup context summary** — On resume, fetches the `working_set` memory block and displays the first 3 lines as a "Context:" line in the startup banner.
+4. **Command menu section headers** — `/help` menu headers now include trailing rule lines. Inline command palette shows `[Section]` tags when filtering.
+
+**Files modified:**
+- `crates/cade-tui/src/app/mod.rs` — `Toast::is_expired()`, auto-dismiss in `draw()`, `session_tokens` field, test
+- `crates/cade-tui/src/app/input.rs` — toast-aware redraw in idle input loop
+- `crates/cade-tui/src/app/render.rs` — `session_tokens` param, footer token rendering
+- `crates/cade-tui/src/app/layout/helpers.rs` — `format_token_count()` + test
+- `crates/cade-tui/src/app/layout/command_palette.rs` — section tag rendering
+- `crates/cade-tui/src/menu.rs` — section header rule lines
+- `crates/cade-cli/src/cli/repl/mod.rs` — token sync to TuiApp, startup context fetch
+- `crates/cade-cli/src/cli/repl/turn_loop/agent.rs` — toast in tick redraw condition
+
+**Previous behavior:** Toasts persisted until overwritten. No token count in footer. No context on startup. Section headers minimal.
+**New behavior:** Toasts auto-dismiss after 3s. Footer shows "1.2k↑" token badge. Startup shows "Context: ..." from working_set. Section headers have visual rules.
+**Tests:** 574 workspace tests, all passing. New: `test_toast_expires_after_ttl`, `test_format_token_count`.
+**Rollback:** Restore checkpoint `before-ui-polish` (cp-412d3888).
