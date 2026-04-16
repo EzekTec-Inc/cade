@@ -1,3 +1,17 @@
+## 2026-04-16T01:15:00Z — feat: install_skill supports bare repo URLs and skill selection
+
+**Summary:** Enhanced `install_skill` tool to support the `npx skills add` ecosystem pattern. Users can now install skills from bare GitHub repo URLs (e.g., `https://github.com/github/awesome-copilot`) and `owner/repo` shorthand by providing a `skill` parameter to select which skill to install from a multi-skill repository.
+
+**Files modified:**
+- `crates/cade-core/src/skills/watcher.rs` — Added `resolve_github_repo_skill_url()` function; updated `install_skill_from_url()` signature to accept `skill_name: Option<&str>`; added resolution chain: repo+skill → tree/blob → direct URL
+- `crates/cade-core/src/skills/tests.rs` — Added 8 new tests for `resolve_github_repo_skill_url` (bare URL, shorthand, trailing slash, missing skill, non-GitHub, invalid owner/repo, path traversal)
+- `crates/cade-agent/src/tools/meta.rs` — Added `skill` parameter to `install_skill` tool schema
+- `crates/cade-agent/src/tools/runtime/skills.rs` — Extract and pass `skill` parameter to `install_skill_from_url()`
+
+**Previous behavior:** `install_skill` only accepted GitHub tree/blob URLs or direct SKILL.MD URLs. Bare repo URLs like `https://github.com/github/awesome-copilot` would fail.
+**New behavior:** `install_skill(url="https://github.com/github/awesome-copilot", skill="rust-mcp-server-generator")` resolves to the raw SKILL.md URL and installs it. Also supports `owner/repo` shorthand.
+**Rollback:** Revert commit or restore checkpoint `before-install-skill-enhancement`.
+
 ## 2026-04-12T21:09:00Z — TUI: Nerd Font icons for tool calls and results
 
 **Summary:** Added Nerd Font glyph icons for all tool call types (bash, file read/write, git, GitHub, memory, skills, subagents, web, etc.) and tool result status badges (success/error). Icons render automatically when `use_nerd_fonts` is true (default). Falls back to plain ASCII/Unicode (`▶`, `✓`, `✗`) when disabled.

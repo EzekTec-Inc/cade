@@ -208,6 +208,73 @@ fn non_github_url_returns_none() {
     assert!(github_url_to_raw_skill("https://example.com/skills").is_none());
 }
 
+// -- resolve_github_repo_skill_url (bare repo URL + skill name)
+
+#[test]
+fn resolve_bare_github_url_with_skill_name() {
+    let url = "https://github.com/github/awesome-copilot";
+    let result = resolve_github_repo_skill_url(url, Some("rust-mcp-server-generator"));
+    assert_eq!(
+        result,
+        Some("https://raw.githubusercontent.com/github/awesome-copilot/main/skills/rust-mcp-server-generator/SKILL.md".to_string())
+    );
+}
+
+#[test]
+fn resolve_bare_github_url_without_skill_name_returns_none() {
+    let url = "https://github.com/github/awesome-copilot";
+    let result = resolve_github_repo_skill_url(url, None);
+    assert!(result.is_none());
+}
+
+#[test]
+fn resolve_github_shorthand_with_skill_name() {
+    let source = "github/awesome-copilot";
+    let result = resolve_github_repo_skill_url(source, Some("rust-mcp-server-generator"));
+    assert_eq!(
+        result,
+        Some("https://raw.githubusercontent.com/github/awesome-copilot/main/skills/rust-mcp-server-generator/SKILL.md".to_string())
+    );
+}
+
+#[test]
+fn resolve_github_shorthand_without_skill_returns_none() {
+    let result = resolve_github_repo_skill_url("user/repo", None);
+    assert!(result.is_none());
+}
+
+#[test]
+fn resolve_bare_github_url_trailing_slash() {
+    let url = "https://github.com/github/awesome-copilot/";
+    let result = resolve_github_repo_skill_url(url, Some("my-skill"));
+    assert_eq!(
+        result,
+        Some("https://raw.githubusercontent.com/github/awesome-copilot/main/skills/my-skill/SKILL.md".to_string())
+    );
+}
+
+#[test]
+fn resolve_non_github_url_returns_none() {
+    let url = "https://example.com/repo";
+    let result = resolve_github_repo_skill_url(url, Some("my-skill"));
+    assert!(result.is_none());
+}
+
+#[test]
+fn resolve_shorthand_rejects_invalid_owner_repo() {
+    // Must be exactly owner/repo (2 segments)
+    assert!(resolve_github_repo_skill_url("just-one-segment", Some("s")).is_none());
+    assert!(resolve_github_repo_skill_url("a/b/c", Some("s")).is_none());
+}
+
+#[test]
+fn resolve_skill_name_is_sanitized() {
+    // Skill names with path traversal should be rejected
+    let url = "https://github.com/user/repo";
+    assert!(resolve_github_repo_skill_url(url, Some("../../../etc/passwd")).is_none());
+    assert!(resolve_github_repo_skill_url(url, Some("foo/bar")).is_none());
+}
+
 // -- discover_skills_in (filesystem)
 
 #[test]

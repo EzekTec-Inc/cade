@@ -211,18 +211,22 @@ fn schema_load_skill() -> Value {
 fn schema_install_skill() -> Value {
     json!({
         "name": "install_skill",
-        "description": "Download and install a skill from any URL that serves a SKILL.MD file. Accepts GitHub tree/blob URLs, skill registry URLs (e.g. https://agentskill.sh/@user/skill), or any direct URL to a SKILL.MD file. Use when the user asks to install a skill or pastes a skill install prompt.",
+        "description": "Download and install a skill from any URL that serves a SKILL.MD file. Accepts GitHub tree/blob URLs, bare GitHub repo URLs with a --skill selector (e.g. https://github.com/github/awesome-copilot), GitHub shorthand (owner/repo), skill registry URLs (e.g. https://agentskill.sh/@user/skill), or any direct URL to a SKILL.MD file. Use when the user asks to install a skill or pastes a skill install prompt.",
         "parameters": {
             "type": "object",
             "properties": {
                 "url": {
                     "type": "string",
-                    "description": "URL to install the skill from — GitHub URL, skill registry URL, or direct SKILL.MD URL"
+                    "description": "URL to install the skill from — GitHub URL, GitHub shorthand (owner/repo), skill registry URL, or direct SKILL.MD URL"
                 },
                 "scope": {
                     "type": "string",
                     "enum": ["project", "global"],
                     "description": "Where to install: project (.cade/skills/) or global (~/.cade/skills/)"
+                },
+                "skill": {
+                    "type": "string",
+                    "description": "Name of a specific skill to install from a multi-skill repository (e.g. 'rust-mcp-server-generator'). Required when the URL points to a repo root rather than a specific skill directory."
                 }
             },
             "required": ["url"]

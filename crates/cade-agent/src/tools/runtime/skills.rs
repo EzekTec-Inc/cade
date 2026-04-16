@@ -6,6 +6,7 @@ impl ToolRuntime {
     pub(crate) async fn handle_install_skill(&self, args: &Value) -> (String, bool) {
         let url = args["url"].as_str().unwrap_or("").trim().to_string();
         let scope = args["scope"].as_str().unwrap_or("project");
+        let skill_name = args["skill"].as_str().map(|s| s.trim()).filter(|s| !s.is_empty());
         if url.is_empty() {
             return ("Error: 'url' is required".to_string(), true);
         }
@@ -16,7 +17,7 @@ impl ToolRuntime {
         } else {
             self.cwd.join(".cade/skills")
         };
-        match cade_core::skills::install_skill_from_url(&url, &target_dir).await {
+        match cade_core::skills::install_skill_from_url(&url, &target_dir, skill_name).await {
             Ok(skill) => (
                 format!(
                     "Skill '{}' installed as [{}] in {} scope. It is now available via load_skill(\"{}\").",

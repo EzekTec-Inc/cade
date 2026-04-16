@@ -131,6 +131,66 @@ pub fn github_url_to_raw_skill(url: &str) -> Option<String> {
 
 // endregion: --- Tests
 
+/// Resolve a bare GitHub repo URL or `owner/repo` shorthand to a raw SKILL.md URL
+/// when a specific `skill_name` is provided.
+///
+/// Supports:
+/// - `https://github.com/owner/repo`  (bare repo URL)
+/// - `https://github.com/owner/repo/` (with trailing slash)
+/// - `owner/repo`                     (GitHub shorthand)
+///
+/// Combined with `skill_name`, resolves to:
+/// `https://raw.githubusercontent.com/{owner}/{repo}/main/skills/{skill_name}/SKILL.md`
+///
+/// Returns `None` if:
+/// - The URL is not a GitHub repo or shorthand
+/// - No `skill_name` is provided (we can't guess which skill)
+/// - The `skill_name` contains path traversal or invalid characters
+pub fn resolve_github_repo_skill_url(source: &str, skill_name: Option<&str>) -> Option<String> {
+    let skill = skill_name?;
+
+    // Validate skill name: no path traversal, no slashes, alphanumeric + hyphens only
+    if skill.is_empty()
+        || skill.contains('/')
+        || skill.contains('\\')
+        || skill.contains("..")
+        || !skill
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return None;
+    }
+
+    // Try to extract owner/repo from the source
+    let (owner, repo) = if source.contains("github.com") {
+        // Full URL: https://github.com/owner/repo[/]
+        let stripped = source
+            .trim_start_matches("https://github.com/")
+            .trim_start_matches("http://github.com/")
+            .trim_end_matches('/');
+
+        // Must be exactly owner/repo (no /tree/, /blob/, or deeper paths)
+        let parts: Vec<&str> = stripped.split('/').collect();
+        if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+            return None;
+        }
+        (parts[0], parts[1])
+    } else if !source.contains("://") && !source.contains(' ') {
+        // GitHub shorthand: owner/repo
+        let parts: Vec<&str> = source.split('/').collect();
+        if parts.len() != 2 || parts[0].is_empty() || parts[1].is_empty() {
+            return None;
+        }
+        (parts[0], parts[1])
+    } else {
+        return None;
+    };
+
+    Some(format!(
+        "https://raw.githubusercontent.com/{owner}/{repo}/main/skills/{skill}/SKILL.md"
+    ))
+}
+
 /// Write edited skill fields back to the SKILL.MD file on disk.
 /// fields: [name, description, category, tags_csv, triggers_csv, body]
 pub fn write_skill_to_disk(skill: &Skill, fields: &[String]) -> std::io::Result<()> {
@@ -173,13 +233,34 @@ pub fn write_skill_to_disk(skill: &Skill, fields: &[String]) -> std::io::Result<
 /// Download and install a skill from a URL into `target_dir/<skill-name>/SKILL.MD`.
 /// Returns the installed skill on success.
 ///
+/// Supports:
+/// - Direct SKILL.MD URLs
+/// - GitHub tree/blob URLs (resolved via `github_url_to_raw_skill`)
+/// - Bare GitHub repo URLs or `owner/repo` shorthand with `skill_name`
+///   (resolved via `resolve_github_repo_skill_url`)
+///
 /// Requires the `http` feature (enabled by default).
 #[cfg(feature = "http")]
-pub async fn install_skill_from_url(url: &str, target_dir: &Path) -> Result<Skill> {
-    // Resolve to raw content URL if needed
-    let raw_url = if url.contains("github.com") && url.contains("/tree/") {
+pub async fn install_skill_from_url(
+    url: &str,
+    target_dir: &Path,
+    skill_name: Option<&str>,
+) -> Result<Skill> {
+    // 1. Try bare repo URL + skill_name first
+    let resolved_from_repo = resolve_github_repo_skill_url(url, skill_name);
+
+    // 2. Then try tree/blob URL conversion
+    let raw_url = if let Some(resolved) = resolved_from_repo {
+        resolved
+    } else if url.contains("github.com") && (url.contains("/tree/") || url.contains("/blob/")) {
         github_url_to_raw_skill(url)
             .ok_or_else(|| Error::custom(format!("Cannot parse GitHub URL: {url}")))?
+    } else if url.contains("github.com") && skill_name.is_none() {
+        // Bare GitHub URL without --skill: we can't guess which skill
+        return Err(Error::custom(format!(
+            "Bare GitHub repo URL requires a 'skill' parameter to select which skill to install. \
+             Example: install_skill(url=\"{url}\", skill=\"my-skill-name\")"
+        )));
     } else {
         url.to_string()
     };
