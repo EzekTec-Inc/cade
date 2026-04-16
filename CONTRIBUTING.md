@@ -16,6 +16,8 @@ Thank you for your interest in contributing to CADE!
   sudo apt install xdotool     # X11
   sudo apt install ydotool     # Wayland
   ```
+- **Windows**: See [WINDOWS_SETUP.md](WINDOWS_SETUP.md) for MSVC build tools and `patch` utility setup
+- **macOS**: Xcode Command Line Tools required (`xcode-select --install`)
 
 ### Optional: Faster Builds (Linux)
 
@@ -51,23 +53,31 @@ ANTHROPIC_API_KEY=sk-ant-... ./target/debug/cade-server
 
 ## Project Structure
 
-CADE is a Cargo workspace with twelve crates. See [ARCHITECTURE.md](ARCHITECTURE.md)
+CADE is a Cargo workspace with fourteen crates. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for full details.
 
 ```
 cade-core       Shared types (permissions, settings, skills, hooks, toolsets)
 cade-ai         LLM providers and model catalogue
-cade-desktop    Desktop extensions (screen capture, window control)
-cade-server     HTTP API server + SQLite persistence
+cade-desktop    Desktop extensions (screen capture, window control) — cross-platform
+cade-store      SQLite persistence + AES-GCM crypto
+cade-server     HTTP API server + consolidation pipeline
 cade-agent      REST client, tool implementations, MCP, subagents
 cade-cli        Terminal UI (Ratatui) + REPL + headless mode
+cade-mcp        MCP server integration
+cade-web        Web search and scraping
+cade-tui        Standalone TUI component library
+cade-plugin     Plugin loading and manifests
+cade-sdk        Rust SDK for programmatic agent control
+cade-ide-mcp    IDE MCP bridge (editor integrations)
 ```
 
 ### Dependency Graph (acyclic)
 
 ```
 cade-core, cade-ai, cade-desktop    ← leaf crates (no workspace deps)
-cade-server  → cade-core, cade-ai
+cade-store   → cade-core, cade-ai
+cade-server  → cade-core, cade-ai, cade-store
 cade-agent   → cade-core, cade-desktop
 cade-cli     → cade-core, cade-agent, cade-ai
 ```
@@ -118,6 +128,12 @@ docs: update ARCHITECTURE.md for workspace split
 - **Bugs**: Include reproduction steps, expected vs actual behavior, and logs
 - **Security**: See [SECURITY.md](SECURITY.md) for responsible disclosure
 - **Features**: Describe the use case and proposed API/behavior
+
+## Architecture
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full dependency graph, module
+descriptions, data flow diagrams, memory/consolidation pipeline, and
+cross-platform support matrix.
 
 ## License
 

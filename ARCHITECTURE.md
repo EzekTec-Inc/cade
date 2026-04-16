@@ -1,228 +1,221 @@
-# Architecture of CADE
+# CADE Architecture
 
-CADE (Coding AI assistant with Desktop Extensions) is a stateful, self-improving
-AI coding agent that runs in the user's terminal. It gives an AI agent full access
-to the local development environment — shell, filesystem, desktop — and ships its
-own server, requiring no external platform.
+This document describes the internal architecture of CADE — a stateful, self-improving Rust CLI coding agent.
 
 ---
 
-## Workspace Layout
+## Workspace Overview
 
-CADE is a Cargo workspace with ten independent crates plus a root package that
-owns the two binaries (`cade` and `cade-server`).
-
-```
-CADE/
-├── Cargo.toml              # Workspace root + binary package
-├── src/
-│   ├── main.rs             # `cade` CLI entry point
-│   ├── lib.rs              # Re-exports workspace crates as `cade::*`
-│   └── bin/
-│       └── cade-server.rs  # `cade-server` entry point
-├── crates/
-│   ├── cade-agent/         # Client, tools, subagents
-│   ├── cade-ai/            # LLM providers & model registry
-│   ├── cade-cli/           # CLI orchestrator, headless mode
-│   ├── cade-core/          # Shared types, toolsets, hooks
-│   ├── cade-desktop/       # Desktop extensions (xcap, xdotool)
-│   ├── cade-mcp/           # MCP client integration
-│   ├── cade-plugin/        # WASM/dylib plugin system
-│   ├── cade-sdk/           # Developer SDK
-│   ├── cade-server/        # HTTP API + SQLite storage
-│   ├── cade-tui/           # Ratatui rendering engine
-│   └── cade-web/           # Web scraping and HTTP tools
-└── tests/                  # Integration tests
-```
-
-## Dependency Graph
+CADE is a Cargo workspace with **fourteen crates** and a root package that owns the two binaries (`cade` CLI and `cade-server`).
 
 ```
-cade-core       (standalone — permissions, settings, skills, hooks, toolsets)
-cade-ai         (standalone — LLM providers, registry, retry)
-cade-desktop    (standalone — screen capture, window control, notifications)
+src/
+├── main.rs                     # `cade` CLI entry point
+├── lib.rs                      # Re-exports workspace crates as cade::*
+└── bin/cade-server.rs          # `cade-server` entry point
 
-cade-server     → cade-core, cade-ai
-cade-agent      → cade-core, cade-desktop
-cade-cli        → cade-core, cade-agent, cade-ai
-
-cade (root)     → all crates (re-exports for binaries)
+crates/
+├── cade-core/                  # Shared types (no workspace deps)
+│   └── permissions, settings, skills, hooks, toolsets, capabilities,
+│       resources (context files)
+├── cade-ai/                    # LLM providers (no workspace deps)
+│   └── anthropic, openai, gemini, ollama, model catalogue
+├── cade-desktop/               # Desktop extensions (no workspace deps)
+│   └── capture, control, notify — cross-platform (Linux/macOS/Windows)
+├── cade-store/                 # SQLite persistence + crypto (→ cade-core, cade-ai)
+│   └── sqlite/ (agents, messages, conversations, memory, tools,
+│       providers, runs, evidence), crypto (AES-GCM encryption)
+├── cade-server/                # HTTP API + consolidation (→ cade-core, cade-ai, cade-store)
+│   └── api/, config, rate_limit, consolidation (sleeptime memory)
+├── cade-agent/                 # REST client + tool implementations (→ cade-core, cade-desktop)
+│   └── agent/ (client, session, consolidation), tools/, mcp/, subagents/
+├── cade-cli/                   # TUI + REPL (→ cade-core, cade-agent, cade-ai)
+│   └── cli/, ui/
+├── cade-mcp/                   # MCP (Model Context Protocol) server integration
+├── cade-web/                   # Web search and scraping capabilities
+├── cade-tui/                   # Standalone TUI component library (Ratatui)
+├── cade-plugin/                # Plugin loading and manifests
+├── cade-sdk/                   # Rust SDK for programmatic agent control
+└── cade-ide-mcp/               # IDE MCP bridge (editor integrations)
 ```
-
-The graph is **strictly acyclic**. Three leaf crates (`cade-core`, `cade-ai`,
-`cade-desktop`) have zero dependencies on other workspace crates, making them
-independently compilable and testable.
 
 ---
 
-## Crate Responsibilities
+## Dependency Graph (acyclic)
 
-### `cade-core`
+```
+cade-core, cade-ai, cade-desktop    ← leaf crates (zero workspace deps)
+cade-store   → cade-core, cade-ai
+cade-server  → cade-core, cade-ai, cade-store
+cade-agent   → cade-core, cade-desktop
+cade-cli     → cade-core, cade-agent, cade-ai
+cade-mcp     → cade-core
+cade-web     → (standalone)
+cade-tui     → (standalone)
+cade-plugin  → (standalone)
+cade-sdk     → cade-core, cade-agent
+```
 
-Shared types used across the workspace. No crate dependencies.
-
-| Module | Purpose |
-|--------|---------|
-| `permissions/` | `PermissionManager`, `PermissionMode` enum, allow/deny rules |
-| `settings/` | `SettingsManager`, global/local config, MCP server config |
-| `skills/` | Skill discovery, SKILL.md parsing, skill lifecycle |
-| `hooks/` | `HookEngine` — lifecycle hooks (PreToolUse, PostToolUse, Stop, etc.) |
-| `toolsets/` | `Toolset` enum — Default / Codex / Gemini tool families |
-
-### `cade-ai`
-
-LLM provider abstraction and model routing. No crate dependencies.
-
-| Module | Purpose |
-|--------|---------|
-| `lib.rs` | `LlmProvider` trait, `LlmRouter`, `CompletionRequest/Response`, `StreamChunk`, `TokenUsage`, `LlmMessage`, `AiConfig`, retry logic, preset providers |
-| `anthropic.rs` | Anthropic/Claude provider (extended thinking, streaming) |
-| `openai.rs` | OpenAI provider (Chat Completions + Responses API) |
-| `gemini.rs` | Google Gemini provider (thought signatures, vision) |
-| `ollama.rs` | Local Ollama provider (delegates to OpenAI-compatible API) |
-| `registry.rs` | Dynamic model pricing registry (`ModelRegistry`) |
-
-### `cade-desktop`
-
-Desktop integration extensions. No crate dependencies.
-
-| Module | Purpose |
-|--------|---------|
-| `capture.rs` | Screen capture via `xcap` → base64 PNG |
-| `control.rs` | Window focus, text typing, key presses, mouse control (`xdotool`/`ydotool`) |
-| `notify.rs` | OS desktop notifications via `notify-rust` |
-
-### `cade-server`
-
-HTTP API server and persistence layer. Depends on `cade-core` and `cade-ai`.
-
-| Module | Purpose |
-|--------|---------|
-| `api/mod.rs` | Axum router with all REST endpoints |
-| `api/agents.rs` | Agent CRUD, tools attachment, memory blocks, conversations |
-| `api/messages.rs` | Message send/stream, context building, auto-compaction |
-| `api/providers.rs` | LLM provider management (add/remove/list) |
-| `api/models.rs` | Live model listing from all providers |
-| `api/runs.rs` | Background run status/streaming |
-| `api/tools.rs` | Tool registration |
-| `api/auth.rs` | Bearer token authentication middleware |
-| `api/health.rs` | Health check and server config endpoints |
-| `config.rs` | `ServerConfig` from env vars, provider auto-detection |
-| `state.rs` | `AppState` — shared Axum state (DB, LLM, config) |
-| `storage/sqlite.rs` | SQLite persistence (agents, messages, tools, providers, memory) |
-| `crypto.rs` | AES-256-GCM encryption for sensitive data at rest |
-| `rate_limit.rs` | Per-agent token-bucket rate limiter |
-
-### `cade-agent`
-
-Agent client, tool implementations, MCP, and subagents. Depends on `cade-core` and `cade-desktop`.
-
-| Module | Purpose |
-|--------|---------|
-| `agent/client.rs` | `CadeClient` — REST client for cade-server, SSE streaming |
-| `agent/session.rs` | Per-directory session persistence |
-| `agent/tools.rs` | Tool registration with the server |
-| `tools/manager.rs` | Tool dispatch registry |
-| `tools/bash.rs` | Shell execution (streaming output) |
-| `tools/fs.rs` | Read/Write/Edit/ApplyPatch with sandbox support |
-| `tools/search.rs` | Grep and glob search |
-| `tools/desktop.rs` | Desktop tool wrappers |
-| `tools/ask.rs` | `ask_user_question` tool |
-| `tools/plan.rs` | Planning tools (EnterPlanMode, Todos, etc.) |
-| `mcp/` | MCP client — spawn and manage local MCP servers |
-| `subagents/` | Subagent runner (spawn ephemeral agents for parallel tasks) |
-
-### `cade-cli`
-
-Terminal UI and REPL. Depends on `cade-core`, `cade-agent`, and `cade-ai`.
-
-| Module | Purpose |
-|--------|---------|
-| `cli/repl.rs` | Interactive REPL, slash commands, tool execution loop, streaming |
-| `cli/headless.rs` | Headless `-p` mode for CI/scripting |
-| `cli/args.rs` | CLI argument parsing (clap) |
-| `cli/export_import.rs` | Agent export/import |
-| `ui/app.rs` | Main TUI application (`TuiApp`), Ratatui rendering, key handling |
-| `ui/editor.rs` | `Editor` component — text buffer, undo/redo, bracketed paste |
-| `ui/component.rs` | `Component` trait for unified render/input interface |
-| `ui/autocomplete.rs` | Tab path completion, `@` fuzzy file picker |
-| `ui/markdown.rs` | Markdown → Ratatui spans (pulldown-cmark AST parser) |
-| `ui/question.rs` | Interactive question/approval prompts |
-| `ui/menu.rs` | `/help` menu system |
-| `ui/skills.rs` | `/skills` browser overlay |
+All dependencies flow downward. No circular references.
 
 ---
 
-## Key Data Flows
+## Data Flow
 
-### User Message → LLM Response
-
-```
-User input → TuiApp → Repl::agent_turn()
-  → CadeClient::stream_message_cancellable()        [HTTP SSE to cade-server]
-    → cade-server: build_context() + LlmProvider::stream()  [LLM API call]
-    → SSE chunks back to CLI
-  → UI consumer task → TuiApp::push_streaming_chunk()  [throttled ~60 FPS]
-  → Tool calls? → dispatch() → execute → stream_tool_return_cancellable()
-  → Loop until no more tool calls
-```
-
-### Streaming Architecture (R-01..R-04)
+### Agent Lifecycle
 
 ```
-SSE token → on_event → ui_tx.send()    [non-blocking channel send, ~0µs]
-                           ↓
-UI task   → ui_rx.recv() → app.lock() → draw_throttled()  [max ~60 FPS]
+CLI (main.rs)
+    │
+    ├── bootstrap/agents.rs  → resolve_agent_and_conversation()
+    │   Resolution order:
+    │   1. CLI flags (--new-agent, --agent <id>, --name <query>)
+    │   2. Local project agent (.cade/settings.local.json → agent_id)
+    │   3. Global last agent (~/.cade/settings.json → last_agent_id)
+    │   4. Create new agent (fallback)
+    │
+    ├── bootstrap/tools.rs   → register_and_attach_with_caps_filtered()
+    ├── bootstrap/memory.rs  → seed_default_memory()
+    └── bootstrap/prompt.rs  → build_system_prompt(capabilities)
+            │
+            ▼
+        REPL / Headless loop
+            │
+            ▼
+    cade-agent ──HTTP──► cade-server ──► LLM provider
+                              │
+                              ▼
+                         cade-store (SQLite)
 ```
 
-Network I/O is fully decoupled from TUI rendering. The tick task handles
-input events and thinking animations on a separate loop.
+### Message Processing
+
+```
+User input → cade-agent → POST /v1/agents/:id/messages/stream → cade-server
+                                                                      │
+                                                              LLM provider call
+                                                                      │
+                                                              SSE stream back
+                                                                      │
+                                                            Tool call routing
+                                                                      │
+                                                            Tool execution
+                                                            (local on client)
+                                                                      │
+                                                            Result → server
+                                                                      │
+                                                            Continue streaming
+```
+
+### Tool Selection Pipeline
+
+```
+Available tools (from capabilities + MCP servers)
+    │
+    ├── ITS (Intelligent Tool Selection)
+    │   Cross-encoder reranking via ONNX ms-marco-MiniLM-L-6-v2
+    │   or cloud API for tool relevance scoring
+    │
+    ├── Toolset filtering (default / codex / gemini)
+    │   Adapts edit tools per model family
+    │
+    └── --tools CLI filter (optional)
+        Restricts what's registered in the LLM context window
+```
+
+---
+
+## Memory & Consolidation Pipeline
+
+### Memory Blocks
+
+| Block | Purpose | Lifecycle |
+|-------|---------|-----------|
+| `persona` | Agent identity and style | Persistent, always injected |
+| `human` | Facts about the user | Persistent, always injected |
+| `project` | Project context, stack, conventions | Persistent, always injected |
+| `session_summary` | Auto-generated summary of older turns | Auto-updated by consolidation |
+| `working_set` | Current task, files modified, next steps | Auto-pinned after consolidation |
+| `skills` | Available skills listing | Injected on startup |
+
+### Sleeptime Consolidation
+
+When the context window approaches its budget, CADE runs the consolidation pipeline (`crates/cade-server/src/server/consolidation.rs`):
+
+1. **Budget-aware turn assembly** — selects turns that fit within the token budget
+2. **Pre-LLM artifact extraction** — `extract_artifacts()` scans messages before truncation for:
+   - File paths (`src/foo/bar.rs`)
+   - Function names (`my_func()`)
+   - Error IDs (`RUSTSEC-2025-0009`, `error[E0433]`)
+   - Error lines (`error: cannot find type...`)
+3. **LLM summarization** — generates a narrative summary with:
+   - `SEARCH ANCHORS:` section (up to 8 keywords for `conversation_search`)
+   - Exact paths, function names, errors, and rejected-alternative reasoning
+4. **Token limits** — `SUMMARY_MAX_TOKENS=900`, `SESSION_SUMMARY_MAX_CHARS=4500`
+5. **Auto-pin** — `working_set` block is auto-pinned after consolidation to prevent aging out at the 80-turn stale threshold
+
+### Memory Aging
+
+- Blocks idle for 80+ turns are archived (replaced with label + excerpt in prompt)
+- Archived blocks are auto-promoted back when matched by `search_memory()`
+- Pinned blocks (e.g., `working_set`) are exempt from aging
+
+---
+
+## Settings Resolution
+
+Settings are layered with increasing specificity:
+
+```
+Global:   ~/.cade/settings.json           (API keys, default model, hooks)
+Project:  .cade/settings.json             (project-level overrides, MCP servers)
+Local:    .cade/settings.local.json       (per-user, gitignored — agent ID, permissions)
+CLI:      --flags and env vars            (highest priority)
+```
+
+Merge logic is in `crates/cade-core/src/settings/resolver.rs`.
+
+---
+
+## Cross-Platform Support
+
+| Component | Linux | macOS | Windows |
+|-----------|-------|-------|---------|
+| Shell execution | `bash -c` | `bash -c` | `cmd.exe /C` |
+| Notifications | D-Bus (urgency) | macOS sound | Windows Toast |
+| Screen capture | xcap (X11/Wayland) | xcap | Windows capture APIs |
+| Input control | xdotool/ydotool | macOS Accessibility | Windows input APIs |
+| File operations | ✓ | ✓ | ✓ |
+| Git integration | ✓ | ✓ | ✓ |
+| Docker backend | ✓ | ✓ | ✓ (Docker Desktop) |
+| SSH backend | ✓ | ✓ | ✓ |
+
+See [WINDOWS_SETUP.md](WINDOWS_SETUP.md) for Windows-specific instructions.
 
 ---
 
 ## Security Model
 
-- Bash commands require explicit approval (unless `--yolo`)
-- File tools respect optional `CADE_FS_ROOT` sandbox
-- `apply_patch` validates paths against traversal attacks
-- Headless output is sanitized against ANSI injection
-- Server auth via Bearer token with constant-time comparison
-- Encryption at rest for sensitive DB fields (AES-256-GCM)
-- Settings files created with 0600 permissions
+See [SECURITY.md](SECURITY.md) for the full security model, threat assumptions, and hardening options.
 
-See [SECURITY.md](SECURITY.md) for full details.
+Key principles:
+- **SQLite WAL mode** for concurrent read/write integrity
+- **AES-GCM encryption** for stored API keys (`cade-store/src/crypto.rs`)
+- **Permission modes** control tool execution (default, acceptEdits, plan, bypassPermissions)
+- **Hooks** allow user-defined audit/block scripts at lifecycle events
+- **Zero-panic safety** — no unhandled `unwrap()`/`expect()` in production code
 
-## Capability System
+---
 
-CADE organizes optional features into **capability packs** controlled by
-**profiles**.
+## Editor Integrations
 
-### Capabilities
+| Editor | Location | Features |
+|--------|----------|----------|
+| Neovim | `plugins/cade.nvim/` | Ghost-text completions, streaming SSE, partial acceptance |
+| VS Code | `editors/vscode/` | Inline completions, streaming, status bar toggle |
 
-| Capability | Description |
-|---|---|
-| `agentic` | Subagents, agent messaging, reflection, artifacts |
-| `desktop` | Screenshots, window control, notifications |
-| `web` | Web search, fetch docs, browser screenshot |
-| `mcp` | MCP server management and external tools |
-| `clipboard-images` | Image paste from clipboard |
-| `syntax-highlighting` | Syntax highlighting in TUI |
-| `advanced-memory` | Typed memory, evidence linking |
-| `integration` | SDK, RPC, plugin embedding |
+Both use the stateless `/v1/agents/:id/complete` endpoint — no conversation pollution.
 
-### Profiles
+---
 
-- **Core** — coding tools + memory + checkpoints
-- **Pro** — Core + agentic
-- **Full** — everything (default)
-
-### Resolution
-
-Effective capabilities = profile baseline + `enable_capabilities` - `disable_capabilities`.
-
-### Key files
-
-- `crates/cade-core/src/capabilities/mod.rs` — `Capability`, `CapabilitySet`, `Profile`
-- `crates/cade-agent/src/tools/catalog.rs` — capability-aware tool filtering
-- `crates/cade-cli/src/cli/repl/capability_gate.rs` — command gating helpers
-- `src/bootstrap/tools.rs` — `register_and_attach_with_caps()`
+Built by [EzekTec Inc.](https://github.com/EzekTec-Inc) · Apache-2.0 / MIT

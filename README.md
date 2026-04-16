@@ -247,19 +247,43 @@ CADE remembers the last agent per directory:
 | `.cade/settings.local.json` | Per-project (gitignored) | Last agent for this directory |
 | `~/.cade/settings.json` | Global | API key, global last agent, permissions, hooks |
 
+### Agent Resolution Order
+
+On startup, CADE resolves the agent in this priority order:
+
+1. **CLI flags** — `--new-agent`, `--agent <id>`, or `--name <query>`
+2. **Local project agent** — `agent_id` from `.cade/settings.local.json`
+3. **Global last agent** — `last_agent_id` from `~/.cade/settings.json`
+4. **Create new** — fallback if no saved agent is found
+
 ---
 
 ## Memory System
 
-The agent has three persistent memory blocks, updated via `update_memory`:
+The agent has persistent memory blocks, updated via `update_memory`:
 
 | Block | Purpose |
 |-------|---------|
 | `persona` | Agent identity and working style |
 | `human` | Facts about the user (name, preferences) |
 | `project` | Current project context, tech stack, conventions |
+| `working_set` | Current task, files modified, next steps (auto-pinned) |
+| `session_summary` | Auto-generated summary of older conversation turns |
 
 Memory persists across sessions — the agent builds up context over time.
+
+### Memory Aging & Consolidation
+
+- Blocks idle for 80+ turns are **archived** (replaced with label + excerpt in the prompt)
+- Archived blocks are **auto-promoted** back when matched by `search_memory()`
+- **Pinned blocks** (e.g., `working_set`) are exempt from aging
+
+When the context window fills, CADE runs **sleeptime consolidation**:
+1. Extracts key artifacts (file paths, function names, error IDs) from messages before truncation
+2. Generates an LLM summary with search anchors for later retrieval
+3. Stores the summary in `session_summary` and auto-pins `working_set`
+
+See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full consolidation pipeline.
 
 ---
 
@@ -443,17 +467,26 @@ cade
 
 ## Desktop Extensions
 
-CADE runs on Linux with Wayland or X11.
+CADE's desktop tools work cross-platform on **Linux**, **macOS**, and **Windows**.
 
-**Screen capture** requires no extra dependencies (uses `xcap`).
+| Feature | Linux | macOS | Windows |
+|---------|-------|-------|---------|
+| Screen capture | xcap (X11/Wayland) | xcap | Windows capture APIs |
+| Window control | xdotool (X11) / ydotool (Wayland) | macOS Accessibility | Windows input APIs |
+| Notifications | D-Bus (urgency) | macOS sound | Windows Toast |
 
-**Window control** requires `xdotool` (X11) or `ydotool` (Wayland):
+**Linux dependencies** (optional):
 ```bash
+# Screen capture on Wayland
+sudo apt install libpipewire-0.3-dev libclang-dev libgbm-dev
+# Window control
 sudo apt install xdotool     # X11
 sudo apt install ydotool     # Wayland
 ```
 
-**Notifications** use the system DBus notification daemon (pre-installed on most desktops).
+**Notifications** use the system notification daemon (pre-installed on most desktops).
+
+See [WINDOWS_SETUP.md](WINDOWS_SETUP.md) for Windows-specific instructions.
 
 ---
 
@@ -477,7 +510,7 @@ cargo install --path .
 
 ## Project Structure
 
-CADE is a Cargo workspace with twelve independent crates:
+CADE is a Cargo workspace with fourteen independent crates:
 
 ```
 src/
@@ -487,13 +520,16 @@ src/
 
 crates/
 ├── cade-core/                  # Shared types (no crate deps)
-│   └── permissions, settings, skills, hooks, toolsets
+│   └── permissions, settings, skills, hooks, toolsets, capabilities
 ├── cade-ai/                    # LLM providers (no crate deps)
 │   └── anthropic, openai, gemini, ollama, catalogue
 ├── cade-desktop/               # Desktop extensions (no crate deps)
-│   └── capture, control, notify
-├── cade-server/                # HTTP API + SQLite (→ cade-core, cade-ai)
-│   └── api/, storage/, config, crypto, rate_limit
+│   └── capture, control, notify — cross-platform (Linux/macOS/Windows)
+├── cade-store/                 # SQLite persistence + crypto (→ cade-core, cade-ai)
+│   └── sqlite/ (agents, messages, conversations, memory, tools,
+│       providers, runs, evidence), crypto (AES-GCM encryption)
+├── cade-server/                # HTTP API + consolidation (→ cade-core, cade-ai, cade-store)
+│   └── api/, config, rate_limit, consolidation
 ├── cade-agent/                 # Client + tools (→ cade-core, cade-desktop)
 │   └── agent/, tools/, mcp/, subagents/
 ├── cade-cli/                   # TUI + REPL (→ cade-core, cade-agent, cade-ai)
@@ -502,7 +538,8 @@ crates/
 ├── cade-web/                   # Web search and scraping capabilities
 ├── cade-tui/                   # Standalone TUI component library
 ├── cade-plugin/                # Plugin loading and manifests
-└── cade-sdk/                   # Rust SDK for programmatic agent control
+├── cade-sdk/                   # Rust SDK for programmatic agent control
+└── cade-ide-mcp/               # IDE MCP bridge (editor integrations)
 ```
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full dependency graph, module
@@ -512,8 +549,9 @@ descriptions, and data flow diagrams.
 
 ## Security
 
-See [`SECURITY.md`](SECURITY.md) for CADE's security model, threat assumptions,
-configuration hardening options, and reporting guidance.
+See [`SECURITY.md`](SECURITY.md) for CADE's security model, trust boundaries, threat
+assumptions, permission modes, hook-based auditing, configuration hardening
+options, and vulnerability reporting guidance.
 
 ---
 

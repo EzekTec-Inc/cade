@@ -101,6 +101,12 @@ On first launch, CADE will:
 3. Generate a random agent ID and remember it in `.cade/settings.local.json`
 4. Load available tools (bash, read_file, write_file, edit_file, grep, glob, etc.)
 
+On subsequent launches, CADE resolves your agent in this order:
+1. **CLI flags** (`--agent <id>`, `--name <query>`, `--new-agent`)
+2. **Local project agent** from `.cade/settings.local.json`
+3. **Global last agent** from `~/.cade/settings.json`
+4. **Create new** (fallback)
+
 Then you can start typing prompts:
 ```
 You: Fix the bug in src/main.rs where...
@@ -258,12 +264,13 @@ If `patch --version` fails, reinstall Git for Windows and select the option to a
 ## Next Steps
 
 1. **Read the [README.md](README.md)** for CLI usage and command reference
-2. **Try a simple prompt:**
+2. **Read the [ARCHITECTURE.md](ARCHITECTURE.md)** for internal architecture and data flow
+3. **Try a simple prompt:**
    ```
    cade> List all Rust files in src/ and show their line counts
    ```
-3. **Set up your project context** via `/init` or `/memory set project ...`
-4. **Use slash commands** — type `/help` inside CADE for full reference
+4. **Set up your project context** via `/init` or `/memory set project ...`
+5. **Use slash commands** — type `/help` inside CADE for full reference
 
 ---
 
