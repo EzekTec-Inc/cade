@@ -344,3 +344,30 @@
 **New behavior:** Toasts auto-dismiss after 3s. Footer shows "1.2k↑" token badge. Startup shows "Context: ..." from working_set. Section headers have visual rules.
 **Tests:** 574 workspace tests, all passing. New: `test_toast_expires_after_ttl`, `test_format_token_count`.
 **Rollback:** Restore checkpoint `before-ui-polish` (cp-412d3888).
+
+## 2026-04-16T05:29:00Z — chore: dependency modernization (security audit fixes)
+
+**Summary:** Upgraded transitive dependencies to resolve 4 `cargo audit` advisories (all transitive). Simplified MCP HTTP transport code by leveraging rmcp 1.4's native auth/header support.
+
+**Upgrades:**
+- `scraper` 0.19 → **0.26** — fixes `fxhash` (RUSTSEC-2025-0057) + `rand 0.8` (unsound)
+- `ratatui` 0.29 → **0.30** — fixes `lru 0.12.5` (RUSTSEC-2026-0002, unsound) + drops `paste`
+- `tui-textarea` 0.7 → **`tui-textarea-2` 0.10** — maintained fork compatible with ratatui 0.30
+- `ansi-to-tui` 7 → **8** — compatible with ratatui 0.30 (uses ratatui-core)
+- `crossterm` 0.28 → **0.29** — aligned with ratatui 0.30
+- `rmcp` 0.2 → **1.4** — fixes `paste` (RUSTSEC-2024-0436, uses `pastey` instead)
+
+**Files modified:**
+- `Cargo.toml` — workspace dependency versions (ratatui, crossterm, ansi-to-tui, rmcp)
+- `crates/cade-web/Cargo.toml` — scraper 0.19 → 0.26
+- `crates/cade-tui/Cargo.toml` — tui-textarea → tui-textarea-2
+- `crates/cade-mcp/Cargo.toml` — removed reqwest dep, added http crate
+- `crates/cade-mcp/src/lib.rs` — rmcp API migration: unified HTTP transport, builder-pattern CallToolRequestParams, RawContent wildcard arm
+
+**Remaining advisories (accepted risk):**
+- `bincode 1.3.3` via syntect — no upstream fix, syntect 5.3.0 is latest
+- `rand 0.8.5` via phf_generator → termwiz — platform-gated (not compiled for our target)
+
+**Previous behavior:** 5 cargo audit warnings, separate SSE/Streamable-HTTP code paths in MCP client
+**New behavior:** 2 audit warnings (accepted), unified HTTP transport with native auth support
+**Rollback:** restore checkpoint `before-dep-upgrades` (cp-4d230378)

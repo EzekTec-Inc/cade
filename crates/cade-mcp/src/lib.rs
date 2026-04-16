@@ -27,7 +27,7 @@ pub use error::{Error, Result};
 pub mod watcher;
 use rmcp::{
     RoleClient, ServiceExt,
-    model::{CallToolRequestParam, RawContent},
+    model::{CallToolRequestParams, RawContent},
     service::RunningService,
     transport::TokioChildProcess,
 };
@@ -313,12 +313,10 @@ impl McpManager {
             ))));
         }
 
-        let arguments = args.as_object().cloned();
         let call_result = peer
-            .call_tool(CallToolRequestParam {
-                name: original_name.into(),
-                arguments,
-            })
+            .call_tool(CallToolRequestParams::new(original_name).with_arguments(
+                args.as_object().cloned().unwrap_or_default(),
+            ))
             .await;
 
         let call_err = match call_result {
@@ -377,13 +375,11 @@ impl McpManager {
                         .map(|t| t.original_name.clone());
 
                     let call_result = if let Some(orig) = original_name {
-                        let arguments = args.as_object().cloned();
                         new_server
                             .peer
-                            .call_tool(CallToolRequestParam {
-                                name: orig.into(),
-                                arguments,
-                            })
+                            .call_tool(CallToolRequestParams::new(orig).with_arguments(
+                                args.as_object().cloned().unwrap_or_default(),
+                            ))
                             .await
                     } else {
                         // Tool disappeared after reconnect — server API changed
@@ -493,47 +489,36 @@ impl McpManager {
 
     /// Connect via HTTP+SSE or Streamable HTTP (remote servers).
     ///
-    /// When `config.auth_token` is set, it is sent as `Authorization: Bearer <token>`
-    /// on every HTTP request via a pre-configured `reqwest::Client` default header.
-    /// Custom headers in `config.headers` are also injected, with support for
-    /// environment variable interpolation (e.g. `${MY_KEY}`).
+    /// Uses rmcp's unified `StreamableHttpClientTransport` which auto-detects
+    /// SSE vs Streamable HTTP on the server side. Auth tokens and custom headers
+    /// are injected via `StreamableHttpClientTransportConfig`.
     async fn connect_server_http(
         key: &str,
         config: &McpServerConfig,
         url: &str,
     ) -> Result<McpServer> {
-        use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
-        use rmcp::transport::{
-            SseClientTransport,
-            sse_client::SseClientConfig,
-            streamable_http_client::{
-                StreamableHttpClientTransportConfig, StreamableHttpClientWorker,
-            },
+        use http::{HeaderName, HeaderValue};
+        use rmcp::transport::streamable_http_client::{
+            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
         };
 
-        let mut headers = HeaderMap::new();
+        let mut transport_config = StreamableHttpClientTransportConfig::with_uri(url);
 
-        // 1. Inject Bearer token (legacy / convenient)
+        // 1. Inject Bearer token
         if let Some(token) = &config.auth_token {
-            let mut value = HeaderValue::from_str(&format!("Bearer {token}"))
-                .map_err(|e| Error::custom(format!("invalid auth_token for '{key}': {e}")))?;
-            value.set_sensitive(true);
-            headers.insert(AUTHORIZATION, value);
+            transport_config = transport_config.auth_header(format!("Bearer {token}"));
         }
 
-        // 2. Inject custom headers with environment interpolation
+        // 2. Inject custom headers with environment variable interpolation
         if let Some(custom_headers) = &config.headers {
+            let mut headers = std::collections::HashMap::new();
             for (k, v) in custom_headers {
                 let header_name = HeaderName::from_bytes(k.as_bytes()).map_err(|e| {
                     Error::custom(format!("invalid header name '{k}' for '{key}': {e}"))
                 })?;
 
-                // Extremely lightweight interpolation for `${VAR}` or `$VAR`
-                // We use cade_core's agent_env expansion if available, or just a simple regex/replace.
-                // For simplicity, we just use regex or manual parsing.
+                // Lightweight interpolation for `${VAR}` style
                 let mut interpolated = v.to_string();
-
-                // Process ${VAR} style
                 while let Some(start) = interpolated.find("${") {
                     if let Some(end) = interpolated[start..].find('}') {
                         let end_idx = start + end;
@@ -545,62 +530,21 @@ impl McpManager {
                     }
                 }
 
-                let mut value = HeaderValue::from_str(&interpolated).map_err(|e| {
+                let value = HeaderValue::from_str(&interpolated).map_err(|e| {
                     Error::custom(format!("invalid header value for '{k}' in '{key}': {e}"))
                 })?;
-
-                // Heuristically mark sensitive headers
-                if k.to_lowercase().contains("auth")
-                    || k.to_lowercase().contains("key")
-                    || k.to_lowercase().contains("token")
-                {
-                    value.set_sensitive(true);
-                }
-
                 headers.insert(header_name, value);
             }
+            transport_config = transport_config.custom_headers(headers);
         }
 
-        let http_client = if !headers.is_empty() {
-            reqwest::Client::builder()
-                .default_headers(headers)
-                .build()
-                .map_err(|e| Error::custom(format!("build http client for '{key}': {e}")))?
-        } else {
-            reqwest::Client::default()
-        };
-
-        // Decide which transport to use based on the URL path.
-        let use_sse = url.contains("/sse") || url.ends_with("/sse");
-
-        let (service, peer) = if use_sse {
-            info!("MCP server '{key}': connecting via SSE → {url}");
-            let sse_config = SseClientConfig {
-                sse_endpoint: url.into(),
-                ..Default::default()
-            };
-            let transport = SseClientTransport::start_with_client(http_client, sse_config)
-                .await
-                .map_err(|e| Error::custom(format!("SSE connect to '{key}' ({url}): {e}")))?;
-            let service: RunningService<RoleClient, ()> = ()
-                .serve(transport)
-                .await
-                .map_err(|e| Error::custom(format!("SSE handshake with '{key}': {e}")))?;
-            let peer = service.peer().clone();
-            (service, peer)
-        } else {
-            info!("MCP server '{key}': connecting via Streamable HTTP → {url}");
-            let sh_config = StreamableHttpClientTransportConfig {
-                uri: url.into(),
-                ..Default::default()
-            };
-            let worker = StreamableHttpClientWorker::new(http_client, sh_config);
-            let service: RunningService<RoleClient, ()> = ().serve(worker).await.map_err(|e| {
-                Error::custom(format!("Streamable HTTP handshake with '{key}': {e}"))
-            })?;
-            let peer = service.peer().clone();
-            (service, peer)
-        };
+        info!("MCP server '{key}': connecting via HTTP → {url}");
+        let transport = StreamableHttpClientTransport::from_config(transport_config);
+        let service: RunningService<RoleClient, ()> = ()
+            .serve(transport)
+            .await
+            .map_err(|e| Error::custom(format!("HTTP handshake with '{key}' ({url}): {e}")))?;
+        let peer = service.peer().clone();
 
         Self::build_server_from_peer(key, config, peer, service, format!("[http] {url}")).await
     }
@@ -776,6 +720,7 @@ fn extract_content_text(content: &[rmcp::model::Content]) -> String {
                 rmcp::model::ResourceContents::TextResourceContents { text, .. } => text.clone(),
                 _ => "[binary resource]".to_string(),
             },
+            _ => "[unsupported content]".to_string(),
         })
         .collect::<Vec<_>>()
         .join("\n")
