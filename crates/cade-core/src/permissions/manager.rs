@@ -198,6 +198,7 @@ impl PermissionManager {
         ) && let Some(path) = arg_ref
             && (path.contains(".cade/settings.json")
                 || path.contains("settings.local.json")
+                || path.contains("session.json")
                 || path.contains(".cade/skills/"))
         {
             return Verdict::Ask(

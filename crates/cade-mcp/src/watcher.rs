@@ -1,9 +1,9 @@
 //! File watcher for MCP settings files.
 //!
-//! Watches `~/.cade/settings.json`, `.cade/settings.json`, and
-//! `.cade/settings.local.json` for writes.  Any change sends `()` on the
-//! returned channel so the REPL can trigger a live MCP reload without
-//! restarting.
+//! Watches `~/.cade/settings.json`, `.cade/settings.json`,
+//! `.cade/settings.local.json`, and `.cade/session.json` for writes.
+//! Any change sends `()` on the returned channel so the REPL can trigger
+//! a live MCP reload without restarting.
 //!
 //! Mirrors the skill watcher in `crate::skills::spawn_skill_watcher` exactly.
 
@@ -74,7 +74,11 @@ pub fn spawn_mcp_watcher(cwd: &Path) -> tokio::sync::mpsc::Receiver<()> {
                     let is_settings = event.paths.iter().any(|p| {
                         p.file_name()
                             .and_then(|n| n.to_str())
-                            .map(|n| n == "settings.json" || n == "settings.local.json")
+                            .map(|n| {
+                                n == "settings.json"
+                                    || n == "settings.local.json"
+                                    || n == "session.json"
+                            })
                             .unwrap_or(false)
                     });
                     if relevant && is_settings {
