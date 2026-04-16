@@ -232,6 +232,13 @@ pub struct Toast {
     pub ttl: std::time::Duration,
 }
 
+impl Toast {
+    /// Returns true if the toast has lived past its TTL.
+    pub fn is_expired(&self) -> bool {
+        self.created_at.elapsed() >= self.ttl
+    }
+}
+
 // -- ActiveQuestionState
 #[derive(Debug, Clone)]
 pub struct ActiveQuestionDrawState {
@@ -540,6 +547,12 @@ impl TuiApp {
     pub fn draw(&mut self) -> Result<()> {
         self.draw_dirty = false;
         self.last_draw_at = Instant::now();
+        // Auto-dismiss expired toasts
+        if let Some(t) = &self.toast {
+            if t.is_expired() {
+                self.toast = None;
+            }
+        }
         self.tick_streaming_reveal();
         self.tick_smooth_scroll();
         self.draw_impl()
@@ -949,6 +962,24 @@ mod tests {
         assert_eq!(snap_to_char_boundary(s, 3), 1);  // still inside emoji
         assert_eq!(snap_to_char_boundary(s, 4), 1);  // still inside emoji
         assert_eq!(snap_to_char_boundary(s, 5), 5);  // after emoji — valid
+    }
+    #[test]
+    fn test_toast_expires_after_ttl() {
+        let toast = Toast {
+            message: "hello".to_string(),
+            level: ToastLevel::Success,
+            created_at: Instant::now() - std::time::Duration::from_secs(5),
+            ttl: std::time::Duration::from_secs(3),
+        };
+        assert!(toast.is_expired(), "toast should be expired after TTL");
+
+        let fresh = Toast {
+            message: "fresh".to_string(),
+            level: ToastLevel::Info,
+            created_at: Instant::now(),
+            ttl: std::time::Duration::from_secs(3),
+        };
+        assert!(!fresh.is_expired(), "fresh toast should not be expired");
     }
 }
 

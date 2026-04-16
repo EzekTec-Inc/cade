@@ -103,11 +103,12 @@ impl Repl {
                             }
                         }
                         // R-01: Only draw if the app has pending state changes
-                        // (draw_dirty) or the thinking animation needs refreshing.
+                        // (draw_dirty), the thinking animation needs refreshing,
+                        // or a toast is active and may need auto-dismissal.
                         // This avoids redundant full-screen redraws when nothing
                         // has changed since the last frame.
                         if let Some(mut app) = tick_app.try_lock()
-                            && (app.draw_dirty || app.thinking.is_some()) {
+                            && (app.draw_dirty || app.thinking.is_some() || app.toast.is_some()) {
                                 let _ = app.draw();
                             }
                     }

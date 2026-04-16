@@ -25,7 +25,8 @@ impl TuiApp {
         self.draw()?;
 
         loop {
-            if self.draw_dirty {
+            // Redraw when dirty or when a toast needs expiry check.
+            if self.draw_dirty || self.toast.is_some() {
                 self.draw()?;
             }
 
