@@ -71,7 +71,7 @@ impl Repl {
         let bar_text = self
             .app
             .lock()
-            .start_thinking("assessing… (esc to interrupt · 0s · 0↑)");
+            .start_thinking("assessing… (Ctrl+c to interrupt · 0s · 0↑)");
 
         // Redraw tick task — updates the spinner animation and assessing timer.
         let tick_app = self.app.clone();
@@ -99,7 +99,7 @@ impl Repl {
                             let cur = tick_bar.lock().clone();
                             if cur.starts_with("assessing") || cur.starts_with("CADE thinking") {
                                 *tick_bar.lock() =
-                                    format!("assessing… (esc to interrupt · {secs}s · {toks}↑)");
+                                    format!("assessing… (Ctrl+c to interrupt · {secs}s · {toks}↑)");
                             }
                         }
                         // R-01: Only draw if the app has pending state changes
