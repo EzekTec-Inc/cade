@@ -341,6 +341,8 @@ pub struct TuiApp {
     pub cwd: String,
     /// Context window usage (0–99 %) updated after each turn's usage event.
     pub context_pct: Option<u8>,
+    /// Cumulative session token usage (input, output) for footer display.
+    pub session_tokens: (u64, u64),
     /// Number of completed user→assistant turn pairs.
     pub turn_count: u32,
     /// Rolling history of context-window percentages (one per turn).
@@ -477,6 +479,7 @@ impl TuiApp {
             reasoning_effort,
             cwd: abbreviate_cwd(&std::env::current_dir().unwrap_or_default()),
             context_pct: None,
+            session_tokens: (0, 0),
             turn_count: 0,
             token_history: Vec::new(),
             mouse_capture_disabled: false,
@@ -733,6 +736,7 @@ impl TuiApp {
                 queued_count,
                 &cwd,
                 context_pct,
+                self.session_tokens,
                 turn_count,
                 &token_history,
                 picker.as_ref(),

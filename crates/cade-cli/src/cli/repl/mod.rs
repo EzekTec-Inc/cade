@@ -545,6 +545,10 @@ impl Repl {
                 app.update_mode(self.permissions.mode());
                 app.update_model(self.current_model.lock().clone());
                 app.update_agent_name(self.agent_name());
+                app.session_tokens = (
+                    self.session_input_tokens.load(std::sync::atomic::Ordering::SeqCst),
+                    self.session_output_tokens.load(std::sync::atomic::Ordering::SeqCst),
+                );
             }
 
             // Read input — either from pending (menu dispatch) or from the user.

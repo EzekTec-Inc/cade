@@ -3,7 +3,7 @@ use crate::app::layout::pickers::{render_picker, render_theme_picker};
 use crate::app::layout::command_palette::render_command_palette;
 use crate::app::layout::breadcrumb::render_breadcrumb;
 use crate::app::layout::summary::render_summary;
-use crate::app::layout::helpers::{mode_sep_color, mode_footer_left, truncate_str};
+use crate::app::layout::helpers::{mode_sep_color, mode_footer_left, truncate_str, format_token_count};
 // Rendering helpers for the TuiApp full-screen layout.
 //
 // Contains `render_frame` and all supporting free functions for drawing
@@ -116,6 +116,7 @@ pub(crate) fn render_frame(
     queued_count: usize,
     cwd: &str,
     context_pct: Option<u8>,
+    session_tokens: (u64, u64),
     turn_count: u32,
     token_history: &[u8],
     picker: Option<&PickerState>,
@@ -505,6 +506,13 @@ pub(crate) fn render_frame(
         Some(p) => (format!(" {p}%"), colors.text_muted),
         None => (String::new(), colors.text_muted),
     };
+    // Token counter: show cumulative output tokens in compact form.
+    let right_tokens = if sidebar_open || session_tokens == (0, 0) {
+        String::new()
+    } else {
+        let total = session_tokens.0 + session_tokens.1;
+        format!(" {}↑", format_token_count(total))
+    };
     let mid_cwd = format!("  {cwd}  ");
 
     let left_base_len: u16 = left_label.chars().count() as u16
@@ -517,7 +525,8 @@ pub(crate) fn render_frame(
         + right_agent.chars().count()
         + right_model.chars().count()
         + right_reasoning.chars().count()
-        + right_ctx.chars().count()) as u16;
+        + right_ctx.chars().count()
+        + right_tokens.chars().count()) as u16;
     let pad = chunks[7].width.saturating_sub(left_base_len + right_len) as usize;
 
     let mut footer: Vec<Span<'static>> = vec![Span::styled(
@@ -551,6 +560,12 @@ pub(crate) fn render_frame(
         footer.push(Span::styled(
             right_ctx,
             Style::default().fg(right_ctx_color),
+        ));
+    }
+    if !right_tokens.is_empty() {
+        footer.push(Span::styled(
+            right_tokens,
+            colors.text_dim(),
         ));
     }
 

@@ -98,4 +98,37 @@ pub fn truncate_str(s: &str, max: usize) -> String {
     }
 }
 
+/// Format a token count compactly: 1234 → "1.2k", 12345 → "12k", 1234567 → "1.2M".
+pub fn format_token_count(n: u64) -> String {
+    if n < 1_000 {
+        n.to_string()
+    } else if n < 10_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else if n < 1_000_000 {
+        format!("{}k", n / 1_000)
+    } else {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_format_token_count() {
+        assert_eq!(format_token_count(0), "0");
+        assert_eq!(format_token_count(500), "500");
+        assert_eq!(format_token_count(999), "999");
+        assert_eq!(format_token_count(1_000), "1.0k");
+        assert_eq!(format_token_count(1_234), "1.2k");
+        assert_eq!(format_token_count(9_999), "10.0k");
+        assert_eq!(format_token_count(10_000), "10k");
+        assert_eq!(format_token_count(50_000), "50k");
+        assert_eq!(format_token_count(999_999), "999k");
+        assert_eq!(format_token_count(1_000_000), "1.0M");
+        assert_eq!(format_token_count(1_500_000), "1.5M");
+    }
+}
+
 
