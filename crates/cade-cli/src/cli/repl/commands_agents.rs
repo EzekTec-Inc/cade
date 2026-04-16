@@ -33,6 +33,9 @@ impl Repl {
                                 { let mut s = self.settings.lock();
                                     let _ = s.set_last_agent(&a.id);
                                 }
+                                { let mut s = self.session.lock();
+                                    let _ = s.set_agent(a.id.clone(), Some(a.name.clone()));
+                                }
                                 self.tui_ok(format!(
                                     "  ✓ Switched to: {} ({})",
                                     a.name, a.id
@@ -87,6 +90,9 @@ impl Repl {
                                                 first.name.clone();
                                             { let mut s = self.settings.lock();
                                                 let _ = s.set_last_agent(&first.id);
+                                            }
+                                            { let mut s = self.session.lock();
+                                                let _ = s.set_agent(first.id.clone(), Some(first.name.clone()));
                                             }
                                             self.tui_dim(format!(
                                                 "  → Now using: {}",
