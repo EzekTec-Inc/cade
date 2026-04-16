@@ -306,3 +306,16 @@
 ## 2026-04-16T02:05:00Z — docs: update CHANGELOG.md
 
 **Summary:** Updated `CHANGELOG.md` to reflect the session persistence fixes, the UI interrupt message refactoring, and the security dependency updates.
+
+
+## 2026-04-16T02:30:00Z — test: add dual-store coexistence integration test
+
+**Summary:** Added integration test proving `SessionStore` (session.json) and `SettingsManager` (settings.local.json) coexist without data loss. Test exercises interleaved writes and reloads from both stores, verifying no cross-contamination or clobbering.
+
+**Files modified:**
+- `crates/cade-agent/src/agent/session.rs` — added `dual_store_coexistence_no_data_loss` test
+
+**Reason:** Phase 4 of dual-store file corruption fix. Validates that the file separation introduced in Phase 1 truly prevents the original bug.
+**Previous behavior:** No integration test existed for dual-store safety.
+**New behavior:** 31 tests total (25 original + 6 session tests), all passing.
+**Rollback:** Remove the test function from session.rs.

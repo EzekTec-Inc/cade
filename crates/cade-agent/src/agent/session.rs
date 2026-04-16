@@ -185,6 +185,94 @@ mod tests {
         );
     }
 
+    /// Integration test: SessionStore and SettingsManager coexist without data loss.
+    /// SessionStore writes to session.json, SettingsManager writes to settings.local.json.
+    /// Neither store should clobber the other's file.
+    #[test]
+    fn dual_store_coexistence_no_data_loss() {
+        use cade_core::settings::SettingsManager;
+
+        let tmp = TempDir::new().unwrap();
+        let cade_dir = tmp.path().join(".cade");
+        std::fs::create_dir_all(&cade_dir).unwrap();
+
+        // 1. SettingsManager writes local settings (last_agent, pinned_agents)
+        let mut sm = SettingsManager::new(tmp.path()).unwrap();
+        sm.set_last_agent("agent-settings-1").unwrap();
+        sm.pin_agent("agent-settings-1", "SettingsAgent").unwrap();
+
+        // 2. SessionStore writes session data
+        let mut ss = SessionStore::load(tmp.path());
+        ss.set_agent("agent-session-1".to_string(), Some("SessionAgent".to_string())).unwrap();
+        ss.set_conversation(Some("conv-1".to_string())).unwrap();
+        ss.set_run(Some("run-1".to_string()), Some(99)).unwrap();
+
+        // 3. Verify settings.local.json still has SettingsManager data
+        let settings_raw = std::fs::read_to_string(cade_dir.join("settings.local.json")).unwrap();
+        assert!(
+            settings_raw.contains("agent-settings-1"),
+            "settings.local.json lost last_agent after SessionStore write: {settings_raw}"
+        );
+        assert!(
+            settings_raw.contains("SettingsAgent"),
+            "settings.local.json lost pinned_agents after SessionStore write: {settings_raw}"
+        );
+        // settings.local.json must NOT contain session fields
+        assert!(
+            !settings_raw.contains("agent-session-1"),
+            "settings.local.json was contaminated with session data: {settings_raw}"
+        );
+
+        // 4. Verify session.json has SessionStore data
+        let session_raw = std::fs::read_to_string(cade_dir.join("session.json")).unwrap();
+        assert!(
+            session_raw.contains("agent-session-1"),
+            "session.json lost agent_id: {session_raw}"
+        );
+        assert!(
+            session_raw.contains("conv-1"),
+            "session.json lost conversation_id: {session_raw}"
+        );
+        assert!(
+            session_raw.contains("run-1"),
+            "session.json lost run_id: {session_raw}"
+        );
+        // session.json must NOT contain settings fields
+        assert!(
+            !session_raw.contains("agent-settings-1"),
+            "session.json was contaminated with settings data: {session_raw}"
+        );
+
+        // 5. SettingsManager writes again — session.json must survive
+        sm.set_last_agent("agent-settings-2").unwrap();
+        let session_after = std::fs::read_to_string(cade_dir.join("session.json")).unwrap();
+        assert!(
+            session_after.contains("agent-session-1"),
+            "session.json lost data after SettingsManager re-save: {session_after}"
+        );
+
+        // 6. SessionStore writes again — settings.local.json must survive
+        ss.set_conversation(Some("conv-2".to_string())).unwrap();
+        let settings_after = std::fs::read_to_string(cade_dir.join("settings.local.json")).unwrap();
+        assert!(
+            settings_after.contains("agent-settings-2"),
+            "settings.local.json lost data after SessionStore re-save: {settings_after}"
+        );
+
+        // 7. Reload both stores and verify data integrity
+        let sm2 = SettingsManager::new(tmp.path()).unwrap();
+        assert_eq!(sm2.last_agent(), Some("agent-settings-2"));
+        assert_eq!(sm2.pinned_agents().len(), 1);
+        assert_eq!(sm2.pinned_agents()[0].name, "SettingsAgent");
+
+        let ss2 = SessionStore::load(tmp.path());
+        assert_eq!(ss2.session.agent_id.as_deref(), Some("agent-session-1"));
+        assert_eq!(ss2.session.agent_name.as_deref(), Some("SessionAgent"));
+        assert_eq!(ss2.session.conversation_id.as_deref(), Some("conv-2"));
+        assert_eq!(ss2.session.run_id.as_deref(), Some("run-1"));
+        assert_eq!(ss2.session.last_seq_id, Some(99));
+    }
+
     #[test]
     fn roundtrip_save_and_load() {
         let tmp = TempDir::new().unwrap();
