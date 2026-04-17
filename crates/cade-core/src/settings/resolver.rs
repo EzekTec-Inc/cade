@@ -109,9 +109,10 @@ impl SettingsManager {
         Ok(())
     }
 
-    /// Resolve API key: CADE_API_KEY env var > global settings file.
-    /// SEC-B2: If `store_api_key` is false in settings, the file-based
-    /// fallback is skipped and only environment variables are used.
+    /// Resolve API key: CADE_API_KEY env var > global settings file > bootstrap token.
+    /// SEC-B2: If `store_api_key` is false in settings, the settings-file fallback is
+    /// skipped, but the bootstrap token at `~/.cade/api-token` is still consulted so the
+    /// CLI can talk to its auto-spawned server.  The token is created on demand.
     pub fn api_key(&self) -> Option<String> {
         std::env::var("CADE_API_KEY")
             .ok()
@@ -122,6 +123,13 @@ impl SettingsManager {
                 } else {
                     None
                 }
+            })
+            .or_else(|| {
+                let path = crate::bootstrap_token::default_token_path()?;
+                // Prefer read-only when possible; fall back to create-on-demand so
+                // the CLI never races the server for the token file.
+                crate::bootstrap_token::read_existing_token(&path)
+                    .or_else(|| crate::bootstrap_token::load_or_create_token(&path).ok())
             })
     }
 
@@ -237,3 +245,4 @@ impl SettingsManager {
         Ok(())
     }
 }
+
