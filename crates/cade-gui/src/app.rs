@@ -311,13 +311,11 @@ impl eframe::App for CadeApp {
 
                                 // Sync edits back into session state.
                                 if resp.changed() {
-                                    if let Some(s) = self.session.borrow_mut().as_mut() {
-                                        if let SessionState::Connected {
-                                            input_buffer: buf, ..
-                                        } = s
-                                        {
-                                            *buf = input_edit.clone();
-                                        }
+                                    if let Some(SessionState::Connected {
+                                        input_buffer: buf, ..
+                                    }) = self.session.borrow_mut().as_mut()
+                                    {
+                                        *buf = input_edit.clone();
                                     }
                                 }
 

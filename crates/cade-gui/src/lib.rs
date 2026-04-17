@@ -14,11 +14,15 @@
 //! intentionally thin — all testable behaviour lives in `config` and
 //! `login`, both of which are covered by native `cargo test`.
 
+// if-let chains require nightly; nested ifs are clearer on stable.
+#![allow(clippy::collapsible_if)]
+
 pub mod api;
 pub mod config;
 pub mod login;
 pub mod session;
 pub mod sse;
+pub mod theme;
 
 #[cfg(target_arch = "wasm32")]
 pub mod app;

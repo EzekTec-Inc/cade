@@ -17,10 +17,13 @@ cade-api-types       = { path = "../cade-api-types" }
 serde.workspace      = true
 serde_json.workspace = true
 
+# egui is not cfg-gated so that `theme.rs` (pure colour constants + tests)
+# compiles and is testable on native targets.
+egui                 = "0.34"
+
 # -- Browser-only dependencies
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 eframe               = { version = "0.34", default-features = false, features = ["web_screen_reader", "wgpu"] }
-egui                 = "0.34"
 egui_commonmark      = "0.23"
 wasm-bindgen         = "0.2"
 wasm-bindgen-futures = "0.4"
