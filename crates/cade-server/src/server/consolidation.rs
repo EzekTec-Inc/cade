@@ -12,6 +12,21 @@ use cade_ai::{CompletionRequest, LlmMessage, catalogue};
 use crate::server::state::AppState;
 use cade_store::sqlite;
 
+/// Resolve the output directory for memory exports readable by cade-rag-mcp.
+///
+/// Precedence:
+///   1. `CADE_RAG_EXPORT_DIR` env var (absolute path), agent-id appended.
+///   2. `$HOME/.cade/rag/<agent_id>/memory/`
+///   3. `None` — export will be skipped silently.
+fn resolve_rag_export_dir(agent_id: &str) -> Option<std::path::PathBuf> {
+    if let Ok(custom) = std::env::var("CADE_RAG_EXPORT_DIR")
+        && !custom.trim().is_empty()
+    {
+        return Some(std::path::PathBuf::from(custom).join(agent_id).join("memory"));
+    }
+    dirs::home_dir().map(|h| h.join(".cade").join("rag").join(agent_id).join("memory"))
+}
+
 // ── tunables ──────────────────────────────────────────────────────────────────
 
 /// Minimum number of DB rows required before consolidation is attempted.
@@ -308,6 +323,29 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
         new_value.chars().count(),
         dropped,
     );
+
+    // Phase B.2: export memory to a directory cade-rag-mcp can index.
+    //
+    // The export path is `<cade_home>/rag/<agent_id>/memory/` unless the
+    // operator has overridden it via `CADE_RAG_EXPORT_DIR`. If the path is
+    // unavailable (no $HOME, disk full, permission denied) we log and move
+    // on — this is an *optional* secondary surface, never a hard dependency.
+    if let Some(out_dir) = resolve_rag_export_dir(agent_id) {
+        match sqlite::export_memory_to_rag_dir(&state.db, agent_id, &out_dir) {
+            Ok(report) => tracing::debug!(
+                "consolidate [{}]: exported memory to rag dir ({} blocks, {} archival) at {}",
+                agent_id,
+                report.blocks_written,
+                report.archival_written,
+                report.out_dir,
+            ),
+            Err(e) => tracing::debug!(
+                "consolidate [{}]: rag export skipped: {}",
+                agent_id,
+                e
+            ),
+        }
+    }
 
     // ── 6. Insert a compaction marker into message history ───────────────────
     // The marker acts as a boundary: `get_context_window()` only loads messages

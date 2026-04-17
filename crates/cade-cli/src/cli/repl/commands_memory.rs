@@ -243,6 +243,29 @@ impl Repl {
                     }
                 }
 
+                // /memory export [path] — write blocks+archival to a dir
+                //                         indexable by cade-rag-mcp
+                "export" => {
+                    let path_arg = parts.get(1).map(|s| s.to_string());
+                    let id = self.agent_id();
+                    self.tui_dim("  Exporting memory…");
+                    match self
+                        .client
+                        .export_memory(&id, path_arg.as_deref())
+                        .await
+                    {
+                        Ok((blocks, archival, out_dir)) => {
+                            self.tui_ok(format!(
+                                "  ✓ Exported {blocks} block(s) + {archival} archival → {out_dir}"
+                            ));
+                            self.tui_dim(
+                                "  Run cade-rag-mcp index_workspace on that path to enable semantic recall.",
+                            );
+                        }
+                        Err(e) => self.tui_err(e.to_string()),
+                    }
+                }
+
                 // /memory why <label> — show provenance chain
                 "why" if parts.len() >= 2 => {
                     let label = parts[1];

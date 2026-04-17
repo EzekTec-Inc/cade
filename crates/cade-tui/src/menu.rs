@@ -171,6 +171,10 @@ const SECTIONS: &[Section] = &[
                 desc: "/memory history <label>  — last 5 revisions",
             },
             CmdEntry {
+                cmd: "/memory export",
+                desc: "/memory export [path]  — dump memory as .md files for cade-rag-mcp",
+            },
+            CmdEntry {
                 cmd: "/init",
                 desc: "Analyse project + populate memory",
             },

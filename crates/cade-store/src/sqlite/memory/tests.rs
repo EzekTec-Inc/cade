@@ -529,3 +529,116 @@ fn schema_migrations_are_idempotent() -> Result<()> {
     assert!(v >= 2, "user_version must be at the current head");
     Ok(())
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase B — export to rag-indexable directory
+// ─────────────────────────────────────────────────────────────────────────────
+
+#[test]
+fn export_round_trips_blocks_and_archival() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block(&db, "a1", "persona", "I am CADE.", Some("identity"), None)?;
+    upsert_memory_block(&db, "a1", "project", "rust workspace", None, None)?;
+    set_memory_tier(&db, "a1", "persona", "pinned", false)?;
+
+    crate::sqlite::tools::insert_archival_memory(
+        &db,
+        "a1",
+        "The quick brown fox jumps over the lazy dog.",
+        &["english".into(), "pangram".into()],
+    )?;
+
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let out_dir = std::env::temp_dir().join(format!("cade_export_{nanos}"));
+
+    let report = export_memory_to_rag_dir(&db, "a1", &out_dir)?;
+    assert_eq!(report.blocks_written, 2);
+    assert_eq!(report.archival_written, 1);
+
+    // -- Verify block content + front-matter
+    let persona_path = out_dir.join("blocks").join("persona.md");
+    let persona = std::fs::read_to_string(&persona_path)?;
+    assert!(persona.contains("label: persona"));
+    assert!(persona.contains("tier: pinned"));
+    assert!(persona.contains("I am CADE."));
+
+    let project_path = out_dir.join("blocks").join("project.md");
+    let project = std::fs::read_to_string(&project_path)?;
+    assert!(project.contains("tier: short")); // default tier
+    assert!(project.contains("rust workspace"));
+
+    // -- Verify archival
+    let archival_dir = out_dir.join("archival");
+    let entries: Vec<_> = std::fs::read_dir(&archival_dir)?.collect::<std::result::Result<_, _>>()?;
+    assert_eq!(entries.len(), 1);
+    let archival_body = std::fs::read_to_string(entries[0].path())?;
+    assert!(archival_body.contains("tier: archival"));
+    assert!(archival_body.contains("tags: [\"english\",\"pangram\"]"));
+    assert!(archival_body.contains("brown fox"));
+
+    // -- Cleanup
+    let _ = std::fs::remove_dir_all(&out_dir);
+    Ok(())
+}
+
+#[test]
+fn export_removes_stale_files_on_rerun() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block(&db, "a1", "foo", "v1", None, None)?;
+
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let out_dir = std::env::temp_dir().join(format!("cade_export_stale_{nanos}"));
+
+    export_memory_to_rag_dir(&db, "a1", &out_dir)?;
+    assert!(out_dir.join("blocks").join("foo.md").exists());
+
+    // Delete `foo`, add `bar`
+    delete_memory_block(&db, "a1", "foo")?;
+    upsert_memory_block(&db, "a1", "bar", "v1", None, None)?;
+
+    export_memory_to_rag_dir(&db, "a1", &out_dir)?;
+    assert!(
+        !out_dir.join("blocks").join("foo.md").exists(),
+        "stale file for deleted block must not persist"
+    );
+    assert!(out_dir.join("blocks").join("bar.md").exists());
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+    Ok(())
+}
+
+#[test]
+fn export_sanitizes_pathological_labels() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    // Labels containing filesystem-unsafe characters.
+    upsert_memory_block(&db, "a1", "skill:rust", "content-a", None, None)?;
+    upsert_memory_block(&db, "a1", "path/traversal", "content-b", None, None)?;
+
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+    let out_dir = std::env::temp_dir().join(format!("cade_export_safe_{nanos}"));
+
+    let report = export_memory_to_rag_dir(&db, "a1", &out_dir)?;
+    assert_eq!(report.blocks_written, 2);
+
+    // Neither pathological path escaped the blocks/ directory
+    let blocks_dir = out_dir.join("blocks");
+    let entries: Vec<_> = std::fs::read_dir(&blocks_dir)?.collect::<std::result::Result<_, _>>()?;
+    assert_eq!(entries.len(), 2);
+    for e in &entries {
+        let name = e.file_name().into_string().unwrap();
+        assert!(!name.contains('/'), "filename must not contain /");
+        assert!(!name.contains(':'), "filename must not contain :");
+    }
+
+    let _ = std::fs::remove_dir_all(&out_dir);
+    Ok(())
+}

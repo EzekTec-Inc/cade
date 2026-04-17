@@ -344,6 +344,48 @@ pub async fn upsert_memory(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// POST /v1/agents/:id/memory/export — export memory blocks + archival
+/// entries to a filesystem directory that cade-rag-mcp (or any other
+/// directory-walking indexer) can consume. Body: `{ "path": "<optional>" }`.
+/// When `path` is omitted or null, the server writes to its default location
+/// (`$CADE_RAG_EXPORT_DIR` or `~/.cade/rag/<agent_id>/memory`).
+pub async fn export_memory_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let custom_path = body
+        .get("path")
+        .and_then(|v| v.as_str())
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let out_dir: std::path::PathBuf = match custom_path {
+        Some(p) => std::path::PathBuf::from(p),
+        None => std::env::var("CADE_RAG_EXPORT_DIR")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .map(std::path::PathBuf::from)
+            .map(|p| p.join(&agent_id).join("memory"))
+            .or_else(|| {
+                dirs::home_dir().map(|h| {
+                    h.join(".cade").join("rag").join(&agent_id).join("memory")
+                })
+            })
+            .ok_or_else(|| {
+                server_err("no $HOME and no CADE_RAG_EXPORT_DIR set".to_string())
+            })?,
+    };
+
+    let report = sqlite::export_memory_to_rag_dir(&state.db, &agent_id, &out_dir)
+        .map_err(|e| server_err(e.to_string()))?;
+    Ok(Json(json!({
+        "blocks_written": report.blocks_written,
+        "archival_written": report.archival_written,
+        "out_dir": report.out_dir,
+    })))
+}
+
 /// GET /v1/agents/:id/memory/:label/history?limit=5
 pub async fn get_memory_history(
     State(state): State<AppState>,

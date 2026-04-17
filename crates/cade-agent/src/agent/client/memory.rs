@@ -249,6 +249,42 @@ impl HttpTransport {
         self.set_memory_tier(agent_id, label, "pinned").await
     }
 
+    /// Export every memory block + archival entry for `agent_id` to a
+    /// directory indexable by cade-rag-mcp (or any other filesystem-walking
+    /// retriever).  `path` may be `None` to use the server's default
+    /// (`$CADE_RAG_EXPORT_DIR` or `~/.cade/rag/<agent_id>/memory`).
+    ///
+    /// Returns `(blocks_written, archival_written, out_dir)`.
+    pub async fn export_memory(
+        &self,
+        agent_id: &str,
+        path: Option<&str>,
+    ) -> Result<(usize, usize, String)> {
+        let body = match path {
+            Some(p) => json!({ "path": p }),
+            None => json!({}),
+        };
+        let resp = self
+            .client
+            .post(self.url(&format!("/agents/{agent_id}/memory/export")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "export_memory failed {}",
+                resp.status()
+            )));
+        }
+        let v: Value = resp.json().await?;
+        Ok((
+            v["blocks_written"].as_u64().unwrap_or(0) as usize,
+            v["archival_written"].as_u64().unwrap_or(0) as usize,
+            v["out_dir"].as_str().unwrap_or("").to_string(),
+        ))
+    }
+
     /// Demote a memory block to long-term (archived, index-only injection).
     pub async fn demote_memory(&self, agent_id: &str, label: &str) -> Result<()> {
         self.set_memory_tier(agent_id, label, "long").await

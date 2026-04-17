@@ -107,6 +107,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/agents/:id/memory/:label/restore/:rev_id",
             put(agents::restore_memory_revision),
         )
+        .route(
+            "/v1/agents/:id/memory/export",
+            post(agents::export_memory_handler),
+        )
         // Memory provenance + reflection
         .route(
             "/v1/agents/:id/memory/:label/evidence",

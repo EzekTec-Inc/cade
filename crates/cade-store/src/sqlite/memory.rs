@@ -513,6 +513,171 @@ pub struct ToolRow {
     pub tags: Vec<String>,
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase B — export memory to a directory indexable by cade-rag-mcp
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// cade-rag-mcp is an external MCP server the user may have attached; it walks
+// a directory tree and builds a semantic index with fastembed. By writing each
+// memory block as a markdown file with YAML front-matter, we get semantic
+// recall over memory for free — without pulling the embedding stack into CADE
+// itself, and without losing anything if cade-rag-mcp isn't running.
+//
+// The export is **one-way** (SQLite → filesystem). The filesystem copy is a
+// read-only index surface. Re-imports are not supported — the DB remains the
+// source of truth.
+
+/// Escape a label for use as a filename stem. Strips path separators and any
+/// control characters; replaces with `_`.
+fn safe_stem(label: &str) -> String {
+    label
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect::<String>()
+        .trim_matches('_')
+        .to_string()
+}
+
+/// Write `contents` to `path` atomically (write to `.tmp`, fsync, rename).
+/// Creates parent directories if needed.
+fn atomic_write(path: &std::path::Path, contents: &str) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| {
+            crate::error::Error::custom(format!("create_dir_all {}: {e}", parent.display()))
+        })?;
+    }
+    let tmp = path.with_extension("md.tmp");
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&tmp).map_err(|e| {
+            crate::error::Error::custom(format!("create {}: {e}", tmp.display()))
+        })?;
+        f.write_all(contents.as_bytes()).map_err(|e| {
+            crate::error::Error::custom(format!("write {}: {e}", tmp.display()))
+        })?;
+        f.sync_all().ok(); // best-effort durability
+    }
+    std::fs::rename(&tmp, path).map_err(|e| {
+        crate::error::Error::custom(format!(
+            "rename {} → {}: {e}",
+            tmp.display(),
+            path.display()
+        ))
+    })?;
+    Ok(())
+}
+
+/// Summary of one export run.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct MemoryExportReport {
+    pub blocks_written: usize,
+    pub archival_written: usize,
+    pub out_dir: String,
+}
+
+/// Export every memory block and archival entry for `agent_id` to `out_dir`
+/// as markdown files with YAML front-matter. Call after consolidation, or on
+/// demand via `/memory export`. Existing files for the agent are **removed**
+/// first so deleted labels don't linger in the index.
+///
+/// Layout:
+///   <out_dir>/blocks/<label>.md         — one per memory block
+///   <out_dir>/archival/<archival_id>.md — one per archival entry
+pub fn export_memory_to_rag_dir(
+    db: &Db,
+    agent_id: &str,
+    out_dir: &std::path::Path,
+) -> Result<MemoryExportReport> {
+    // Clear any previous export so stale files don't outlive their blocks.
+    let blocks_dir = out_dir.join("blocks");
+    let archival_dir = out_dir.join("archival");
+    if blocks_dir.exists() {
+        let _ = std::fs::remove_dir_all(&blocks_dir);
+    }
+    if archival_dir.exists() {
+        let _ = std::fs::remove_dir_all(&archival_dir);
+    }
+    std::fs::create_dir_all(&blocks_dir).map_err(|e| {
+        crate::error::Error::custom(format!("mkdir {}: {e}", blocks_dir.display()))
+    })?;
+    std::fs::create_dir_all(&archival_dir).map_err(|e| {
+        crate::error::Error::custom(format!("mkdir {}: {e}", archival_dir.display()))
+    })?;
+
+    let mut report = MemoryExportReport {
+        blocks_written: 0,
+        archival_written: 0,
+        out_dir: out_dir.display().to_string(),
+    };
+
+    // -- Memory blocks -----------------------------------------------------
+    let full = get_memory_blocks_full(db, agent_id)?;
+    for (label, value, desc, tier) in full {
+        let stem = safe_stem(&label);
+        if stem.is_empty() {
+            continue;
+        }
+        let fm = format!(
+            "---\nlabel: {}\ntier: {}\nagent_id: {}\nexported_at: {}\n{}---\n\n",
+            label,
+            tier,
+            agent_id,
+            now_ts(),
+            if desc.is_empty() {
+                String::new()
+            } else {
+                format!("description: {}\n", desc.replace('\n', " "))
+            }
+        );
+        let body = format!("{fm}{value}\n");
+        let path = blocks_dir.join(format!("{stem}.md"));
+        atomic_write(&path, &body)?;
+        report.blocks_written += 1;
+    }
+
+    // -- Archival entries --------------------------------------------------
+    //
+    // We read the archival_memory FTS5 virtual table directly — no existing
+    // helper lists all rows for an agent, and we don't want one in the hot
+    // path. Expected volume here is small-ish (hundreds to low thousands).
+    let conn = db
+        .lock()
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+    let mut stmt = conn.prepare(
+        "SELECT id, content, tags, created_at FROM archival_memory WHERE agent_id = ?1",
+    )?;
+    let rows = stmt.query_map(params![agent_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })?;
+    for row in rows.filter_map(|r| r.ok()) {
+        let (id, content, tags_json, created_at) = row;
+        let stem = safe_stem(&id);
+        if stem.is_empty() {
+            continue;
+        }
+        let fm = format!(
+            "---\nid: {id}\ntier: archival\nagent_id: {agent_id}\ncreated_at: {created_at}\ntags: {tags_json}\n---\n\n"
+        );
+        let body = format!("{fm}{content}\n");
+        let path = archival_dir.join(format!("{stem}.md"));
+        atomic_write(&path, &body)?;
+        report.archival_written += 1;
+    }
+
+    Ok(report)
+}
+
 // region:    --- Tests
 
 #[cfg(test)]
