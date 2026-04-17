@@ -21,6 +21,7 @@ use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 use crate::config::Config;
 use crate::login::LoginState;
 use crate::session::SessionState;
+use crate::shortcuts::{ShortcutAction, poll_shortcut};
 
 /// Top-level eframe app for the cade-gui dashboard.
 pub struct CadeApp {
@@ -39,6 +40,8 @@ pub struct CadeApp {
     /// Shared cache for egui_commonmark — avoids re-parsing markdown
     /// on every frame.
     md_cache: CommonMarkCache,
+    /// Stable ID for the chat input field — used by Ctrl+L to request focus.
+    input_id: egui::Id,
 }
 
 impl CadeApp {
@@ -73,6 +76,7 @@ impl CadeApp {
             ctx: cc.egui_ctx.clone(),
             server_url: config.server_url,
             md_cache: CommonMarkCache::default(),
+            input_id: egui::Id::new("chat_input"),
         }
     }
 
@@ -264,6 +268,10 @@ impl eframe::App for CadeApp {
         // with Rc<RefCell<..>>.
         let mut action = AppAction::None;
 
+        // ── Global keyboard shortcuts ────────────────────────────
+        let shortcut = ui.input(poll_shortcut);
+        let mut request_focus_input = false;
+
         ui.vertical_centered(|ui| {
             ui.add_space(40.0);
             ui.heading("CADE Dashboard");
@@ -300,6 +308,28 @@ impl eframe::App for CadeApp {
 
                     // Clone input buffer for the editable text field.
                     let mut input_edit = input_buffer.clone();
+
+                    // ── Map keyboard shortcuts to actions ─────────
+                    if let Some(sc) = shortcut {
+                        match sc {
+                            ShortcutAction::Send => {
+                                if has_agent && !is_streaming && !input_edit.trim().is_empty() {
+                                    action = AppAction::SendMessage;
+                                }
+                            }
+                            ShortcutAction::InsertNewline => {
+                                // Handled inside TextEdit (multiline future); no-op for singleline.
+                            }
+                            ShortcutAction::DismissError => {
+                                if error_toast.is_some() {
+                                    action = AppAction::DismissError;
+                                }
+                            }
+                            ShortcutAction::FocusInput => {
+                                request_focus_input = true;
+                            }
+                        }
+                    }
 
                     // ── Left sidebar: agent list ────────────────────
                     egui::Panel::left("agent_sidebar")
@@ -344,15 +374,21 @@ impl eframe::App for CadeApp {
                                 let resp = ui.add_enabled(
                                     can_edit,
                                     egui::TextEdit::singleline(&mut input_edit)
+                                        .id(self.input_id)
                                         .hint_text(if !has_agent {
                                             "Select an agent first…"
                                         } else if is_streaming {
                                             "Waiting for response…"
                                         } else {
-                                            "Send a message…"
+                                            "Send a message…  (Ctrl+L to focus)"
                                         })
                                         .desired_width(ui.available_width() - 80.0),
                                 );
+
+                                // Focus the input when Ctrl+L was pressed.
+                                if request_focus_input {
+                                    resp.request_focus();
+                                }
 
                                 // Sync edits back into session state.
                                 if resp.changed() {
