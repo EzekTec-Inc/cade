@@ -165,3 +165,26 @@ async fn dashboard_is_reachable_through_full_router_without_auth() {
         .unwrap_or("");
     assert!(ct.starts_with("text/html"), "expected HTML, got {ct}");
 }
+
+/// Dashboard asset wildcard route is reachable through the full production
+/// router without auth.  Returns 404 for a non-existent file (proving auth
+/// was skipped — a 401 would mean the middleware blocked it).
+#[tokio::test]
+async fn dashboard_asset_wildcard_is_reachable_through_full_router_without_auth() {
+    let state = make_state(Some("tok".into()));
+    let app = router(state);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/dashboard/nonexistent.js")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "/dashboard/* must be auth-exempt (expected 404 for missing asset, got {})",
+        resp.status()
+    );
+}

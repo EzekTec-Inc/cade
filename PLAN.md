@@ -1,3 +1,60 @@
+## 2026-04-17T19:37:00Z — cade-gui M8: trunk + rust-embed — serve real WASM at /dashboard
+
+**Task:** Build cade-gui into a real WASM bundle via `trunk build` and serve the assets from cade-server using `rust-embed` at `/dashboard` and `/dashboard/*`.
+
+**Scope guardrail:** Build pipeline + asset serving only.  No new GUI features.  No wasm-opt (bundled version is outdated).  The GUI itself is unchanged from M7.
+
+**Files created:**
+- `crates/cade-gui/index.html` — trunk entry point with `<canvas id="cade_gui_canvas">`, dark theme styles, `<link data-trunk rel="rust" data-wasm-opt="0" />`.
+- `crates/cade-gui/Trunk.toml` — trunk config: `dist = "dist"`, `filehash = true`, `public_url = "/dashboard/"`, `minify = "never"`.
+- `crates/cade-server/src/server/api/dashboard_assets.rs` — `DashboardAssets` struct deriving `rust_embed::Embed`, folder = `../cade-gui/dist/`, `allow_missing = "true"`.
+
+**Files modified:**
+- `crates/cade-server/Cargo.toml` — added `rust-embed = "8.11.0"` dependency.
+- `crates/cade-server/src/server/api/mod.rs` — registered `dashboard_assets` module; added `GET /dashboard/*path` wildcard route for asset serving.
+- `crates/cade-server/src/server/api/dashboard.rs` — rewritten from inline HTML string to `rust-embed` asset serving:
+  - `get_dashboard()` serves embedded `index.html`.
+  - `get_dashboard_asset(Path(path))` serves JS/WASM/CSS/etc. with correct MIME types.
+  - `mime_for(path)` infers MIME from extension (html, js, wasm, css, json, png, svg, ico).
+  - `serve_embedded(path)` returns the file with cache headers (`no-cache` for index.html, `immutable` for hashed assets).
+- `crates/cade-server/src/server/api/dashboard_test.rs` — updated for new architecture:
+  - `make_app` now mounts both `/dashboard` and `/dashboard/*path`.
+  - Existing tests preserved and updated: `dashboard_returns_html_page_without_auth`, `dashboard_does_not_leak_server_api_key`, `dashboard_error_page_has_no_stack_trace_or_framework_info`, `dashboard_contains_canvas_with_expected_id`.
+  - New tests: `dashboard_index_html_has_no_cache_header`, `dashboard_missing_asset_returns_404`, `dashboard_assets_do_not_require_auth`, `mime_for_returns_correct_types`.
+- `crates/cade-server/src/server/api/router_test.rs` — added `dashboard_asset_wildcard_is_reachable_through_full_router_without_auth`.
+- `.gitignore` — added `crates/cade-gui/dist/`.
+
+**Dependency policy:** 1 new crate: `rust-embed 8.11.0` (+ transitive: `rust-embed-impl`, `rust-embed-utils`, `sha2`, `digest`, `crypto-common`, `block-buffer`, `generic-array`).  Needed to embed the trunk-built `dist/` directory into the cade-server binary at compile time.
+
+**Build pipeline:**
+1. `cd crates/cade-gui && trunk build --release` → produces `dist/index.html`, `dist/cade-gui-<hash>.js`, `dist/cade-gui-<hash>_bg.wasm`.
+2. `cargo build -p cade-server` → embeds `dist/` contents via `rust-embed`.  If `dist/` is empty (trunk not run), the server compiles but returns 404 for all dashboard routes.
+3. `data-wasm-opt="0"` in index.html skips wasm-opt (bundled v123 doesn't support bulk-memory ops from recent Rust).
+4. `public_url = "/dashboard/"` ensures all JS/WASM references use the correct server path prefix.
+
+**Auth contract:** `/dashboard` and `/dashboard/*` are exempt from bearer auth (unchanged from M1 — auth.rs already had `path.starts_with("/dashboard/")`).
+
+**Reason:** M8 of the cade-gui roadmap.  Replaces the static placeholder HTML with the real egui WASM application.  Users can now access the full GUI at `/dashboard`.
+
+**Previous behavior:** `GET /dashboard` returned a hardcoded inline HTML login page.
+
+**New behavior:**
+- `GET /dashboard` serves trunk-built `index.html` that loads the WASM app.
+- `GET /dashboard/cade-gui-<hash>.js` serves JS glue (application/javascript).
+- `GET /dashboard/cade-gui-<hash>_bg.wasm` serves WASM binary (application/wasm).
+- Hashed assets get `Cache-Control: public, max-age=31536000, immutable`.
+- `index.html` gets `Cache-Control: no-cache` for revalidation.
+- Missing assets return 404.
+- Tests: 755/755 workspace (was 750; +5 new), 55/55 cade-gui native (unchanged).
+- `RUSTFLAGS="-D warnings" cargo check -p cade-server` → clean.
+- `RUSTFLAGS="-D warnings" cargo build -p cade-gui --target wasm32-unknown-unknown` → clean.
+
+**Rollback steps:**
+1. `git revert <this-commit>` — reverts all M8 changes.
+2. Checkpoint `cp-05ea443e` (label `pre-M8`, HEAD 7d4e1ae9) for full rollback to pre-M8.
+
+---
+
 ## 2026-04-17T19:23:24Z — cade-gui M7: egui_commonmark wiring (markdown in timeline)
 
 **Task:** Wire egui_commonmark into the dashboard timeline panel so markdown content renders with headings, lists, code blocks, bold, italic, and block quotes.

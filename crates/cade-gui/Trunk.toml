@@ -1,0 +1,11 @@
+[build]
+target     = "index.html"
+dist       = "dist"
+# filehash appends a content hash to .js/.wasm filenames for cache-busting.
+filehash   = true
+# Assets are served at /dashboard/ by cade-server.
+public_url = "/dashboard/"
+# Disable minification (wasm-opt).  The bundled wasm-opt v123 doesn't
+# support bulk-memory ops emitted by recent Rust.  The .wasm is already
+# compiled with opt-level = "s" via the release profile.
+minify     = "never"

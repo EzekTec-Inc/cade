@@ -19,3 +19,4 @@ crates/cade-server/.cade-db.key
 docs/
 ARCHITECTURE.md
 PLAN.md
+crates/cade-gui/dist/

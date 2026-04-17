@@ -1,11 +1,11 @@
-//! Tests for the /dashboard route (M1).
+//! Tests for the /dashboard route (M1 → M8: now serves embedded WASM assets).
 //!
 //! Security contract under test:
 //! - `GET /dashboard` returns 200 with HTML content even with no Authorization
 //!   header and no `api_key` configured (unauth-exempt alongside /v1/health).
 //! - The response body must NOT contain the server's api_key, any bearer
 //!   token, or any stack trace / framework version string.  Users paste
-//!   their key into the page; it is never embedded by the server.
+//!   their key into the egui login form; the WASM app holds it in memory only.
 
 use crate::server::api::auth::auth_middleware;
 use crate::server::state::AppState;
@@ -54,17 +54,20 @@ fn make_state(api_key: Option<String>) -> AppState {
     }
 }
 
-/// Minimal app that mounts the dashboard route behind the real auth middleware,
-/// matching the path-skip wiring the production router uses.
+/// Minimal app that mounts both dashboard routes behind the real auth
+/// middleware, matching the path-skip wiring the production router uses.
 fn make_app(state: AppState) -> Router {
     Router::new()
         .route("/dashboard", get(super::get_dashboard))
+        .route("/dashboard/*path", get(super::get_dashboard_asset))
         .with_state(state.clone())
         .layer(middleware::from_fn_with_state(state, auth_middleware))
 }
 
+// ── index.html serving ──────────────────────────────────────────────
+
 #[tokio::test]
-async fn dashboard_returns_html_login_page_without_auth() {
+async fn dashboard_returns_html_page_without_auth() {
     let app = make_app(make_state(Some("super-secret-key".into())));
     let req = Request::builder()
         .uri("/dashboard")
@@ -75,7 +78,7 @@ async fn dashboard_returns_html_login_page_without_auth() {
     assert_eq!(
         resp.status(),
         StatusCode::OK,
-        "dashboard must be public (unauthenticated) so browsers can load the login page"
+        "dashboard must be public (unauthenticated) so browsers can load the page"
     );
 
     let ct = resp
@@ -89,7 +92,7 @@ async fn dashboard_returns_html_login_page_without_auth() {
         "dashboard must return HTML, got content-type: {ct}"
     );
 
-    let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let body_str = std::str::from_utf8(&body).expect("utf-8 html");
     assert!(
         body_str.contains("<html"),
@@ -99,8 +102,6 @@ async fn dashboard_returns_html_login_page_without_auth() {
 
 #[tokio::test]
 async fn dashboard_does_not_leak_server_api_key() {
-    // Security-critical: even though the route is auth-exempt, it must
-    // never embed the configured bearer token into the served HTML.
     let secret = "leaky-token-DO-NOT-LEAK";
     let app = make_app(make_state(Some(secret.into())));
 
@@ -109,7 +110,7 @@ async fn dashboard_does_not_leak_server_api_key() {
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
-    let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let body_str = std::str::from_utf8(&body).unwrap();
 
     assert!(
@@ -121,16 +122,13 @@ async fn dashboard_does_not_leak_server_api_key() {
 
 #[tokio::test]
 async fn dashboard_error_page_has_no_stack_trace_or_framework_info() {
-    // tdd-guide §3.3 — public-facing error responses must not leak
-    // internals. Exercise the happy path too: the served HTML must not
-    // include obvious framework/version fingerprints.
     let app = make_app(make_state(None));
     let req = Request::builder()
         .uri("/dashboard")
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
-    let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let body_str = std::str::from_utf8(&body).unwrap();
 
     for forbidden in ["axum/", "tokio-", "panicked at", "RUST_BACKTRACE"] {
@@ -143,8 +141,7 @@ async fn dashboard_error_page_has_no_stack_trace_or_framework_info() {
 
 /// The dashboard page must carry a `<canvas id="cade_gui_canvas">` element
 /// that matches the ID the cade-gui WASM boot code looks up.  Missing or
-/// renamed canvas = white screen for every user.  This is the cheap
-/// contract test that locks the two sides together.
+/// renamed canvas = white screen for every user.
 #[tokio::test]
 async fn dashboard_contains_canvas_with_expected_id() {
     let app = make_app(make_state(None));
@@ -153,7 +150,7 @@ async fn dashboard_contains_canvas_with_expected_id() {
         .body(Body::empty())
         .unwrap();
     let resp = app.oneshot(req).await.unwrap();
-    let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body = to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
     let body_str = std::str::from_utf8(&body).unwrap();
 
     assert!(
@@ -161,4 +158,80 @@ async fn dashboard_contains_canvas_with_expected_id() {
         "dashboard HTML must expose <canvas id=\"cade_gui_canvas\"> for the \
          cade-gui WASM client to mount on"
     );
+}
+
+/// The index.html sets `Cache-Control: no-cache` so browsers always
+/// fetch the latest asset hashes after a rebuild.
+#[tokio::test]
+async fn dashboard_index_html_has_no_cache_header() {
+    let app = make_app(make_state(None));
+    let req = Request::builder()
+        .uri("/dashboard")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let cc = resp
+        .headers()
+        .get("cache-control")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert_eq!(cc, "no-cache", "index.html must be no-cache");
+}
+
+// ── Asset serving ───────────────────────────────────────────────────
+
+/// Requesting a non-existent asset returns 404, not 500.
+#[tokio::test]
+async fn dashboard_missing_asset_returns_404() {
+    let app = make_app(make_state(None));
+    let req = Request::builder()
+        .uri("/dashboard/does-not-exist.js")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "missing dashboard asset should be 404, not 500"
+    );
+}
+
+/// Dashboard assets must be served without an Authorization header
+/// (same exemption as /dashboard itself).
+#[tokio::test]
+async fn dashboard_assets_do_not_require_auth() {
+    let app = make_app(make_state(Some("secret-key".into())));
+    // Request a non-existent asset — we care about the status (404 = unblocked
+    // by auth), not the body.
+    let req = Request::builder()
+        .uri("/dashboard/some-file.wasm")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    // If auth blocked us we'd get 401; 404 proves auth was skipped.
+    assert_eq!(
+        resp.status(),
+        StatusCode::NOT_FOUND,
+        "dashboard assets must be auth-exempt (got {} instead of 404 for missing asset)",
+        resp.status()
+    );
+}
+
+// ── MIME type inference ─────────────────────────────────────────────
+
+#[test]
+fn mime_for_returns_correct_types() {
+    use super::mime_for;
+    assert_eq!(mime_for("index.html"), "text/html; charset=utf-8");
+    assert_eq!(
+        mime_for("cade-gui-abc123.js"),
+        "application/javascript; charset=utf-8"
+    );
+    assert_eq!(mime_for("cade-gui-abc123_bg.wasm"), "application/wasm");
+    assert_eq!(mime_for("style.css"), "text/css; charset=utf-8");
+    assert_eq!(mime_for("data.json"), "application/json");
+    assert_eq!(mime_for("logo.png"), "image/png");
+    assert_eq!(mime_for("icon.svg"), "image/svg+xml");
+    assert_eq!(mime_for("favicon.ico"), "image/x-icon");
+    assert_eq!(mime_for("unknown.xyz"), "application/octet-stream");
 }
