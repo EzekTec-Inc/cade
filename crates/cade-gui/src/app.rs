@@ -117,6 +117,49 @@ impl CadeApp {
         *self.session.borrow_mut() = None;
         self.connect_started = false;
     }
+
+    /// Select an agent and spawn an async task to fetch its messages.
+    fn spawn_fetch_messages(&mut self, idx: usize) {
+        // Extract what we need while holding the borrow briefly.
+        let (changed, server_url, token, agent_id) = {
+            let mut session = self.session.borrow_mut();
+            let s = match session.as_mut() {
+                Some(s) => s,
+                None => return,
+            };
+            let changed = s.on_select_agent(idx);
+            if !changed {
+                return;
+            }
+            let server_url = s.server_url().to_string();
+            let token = s.token().to_string();
+            let agent_id = s.selected_agent_id().unwrap().to_string();
+            (changed, server_url, token, agent_id)
+        };
+
+        if !changed {
+            return;
+        }
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::get_messages(&server_url, &token, &agent_id).await {
+                Ok(msgs) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_messages(msgs);
+                    }
+                }
+                Err(_e) => {
+                    // Silently ignore message-fetch errors for now —
+                    // the timeline just stays empty.  A future milestone
+                    // can surface a toast or inline error.
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
 }
 
 impl eframe::App for CadeApp {
@@ -146,12 +189,11 @@ impl eframe::App for CadeApp {
                 Some(SessionState::Connected {
                     ref agents,
                     ref health,
+                    ref selected_agent,
+                    ref messages,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
-                    // Skip vertical_centered for connected state — we
-                    // need the full area for panels.  The panels use
-                    // `show_inside` to nest within the parent `Ui`.
                     let version = health.version.as_deref().unwrap_or("unknown");
 
                     // ── Left sidebar: agent list ────────────────────
@@ -164,9 +206,14 @@ impl eframe::App for CadeApp {
                             if agents.is_empty() {
                                 ui.label("No agents configured.");
                             } else {
-                                for agent in agents {
+                                for (i, agent) in agents.iter().enumerate() {
+                                    let is_selected = *selected_agent == Some(i);
                                     let label = format!("🤖 {}", agent.name);
-                                    let _ = ui.selectable_label(false, label);
+                                    if ui.selectable_label(is_selected, label).clicked()
+                                        && !is_selected
+                                    {
+                                        action = AppAction::SelectAgent(i);
+                                    }
                                 }
                             }
                             ui.separator();
@@ -195,33 +242,57 @@ impl eframe::App for CadeApp {
                             });
                         });
 
-                    // ── Central area: timeline with markdown ─────
+                    // ── Central area: timeline ──────────────────────
                     egui::CentralPanel::default().show_inside(ui, |ui| {
                         egui::ScrollArea::vertical().show(ui, |ui| {
-                            // Placeholder: render a sample markdown to prove
-                            // the pipeline works.  Real content comes from
-                            // SSE stream frames in a future milestone.
-                            let sample_md = "\
+                            if selected_agent.is_none() {
+                                let welcome = "\
 ## Welcome to CADE Dashboard
 
 Connected and ready.  Select an agent from the sidebar to begin.
-
-### What you can do
 
 - **Chat** with any configured agent
 - View the *streaming* response in real time
 - Inspect tool calls and their results
 
-```rust
-fn main() {
-    println!(\"Hello from CADE!\");
-}
-```
-
 > This timeline will show the conversation once you pick an agent.
 ";
-                            CommonMarkViewer::new()
-                                .show(ui, &mut self.md_cache, sample_md);
+                                CommonMarkViewer::new()
+                                    .show(ui, &mut self.md_cache, welcome);
+                            } else if messages.is_empty() {
+                                ui.label("Loading messages…");
+                                ui.spinner();
+                            } else {
+                                for msg in messages {
+                                    // Role header
+                                    let role_text = match msg.role.as_str() {
+                                        "user" => "👤 User",
+                                        "assistant" => "🤖 Assistant",
+                                        "system" => "⚙️ System",
+                                        "tool" => "🔧 Tool",
+                                        other => other,
+                                    };
+                                    ui.add_space(8.0);
+                                    ui.label(
+                                        egui::RichText::new(role_text)
+                                            .strong()
+                                            .size(13.0),
+                                    );
+                                    ui.separator();
+
+                                    // Render content as markdown (string) or
+                                    // raw JSON (structured).
+                                    let content_str = match &msg.content {
+                                        serde_json::Value::String(s) => s.clone(),
+                                        other => other.to_string(),
+                                    };
+                                    CommonMarkViewer::new().show(
+                                        ui,
+                                        &mut self.md_cache,
+                                        &content_str,
+                                    );
+                                }
+                            }
                         });
                     });
                 }
@@ -277,6 +348,7 @@ fn main() {
             AppAction::None => {}
             AppAction::Connect(token) => self.spawn_connect(&token),
             AppAction::Retry => self.retry(),
+            AppAction::SelectAgent(idx) => self.spawn_fetch_messages(idx),
         }
     }
 }
@@ -287,4 +359,6 @@ enum AppAction {
     None,
     Connect(String),
     Retry,
+    /// User clicked an agent in the sidebar — spawn a message fetch.
+    SelectAgent(usize),
 }

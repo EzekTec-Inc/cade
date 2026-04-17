@@ -22,7 +22,7 @@
 //! async tasks that call `http_wasm::{get_health, get_agents}` and
 //! feeding the results back via `on_health` / `on_agents` / `on_error`.
 
-use cade_api_types::{AgentInfo, HealthInfo};
+use cade_api_types::{AgentInfo, ChatMessage, HealthInfo};
 
 /// Post-login session state.
 ///
@@ -47,6 +47,11 @@ pub enum SessionState {
         token: String,
         health: HealthInfo,
         agents: Vec<AgentInfo>,
+        /// Index into `agents` of the currently selected agent, if any.
+        selected_agent: Option<usize>,
+        /// Messages for the selected agent (empty until an agent is selected
+        /// and the fetch completes).
+        messages: Vec<ChatMessage>,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -123,6 +128,8 @@ impl SessionState {
                 token: std::mem::take(token),
                 health: health.clone(),
                 agents,
+                selected_agent: None,
+                messages: Vec::new(),
             };
         }
     }
@@ -146,6 +153,58 @@ impl SessionState {
                 };
             }
             _ => {}
+        }
+    }
+
+    /// Select an agent by index.  Clears messages so the UI can show a
+    /// loading state while the fetch is in flight.
+    ///
+    /// Returns `true` if the selection changed (caller should spawn a
+    /// message fetch), `false` if it was a no-op (already selected, or
+    /// index out of bounds, or not in `Connected` state).
+    pub fn on_select_agent(&mut self, idx: usize) -> bool {
+        if let Self::Connected {
+            agents,
+            selected_agent,
+            messages,
+            ..
+        } = self
+        {
+            if idx >= agents.len() {
+                return false;
+            }
+            if *selected_agent == Some(idx) {
+                return false;
+            }
+            *selected_agent = Some(idx);
+            messages.clear();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Feed the message list fetched for the currently selected agent.
+    ///
+    /// Only applies when `Connected` and an agent is selected.  No-op
+    /// otherwise.
+    pub fn on_messages(&mut self, msgs: Vec<ChatMessage>) {
+        if let Self::Connected { messages, .. } = self {
+            *messages = msgs;
+        }
+    }
+
+    /// The currently selected agent's ID, if any.
+    pub fn selected_agent_id(&self) -> Option<&str> {
+        if let Self::Connected {
+            agents,
+            selected_agent: Some(idx),
+            ..
+        } = self
+        {
+            agents.get(*idx).map(|a| a.id.as_str())
+        } else {
+            None
         }
     }
 
@@ -328,5 +387,109 @@ mod tests {
             SessionState::Connected { agents, .. } => assert!(agents.is_empty()),
             other => panic!("expected Connected, got {other:?}"),
         }
+    }
+
+    // ── Agent selection ─────────────────────────────────────────────────
+
+    fn make_connected() -> SessionState {
+        let mut s = SessionState::start("http://x", "tok");
+        s.on_health(test_health());
+        s.on_agents(test_agents());
+        s
+    }
+
+    #[test]
+    fn on_select_agent_sets_selection_and_clears_messages() {
+        let mut s = make_connected();
+        assert!(s.on_select_agent(0));
+        assert_eq!(s.selected_agent_id(), Some("agent-1"));
+        match &s {
+            SessionState::Connected {
+                selected_agent,
+                messages,
+                ..
+            } => {
+                assert_eq!(*selected_agent, Some(0));
+                assert!(messages.is_empty());
+            }
+            other => panic!("expected Connected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn on_select_agent_same_index_is_noop() {
+        let mut s = make_connected();
+        assert!(s.on_select_agent(0));
+        // Second call with same index returns false.
+        assert!(!s.on_select_agent(0));
+    }
+
+    #[test]
+    fn on_select_agent_out_of_bounds_is_noop() {
+        let mut s = make_connected();
+        assert!(!s.on_select_agent(99));
+        assert_eq!(s.selected_agent_id(), None);
+    }
+
+    #[test]
+    fn on_select_agent_not_connected_is_noop() {
+        let mut s = SessionState::start("http://x", "tok");
+        assert!(!s.on_select_agent(0));
+    }
+
+    #[test]
+    fn on_messages_populates_messages() {
+        let mut s = make_connected();
+        s.on_select_agent(0);
+        let msgs = vec![ChatMessage {
+            id: "m1".to_string(),
+            role: "user".to_string(),
+            content: serde_json::Value::String("hello".to_string()),
+            conversation_id: None,
+        }];
+        s.on_messages(msgs.clone());
+        match &s {
+            SessionState::Connected { messages, .. } => {
+                assert_eq!(messages.len(), 1);
+                assert_eq!(messages[0].id, "m1");
+            }
+            other => panic!("expected Connected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn on_select_agent_clears_previous_messages() {
+        let mut s = make_connected();
+        // Add a second agent so we can switch.
+        if let SessionState::Connected { agents, .. } = &mut s {
+            agents.push(AgentInfo {
+                id: "agent-2".to_string(),
+                name: "Second".to_string(),
+                model: None,
+                provider: None,
+            });
+        }
+        s.on_select_agent(0);
+        s.on_messages(vec![ChatMessage {
+            id: "m1".to_string(),
+            role: "user".to_string(),
+            content: serde_json::Value::String("hi".to_string()),
+            conversation_id: None,
+        }]);
+        // Switch to agent 2 — messages should be cleared.
+        assert!(s.on_select_agent(1));
+        assert_eq!(s.selected_agent_id(), Some("agent-2"));
+        match &s {
+            SessionState::Connected { messages, .. } => {
+                assert!(messages.is_empty(), "messages should be cleared on agent switch");
+            }
+            other => panic!("expected Connected, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn selected_agent_id_none_when_no_selection() {
+        let s = make_connected();
+        assert_eq!(s.selected_agent_id(), None);
     }
 }

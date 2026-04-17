@@ -14,7 +14,7 @@
 
 #![cfg(target_arch = "wasm32")]
 
-use cade_api_types::{AgentInfo, HealthInfo};
+use cade_api_types::{AgentInfo, ChatMessage, HealthInfo};
 use gloo_net::http::Request;
 use wasm_bindgen::JsCast as _;
 use wasm_bindgen_futures::JsFuture;
@@ -41,6 +41,18 @@ pub async fn get_agents(base_url: &str, token: &str) -> Result<Vec<AgentInfo>, A
     let url = api::build_url(base_url, "/v1/agents");
     let (status, body) = send_text(&url, token).await?;
     api::parse_agents(status, &body)
+}
+
+/// `GET /v1/agents/:id/messages` — returns the parsed message list or a typed error.
+pub async fn get_messages(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+) -> Result<Vec<ChatMessage>, ApiError> {
+    let path = format!("/v1/agents/{agent_id}/messages");
+    let url = api::build_url(base_url, &path);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_messages(status, &body)
 }
 
 // ── SSE streaming endpoint ──────────────────────────────────────────────
