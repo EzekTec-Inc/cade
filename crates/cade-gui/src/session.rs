@@ -300,6 +300,59 @@ impl SessionState {
         }
     }
 
+    /// Append a chunk of streamed reasoning text.
+    ///
+    /// Works like `on_stream_chunk` but uses `role = "reasoning"`.
+    /// Consecutive reasoning chunks accumulate into the same message.
+    pub fn on_stream_reasoning(&mut self, text: &str) {
+        if let Self::Connected {
+            messages,
+            streaming: true,
+            ..
+        } = self
+        {
+            if let Some(last) = messages.last_mut()
+                && last.role == "reasoning"
+                && last.id.is_empty()
+            {
+                if let serde_json::Value::String(ref mut s) = last.content {
+                    s.push_str(text);
+                }
+                return;
+            }
+            messages.push(ChatMessage {
+                id: String::new(),
+                role: "reasoning".to_string(),
+                content: serde_json::Value::String(text.to_string()),
+                conversation_id: None,
+            });
+        }
+    }
+
+    /// Record a tool call emitted by the assistant during streaming.
+    ///
+    /// Each tool call becomes its own message with `role = "tool_call"`
+    /// and structured JSON content.
+    pub fn on_stream_tool_call(&mut self, id: &str, name: &str, arguments: &str) {
+        if let Self::Connected {
+            messages,
+            streaming: true,
+            ..
+        } = self
+        {
+            messages.push(ChatMessage {
+                id: String::new(),
+                role: "tool_call".to_string(),
+                content: serde_json::json!({
+                    "id": id,
+                    "name": name,
+                    "arguments": arguments,
+                }),
+                conversation_id: None,
+            });
+        }
+    }
+
     /// Whether the session is currently streaming an assistant response.
     pub fn is_streaming(&self) -> bool {
         matches!(
@@ -885,5 +938,95 @@ mod tests {
         s.on_conversation_id("conv-old");
         assert!(s.on_select_agent(1)); // switch to agent-2
         assert_eq!(s.conversation_id(), None);
+    }
+
+    // ── Reasoning stream ───────────────────────────────────────────────
+
+    #[test]
+    fn on_stream_reasoning_creates_reasoning_message() {
+        let mut s = make_connected_with_agent_selected();
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "explain".to_string();
+        }
+        let _ = s.on_send();
+
+        s.on_stream_reasoning("Let me think");
+        s.on_stream_reasoning(" about this.");
+
+        if let SessionState::Connected { messages, .. } = &s {
+            // user + reasoning
+            assert_eq!(messages.len(), 2);
+            assert_eq!(messages[1].role, "reasoning");
+            assert_eq!(
+                messages[1].content,
+                serde_json::Value::String("Let me think about this.".to_string())
+            );
+        } else {
+            panic!("expected Connected");
+        }
+    }
+
+    #[test]
+    fn reasoning_then_assistant_are_separate_messages() {
+        let mut s = make_connected_with_agent_selected();
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "hello".to_string();
+        }
+        let _ = s.on_send();
+
+        s.on_stream_reasoning("thinking...");
+        s.on_stream_chunk("The answer is 42.");
+
+        if let SessionState::Connected { messages, .. } = &s {
+            assert_eq!(messages.len(), 3); // user + reasoning + assistant
+            assert_eq!(messages[1].role, "reasoning");
+            assert_eq!(messages[2].role, "assistant");
+        } else {
+            panic!("expected Connected");
+        }
+    }
+
+    // ── Tool call stream ───────────────────────────────────────────────
+
+    #[test]
+    fn on_stream_tool_call_creates_tool_call_message() {
+        let mut s = make_connected_with_agent_selected();
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "search".to_string();
+        }
+        let _ = s.on_send();
+
+        s.on_stream_tool_call("tc-1", "web_search", r#"{"query":"rust"}"#);
+
+        if let SessionState::Connected { messages, .. } = &s {
+            assert_eq!(messages.len(), 2); // user + tool_call
+            assert_eq!(messages[1].role, "tool_call");
+            let tc = &messages[1].content;
+            assert_eq!(tc["name"], "web_search");
+            assert_eq!(tc["id"], "tc-1");
+            assert_eq!(tc["arguments"], r#"{"query":"rust"}"#);
+        } else {
+            panic!("expected Connected");
+        }
+    }
+
+    #[test]
+    fn multiple_tool_calls_are_separate_messages() {
+        let mut s = make_connected_with_agent_selected();
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "do stuff".to_string();
+        }
+        let _ = s.on_send();
+
+        s.on_stream_tool_call("tc-1", "read_file", r#"{"path":"a.rs"}"#);
+        s.on_stream_tool_call("tc-2", "write_file", r#"{"path":"b.rs"}"#);
+
+        if let SessionState::Connected { messages, .. } = &s {
+            assert_eq!(messages.len(), 3); // user + 2 tool_calls
+            assert_eq!(messages[1].content["name"], "read_file");
+            assert_eq!(messages[2].content["name"], "write_file");
+        } else {
+            panic!("expected Connected");
+        }
     }
 }
