@@ -29,6 +29,7 @@ use cade_api_types::{AgentInfo, ChatMessage, HealthInfo};
 /// Created from `LoginState::Submitted` — the token and server URL are
 /// captured at construction and never mutated.
 #[derive(Debug, Clone, PartialEq)]
+#[allow(clippy::large_enum_variant)] // Connected is intentionally rich; boxing adds no value
 pub enum SessionState {
     /// Token submitted, waiting for health + agent-list responses.
     Connecting {
@@ -60,6 +61,10 @@ pub enum SessionState {
         error_toast: Option<String>,
         /// Active conversation ID (set from SSE metadata, cleared on agent switch).
         conversation_id: Option<String>,
+        /// Token usage from the last completed turn.
+        last_usage: Option<(u64, u64, Option<String>)>,
+        /// Finish reason from the last completed turn (e.g. "stop", "length").
+        last_finish_reason: Option<String>,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -142,6 +147,8 @@ impl SessionState {
                 streaming: false,
                 error_toast: None,
                 conversation_id: None,
+                last_usage: None,
+                last_finish_reason: None,
             };
         }
     }
@@ -236,6 +243,8 @@ impl SessionState {
             input_buffer,
             messages,
             streaming,
+            last_usage,
+            last_finish_reason,
             ..
         } = self
         {
@@ -254,6 +263,8 @@ impl SessionState {
             });
             input_buffer.clear();
             *streaming = true;
+            *last_usage = None;
+            *last_finish_reason = None;
             Some(trimmed)
         } else {
             None
@@ -423,6 +434,48 @@ impl SessionState {
         } = self
         {
             conversation_id.as_deref()
+        } else {
+            None
+        }
+    }
+
+    // ── Usage / finish reason API ──────────────────────────────────────
+
+    /// Store token usage statistics from a `usage_statistics` SSE event.
+    pub fn on_usage(&mut self, input_tokens: u64, output_tokens: u64, model: Option<&str>) {
+        if let Self::Connected { last_usage, .. } = self {
+            *last_usage = Some((input_tokens, output_tokens, model.map(String::from)));
+        }
+    }
+
+    /// Store the finish reason from a `finish_reason` SSE event.
+    pub fn on_finish_reason(&mut self, reason: &str) {
+        if let Self::Connected {
+            last_finish_reason, ..
+        } = self
+        {
+            *last_finish_reason = Some(reason.to_string());
+        }
+    }
+
+    /// Last token usage: `(input_tokens, output_tokens, model)`.
+    pub fn last_usage(&self) -> Option<(u64, u64, Option<&str>)> {
+        if let Self::Connected { last_usage, .. } = self {
+            last_usage
+                .as_ref()
+                .map(|(i, o, m)| (*i, *o, m.as_deref()))
+        } else {
+            None
+        }
+    }
+
+    /// Last finish reason (e.g. "stop", "length").
+    pub fn last_finish_reason(&self) -> Option<&str> {
+        if let Self::Connected {
+            last_finish_reason, ..
+        } = self
+        {
+            last_finish_reason.as_deref()
         } else {
             None
         }
@@ -1028,5 +1081,56 @@ mod tests {
         } else {
             panic!("expected Connected");
         }
+    }
+
+    // ── Usage / finish reason ──────────────────────────────────────────
+
+    #[test]
+    fn on_usage_stores_stats() {
+        let mut s = make_connected_with_agent_selected();
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "hi".to_string();
+        }
+        let _ = s.on_send();
+        s.on_usage(100, 50, Some("gpt-4o"));
+        assert_eq!(s.last_usage(), Some((100, 50, Some("gpt-4o"))));
+    }
+
+    #[test]
+    fn on_finish_reason_stores_reason() {
+        let mut s = make_connected_with_agent_selected();
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "hi".to_string();
+        }
+        let _ = s.on_send();
+        s.on_finish_reason("stop");
+        assert_eq!(s.last_finish_reason(), Some("stop"));
+    }
+
+    #[test]
+    fn usage_and_finish_reason_none_initially() {
+        let s = make_connected_with_agent_selected();
+        assert_eq!(s.last_usage(), None);
+        assert_eq!(s.last_finish_reason(), None);
+    }
+
+    #[test]
+    fn on_send_clears_usage_and_finish_reason() {
+        let mut s = make_connected_with_agent_selected();
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "first".to_string();
+        }
+        let _ = s.on_send();
+        s.on_usage(10, 5, None);
+        s.on_finish_reason("stop");
+        s.on_stream_done();
+
+        // Send again — usage/finish should reset.
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "second".to_string();
+        }
+        let _ = s.on_send();
+        assert_eq!(s.last_usage(), None);
+        assert_eq!(s.last_finish_reason(), None);
     }
 }

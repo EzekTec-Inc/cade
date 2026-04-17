@@ -211,8 +211,11 @@ impl CadeApp {
                             StreamEvent::ToolCall { id, name, arguments } => {
                                 s.on_stream_tool_call(&id, &name, &arguments);
                             }
-                            StreamEvent::Usage { .. } | StreamEvent::FinishReason(_) => {
-                                // TODO: display in UI footer
+                            StreamEvent::Usage { input_tokens, output_tokens, model } => {
+                                s.on_usage(input_tokens, output_tokens, model.as_deref());
+                            }
+                            StreamEvent::FinishReason(reason) => {
+                                s.on_finish_reason(&reason);
                             }
                         }
                     }
@@ -266,6 +269,8 @@ impl eframe::App for CadeApp {
                     ref input_buffer,
                     streaming,
                     ref error_toast,
+                    ref last_usage,
+                    ref last_finish_reason,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -488,6 +493,26 @@ Connected and ready.  Select an agent from the sidebar to begin.
                                     }
                                 }
                             });
+
+                        // ── Usage stats footer ─────────────────────
+                        if let Some((inp, out, model)) = last_usage {
+                            ui.add_space(2.0);
+                            let model_str = model
+                                .as_ref()
+                                .map(|m| format!(" · {m}"))
+                                .unwrap_or_default();
+                            let finish = last_finish_reason
+                                .as_ref()
+                                .map(|r| format!(" · {r}"))
+                                .unwrap_or_default();
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "↑{inp} ↓{out} tokens{model_str}{finish}"
+                                ))
+                                .color(crate::theme::TEXT_DIM)
+                                .size(11.0),
+                            );
+                        }
 
                         // ── Error toast overlay ────────────────────
                         if let Some(err) = error_toast {
