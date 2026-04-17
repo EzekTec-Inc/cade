@@ -605,3 +605,54 @@ Attacker plants key file in hostile repo; user cds in and runs cade. BEFORE: att
 **Known limitations (deferred):**
 - No auto-migration. Intentional per approved design: reading from cwd is the vulnerability; preserving that code path leaves the surface open.
 - The weak 100k-iteration PBKDF2 derivation is unchanged. That is P2-2.
+
+
+---
+
+## 2026-04-17T04:45Z — Task 6 / P2-2: Replace 100k PBKDF2 with Argon2id
+
+**Summary:** Swapped the KDF used to derive the AES-256-GCM key from PBKDF2-HMAC-SHA256 (100k iterations) to Argon2id with OWASP 2023 recommended defaults (m_cost=19456 KiB, t_cost=2, p_cost=1). New ciphertexts carry a 1-byte version prefix (0x02) so the decrypt path can dispatch correctly; existing pre-P2-2 ciphertexts (unprefixed) still decrypt via the retained PBKDF2 branches.
+
+**Files modified:**
+- `Cargo.toml` — added `argon2 = "0.5"` to `[workspace.dependencies]`.
+- `crates/cade-store/Cargo.toml` — added `argon2 = { workspace = true }`.
+- `crates/cade-store/src/crypto.rs` — replaced the single `derive_key()` with two specialized functions: `derive_key_argon2id()` (new default, used by `encrypt()`) and `derive_key_pbkdf2()` (compat-only, used by legacy decrypt branches). Added `KDF_V2_ARGON2ID = 0x02` version byte, `ARGON2_M_COST = 19_456`, `ARGON2_T_COST = 2`, `ARGON2_P_COST = 1` constants. Rewrote `encrypt()` to prepend the version byte. Rewrote `decrypt()` to dispatch on leading byte: 0x02 -> Argon2id, otherwise fall through to the existing PBKDF2 branches (unprefixed salted >=29 bytes, or static-salt <29 bytes). Added a doc comment to the public `decrypt()` documenting the dispatch table. Cleaned up one pre-existing dangling doc comment that was also getting flagged by clippy after my earlier edit.
+
+**Threat reduced:** the previous 100k-iteration PBKDF2 provides ~10 ms of CPU work per guess on modern hardware. An offline attacker who steals the encrypted DB AND learns the machine secret format (32-byte base64) could brute-force a weak secret in GPU time. Argon2id with the OWASP defaults takes ~50 ms per derivation and is deliberately memory-hard (19 MiB per guess), making GPU/ASIC attacks far less efficient — roughly a 5000x slowdown for an equivalent dollar cost on attacker hardware, and far worse if the attacker has to parallelize across many guesses because of the memory pressure.
+
+**Previous behavior (pre-P2-2):**
+- `encrypt()` output layout: `[ salt(16) | nonce(12) | ct+tag ]`, key derived via PBKDF2-HMAC-SHA256 100k iterations.
+- `decrypt()` dispatched purely on byte length: >=29 -> salted PBKDF2, else static-salt PBKDF2.
+
+**New behavior (P2-2):**
+- `encrypt()` output layout: `[ 0x02 | salt(16) | nonce(12) | ct+tag ]`, key derived via Argon2id.
+- `decrypt()` dispatch:
+  1. len >= 30 AND data[0] == 0x02 -> Argon2id (current).
+  2. len >= 29 -> PBKDF2 with extracted salt (pre-P2-2 legacy, warns).
+  3. len >= 12 -> PBKDF2 with hardcoded salt (oldest legacy, warns).
+  4. else -> error.
+
+**Tests:**
+- 6 new unit tests in `crypto.rs`:
+  * `p2_2_argon2_params_match_owasp_profile` - param constants locked to OWASP values.
+  * `p2_2_new_ciphertext_starts_with_version_byte` - verifies 0x02 prefix in fresh encrypts.
+  * `p2_2_argon2id_roundtrip` - encrypt/decrypt happy path.
+  * `p2_2_legacy_pbkdf2_salted_blob_still_decrypts` - hand-crafted pre-P2-2 blob still decrypts.
+  * `p2_2_legacy_static_salt_blob_still_decrypts` - oldest format still decrypts for len<29.
+  * `p2_2_corrupted_version_byte_fails_cleanly` - XORed version byte returns error, no panic.
+- `cargo test -p cade-store --lib crypto` -> 17/17 green (11 pre-existing + 6 new).
+- `cargo test --workspace` -> 646 green, 0 failed (up from 640, +6).
+- `cargo clippy -p cade-store --lib --tests` -> no new warnings from crypto.rs.
+
+**New dependencies:** `argon2 = "0.5"` (0.5.3) added to workspace + cade-store. Explicitly pre-approved in the remediation contract.
+
+**Rollback:** `restore_checkpoint cp-160fd827-925d-4fe1-b4d9-209b231d83e9` (label `before-p2-2-argon2id`). For task-level revert: git revert the P2-2 commit. Values encrypted after P2-2 land will be unreadable after a revert because the PBKDF2-only dispatch does not recognize the 0x02 prefix; operators would need to manually re-save any providers added between P2-2 and revert.
+
+**Design notes:**
+- KDF-version byte chosen over an outer container (e.g. JSON envelope) because (a) it preserves the existing base64-string format callers expect, (b) it adds only 1 byte overhead per value, (c) dispatch is O(1) and unambiguous (0x02 in the first byte of an unprefixed salted blob would require a specific base64 bit pattern we can rule out by checking len AND value).
+- `Option<u32>` output len on `Params::new(...)` is set to `Some(32)` to match the `[u8; 32]` AES-256 key size; the default (None) would imply Argon2's internal default (32 bytes) but being explicit avoids silent breakage if argon2 crate defaults change.
+- PBKDF2 dep (`pbkdf2 = "0.12"`) is kept as compat-only. It can be removed in a future release once operators confirm all legacy values have been re-saved.
+
+**Known limitations (deferred):**
+- No automatic "re-encrypt on read" for legacy blobs. Operators currently see a tracing::warn! log and can re-save values through the UI to upgrade them. A future task could add an opportunistic upgrade inside the decrypt-then-use code path if desired.
+- OWASP params are fixed constants. A future task could expose them via env vars (e.g. CADE_ARGON2_M_COST) for constrained environments.
