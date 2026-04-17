@@ -5,6 +5,7 @@ pub mod artifacts;
 pub mod auth;
 pub mod checkpoints;
 pub mod complete;
+pub mod csrf;
 pub mod evals;
 pub mod health;
 pub mod memory_evidence;
@@ -194,16 +195,22 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/providers/presets", get(providers::list_presets))
         .route("/v1/providers/:name", delete(providers::remove_provider));
 
-    // Merge and apply auth middleware to everything.
+    // Merge and apply middleware to everything.
     //
-    // P1-2: cap every request body at 8 MiB so oversized payloads are
-    // rejected with 413 before any handler buffers them.
+    // Layer order (outermost → innermost; request flows top-down):
+    //   1. csrf_middleware  — P2-5: reject mutating requests with a
+    //      non-localhost `Origin` header (defense-in-depth on top of
+    //      bearer-token auth).  Absent Origin and safe methods pass.
+    //   2. auth_middleware  — P1-1: bearer token required on all
+    //      non-health routes.
+    //   3. DefaultBodyLimit — P1-2: cap every request body at 8 MiB.
     Router::new()
         .merge(inference)
         .merge(rest)
         .with_state(state.clone())
         .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(state, auth::auth_middleware))
+        .layer(middleware::from_fn(csrf::csrf_middleware))
 }
 
 #[cfg(test)]

@@ -1,4 +1,63 @@
-## 2026-04-17T16:50:08Z — P3-1 (MVP): Generic 500 error responses
+## 2026-04-17T16:57:31Z — P2-5: Origin header CSRF middleware
+
+**Task:** Add defense-in-depth Origin-header validation on mutating HTTP requests.  Block `POST` / `PUT` / `PATCH` / `DELETE` when the `Origin` header is present but not on the existing localhost allow-list.
+
+**Context / priority caveat:** Real CSRF risk against cade-server is already low.  Bearer-token auth (P1-1) is mandatory and is sent via `Authorization: Bearer`, not a cookie — a browser cannot forge it cross-origin.  CORS (H-03) is locked to `http://localhost` / `http://127.0.0.1` at the binary level.  This middleware adds one more layer: if a browser manages to originate a mutating request, its Origin header must match the localhost allow-list regardless of CORS or auth outcomes.  Not a gap-closer; a belt-and-braces hardening task.
+
+**Files modified:**
+- `crates/cade-server/src/server/api/mod.rs`
+  - Registered `pub mod csrf;`
+  - Added `.layer(middleware::from_fn(csrf::csrf_middleware))` as the outermost layer in `router()` (request flow: `csrf → auth → body-limit → handler`).
+  - Updated the layer-order doc comment.
+- `crates/cade-server/src/server/api/csrf.rs` (new, 90 lines).
+  - Pure policy `pub(crate) fn origin_is_allowed(origin: &str) -> bool` — accepts `http://localhost` and `http://127.0.0.1` on any numeric port (or bare); rejects everything else including `https://` on localhost, non-ASCII-digit ports, prefix-confusion names like `http://localhost.evil.com`, and the empty string.
+  - Private helper `fn is_mutating(method: &Method) -> bool` for the POST/PUT/PATCH/DELETE set.
+  - `pub async fn csrf_middleware(req, next) -> Response`:
+    - Safe methods (GET / HEAD / OPTIONS) → pass through unconditionally.
+    - No `Origin` header → pass through (non-browser clients: CADE CLI, curl, CI).
+    - Origin present + on allow-list → pass through.
+    - Origin present + not on allow-list → log `tracing::warn!(method, path, origin, …)` and return `403 Forbidden` with body `{"error":"forbidden","reason":"origin not allowed"}`.
+- `crates/cade-server/src/server/api/csrf_test.rs` (new, 120 lines).  9 tests:
+  - Policy: accepts bare localhost schemes, accepts any-port localhost schemes, rejects non-localhost / HTTPS-on-localhost / prefix-confusion / malformed ports / non-`http` schemes / empty string.
+  - Middleware: allows POST with allowed origin, blocks POST/DELETE with disallowed origin, pass-through when Origin absent, pass-through on GET even with hostile origin, OPTIONS preflight not 403-blocked.
+
+**Dependency policy:** no new dependencies.
+
+**Reason:** Phase 2 of the user-approved security backlog (P2-5).  Bearer auth + strict CORS already mitigate classical CSRF against this server.  This middleware adds an explicit origin check at the HTTP layer, independent of CORS (which only gates browser-side response access, not server-side request acceptance) and auth (which only checks `Authorization`, not `Origin`).
+
+**Layer ordering rationale:**
+- `csrf_middleware` is the **outermost** layer — it runs first so a disallowed-Origin request never reaches auth (no crypto compare) or a handler (no DB work, no allocation).
+- `auth_middleware` next — bearer token check.
+- `DefaultBodyLimit` innermost — cheap guardrail that applies to any request that makes it past auth.
+
+**Previous behaviour:**
+- A mutating request carrying `Origin: https://evil.com` was evaluated only by auth.  If the attacker somehow obtained or injected a valid bearer token (e.g. via an unrelated XSS on a localhost page that exposed it), the request was honoured.
+
+**New behaviour:**
+- Same request → `403 Forbidden` before auth runs.  Even if the attacker holds a valid bearer token, they need an allowed `Origin` too — or, if they're a non-browser caller, they must not send an `Origin` header at all.
+
+**Explicit non-goals (per user validation):**
+- `Referer` header is NOT checked.  `Origin` is RFC 6454-standard for cross-origin requests; `Referer` is privacy-leaky and often stripped.
+- Absent `Origin` is NOT treated as suspicious.  Blocking it would break the CADE CLI (which never sets `Origin`) and every non-browser caller.
+- GET / HEAD / OPTIONS are NOT checked.  They must never have side effects; OPTIONS preflight handling is owned by the tower-http CORS layer.
+
+**Test results:**
+- `cargo test -p cade-server --lib csrf` → 9/9 pass.
+- `cargo test -p cade-server` → 129/129 pass (+9 new; no regressions in auth, router, agents, error, evals, messages, etc.).
+- `cargo clippy -p cade-server --all-targets --no-deps` → zero new warnings in changed files.  (Pre-existing warnings in `context.rs`, `complete.rs`, `consolidation.rs` unchanged — not fixed, TDD §9.)
+- `cargo build --workspace` → clean.
+
+**Rollback steps:**
+1. `git revert <this commit>`.
+2. Or restore from checkpoint `pre-p2-5` (ID `cp-f984799f-8ab9-4674-aa91-dea6d1cf71bf`, HEAD `e4b23a8b`).
+
+**Follow-ups (explicitly deferred):**
+- Making the allow-list configurable for remote deployments (currently hard-coded to localhost to match `src/bin/cade-server.rs` CORS).  Out of scope for P2-5 — add a `CADE_ALLOWED_ORIGINS` env var if remote-hosting becomes a supported configuration.
+- Extending the allow-list with the `:PORT` from `ServerConfig.addr` explicitly (today we accept *any* port on `localhost`/`127.0.0.1` — a superset of the CORS allow-list which is more restrictive).  Trade-off deferred; the current policy is simpler and strictly tighter than leaving the check off.
+
+---
+
+
 
 **Task:** Stop the CADE server from echoing internal error detail in 5xx HTTP responses.  Replace leaky bodies with a stable generic shape that carries a correlation id, and push the full detail into the structured log under the same id.
 
