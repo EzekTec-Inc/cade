@@ -44,6 +44,9 @@ pub struct CadeApp {
 impl CadeApp {
     /// Construct from the `CreationContext` handed to us by eframe.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        // Apply the CADE dark theme once at startup.
+        crate::theme::apply_theme(&cc.egui_ctx);
+
         // Resolve the server URL from the page origin.  In production
         // the dashboard is served by cade-server, so origin == API host.
         let origin = web_sys::window()
