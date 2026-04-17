@@ -160,6 +160,63 @@ impl CadeApp {
             ctx.request_repaint();
         });
     }
+
+    /// Call `on_send` on the session state, then spawn an async SSE stream
+    /// that feeds chunks back into the session.
+    fn spawn_stream_message(&mut self) {
+        // on_send returns the trimmed input if the send is valid.
+        let (input, server_url, token, agent_id) = {
+            let mut session = self.session.borrow_mut();
+            let s = match session.as_mut() {
+                Some(s) => s,
+                None => return,
+            };
+            let input = match s.on_send() {
+                Some(i) => i,
+                None => return,
+            };
+            let server_url = s.server_url().to_string();
+            let token = s.token().to_string();
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            (input, server_url, token, agent_id)
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let session_clone = Rc::clone(&session);
+            let ctx_clone = ctx.clone();
+
+            let result = crate::http_wasm::send_message_stream(
+                &server_url,
+                &token,
+                &agent_id,
+                &input,
+                move |chunk| {
+                    if let Some(s) = session_clone.borrow_mut().as_mut() {
+                        s.on_stream_chunk(chunk);
+                    }
+                    ctx_clone.request_repaint();
+                },
+            )
+            .await;
+
+            // Mark stream as done regardless of success/error.
+            if let Some(s) = session.borrow_mut().as_mut() {
+                s.on_stream_done();
+            }
+
+            if let Err(_e) = result {
+                // TODO: surface streaming errors in the UI.
+            }
+
+            ctx.request_repaint();
+        });
+    }
 }
 
 impl eframe::App for CadeApp {
@@ -191,10 +248,17 @@ impl eframe::App for CadeApp {
                     ref health,
                     ref selected_agent,
                     ref messages,
+                    ref input_buffer,
+                    streaming,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
                     let version = health.version.as_deref().unwrap_or("unknown");
+                    let has_agent = selected_agent.is_some();
+                    let is_streaming = streaming;
+
+                    // Clone input buffer for the editable text field.
+                    let mut input_edit = input_buffer.clone();
 
                     // ── Left sidebar: agent list ────────────────────
                     egui::Panel::left("agent_sidebar")
@@ -231,22 +295,57 @@ impl eframe::App for CadeApp {
                         .show_inside(ui, |ui| {
                             ui.horizontal(|ui| {
                                 ui.label("▸");
-                                ui.add_enabled(
-                                    false,
-                                    egui::TextEdit::singleline(
-                                        &mut String::new(),
-                                    )
-                                    .hint_text("Send a message… (coming soon)")
-                                    .desired_width(ui.available_width() - 60.0),
+                                let can_edit = has_agent && !is_streaming;
+                                let resp = ui.add_enabled(
+                                    can_edit,
+                                    egui::TextEdit::singleline(&mut input_edit)
+                                        .hint_text(if !has_agent {
+                                            "Select an agent first…"
+                                        } else if is_streaming {
+                                            "Waiting for response…"
+                                        } else {
+                                            "Send a message…"
+                                        })
+                                        .desired_width(ui.available_width() - 80.0),
                                 );
+
+                                // Sync edits back into session state.
+                                if resp.changed() {
+                                    if let Some(s) = self.session.borrow_mut().as_mut() {
+                                        if let SessionState::Connected {
+                                            input_buffer: buf, ..
+                                        } = s
+                                        {
+                                            *buf = input_edit.clone();
+                                        }
+                                    }
+                                }
+
+                                let enter_pressed = resp.lost_focus()
+                                    && ui.input(|i| i.key_pressed(egui::Key::Enter));
+
+                                let send_enabled = can_edit && !input_edit.trim().is_empty();
+                                let send_clicked =
+                                    ui.add_enabled(send_enabled, egui::Button::new("Send"))
+                                        .clicked();
+
+                                if (send_clicked || enter_pressed) && send_enabled {
+                                    action = AppAction::SendMessage;
+                                }
+
+                                if is_streaming {
+                                    ui.spinner();
+                                }
                             });
                         });
 
                     // ── Central area: timeline ──────────────────────
                     egui::CentralPanel::default().show_inside(ui, |ui| {
-                        egui::ScrollArea::vertical().show(ui, |ui| {
-                            if selected_agent.is_none() {
-                                let welcome = "\
+                        egui::ScrollArea::vertical()
+                            .stick_to_bottom(true)
+                            .show(ui, |ui| {
+                                if selected_agent.is_none() {
+                                    let welcome = "\
 ## Welcome to CADE Dashboard
 
 Connected and ready.  Select an agent from the sidebar to begin.
@@ -257,43 +356,54 @@ Connected and ready.  Select an agent from the sidebar to begin.
 
 > This timeline will show the conversation once you pick an agent.
 ";
-                                CommonMarkViewer::new()
-                                    .show(ui, &mut self.md_cache, welcome);
-                            } else if messages.is_empty() {
-                                ui.label("Loading messages…");
-                                ui.spinner();
-                            } else {
-                                for msg in messages {
-                                    // Role header
-                                    let role_text = match msg.role.as_str() {
-                                        "user" => "👤 User",
-                                        "assistant" => "🤖 Assistant",
-                                        "system" => "⚙️ System",
-                                        "tool" => "🔧 Tool",
-                                        other => other,
-                                    };
-                                    ui.add_space(8.0);
-                                    ui.label(
-                                        egui::RichText::new(role_text)
-                                            .strong()
-                                            .size(13.0),
-                                    );
-                                    ui.separator();
+                                    CommonMarkViewer::new()
+                                        .show(ui, &mut self.md_cache, welcome);
+                                } else if messages.is_empty() && !is_streaming {
+                                    ui.label("No messages yet. Send one to start a conversation.");
+                                } else {
+                                    for msg in messages {
+                                        // Role header
+                                        let role_text = match msg.role.as_str() {
+                                            "user" => "👤 User",
+                                            "assistant" => "🤖 Assistant",
+                                            "system" => "⚙️ System",
+                                            "tool" => "🔧 Tool",
+                                            other => other,
+                                        };
+                                        ui.add_space(8.0);
+                                        ui.label(
+                                            egui::RichText::new(role_text)
+                                                .strong()
+                                                .size(13.0),
+                                        );
+                                        ui.separator();
 
-                                    // Render content as markdown (string) or
-                                    // raw JSON (structured).
-                                    let content_str = match &msg.content {
-                                        serde_json::Value::String(s) => s.clone(),
-                                        other => other.to_string(),
-                                    };
-                                    CommonMarkViewer::new().show(
-                                        ui,
-                                        &mut self.md_cache,
-                                        &content_str,
-                                    );
+                                        // Render content as markdown (string) or
+                                        // raw JSON (structured).
+                                        let content_str = match &msg.content {
+                                            serde_json::Value::String(s) => s.clone(),
+                                            other => other.to_string(),
+                                        };
+                                        CommonMarkViewer::new().show(
+                                            ui,
+                                            &mut self.md_cache,
+                                            &content_str,
+                                        );
+                                    }
+
+                                    if is_streaming {
+                                        ui.add_space(4.0);
+                                        ui.horizontal(|ui| {
+                                            ui.spinner();
+                                            ui.label(
+                                                egui::RichText::new("Streaming…")
+                                                    .weak()
+                                                    .italics(),
+                                            );
+                                        });
+                                    }
                                 }
-                            }
-                        });
+                            });
                     });
                 }
                 Some(SessionState::ConnectionFailed { ref error, .. }) => {
@@ -349,6 +459,7 @@ Connected and ready.  Select an agent from the sidebar to begin.
             AppAction::Connect(token) => self.spawn_connect(&token),
             AppAction::Retry => self.retry(),
             AppAction::SelectAgent(idx) => self.spawn_fetch_messages(idx),
+            AppAction::SendMessage => self.spawn_stream_message(),
         }
     }
 }
@@ -361,4 +472,6 @@ enum AppAction {
     Retry,
     /// User clicked an agent in the sidebar — spawn a message fetch.
     SelectAgent(usize),
+    /// User submitted a message — spawn the SSE stream.
+    SendMessage,
 }

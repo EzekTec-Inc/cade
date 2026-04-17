@@ -55,6 +55,120 @@ pub async fn get_messages(
     api::parse_messages(status, &body)
 }
 
+/// `POST /v1/agents/:id/messages/stream` — send a user message and stream
+/// the assistant's response via SSE.
+///
+/// `on_chunk` is called with each assistant-text fragment.
+/// The future resolves when the stream ends or an error occurs.
+pub async fn send_message_stream(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    input: &str,
+    mut on_chunk: impl FnMut(&str),
+) -> Result<(), ApiError> {
+    let path = format!("/v1/agents/{agent_id}/messages/stream");
+    let url = api::build_url(base_url, &path);
+
+    let body = serde_json::json!({ "input": input });
+
+    let resp = Request::post(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .header("Content-Type", "application/json")
+        .body(body.to_string())
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
+
+    let status = resp.status();
+    if status == 401 {
+        return Err(ApiError::Unauthorized);
+    }
+    if !(200..300).contains(&(status as u16)) {
+        return Err(ApiError::Server {
+            status: status as u16,
+        });
+    }
+
+    let resp_body = resp.body().ok_or_else(|| ApiError::Transport {
+        message: "response has no body".to_string(),
+    })?;
+
+    let reader =
+        web_sys::ReadableStreamDefaultReader::new(&resp_body).map_err(|e| ApiError::Transport {
+            message: format!("failed to get reader: {e:?}"),
+        })?;
+
+    let mut parser = SseParser::new();
+
+    loop {
+        let result = JsFuture::from(reader.read())
+            .await
+            .map_err(|e| ApiError::Transport {
+                message: format!("read error: {e:?}"),
+            })?;
+
+        let done = js_sys::Reflect::get(&result, &"done".into())
+            .unwrap_or(true.into())
+            .as_bool()
+            .unwrap_or(true);
+
+        if !done {
+            if let Ok(value) = js_sys::Reflect::get(&result, &"value".into()) {
+                if let Ok(arr) = value.dyn_into::<Uint8Array>() {
+                    let bytes = arr.to_vec();
+                    parser.feed(&bytes);
+
+                    while let Some(frame) = parser.pop() {
+                        match &frame {
+                            SseFrame::Json(v) => {
+                                if v.get("message_type").and_then(|m| m.as_str())
+                                    == Some("assistant_message")
+                                {
+                                    if let Some(text) = v.get("content").and_then(|c| c.as_str()) {
+                                        on_chunk(text);
+                                    }
+                                }
+                            }
+                            SseFrame::Done => {
+                                reader.release_lock();
+                                return Ok(());
+                            }
+                            SseFrame::ParseError(_) => {
+                                // Skip malformed frames.
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if done {
+            // Drain remaining buffered frames.
+            while let Some(frame) = parser.pop() {
+                if let SseFrame::Json(v) = &frame {
+                    if v.get("message_type").and_then(|m| m.as_str())
+                        == Some("assistant_message")
+                    {
+                        if let Some(text) = v.get("content").and_then(|c| c.as_str()) {
+                            on_chunk(text);
+                        }
+                    }
+                }
+            }
+            break;
+        }
+    }
+
+    reader.release_lock();
+    Ok(())
+}
+
 // ── SSE streaming endpoint ──────────────────────────────────────────────
 
 /// Stream SSE frames from an authenticated GET endpoint.

@@ -52,6 +52,10 @@ pub enum SessionState {
         /// Messages for the selected agent (empty until an agent is selected
         /// and the fetch completes).
         messages: Vec<ChatMessage>,
+        /// The text the user is currently typing in the input bar.
+        input_buffer: String,
+        /// True while we are streaming an assistant response via SSE.
+        streaming: bool,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -130,6 +134,8 @@ impl SessionState {
                 agents,
                 selected_agent: None,
                 messages: Vec::new(),
+                input_buffer: String::new(),
+                streaming: false,
             };
         }
     }
@@ -206,6 +212,95 @@ impl SessionState {
         } else {
             None
         }
+    }
+
+    /// Submit the current input buffer as a user message.
+    ///
+    /// Returns the trimmed input text if the send is valid (agent selected,
+    /// non-empty buffer, not already streaming).  Returns `None` if it's a
+    /// no-op.  On success:
+    ///   1. Appends a `ChatMessage { role: "user", content: input }` to messages.
+    ///   2. Clears the input buffer.
+    ///   3. Sets `streaming = true`.
+    pub fn on_send(&mut self) -> Option<String> {
+        if let Self::Connected {
+            selected_agent: Some(_),
+            input_buffer,
+            messages,
+            streaming,
+            ..
+        } = self
+        {
+            if *streaming {
+                return None;
+            }
+            let trimmed = input_buffer.trim().to_string();
+            if trimmed.is_empty() {
+                return None;
+            }
+            messages.push(ChatMessage {
+                id: String::new(), // server assigns a real ID
+                role: "user".to_string(),
+                content: serde_json::Value::String(trimmed.clone()),
+                conversation_id: None,
+            });
+            input_buffer.clear();
+            *streaming = true;
+            Some(trimmed)
+        } else {
+            None
+        }
+    }
+
+    /// Append a chunk of streamed assistant text.
+    ///
+    /// If the last message is already an assistant message (the one we're
+    /// building), the chunk is appended to its content.  Otherwise a new
+    /// assistant message is created.
+    pub fn on_stream_chunk(&mut self, text: &str) {
+        if let Self::Connected {
+            messages,
+            streaming: true,
+            ..
+        } = self
+        {
+            // Append to existing assistant message or create one.
+            if let Some(last) = messages.last_mut()
+                && last.role == "assistant"
+                && last.id.is_empty()
+            {
+                // Accumulate into the in-progress message.
+                if let serde_json::Value::String(ref mut s) = last.content {
+                    s.push_str(text);
+                }
+                return;
+            }
+            // First chunk — create the assistant message.
+            messages.push(ChatMessage {
+                id: String::new(),
+                role: "assistant".to_string(),
+                content: serde_json::Value::String(text.to_string()),
+                conversation_id: None,
+            });
+        }
+    }
+
+    /// Mark the SSE stream as complete.
+    pub fn on_stream_done(&mut self) {
+        if let Self::Connected { streaming, .. } = self {
+            *streaming = false;
+        }
+    }
+
+    /// Whether the session is currently streaming an assistant response.
+    pub fn is_streaming(&self) -> bool {
+        matches!(
+            self,
+            Self::Connected {
+                streaming: true,
+                ..
+            }
+        )
     }
 
     /// Whether the caller should attempt a retry (re-enter the login flow).
@@ -491,5 +586,153 @@ mod tests {
     fn selected_agent_id_none_when_no_selection() {
         let s = make_connected();
         assert_eq!(s.selected_agent_id(), None);
+    }
+
+    // ── Input / Send / Stream ───────────────────────────────────────────
+
+    fn make_connected_with_agent_selected() -> SessionState {
+        let mut s = make_connected();
+        s.on_select_agent(0);
+        s
+    }
+
+    #[test]
+    fn on_send_returns_trimmed_input_and_appends_user_message() {
+        let mut s = make_connected_with_agent_selected();
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "  hello world  ".to_string();
+        }
+        let result = s.on_send();
+        assert_eq!(result.as_deref(), Some("hello world"));
+        if let SessionState::Connected {
+            messages,
+            input_buffer,
+            streaming,
+            ..
+        } = &s
+        {
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].role, "user");
+            assert_eq!(
+                messages[0].content,
+                serde_json::Value::String("hello world".to_string())
+            );
+            assert!(input_buffer.is_empty());
+            assert!(*streaming);
+        } else {
+            panic!("expected Connected");
+        }
+    }
+
+    #[test]
+    fn on_send_noop_when_no_agent_selected() {
+        let mut s = make_connected();
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "hello".to_string();
+        }
+        assert_eq!(s.on_send(), None);
+    }
+
+    #[test]
+    fn on_send_noop_when_empty_buffer() {
+        let mut s = make_connected_with_agent_selected();
+        assert_eq!(s.on_send(), None);
+    }
+
+    #[test]
+    fn on_send_noop_when_whitespace_only() {
+        let mut s = make_connected_with_agent_selected();
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "   ".to_string();
+        }
+        assert_eq!(s.on_send(), None);
+    }
+
+    #[test]
+    fn on_send_noop_while_streaming() {
+        let mut s = make_connected_with_agent_selected();
+        if let SessionState::Connected {
+            input_buffer,
+            streaming,
+            ..
+        } = &mut s
+        {
+            *input_buffer = "hello".to_string();
+            *streaming = true;
+        }
+        assert_eq!(s.on_send(), None);
+    }
+
+    #[test]
+    fn on_stream_chunk_creates_then_appends_assistant_message() {
+        let mut s = make_connected_with_agent_selected();
+        if let SessionState::Connected { streaming, .. } = &mut s {
+            *streaming = true;
+        }
+        s.on_stream_chunk("Hello");
+        s.on_stream_chunk(", world!");
+
+        if let SessionState::Connected { messages, .. } = &s {
+            assert_eq!(messages.len(), 1);
+            assert_eq!(messages[0].role, "assistant");
+            assert_eq!(
+                messages[0].content,
+                serde_json::Value::String("Hello, world!".to_string())
+            );
+        } else {
+            panic!("expected Connected");
+        }
+    }
+
+    #[test]
+    fn on_stream_chunk_noop_when_not_streaming() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_stream_chunk("ignored");
+        if let SessionState::Connected { messages, .. } = &s {
+            assert!(messages.is_empty());
+        }
+    }
+
+    #[test]
+    fn on_stream_done_clears_streaming_flag() {
+        let mut s = make_connected_with_agent_selected();
+        if let SessionState::Connected { streaming, .. } = &mut s {
+            *streaming = true;
+        }
+        assert!(s.is_streaming());
+        s.on_stream_done();
+        assert!(!s.is_streaming());
+    }
+
+    #[test]
+    fn full_send_stream_cycle() {
+        let mut s = make_connected_with_agent_selected();
+        // Type and send.
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "What is Rust?".to_string();
+        }
+        let input = s.on_send().expect("should send");
+        assert_eq!(input, "What is Rust?");
+        assert!(s.is_streaming());
+
+        // Stream chunks arrive.
+        s.on_stream_chunk("Rust is ");
+        s.on_stream_chunk("a systems programming language.");
+        s.on_stream_done();
+
+        assert!(!s.is_streaming());
+        if let SessionState::Connected { messages, .. } = &s {
+            assert_eq!(messages.len(), 2); // user + assistant
+            assert_eq!(messages[0].role, "user");
+            assert_eq!(messages[1].role, "assistant");
+            assert_eq!(
+                messages[1].content,
+                serde_json::Value::String(
+                    "Rust is a systems programming language.".to_string()
+                )
+            );
+        } else {
+            panic!("expected Connected");
+        }
     }
 }
