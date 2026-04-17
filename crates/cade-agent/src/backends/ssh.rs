@@ -25,13 +25,20 @@ pub struct SshBackend {
 
 impl SshBackend {
     fn base_ssh_args(&self) -> Vec<String> {
+        // P2-4: default `StrictHostKeyChecking=yes` so unknown host keys
+        // are rejected.  `CADE_SSH_ACCEPT_NEW=1` (exact) opts in to the
+        // weaker TOFU `accept-new` mode for environments that pre-seed
+        // `known_hosts` dynamically (CI, test fleets).
+        let host_key_mode = strict_host_key_checking_policy(
+            std::env::var("CADE_SSH_ACCEPT_NEW").ok().as_deref(),
+        );
         let mut args = vec![
             "-o".to_string(),
             "BatchMode=yes".to_string(),
             "-o".to_string(),
             "ConnectTimeout=10".to_string(),
             "-o".to_string(),
-            "StrictHostKeyChecking=accept-new".to_string(),
+            format!("StrictHostKeyChecking={host_key_mode}"),
             "-p".to_string(),
             self.port.to_string(),
         ];
@@ -110,6 +117,30 @@ fn build_remote_cwd_command(command: &str, cwd: &Path) -> String {
 }
 
 // endregion: --- Shell quoting (P2-3)
+
+// region:    --- Host key policy (P2-4)
+
+/// Resolve the value for the `StrictHostKeyChecking` ssh option.
+///
+/// Pure, deterministic, unit-testable.  Takes the raw env value (or
+/// `None` if unset) and returns the policy string to pass to `ssh -o`.
+///
+/// Default: `"yes"` — unknown host keys are rejected outright.
+///
+/// Escape hatch: `CADE_SSH_ACCEPT_NEW=1` (exact match) → `"accept-new"`,
+/// which restores the previous TOFU behaviour for environments that
+/// can't pre-populate `~/.ssh/known_hosts`.  Any other value — empty,
+/// `"0"`, `"true"`, `"yes"`, `" 1 "`, `"1\n"`, etc. — is treated as if
+/// the variable were unset so operators can't accidentally weaken the
+/// default with truthy-looking strings.
+fn strict_host_key_checking_policy(env_value: Option<&str>) -> &'static str {
+    match env_value {
+        Some("1") => "accept-new",
+        _ => "yes",
+    }
+}
+
+// endregion: --- Host key policy (P2-4)
 
 #[async_trait]
 impl ExecutionBackend for SshBackend {
@@ -226,6 +257,42 @@ impl ExecutionBackend for SshBackend {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    // -- P2-4: StrictHostKeyChecking default
+    //
+    // Default must be `yes` so unknown host keys are rejected.  The only
+    // escape hatch is the env var `CADE_SSH_ACCEPT_NEW=1` (exact match),
+    // which relaxes the policy to `accept-new` (TOFU on first connect).
+    // Any other value — including empty, `0`, `true`, or `yes` — must
+    // behave as if unset, so operators can't accidentally weaken the
+    // default with truthy-looking strings.
+
+    #[test]
+    fn strict_host_key_default_is_yes() {
+        assert_eq!(strict_host_key_checking_policy(None), "yes");
+    }
+
+    #[test]
+    fn strict_host_key_accept_new_opt_in_requires_exact_one() {
+        assert_eq!(
+            strict_host_key_checking_policy(Some("1")),
+            "accept-new",
+            "CADE_SSH_ACCEPT_NEW=1 must enable accept-new (TOFU)"
+        );
+    }
+
+    #[test]
+    fn strict_host_key_rejects_truthy_lookalikes() {
+        // Operators should not be able to disable the hardened default
+        // with values that *look* truthy but are not the exact opt-in.
+        for v in ["", "0", "true", "yes", "TRUE", "2", " 1 ", "1\n"] {
+            assert_eq!(
+                strict_host_key_checking_policy(Some(v)),
+                "yes",
+                "value {v:?} must NOT enable accept-new"
+            );
+        }
+    }
 
     // -- P2-3: SSH cwd shell quoting
     //

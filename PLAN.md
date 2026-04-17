@@ -1,4 +1,48 @@
-## 2026-04-17T16:28:32Z — P2-3: SSH cwd shell quoting
+## 2026-04-17T16:36:18Z — P2-4: SSH `StrictHostKeyChecking=yes` default
+
+**Task:** Change the SSH backend's default host-key-checking policy from `accept-new` (TOFU — trust-on-first-use) to `yes` (reject unknown host keys), with a narrow env-var escape hatch for environments that dynamically seed `~/.ssh/known_hosts`.
+
+**Vulnerability (before):**
+`crates/cade-agent/src/backends/ssh.rs:34` hard-coded `StrictHostKeyChecking=accept-new`.  This makes the first connection to any host trust-on-first-use: an attacker able to interpose during that first handshake can MITM the channel, and subsequent connections pin the attacker's key as legitimate.  For an agent that executes shell commands on a remote host, this is a weak default.
+
+**Files modified:**
+- `crates/cade-agent/src/backends/ssh.rs`
+  - Added pure helper `fn strict_host_key_checking_policy(env_value: Option<&str>) -> &'static str` — maps exactly `Some("1")` → `"accept-new"`; everything else (including unset, empty, `"0"`, `"true"`, `"yes"`, `" 1 "`, `"1\n"`) → `"yes"`.  Deterministic, no env access inside the helper so unit tests are hermetic.
+  - `base_ssh_args` now reads `CADE_SSH_ACCEPT_NEW` via `std::env::var` and passes the result through the helper to build the `StrictHostKeyChecking=<mode>` flag.
+  - Added 3 unit tests: default-is-yes, exact-1-opts-in, and truthy-lookalike rejection (empty, `"0"`, `"true"`, `"yes"`, `"TRUE"`, `"2"`, `" 1 "`, `"1\n"`).
+
+**Reason:** Close the TOFU-on-first-connect weakness in the SSH execution backend.  Part of Phase 2 of the user-approved security backlog (P2-4).  Breaking default was pre-approved: operators opt back in with `CADE_SSH_ACCEPT_NEW=1`.
+
+**Previous behaviour:**
+- `ssh -o StrictHostKeyChecking=accept-new ...` — first-contact hosts silently trusted; their keys pinned.
+- No escape hatch needed because the default was already permissive.
+
+**New behaviour:**
+- `ssh -o StrictHostKeyChecking=yes ...` by default — connection **refused** if the host key is not already present in `~/.ssh/known_hosts` (or `/etc/ssh/ssh_known_hosts`).
+- `CADE_SSH_ACCEPT_NEW=1` (exact match required) restores the pre-fix `accept-new` behaviour.
+- Any other value — empty, `0`, `true`, `yes`, whitespace-padded `" 1 "`, newline-tailed `"1\n"` — is treated as unset and produces the secure default.  This prevents accidental weakening by shell scripts that quote "truthy" values loosely.
+
+**Operational impact (documented here for operators):**
+- Users whose `~/.ssh/known_hosts` does not already contain the remote host's key will see `ssh: Host key verification failed` on first connection.  Remediation: run `ssh-keyscan -H <host> >> ~/.ssh/known_hosts` out-of-band, or set `CADE_SSH_ACCEPT_NEW=1` for the session.
+- No change to the `-o BatchMode=yes`, `-o ConnectTimeout=10`, port, identity-file, or user arguments.
+
+**Test results:**
+- `cargo test -p cade-agent --features backend-ssh --lib backends::ssh` → 11/11 pass (8 existing P2-3 + 3 new P2-4).
+- `cargo test -p cade-agent` → 95/95 pass (+3 vs. P2-3 baseline of 92).
+- `cargo clippy -p cade-agent --all-targets --no-deps` → clean.
+- `cargo build -p cade-agent` (default features) → clean.
+
+**Rollback steps:**
+1. `git revert <this commit>` — single-file change.
+2. Or restore `crates/cade-agent/src/backends/ssh.rs` from checkpoint `pre-p2-4` (ID `cp-3532dfb5-533f-4bc8-94d7-a5ba20d0b21e`, HEAD `d6d5d446`).
+
+**Follow-ups (explicitly out of scope for P2-4):**
+- Documenting `CADE_SSH_ACCEPT_NEW` in README.md's CLI env-var table is a docs-only task and was not included here to keep the change minimum-scope.  If desired, it can be a one-line addition next to `CADE_SERVER_URL` / `CADE_API_KEY`.
+- Offering a `ssh-keyscan`-on-first-use wrapper CLI command is explicitly out of scope — the env hatch is the contract.
+
+---
+
+
 
 **Task:** Harden `crates/cade-agent/src/backends/ssh.rs` so hostile working-directory strings cannot inject commands into the `bash -c` payload executed on the remote host.
 
