@@ -24,9 +24,43 @@ pub struct AgentInfo {
     pub provider: Option<String>,
 }
 
+/// Response shape of `GET /v1/health`.
+///
+/// Mirrors the JSON returned by `cade-server` — see
+/// `crates/cade-server/src/server/api/health.rs::get_health`. Fields are
+/// additive; never remove or rename without bumping the wire contract.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HealthInfo {
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub server: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn health_info_parses_server_shape() {
+        // Exact shape returned by get_health() in cade-server.
+        let wire = r#"{"status":"ok","server":"cade-server","version":"0.2.0"}"#;
+        let h: HealthInfo = serde_json::from_str(wire).expect("parse");
+        assert_eq!(h.status, "ok");
+        assert_eq!(h.server.as_deref(), Some("cade-server"));
+        assert_eq!(h.version.as_deref(), Some("0.2.0"));
+    }
+
+    #[test]
+    fn health_info_tolerates_missing_optional_fields() {
+        // Future-proof: older servers may only return `status`.
+        let wire = r#"{"status":"ok"}"#;
+        let h: HealthInfo = serde_json::from_str(wire).expect("parse");
+        assert_eq!(h.status, "ok");
+        assert_eq!(h.server, None);
+        assert_eq!(h.version, None);
+    }
 
     #[test]
     fn agent_info_round_trips_via_json() {

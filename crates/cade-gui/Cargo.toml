@@ -13,6 +13,7 @@ doctest     = false
 
 # -- Pure-Rust dependencies (compile on both native and wasm32)
 [dependencies]
+cade-api-types       = { path = "../cade-api-types" }
 serde.workspace      = true
 serde_json.workspace = true
 

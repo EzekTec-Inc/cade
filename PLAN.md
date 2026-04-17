@@ -1,3 +1,58 @@
+## 2026-04-17T18:10:02Z — cade-gui M4: pure API client (get_health, get_agents)
+
+**Task:** Add a pure HTTP-client module for the cade-gui wasm app that can call `GET /v1/health` and `GET /v1/agents` using the user-submitted bearer token. First consumer of `cade-api-types`.
+
+**Scope guardrail (strict-project-execution):** This milestone ships **only the client-side API layer**. No app.rs integration yet (that lands with the panel-layout milestone M6 so state transitions have somewhere to drive data into). The `http_wasm` adapter is compiled-only code until a wasm-bindgen-test runner is wired into CI.
+
+**Files modified:**
+- `crates/cade-api-types/src/lib.rs`
+  - Added `HealthInfo { status, server: Option<String>, version: Option<String> }` mirroring `get_health` in `cade-server/src/server/api/health.rs`.  `server` / `version` optional and `skip_serializing_if = "Option::is_none"` for drift tolerance.
+  - 2 new native tests: `health_info_parses_server_shape`, `health_info_tolerates_missing_optional_fields`.
+- `crates/cade-gui/Cargo.toml`
+  - Added `cade-api-types = { path = "../cade-api-types" }` to the pure `[dependencies]` table so both native and wasm can use the wire types.  No new external crate; no workspace deps changed.
+- `crates/cade-gui/src/lib.rs`
+  - Registered `pub mod api;` (pure, native + wasm) and `#[cfg(target_arch = "wasm32")] pub mod http_wasm;`.
+  - Updated module-level doc comment listing public modules.
+- `crates/cade-gui/src/api.rs` (new, ~200 lines, native + wasm).
+  - `build_url(base, path) -> String` — strips trailing `/` runs from base.
+  - `bearer_header(token) -> String` — literal `"Bearer {token}"` (no trim — upstream `login::LoginState` owns trimming).
+  - `parse_health(status, body) -> Result<HealthInfo, ApiError>`.
+  - `parse_agents(status, body) -> Result<Vec<AgentInfo>, ApiError>`.
+  - `ApiError` enum: `Unauthorized` | `Server { status: u16 }` | `Decode { message }` | `Transport { message }`.  Implements `std::error::Error` + `Display` with user-safe strings (tdd-guide §3.3: no stack traces, no internal paths).
+  - Shared `decode_or_error<T: DeserializeOwned>` generic: `2xx → Decode or Ok(T)`, `401 → Unauthorized`, `other → Server`.
+  - 15 native tests covering: URL joining, both trailing-slash cases, bearer formatting (incl. deliberate no-trim), 2xx/401/500 on both endpoints, empty list, malformed JSON → `Decode`, `Display` output shape.
+- `crates/cade-gui/src/http_wasm.rs` (new, ~55 lines, `#![cfg(target_arch = "wasm32")]`).
+  - `pub async fn get_health(base_url, token) -> Result<HealthInfo, ApiError>`
+  - `pub async fn get_agents(base_url, token) -> Result<Vec<AgentInfo>, ApiError>`
+  - Private `send(url, token) -> Result<(u16, String), ApiError>` — uses `gloo-net::http::Request::get`, maps every `gloo-net` error to `ApiError::Transport { message }`, delegates status+body parsing to the pure module.
+  - No conditional logic, no retry, no caching — that stays in `api::` where it is native-testable.
+
+**Dependency policy:** No new external deps.  `gloo-net = "0.6"` was already declared in `cade-gui/Cargo.toml` from M3; `cade-api-types` is an existing workspace member.
+
+**Reason:** M4 of the cade-gui roadmap pinned in `working_set` memory: the submitted token from `LoginState::Submitted` now has a destination.  Provides the parsing primitives the panel layout (M6) will drive from the render loop.
+
+**Previous behavior:** `cade-gui` could render a login screen but had no way to contact the server.  `cade-api-types` only modelled `AgentInfo`.
+
+**New behavior:**
+- Native `cargo test -p cade-gui --lib` → 30 pass (was 15): 15 new `api::` tests + 8 config + 7 login.
+- `cargo test -p cade-api-types` → 4 pass (was 2): 2 new `HealthInfo` tests.
+- `RUSTFLAGS="-D warnings" cargo build -p cade-gui --target wasm32-unknown-unknown` → clean.
+- `RUSTFLAGS="-D warnings" cargo build -p cade-gui --target wasm32-unknown-unknown --tests` → clean.
+- `cargo test --workspace --lib` → 725 pass / 0 fail (was 708).
+- `cargo clippy -p cade-gui -p cade-api-types --all-targets -- -D warnings` → clean.
+
+**TDD cycle summary:**
+1. RED/GREEN — add `HealthInfo` wire type + 2 tests (pure additive type; tests encode the contract).
+2. RED/GREEN — add `api` module + 15 tests covering every error branch on both endpoints.
+3. GREEN — add `http_wasm` I/O adapter (no native logic to test; all behaviour delegated to `api::`).
+
+**Rollback steps:**
+1. `git revert <this-commit>` — reverts `crates/cade-api-types/src/lib.rs`, `crates/cade-gui/Cargo.toml`, `crates/cade-gui/src/lib.rs`, and deletes `crates/cade-gui/src/api.rs` + `crates/cade-gui/src/http_wasm.rs`.
+2. No DB migrations, no on-disk state, no CI workflow changes — reverting the commit fully restores prior behaviour.
+3. Checkpoint `cp-c1aa06cf-8143-4f61-a3fc-1984ff0247cd` (label `pre-M4`, HEAD 47fa502d) captures the exact pre-M4 state for `restore_checkpoint`.
+
+---
+
 ## 2026-04-17T16:57:31Z — P2-5: Origin header CSRF middleware
 
 **Task:** Add defense-in-depth Origin-header validation on mutating HTTP requests.  Block `POST` / `PUT` / `PATCH` / `DELETE` when the `Origin` header is present but not on the existing localhost allow-list.

@@ -1,20 +1,26 @@
 //! CADE web GUI — egui/eframe client served at `/dashboard` by cade-server.
 //!
 //! Public modules:
-//! - `config` — pure boot-time configuration parser (native + wasm).
-//! - `login` — pure login-screen state machine (native + wasm).
-//! - `app`   — `eframe::App` login-screen renderer (wasm-only).
+//! - `config`    — pure boot-time configuration parser (native + wasm).
+//! - `login`     — pure login-screen state machine (native + wasm).
+//! - `api`       — pure HTTP URL/header builders and response parsers.
+//! - `app`       — `eframe::App` login-screen renderer (wasm-only).
+//! - `http_wasm` — thin gloo-net adapter issuing real fetches (wasm-only).
 //!
 //! The crate exposes a `#[wasm_bindgen(start)]` entry that mounts the
 //! `CadeApp` on the `#cade_gui_canvas` element.  The browser-side code is
 //! intentionally thin — all testable behaviour lives in `config` and
 //! `login`, both of which are covered by native `cargo test`.
 
+pub mod api;
 pub mod config;
 pub mod login;
 
 #[cfg(target_arch = "wasm32")]
 pub mod app;
+
+#[cfg(target_arch = "wasm32")]
+pub mod http_wasm;
 
 #[cfg(target_arch = "wasm32")]
 mod boot {
