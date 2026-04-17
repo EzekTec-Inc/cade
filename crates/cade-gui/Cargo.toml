@@ -27,7 +27,7 @@ eframe               = { version = "0.34", default-features = false, features = 
 egui_commonmark      = "0.23"
 wasm-bindgen         = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys              = { version = "0.3", features = ["Window", "Document", "Location", "UrlSearchParams", "HtmlCanvasElement", "Element", "ReadableStream", "ReadableStreamDefaultReader"] }
+web-sys              = { version = "0.3", features = ["Window", "Document", "Location", "UrlSearchParams", "HtmlCanvasElement", "Element", "ReadableStream", "ReadableStreamDefaultReader", "Storage"] }
 gloo-net             = "0.6"
 serde-wasm-bindgen   = "0.6"
 log                  = "0.4"

@@ -55,8 +55,19 @@ impl CadeApp {
         let query = web_sys::window().and_then(|w| w.location().search().ok());
         let config = Config::resolve(&origin, query.as_deref(), None);
 
+        let mut login = LoginState::new();
+
+        // If a token was previously saved, pre-fill and auto-submit so the
+        // first render frame triggers spawn_connect via the existing flow.
+        if let Some(saved_token) = crate::storage::load(crate::storage::StorageKey::ApiToken) {
+            if !saved_token.is_empty() {
+                login.on_input(&saved_token);
+                login.on_submit();
+            }
+        }
+
         Self {
-            login: LoginState::new(),
+            login,
             session: Rc::new(RefCell::new(None)),
             connect_started: false,
             ctx: cc.egui_ctx.clone(),
@@ -102,6 +113,9 @@ impl CadeApp {
                     if let Some(s) = session.borrow_mut().as_mut() {
                         s.on_agents(agents);
                     }
+                    // Persist credentials so the next page load skips login.
+                    crate::storage::save(crate::storage::StorageKey::ApiToken, &token);
+                    crate::storage::save(crate::storage::StorageKey::ServerUrl, &server_url);
                     ctx.request_repaint();
                 }
                 Err(e) => {
@@ -119,6 +133,12 @@ impl CadeApp {
         self.login = LoginState::new();
         *self.session.borrow_mut() = None;
         self.connect_started = false;
+    }
+
+    /// Clear saved credentials and return to the login screen.
+    fn logout(&mut self) {
+        crate::storage::clear_all();
+        self.retry();
     }
 
     /// Select an agent and spawn an async task to fetch its messages.
@@ -302,6 +322,10 @@ impl eframe::App for CadeApp {
                                 }
                             }
                             ui.separator();
+                            ui.add_space(4.0);
+                            if ui.button("🚪 Logout").clicked() {
+                                action = AppAction::Logout;
+                            }
                             ui.add_space(4.0);
                             ui.label(
                                 egui::RichText::new(format!("v{version}"))
@@ -600,6 +624,7 @@ Connected and ready.  Select an agent from the sidebar to begin.
                     s.dismiss_error();
                 }
             }
+            AppAction::Logout => self.logout(),
         }
     }
 }
@@ -616,4 +641,6 @@ enum AppAction {
     SendMessage,
     /// User dismissed the error toast.
     DismissError,
+    /// User clicked Logout — clear credentials and return to login.
+    Logout,
 }

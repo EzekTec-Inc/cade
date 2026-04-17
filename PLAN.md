@@ -1737,3 +1737,18 @@ M3 = **state-machine + minimal render + WASM entry**.  No network calls.
 - `14b854e9 feat(gui): add cade-gui skeleton with wasm-compatible config parser`
 - Workspace: 700 pass, 0 fail.
 
+
+## 2026-07-27T00:00:00Z — cade-gui M11: Session persistence (localStorage)
+
+**Task:** Persist API token in browser localStorage so the user does not need to re-enter it on page reload. Add auto-reconnect on boot and a logout button.
+
+**Files modified:**
+- `crates/cade-gui/src/storage.rs` — **new** — `StorageKey` enum, `save`/`load`/`remove`/`clear_all` functions with wasm32 localStorage backend and native no-op stubs. 7 tests.
+- `crates/cade-gui/src/lib.rs` — added `pub mod storage;`
+- `crates/cade-gui/Cargo.toml` — added `"Storage"` to web-sys features
+- `crates/cade-gui/src/app.rs` — auto-save token after successful connection, auto-load on boot (pre-fill + auto-submit LoginState), logout button in sidebar, `AppAction::Logout` variant
+
+**Previous behavior:** User must re-enter API key on every page load. No logout button.
+**New behavior:** Token saved to localStorage on successful connection. On next load, token is auto-loaded and connection starts immediately (skipping login screen). Logout button clears storage and returns to login.
+
+**Rollback:** `git revert <commit>` — single commit, no schema changes.
