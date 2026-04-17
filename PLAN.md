@@ -1277,3 +1277,53 @@ These are per-crate deps — they do NOT become workspace-wide.
 - `dc9f022d feat(api-types): add cade-api-types crate for wasm-safe wire types`
 - Workspace: 692 pass, 0 fail.
 
+
+---
+
+## cade-gui M3 — eframe WebRunner + Login Screen — 2026-04-17
+
+**Timestamp:** 2026-04-17T18:15:00Z
+
+### Scope (approved by user)
+M3 = **state-machine + minimal render + WASM entry**.  No network calls.
+
+1. `LoginState` pure-Rust state machine in `cade-gui/src/login.rs` covering:
+   - `Entering { buffer }` — text-field content.
+   - `Submitted { key }` — user pressed Connect with non-empty buffer.
+   - Transitions: `on_input(s)`, `on_submit()`.  Empty buffer stays in `Entering`.
+2. `eframe::App` impl in `cade-gui/src/app.rs` rendering one `CentralPanel`
+   with a password-style text field + Connect button.  No panels, no
+   markdown, no fonts, no network.
+3. `#[wasm_bindgen(start)]` entry in `cade-gui/src/lib.rs` mounting the app
+   on the `#cade_gui_canvas` element via `eframe::WebRunner`.
+4. `/dashboard` HTML in `cade-server/src/server/api/dashboard.rs` gains a
+   `<canvas id="cade_gui_canvas">` placeholder.  No WASM bundle is yet
+   served; the page remains loadable standalone.
+
+### Approved Dependency Additions (per user)
+- `wasm-bindgen-test = "0.3"` — dev-dep on `cade-gui` only; target-gated
+  to wasm32 so native `cargo test` is unaffected.
+
+### Execution Contract
+- Strict TDD: failing test for `LoginState` before any login.rs impl.
+- Browser wiring is a ~5-line thin seam; visually verified, not unit-tested.
+- Zero changes to `cade-tui`, `cade-core`, `cade-agent`, `cade-cli`, `cade-api-types`.
+- `auth_middleware`/CSRF/routing: unchanged.
+- Dashboard HTML change is additive (append `<canvas>` inside `<main>`).
+  All three existing dashboard security tests must still pass unmodified.
+
+### Files Expected
+- NEW `crates/cade-gui/src/login.rs` (pure state machine + tests)
+- MOD `crates/cade-gui/src/lib.rs` (register login mod; add wasm_bindgen start entry)
+- MOD `crates/cade-gui/src/app.rs` (eframe::App impl for login screen)
+- MOD `crates/cade-gui/Cargo.toml` (+ wasm-bindgen-test dev-dep, + web-sys HtmlCanvasElement feature)
+- MOD `crates/cade-server/src/server/api/dashboard.rs` (add canvas element to HTML)
+
+### Rollback
+- `restore_checkpoint cp-623aaf6a-40ec-4b4f-8263-2fb1432ed02f`
+- or `git revert <commit>`.
+
+### Pre-state (HEAD)
+- `14b854e9 feat(gui): add cade-gui skeleton with wasm-compatible config parser`
+- Workspace: 700 pass, 0 fail.
+

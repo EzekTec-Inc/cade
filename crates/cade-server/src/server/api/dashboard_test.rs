@@ -140,3 +140,25 @@ async fn dashboard_error_page_has_no_stack_trace_or_framework_info() {
         );
     }
 }
+
+/// The dashboard page must carry a `<canvas id="cade_gui_canvas">` element
+/// that matches the ID the cade-gui WASM boot code looks up.  Missing or
+/// renamed canvas = white screen for every user.  This is the cheap
+/// contract test that locks the two sides together.
+#[tokio::test]
+async fn dashboard_contains_canvas_with_expected_id() {
+    let app = make_app(make_state(None));
+    let req = Request::builder()
+        .uri("/dashboard")
+        .body(Body::empty())
+        .unwrap();
+    let resp = app.oneshot(req).await.unwrap();
+    let body = to_bytes(resp.into_body(), 64 * 1024).await.unwrap();
+    let body_str = std::str::from_utf8(&body).unwrap();
+
+    assert!(
+        body_str.contains(r#"id="cade_gui_canvas""#),
+        "dashboard HTML must expose <canvas id=\"cade_gui_canvas\"> for the \
+         cade-gui WASM client to mount on"
+    );
+}

@@ -73,6 +73,7 @@ const DASHBOARD_HTML: &str = r#"<!doctype html>
     <input id="k" type="password" placeholder="CADE_API_KEY" required>
     <button type="submit">Connect</button>
   </form>
+  <canvas id="cade_gui_canvas" width="1" height="1" hidden></canvas>
   <p class="note">UI coming soon. This page reserves the route.</p>
 </main>
 </body>

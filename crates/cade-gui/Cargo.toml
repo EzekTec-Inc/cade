@@ -23,9 +23,14 @@ egui                 = "0.34"
 egui_commonmark      = "0.20"
 wasm-bindgen         = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys              = { version = "0.3", features = ["Window", "Location", "UrlSearchParams"] }
+web-sys              = { version = "0.3", features = ["Window", "Document", "Location", "UrlSearchParams", "HtmlCanvasElement", "Element"] }
 gloo-net             = "0.6"
 serde-wasm-bindgen   = "0.6"
+log                  = "0.4"
+
+# -- Browser-only dev dependencies (for wasm-bindgen-test harness)
+[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
+wasm-bindgen-test    = "0.3"
 
 [lints.rust]
 unsafe_code = "forbid"
