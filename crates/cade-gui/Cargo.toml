@@ -1,0 +1,31 @@
+[package]
+name        = "cade-gui"
+version     = "0.2.0"
+edition     = "2024"
+description = "CADE — web GUI (WASM) served by cade-server at /dashboard"
+license     = "MIT OR Apache-2.0"
+
+[lib]
+# rlib → native `cargo test` for the pure logic modules (config, etc.).
+# cdylib → wasm32 build produces a loadable WebAssembly module.
+crate-type  = ["rlib", "cdylib"]
+doctest     = false
+
+# -- Pure-Rust dependencies (compile on both native and wasm32)
+[dependencies]
+serde.workspace      = true
+serde_json.workspace = true
+
+# -- Browser-only dependencies
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+eframe               = { version = "0.34", default-features = false, features = ["web_screen_reader", "wgpu"] }
+egui                 = "0.34"
+egui_commonmark      = "0.20"
+wasm-bindgen         = "0.2"
+wasm-bindgen-futures = "0.4"
+web-sys              = { version = "0.3", features = ["Window", "Location", "UrlSearchParams"] }
+gloo-net             = "0.6"
+serde-wasm-bindgen   = "0.6"
+
+[lints.rust]
+unsafe_code = "forbid"

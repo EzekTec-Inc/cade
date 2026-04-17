@@ -1222,3 +1222,58 @@ Batch M0+M1 only. WASM/egui work (M2+) deferred pending re-approval.
 - `8d7d9773 security(server): P2-5 Origin-header CSRF middleware`
 - `cargo test -p cade-server` passes (129/129 at time of last recorded status).
 
+
+---
+
+## cade-gui M2 Skeleton — 2026-04-17
+
+**Timestamp:** 2026-04-17T17:45:00Z
+
+### Scope (approved by user)
+Create `crates/cade-gui` skeleton only. Scope ends once the crate:
+1. Compiles to `wasm32-unknown-unknown` clean.
+2. Has one green unit test (native) covering a pure predicate.
+3. Is registered in the workspace.
+
+No render-loop behaviour, no SSE client, no markdown, no fonts, no trunk
+pipeline yet — those come in separate stop-and-ask milestones.
+
+### Approved Dependency Additions (per user)
+All scoped to `crates/cade-gui/Cargo.toml` only. Server binary and native
+builds unaffected.
+
+- `eframe = "0.34"` (with default features disabled; `web_screen_reader` only)
+- `egui = "0.34"`
+- `egui_commonmark = "0.20"` (markdown — deferred until first renderer, but
+  pulled in now to fail fast on compatibility)
+- `wasm-bindgen = "0.2"`
+- `wasm-bindgen-futures = "0.4"`
+- `web-sys = "0.3"` (minimal feature list: `Window`, `Location`, `UrlSearchParams`)
+- `gloo-net = "0.6"`
+- `serde-wasm-bindgen = "0.6"`
+- `serde` / `serde_json` via existing workspace deps
+
+These are per-crate deps — they do NOT become workspace-wide.
+
+### Execution Contract
+- Strict TDD: one failing test for config-precedence logic before any impl.
+- WASM-only crate: `[lib] crate-type = ["cdylib", "rlib"]`, `# [cfg(target_arch = "wasm32")]` guards on browser-only code so native `cargo test` can exercise the pure logic.
+- Zero edits to cade-tui, cade-core, cade-agent, cade-cli, cade-server.
+- `cade-api-types` NOT yet consumed by `cade-gui`; added when the first real wire type is rendered (separate milestone).
+
+### Files Expected
+- NEW `crates/cade-gui/Cargo.toml`
+- NEW `crates/cade-gui/src/lib.rs`
+- NEW `crates/cade-gui/src/config.rs` (pure logic + tests)
+- NEW `crates/cade-gui/src/app.rs` (`eframe::App` placeholder)
+- MOD `Cargo.toml` (workspace members)
+
+### Rollback
+- `restore_checkpoint cp-7ef2ed4f-f972-4075-8819-9d6f3e84c332`
+- or `git revert <commit>` once committed.
+
+### Pre-state (HEAD)
+- `577c2ddf feat(server): serve /dashboard login page (public, no token leak)`
+- `dc9f022d feat(api-types): add cade-api-types crate for wasm-safe wire types`
+- Workspace: 692 pass, 0 fail.
+

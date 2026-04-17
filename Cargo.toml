@@ -10,6 +10,7 @@ members = [
     "crates/cade-sdk",
     "crates/cade-web",
     "crates/cade-tui",
+    "crates/cade-gui",
     "crates/cade-mcp",
     "crates/cade-cli",
     ".", "crates/cade-ide-mcp", "crates/cade-store",          # root package — owns the two binaries
