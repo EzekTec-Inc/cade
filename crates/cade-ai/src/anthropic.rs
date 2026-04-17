@@ -53,6 +53,33 @@ pub async fn fetch_anthropic_models(api_key: &str) -> Vec<(String, String)> {
 
 // endregion: --- Tests
 
+/// Returns true if the given Anthropic model expects the newer
+/// `thinking.type=adaptive` + `output_config.effort` request shape.
+///
+/// As of 2025 Anthropic returns HTTP 400 `"thinking.type.enabled" is not
+/// supported for this model` when sending the legacy `enabled` shape to
+/// Claude 4+ family models. The canonical TypedDicts live in the official
+/// Python SDK (`ThinkingConfigAdaptiveParam`, `OutputConfigParam`).
+///
+/// Heuristic: match `claude-(opus|sonnet|haiku)-<N>-…` where N ≥ 4. This
+/// naturally covers current releases (`claude-sonnet-4-5-…`,
+/// `claude-opus-4-…`) and future majors (claude-5-*, claude-10-*) without a
+/// hardcoded model list.
+pub(crate) fn supports_adaptive_thinking(model: &str) -> bool {
+    let bare = bare_model(model);
+    for family in ["sonnet", "opus", "haiku"] {
+        let prefix = format!("claude-{family}-");
+        if let Some(rest) = bare.strip_prefix(&prefix) {
+            if let Some(first) = rest.split('-').next() {
+                if let Ok(n) = first.parse::<u32>() {
+                    return n >= 4;
+                }
+            }
+        }
+    }
+    false
+}
+
 pub struct AnthropicProvider {
     client: Client,
     api_key: String,
@@ -206,26 +233,41 @@ impl AnthropicProvider {
         });
 
         if let Some(effort) = &req.reasoning_effort {
-            // Anthropic requires budget_tokens ≤ max_tokens. The max_tokens
-            // field is shared between reasoning and output, so we scale the
-            // reasoning budget relative to max_tokens.
-            let effective_max = req.max_tokens.max(4096);
-            let budget = match effort.as_str() {
-                "low" => (effective_max / 4).max(1024), // 25% of max_tokens
-                "medium" => (effective_max / 2).max(2048), // 50%
-                "high" => (effective_max * 3 / 4).max(4096), // 75%
-                "xhigh" => effective_max.saturating_sub(1024), // nearly all
-                _ => 0,
-            };
-            if budget > 0 {
-                // Ensure max_tokens is at least budget + 1024 so the model
-                // still has room for visible output after reasoning.
-                let adjusted_max = effective_max.max(budget + 1024);
-                body["max_tokens"] = json!(adjusted_max);
-                body["thinking"] = json!({
-                    "type": "enabled",
-                    "budget_tokens": budget
-                });
+            if supports_adaptive_thinking(&req.model) {
+                // Claude 4+ models require `thinking.type=adaptive` and the
+                // effort level is passed via the top-level `output_config`.
+                // Budget is managed dynamically by the server, so we do NOT
+                // pre-allocate budget_tokens or inflate max_tokens.
+                let mapped_effort = match effort.as_str() {
+                    "low" | "medium" | "high" | "xhigh" | "max" => effort.clone(),
+                    _ => "medium".to_string(),
+                };
+                body["thinking"] = json!({ "type": "adaptive" });
+                body["output_config"] = json!({ "effort": mapped_effort });
+            } else {
+                // Legacy Claude 3.5 / 3.7 extended-thinking models:
+                // `thinking.type=enabled` with an explicit `budget_tokens`.
+                // Anthropic requires budget_tokens ≤ max_tokens. The max_tokens
+                // field is shared between reasoning and output, so we scale the
+                // reasoning budget relative to max_tokens.
+                let effective_max = req.max_tokens.max(4096);
+                let budget = match effort.as_str() {
+                    "low" => (effective_max / 4).max(1024), // 25% of max_tokens
+                    "medium" => (effective_max / 2).max(2048), // 50%
+                    "high" => (effective_max * 3 / 4).max(4096), // 75%
+                    "xhigh" => effective_max.saturating_sub(1024), // nearly all
+                    _ => 0,
+                };
+                if budget > 0 {
+                    // Ensure max_tokens is at least budget + 1024 so the model
+                    // still has room for visible output after reasoning.
+                    let adjusted_max = effective_max.max(budget + 1024);
+                    body["max_tokens"] = json!(adjusted_max);
+                    body["thinking"] = json!({
+                        "type": "enabled",
+                        "budget_tokens": budget
+                    });
+                }
             }
         }
 
@@ -649,10 +691,11 @@ mod tests {
     }
 
     #[test]
-    fn build_body_with_reasoning_effort() {
+    fn build_body_with_reasoning_effort_legacy() {
+        // Older Claude 3.7 still expects the `enabled` + budget_tokens shape.
         let provider = AnthropicProvider::new("sk-test".into());
         let req = CompletionRequest {
-            model: "claude-sonnet-4-5-20250929".into(),
+            model: "claude-3-7-sonnet-20250219".into(),
             messages: vec![super::super::LlmMessage {
                 role: "user".into(),
                 content: "Think hard".into(),
@@ -669,6 +712,54 @@ mod tests {
         assert_eq!(body["thinking"]["type"], "enabled");
         // "high" = 75% of max_tokens (8192) = 6144, clamped to .max(4096)
         assert_eq!(body["thinking"]["budget_tokens"], 6144);
+        // No output_config in the legacy shape.
+        assert!(body.get("output_config").is_none());
+    }
+
+    #[test]
+    fn build_body_with_reasoning_effort_adaptive() {
+        // Claude 4+ (e.g. sonnet-4-5) requires adaptive thinking + output_config.effort.
+        let provider = AnthropicProvider::new("sk-test".into());
+        let req = CompletionRequest {
+            model: "claude-sonnet-4-5-20250929".into(),
+            messages: vec![super::super::LlmMessage {
+                role: "user".into(),
+                content: "Think hard".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+            }],
+            tools: vec![],
+            max_tokens: 8192,
+            reasoning_effort: Some("high".into()),
+        };
+        let body = provider.build_body(&req, false);
+        assert_eq!(body["thinking"]["type"], "adaptive");
+        // Adaptive mode must NOT send budget_tokens (server manages budget).
+        assert!(body["thinking"].get("budget_tokens").is_none());
+        assert_eq!(body["output_config"]["effort"], "high");
+        // max_tokens must not be auto-inflated in adaptive mode.
+        assert_eq!(body["max_tokens"], 8192);
+    }
+
+    #[test]
+    fn supports_adaptive_thinking_matrix() {
+        use super::supports_adaptive_thinking;
+        // Claude 4+ family -> adaptive
+        assert!(supports_adaptive_thinking("claude-sonnet-4-5-20250929"));
+        assert!(supports_adaptive_thinking("claude-opus-4-20250514"));
+        assert!(supports_adaptive_thinking("claude-haiku-4-20250815"));
+        assert!(supports_adaptive_thinking("anthropic/claude-sonnet-4-6"));
+        // Future majors must keep working.
+        assert!(supports_adaptive_thinking("claude-sonnet-5-20260101"));
+        assert!(supports_adaptive_thinking("claude-opus-10-20270101"));
+        // Legacy Claude 3.x -> NOT adaptive
+        assert!(!supports_adaptive_thinking("claude-3-7-sonnet-20250219"));
+        assert!(!supports_adaptive_thinking("claude-3-5-haiku-20241022"));
+        assert!(!supports_adaptive_thinking("claude-3-opus-20240229"));
+        // Non-Claude models -> false
+        assert!(!supports_adaptive_thinking("gpt-4o"));
+        assert!(!supports_adaptive_thinking("gemini-2.5-pro"));
     }
 
     #[test]
