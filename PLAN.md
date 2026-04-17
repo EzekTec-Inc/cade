@@ -1179,3 +1179,46 @@ Modernised the `/theme` command, theme picker, and TUI visual layer across 7 imp
 ### Rollback Steps
 1. `git revert HEAD` (single commit covers all changes)
 2. Or revert individual files listed above — each change is isolated to its file
+
+---
+
+## cade-gui M0+M1 — Shared Types Crate + Dashboard Route — 2026-04-17
+
+**Timestamp:** 2026-04-17T17:10:00Z
+
+### Scope (approved by user)
+Batch M0+M1 only. WASM/egui work (M2+) deferred pending re-approval.
+
+- **M0** — Create `crates/cade-api-types`: pure `serde` + `serde_json` crate. Compiles on both `x86_64-unknown-linux-gnu` and `wasm32-unknown-unknown`. Zero native deps. Purpose: shared wire types between `cade-server` and the future `cade-gui` WASM client.
+- **M1** — Add `GET /dashboard` route on `cade-server` serving a static HTML login page (embedded via `rust-embed`). Route is exempt from `auth_middleware` (alongside existing `/v1/health`). The page does **not** embed any token; user pastes API key manually — WASM app (future M2+) will hold it in memory only.
+
+### Approved Dependency Additions
+- `rust-embed = { version = "8", features = ["axum"] }` on `cade-server` only.
+- New workspace member `cade-api-types` (serde + serde_json; already workspace deps).
+
+### Execution Contract
+- Strict TDD: one failing test per behaviour.
+- No edits to `cade-tui`.
+- No changes to `cade-core`, `cade-agent`, `cade-cli`.
+- `auth_middleware` change is additive (one extra path-skip); other routes unaffected.
+- `csrf_middleware` stays as-is (dashboard GET is a safe method).
+
+### Files Expected to Change
+- NEW `crates/cade-api-types/Cargo.toml`
+- NEW `crates/cade-api-types/src/lib.rs`
+- NEW `crates/cade-server/src/server/api/dashboard.rs`
+- NEW `crates/cade-server/src/server/api/dashboard/index.html` (login page asset)
+- NEW `crates/cade-server/src/server/api/dashboard_test.rs`
+- MOD `Cargo.toml` (workspace members)
+- MOD `crates/cade-server/Cargo.toml` (+rust-embed)
+- MOD `crates/cade-server/src/server/api/mod.rs` (route registration)
+- MOD `crates/cade-server/src/server/api/auth.rs` (path-skip `/dashboard`, `/dashboard/*`)
+
+### Rollback
+- `restore_checkpoint cp-b3a55d19-f2a1-4a78-ba0c-ce944a51687b`
+- or `git revert <commit>`
+
+### Pre-state (HEAD)
+- `8d7d9773 security(server): P2-5 Origin-header CSRF middleware`
+- `cargo test -p cade-server` passes (129/129 at time of last recorded status).
+

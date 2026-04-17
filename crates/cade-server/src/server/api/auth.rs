@@ -15,8 +15,17 @@ use axum::{
 /// configured, all non-health requests are rejected with 401 — auth is
 /// mandatory; the server bootstrap is responsible for providing a token.
 pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    // Health check is always public
-    if req.uri().path() == "/v1/health" {
+    // Public routes — served before auth check.
+    //   /v1/health         — health probe (safe, no state touched)
+    //   /dashboard         — static login page for the web GUI (M1).
+    //                        The page itself never embeds the api_key;
+    //                        the user pastes their key into the form.
+    //   /dashboard/*       — future WASM asset bundle (M2+).
+    let path = req.uri().path();
+    if path == "/v1/health"
+        || path == "/dashboard"
+        || path.starts_with("/dashboard/")
+    {
         return next.run(req).await;
     }
 

@@ -136,3 +136,32 @@ async fn small_request_body_is_accepted() {
         "small bodies must pass the body-size check"
     );
 }
+
+/// End-to-end: /dashboard is reachable through the real production router
+/// (with auth, CSRF, and body-limit layers all active) without any
+/// Authorization header.  Covers middleware-ordering regressions that
+/// per-handler unit tests in dashboard_test.rs cannot catch.
+#[tokio::test]
+async fn dashboard_is_reachable_through_full_router_without_auth() {
+    let state = make_state(Some("tok".into()));
+    let app = router(state);
+
+    let req = Request::builder()
+        .method(Method::GET)
+        .uri("/dashboard")
+        .body(Body::empty())
+        .unwrap();
+
+    let resp = app.oneshot(req).await.unwrap();
+    assert_eq!(
+        resp.status(),
+        StatusCode::OK,
+        "/dashboard must be reachable through the full router without a token"
+    );
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(ct.starts_with("text/html"), "expected HTML, got {ct}");
+}

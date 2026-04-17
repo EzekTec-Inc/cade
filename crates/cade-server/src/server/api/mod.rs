@@ -6,6 +6,7 @@ pub mod auth;
 pub mod checkpoints;
 pub mod complete;
 pub mod csrf;
+pub mod dashboard;
 pub mod evals;
 pub mod health;
 pub mod memory_evidence;
@@ -58,6 +59,8 @@ pub fn router(state: AppState) -> Router {
         // Health + server config
         .route("/v1/health", get(health::get_health))
         .route("/v1/config", get(health::get_config))
+        // Dashboard (public, unauthenticated — see auth.rs for exemption)
+        .route("/dashboard", get(dashboard::get_dashboard))
         // Real context-window stats (D2)
         .route(
             "/v1/agents/:id/context",
