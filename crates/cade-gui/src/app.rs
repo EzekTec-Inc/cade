@@ -168,7 +168,7 @@ impl CadeApp {
     /// that feeds chunks back into the session.
     fn spawn_stream_message(&mut self) {
         // on_send returns the trimmed input if the send is valid.
-        let (input, server_url, token, agent_id) = {
+        let (input, server_url, token, agent_id, conv_id) = {
             let mut session = self.session.borrow_mut();
             let s = match session.as_mut() {
                 Some(s) => s,
@@ -184,7 +184,8 @@ impl CadeApp {
                 Some(id) => id.to_string(),
                 None => return,
             };
-            (input, server_url, token, agent_id)
+            let conv_id = s.conversation_id().map(String::from);
+            (input, server_url, token, agent_id, conv_id)
         };
 
         let session = Rc::clone(&self.session);
@@ -199,6 +200,7 @@ impl CadeApp {
                 &token,
                 &agent_id,
                 &input,
+                conv_id.as_deref(),
                 move |chunk| {
                     if let Some(s) = session_clone.borrow_mut().as_mut() {
                         s.on_stream_chunk(chunk);
@@ -211,7 +213,12 @@ impl CadeApp {
             // Mark stream as done and surface any error.
             if let Some(s) = session.borrow_mut().as_mut() {
                 match result {
-                    Ok(()) => s.on_stream_done(),
+                    Ok(new_conv_id) => {
+                        if let Some(cid) = new_conv_id {
+                            s.on_conversation_id(&cid);
+                        }
+                        s.on_stream_done();
+                    }
                     Err(e) => s.push_error(&format!("{e}")),
                 }
             }

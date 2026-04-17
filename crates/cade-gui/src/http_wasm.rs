@@ -59,18 +59,23 @@ pub async fn get_messages(
 /// the assistant's response via SSE.
 ///
 /// `on_chunk` is called with each assistant-text fragment.
-/// The future resolves when the stream ends or an error occurs.
+/// Returns the `conversation_id` from the server's `stream_start` event
+/// (if present).
 pub async fn send_message_stream(
     base_url: &str,
     token: &str,
     agent_id: &str,
     input: &str,
+    conversation_id: Option<&str>,
     mut on_chunk: impl FnMut(&str),
-) -> Result<(), ApiError> {
+) -> Result<Option<String>, ApiError> {
     let path = format!("/v1/agents/{agent_id}/messages/stream");
     let url = api::build_url(base_url, &path);
 
-    let body = serde_json::json!({ "input": input });
+    let mut body = serde_json::json!({ "input": input });
+    if let Some(cid) = conversation_id {
+        body["conversation_id"] = serde_json::Value::String(cid.to_string());
+    }
 
     let resp = Request::post(&url)
         .header("Authorization", &api::bearer_header(token))
@@ -105,6 +110,7 @@ pub async fn send_message_stream(
         })?;
 
     let mut parser = SseParser::new();
+    let mut conv_id: Option<String> = None;
 
     loop {
         let result = JsFuture::from(reader.read())
@@ -127,17 +133,27 @@ pub async fn send_message_stream(
                     while let Some(frame) = parser.pop() {
                         match &frame {
                             SseFrame::Json(v) => {
-                                if v.get("message_type").and_then(|m| m.as_str())
-                                    == Some("assistant_message")
-                                {
-                                    if let Some(text) = v.get("content").and_then(|c| c.as_str()) {
-                                        on_chunk(text);
+                                match v.get("message_type").and_then(|m| m.as_str()) {
+                                    Some("stream_start") => {
+                                        if let Some(cid) =
+                                            v.get("conversation_id").and_then(|c| c.as_str())
+                                        {
+                                            conv_id = Some(cid.to_string());
+                                        }
                                     }
+                                    Some("assistant_message") => {
+                                        if let Some(text) =
+                                            v.get("content").and_then(|c| c.as_str())
+                                        {
+                                            on_chunk(text);
+                                        }
+                                    }
+                                    _ => {}
                                 }
                             }
                             SseFrame::Done => {
                                 reader.release_lock();
-                                return Ok(());
+                                return Ok(conv_id);
                             }
                             SseFrame::ParseError(_) => {
                                 // Skip malformed frames.
@@ -152,12 +168,20 @@ pub async fn send_message_stream(
             // Drain remaining buffered frames.
             while let Some(frame) = parser.pop() {
                 if let SseFrame::Json(v) = &frame {
-                    if v.get("message_type").and_then(|m| m.as_str())
-                        == Some("assistant_message")
-                    {
-                        if let Some(text) = v.get("content").and_then(|c| c.as_str()) {
-                            on_chunk(text);
+                    match v.get("message_type").and_then(|m| m.as_str()) {
+                        Some("stream_start") => {
+                            if let Some(cid) =
+                                v.get("conversation_id").and_then(|c| c.as_str())
+                            {
+                                conv_id = Some(cid.to_string());
+                            }
                         }
+                        Some("assistant_message") => {
+                            if let Some(text) = v.get("content").and_then(|c| c.as_str()) {
+                                on_chunk(text);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -166,7 +190,7 @@ pub async fn send_message_stream(
     }
 
     reader.release_lock();
-    Ok(())
+    Ok(conv_id)
 }
 
 // ── SSE streaming endpoint ──────────────────────────────────────────────

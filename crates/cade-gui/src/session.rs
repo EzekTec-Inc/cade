@@ -58,6 +58,8 @@ pub enum SessionState {
         streaming: bool,
         /// Transient error message displayed as a toast overlay.
         error_toast: Option<String>,
+        /// Active conversation ID (set from SSE metadata, cleared on agent switch).
+        conversation_id: Option<String>,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -139,6 +141,7 @@ impl SessionState {
                 input_buffer: String::new(),
                 streaming: false,
                 error_toast: None,
+                conversation_id: None,
             };
         }
     }
@@ -176,6 +179,7 @@ impl SessionState {
             agents,
             selected_agent,
             messages,
+            conversation_id,
             ..
         } = self
         {
@@ -187,6 +191,7 @@ impl SessionState {
             }
             *selected_agent = Some(idx);
             messages.clear();
+            *conversation_id = None;
             true
         } else {
             false
@@ -341,6 +346,30 @@ impl SessionState {
     pub fn error_toast(&self) -> Option<&str> {
         if let Self::Connected { error_toast, .. } = self {
             error_toast.as_deref()
+        } else {
+            None
+        }
+    }
+
+    // ── Conversation ID API ────────────────────────────────────────────
+
+    /// Store a conversation_id received from the server (e.g. SSE metadata).
+    pub fn on_conversation_id(&mut self, id: &str) {
+        if let Self::Connected {
+            conversation_id, ..
+        } = self
+        {
+            *conversation_id = Some(id.to_string());
+        }
+    }
+
+    /// The active conversation ID, if any.
+    pub fn conversation_id(&self) -> Option<&str> {
+        if let Self::Connected {
+            conversation_id, ..
+        } = self
+        {
+            conversation_id.as_deref()
         } else {
             None
         }
@@ -816,5 +845,45 @@ mod tests {
         s.push_error("connection lost");
         assert!(!s.is_streaming(), "streaming should be cleared on error");
         assert_eq!(s.error_toast(), Some("connection lost"));
+    }
+
+    // ── Conversation ID ────────────────────────────────────────────────
+
+    #[test]
+    fn conversation_id_none_initially() {
+        let s = make_connected_with_agent_selected();
+        assert_eq!(s.conversation_id(), None);
+    }
+
+    #[test]
+    fn on_conversation_id_stores_id() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_conversation_id("conv-abc-123");
+        assert_eq!(s.conversation_id(), Some("conv-abc-123"));
+    }
+
+    #[test]
+    fn on_conversation_id_replaces_previous() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_conversation_id("conv-1");
+        s.on_conversation_id("conv-2");
+        assert_eq!(s.conversation_id(), Some("conv-2"));
+    }
+
+    #[test]
+    fn select_agent_clears_conversation_id() {
+        let mut s = make_connected_with_agent_selected();
+        // Add a second agent so we can actually switch.
+        if let SessionState::Connected { agents, .. } = &mut s {
+            agents.push(AgentInfo {
+                id: "agent-2".to_string(),
+                name: "Second Agent".to_string(),
+                model: None,
+                provider: None,
+            });
+        }
+        s.on_conversation_id("conv-old");
+        assert!(s.on_select_agent(1)); // switch to agent-2
+        assert_eq!(s.conversation_id(), None);
     }
 }
