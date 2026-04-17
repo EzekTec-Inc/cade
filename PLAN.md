@@ -1,3 +1,47 @@
+## 2026-04-17T18:58:36Z — cade-gui M5b: wasm fetch+ReadableStream SSE adapter
+
+**Task:** Add a wasm-only streaming SSE adapter that uses `fetch()` + `ReadableStream` to deliver `SseFrame` values from any authenticated cade-server SSE endpoint.
+
+**Scope guardrail:** I/O glue only — every byte of parsing logic lives in the pure `sse` module (M5) and `api` module (M4).  The adapter contains zero conditional logic beyond transport-error mapping and a `done` flag check.
+
+**Why fetch+ReadableStream, not EventSource?**
+`EventSource` cannot send custom headers.  The browser API has no way to attach `Authorization: Bearer <token>`.  Every cade-server streaming endpoint (except `/v1/health`) requires auth, so all SSE consumption MUST go through `fetch()` + `ReadableStream`.
+
+**Files modified:**
+- `crates/cade-gui/Cargo.toml`
+  - Added `"ReadableStream"` and `"ReadableStreamDefaultReader"` to the `web-sys` features list.  No new crates; web-sys was already a wasm32-only dependency.
+- `crates/cade-gui/src/http_wasm.rs` (modified, ~160 lines total, wasm-only).
+  - Renamed internal `send()` → `send_text()` for clarity.
+  - Added `pub async fn stream_sse(url, token, on_frame: impl FnMut(SseFrame) -> bool) -> Result<(), ApiError>`:
+    - Issues `GET` with `Authorization: Bearer <token>` via `gloo-net::http::Request`.
+    - Checks status: 401 → `ApiError::Unauthorized`, non-2xx → `ApiError::Server`.
+    - Grabs `resp.body()` → `web_sys::ReadableStream` → `ReadableStreamDefaultReader`.
+    - Loops: `JsFuture::from(reader.read())` → extracts `Uint8Array` → `parser.feed(&bytes)` → drains frames via `parser.pop()` → calls `on_frame(frame)`.
+    - Loop exits on: stream `done`, `on_frame` returns `false` (early stop), or transport error.
+    - Releases reader lock on all exit paths.
+  - Used `web_sys::js_sys::Reflect` and `web_sys::js_sys::Uint8Array` — no direct `js-sys` dependency needed (re-exported through web-sys).
+
+**Dependency policy:** No new external crates.  Only added two web-sys feature flags for types that were already available but not activated.
+
+**Reason:** M5b of the cade-gui roadmap.  The `stream_sse` function is the transport layer that M6 (panel layout) will call from a `wasm_bindgen_futures::spawn_local` task, pushing frames into a shared buffer that the `eframe::App::update()` loop drains.
+
+**Previous behavior:** `http_wasm.rs` only supported one-shot JSON endpoints (`get_health`, `get_agents`).
+
+**New behavior:**
+- `stream_sse(url, token, callback)` — async streaming SSE consumer for any authenticated endpoint.
+- Callback pattern: `on_frame(SseFrame) -> bool` — return `false` to stop early.
+- `cargo test -p cade-gui --lib` → 43 pass (unchanged — no new native tests; all logic was already tested in M4/M5).
+- `cargo test --workspace --lib` → 738 pass / 0 fail (unchanged).
+- `RUSTFLAGS="-D warnings" cargo build -p cade-gui --target wasm32-unknown-unknown` → clean.
+- `RUSTFLAGS="-D warnings" cargo build -p cade-gui --target wasm32-unknown-unknown --tests` → clean.
+- `cargo clippy -p cade-gui --all-targets -- -D warnings` → clean.
+
+**Rollback steps:**
+1. `git revert <this-commit>` — reverts `http_wasm.rs` and `Cargo.toml` web-sys features.
+2. No DB/CI/config changes.
+
+---
+
 ## 2026-04-17T18:46:53Z — cade-gui M5: pure SSE frame parser
 
 **Task:** Add a pure, native-testable SSE frame parser for the cade-gui WASM app.  This parser consumes raw bytes (arriving in arbitrary chunks from `fetch()` + `ReadableStream`) and emits typed `SseFrame` values.  No network I/O — the wasm fetch-streaming adapter is deferred to M5b behind a separate approval gate.
