@@ -146,6 +146,15 @@ pub struct ThemeTokens {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Theme {
     pub name: String,
+    /// Short human-readable description (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Theme author (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author: Option<String>,
+    /// Colour-scheme variant: "dark", "light", or "auto" (optional).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<String>,
     /// Optional variable aliases (referenced by name in `colors`).
     #[serde(default)]
     pub vars: HashMap<String, ThemeColor>,
@@ -206,6 +215,9 @@ fn load_tmtheme(path: &Path) -> crate::Result<Theme> {
 
     let mut theme = Theme {
         name,
+        description: None,
+        author: None,
+        variant: None,
         vars: HashMap::new(),
         colors: ThemeTokens::default(),
         source: path.to_path_buf(),
@@ -373,6 +385,9 @@ mod tests {
         // We use serde_json::to_string of a Theme with default colors.
         let theme = Theme {
             name: "mytheme".to_string(),
+            description: None,
+            author: None,
+            variant: None,
             vars: Default::default(),
             colors: ThemeTokens::default(),
             source: PathBuf::new(),
@@ -468,6 +483,53 @@ mod tests {
         assert_eq!(loaded.colors.text, ThemeColor::Hex("#D4D4D4".to_string()));
         // The parser should extract #C586C0 for accent (from keyword.control)
         assert_eq!(loaded.colors.accent, ThemeColor::Hex("#C586C0".to_string()));
+    }
+
+    // -- Step 2: metadata fields
+    #[test]
+    fn test_theme_default_variant_is_none() {
+        let t = Theme {
+            name: "x".to_string(),
+            description: None,
+            author: None,
+            variant: None,
+            vars: Default::default(),
+            colors: ThemeTokens::default(),
+            source: PathBuf::new(),
+        };
+        assert!(t.variant.is_none());
+        assert!(t.description.is_none());
+        assert!(t.author.is_none());
+    }
+
+    #[test]
+    fn test_theme_metadata_round_trips_json() {
+        let dir = make_dir();
+        let path = dir.path().join("meta.json");
+        let json = r#"{
+            "name": "meta-theme",
+            "description": "A test theme",
+            "author": "CADE",
+            "variant": "dark",
+            "colors": {}
+        }"#;
+        fs::write(&path, json).unwrap();
+        let loaded = load_theme(&path).unwrap();
+        assert_eq!(loaded.description.as_deref(), Some("A test theme"));
+        assert_eq!(loaded.author.as_deref(), Some("CADE"));
+        assert_eq!(loaded.variant.as_deref(), Some("dark"));
+    }
+
+    #[test]
+    fn test_theme_missing_metadata_defaults_none() {
+        let dir = make_dir();
+        let path = dir.path().join("bare.json");
+        let json = r#"{"name": "bare", "colors": {}}"#;
+        fs::write(&path, json).unwrap();
+        let loaded = load_theme(&path).unwrap();
+        assert!(loaded.description.is_none());
+        assert!(loaded.author.is_none());
+        assert!(loaded.variant.is_none());
     }
 }
 

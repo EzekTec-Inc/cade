@@ -14,7 +14,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 
@@ -459,7 +459,11 @@ pub(crate) fn render_frame(
             Span::raw(" "),
             Span::styled("> ", colors.text_dim()),
         ];
-        frame.render_widget(Paragraph::new(Line::from(prefix_spans)), input_chunks[0]);
+        frame.render_widget(
+            Paragraph::new(Line::from(prefix_spans))
+                .style(Style::default().bg(colors.bg_input)),
+            input_chunks[0],
+        );
 
         let input_placeholder = if queued_count > 0 {
             format!("{queued_count} queued — type another or Ctrl+Enter to redirect")
@@ -469,8 +473,11 @@ pub(crate) fn render_frame(
 
         textarea.set_placeholder_text(input_placeholder);
         textarea.set_placeholder_style(colors.text_muted());
-        textarea.set_cursor_line_style(Style::default());
+        textarea.set_cursor_line_style(Style::default().bg(colors.bg_input));
         textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
+        // Apply bg_input as the textarea base style so the whole row has the
+        // themed background even when the line is shorter than the terminal width.
+        textarea.set_style(Style::default().bg(colors.bg_input));
 
         frame.render_widget(&*textarea, input_chunks[1]);
         input_cursor_pos = Some((
@@ -647,7 +654,7 @@ pub(crate) fn render_frame(
         let list = List::new(items).block(
             Block::default()
                 .borders(Borders::ALL)
-                .border_type(BorderType::Rounded)
+                .border_type(colors.border_style.to_ratatui())
                 .title(" Todos ")
                 .border_style(colors.border_base()),
         );

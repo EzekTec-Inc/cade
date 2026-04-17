@@ -656,3 +656,41 @@ Attacker plants key file in hostile repo; user cds in and runs cade. BEFORE: att
 **Known limitations (deferred):**
 - No automatic "re-encrypt on read" for legacy blobs. Operators currently see a tracing::warn! log and can re-save values through the UI to upgrade them. A future task could add an opportunistic upgrade inside the decrypt-then-use code path if desired.
 - OWASP params are fixed constants. A future task could expose them via env vars (e.g. CADE_ARGON2_M_COST) for constrained environments.
+
+---
+
+## /theme UI/UX Modernisation — 2026-04-16
+
+**Timestamp:** 2026-04-16T06:00:00Z
+
+### Summary
+Modernised the `/theme` command, theme picker, and TUI visual layer across 7 implementation steps.
+
+### Files Modified
+- `crates/cade-tui/src/colors.rs` — `BorderStyle` enum; 4 new token fields (`border_style`, `bg_card`, `bg_input`, `accent_dim`); refined `dark()` + `light()` palettes; new built-ins `catppuccin_mocha()`, `catppuccin_latte()`, `tokyo_night()`
+- `crates/cade-tui/src/lib.rs` — re-exports `BorderStyle`
+- `crates/cade-core/src/resources/themes.rs` — `Theme` struct gained `description`, `author`, `variant` fields (all `Option<String>`, `#[serde(default)]`, backward-compatible)
+- `crates/cade-cli/src/cli/repl/commands_theme.rs` — built-in theme list extended with metadata + 3 new names; direct-name dispatch for `catppuccin-mocha`, `catppuccin-latte`, `tokyo-night`
+- `crates/cade-tui/src/app/layout/pickers.rs` — full theme picker rewrite: colour swatches, built-in/custom grouping, live-preview badge, themed border style, `bg_surface0` background
+- `crates/cade-tui/src/app/layout/sidebar.rs` — sidebar outer block now uses `bg_surface0` for a distinct panel background
+- `crates/cade-tui/src/app/render.rs` — input area prefix + textarea use `bg_input`; stale `BorderType` import removed
+- `crates/cade-tui/src/app/layout/command_palette.rs`, `toast.rs`, `summary.rs`, `overlay.rs`, `mcp_picker.rs`, `skills.rs` — all `BorderType::Rounded` replaced with `colors.border_style.to_ratatui()`
+
+### Previous Behaviour
+- 2 built-in themes (dark/light) with flat, low-contrast palettes
+- No `BorderStyle`, `bg_card`, `bg_input`, `accent_dim` tokens
+- Theme picker: plain table, no swatches, no grouping, hardcoded `BorderType::Rounded`
+- Sidebar had no background; input area had no distinct background
+- `Theme` struct had no metadata fields
+
+### New Behaviour
+- 5 built-in themes: `dark`, `light`, `catppuccin-mocha`, `catppuccin-latte`, `tokyo-night`
+- Richer palettes with noticeable layer depth (8–10 pt RGB step between bg levels)
+- `BorderStyle` enum controls border character style across all overlays
+- Theme picker shows colour swatches (primary/success/error/warning/bg_surface2) per row, groups built-in vs custom, shows live-preview badge
+- Sidebar rendered over `bg_surface0`; input area rendered over `bg_input`
+- `Theme` supports optional `description`, `author`, `variant` metadata (fully backward-compatible JSON)
+
+### Rollback Steps
+1. `git revert HEAD` (single commit covers all changes)
+2. Or revert individual files listed above — each change is isolated to its file

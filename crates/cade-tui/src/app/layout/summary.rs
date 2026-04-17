@@ -3,7 +3,7 @@ use ratatui::{
     layout::Rect,
     style::Modifier,
     text::Span,
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, Paragraph, Wrap},
 };
 use crate::colors::ThemeColors;
 use crate::app::SummaryState;
@@ -28,7 +28,7 @@ pub fn render_summary(
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .border_type(colors.border_style.to_ratatui())
         .border_style(colors.border_focus())
         .title(Span::styled(" Conversation Summary ", colors.primary_bold()));
 

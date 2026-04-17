@@ -10,7 +10,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
 use std::path::Path;
 
@@ -110,7 +110,7 @@ pub fn show_skills_manager(
             .block(
                 Block::default()
                     .borders(Borders::ALL)
-                    .border_type(BorderType::Rounded)
+                    .border_type(colors.border_style.to_ratatui())
                     .title(" Skills ")
                     .border_style(colors.border_base()),
             );
@@ -140,7 +140,7 @@ pub fn show_skills_manager(
                 .block(
                     Block::default()
                         .borders(Borders::ALL)
-                        .border_type(BorderType::Rounded)
+                        .border_type(colors.border_style.to_ratatui())
                         .title(" Preview ")
                         .border_style(colors.border_base()),
                 );

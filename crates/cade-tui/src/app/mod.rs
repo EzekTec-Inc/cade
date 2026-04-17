@@ -55,7 +55,7 @@ use ratatui::{
     layout::Rect,
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Padding, Paragraph, Wrap},
+    widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
 use unicode_width::UnicodeWidthStr;
 

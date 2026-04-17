@@ -1,6 +1,33 @@
 /// Theme color palette for the CADE TUI.
 use ratatui::style::{Color as RC, Style, Modifier};
 
+// region:    --- BorderStyle
+
+/// Which ratatui `BorderType` the theme prefers for all overlay blocks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum BorderStyle {
+    #[default]
+    Rounded,
+    Thick,
+    Plain,
+    Double,
+}
+
+impl BorderStyle {
+    /// Convert to the corresponding ratatui `BorderType`.
+    pub fn to_ratatui(self) -> ratatui::widgets::BorderType {
+        use ratatui::widgets::BorderType;
+        match self {
+            Self::Rounded => BorderType::Rounded,
+            Self::Thick   => BorderType::Thick,
+            Self::Plain   => BorderType::Plain,
+            Self::Double  => BorderType::Double,
+        }
+    }
+}
+
+// endregion: --- BorderStyle
+
 // region:    --- ThemeColors
 
 /// Resolved, Ratatui-ready color palette for the TUI.
@@ -69,6 +96,16 @@ pub struct ThemeColors {
     // -- Bash mode editor border
     pub bash_mode: RC,
 
+    // -- Extended surface tokens (Step 1)
+    /// Preferred border character style for all overlay blocks.
+    pub border_style: BorderStyle,
+    /// Subtle card background for tool-result / message cards.
+    pub bg_card: RC,
+    /// Input area background (textarea row).
+    pub bg_input: RC,
+    /// Desaturated accent for secondary emphasis (badges, counts).
+    pub accent_dim: RC,
+
     #[cfg(feature = "syntax-highlighting")]
     pub syntect_theme: Option<std::sync::Arc<syntect::highlighting::Theme>>,
 }
@@ -134,124 +171,272 @@ impl ThemeColors {
 
     // -- Built-in themes
 
-    /// Dark theme (modern tonal scaling).
+    /// Dark theme (deep blue-black, high contrast, rich depth).
     pub fn dark() -> Self {
         Self {
             source_path: None,
             #[cfg(feature = "syntax-highlighting")]
             syntect_theme: None,
 
-            // Semantic Elevation
-            bg_base: RC::Rgb(10, 10, 18),
-            bg_surface0: RC::Rgb(18, 22, 32),
-            bg_surface1: RC::Rgb(22, 26, 40),
-            bg_surface2: RC::Rgb(28, 32, 48),
+            // Semantic Elevation — noticeable depth between layers
+            bg_base:     RC::Rgb(12,  13,  20),   // near-void blue-black
+            bg_surface0: RC::Rgb(20,  22,  33),   // card base  (+8 step)
+            bg_surface1: RC::Rgb(26,  28,  42),   // overlay base (+6 step)
+            bg_surface2: RC::Rgb(34,  36,  54),   // selection highlight (+8 step)
 
-            primary: RC::Rgb(100, 180, 255),
-            success: RC::Rgb(80, 200, 120),
-            error: RC::Rgb(220, 80, 80),
-            warning: RC::Rgb(240, 180, 60),
+            primary: RC::Rgb(122, 162, 247),   // vivid sky blue
+            success: RC::Rgb( 73, 196, 127),   // fresh green
+            error:   RC::Rgb(247,  93, 100),   // soft coral
+            warning: RC::Rgb(224, 175, 104),   // warm amber
 
             text_primary: RC::Reset,
-            text_muted: RC::Rgb(130, 140, 160),
-            text_dim: RC::Rgb(80, 88, 110),
+            text_muted:   RC::Rgb(122, 128, 153),  // mid-grey, blue-tinted
+            text_dim:     RC::Rgb( 72,  78,  98),  // dark hint text
 
-            border_base: RC::Rgb(45, 50, 65),
-            border_focus: RC::Rgb(100, 180, 255),
+            border_base:  RC::Rgb( 41,  44,  64),  // barely-visible divider
+            border_focus: RC::Rgb(122, 162, 247),  // matches primary
 
-            diff_added: RC::Rgb(80, 200, 120),
-            diff_removed: RC::Rgb(220, 80, 80),
-            diff_context: RC::Rgb(100, 108, 128),
+            diff_added:   RC::Rgb( 73, 196, 127),
+            diff_removed: RC::Rgb(247,  93, 100),
+            diff_context: RC::Rgb( 90,  98, 120),
 
-            md_heading: RC::Rgb(240, 180, 60),
-            md_link: RC::Rgb(100, 180, 255),
-            md_link_url: RC::Rgb(130, 140, 160),
-            md_code: RC::Rgb(120, 210, 210),
-            md_code_block: RC::Reset,
-            md_code_block_border: RC::Rgb(60, 70, 90),
-            md_quote: RC::Rgb(130, 140, 160),
-            md_quote_border: RC::Rgb(60, 70, 90),
-            md_hr: RC::Rgb(60, 70, 90),
-            md_list_bullet: RC::Rgb(120, 210, 210),
+            md_heading:          RC::Rgb(224, 175, 104),
+            md_link:             RC::Rgb(122, 162, 247),
+            md_link_url:         RC::Rgb(122, 128, 153),
+            md_code:             RC::Rgb(115, 218, 202),
+            md_code_block:       RC::Reset,
+            md_code_block_border: RC::Rgb(48,  52,  72),
+            md_quote:            RC::Rgb(122, 128, 153),
+            md_quote_border:     RC::Rgb(48,  52,  72),
+            md_hr:               RC::Rgb(48,  52,  72),
+            md_list_bullet:      RC::Rgb(115, 218, 202),
 
-            syntax_comment: RC::Rgb(100, 108, 128),
-            syntax_keyword: RC::Rgb(200, 120, 220),
-            syntax_function: RC::Rgb(100, 180, 255),
-            syntax_variable: RC::Rgb(240, 180, 60),
-            syntax_string: RC::Rgb(120, 210, 160),
-            syntax_number: RC::Rgb(220, 150, 100),
-            syntax_type: RC::Rgb(120, 200, 240),
-            syntax_operator: RC::Rgb(200, 120, 220),
-            syntax_punctuation: RC::Rgb(130, 140, 160),
+            syntax_comment:     RC::Rgb( 90,  98, 120),
+            syntax_keyword:     RC::Rgb(187, 154, 247),  // purple
+            syntax_function:    RC::Rgb(122, 162, 247),  // blue
+            syntax_variable:    RC::Rgb(224, 175, 104),  // amber
+            syntax_string:      RC::Rgb(158, 206, 106),  // green
+            syntax_number:      RC::Rgb(255, 158, 100),  // orange
+            syntax_type:        RC::Rgb(115, 218, 202),  // teal
+            syntax_operator:    RC::Rgb(187, 154, 247),
+            syntax_punctuation: RC::Rgb(122, 128, 153),
 
-            thinking_off: RC::Rgb(45, 50, 65),
-            thinking_minimal: RC::Rgb(100, 180, 255),
-            thinking_low: RC::Rgb(80, 160, 200),
-            thinking_medium: RC::Rgb(120, 200, 180),
-            thinking_high: RC::Rgb(200, 160, 80),
-            thinking_xhigh: RC::Rgb(220, 80, 80),
-            bash_mode: RC::Rgb(240, 180, 60),
+            thinking_off:     RC::Rgb( 41,  44,  64),
+            thinking_minimal: RC::Rgb(122, 162, 247),
+            thinking_low:     RC::Rgb( 80, 160, 200),
+            thinking_medium:  RC::Rgb(115, 218, 202),
+            thinking_high:    RC::Rgb(224, 175, 104),
+            thinking_xhigh:   RC::Rgb(247,  93, 100),
+            bash_mode:        RC::Rgb(224, 175, 104),
+
+            border_style: BorderStyle::Rounded,
+            bg_card:      RC::Rgb(20,  22,  34),
+            bg_input:     RC::Rgb(22,  24,  36),
+            accent_dim:   RC::Rgb(64, 102, 168),
         }
     }
 
-    /// Light theme.
+    /// Light theme (warm white base, high readability, clear depth).
     pub fn light() -> Self {
         Self {
             source_path: None,
             #[cfg(feature = "syntax-highlighting")]
             syntect_theme: None,
 
-            // Semantic Elevation
-            bg_base: RC::Rgb(250, 252, 255),
-            bg_surface0: RC::Rgb(244, 248, 255),
-            bg_surface1: RC::Rgb(240, 244, 255),
-            bg_surface2: RC::Rgb(230, 236, 250),
+            // Semantic Elevation — clear layering on a white surface
+            bg_base:     RC::Rgb(252, 252, 255),   // near-white, slight blue
+            bg_surface0: RC::Rgb(244, 246, 255),   // card base
+            bg_surface1: RC::Rgb(236, 240, 255),   // overlay / panel
+            bg_surface2: RC::Rgb(220, 226, 248),   // selection highlight
 
-            primary: RC::Rgb(0, 100, 200),
-            success: RC::Rgb(0, 140, 60),
-            error: RC::Rgb(180, 30, 30),
-            warning: RC::Rgb(160, 100, 0),
+            primary: RC::Rgb( 14,  98, 200),   // rich blue
+            success: RC::Rgb(  0, 135,  75),   // forest green
+            error:   RC::Rgb(185,  28,  28),   // deep red
+            warning: RC::Rgb(146,  88,   0),   // dark amber
 
             text_primary: RC::Reset,
-            text_muted: RC::Rgb(100, 110, 130),
-            text_dim: RC::Rgb(150, 158, 175),
+            text_muted:   RC::Rgb( 90, 100, 125),
+            text_dim:     RC::Rgb(148, 158, 180),
 
-            border_base: RC::Rgb(200, 208, 220),
-            border_focus: RC::Rgb(0, 100, 200),
+            border_base:  RC::Rgb(198, 206, 226),
+            border_focus: RC::Rgb( 14,  98, 200),
 
-            diff_added: RC::Rgb(0, 140, 60),
-            diff_removed: RC::Rgb(180, 30, 30),
-            diff_context: RC::Rgb(100, 110, 130),
+            diff_added:   RC::Rgb(  0, 135,  75),
+            diff_removed: RC::Rgb(185,  28,  28),
+            diff_context: RC::Rgb( 90, 100, 125),
 
-            md_heading: RC::Rgb(160, 100, 0),
-            md_link: RC::Rgb(0, 100, 200),
-            md_link_url: RC::Rgb(100, 110, 130),
-            md_code: RC::Rgb(0, 120, 120),
-            md_code_block: RC::Reset,
-            md_code_block_border: RC::Rgb(180, 190, 210),
-            md_quote: RC::Rgb(100, 110, 130),
-            md_quote_border: RC::Rgb(180, 190, 210),
-            md_hr: RC::Rgb(180, 190, 210),
-            md_list_bullet: RC::Rgb(0, 120, 120),
+            md_heading:          RC::Rgb(146,  88,   0),
+            md_link:             RC::Rgb( 14,  98, 200),
+            md_link_url:         RC::Rgb( 90, 100, 125),
+            md_code:             RC::Rgb(  0, 118, 118),
+            md_code_block:       RC::Reset,
+            md_code_block_border: RC::Rgb(180, 190, 215),
+            md_quote:            RC::Rgb( 90, 100, 125),
+            md_quote_border:     RC::Rgb(180, 190, 215),
+            md_hr:               RC::Rgb(180, 190, 215),
+            md_list_bullet:      RC::Rgb(  0, 118, 118),
 
-            syntax_comment: RC::Rgb(100, 110, 130),
-            syntax_keyword: RC::Rgb(140, 40, 160),
-            syntax_function: RC::Rgb(0, 100, 200),
-            syntax_variable: RC::Rgb(160, 100, 0),
-            syntax_string: RC::Rgb(0, 120, 60),
-            syntax_number: RC::Rgb(160, 80, 20),
-            syntax_type: RC::Rgb(0, 100, 160),
-            syntax_operator: RC::Rgb(140, 40, 160),
-            syntax_punctuation: RC::Rgb(100, 110, 130),
+            syntax_comment:     RC::Rgb( 90, 100, 125),
+            syntax_keyword:     RC::Rgb(128,  30, 155),
+            syntax_function:    RC::Rgb( 14,  98, 200),
+            syntax_variable:    RC::Rgb(146,  88,   0),
+            syntax_string:      RC::Rgb(  0, 115,  55),
+            syntax_number:      RC::Rgb(155,  70,  15),
+            syntax_type:        RC::Rgb(  0,  95, 155),
+            syntax_operator:    RC::Rgb(128,  30, 155),
+            syntax_punctuation: RC::Rgb( 90, 100, 125),
 
-            thinking_off: RC::Rgb(200, 208, 220),
-            thinking_minimal: RC::Rgb(0, 100, 200),
-            thinking_low: RC::Rgb(0, 120, 160),
-            thinking_medium: RC::Rgb(0, 140, 100),
-            thinking_high: RC::Rgb(160, 100, 0),
-            thinking_xhigh: RC::Rgb(180, 30, 30),
-            bash_mode: RC::Rgb(160, 100, 0),
+            thinking_off:     RC::Rgb(198, 206, 226),
+            thinking_minimal: RC::Rgb( 14,  98, 200),
+            thinking_low:     RC::Rgb(  0, 118, 160),
+            thinking_medium:  RC::Rgb(  0, 135,  75),
+            thinking_high:    RC::Rgb(146,  88,   0),
+            thinking_xhigh:   RC::Rgb(185,  28,  28),
+            bash_mode:        RC::Rgb(146,  88,   0),
+
+            border_style: BorderStyle::Rounded,
+            bg_card:      RC::Rgb(242, 245, 255),
+            bg_input:     RC::Rgb(236, 240, 255),
+            accent_dim:   RC::Rgb( 76, 136, 210),
         }
+    }
+
+    // -- Additional built-in themes
+
+    /// Catppuccin Mocha — warm purple-tinted dark.
+    /// Palette source: <https://github.com/catppuccin/catppuccin>
+    pub fn catppuccin_mocha() -> Self {
+        let mut c = Self::dark();
+        // Base surfaces
+        c.bg_base     = RC::Rgb( 30,  30,  46);  // Crust
+        c.bg_surface0 = RC::Rgb( 36,  36,  54);  // Mantle
+        c.bg_surface1 = RC::Rgb( 49,  50,  68);  // Base
+        c.bg_surface2 = RC::Rgb( 69,  71,  90);  // Surface0
+        c.bg_card     = RC::Rgb( 36,  36,  54);
+        c.bg_input    = RC::Rgb( 49,  50,  68);
+        // Accents
+        c.primary      = RC::Rgb(137, 180, 250);  // Blue
+        c.success      = RC::Rgb(166, 227, 161);  // Green
+        c.error        = RC::Rgb(243, 139, 168);  // Red
+        c.warning      = RC::Rgb(249, 226, 175);  // Yellow
+        c.accent_dim   = RC::Rgb( 88, 128, 200);
+        // Text
+        c.text_muted   = RC::Rgb(166, 173, 200);  // Overlay2
+        c.text_dim     = RC::Rgb(108, 112, 134);  // Surface2
+        // Borders
+        c.border_base  = RC::Rgb( 69,  71,  90);
+        c.border_focus = RC::Rgb(137, 180, 250);
+        // Diff
+        c.diff_added   = RC::Rgb(166, 227, 161);
+        c.diff_removed = RC::Rgb(243, 139, 168);
+        // Markdown
+        c.md_heading    = RC::Rgb(249, 226, 175);
+        c.md_link       = RC::Rgb(137, 180, 250);
+        c.md_code       = RC::Rgb(148, 226, 213);  // Teal
+        c.md_list_bullet = RC::Rgb(148, 226, 213);
+        // Syntax
+        c.syntax_keyword    = RC::Rgb(203, 166, 247);  // Mauve
+        c.syntax_function   = RC::Rgb(137, 180, 250);  // Blue
+        c.syntax_string     = RC::Rgb(166, 227, 161);  // Green
+        c.syntax_number     = RC::Rgb(250, 179, 135);  // Peach
+        c.syntax_type       = RC::Rgb(148, 226, 213);  // Teal
+        c.syntax_variable   = RC::Rgb(249, 226, 175);  // Yellow
+        c.syntax_operator   = RC::Rgb(203, 166, 247);
+        // Thinking
+        c.thinking_minimal  = RC::Rgb(137, 180, 250);
+        c.thinking_medium   = RC::Rgb(148, 226, 213);
+        c.thinking_high     = RC::Rgb(249, 226, 175);
+        c.thinking_xhigh    = RC::Rgb(243, 139, 168);
+        c.bash_mode         = RC::Rgb(249, 226, 175);
+        c
+    }
+
+    /// Catppuccin Latte — warm beige light.
+    /// Palette source: <https://github.com/catppuccin/catppuccin>
+    pub fn catppuccin_latte() -> Self {
+        let mut c = Self::light();
+        // Base surfaces
+        c.bg_base     = RC::Rgb(239, 241, 245);  // Base
+        c.bg_surface0 = RC::Rgb(230, 233, 239);  // Mantle
+        c.bg_surface1 = RC::Rgb(220, 224, 232);  // Crust
+        c.bg_surface2 = RC::Rgb(204, 208, 218);  // Surface0
+        c.bg_card     = RC::Rgb(230, 233, 239);
+        c.bg_input    = RC::Rgb(220, 224, 232);
+        // Accents
+        c.primary      = RC::Rgb( 30, 102, 245);  // Blue
+        c.success      = RC::Rgb( 64, 160,  43);  // Green
+        c.error        = RC::Rgb(210,  15,  57);  // Red
+        c.warning      = RC::Rgb(223, 142,  29);  // Yellow
+        c.accent_dim   = RC::Rgb( 80, 140, 210);
+        // Text
+        c.text_muted   = RC::Rgb( 92, 106, 134);  // Overlay2
+        c.text_dim     = RC::Rgb(156, 160, 176);  // Surface2
+        // Borders
+        c.border_base  = RC::Rgb(188, 192, 204);
+        c.border_focus = RC::Rgb( 30, 102, 245);
+        // Markdown
+        c.md_heading    = RC::Rgb(223, 142,  29);
+        c.md_link       = RC::Rgb( 30, 102, 245);
+        c.md_code       = RC::Rgb( 23, 146, 153);  // Teal
+        c.md_list_bullet = RC::Rgb( 23, 146, 153);
+        // Syntax
+        c.syntax_keyword    = RC::Rgb(136,  57, 239);  // Mauve
+        c.syntax_function   = RC::Rgb( 30, 102, 245);
+        c.syntax_string     = RC::Rgb( 64, 160,  43);
+        c.syntax_number     = RC::Rgb(254, 100,  11);  // Peach
+        c.syntax_type       = RC::Rgb( 23, 146, 153);
+        c.syntax_variable   = RC::Rgb(223, 142,  29);
+        c.syntax_operator   = RC::Rgb(136,  57, 239);
+        c.bash_mode         = RC::Rgb(223, 142,  29);
+        c
+    }
+
+    /// Tokyo Night — deep indigo dark with neon cyan + rose accents.
+    /// Palette source: <https://github.com/enkia/tokyo-night-vscode-theme>
+    pub fn tokyo_night() -> Self {
+        let mut c = Self::dark();
+        // Base surfaces
+        c.bg_base     = RC::Rgb( 26,  27,  38);  // bg
+        c.bg_surface0 = RC::Rgb( 28,  29,  44);  // bg_dark
+        c.bg_surface1 = RC::Rgb( 32,  34,  51);  // bg_highlight
+        c.bg_surface2 = RC::Rgb( 41,  44,  66);  // terminal_black
+        c.bg_card     = RC::Rgb( 28,  29,  44);
+        c.bg_input    = RC::Rgb( 32,  34,  51);
+        // Accents
+        c.primary      = RC::Rgb(122, 162, 247);  // blue
+        c.success      = RC::Rgb(158, 206, 106);  // green
+        c.error        = RC::Rgb(247,  93, 100);  // red
+        c.warning      = RC::Rgb(224, 175, 104);  // yellow
+        c.accent_dim   = RC::Rgb( 65, 105, 190);
+        // Text
+        c.text_muted   = RC::Rgb(169, 177, 214);  // fg_dark
+        c.text_dim     = RC::Rgb( 86,  95, 137);  // comment
+        // Borders
+        c.border_base  = RC::Rgb( 41,  44,  66);
+        c.border_focus = RC::Rgb(122, 162, 247);
+        // Diff
+        c.diff_added   = RC::Rgb(158, 206, 106);
+        c.diff_removed = RC::Rgb(247,  93, 100);
+        // Markdown
+        c.md_heading    = RC::Rgb(224, 175, 104);
+        c.md_link       = RC::Rgb(122, 162, 247);
+        c.md_code       = RC::Rgb(  42, 195, 222);  // cyan
+        c.md_list_bullet = RC::Rgb( 42, 195, 222);
+        // Syntax
+        c.syntax_keyword    = RC::Rgb(187, 154, 247);  // purple
+        c.syntax_function   = RC::Rgb(122, 162, 247);  // blue
+        c.syntax_string     = RC::Rgb(158, 206, 106);  // green
+        c.syntax_number     = RC::Rgb(255, 158, 100);  // orange
+        c.syntax_type       = RC::Rgb( 42, 195, 222);  // cyan
+        c.syntax_variable   = RC::Rgb(224, 175, 104);  // yellow
+        c.syntax_operator   = RC::Rgb(187, 154, 247);
+        // Thinking
+        c.thinking_minimal  = RC::Rgb(122, 162, 247);
+        c.thinking_medium   = RC::Rgb( 42, 195, 222);
+        c.thinking_high     = RC::Rgb(224, 175, 104);
+        c.thinking_xhigh    = RC::Rgb(247,  93, 100);
+        c.bash_mode         = RC::Rgb(224, 175, 104);
+        c
     }
 
     // -- Custom theme loading
@@ -378,6 +563,73 @@ mod tests {
     fn test_parse_hex_invalid() {
         assert!(parse_hex("xyz").is_none());
         assert!(parse_hex("#12345").is_none());
+    }
+
+    // -- Step 1: new token fields
+    #[test]
+    fn test_dark_has_border_style_rounded() {
+        let c = ThemeColors::dark();
+        assert_eq!(c.border_style, BorderStyle::Rounded);
+    }
+
+    #[test]
+    fn test_dark_has_bg_card() {
+        let c = ThemeColors::dark();
+        assert_ne!(c.bg_card, RC::Reset);
+    }
+
+    #[test]
+    fn test_dark_has_bg_input() {
+        let c = ThemeColors::dark();
+        assert_ne!(c.bg_input, RC::Reset);
+    }
+
+    #[test]
+    fn test_dark_has_accent_dim() {
+        let c = ThemeColors::dark();
+        assert_ne!(c.accent_dim, RC::Reset);
+    }
+
+    #[test]
+    fn test_border_style_to_ratatui_rounded() {
+        use ratatui::widgets::BorderType;
+        assert_eq!(BorderStyle::Rounded.to_ratatui(), BorderType::Rounded);
+    }
+
+    #[test]
+    fn test_border_style_to_ratatui_thick() {
+        use ratatui::widgets::BorderType;
+        assert_eq!(BorderStyle::Thick.to_ratatui(), BorderType::Thick);
+    }
+
+    #[test]
+    fn test_light_has_new_fields() {
+        let c = ThemeColors::light();
+        assert_eq!(c.border_style, BorderStyle::Rounded);
+        assert_ne!(c.bg_card, RC::Reset);
+    }
+
+    // -- Step 4: new built-in themes
+    #[test]
+    fn test_catppuccin_mocha_smoke() {
+        let c = ThemeColors::catppuccin_mocha();
+        assert_ne!(c.primary, RC::Reset);
+        assert_ne!(c.bg_base, RC::Reset);
+        assert_eq!(c.border_style, BorderStyle::Rounded);
+    }
+
+    #[test]
+    fn test_catppuccin_latte_smoke() {
+        let c = ThemeColors::catppuccin_latte();
+        assert_ne!(c.primary, RC::Reset);
+        assert_ne!(c.bg_base, RC::Reset);
+    }
+
+    #[test]
+    fn test_tokyo_night_smoke() {
+        let c = ThemeColors::tokyo_night();
+        assert_ne!(c.primary, RC::Reset);
+        assert_ne!(c.bg_base, RC::Reset);
     }
 }
 // endregion: --- Tests

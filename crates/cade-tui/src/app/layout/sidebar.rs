@@ -73,12 +73,14 @@ pub(crate) fn render_sidebar(
     let inner = Block::default()
         .borders(Borders::LEFT)
         .border_style(colors.border_base())
+        .style(Style::default().bg(colors.bg_surface0))
         .padding(Padding::new(1, 1, 0, 0))
         .inner(area);
     frame.render_widget(
         Block::default()
             .borders(Borders::LEFT)
-            .border_style(colors.border_base()),
+            .border_style(colors.border_base())
+            .style(Style::default().bg(colors.bg_surface0)),
         area,
     );
 

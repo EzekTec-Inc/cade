@@ -4,7 +4,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 /// Draw a standard full-screen overlay shell and return the inner content area.
@@ -17,7 +17,7 @@ pub fn render_overlay_shell(
     frame.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .border_type(colors.border_style.to_ratatui())
         .style(Style::default().bg(colors.bg_surface2))
         .border_style(colors.border_base())
         .title(Line::from(vec![

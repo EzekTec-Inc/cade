@@ -28,6 +28,9 @@ impl Repl {
                         0,
                         cade_core::resources::Theme {
                             name: "dark".to_string(),
+                            description: Some("Built-in dark theme".to_string()),
+                            author: Some("CADE".to_string()),
+                            variant: Some("dark".to_string()),
                             vars: Default::default(),
                             colors: Default::default(),
                             source: std::path::PathBuf::from("builtin"),
@@ -39,11 +42,34 @@ impl Repl {
                         1,
                         cade_core::resources::Theme {
                             name: "light".to_string(),
+                            description: Some("Built-in light theme".to_string()),
+                            author: Some("CADE".to_string()),
+                            variant: Some("light".to_string()),
                             vars: Default::default(),
                             colors: Default::default(),
                             source: std::path::PathBuf::from("builtin"),
                         },
                     );
+                }
+                for (idx, (n, desc, var)) in [
+                    ("catppuccin-mocha", "Warm purple-tinted dark",  "dark"),
+                    ("catppuccin-latte", "Warm beige light",         "light"),
+                    ("tokyo-night",      "Deep indigo dark, neon accents", "dark"),
+                ].iter().enumerate() {
+                    if !discovered.iter().any(|t| t.name == *n) {
+                        discovered.insert(
+                            2 + idx,
+                            cade_core::resources::Theme {
+                                name: n.to_string(),
+                                description: Some(desc.to_string()),
+                                author: Some("CADE".to_string()),
+                                variant: Some(var.to_string()),
+                                vars: Default::default(),
+                                colors: Default::default(),
+                                source: std::path::PathBuf::from("builtin"),
+                            },
+                        );
+                    }
                 }
                 let current_colors =
                     self.app.lock().colors.clone();
@@ -58,6 +84,12 @@ impl Repl {
                 (cade_tui::ThemeColors::dark(), "dark".to_string())
             } else if name == "light" {
                 (cade_tui::ThemeColors::light(), "light".to_string())
+            } else if name == "catppuccin-mocha" {
+                (cade_tui::ThemeColors::catppuccin_mocha(), "catppuccin-mocha".to_string())
+            } else if name == "catppuccin-latte" {
+                (cade_tui::ThemeColors::catppuccin_latte(), "catppuccin-latte".to_string())
+            } else if name == "tokyo-night" {
+                (cade_tui::ThemeColors::tokyo_night(), "tokyo-night".to_string())
             } else {
                 let agent_dir = self
                     .settings

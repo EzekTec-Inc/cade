@@ -7,7 +7,7 @@ use ratatui::{
     layout::{Constraint, Layout, Rect},
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
 };
 
 /// Render the command palette as a centered overlay.
@@ -37,7 +37,7 @@ pub(crate) fn render_command_palette(
     // Outer block
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_type(BorderType::Rounded)
+        .border_type(colors.border_style.to_ratatui())
         .title(Line::from(vec![
             Span::raw(" "),
             Span::styled(
