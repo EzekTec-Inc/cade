@@ -466,3 +466,45 @@
 **Schema changes:** none. All state lives in the existing `shared_memory_blocks` / `agent_memory_blocks` tables via standard labels.
 
 **Rollback:** `git revert` the Phase C commit, or restore checkpoint `cp-e5832a63-fdf9-4294-b293-0109921b08d2` (label `before-phase-c-ring`). No migration needed — stray `session_summary_N` / `session_index` blocks on rollback are harmless (they simply stop being written/read).
+
+---
+
+## 2026-04-17T04:22Z — Task 3 / P1-3: SSRF proxy lockdown
+
+**Summary:** Locked down `/v1/stream` so it can no longer be used as a server-side request forgery (SSRF) primitive. Every outbound URL now passes an explicit scheme + IP-literal + host-allow-list validator before any network I/O, the reqwest client is built with redirects disabled, and a 30-second total timeout bounds slow upstreams.
+
+**Files modified:**
+- `crates/cade-server/src/server/api/proxy.rs` — rewrote the handler to call `validate_outbound_url()` before any I/O; build `reqwest::Client` with `Policy::none()` for redirects and a 30 s timeout. Added public `validate_outbound_url()` fn returning `Result<Url, UrlRejection>`, public `UrlRejection` enum with `status()` and `message()` helpers. Introduced `ALLOWED_HOSTS_EXACT` (4 entries) and `ALLOWED_HOST_SUFFIXES` (3 entries) constants.
+- `crates/cade-server/src/server/api/proxy_test.rs` — new test module, 19 unit tests (5 scheme, 5 IP-literal, 7 host allow/deny, 3 edge cases).
+
+**Threat blocked:**
+- `GET /v1/stream?url=file:///etc/passwd` → 400 bad scheme
+- `GET /v1/stream?url=http://169.254.169.254/...` (cloud metadata) → 403 ip-literal-host
+- `GET /v1/stream?url=http://127.0.0.1:8080/admin` (loopback) → 403 ip-literal-host
+- `GET /v1/stream?url=http://[::1]/` (IPv6 loopback) → 403 ip-literal-host
+- `GET /v1/stream?url=https://evil.com/` (arbitrary public host) → 403 host-not-allowed
+- `GET /v1/stream?url=https://api.anthropic.com.evil.com/` (suffix-match bypass) → 403 host-not-allowed
+- Redirect chain from allowed host → blocked host: upstream 302 is NOT followed; caller sees the 302 byte-stream but no second request is issued.
+
+**Allow-list (initial):**
+- Exact: `api.anthropic.com`, `api.openai.com`, `generativelanguage.googleapis.com`, `openrouter.ai`
+- Suffix (matched via leading dot — `anthropic.com.evil.com` ≠ `*.anthropic.com`): `anthropic.com`, `openai.com`, `googleapis.com`
+
+**Reason:** HIGH/CRITICAL-severity SSRF finding from the security review. The original handler accepted any URL from the query string and proxied it verbatim. An authenticated caller (or any prompt-injection path that reaches an agent tool-call emitting `/v1/stream?url=…`) could reach loopback services, cloud metadata endpoints, or arbitrary schemes.
+
+**Previous behavior:** `stream_http_handler` called `client.get(&params.url).send().await` with zero URL validation and redirects auto-followed.
+
+**New behavior:** Request is rejected before any I/O if the URL fails validation. Valid URLs are fetched with redirects disabled and a 30 s total timeout. The handler's public interface (GET, query param shape, streaming response) is unchanged for legitimate traffic.
+
+**Tests:**
+- `cargo test -p cade-server --lib server::api::proxy` → 19 green (all new).
+- `cargo test -p cade-server` → 98 green (up from 79, +19).
+- `cargo clippy -p cade-server --lib --tests` → no new warnings from proxy.rs (one `manual_contains` lint flagged during dev, fixed before commit).
+
+**New dependencies:** none. Uses `reqwest::Url` (re-export of the `url` crate already pulled in via `reqwest`), `std::net::IpAddr` for IP-literal detection, and `reqwest::redirect::Policy` / `Client::builder()` for the hardened client.
+
+**Rollback:** `restore_checkpoint cp-010fb43b-cf0b-4e1a-871e-db964a1684c6` (label `before-p1-3-ssrf`). For task-level revert: `git revert` the P1-3 commit — restores the pre-lockdown proxy handler. Note: reverting re-opens the SSRF vector.
+
+**Known limitations (deferred):**
+- **DNS resolution check not implemented yet.** A host on the allow-list could in principle resolve to a private IP if an attacker controls DNS for that host. Mitigated in practice because the allow-list contains only trusted LLM-provider domains, but a full fix (resolve host → reject if any returned IP is private/loopback/link-local) is a follow-up if an operator widens the allow-list. The `UrlRejection` enum has room for a `ResolvesToPrivateIp` variant.
+- **No per-operator extension of the allow-list** (e.g. `CADE_PROXY_ALLOWED_HOSTS` env var). Declined in design question; can be added without breaking changes.
