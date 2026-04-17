@@ -89,7 +89,7 @@ arboard        = "3"
 
 # Server
 axum           = { version = "0.7", features = ["macros"] }
-tower-http     = { version = "0.5", features = ["cors", "trace"] }
+tower-http     = { version = "0.5", features = ["cors", "trace", "compression-gzip"] }
 rusqlite       = { version = "0.31" }
 
 # MCP

@@ -61,8 +61,14 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/health", get(health::get_health))
         .route("/v1/config", get(health::get_config))
         // Dashboard (public, unauthenticated — see auth.rs for exemption)
-        .route("/dashboard", get(dashboard::get_dashboard))
-        .route("/dashboard/*path", get(dashboard::get_dashboard_asset))
+        // Gzip-compressed so the ~7 MB .wasm transfers as ~2.7 MB.
+        .nest(
+            "/dashboard",
+            Router::new()
+                .route("/", get(dashboard::get_dashboard))
+                .route("/*path", get(dashboard::get_dashboard_asset))
+                .layer(tower_http::compression::CompressionLayer::new()),
+        )
         // Real context-window stats (D2)
         .route(
             "/v1/agents/:id/context",
