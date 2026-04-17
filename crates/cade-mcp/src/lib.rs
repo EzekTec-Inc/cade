@@ -557,15 +557,22 @@ impl McpManager {
         for (k, v) in &config.env {
             cmd.env(k, v);
         }
-        // Suppress server stderr from polluting CADE's terminal
-        cmd.stderr(std::process::Stdio::null());
 
-        let transport = TokioChildProcess::new(cmd).map_err(|e| {
-            Error::custom(format!(
-                "spawn MCP server '{key}' ({}): {e}",
-                config.command
-            ))
-        })?;
+        // rmcp 1.4's `TokioChildProcess::new()` silently overrides the
+        // caller's Stdio settings (it forces stdin/stdout=piped, stderr=inherit
+        // via the builder's Default). That re-enables the server's stderr and
+        // pollutes CADE's terminal. Use the builder API directly so we can
+        // pin stderr=null. `.spawn()` returns (transport, Option<ChildStderr>);
+        // the second element is always None because stderr isn't piped.
+        let (transport, _stderr) = TokioChildProcess::builder(cmd)
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .map_err(|e| {
+                Error::custom(format!(
+                    "spawn MCP server '{key}' ({}): {e}",
+                    config.command
+                ))
+            })?;
 
         let service = ()
             .serve(transport)
