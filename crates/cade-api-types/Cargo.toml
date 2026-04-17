@@ -1,0 +1,16 @@
+[package]
+name        = "cade-api-types"
+version     = "0.2.0"
+edition     = "2024"
+description = "CADE — shared API wire types (serde-only, WASM-compatible)"
+license     = "MIT OR Apache-2.0"
+
+[lib]
+doctest     = false
+
+[dependencies]
+serde.workspace      = true
+serde_json.workspace = true
+
+[lints.rust]
+unsafe_code = "forbid"

@@ -685,6 +685,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cade-api-types"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "cade-cli"
 version = "0.2.0"
 dependencies = [

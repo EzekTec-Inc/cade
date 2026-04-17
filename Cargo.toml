@@ -2,6 +2,7 @@
 members = [
     "crates/cade-core",
     "crates/cade-ai",
+    "crates/cade-api-types",
     "crates/cade-server",
     "crates/cade-desktop",
     "crates/cade-agent",
