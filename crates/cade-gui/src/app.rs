@@ -376,33 +376,103 @@ Connected and ready.  Select an agent from the sidebar to begin.
                                     ui.label("No messages yet. Send one to start a conversation.");
                                 } else {
                                     for msg in messages {
-                                        // Role header
-                                        let role_text = match msg.role.as_str() {
-                                            "user" => "👤 User",
-                                            "assistant" => "🤖 Assistant",
-                                            "system" => "⚙️ System",
-                                            "tool" => "🔧 Tool",
-                                            other => other,
-                                        };
                                         ui.add_space(8.0);
-                                        ui.label(
-                                            egui::RichText::new(role_text)
-                                                .strong()
-                                                .size(13.0),
-                                        );
-                                        ui.separator();
+                                        match msg.role.as_str() {
+                                            "reasoning" => {
+                                                // Collapsible "Thinking" block with
+                                                // dimmed purple styling.
+                                                let text = match &msg.content {
+                                                    serde_json::Value::String(s) => s.as_str(),
+                                                    _ => "",
+                                                };
+                                                egui::CollapsingHeader::new(
+                                                    egui::RichText::new("💭 Thinking…")
+                                                        .color(crate::theme::PURPLE)
+                                                        .italics()
+                                                        .size(12.0),
+                                                )
+                                                .default_open(false)
+                                                .show(ui, |ui| {
+                                                    ui.label(
+                                                        egui::RichText::new(text)
+                                                            .color(crate::theme::TEXT_MUTED)
+                                                            .size(12.0),
+                                                    );
+                                                });
+                                            }
+                                            "tool_call" => {
+                                                // Styled tool-call card with name +
+                                                // collapsible arguments.
+                                                let name = msg.content.get("name")
+                                                    .and_then(|n| n.as_str())
+                                                    .unwrap_or("unknown");
+                                                let args = msg.content.get("arguments")
+                                                    .and_then(|a| a.as_str())
+                                                    .unwrap_or("{}");
 
-                                        // Render content as markdown (string) or
-                                        // raw JSON (structured).
-                                        let content_str = match &msg.content {
-                                            serde_json::Value::String(s) => s.clone(),
-                                            other => other.to_string(),
-                                        };
-                                        CommonMarkViewer::new().show(
-                                            ui,
-                                            &mut self.md_cache,
-                                            &content_str,
-                                        );
+                                                // Pretty-print JSON args if possible.
+                                                let args_pretty = serde_json::from_str::<serde_json::Value>(args)
+                                                    .ok()
+                                                    .and_then(|v| serde_json::to_string_pretty(&v).ok())
+                                                    .unwrap_or_else(|| args.to_string());
+
+                                                egui::Frame::new()
+                                                    .fill(crate::theme::BG_SURFACE1)
+                                                    .stroke(egui::Stroke::new(1.0, crate::theme::TEAL.gamma_multiply(0.4)))
+                                                    .corner_radius(egui::CornerRadius::same(4))
+                                                    .inner_margin(8.0)
+                                                    .show(ui, |ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(format!("🔧 {name}"))
+                                                                .color(crate::theme::TEAL)
+                                                                .strong()
+                                                                .size(12.0),
+                                                        );
+                                                        egui::CollapsingHeader::new(
+                                                            egui::RichText::new("Arguments")
+                                                                .color(crate::theme::TEXT_DIM)
+                                                                .size(11.0),
+                                                        )
+                                                        .default_open(false)
+                                                        .show(ui, |ui| {
+                                                            ui.label(
+                                                                egui::RichText::new(&args_pretty)
+                                                                    .color(crate::theme::TEXT_MUTED)
+                                                                    .monospace()
+                                                                    .size(11.0),
+                                                            );
+                                                        });
+                                                    });
+                                            }
+                                            role => {
+                                                // Standard message: user, assistant,
+                                                // system, tool, etc.
+                                                let (icon, color) = match role {
+                                                    "user" => ("👤 User", crate::theme::ROLE_USER),
+                                                    "assistant" => ("🤖 Assistant", crate::theme::ROLE_ASSISTANT),
+                                                    "system" => ("⚙️ System", crate::theme::ROLE_SYSTEM),
+                                                    "tool" => ("🔧 Tool", crate::theme::ROLE_TOOL),
+                                                    _ => (role, crate::theme::TEXT_MUTED),
+                                                };
+                                                ui.label(
+                                                    egui::RichText::new(icon)
+                                                        .color(color)
+                                                        .strong()
+                                                        .size(13.0),
+                                                );
+                                                ui.separator();
+
+                                                let content_str = match &msg.content {
+                                                    serde_json::Value::String(s) => s.clone(),
+                                                    other => other.to_string(),
+                                                };
+                                                CommonMarkViewer::new().show(
+                                                    ui,
+                                                    &mut self.md_cache,
+                                                    &content_str,
+                                                );
+                                            }
+                                        }
                                     }
 
                                     if is_streaming {
