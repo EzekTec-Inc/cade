@@ -201,9 +201,20 @@ impl CadeApp {
                 &agent_id,
                 &input,
                 conv_id.as_deref(),
-                move |chunk| {
+                move |evt| {
+                    use crate::api::StreamEvent;
                     if let Some(s) = session_clone.borrow_mut().as_mut() {
-                        s.on_stream_chunk(chunk);
+                        match evt {
+                            StreamEvent::ConversationId(cid) => s.on_conversation_id(&cid),
+                            StreamEvent::Text(text) => s.on_stream_chunk(&text),
+                            StreamEvent::Reasoning(text) => s.on_stream_reasoning(&text),
+                            StreamEvent::ToolCall { id, name, arguments } => {
+                                s.on_stream_tool_call(&id, &name, &arguments);
+                            }
+                            StreamEvent::Usage { .. } | StreamEvent::FinishReason(_) => {
+                                // TODO: display in UI footer
+                            }
+                        }
                     }
                     ctx_clone.request_repaint();
                 },
@@ -213,12 +224,7 @@ impl CadeApp {
             // Mark stream as done and surface any error.
             if let Some(s) = session.borrow_mut().as_mut() {
                 match result {
-                    Ok(new_conv_id) => {
-                        if let Some(cid) = new_conv_id {
-                            s.on_conversation_id(&cid);
-                        }
-                        s.on_stream_done();
-                    }
+                    Ok(()) => s.on_stream_done(),
                     Err(e) => s.push_error(&format!("{e}")),
                 }
             }

@@ -41,6 +41,36 @@ impl core::fmt::Display for ApiError {
 
 impl std::error::Error for ApiError {}
 
+// ── SSE stream event types ─────────────────────────────────────────────
+
+/// Events emitted by an SSE message stream.
+///
+/// Used by `send_message_stream` to relay parsed SSE frames back to the
+/// caller in a type-safe way (as opposed to raw JSON).
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamEvent {
+    /// The server assigned a conversation ID.
+    ConversationId(String),
+    /// A chunk of assistant text.
+    Text(String),
+    /// A chunk of chain-of-thought reasoning text.
+    Reasoning(String),
+    /// The assistant invoked a tool.
+    ToolCall {
+        id: String,
+        name: String,
+        arguments: String,
+    },
+    /// Token usage statistics for the turn.
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+        model: Option<String>,
+    },
+    /// The reason the stream ended (e.g. "stop", "length").
+    FinishReason(String),
+}
+
 /// Build the absolute URL for an API path.
 ///
 /// Rules:
@@ -102,6 +132,48 @@ where
         }),
         401 => Err(ApiError::Unauthorized),
         s => Err(ApiError::Server { status: s }),
+    }
+}
+
+// ── SSE event parsing ──────────────────────────────────────────────────
+
+/// Try to convert raw SSE JSON into a typed [`StreamEvent`].
+///
+/// Returns `None` for unrecognised `message_type` values (the caller can
+/// safely ignore them).
+pub fn parse_stream_event(v: &serde_json::Value) -> Option<StreamEvent> {
+    let mt = v.get("message_type")?.as_str()?;
+    match mt {
+        "stream_start" => {
+            let cid = v.get("conversation_id")?.as_str()?;
+            Some(StreamEvent::ConversationId(cid.to_string()))
+        }
+        "assistant_message" => {
+            let text = v.get("content")?.as_str()?;
+            Some(StreamEvent::Text(text.to_string()))
+        }
+        "reasoning_message" => {
+            let text = v.get("reasoning")?.as_str()?;
+            Some(StreamEvent::Reasoning(text.to_string()))
+        }
+        "tool_call_message" => {
+            let tc = v.get("tool_call")?;
+            Some(StreamEvent::ToolCall {
+                id: tc.get("id")?.as_str()?.to_string(),
+                name: tc.get("name")?.as_str()?.to_string(),
+                arguments: tc.get("arguments")?.as_str()?.to_string(),
+            })
+        }
+        "usage_statistics" => Some(StreamEvent::Usage {
+            input_tokens: v.get("input_tokens").and_then(|n| n.as_u64()).unwrap_or(0),
+            output_tokens: v.get("output_tokens").and_then(|n| n.as_u64()).unwrap_or(0),
+            model: v.get("model").and_then(|m| m.as_str()).map(String::from),
+        }),
+        "finish_reason" => {
+            let reason = v.get("reason")?.as_str()?;
+            Some(StreamEvent::FinishReason(reason.to_string()))
+        }
+        _ => None,
     }
 }
 
@@ -274,5 +346,83 @@ mod tests {
             ApiError::Decode { .. } => {}
             other => panic!("expected Decode, got {other:?}"),
         }
+    }
+
+    // ── parse_stream_event ────────────────────────────────────────────
+
+    #[test]
+    fn parse_stream_start() {
+        let v = serde_json::json!({"message_type":"stream_start","conversation_id":"c-1","run_id":"r-1"});
+        assert_eq!(
+            parse_stream_event(&v),
+            Some(StreamEvent::ConversationId("c-1".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_assistant_message() {
+        let v = serde_json::json!({"message_type":"assistant_message","content":"hello"});
+        assert_eq!(
+            parse_stream_event(&v),
+            Some(StreamEvent::Text("hello".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_reasoning_message() {
+        let v = serde_json::json!({"message_type":"reasoning_message","reasoning":"hmm"});
+        assert_eq!(
+            parse_stream_event(&v),
+            Some(StreamEvent::Reasoning("hmm".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_tool_call_message() {
+        let v = serde_json::json!({
+            "message_type": "tool_call_message",
+            "tool_call": {"id": "tc-1", "name": "read_file", "arguments": "{\"path\":\"a.rs\"}"}
+        });
+        assert_eq!(
+            parse_stream_event(&v),
+            Some(StreamEvent::ToolCall {
+                id: "tc-1".to_string(),
+                name: "read_file".to_string(),
+                arguments: "{\"path\":\"a.rs\"}".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_usage_statistics() {
+        let v = serde_json::json!({
+            "message_type": "usage_statistics",
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "model": "gpt-4o"
+        });
+        assert_eq!(
+            parse_stream_event(&v),
+            Some(StreamEvent::Usage {
+                input_tokens: 100,
+                output_tokens: 50,
+                model: Some("gpt-4o".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_finish_reason() {
+        let v = serde_json::json!({"message_type":"finish_reason","reason":"stop"});
+        assert_eq!(
+            parse_stream_event(&v),
+            Some(StreamEvent::FinishReason("stop".to_string()))
+        );
+    }
+
+    #[test]
+    fn parse_unknown_event_returns_none() {
+        let v = serde_json::json!({"message_type":"unknown_event"});
+        assert_eq!(parse_stream_event(&v), None);
     }
 }

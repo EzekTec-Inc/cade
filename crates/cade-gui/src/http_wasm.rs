@@ -58,17 +58,16 @@ pub async fn get_messages(
 /// `POST /v1/agents/:id/messages/stream` — send a user message and stream
 /// the assistant's response via SSE.
 ///
-/// `on_chunk` is called with each assistant-text fragment.
-/// Returns the `conversation_id` from the server's `stream_start` event
-/// (if present).
+/// `on_event` is called for each parsed [`api::StreamEvent`].
+/// Returns `Ok(())` when the stream ends normally.
 pub async fn send_message_stream(
     base_url: &str,
     token: &str,
     agent_id: &str,
     input: &str,
     conversation_id: Option<&str>,
-    mut on_chunk: impl FnMut(&str),
-) -> Result<Option<String>, ApiError> {
+    mut on_event: impl FnMut(api::StreamEvent),
+) -> Result<(), ApiError> {
     let path = format!("/v1/agents/{agent_id}/messages/stream");
     let url = api::build_url(base_url, &path);
 
@@ -110,7 +109,6 @@ pub async fn send_message_stream(
         })?;
 
     let mut parser = SseParser::new();
-    let mut conv_id: Option<String> = None;
 
     loop {
         let result = JsFuture::from(reader.read())
@@ -133,31 +131,15 @@ pub async fn send_message_stream(
                     while let Some(frame) = parser.pop() {
                         match &frame {
                             SseFrame::Json(v) => {
-                                match v.get("message_type").and_then(|m| m.as_str()) {
-                                    Some("stream_start") => {
-                                        if let Some(cid) =
-                                            v.get("conversation_id").and_then(|c| c.as_str())
-                                        {
-                                            conv_id = Some(cid.to_string());
-                                        }
-                                    }
-                                    Some("assistant_message") => {
-                                        if let Some(text) =
-                                            v.get("content").and_then(|c| c.as_str())
-                                        {
-                                            on_chunk(text);
-                                        }
-                                    }
-                                    _ => {}
+                                if let Some(evt) = api::parse_stream_event(v) {
+                                    on_event(evt);
                                 }
                             }
                             SseFrame::Done => {
                                 reader.release_lock();
-                                return Ok(conv_id);
+                                return Ok(());
                             }
-                            SseFrame::ParseError(_) => {
-                                // Skip malformed frames.
-                            }
+                            SseFrame::ParseError(_) => {}
                         }
                     }
                 }
@@ -165,23 +147,10 @@ pub async fn send_message_stream(
         }
 
         if done {
-            // Drain remaining buffered frames.
             while let Some(frame) = parser.pop() {
                 if let SseFrame::Json(v) = &frame {
-                    match v.get("message_type").and_then(|m| m.as_str()) {
-                        Some("stream_start") => {
-                            if let Some(cid) =
-                                v.get("conversation_id").and_then(|c| c.as_str())
-                            {
-                                conv_id = Some(cid.to_string());
-                            }
-                        }
-                        Some("assistant_message") => {
-                            if let Some(text) = v.get("content").and_then(|c| c.as_str()) {
-                                on_chunk(text);
-                            }
-                        }
-                        _ => {}
+                    if let Some(evt) = api::parse_stream_event(v) {
+                        on_event(evt);
                     }
                 }
             }
@@ -190,7 +159,7 @@ pub async fn send_message_stream(
     }
 
     reader.release_lock();
-    Ok(conv_id)
+    Ok(())
 }
 
 // ── SSE streaming endpoint ──────────────────────────────────────────────
