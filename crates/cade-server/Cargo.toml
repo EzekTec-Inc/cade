@@ -46,3 +46,4 @@ unsafe_code = "forbid"
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 tempfile = { workspace = true }
+async-trait.workspace = true

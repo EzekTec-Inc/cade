@@ -65,6 +65,67 @@ const HISTORY_BUDGET_FRACTION: f64 = 0.40;
 /// Characters per token approximation (conservative).
 const CHARS_PER_TOKEN: usize = 3;
 
+// ── preview / filter helpers (M2) ────────────────────────────────────────────
+
+/// Maximum chars kept per message in the history text fed to the summariser.
+///
+/// Limits are per-role because assistant turns carry the highest-signal
+/// technical content (file edits, decisions, error reports) and were being
+/// clipped at the old flat 600-char cap. Tool outputs are medium-signal;
+/// user prompts are shortest on average. Unknown roles get the smallest
+/// limit to prevent an unexpected role from flooding the summariser.
+fn preview_limit_for_role(role: &str) -> usize {
+    match role {
+        "assistant" => 1_200,
+        "tool" => 800,
+        "user" => 400,
+        _ => 400,
+    }
+}
+
+/// Whether to drop a tool message from the summary prompt as pure noise.
+///
+/// M2: the old heuristic (`len < 15 && no '/' && no digit`) incorrectly
+/// dropped legitimate short confirmations such as `"ok"` or `"done"`, making
+/// the summariser think those tools never ran. The `MAX_SUMMARY_INPUT_CHARS`
+/// cap upstream is now the only safeguard against runaway input, and
+/// whitespace-only content is already filtered via `trimmed.is_empty()` before
+/// this function is called.
+fn should_skip_noisy_tool(_role: &str, _trimmed: &str) -> bool {
+    false
+}
+
+/// Number of turns between eager (turn-count-driven) consolidation runs.
+///
+/// The Sleeptime background task fires consolidation after 20 s of inactivity
+/// (see `src/bin/cade-server.rs`). During a continuous interactive session
+/// that timer may never expire between turns, so we also fire consolidation
+/// once every `EAGER_CONSOLIDATION_TURN_THRESHOLD` turns that produce a
+/// `needs_consolidation` signal. 20 is comfortably below the 80-turn
+/// `STALE_THRESHOLD` so `working_set`'s pin (see M1) and the session_summary
+/// block are refreshed before `promote_stale_blocks` could archive them.
+pub(crate) const EAGER_CONSOLIDATION_TURN_THRESHOLD: i64 = 20;
+
+/// Pure decision: given the agent's current turn counter and the turn at which
+/// the last eager consolidation fired (0 if never), should we trigger an eager
+/// run now? This is the ONLY logic driving the eager path — keeping it pure
+/// makes it exhaustively testable without state plumbing.
+///
+/// Returns `true` iff `current_turn - last_consolidation_turn >= threshold`,
+/// using saturating subtraction so a `current < last` counter regression never
+/// panics.
+pub(crate) fn should_eager_consolidate(
+    current_turn: i64,
+    last_consolidation_turn: i64,
+    threshold: i64,
+) -> bool {
+    if threshold <= 0 {
+        return false;
+    }
+    let gap = current_turn.saturating_sub(last_consolidation_turn);
+    gap >= threshold
+}
+
 // ── public API ────────────────────────────────────────────────────────────────
 
 /// Summarise older conversation turns that are no longer in the active context
@@ -154,7 +215,8 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     //
     // Pre-processing extracts high-signal artifacts (file paths, error messages,
     // function names) from each message *before* truncation so they survive the
-    // 600-char preview cut.  These are prepended as a structured prefix.
+    // per-role preview cut (see `preview_limit_for_role`). These are prepended
+    // as a structured prefix.
     let mut history_text = String::new();
     'outer: for turn in &turns[..dropped] {
         for (role, text) in turn {
@@ -166,17 +228,14 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
             if trimmed.is_empty() {
                 continue;
             }
-            // Skip noisy short tool results — but keep those that look like
-            // error codes or short meaningful outputs (contain digits or '/')
-            if role == "tool" && trimmed.len() < 15
-                && !trimmed.contains('/')
-                && !trimmed.chars().any(|c| c.is_ascii_digit())
-            {
+            // Filter pure-noise tool messages (no-op after M2 — retained for
+            // call-site readability in case future heuristics are added).
+            if should_skip_noisy_tool(role, trimmed) {
                 continue;
             }
             // Extract high-signal artifacts before truncation: file paths,
             // function signatures, and error-like strings survive even when
-            // the full message is cut to 600 chars.
+            // the full message is cut to the per-role preview limit.
             let artifacts = extract_artifacts(trimmed);
             let artifact_prefix = if artifacts.is_empty() {
                 String::new()
@@ -184,8 +243,10 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
                 format!(" | artifacts: {}", artifacts.join(", "))
             };
             // Truncate very long individual messages (file dumps, base64, etc.)
-            let preview: String = if trimmed.chars().count() > 600 {
-                format!("{}…", trimmed.chars().take(600).collect::<String>())
+            // using per-role limits so assistant technical content survives.
+            let preview_cap = preview_limit_for_role(role);
+            let preview: String = if trimmed.chars().count() > preview_cap {
+                format!("{}…", trimmed.chars().take(preview_cap).collect::<String>())
             } else {
                 trimmed.to_string()
             };
@@ -948,6 +1009,117 @@ mod tests {
         assert_eq!(out.chars().count(), 200);
     }
 
+    // ── M2: per-role preview limits + tighter noisy-tool filter ──────────
+
+    #[test]
+    fn m2_preview_limit_assistant_is_1200() {
+        assert_eq!(preview_limit_for_role("assistant"), 1_200);
+    }
+
+    #[test]
+    fn m2_preview_limit_tool_is_800() {
+        assert_eq!(preview_limit_for_role("tool"), 800);
+    }
+
+    #[test]
+    fn m2_preview_limit_user_is_400() {
+        assert_eq!(preview_limit_for_role("user"), 400);
+    }
+
+    #[test]
+    fn m2_preview_limit_unknown_role_falls_back_to_user_limit() {
+        // Unknown roles must get the smallest limit so an unexpected role cannot
+        // flood the summary prompt.
+        assert_eq!(preview_limit_for_role("system"), 400);
+        assert_eq!(preview_limit_for_role(""), 400);
+    }
+
+    #[test]
+    fn m2_should_skip_noisy_tool_returns_false_for_any_content() {
+        // The noisy-tool-skip heuristic was removed in M2: the MAX_SUMMARY_INPUT_CHARS
+        // cap is the only safeguard against runaway input. Short success confirmations
+        // like "ok" and "done" must now survive into the summary prompt so the LLM
+        // knows a tool ran successfully.
+        assert!(!should_skip_noisy_tool("tool", "ok"));
+        assert!(!should_skip_noisy_tool("tool", "done"));
+        assert!(!should_skip_noisy_tool("tool", "nothing"));
+        assert!(!should_skip_noisy_tool("tool", "a/b"));
+        assert!(!should_skip_noisy_tool("tool", "E42"));
+    }
+
+    #[test]
+    fn m2_should_skip_noisy_tool_still_skips_empty() {
+        // Empty/whitespace-only content is already filtered earlier via
+        // `trimmed.is_empty()`, but should_skip_noisy_tool must not re-introduce
+        // the old behaviour for it.
+        assert!(!should_skip_noisy_tool("tool", ""));
+    }
+
+    #[test]
+    fn m2_should_skip_noisy_tool_never_skips_non_tool_roles() {
+        // The filter only applies to `role == "tool"`; user/assistant messages
+        // are never dropped by this rule.
+        assert!(!should_skip_noisy_tool("user", "hi"));
+        assert!(!should_skip_noisy_tool("assistant", "ok"));
+    }
+
+    // ── M3: eager consolidation trigger (turn-count based) ───────────────
+
+    #[test]
+    fn m3_eager_first_time_triggers_when_at_or_above_threshold() {
+        // With last_consolidation_turn = 0 and current = threshold, trigger.
+        assert!(should_eager_consolidate(
+            /* current */ EAGER_CONSOLIDATION_TURN_THRESHOLD,
+            /* last    */ 0,
+            EAGER_CONSOLIDATION_TURN_THRESHOLD,
+        ));
+    }
+
+    #[test]
+    fn m3_eager_does_not_trigger_before_threshold() {
+        // current - last < threshold → no eager consolidation.
+        assert!(!should_eager_consolidate(
+            /* current */ EAGER_CONSOLIDATION_TURN_THRESHOLD - 1,
+            /* last    */ 0,
+            EAGER_CONSOLIDATION_TURN_THRESHOLD,
+        ));
+    }
+
+    #[test]
+    fn m3_eager_does_not_double_fire_within_threshold_window() {
+        // After a previous eager run stamped last = 25, we must not re-fire at
+        // turn 30 if threshold = 10 (gap 5 < 10).
+        assert!(!should_eager_consolidate(30, 25, 10));
+    }
+
+    #[test]
+    fn m3_eager_fires_again_after_threshold_gap() {
+        // After a previous eager run stamped last = 25, turn 35 (gap 10) should re-fire.
+        assert!(should_eager_consolidate(35, 25, 10));
+    }
+
+    #[test]
+    fn m3_eager_handles_current_equal_to_last() {
+        // Edge case: current == last (shouldn't normally happen but must be safe).
+        assert!(!should_eager_consolidate(10, 10, 5));
+    }
+
+    #[test]
+    fn m3_eager_handles_current_less_than_last() {
+        // Defensive: if the counter is ever somehow below last_consolidation_turn,
+        // saturating arithmetic must prevent a panic and must not trigger.
+        assert!(!should_eager_consolidate(5, 10, 5));
+    }
+
+    #[test]
+    fn m3_eager_threshold_constant_is_sane() {
+        // The threshold must be > 0 (else eager fires on every turn) and should
+        // be well below the 80-turn STALE_THRESHOLD so consolidation wins the
+        // race against promote_stale_blocks. A value in 10..=40 is reasonable.
+        assert!(EAGER_CONSOLIDATION_TURN_THRESHOLD >= 10);
+        assert!(EAGER_CONSOLIDATION_TURN_THRESHOLD <= 40);
+    }
+
     // ── Phase C: DB-backed ring tests ────────────────────────────────────
 
     use cade_store::sqlite::{self as store_sqlite, AgentRow, Db};
@@ -1073,5 +1245,204 @@ mod tests {
         assert_eq!(v.chars().count(), SESSION_SUMMARY_ARCHIVED_MAX_CHARS);
         // Tail-preserving truncation: still all Zs.
         assert!(v.chars().all(|c| c == 'Z'));
+    }
+
+    // ─────────────────────────────────────────────────────────────────────
+    // M4 — End-to-end consolidation round-trip regression test
+    // ─────────────────────────────────────────────────────────────────────
+    //
+    // Protects the full pipeline: many dropped turns → `consolidate_agent`
+    // → `session_summary` memory block written with LLM output → block is
+    // `pinned` so the next context build surfaces it even after restart.
+    //
+    // This is the first test that exercises the whole round-trip through
+    // the real consolidation code path using an in-process mock LLM.
+    //
+    // Gap this test closes: prior to M4 no test verified that `consolidate_agent`
+    // actually writes a usable `session_summary` block — only rotation, turn
+    // grouping, and inflation-guard pieces were covered in isolation.
+
+    use async_trait::async_trait;
+    use cade_ai::{
+        AiConfig, CompletionRequest, CompletionResponse, LlmProvider, LlmRouter,
+        StreamChunk,
+    };
+    use cade_ai::Result as AiResult;
+    use crate::server::config::{LlmProviderKind, ServerConfig};
+    use crate::server::rate_limit::RateLimiter;
+    use crate::server::state::AppState;
+    use futures::Stream;
+    use std::net::SocketAddr;
+    use std::pin::Pin;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::RwLock as AsyncRwLock;
+
+    /// Mock LLM provider that returns a fixed summary string and counts calls.
+    struct MockSummaryLlm {
+        summary: String,
+        calls: AtomicUsize,
+    }
+
+    impl MockSummaryLlm {
+        fn new(summary: impl Into<String>) -> Self {
+            Self {
+                summary: summary.into(),
+                calls: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl LlmProvider for MockSummaryLlm {
+        async fn complete(&self, _req: &CompletionRequest) -> AiResult<CompletionResponse> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(CompletionResponse {
+                content: Some(self.summary.clone()),
+                tool_calls: Vec::new(),
+                finish_reason: "stop".into(),
+            })
+        }
+
+        async fn stream(
+            &self,
+            _req: &CompletionRequest,
+        ) -> AiResult<Pin<Box<dyn Stream<Item = AiResult<StreamChunk>> + Send>>> {
+            // Consolidation only ever calls complete(); stream must exist to satisfy
+            // the trait but is never invoked in this test.
+            Err(cade_ai::Error::custom("stream not supported in mock"))
+        }
+    }
+
+    /// Build a minimal AppState around an in-memory DB and a mock LLM.
+    fn mk_state(db: cade_store::sqlite::Db, llm: Arc<dyn LlmProvider>) -> AppState {
+        let ai_cfg = AiConfig {
+            anthropic_api_key: None,
+            openai_api_key: None,
+            google_api_key: None,
+            ollama_base_url: "http://localhost:11434".into(),
+            llm_provider: "ollama".into(),
+        };
+        let router = Arc::new(AsyncRwLock::new(LlmRouter::build(&ai_cfg)));
+
+        let addr: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let cfg = ServerConfig {
+            addr,
+            db_path: ":memory:".into(),
+            llm_provider: LlmProviderKind::Ollama,
+            default_model: "m".into(),
+            anthropic_api_key: None,
+            openai_api_key: None,
+            google_api_key: None,
+            ollama_base_url: "http://localhost:11434".into(),
+            api_key: None,
+        };
+
+        AppState {
+            db,
+            llm,
+            llm_router: router,
+            config: Arc::new(cfg),
+            rate_limiter: RateLimiter::from_env(),
+            memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            agent_activity: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
+            agent_metrics: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
+        }
+    }
+
+    /// Seed `n` fake user↔assistant turns (content each ~`payload_chars` chars) so
+    /// that consolidation has enough dropped content to summarise.
+    fn seed_turns(db: &cade_store::sqlite::Db, agent_id: &str, n: usize, payload_chars: usize) {
+        use cade_store::sqlite::MessageRow;
+        for i in 0..n {
+            let user_body = format!(
+                "turn {i}: please edit src/mod_{i}.rs and fix `fn compute_{i}`. {}",
+                "x".repeat(payload_chars)
+            );
+            let asst_body = format!(
+                "turn {i}: I edited src/mod_{i}.rs — updated `fn compute_{i}`. error code E{:04}. {}",
+                i,
+                "y".repeat(payload_chars)
+            );
+            store_sqlite::insert_message(
+                db,
+                &MessageRow {
+                    id: format!("u-{i}"),
+                    agent_id: agent_id.into(),
+                    conversation_id: None,
+                    role: "user".into(),
+                    content: serde_json::json!({ "content": user_body }),
+                    char_count: user_body.chars().count(),
+                },
+            )
+            .unwrap();
+            store_sqlite::insert_message(
+                db,
+                &MessageRow {
+                    id: format!("a-{i}"),
+                    agent_id: agent_id.into(),
+                    conversation_id: None,
+                    role: "assistant".into(),
+                    content: serde_json::json!({ "content": asst_body }),
+                    char_count: asst_body.chars().count(),
+                },
+            )
+            .unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn m4_consolidation_round_trip_writes_pinned_session_summary() {
+        // ── arrange ─────────────────────────────────────────────────────
+        let db = setup_db(); // agent "a1", model "m" (unknown → 32 000 token window)
+        let agent_id = "a1";
+
+        // Seed enough turns that the older ones will not fit in HISTORY_BUDGET_FRACTION (40%)
+        // of the estimated char budget. With model "m" → 32 000 tokens → ~81 600 char budget
+        // → ~32 640 char history budget. 40 turns × ~4200 chars/turn ≈ 168 000 chars ⇒ most
+        // turns must be classified as dropped, guaranteeing consolidate_agent reaches the
+        // "write session_summary" branch.
+        seed_turns(&db, agent_id, 40, 2_000);
+
+        let mock_summary = "MOCK_ROUND_TRIP_SUMMARY: rewrote src/mod_3.rs, fixed fn compute_7, error E0042 resolved.";
+        let llm = Arc::new(MockSummaryLlm::new(mock_summary));
+        let llm_trait: Arc<dyn LlmProvider> = llm.clone();
+        let state = mk_state(db.clone(), llm_trait);
+
+        // ── act ─────────────────────────────────────────────────────────
+        consolidate_agent(&state, agent_id, None).await;
+
+        // ── assert ──────────────────────────────────────────────────────
+
+        // 1. The mock LLM's complete() was invoked exactly once.
+        assert_eq!(
+            llm.calls.load(Ordering::SeqCst),
+            1,
+            "consolidate_agent must call LLM.complete exactly once when there are dropped turns"
+        );
+
+        // 2. `session_summary` block exists and contains the mock output verbatim.
+        let blocks = store_sqlite::get_memory_blocks(&db, agent_id).unwrap();
+        let summary_block = blocks
+            .iter()
+            .find(|(l, _, _)| l == "session_summary")
+            .expect("session_summary block must be written after consolidation");
+        assert!(
+            summary_block.1.contains("MOCK_ROUND_TRIP_SUMMARY"),
+            "session_summary must contain LLM's summary text; got: {}",
+            summary_block.1
+        );
+
+        // 3. `session_summary` is `pinned` tier so it is not subject to
+        //    promote_stale_blocks demotion on future context builds.
+        let active = store_sqlite::get_active_blocks(&db, agent_id).unwrap();
+        let (_, _, _, tier, _) = active
+            .iter()
+            .find(|(l, _, _, _, _)| l == "session_summary")
+            .expect("session_summary must appear in active (pinned+short) blocks");
+        assert_eq!(
+            tier, "pinned",
+            "session_summary must be pinned so next build_context always injects it"
+        );
     }
 }

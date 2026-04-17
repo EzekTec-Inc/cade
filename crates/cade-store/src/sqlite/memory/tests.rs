@@ -642,3 +642,130 @@ fn export_sanitizes_pathological_labels() -> Result<()> {
     let _ = std::fs::remove_dir_all(&out_dir);
     Ok(())
 }
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// M1 — working_set auto-pin on first non-empty write
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// Contract: when an agent first writes a non-empty value to `working_set`,
+// `upsert_memory_block` must flip the block's tier from the default `short`
+// to `pinned` so that `promote_stale_blocks` never archives it. This closes
+// the race where `working_set` could be demoted to `long` before
+// `consolidate_agent` had a chance to pin it.
+//
+// Invariants preserved:
+//   * Seed (empty-value) writes leave tier = `short` (so `DEFAULT_MEMORY_BLOCKS`
+//     seeding does not flip the tier on the initial blank insert).
+//   * No other labels are affected by this auto-pin rule.
+//   * Once pinned, subsequent writes stay pinned (never downgraded).
+
+#[test]
+fn m1_working_set_auto_pins_on_first_nonempty_write() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block(&db, "a1", "working_set", "Active task: implement M1", None, None)?;
+
+    let active = get_active_blocks(&db, "a1")?;
+    let (_, _, _, tier, _) = active
+        .iter()
+        .find(|(l, _, _, _, _)| l == "working_set")
+        .expect("working_set must exist after upsert");
+    assert_eq!(
+        tier, "pinned",
+        "working_set must be auto-pinned on first non-empty write"
+    );
+    Ok(())
+}
+
+#[test]
+fn m1_working_set_empty_seed_stays_short() -> Result<()> {
+    // Seeding step in bootstrap writes empty values from DEFAULT_MEMORY_BLOCKS.
+    // That initial blank write MUST NOT flip the tier to pinned — the existing
+    // `r06_working_set_is_short_not_pinned` invariant depends on tier being
+    // `short` after seed.
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block(&db, "a1", "working_set", "", None, None)?;
+
+    let active = get_active_blocks(&db, "a1")?;
+    let (_, _, _, tier, _) = active
+        .iter()
+        .find(|(l, _, _, _, _)| l == "working_set")
+        .expect("working_set must exist after empty seed");
+    assert_eq!(
+        tier, "short",
+        "empty-value seed must leave working_set in short tier"
+    );
+    Ok(())
+}
+
+#[test]
+fn m1_working_set_whitespace_only_value_stays_short() -> Result<()> {
+    // Whitespace-only values are effectively empty — they must not pin.
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block(&db, "a1", "working_set", "   \n\t  ", None, None)?;
+
+    let active = get_active_blocks(&db, "a1")?;
+    let (_, _, _, tier, _) = active
+        .iter()
+        .find(|(l, _, _, _, _)| l == "working_set")
+        .expect("working_set must exist");
+    assert_eq!(
+        tier, "short",
+        "whitespace-only value must leave working_set in short tier"
+    );
+    Ok(())
+}
+
+#[test]
+fn m1_other_labels_are_not_auto_pinned() -> Result<()> {
+    // Only `working_set` is auto-pinned. `project`, `persona`, `human`, custom
+    // labels — all must still default to `short` on first write. (The existing
+    // bootstrap code explicitly pins `persona`/`human`/`project` via
+    // set_memory_tier AFTER insert; we must not short-circuit that via
+    // upsert_memory_block.)
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block(&db, "a1", "project", "Rust coding assistant", None, None)?;
+    upsert_memory_block(&db, "a1", "session_summary", "recap text", None, None)?;
+    upsert_memory_block(&db, "a1", "some_custom_label", "payload", None, None)?;
+
+    let active = get_active_blocks(&db, "a1")?;
+    for (label, _, _, tier, _) in &active {
+        if label == "working_set" {
+            continue;
+        }
+        assert_eq!(
+            tier, "short",
+            "label '{label}' must default to short tier (only working_set auto-pins)"
+        );
+    }
+    Ok(())
+}
+
+#[test]
+fn m1_working_set_remains_pinned_on_subsequent_writes() -> Result<()> {
+    // Once pinned, further upserts must keep tier = pinned. The existing
+    // CASE WHEN tier = 'pinned' THEN 'pinned' ELSE 'short' END clause in the
+    // UPDATE path already protects this, but a regression test guards it.
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block(&db, "a1", "working_set", "v1", None, None)?;
+    upsert_memory_block(&db, "a1", "working_set", "v2", None, None)?;
+
+    let active = get_active_blocks(&db, "a1")?;
+    let (_, value, _, tier, _) = active
+        .iter()
+        .find(|(l, _, _, _, _)| l == "working_set")
+        .expect("working_set must exist");
+    assert_eq!(tier, "pinned");
+    assert_eq!(value, "v2");
+    Ok(())
+}

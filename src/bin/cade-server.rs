@@ -117,9 +117,12 @@ async fn main() -> Result<()> {
     };
 
     // ── Sleeptime consolidation task ─────────────────────────────────────────
-    // Polls every 30 s.  When an agent has been inactive for 60 s AND its
+    // Polls every 30 s.  When an agent has been inactive for 20 s AND its
     // build_context dropped turns in the last request, call consolidate_agent
     // to summarise the dropped turns into the `session_summary` memory block.
+    // M3: threshold lowered from 60 s → 20 s so interactive pauses trigger
+    // consolidation sooner; turn-count eager path (see build_context) covers
+    // continuous sessions that never hit the idle timer.
     let state_bg = state.clone();
     tokio::spawn(async move {
         loop {
@@ -129,7 +132,7 @@ async fn main() -> Result<()> {
                 let mut activity = state_bg.agent_activity.write().await;
                 let now = chrono::Utc::now().timestamp();
                 for (agent_id, act) in activity.iter_mut() {
-                    if act.needs_consolidation && (now - act.last_active_ts) > 60 {
+                    if act.needs_consolidation && (now - act.last_active_ts) > 20 {
                         act.needs_consolidation = false;
                         pending.push((agent_id.clone(), act.conversation_id.clone()));
                     }

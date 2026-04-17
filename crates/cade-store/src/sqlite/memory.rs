@@ -56,6 +56,15 @@ pub fn upsert_memory_block(
         )
         .unwrap_or(0);
 
+    // M1: auto-pin `working_set` the first time it receives a non-empty value.
+    // The block is seeded as `short` (see DEFAULT_MEMORY_BLOCKS) so it can
+    // age out when the agent moves on to a new task, but once the agent has
+    // written real task state the block must survive `promote_stale_blocks`
+    // until consolidation explicitly manages it. Without this, a long session
+    // (≥80 idle turns between working_set writes) would archive the block
+    // before `consolidate_agent` could pin it.
+    let is_nonempty_working_set = label == "working_set" && !final_value.trim().is_empty();
+
     if let Some((block_id, old_value, _)) = existing {
         // Snapshot old value into history (skip if unchanged)
         if old_value != final_value {
@@ -75,13 +84,26 @@ pub fn upsert_memory_block(
             );
         }
 
+        // Tier transition rule for UPDATE:
+        //   * already pinned → stay pinned
+        //   * working_set with non-empty value → pinned (M1)
+        //   * else → short
+        let tier_sql = if is_nonempty_working_set {
+            "'pinned'"
+        } else {
+            "CASE WHEN tier = 'pinned' THEN 'pinned' ELSE 'short' END"
+        };
+
         if let Some(desc) = description {
-            conn.execute(
+            let sql = format!(
                 "UPDATE shared_memory_blocks
                  SET value = ?1, description = ?2, max_chars = ?3, updated_at = ?4,
                      last_turn = ?5,
-                     tier = CASE WHEN tier = 'pinned' THEN 'pinned' ELSE 'short' END
-                 WHERE id = ?6",
+                     tier = {tier_sql}
+                 WHERE id = ?6"
+            );
+            conn.execute(
+                &sql,
                 params![
                     final_value,
                     desc,
@@ -92,22 +114,27 @@ pub fn upsert_memory_block(
                 ],
             )?;
         } else {
-            conn.execute(
+            let sql = format!(
                 "UPDATE shared_memory_blocks
                  SET value = ?1, updated_at = ?2, last_turn = ?3,
-                     tier = CASE WHEN tier = 'pinned' THEN 'pinned' ELSE 'short' END
-                 WHERE id = ?4",
+                     tier = {tier_sql}
+                 WHERE id = ?4"
+            );
+            conn.execute(
+                &sql,
                 params![final_value, ts, current_turn, block_id],
             )?;
         }
     } else {
-        // Create a new shared block and link it to the agent
+        // Create a new shared block and link it to the agent.
+        // INSERT tier: `pinned` for non-empty working_set (M1), else `short`.
+        let insert_tier = if is_nonempty_working_set { "pinned" } else { "short" };
         let id = uuid::Uuid::new_v4().to_string();
         conn.execute(
             "INSERT INTO shared_memory_blocks (id, label, value, description, max_chars, updated_at, tier, last_turn)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'short', ?7)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![id, label, final_value, description.unwrap_or(""),
-                    max_chars.map(|n| n as i64), ts, current_turn],
+                    max_chars.map(|n| n as i64), ts, insert_tier, current_turn],
         )?;
         conn.execute(
             "INSERT INTO agent_memory_blocks (agent_id, block_id) VALUES (?1, ?2)",

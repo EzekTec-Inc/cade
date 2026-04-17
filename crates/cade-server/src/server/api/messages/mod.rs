@@ -177,6 +177,7 @@ pub async fn send_message(
                     last_active_ts: 0,
                     needs_consolidation: false,
                     conversation_id: conv_id.clone(),
+                    last_consolidation_turn: 0,
                 });
         entry.last_active_ts = chrono::Utc::now().timestamp();
         entry.conversation_id = conv_id.clone();
@@ -398,6 +399,7 @@ pub async fn stream_message(
                     last_active_ts: 0,
                     needs_consolidation: false,
                     conversation_id: conv_id.clone(),
+                    last_consolidation_turn: 0,
                 });
         entry.last_active_ts = chrono::Utc::now().timestamp();
         entry.conversation_id = conv_id.clone();

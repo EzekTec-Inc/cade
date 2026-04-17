@@ -810,6 +810,7 @@ dependencies = [
 name = "cade-server"
 version = "0.2.0"
 dependencies = [
+ "async-trait",
  "axum",
  "cade-ai",
  "cade-core",

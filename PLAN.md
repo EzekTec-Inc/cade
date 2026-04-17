@@ -1,3 +1,196 @@
+## 2026-04-17T00:20:00Z — M5: Closed as already-implemented
+
+**Task:** Expose `AgentMetrics` via an HTTP endpoint.
+
+**Discovery:** The endpoint `GET /v1/agents/:id/metrics` already exists:
+- Route: `crates/cade-server/src/server/api/mod.rs:76`
+- Handler: `crates/cade-server/src/server/api/agents.rs::get_agent_metrics` (lines 260–268)
+- Returns `state.agent_metrics[agent_id]` as JSON; `AgentMetrics` derives `serde::Serialize`.
+- All five counters are incremented in production code:
+  - `tool_outputs_compacted` — `context.rs:388`
+  - `consolidation_runs`, `chars_summarised`, `chars_produced` — `consolidation.rs:511-513`
+  - `inflation_guard_hits` — `consolidation.rs:340`
+- M3's eager-consolidation path calls `consolidate_agent` which already bumps `consolidation_runs`, so no additional metric wiring is needed.
+
+**Decision:** User chose to close M5 as done rather than add test coverage or 404-on-unknown behaviour. The 5-task context-loss fix (M4 → M2 → M1-revised → M3-revised → M5) is now complete.
+
+**Files modified:** none.
+
+**Rollback:** N/A.
+
+---
+
+## 2026-04-17T00:15:00Z — M3-revised: Lower idle threshold + eager turn-count trigger
+
+**Task:** Close the gap where interactive sessions never cross the 60-second idle timer between turns, leaving consolidation un-triggered until context had already overflowed. Lower the Sleeptime idle threshold 60 s → 20 s, and add an eager trigger that fires consolidation every N turns (configurable via `EAGER_CONSOLIDATION_TURN_THRESHOLD = 20`) when `needs_consolidation` is set.
+
+**Files modified:**
+- `crates/cade-server/src/server/consolidation.rs`
+  - Added `pub(crate) const EAGER_CONSOLIDATION_TURN_THRESHOLD: i64 = 20`.
+  - Added `pub(crate) fn should_eager_consolidate(current, last, threshold) -> bool` (pure, saturating).
+  - Added 7 `m3_*` unit tests.
+- `crates/cade-server/src/server/state.rs`
+  - Added `pub last_consolidation_turn: i64` field to `AgentActivity`.
+  - Updated doc comment to reflect 20 s idle + eager turn-count path.
+- `crates/cade-server/src/server/api/messages/context.rs`
+  - Added eager-trigger block inside the existing `omitted_turns > 0 || needs_proactive…` branch:
+    - Reads `sqlite::get_turn_counter` under the `agent_activity` write lock.
+    - If `should_eager_consolidate(current, entry.last_consolidation_turn, THRESHOLD)` is true:
+      - Stamps `entry.last_consolidation_turn = current`.
+      - Clears `entry.needs_consolidation` (so Sleeptime doesn't re-fire).
+      - Spawns `consolidate_agent` via `tokio::spawn` after the lock is released.
+  - Added `last_consolidation_turn: 0` to the existing `AgentActivity` literal.
+- `crates/cade-server/src/server/api/messages/mod.rs`
+  - Added `last_consolidation_turn: 0` to the two existing `AgentActivity` literals (send_message + stream_message).
+- `src/bin/cade-server.rs`
+  - Lowered Sleeptime idle threshold 60 → 20 seconds.
+  - Updated block comment.
+
+**Reason:** Before M3, consolidation relied solely on the 60-second Sleeptime timer. A continuous interactive session (short pauses between turns) could easily complete 80+ turns without triggering the timer — `promote_stale_blocks` would then demote `working_set` and `session_summary` to `long` before consolidation could pin them. M1 partially addressed this for `working_set`; M3 closes the remaining gap by guaranteeing consolidation fires at least once per 20 turns when dropped turns occur.
+
+**Previous behaviour:**
+- Sleeptime task fired consolidation only after 60 s of agent inactivity.
+- No turn-count-driven trigger.
+
+**New behaviour:**
+- Sleeptime task fires after 20 s of inactivity.
+- An eager consolidation spawns from `build_context` whenever:
+  - Older turns were dropped (`omitted_turns > 0` or proactive signal), AND
+  - The turn counter has advanced ≥ 20 turns since the last eager run for this agent.
+- Decision is made under the `agent_activity` write lock → concurrent requests cannot double-fire.
+
+**Test results:**
+- `cargo test -p cade-server` → 113/113 pass (+7 new M3 tests).
+- `cargo test -p cade-store --lib` → 95/95 pass.
+- `cargo test --test context_memory_regression` → 15/15 pass.
+- `cargo build --workspace` → clean.
+- `cargo clippy -p cade-server --lib` → no new warnings.
+- M4 round-trip and all M1/M2 tests remain green.
+
+**Security / privacy review (tdd-guide §3–5):**
+- `should_eager_consolidate` and `EAGER_CONSOLIDATION_TURN_THRESHOLD` are `pub(crate)`; no new public surface.
+- `current_turn` is read from the DB (`agents.memory_turn_counter`, an `i64` counter controlled by the server); no user data.
+- **Race-safety (§5.2):** eager-trigger decision is made under the same `agent_activity.write()` lock that updates the state, so two concurrent requests for the same agent serialize — the second observes the updated `last_consolidation_turn` and correctly returns `false`.
+- **Resource cap:** a given agent can spawn at most one eager `consolidate_agent` every 20 turns regardless of request rate; the `tokio::spawn` is not unbounded per-agent.
+- No PII in logs — `tracing::info!` only includes the opaque `agent_id`.
+
+**Rollback steps:**
+1. `git checkout -- crates/cade-server/src/server/consolidation.rs \
+      crates/cade-server/src/server/state.rs \
+      crates/cade-server/src/server/api/messages/context.rs \
+      crates/cade-server/src/server/api/messages/mod.rs \
+      src/bin/cade-server.rs`
+2. Or revert this commit once committed.
+
+---
+## 2026-04-17T00:10:00Z — M1-revised: Auto-pin `working_set` on first non-empty write
+
+**Task:** Close the race where `working_set` could be demoted to `long` tier by `promote_stale_blocks` before `consolidate_agent` had a chance to pin it. Modify `upsert_memory_block` so that writing a non-empty value to label `working_set` promotes the block to `pinned` tier in the same write.
+
+**Files modified:**
+- `crates/cade-store/src/sqlite/memory.rs`
+  - Added `is_nonempty_working_set` flag (`label == "working_set" && !final_value.trim().is_empty()`).
+  - UPDATE path: dynamic `tier_sql` — `'pinned'` when flag set, else existing `CASE WHEN tier = 'pinned' THEN 'pinned' ELSE 'short' END`.
+  - INSERT path: dynamic `insert_tier` — `"pinned"` when flag set, else `"short"`.
+- `crates/cade-store/src/sqlite/memory/tests.rs` — appended 5 `m1_*` unit tests:
+  - `m1_working_set_auto_pins_on_first_nonempty_write`
+  - `m1_working_set_empty_seed_stays_short`
+  - `m1_working_set_whitespace_only_value_stays_short`
+  - `m1_other_labels_are_not_auto_pinned`
+  - `m1_working_set_remains_pinned_on_subsequent_writes`
+
+**Reason:** The original design seeds `working_set` as `short` so it can age out when the agent moves to a new task. Pre-M1, the agent writing real task state (e.g. `update_memory(label="working_set", value=…)`) left the block in `short` tier — a long interactive session without consolidation firing could then archive the block via `promote_stale_blocks` (threshold 80 turns) before `consolidate_agent` re-pinned it.
+
+**Previous behaviour:**
+- First non-empty write to `working_set` → block tier remained `short`.
+- Block relied on `consolidate_agent` at line 333 to later re-pin it — race window open for up to 80 idle turns.
+
+**New behaviour:**
+- First non-empty write to `working_set` → block tier set to `pinned` immediately.
+- Empty / whitespace-only values leave the tier at `short` (preserves `r06_working_set_is_short_not_pinned` and `DEFAULT_MEMORY_BLOCKS` seeding invariant).
+- Other labels unchanged — auto-pin rule is scoped to `working_set` only.
+
+**Test results:**
+- `cargo test -p cade-store` → 95/95 pass (+5 new M1 tests).
+- `cargo test --test context_memory_regression` → 15/15 pass (`r06_working_set_is_short_not_pinned` still green).
+- `cargo test -p cade-server` → 106/106 pass (M4 round-trip still green).
+- `cargo build --workspace` → clean.
+
+**Security / privacy review (tdd-guide §3–4):**
+- No new public-facing surface; label `"working_set"` is a compile-time string literal, not user input.
+- `format!` builds SQL from two fixed string literals (`"'pinned'"` and the prior `CASE` expression); no user-controlled data enters SQL. Bind params retained. No injection risk.
+- No changes to logs, error messages, or PII handling.
+
+**Rollback steps:**
+1. `git checkout -- crates/cade-store/src/sqlite/memory.rs crates/cade-store/src/sqlite/memory/tests.rs`
+2. Or revert this commit once committed.
+
+---
+## 2026-04-17T00:05:00Z — M2: Per-role preview limits + drop noisy-tool filter
+
+**Task:** Replace the flat 600-char preview cut in `consolidate_agent` with per-role limits (assistant 1200 / tool 800 / user 400) so the summariser sees full assistant technical content. Also drop the `len < 15 && no-digit && no-slash` noisy-tool-skip heuristic, which was incorrectly dropping short legitimate confirmations like `"ok"` and `"done"`.
+
+**Files modified:**
+- `crates/cade-server/src/server/consolidation.rs`
+  - Added helpers `preview_limit_for_role(role: &str) -> usize` and `should_skip_noisy_tool(_role: &str, _trimmed: &str) -> bool`.
+  - Replaced inline 600-char truncation with `preview_limit_for_role(role)`.
+  - Replaced inline `len < 15 && …` skip with `should_skip_noisy_tool(role, trimmed)` (now returns `false` always; placeholder for future heuristics).
+  - Updated section-3 doc comment from "600-char preview cut" to "per-role preview cut".
+  - Added 7 unit tests (`m2_*`).
+
+**Reason:** Assistant turns were losing file-edit detail (>600 chars) before the summariser saw them. Short tool confirmations like `"ok"` were being silently discarded, making the summariser believe those tools never ran. User chose to drop the filter entirely (vs. tightening the threshold) in the clarification turn — `MAX_SUMMARY_INPUT_CHARS = 24_000` is the sole remaining safeguard.
+
+**Previous behaviour:**
+- Flat 600-char cap on every message regardless of role.
+- Tool messages with `len < 15 && !contains('/') && !any_ascii_digit` were skipped.
+
+**New behaviour:**
+- Per-role limits: assistant → 1200, tool → 800, user/other → 400.
+- Tool noisy-skip filter removed (function now always returns `false`; empty/whitespace-only content already filtered earlier by `trimmed.is_empty()`).
+
+**Test results:**
+- `cargo test -p cade-server` → 106/106 pass (+7 new M2 tests).
+- `cargo test --test context_memory_regression` → 15/15 pass.
+- M4 round-trip test still green → pipeline behaviour unchanged from caller's perspective.
+
+**Rollback steps:**
+1. `git checkout -- crates/cade-server/src/server/consolidation.rs`
+2. Or revert this single commit once committed.
+
+**Notes:**
+- `should_skip_noisy_tool` is intentionally kept as a function (not inlined) to preserve a named extension point for future noise heuristics without re-touching the hot path.
+- `preview_limit_for_role` uses a `match` rather than a `HashMap` to stay allocation-free in the inner loop (rust10x lean-deps/zero-alloc guidance).
+
+---
+## 2026-04-17T00:00:00Z — M4: End-to-end consolidation round-trip regression test
+
+**Task:** Protect the pipeline `dropped turns → consolidate_agent → session_summary written → pinned` with a regression test that exercises the real code path via an in-process mock LLM.
+
+**Files modified:**
+- `crates/cade-server/Cargo.toml` — added `async-trait.workspace = true` to `[dev-dependencies]`
+- `crates/cade-server/src/server/consolidation.rs` — appended to existing `mod tests`:
+  - `MockSummaryLlm` struct implementing `LlmProvider`
+  - Helpers `mk_state()` and `seed_turns()`
+  - Test `m4_consolidation_round_trip_writes_pinned_session_summary`
+
+**Reason:** Prior to M4, no test verified that `consolidate_agent` actually writes a usable, pinned `session_summary` block. Rotation, turn-grouping, and inflation-guard pieces were covered in isolation but the end-to-end contract was unverified. This closes that gap before refactors touch the pipeline.
+
+**Previous behaviour:** 98 tests in `cade-server`. Consolidation round-trip was only validated manually.
+
+**New behaviour:** 99 tests in `cade-server` (+1). Test asserts:
+1. `LlmProvider::complete` called exactly once when dropped turns exist.
+2. `session_summary` block contains the mocked summary verbatim.
+3. `session_summary` block ends up in `pinned` tier (survives `promote_stale_blocks`).
+
+**Test results:** `cargo test -p cade-server` → 99/99 pass. `cargo test --test context_memory_regression` → 15/15 pass. No regressions.
+
+**Rollback steps:**
+1. `git checkout -- crates/cade-server/Cargo.toml crates/cade-server/src/server/consolidation.rs`
+2. Or restore checkpoint `cp-5fa830c4-d999-4971-84ce-60a2fbeabf82` (label `M4-before-failing-test`).
+
+**Checkpoint ID:** `cp-5fa830c4-d999-4971-84ce-60a2fbeabf82` (label: `M4-before-failing-test`).
+
+---
 ## 2026-04-16T01:15:00Z — feat: install_skill supports bare repo URLs and skill selection
 
 **Summary:** Enhanced `install_skill` tool to support the `npx skills add` ecosystem pattern. Users can now install skills from bare GitHub repo URLs (e.g., `https://github.com/github/awesome-copilot`) and `owner/repo` shorthand by providing a `skill` parameter to select which skill to install from a multi-skill repository.

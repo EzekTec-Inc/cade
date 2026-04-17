@@ -11,6 +11,12 @@ pub struct AgentActivity {
     pub last_active_ts: i64,
     pub needs_consolidation: bool,
     pub conversation_id: Option<String>,
+    /// Turn counter snapshot at the time the last eager consolidation was
+    /// triggered for this agent. Used by `should_eager_consolidate` to
+    /// rate-limit the eager path (M3): even if `needs_consolidation` remains
+    /// set across many rapid turns, a fresh run fires only once per
+    /// `EAGER_CONSOLIDATION_TURN_THRESHOLD` turns. `0` means "never".
+    pub last_consolidation_turn: i64,
 }
 
 #[derive(Debug, Clone, Default, serde::Serialize)]
@@ -38,7 +44,9 @@ pub struct AppState {
     /// Tracks `(last_active_ts, needs_consolidation, conversation_id)` per agent.
     /// `needs_consolidation` is set by `build_context` whenever older turns are
     /// dropped from the context window — the Sleeptime background task picks it
-    /// up after 60 s of inactivity and summarises the dropped turns.
+    /// up after 20 s of inactivity and summarises the dropped turns. An eager
+    /// turn-count path in `build_context` (see `should_eager_consolidate`)
+    /// covers continuous sessions that never hit the idle timer.
     pub agent_activity: Arc<RwLock<std::collections::HashMap<String, AgentActivity>>>,
     /// Tracks lifetime context efficiency metrics per agent.
     pub agent_metrics: Arc<RwLock<std::collections::HashMap<String, AgentMetrics>>>,

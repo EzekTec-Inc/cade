@@ -309,20 +309,58 @@ pub(crate) async fn build_context(
                 message_budget,
             );
         }
-        // Signal the Sleeptime consolidation task.  After 60 s of inactivity
-        // it will summarise the dropped turns into the `session_summary` block.
-        let mut activity = state.agent_activity.write().await;
-        let entry =
-            activity
-                .entry(agent_id.to_string())
-                .or_insert(crate::server::state::AgentActivity {
-                    last_active_ts: chrono::Utc::now().timestamp(),
-                    needs_consolidation: true,
-                    conversation_id: conversation_id.map(String::from),
-                });
-        entry.needs_consolidation = true;
-        if conversation_id.is_some() {
-            entry.conversation_id = conversation_id.map(String::from);
+        // Signal the Sleeptime consolidation task.  After 20 s of inactivity
+        // (M3) it will summarise the dropped turns into the `session_summary`
+        // block. In continuous interactive sessions the timer may never fire
+        // between turns, so we also trigger an eager consolidation when the
+        // turn counter has advanced enough since the last run (see M3).
+        let eager_snapshot = {
+            let mut activity = state.agent_activity.write().await;
+            let entry =
+                activity
+                    .entry(agent_id.to_string())
+                    .or_insert(crate::server::state::AgentActivity {
+                        last_active_ts: chrono::Utc::now().timestamp(),
+                        needs_consolidation: true,
+                        conversation_id: conversation_id.map(String::from),
+                        last_consolidation_turn: 0,
+                    });
+            entry.needs_consolidation = true;
+            if conversation_id.is_some() {
+                entry.conversation_id = conversation_id.map(String::from);
+            }
+
+            // Eager-consolidation decision is made under the same lock so two
+            // racing requests cannot both cross the threshold and double-fire.
+            let current_turn = sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
+            if crate::server::consolidation::should_eager_consolidate(
+                current_turn,
+                entry.last_consolidation_turn,
+                crate::server::consolidation::EAGER_CONSOLIDATION_TURN_THRESHOLD,
+            ) {
+                entry.last_consolidation_turn = current_turn;
+                entry.needs_consolidation = false;
+                Some(entry.conversation_id.clone())
+            } else {
+                None
+            }
+        };
+
+        if let Some(conv_for_eager) = eager_snapshot {
+            let state_eager = state.clone();
+            let agent_eager = agent_id.to_string();
+            tracing::info!(
+                "build_context [{}]: eager consolidation triggered (turn-count path)",
+                agent_id
+            );
+            tokio::spawn(async move {
+                crate::server::consolidation::consolidate_agent(
+                    &state_eager,
+                    &agent_eager,
+                    conv_for_eager.as_deref(),
+                )
+                .await;
+            });
         }
 
         // ── Surgical tool-output pruning ───────────────────────────────────
