@@ -96,6 +96,7 @@ rmcp           = { version = "1.4", features = [
     "transport-io",
     "transport-streamable-http-client",
     "transport-streamable-http-client-reqwest",
+    "reqwest-native-tls",
 ] }
 
 [package]
