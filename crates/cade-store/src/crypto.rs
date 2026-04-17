@@ -5,8 +5,26 @@ use aes_gcm::{
 };
 use hmac::Hmac;
 use sha2::Sha256;
+use std::path::PathBuf;
 
 // -- Key derivation
+
+/// Resolve the on-disk DB-key path.  **Pure policy function** (no env, no
+/// cwd, no I/O) so tests can exercise it without racing on process state.
+///
+/// Returns `Some(home.join(".cade").join("db.key"))` when `home` is
+/// provided, `None` otherwise.  The caller decides how to obtain `home`
+/// (typically `dirs::home_dir()`).
+///
+/// # P2-1
+/// The previous implementation read `.cade-db.key` from the *process's
+/// current working directory*.  That meant `cd`-ing into a hostile repo
+/// (supply-chain, shared devcontainer, malicious git checkout) handed
+/// the attacker the DB encryption key for every subsequent write.  The
+/// new anchor is always `$HOME/.cade/db.key`; cwd is never consulted.
+pub fn resolve_db_key_path(home: Option<PathBuf>) -> Option<PathBuf> {
+    home.map(|h| h.join(".cade").join("db.key"))
+}
 
 /// Derive a 256-bit key using PBKDF2-HMAC-SHA256.
 ///
@@ -28,14 +46,26 @@ fn get_root_secret() -> Result<String> {
         return Ok(k);
     }
 
-    let path = std::path::Path::new(".cade-db.key");
+    // P2-1: anchor the key file at $HOME/.cade/db.key.  The cwd-based
+    // ./.cade-db.key path is NO LONGER read — it was a classic "trust
+    // the current working directory" vulnerability.
+    let Some(path) = resolve_db_key_path(dirs::home_dir()) else {
+        return Err(Error::custom(
+            "cannot resolve $HOME for DB key; set CADE_DB_KEY explicitly".to_string(),
+        ));
+    };
+
     if path.exists() {
-        return std::fs::read_to_string(path)
+        return std::fs::read_to_string(&path)
             .map(|s| s.trim().to_string())
-            .map_err(|e| Error::custom(format!("Failed to read .cade-db.key: {e}")));
+            .map_err(|e| {
+                Error::custom(format!("Failed to read {}: {e}", path.display()))
+            });
     }
 
-    // Backwards compatibility check: if cade.db exists, fall back to machine_uid
+    // Backwards compatibility: if cade.db exists beside the process, fall
+    // back to machine_uid so existing local databases remain decryptable.
+    // New installs never reach this branch because no cade.db is present.
     if std::path::Path::new("cade.db").exists()
         && let Ok(uid) = machine_uid::get()
     {
@@ -45,9 +75,25 @@ fn get_root_secret() -> Result<String> {
         return Ok(uid);
     }
 
+    // Fresh install: generate a random key and persist it at the
+    // canonical path with 0o600 perms on Unix.
     let mut key = [0u8; 32];
     getrandom::getrandom(&mut key).map_err(|e| Error::custom(format!("getrandom failed: {e}")))?;
     let secret = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, key);
+
+    // Ensure parent dir exists with tight perms (0o700 on Unix).
+    if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if let Ok(meta) = std::fs::metadata(parent) {
+                let mut perms = meta.permissions();
+                perms.set_mode(0o700);
+                let _ = std::fs::set_permissions(parent, perms);
+            }
+        }
+    }
 
     #[cfg(unix)]
     {
@@ -57,7 +103,7 @@ fn get_root_secret() -> Result<String> {
             .create(true)
             .truncate(true)
             .mode(0o600)
-            .open(path)
+            .open(&path)
         {
             use std::io::Write;
             let _ = f.write_all(secret.as_bytes());
@@ -65,7 +111,7 @@ fn get_root_secret() -> Result<String> {
     }
     #[cfg(not(unix))]
     {
-        let _ = std::fs::write(path, &secret);
+        let _ = std::fs::write(&path, &secret);
     }
 
     Ok(secret)
@@ -200,14 +246,55 @@ mod tests {
     use super::*;
     use std::sync::Once;
 
-    /// Ensure all crypto tests use a stable key (avoids race conditions
-    /// when parallel tests race on `.cade-db.key` creation).
+    /// Ensure all crypto tests use a stable key.  Setting `CADE_DB_KEY`
+    /// is race-free across parallel tests because every test uses the
+    /// same value and env mutation is idempotent.  This is also the
+    /// P2-1-safe way to stub the key (no cwd file, no filesystem).
     static INIT: Once = Once::new();
     fn setup_test_key() {
         INIT.call_once(|| {
-            let _ = std::fs::write(".cade-db.key", "test-crypto-secret-for-unit-tests");
+            // SAFETY: `std::env::set_var` is unsafe on edition 2024 because
+            // it's not thread-safe on some platforms; `Once` guarantees we
+            // set it exactly once before any test thread reads it.
+            unsafe {
+                std::env::set_var("CADE_DB_KEY", "test-crypto-secret-for-unit-tests");
+            }
         });
     }
+
+    // -- P2-1: resolve_db_key_path (pure policy)
+
+    #[test]
+    fn p2_1_resolves_to_dotcade_subdir() {
+        let home = PathBuf::from("/home/alice");
+        let got = resolve_db_key_path(Some(home));
+        assert_eq!(got, Some(PathBuf::from("/home/alice/.cade/db.key")));
+    }
+
+    #[test]
+    fn p2_1_none_when_home_unresolved() {
+        let got = resolve_db_key_path(None);
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn p2_1_windows_style_home() {
+        let home = PathBuf::from(r"C:\Users\alice");
+        let got = resolve_db_key_path(Some(home));
+        // On Unix the separator is '/'; on Windows it's '\'.  Either way
+        // the final component must be `db.key` and the one before must
+        // be `.cade`.
+        let p = got.unwrap();
+        assert_eq!(p.file_name().and_then(|s| s.to_str()), Some("db.key"));
+        assert_eq!(
+            p.parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str()),
+            Some(".cade")
+        );
+    }
+
+    // -- crypto round-trip (existing tests, unchanged behavior under P2-1)
 
     #[test]
     fn encrypt_decrypt_roundtrip() -> Result<()> {

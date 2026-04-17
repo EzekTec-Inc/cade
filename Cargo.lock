@@ -824,6 +824,7 @@ dependencies = [
  "cade-core",
  "chrono",
  "derive_more",
+ "dirs",
  "getrandom 0.2.17",
  "hmac",
  "machine-uid",

@@ -166,6 +166,11 @@ pub fn path_is_protected(path_or_cmd: &str) -> bool {
         || stripped.contains("/.cade-db")
         || stripped.starts_with(".cade-db")
         || stripped == ".cade-db"
+        // P2-1: the canonical DB-key anchor moved to ~/.cade/db.key.
+        // Protect both the directory and the file from agent writes.
+        || stripped.contains("/.cade/db.key")
+        || stripped.ends_with("/.cade/db.key")
+        || stripped == ".cade/db.key"
 }
 
 /// Returns true if a bash `command` string would mutate the file system or

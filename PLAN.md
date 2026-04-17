@@ -552,3 +552,56 @@
 - **Default install:** no change needed — sandbox activates at cwd.
 - **Was relying on skip-when-unset:** set `CADE_FS_NO_SANDBOX=1` to restore previous behavior (NOT recommended; advertises the risk).
 - **Wanted a specific root:** no change — `CADE_FS_ROOT=/path` still works as before.
+
+
+---
+
+## 2026-04-17T04:37Z — Task 5 / P2-1: Anchor DB key file at home/.cade/db.key
+
+**Summary:** The DB encryption key file is now read exclusively from the user home directory under .cade/db.key, never from the process cwd. The cwd-based path was a classic trust-the-working-directory vulnerability: cd-ing into a hostile repo (supply-chain, shared devcontainer, malicious checkout) handed the attacker the DB encryption key for every subsequent write.
+
+**Files modified:**
+- crates/cade-store/Cargo.toml - added dirs (explicitly approved in the remediation contract).
+- crates/cade-store/src/crypto.rs - added pure policy function resolve_db_key_path(home) -> Option<PathBuf>. Rewrote get_root_secret() to use it, hard-error when home is unresolvable and no env var is set, auto-create .cade/ with 0o700 perms on Unix. Updated test helper setup_test_key() to use std::env::set_var (race-free via Once::call_once, P2-1-safe). Added 3 unit tests.
+- crates/cade-store/src/sqlite/providers.rs - updated stale comment.
+- crates/cade-core/src/permissions/checks.rs - added three new path_is_protected patterns for the new canonical anchor.
+- crates/cade-core/src/permissions/tests.rs - 3 new assertions covering the new protected patterns.
+
+**Threat blocked:**
+Attacker plants key file in hostile repo; user cds in and runs cade. BEFORE: attacker key is used for all DB writes; attacker can decrypt stolen DB files offline. AFTER: cwd file is ignored entirely; only home-dir anchor or explicit env var is consulted.
+
+**Previous behavior (pre-P2-1):**
+1. CADE_DB_KEY env -> use it
+2. CADE_MACHINE_SECRET env -> use it
+3. cwd key file -> read and use it
+4. cade.db exists in cwd -> use machine_uid (legacy)
+5. otherwise -> generate random key, write to cwd
+
+**New behavior (P2-1):**
+1. CADE_DB_KEY env -> use it (unchanged)
+2. CADE_MACHINE_SECRET env -> use it (unchanged)
+3. home/.cade/db.key -> read and use it (MOVED)
+4. cade.db exists in cwd -> use machine_uid (legacy fallback preserved)
+5. otherwise -> generate random key, write to home/.cade/db.key with 0o600 perms inside a 0o700 directory (MOVED)
+6. if home unresolvable AND no env var set AND no legacy cade.db -> hard error with clear message
+
+**Tests:**
+- cargo test -p cade-store --lib crypto -> 11 green (8 pre-existing + 3 new P2-1 tests).
+- cargo test -p cade-core --lib permissions -> 74 green (71 pre-existing + 3 new).
+- cargo test --workspace -> 640 green, 0 failed.
+- cargo clippy -p cade-store --lib --tests -> no new warnings.
+- cargo clippy -p cade-core --lib --tests -> no warnings from touched files.
+
+**New dependencies:** dirs added to cade-store (approved in the remediation contract; already in workspace deps).
+
+**Rollback:** restore_checkpoint cp-368623d5-42fe-4cc5-8cf3-17fb39495f83 (label before-p2-1-db-key). For task-level revert: git revert the P2-1 commit — restores cwd-file reading (re-opens the HIGH-severity gap).
+
+**Operator migration (pre-P2-1 -> P2-1):**
+- If CADE_DB_KEY is set in env: no action.
+- If home anchor does not exist and old cwd key exists: move it once (mkdir -p ~/.cade && mv <old-path> ~/.cade/db.key && chmod 600 ~/.cade/db.key). Without this, existing encrypted DB values cannot be decrypted until CADE_DB_KEY is set to the original key string.
+- Existing cade.db encrypted via legacy machine_uid fallback: no action. The fallback branch still fires when cade.db exists in cwd.
+- Fresh install: no action. A new random key auto-generates at home anchor on first use.
+
+**Known limitations (deferred):**
+- No auto-migration. Intentional per approved design: reading from cwd is the vulnerability; preserving that code path leaves the surface open.
+- The weak 100k-iteration PBKDF2 derivation is unchanged. That is P2-2.

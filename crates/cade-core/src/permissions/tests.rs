@@ -336,6 +336,10 @@ fn path_is_protected_checks() {
     assert!(path_is_protected("../.env"));
     assert!(path_is_protected("../../.git"));
     assert!(path_is_protected("./.cade-db.key"));
+    // P2-1: new canonical anchor at ~/.cade/db.key must also be protected.
+    assert!(path_is_protected("/home/alice/.cade/db.key"));
+    assert!(path_is_protected(".cade/db.key"));
+    assert!(path_is_protected("./.cade/db.key"));
 }
 
 #[test]

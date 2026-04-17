@@ -50,7 +50,8 @@ pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
         // SEC-02: Decrypt API key after retrieval
         // Decrypt API key — skip this provider on failure instead of aborting.
         // The key may have been encrypted with a different machine key or a
-        // previous `.cade-db.key`.  The provider will be re-created from env
+        // previous DB-key file (pre-P2-1 `.cade-db.key`, or a different
+        // `~/.cade/db.key`).  The provider will be re-created from env
         // vars if available; the user can also re-save it via /connect.
         let api_key = match encrypted_key {
             Some(k) if !k.is_empty() => {
