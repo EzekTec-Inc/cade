@@ -22,6 +22,14 @@ fn scope_display() {
     assert_eq!(SkillScope::Project.to_string(), "project");
 }
 
+#[test]
+fn scope_display_order_is_inverse_of_priority() {
+    // UI shows highest-priority scope first. display_order(Project)=0 (top).
+    assert!(SkillScope::Project.display_order() < SkillScope::Agent.display_order());
+    assert!(SkillScope::Agent.display_order() < SkillScope::Global.display_order());
+    assert!(SkillScope::Global.display_order() < SkillScope::Builtin.display_order());
+}
+
 // -- Frontmatter parsing
 
 #[test]

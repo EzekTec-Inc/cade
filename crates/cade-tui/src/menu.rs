@@ -235,11 +235,11 @@ const SECTIONS: &[Section] = &[
         items: &[
             CmdEntry {
                 cmd: "/skills",
-                desc: "List available skills",
+                desc: "Open interactive skills manager",
             },
             CmdEntry {
-                cmd: "/skills show",
-                desc: "/skills show <id>  — show skill detail",
+                cmd: "/skills new",
+                desc: "/skills new <name>  — scaffold a new skill",
             },
             CmdEntry {
                 cmd: "/skills reload",

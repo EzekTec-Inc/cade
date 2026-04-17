@@ -50,21 +50,16 @@ impl Repl {
                             });
                             let _ = app.push(RenderLine::Blank);
                             let _ = app.push(RenderLine::DimMsg(
-                                "  /skills create <name>  to scaffold your first skill"
+                                "  /skills new <name>  to scaffold your first skill"
                                     .to_string(),
                             ));
                             let _ = app.push(RenderLine::Blank);
                         } else {
-                            let scope_ord = |s: &str| match s {
-                                "project" => 0u8,
-                                "agent" => 1,
-                                "global" => 2,
-                                _ => 3,
-                            };
                             let mut sorted: Vec<_> = skills.iter().cloned().collect();
                             sorted.sort_by(|a, b| {
-                                scope_ord(&a.scope.to_string())
-                                    .cmp(&scope_ord(&b.scope.to_string()))
+                                a.scope
+                                    .display_order()
+                                    .cmp(&b.scope.display_order())
                                     .then(a.id.cmp(&b.id))
                             });
                             drop(skills);
@@ -86,7 +81,7 @@ impl Repl {
                         }
                     }
 
-                    "create" => {
+                    "create" | "new" => {
                         let name_raw = sub_arg.trim().to_string();
                         if name_raw.is_empty() {
                             self.tui_dim("  Usage: /skills create <name>");
@@ -136,7 +131,7 @@ impl Repl {
                                                     "  ✓ Created: {}",
                                                     skill_file.display()
                                                 ));
-                                                self.tui_dim(format!("  /skills edit {slug}  to open now  ·  /skills reload  to activate"));
+                                                self.tui_dim(format!("  /skills reload  to activate  ·  open {} in your editor to customize", skill_file.display()));
                                             }
                                             Err(e) => self.tui_err(format!(
                                                 "Failed to write skill file: {e}"
@@ -149,13 +144,6 @@ impl Repl {
                                 }
                             }
                         }
-                    }
-
-                    "show" => {
-                        self.tui_dim("  The /skills show command has been deprecated.");
-                        self.tui_dim(
-                            "  Please type /skills to open the interactive skills manager.",
-                        );
                     }
 
                     "reload" => {
@@ -222,13 +210,6 @@ impl Repl {
                         }
                     }
 
-                    "edit" => {
-                        self.tui_dim("  The /skills edit command has been deprecated.");
-                        self.tui_dim(
-                            "  Please type /skills to open the interactive skills manager.",
-                        );
-                    }
-
                     "delete" | "rm" => {
                         let id = sub_arg.trim();
                         if id.is_empty() {
@@ -293,7 +274,7 @@ impl Repl {
                         self.tui_err(format!("  Unknown /skills subcommand: '{other}'"));
                         self.tui_blank();
                         self.tui_dim("  /skills                    — open interactive skills manager");
-                        self.tui_dim("  /skills create <name>      — scaffold a new skill");
+                        self.tui_dim("  /skills new <name>         — scaffold a new skill");
                         self.tui_dim(
                             "  /skills delete <id>        — remove a skill directory",
                         );

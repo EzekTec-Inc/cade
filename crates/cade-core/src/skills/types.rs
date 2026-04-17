@@ -32,6 +32,20 @@ impl std::fmt::Display for SkillScope {
     }
 }
 
+impl SkillScope {
+    /// Stable ordering used by UI listings (project first, then agent, global, builtin).
+    /// This is the inverse of priority resolution — the highest-priority scope shows
+    /// at the top of the list. Keep UI and command layers in sync via this one method.
+    pub fn display_order(&self) -> u8 {
+        match self {
+            Self::Project => 0,
+            Self::Agent => 1,
+            Self::Global => 2,
+            Self::Builtin => 3,
+        }
+    }
+}
+
 // -- Skill
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
