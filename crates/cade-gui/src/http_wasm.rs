@@ -55,6 +55,24 @@ pub async fn get_messages(
     api::parse_messages(status, &body)
 }
 
+/// `GET /v1/agents/:id/messages?limit=<limit>&offset=<offset>` — paged messages.
+pub async fn get_messages_paged(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    limit: usize,
+    offset: usize,
+    conversation_id: Option<&str>,
+) -> Result<(Vec<ChatMessage>, bool), ApiError> {
+    let mut path = format!("/v1/agents/{agent_id}/messages?limit={limit}&offset={offset}");
+    if let Some(cid) = conversation_id {
+        path.push_str(&format!("&conversation_id={cid}"));
+    }
+    let url = api::build_url(base_url, &path);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_messages_paged(status, &body)
+}
+
 /// `GET /v1/agents/:id/messages?conversation_id=<cid>` — messages for one conversation.
 pub async fn get_messages_for_conversation(
     base_url: &str,

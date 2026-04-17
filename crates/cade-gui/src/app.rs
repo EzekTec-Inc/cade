@@ -172,16 +172,19 @@ impl CadeApp {
         let ctx = self.ctx.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::http_wasm::get_messages(&server_url, &token, &agent_id).await {
-                Ok(msgs) => {
+            match crate::http_wasm::get_messages_paged(
+                &server_url, &token, &agent_id, 50, 0, None,
+            )
+            .await
+            {
+                Ok((msgs, has_more)) => {
                     if let Some(s) = session.borrow_mut().as_mut() {
-                        s.on_messages(msgs);
+                        s.on_messages_paged(msgs, has_more);
                     }
                 }
                 Err(_e) => {
                     // Silently ignore message-fetch errors for now —
-                    // the timeline just stays empty.  A future milestone
-                    // can surface a toast or inline error.
+                    // the timeline just stays empty.
                 }
             }
             ctx.request_repaint();
@@ -244,14 +247,61 @@ impl CadeApp {
         let ctx = self.ctx.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::http_wasm::get_messages_for_conversation(
-                &server_url, &token, &agent_id, &conv_id,
+            match crate::http_wasm::get_messages_paged(
+                &server_url, &token, &agent_id, 50, 0, Some(&conv_id),
             )
             .await
             {
-                Ok(msgs) => {
+                Ok((msgs, has_more)) => {
                     if let Some(s) = session.borrow_mut().as_mut() {
-                        s.on_messages(msgs);
+                        s.on_messages_paged(msgs, has_more);
+                    }
+                }
+                Err(_e) => {}
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Load older messages (pagination) — fetch with offset and prepend.
+    fn spawn_load_more_messages(&mut self) {
+        const PAGE_SIZE: usize = 50;
+        let (server_url, token, agent_id, offset, conv_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            (
+                s.server_url().to_string(),
+                s.token().to_string(),
+                agent_id,
+                s.message_count(),
+                s.conversation_id().map(String::from),
+            )
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::get_messages_paged(
+                &server_url,
+                &token,
+                &agent_id,
+                PAGE_SIZE,
+                offset,
+                conv_id.as_deref(),
+            )
+            .await
+            {
+                Ok((msgs, has_more)) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_prepend_messages(msgs, has_more);
                     }
                 }
                 Err(_e) => {}
@@ -373,6 +423,7 @@ impl eframe::App for CadeApp {
                     ref last_finish_reason,
                     ref conversations,
                     ref selected_conversation,
+                    has_more_messages,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -561,6 +612,23 @@ Connected and ready.  Select an agent from the sidebar to begin.
                                 } else if messages.is_empty() && !is_streaming {
                                     ui.label("No messages yet. Send one to start a conversation.");
                                 } else {
+                                    // ── "Load more" button at the top ──
+                                    if has_more_messages {
+                                        ui.horizontal(|ui| {
+                                            if ui
+                                                .button(
+                                                    egui::RichText::new("⬆ Load older messages…")
+                                                        .weak()
+                                                        .size(11.0),
+                                                )
+                                                .clicked()
+                                            {
+                                                action = AppAction::LoadMore;
+                                            }
+                                        });
+                                        ui.separator();
+                                    }
+
                                     for msg in messages {
                                         ui.add_space(8.0);
                                         match msg.role.as_str() {
@@ -801,6 +869,7 @@ Connected and ready.  Select an agent from the sidebar to begin.
                     s.on_new_conversation();
                 }
             }
+            AppAction::LoadMore => self.spawn_load_more_messages(),
             AppAction::Logout => self.logout(),
         }
     }
@@ -822,6 +891,8 @@ enum AppAction {
     SelectConversation(usize),
     /// User clicked "New Chat" — start a fresh conversation.
     NewConversation,
+    /// User clicked "Load more" to fetch older messages.
+    LoadMore,
     /// User clicked Logout — clear credentials and return to login.
     Logout,
 }

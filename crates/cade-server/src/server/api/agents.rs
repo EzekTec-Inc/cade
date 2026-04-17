@@ -455,8 +455,13 @@ pub async fn search_messages_handler(
             .get("limit")
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(100);
-        let rows = sqlite::list_messages(&state.db, &agent_id, conv_id, limit)
-            .map_err(|e| server_err(e.to_string()))?;
+        let offset = params
+            .get("offset")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
+        let rows =
+            sqlite::list_messages_page(&state.db, &agent_id, conv_id, limit, offset)
+                .map_err(|e| server_err(e.to_string()))?;
         let messages: Vec<Value> = rows
             .into_iter()
             .map(|r| {
@@ -470,7 +475,9 @@ pub async fn search_messages_handler(
                 })
             })
             .collect();
-        return Ok(Json(json!({ "messages": messages, "query": query })));
+        // If we got exactly `limit` messages, there may be more.
+        let has_more = messages.len() == limit;
+        return Ok(Json(json!({ "messages": messages, "query": query, "has_more": has_more })));
     }
 
     let rows = sqlite::search_messages(&state.db, &agent_id, query, conv_id)

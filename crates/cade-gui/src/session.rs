@@ -69,6 +69,8 @@ pub enum SessionState {
         conversations: Vec<crate::api::ConversationInfo>,
         /// Index into `conversations` of the currently selected conversation.
         selected_conversation: Option<usize>,
+        /// Whether there are more messages to load (pagination).
+        has_more_messages: bool,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -155,6 +157,7 @@ impl SessionState {
                 last_finish_reason: None,
                 conversations: Vec::new(),
                 selected_conversation: None,
+                has_more_messages: false,
             };
         }
     }
@@ -222,6 +225,55 @@ impl SessionState {
     pub fn on_messages(&mut self, msgs: Vec<ChatMessage>) {
         if let Self::Connected { messages, .. } = self {
             *messages = msgs;
+        }
+    }
+
+    /// Set messages and pagination flag from a paged fetch.
+    pub fn on_messages_paged(&mut self, msgs: Vec<ChatMessage>, has_more: bool) {
+        if let Self::Connected {
+            messages,
+            has_more_messages,
+            ..
+        } = self
+        {
+            *messages = msgs;
+            *has_more_messages = has_more;
+        }
+    }
+
+    /// Prepend older messages (from "Load more") to the beginning.
+    pub fn on_prepend_messages(&mut self, older: Vec<ChatMessage>, has_more: bool) {
+        if let Self::Connected {
+            messages,
+            has_more_messages,
+            ..
+        } = self
+        {
+            let mut combined = older;
+            combined.append(messages);
+            *messages = combined;
+            *has_more_messages = has_more;
+        }
+    }
+
+    /// Whether there are older messages to load.
+    pub fn has_more_messages(&self) -> bool {
+        if let Self::Connected {
+            has_more_messages, ..
+        } = self
+        {
+            *has_more_messages
+        } else {
+            false
+        }
+    }
+
+    /// Current message count (used as offset for pagination).
+    pub fn message_count(&self) -> usize {
+        if let Self::Connected { messages, .. } = self {
+            messages.len()
+        } else {
+            0
         }
     }
 
@@ -1342,5 +1394,75 @@ mod tests {
         s.on_select_agent(1);
         assert!(s.conversations().is_empty());
         assert_eq!(s.selected_conversation(), None);
+    }
+
+    // ── Pagination tests ────────────────────────────────────────────
+
+    #[test]
+    fn on_messages_paged_stores_has_more() {
+        let mut s = make_connected_with_agent_selected();
+        let msgs = vec![ChatMessage {
+            id: "m1".into(),
+            role: "user".into(),
+            content: serde_json::Value::String("hi".into()),
+            conversation_id: None,
+        }];
+        s.on_messages_paged(msgs, true);
+        assert!(s.has_more_messages());
+        assert_eq!(s.message_count(), 1);
+    }
+
+    #[test]
+    fn on_messages_paged_no_more() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_messages_paged(vec![], false);
+        assert!(!s.has_more_messages());
+        assert_eq!(s.message_count(), 0);
+    }
+
+    #[test]
+    fn on_prepend_messages_adds_to_front() {
+        let mut s = make_connected_with_agent_selected();
+        let recent = vec![ChatMessage {
+            id: "m2".into(),
+            role: "assistant".into(),
+            content: serde_json::Value::String("hello".into()),
+            conversation_id: None,
+        }];
+        s.on_messages_paged(recent, true);
+
+        let older = vec![ChatMessage {
+            id: "m1".into(),
+            role: "user".into(),
+            content: serde_json::Value::String("hi".into()),
+            conversation_id: None,
+        }];
+        s.on_prepend_messages(older, false);
+
+        assert_eq!(s.message_count(), 2);
+        assert!(!s.has_more_messages());
+        // The older message should be first.
+        if let SessionState::Connected { messages, .. } = &s {
+            assert_eq!(messages[0].id, "m1");
+            assert_eq!(messages[1].id, "m2");
+        }
+    }
+
+    #[test]
+    fn parse_messages_paged_with_has_more() {
+        let body = r#"{"messages":[
+            {"id":"m1","role":"user","content":"hi","conversation_id":null}
+        ],"has_more":true,"query":""}"#;
+        let (msgs, has_more) = crate::api::parse_messages_paged(200, body).unwrap();
+        assert_eq!(msgs.len(), 1);
+        assert!(has_more);
+    }
+
+    #[test]
+    fn parse_messages_paged_without_has_more() {
+        let body = r#"{"messages":[],"query":""}"#;
+        let (msgs, has_more) = crate::api::parse_messages_paged(200, body).unwrap();
+        assert!(msgs.is_empty());
+        assert!(!has_more); // defaults to false when missing
     }
 }

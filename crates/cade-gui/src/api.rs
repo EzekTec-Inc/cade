@@ -111,6 +111,8 @@ pub fn parse_agents(status: u16, body: &str) -> Result<Vec<AgentInfo>, ApiError>
 #[derive(serde::Deserialize)]
 struct MessagesEnvelope {
     messages: Vec<ChatMessage>,
+    #[serde(default)]
+    has_more: bool,
 }
 
 /// Parse the response from `GET /v1/agents/:id/messages`.
@@ -120,6 +122,15 @@ struct MessagesEnvelope {
 pub fn parse_messages(status: u16, body: &str) -> Result<Vec<ChatMessage>, ApiError> {
     let envelope: MessagesEnvelope = decode_or_error(status, body)?;
     Ok(envelope.messages)
+}
+
+/// Like `parse_messages` but also returns the `has_more` flag.
+pub fn parse_messages_paged(
+    status: u16,
+    body: &str,
+) -> Result<(Vec<ChatMessage>, bool), ApiError> {
+    let envelope: MessagesEnvelope = decode_or_error(status, body)?;
+    Ok((envelope.messages, envelope.has_more))
 }
 
 fn decode_or_error<T>(status: u16, body: &str) -> Result<T, ApiError>
