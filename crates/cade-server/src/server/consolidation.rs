@@ -44,6 +44,19 @@ const SUMMARY_MAX_TOKENS: u32 = 900;
 /// Maximum chars stored in the `session_summary` memory block.
 const SESSION_SUMMARY_MAX_CHARS: usize = 4_500;
 
+/// Phase C: maximum number of rotated `session_summary_N` blocks to keep in
+/// the long-term tier. When the ring fills, the oldest is evicted and a
+/// one-line excerpt is appended to the pinned `session_index` block.
+const SESSION_SUMMARY_RING_CAP: usize = 5;
+
+/// Max chars retained per rotated `session_summary_N` block. Lower than the
+/// live cap because older phases get less frequent attention.
+const SESSION_SUMMARY_ARCHIVED_MAX_CHARS: usize = 2_000;
+
+/// Max chars retained in the `session_index` pinned block. When the FIFO
+/// line-buffer exceeds this, the oldest lines are dropped.
+const SESSION_INDEX_MAX_CHARS: usize = 3_000;
+
 /// Fraction of the estimated history budget used as the threshold: turns that
 /// fit within `char_budget * HISTORY_BUDGET_FRACTION` are considered "in
 /// context"; everything older is considered "dropped" and summarised.
@@ -281,7 +294,10 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     } else {
         let combined = format!("{existing}\n\n---\n\n{summary}");
         if combined.chars().count() > SESSION_SUMMARY_MAX_CHARS {
-            // Combined too long — keep only the latest summary to stay useful.
+            // Phase C: instead of losing the previous summary, rotate it into
+            // the `session_summary_N` ring (long-term tier). The new live
+            // value becomes just the latest summary.
+            rotate_and_archive_session_summary(state, agent_id, existing);
             summary.clone()
         } else {
             combined
@@ -437,6 +453,199 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
+
+/// Phase C: rotate the live `session_summary` into the `session_summary_N`
+/// ring before it is overwritten by a fresh consolidation pass.
+///
+/// Behavior:
+///   1. If `session_summary_{RING_CAP}` already exists, extract its first
+///      non-empty line and append it to the pinned `session_index` block,
+///      then delete the evicted block.
+///   2. Shift blocks up by one: `session_summary_{N}` → `session_summary_{N+1}`
+///      for N = RING_CAP-1 down to 1.
+///   3. Write `prev_live` (capped at SESSION_SUMMARY_ARCHIVED_MAX_CHARS,
+///      truncated head-first to preserve the tail / most-recent content)
+///      to `session_summary_1` at tier `long`.
+///
+/// All DB errors are logged at debug/warn and swallowed — rotation is
+/// best-effort and must never break the main consolidation path.
+fn rotate_and_archive_session_summary(state: &AppState, agent_id: &str, prev_live: &str) {
+    rotate_and_archive_session_summary_db(&state.db, agent_id, prev_live);
+}
+
+fn rotate_and_archive_session_summary_db(
+    db: &cade_store::sqlite::Db,
+    agent_id: &str,
+    prev_live: &str,
+) {
+    if prev_live.trim().is_empty() {
+        return;
+    }
+
+    let blocks = sqlite::get_memory_blocks(db, agent_id).unwrap_or_default();
+    let label_for = |n: usize| format!("session_summary_{n}");
+
+    // Step 1: evict oldest slot if occupied.
+    let oldest_label = label_for(SESSION_SUMMARY_RING_CAP);
+    if let Some((_, val, _)) = blocks.iter().find(|(l, _, _)| l == &oldest_label) {
+        let excerpt = first_nonempty_line(val);
+        if !excerpt.is_empty() {
+            append_to_session_index_db(db, agent_id, &excerpt);
+        }
+        if let Err(e) = sqlite::delete_memory_block(db, agent_id, &oldest_label) {
+            tracing::debug!(
+                "consolidate [{}]: failed to evict {}: {}",
+                agent_id,
+                oldest_label,
+                e
+            );
+        }
+    }
+
+    // Step 2: shift N → N+1, from N=RING_CAP-1 down to 1.
+    for n in (1..SESSION_SUMMARY_RING_CAP).rev() {
+        let src = label_for(n);
+        let dst = label_for(n + 1);
+        if let Some((_, val, _)) = blocks.iter().find(|(l, _, _)| l == &src) {
+            if let Err(e) = sqlite::upsert_memory_block(
+                db,
+                agent_id,
+                &dst,
+                val,
+                Some("Rotated session summary (Phase C ring)"),
+                Some(SESSION_SUMMARY_ARCHIVED_MAX_CHARS),
+            ) {
+                tracing::debug!(
+                    "consolidate [{}]: failed to shift {} → {}: {}",
+                    agent_id,
+                    src,
+                    dst,
+                    e
+                );
+                continue;
+            }
+            let _ = sqlite::set_memory_tier(db, agent_id, &dst, "long", false);
+            if let Err(e) = sqlite::delete_memory_block(db, agent_id, &src) {
+                tracing::debug!(
+                    "consolidate [{}]: failed to delete old {}: {}",
+                    agent_id,
+                    src,
+                    e
+                );
+            }
+        }
+    }
+
+    // Step 3: write prev_live into slot 1 (head-truncated to preserve tail).
+    let capped = truncate_head_to(prev_live, SESSION_SUMMARY_ARCHIVED_MAX_CHARS);
+    let slot1 = label_for(1);
+    if let Err(e) = sqlite::upsert_memory_block(
+        db,
+        agent_id,
+        &slot1,
+        &capped,
+        Some("Rotated session summary (Phase C ring)"),
+        Some(SESSION_SUMMARY_ARCHIVED_MAX_CHARS),
+    ) {
+        tracing::debug!(
+            "consolidate [{}]: failed to write {}: {}",
+            agent_id,
+            slot1,
+            e
+        );
+        return;
+    }
+    let _ = sqlite::set_memory_tier(db, agent_id, &slot1, "long", false);
+
+    tracing::debug!(
+        "consolidate [{}]: rotated session_summary ({} chars) → {}",
+        agent_id,
+        capped.chars().count(),
+        slot1,
+    );
+}
+
+/// Append a one-line excerpt to the pinned `session_index` block, evicting
+/// oldest lines FIFO when the block exceeds `SESSION_INDEX_MAX_CHARS`.
+fn append_to_session_index_db(db: &cade_store::sqlite::Db, agent_id: &str, excerpt: &str) {
+    let blocks = sqlite::get_memory_blocks(db, agent_id).unwrap_or_default();
+    let existing = blocks
+        .iter()
+        .find(|(l, _, _)| l == "session_index")
+        .map(|(_, v, _)| v.as_str())
+        .unwrap_or("");
+
+    let line = sanitize_index_line(excerpt);
+    if line.is_empty() {
+        return;
+    }
+
+    let mut combined = if existing.is_empty() {
+        line
+    } else {
+        format!("{existing}\n{line}")
+    };
+
+    // FIFO truncation: drop leading lines until within cap.
+    while combined.chars().count() > SESSION_INDEX_MAX_CHARS {
+        match combined.find('\n') {
+            Some(i) => {
+                combined.drain(..=i);
+            }
+            None => break,
+        };
+    }
+
+    if let Err(e) = sqlite::upsert_memory_block(
+        db,
+        agent_id,
+        "session_index",
+        &combined,
+        Some("Timeline index of evicted session summaries (Phase C)"),
+        Some(SESSION_INDEX_MAX_CHARS),
+    ) {
+        tracing::debug!(
+            "consolidate [{}]: failed to update session_index: {}",
+            agent_id,
+            e
+        );
+        return;
+    }
+    let _ = sqlite::set_memory_tier(db, agent_id, "session_index", "pinned", false);
+}
+
+/// Return the first non-empty, trimmed line of `s`, capped at 200 chars.
+fn first_nonempty_line(s: &str) -> String {
+    for line in s.lines() {
+        let t = line.trim();
+        if !t.is_empty() {
+            return t.chars().take(200).collect();
+        }
+    }
+    String::new()
+}
+
+/// Sanitize a line for inclusion in `session_index`: strip newlines,
+/// collapse internal whitespace, cap at 200 chars.
+fn sanitize_index_line(s: &str) -> String {
+    let collapsed: String = s
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    collapsed.chars().take(200).collect()
+}
+
+/// Truncate `s` from the head so the result has at most `max_chars` chars.
+/// Preserves the tail (most recent content). If already within cap, returns
+/// `s` unchanged.
+fn truncate_head_to(s: &str, max_chars: usize) -> String {
+    let total = s.chars().count();
+    if total <= max_chars {
+        return s.to_string();
+    }
+    let skip = total - max_chars;
+    s.chars().skip(skip).collect()
+}
 
 /// Returns `true` if the summary is inflated relative to the source text — i.e.,
 /// the summary is ≥ 80% of the dropped-content size and should be rejected.
@@ -683,5 +892,186 @@ mod tests {
         let text = "src/lib.rs and again src/lib.rs and src/lib.rs";
         let arts = extract_artifacts(text);
         assert_eq!(arts.len(), 1);
+    }
+
+    // ── Phase C: pure helper tests ───────────────────────────────────────
+
+    #[test]
+    fn truncate_head_to_preserves_tail() {
+        let out = truncate_head_to("abcdefghij", 4);
+        assert_eq!(out, "ghij");
+    }
+
+    #[test]
+    fn truncate_head_to_noop_when_under_cap() {
+        let out = truncate_head_to("abc", 100);
+        assert_eq!(out, "abc");
+    }
+
+    #[test]
+    fn truncate_head_to_handles_multibyte() {
+        // 5 chars, each multi-byte
+        let out = truncate_head_to("αβγδε", 3);
+        assert_eq!(out.chars().count(), 3);
+        assert_eq!(out, "γδε");
+    }
+
+    #[test]
+    fn first_nonempty_line_skips_blank_lines() {
+        let out = first_nonempty_line("\n\n  \nhello world\nnext");
+        assert_eq!(out, "hello world");
+    }
+
+    #[test]
+    fn first_nonempty_line_empty_input() {
+        assert_eq!(first_nonempty_line(""), "");
+        assert_eq!(first_nonempty_line("\n\n  \n"), "");
+    }
+
+    #[test]
+    fn first_nonempty_line_caps_at_200() {
+        let long = "x".repeat(500);
+        let out = first_nonempty_line(&long);
+        assert_eq!(out.chars().count(), 200);
+    }
+
+    #[test]
+    fn sanitize_index_line_collapses_whitespace() {
+        let out = sanitize_index_line("hello\n  world\t\tfoo");
+        assert_eq!(out, "hello world foo");
+    }
+
+    #[test]
+    fn sanitize_index_line_caps_at_200() {
+        let long = "a ".repeat(200);
+        let out = sanitize_index_line(&long);
+        assert_eq!(out.chars().count(), 200);
+    }
+
+    // ── Phase C: DB-backed ring tests ────────────────────────────────────
+
+    use cade_store::sqlite::{self as store_sqlite, AgentRow, Db};
+
+    fn setup_db() -> Db {
+        let db = store_sqlite::open(":memory:").expect("open in-memory db");
+        store_sqlite::create_agent(
+            &db,
+            &AgentRow {
+                id: "a1".into(),
+                name: "A".into(),
+                model: "m".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+            },
+        )
+        .unwrap();
+        db
+    }
+
+    fn block_value(db: &Db, label: &str) -> Option<String> {
+        store_sqlite::get_memory_blocks(db, "a1")
+            .unwrap()
+            .into_iter()
+            .find(|(l, _, _)| l == label)
+            .map(|(_, v, _)| v)
+    }
+
+    #[test]
+    fn rotate_writes_prev_live_to_slot_1() {
+        let db = setup_db();
+        rotate_and_archive_session_summary_db(&db, "a1", "FIRST summary content");
+        assert_eq!(
+            block_value(&db, "session_summary_1").as_deref(),
+            Some("FIRST summary content")
+        );
+        assert!(block_value(&db, "session_summary_2").is_none());
+    }
+
+    #[test]
+    fn rotate_empty_input_is_noop() {
+        let db = setup_db();
+        rotate_and_archive_session_summary_db(&db, "a1", "   \n  ");
+        assert!(block_value(&db, "session_summary_1").is_none());
+    }
+
+    #[test]
+    fn rotate_shifts_slots_and_fills_slot_1() {
+        let db = setup_db();
+        rotate_and_archive_session_summary_db(&db, "a1", "ONE");
+        rotate_and_archive_session_summary_db(&db, "a1", "TWO");
+        rotate_and_archive_session_summary_db(&db, "a1", "THREE");
+        assert_eq!(block_value(&db, "session_summary_1").as_deref(), Some("THREE"));
+        assert_eq!(block_value(&db, "session_summary_2").as_deref(), Some("TWO"));
+        assert_eq!(block_value(&db, "session_summary_3").as_deref(), Some("ONE"));
+        assert!(block_value(&db, "session_summary_4").is_none());
+    }
+
+    #[test]
+    fn rotate_evicts_to_session_index_when_ring_full() {
+        let db = setup_db();
+        // Fill RING_CAP slots (5).
+        rotate_and_archive_session_summary_db(&db, "a1", "Summary ONE first line\nmore");
+        rotate_and_archive_session_summary_db(&db, "a1", "Summary TWO first line\nmore");
+        rotate_and_archive_session_summary_db(&db, "a1", "Summary THREE first line\nmore");
+        rotate_and_archive_session_summary_db(&db, "a1", "Summary FOUR first line\nmore");
+        rotate_and_archive_session_summary_db(&db, "a1", "Summary FIVE first line\nmore");
+        // All 5 slots should now be occupied, no index yet.
+        assert!(block_value(&db, "session_summary_5").is_some());
+        assert!(block_value(&db, "session_index").is_none());
+
+        // One more rotation — "ONE" should be evicted to session_index.
+        rotate_and_archive_session_summary_db(&db, "a1", "Summary SIX first line\nmore");
+        let index = block_value(&db, "session_index").expect("index block must exist");
+        assert!(
+            index.contains("Summary ONE first line"),
+            "expected ONE's first line in index, got: {index}"
+        );
+        // Ring still bounded at 5.
+        assert!(block_value(&db, "session_summary_5").is_some());
+        assert!(block_value(&db, "session_summary_6").is_none());
+        // Slot 1 has the newest.
+        assert_eq!(
+            block_value(&db, "session_summary_1").as_deref(),
+            Some("Summary SIX first line\nmore")
+        );
+    }
+
+    #[test]
+    fn session_index_fifo_truncates_when_over_cap() {
+        let db = setup_db();
+        // Pre-seed session_index near the cap.
+        let big = "X".repeat(SESSION_INDEX_MAX_CHARS - 10);
+        store_sqlite::upsert_memory_block(
+            &db,
+            "a1",
+            "session_index",
+            &big,
+            Some("seed"),
+            Some(SESSION_INDEX_MAX_CHARS + 1000),
+        )
+        .unwrap();
+
+        // Append a line long enough to push over cap — should trigger drain.
+        append_to_session_index_db(&db, "a1", &"y".repeat(100));
+        let v = block_value(&db, "session_index").unwrap();
+        assert!(
+            v.chars().count() <= SESSION_INDEX_MAX_CHARS,
+            "expected ≤ {} chars, got {}",
+            SESSION_INDEX_MAX_CHARS,
+            v.chars().count()
+        );
+    }
+
+    #[test]
+    fn rotated_slot_capped_at_archived_max_chars() {
+        let db = setup_db();
+        let huge = "Z".repeat(SESSION_SUMMARY_ARCHIVED_MAX_CHARS * 3);
+        rotate_and_archive_session_summary_db(&db, "a1", &huge);
+        let v = block_value(&db, "session_summary_1").unwrap();
+        assert_eq!(v.chars().count(), SESSION_SUMMARY_ARCHIVED_MAX_CHARS);
+        // Tail-preserving truncation: still all Zs.
+        assert!(v.chars().all(|c| c == 'Z'));
     }
 }

@@ -436,3 +436,33 @@
 **New dependencies:** none (DefaultBodyLimit lives in axum, already a dep).
 
 **Rollback:** `restore_checkpoint cp-0e65ca6a-f36e-4a87-bc73-141aac431452` reverts everything in the remediation chain. For task-level revert, delete the `DefaultBodyLimit` layer + import and remove `router_test.rs`.
+
+---
+
+## 2026-04-17T04:10Z — Phase C: `session_summary` rotating ring + `session_index` eviction trail
+
+**Summary:** Implemented the `session_summary_N` rotating ring (cap=5) in `consolidation.rs` so that previous `session_summary` content is no longer discarded when a new consolidation pass would overflow `SESSION_SUMMARY_MAX_CHARS`. Old summaries rotate into long-tier blocks (`session_summary_1` … `session_summary_5`). When the ring fills, the oldest block's first non-empty line is appended to a pinned `session_index` block (FIFO-capped at 3 KB), then the evicted block is deleted.
+
+**Files modified:**
+- `crates/cade-server/src/server/consolidation.rs` —
+  - Added 3 tunables: `SESSION_SUMMARY_RING_CAP = 5`, `SESSION_SUMMARY_ARCHIVED_MAX_CHARS = 2_000`, `SESSION_INDEX_MAX_CHARS = 3_000`.
+  - Replaced the single-line "keep only the latest summary" discard branch in `consolidate_agent()` with a call to `rotate_and_archive_session_summary()` before overwriting the live block.
+  - Added private helpers: `rotate_and_archive_session_summary` (AppState-facing shim), `rotate_and_archive_session_summary_db` (Db-only inner, unit-testable), `append_to_session_index_db` (FIFO line-buffer appender), `first_nonempty_line`, `sanitize_index_line`, `truncate_head_to` (tail-preserving char-safe truncation).
+  - Added 11 unit tests under `#[cfg(test)] mod tests` — 6 pure-helper tests (truncation, line extraction, whitespace sanitization) and 5 DB-backed ring tests using `cade_store::sqlite::open(":memory:")` (rotation writes slot 1, empty input is noop, slot shifting, eviction trail to `session_index`, FIFO truncation of index, archived-slot char cap).
+
+**Reason:** Before Phase C, when the combined `session_summary + new_summary` exceeded `SESSION_SUMMARY_MAX_CHARS`, the previous summary was silently dropped. Over long-running sessions this destroyed the narrative history of what was done 3+ consolidation cycles ago. Phase C preserves that history in a bounded, predictable way (hard cap: 5 blocks × 2 KB + 1 × 3 KB index = ~13 KB worst case) without schema changes.
+
+**Previous behavior:** `combined.chars().count() > SESSION_SUMMARY_MAX_CHARS` → keep only the latest `summary`; prior content lost forever.
+
+**New behavior:** Same overflow trigger → rotate the prior live value into `session_summary_1` (tail-preserved, capped at 2 KB, tier=long); shift existing `session_summary_N` to `session_summary_{N+1}` for N=4..1; if `session_summary_5` already existed, write its first non-empty line (max 200 chars, whitespace-collapsed) to the pinned `session_index` block (FIFO-evict oldest lines when >3 KB), then delete `session_summary_5`. The live `session_summary` continues to hold only the newest summary. All errors in the rotation path are logged at debug/warn and swallowed — rotation is strictly best-effort and cannot fail the main consolidation.
+
+**Tests:**
+- `cargo test -p cade-server --lib server::consolidation` → 31 green (20 pre-existing + 11 new).
+- `cargo test -p cade-server` → 79 green, 0 failed.
+- `cargo clippy -p cade-server --lib --tests` → no new warnings (only pre-existing ones in unrelated files).
+
+**New dependencies:** none. Uses only existing `cade_store::sqlite` functions (`upsert_memory_block`, `delete_memory_block`, `get_memory_blocks`, `set_memory_tier`, `create_agent`, `open`).
+
+**Schema changes:** none. All state lives in the existing `shared_memory_blocks` / `agent_memory_blocks` tables via standard labels.
+
+**Rollback:** `git revert` the Phase C commit, or restore checkpoint `cp-e5832a63-fdf9-4294-b293-0109921b08d2` (label `before-phase-c-ring`). No migration needed — stray `session_summary_N` / `session_index` blocks on rollback are harmless (they simply stop being written/read).
