@@ -1,4 +1,67 @@
-## 2026-04-17T16:36:18Z — P2-4: SSH `StrictHostKeyChecking=yes` default
+## 2026-04-17T16:41:43Z — P3-2: `cargo audit` CI workflow
+
+**Task:** Add an automated cargo-audit scan that runs on every PR, every push to `main`, and once per day, so newly-disclosed dependency advisories can't silently slip into the codebase.
+
+**Gap (before):** Only `.github/workflows/ci.yml` existed (build / test / clippy / fmt) — no dependency advisory scanning anywhere in CI.  Advisories disclosed against any of CADE's 660 transitive dependencies would not be surfaced until a developer ran `cargo audit` manually.
+
+**Files modified:**
+- `.github/workflows/audit.yml` (new, 54 lines).
+
+**Workflow shape:**
+- Name: `Security audit`.
+- Triggers:
+  - `pull_request` on `main` with `paths` filter (`**/Cargo.toml`, `Cargo.lock`, `.github/workflows/audit.yml`) — only runs when dependency manifest changes, avoiding noisy failures on unrelated PRs.
+  - `push` on `main` with the same path filter.
+  - `schedule`: daily at 06:00 UTC — catches advisories disclosed after a merge.
+  - `workflow_dispatch: {}` — manual trigger.
+- `concurrency.cancel-in-progress: true` on the group `audit-${{ github.workflow }}-${{ github.ref }}` so rapid pushes don't stack.
+- Permissions: `contents: read`, `issues: write` (scheduled `rustsec/audit-check` runs open / update an advisory issue; it needs issue write access).
+- Steps:
+  1. `actions/checkout@v4`.
+  2. `rustsec/audit-check@v2.0.0` with `token: ${{ secrets.GITHUB_TOKEN }}`.
+- Pinned to a specific major tag rather than `@main` so upstream action changes can't alter behaviour silently.
+
+**Reason:** Close the static-analysis gap for dependency vulnerabilities.  Part of Phase 3 of the user-approved security backlog (P3-2).  No production code is touched; no Rust dependencies are added — the action runs `cargo audit` inside the runner.
+
+**Previous behaviour:**
+- `cargo audit` had to be run manually by developers; no enforcement in CI.
+
+**New behaviour:**
+- Every dependency-affecting PR blocks until `cargo audit` passes.
+- Every merge to `main` that touches manifests re-runs the audit.
+- Daily cron catches newly-published advisories against already-merged code.
+- Manual `workflow_dispatch` available for ad-hoc scans.
+- Hard vulnerabilities (`Crate: … Vulnerability:`) → exit non-zero → CI fails.
+- Unmaintained / unsound warnings → logged as notices but CI passes (current `cargo audit` default behaviour).
+
+**Baseline (local run, advisory DB loaded from `~/.cargo/advisory-db`):**
+- `660 crate dependencies` scanned.
+- `0` hard vulnerabilities.
+- `3` allowed warnings (all transitive, no patched-upstream fix available at time of writing):
+  - `bincode 1.3.3` — unmaintained (RUSTSEC-2025-0141) — via `syntect 5.3.0` → `cade-tui`.
+  - `number_prefix 0.4.0` — unmaintained (RUSTSEC-2025-0119) — via `indicatif 0.17.11`.
+  - `rand 0.8.5` — unsound (RUSTSEC-2026-0097) — via `phf_generator 0.11.3` → `phf`/`termwiz`/`ratatui`.
+- Exit code: `0`.
+- Conclusion: the workflow will pass on first run, matching our intent.
+
+**Test results:**
+- Local `cargo audit` → exit 0, 3 warnings (captured above).
+- Python `yaml.safe_load` on the workflow file → parses cleanly, no syntax errors.
+- No Rust code touched → no regression possible in the cade-agent test suite; deferred running `cargo test --workspace` since the change is CI-only.
+
+**Rollback steps:**
+1. `git revert <this commit>` — single new file.
+2. Or delete `.github/workflows/audit.yml` and re-commit.
+3. Or restore state from checkpoint `pre-p3-2` (ID `cp-a46d896a-10e5-4556-acd5-9f1c897fe4cc`, HEAD `98ae2138`).
+
+**Follow-ups (explicitly out of scope for P3-2):**
+- If any of the 3 current warnings must be silenced (e.g. to reduce log noise), add a `.cargo/audit.toml` with an `[advisories] ignore = [...]` list and a written justification per entry.  Not added here because the default behaviour (warn-only, pass CI) is already correct.
+- Bumping the workflow's action pin from `v2.0.0` to a specific SHA is a hardening option for supply-chain paranoia; deferred.
+- Cross-linking from `SECURITY.md` and `CONTRIBUTING.md` to the new workflow is a docs task; deferred.
+
+---
+
+
 
 **Task:** Change the SSH backend's default host-key-checking policy from `accept-new` (TOFU — trust-on-first-use) to `yes` (reject unknown host keys), with a narrow env-var escape hatch for environments that dynamically seed `~/.ssh/known_hosts`.
 

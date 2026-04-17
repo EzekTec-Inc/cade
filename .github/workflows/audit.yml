@@ -1,0 +1,56 @@
+# Cargo dependency vulnerability scan (P3-2).
+#
+# Runs `cargo audit` against the committed `Cargo.lock` on every PR and
+# push that touches the dependency manifest, plus a daily schedule to
+# catch advisories disclosed after a merge.  The workflow does NOT add
+# any crate dependencies to the project — it only invokes a GitHub
+# Action that runs `cargo audit` inside the runner.
+#
+# Exit behaviour (from `cargo audit` default):
+#   - Hard vulnerabilities          → non-zero exit, CI fails
+#   - Unmaintained / unsound crates → warnings, CI passes
+# To ignore a specific advisory, add it to `.cargo/audit.toml` in a
+# follow-up PR with written justification.
+
+name: Security audit
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/audit.yml"
+  push:
+    branches: [main]
+    paths:
+      - "**/Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/audit.yml"
+  schedule:
+    # Daily at 06:00 UTC — catches advisories published after a PR merges.
+    - cron: "0 6 * * *"
+  workflow_dispatch: {}
+
+# Cancel in-progress runs on the same ref when a new commit lands.
+concurrency:
+  group: audit-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    permissions:
+      # `rustsec/audit-check` opens/updates an issue when a scheduled run
+      # finds a new advisory, so it needs `issues: write`.
+      contents: read
+      issues: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run cargo audit
+        uses: rustsec/audit-check@v2.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
