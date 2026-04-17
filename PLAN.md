@@ -1,3 +1,40 @@
+## 2026-04-17T19:23:24Z — cade-gui M7: egui_commonmark wiring (markdown in timeline)
+
+**Task:** Wire egui_commonmark into the dashboard timeline panel so markdown content renders with headings, lists, code blocks, bold, italic, and block quotes.
+
+**Scope guardrail:** Wiring only.  The timeline shows a static sample markdown to prove the pipeline works.  Real SSE stream content is a future milestone.  No syntect (no `better_syntax_highlighting` feature) — code fences render as monospace without syntax colouring.
+
+**Files modified:**
+- `crates/cade-gui/Cargo.toml`
+  - Bumped `egui_commonmark` from `"0.20"` → `"0.23"`.  v0.20 depended on `egui 0.31` which conflicted with our `egui 0.34`.  v0.23 requires `egui ^0.34.0`.
+  - This also updates `egui_commonmark_backend` (0.20→0.23), `egui_extras` (0.31→0.34), `pulldown-cmark` (0.12→0.13), and removes the duplicate `egui 0.31` tree.  No new crate names — only version bumps of existing transitive deps.
+- `Cargo.lock` — updated automatically.
+- `crates/cade-gui/src/app.rs` (modified, ~270 lines, wasm-only).
+  - Added `use egui_commonmark::{CommonMarkCache, CommonMarkViewer};`.
+  - Added `md_cache: CommonMarkCache` field to `CadeApp`.
+  - Connected timeline panel now renders a sample markdown via `CommonMarkViewer::new().show(ui, &mut self.md_cache, sample_md)` inside a `ScrollArea::vertical`.
+  - Sample covers: h2/h3 headings, bullet list, bold, italic, Rust code fence, block quote.
+
+**Dependency policy:** No new crate names.  `egui_commonmark` was already declared; bumped from 0.20 → 0.23 for egui 0.34 compatibility.  Transitive dep versions updated in lockfile only.
+
+**Reason:** M7 of the cade-gui roadmap.  Establishes the markdown rendering pipeline in the timeline area.  Future milestones will replace the sample with real streamed content.
+
+**Previous behavior:** Connected timeline showed "Select an agent" placeholder text.
+
+**New behavior:**
+- Connected timeline renders markdown: headings, lists, bold/italic, code fences (monospace, no syntax highlighting), block quotes.
+- Scrollable via `egui::ScrollArea::vertical`.
+- `CommonMarkCache` avoids re-parsing on every frame.
+- Tests: 55/55 cade-gui native (unchanged), 750/750 workspace (unchanged).
+- `RUSTFLAGS="-D warnings" cargo build -p cade-gui --target wasm32-unknown-unknown` → clean.
+- `cargo clippy -p cade-gui --all-targets -- -D warnings` → clean.
+
+**Rollback steps:**
+1. `git revert <this-commit>` — reverts `app.rs`, `Cargo.toml`, and `Cargo.lock`.
+2. Checkpoint `cp-9e415b65` (label `pre-M6`, HEAD 938ccd64) for full rollback to pre-M6.
+
+---
+
 ## 2026-04-17T19:17:04Z — cade-gui M6c: 3-panel layout (sidebar, timeline, input bar)
 
 **Task:** Replace the flat placeholder agent list in the Connected state with a proper 3-panel layout: left sidebar (agent list), central timeline area (placeholder), and bottom input bar (disabled placeholder).

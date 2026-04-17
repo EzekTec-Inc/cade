@@ -16,6 +16,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use eframe::egui;
+use egui_commonmark::{CommonMarkCache, CommonMarkViewer};
 
 use crate::config::Config;
 use crate::login::LoginState;
@@ -35,6 +36,9 @@ pub struct CadeApp {
     ctx: egui::Context,
     /// Server URL resolved at boot (from page origin).
     server_url: String,
+    /// Shared cache for egui_commonmark — avoids re-parsing markdown
+    /// on every frame.
+    md_cache: CommonMarkCache,
 }
 
 impl CadeApp {
@@ -54,6 +58,7 @@ impl CadeApp {
             connect_started: false,
             ctx: cc.egui_ctx.clone(),
             server_url: config.server_url,
+            md_cache: CommonMarkCache::default(),
         }
     }
 
@@ -190,15 +195,33 @@ impl eframe::App for CadeApp {
                             });
                         });
 
-                    // ── Central area: timeline placeholder ──────────
+                    // ── Central area: timeline with markdown ─────
                     egui::CentralPanel::default().show_inside(ui, |ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.add_space(80.0);
-                            ui.label(
-                                egui::RichText::new("Select an agent to start a conversation")
-                                    .weak()
-                                    .size(16.0),
-                            );
+                        egui::ScrollArea::vertical().show(ui, |ui| {
+                            // Placeholder: render a sample markdown to prove
+                            // the pipeline works.  Real content comes from
+                            // SSE stream frames in a future milestone.
+                            let sample_md = "\
+## Welcome to CADE Dashboard
+
+Connected and ready.  Select an agent from the sidebar to begin.
+
+### What you can do
+
+- **Chat** with any configured agent
+- View the *streaming* response in real time
+- Inspect tool calls and their results
+
+```rust
+fn main() {
+    println!(\"Hello from CADE!\");
+}
+```
+
+> This timeline will show the conversation once you pick an agent.
+";
+                            CommonMarkViewer::new()
+                                .show(ui, &mut self.md_cache, sample_md);
                         });
                     });
                 }
