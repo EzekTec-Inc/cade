@@ -38,6 +38,20 @@ pub struct HealthInfo {
     pub version: Option<String>,
 }
 
+/// A single message in a conversation — what `GET /v1/agents/:id/messages`
+/// returns per row.
+///
+/// The `content` field is `serde_json::Value` because the server stores both
+/// plain-text strings and structured JSON (tool calls, multi-part content).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub id: String,
+    pub role: String,
+    pub content: serde_json::Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversation_id: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -94,5 +108,33 @@ mod tests {
         assert_eq!(a.name, "n");
         assert_eq!(a.model, None);
         assert_eq!(a.provider, None);
+    }
+
+    #[test]
+    fn chat_message_parses_server_shape() {
+        // Exact shape returned by GET /v1/agents/:id/messages in cade-server.
+        let wire = r#"{"id":"msg-1","role":"user","content":"hello","conversation_id":"conv-1"}"#;
+        let m: ChatMessage = serde_json::from_str(wire).expect("parse");
+        assert_eq!(m.id, "msg-1");
+        assert_eq!(m.role, "user");
+        assert_eq!(m.content, serde_json::Value::String("hello".into()));
+        assert_eq!(m.conversation_id.as_deref(), Some("conv-1"));
+    }
+
+    #[test]
+    fn chat_message_tolerates_missing_optional_fields() {
+        let wire = r#"{"id":"m","role":"assistant","content":"hi"}"#;
+        let m: ChatMessage = serde_json::from_str(wire).expect("tolerant parse");
+        assert_eq!(m.id, "m");
+        assert_eq!(m.role, "assistant");
+        assert_eq!(m.conversation_id, None);
+    }
+
+    #[test]
+    fn chat_message_content_can_be_structured_json() {
+        // The server sometimes stores content as a JSON object (tool calls, etc.)
+        let wire = r#"{"id":"m","role":"tool","content":{"tool":"bash","output":"ok"}}"#;
+        let m: ChatMessage = serde_json::from_str(wire).expect("parse structured content");
+        assert!(m.content.is_object(), "content should be a JSON object");
     }
 }

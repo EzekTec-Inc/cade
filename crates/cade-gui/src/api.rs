@@ -11,7 +11,7 @@
 //! `cargo test` covers URL building, header construction, JSON parsing, and
 //! error classification without a browser.
 
-use cade_api_types::{AgentInfo, HealthInfo};
+use cade_api_types::{AgentInfo, ChatMessage, HealthInfo};
 
 /// Typed error surface for API calls.  The wasm fetch wrapper produces
 /// `Transport`; the pure logic here produces `Unauthorized`, `Server`, or
@@ -72,6 +72,24 @@ pub fn parse_health(status: u16, body: &str) -> Result<HealthInfo, ApiError> {
 /// Same as `parse_health`, but for the `GET /v1/agents` list.
 pub fn parse_agents(status: u16, body: &str) -> Result<Vec<AgentInfo>, ApiError> {
     decode_or_error(status, body)
+}
+
+/// Server envelope for `GET /v1/agents/:id/messages`.
+///
+/// The server wraps the message list in `{ "messages": [...], "query": "" }`.
+/// We only care about the `messages` array.
+#[derive(serde::Deserialize)]
+struct MessagesEnvelope {
+    messages: Vec<ChatMessage>,
+}
+
+/// Parse the response from `GET /v1/agents/:id/messages`.
+///
+/// Handles the server's `{ "messages": [...] }` envelope, status-code
+/// classification, and JSON decode errors — same contract as `parse_health`.
+pub fn parse_messages(status: u16, body: &str) -> Result<Vec<ChatMessage>, ApiError> {
+    let envelope: MessagesEnvelope = decode_or_error(status, body)?;
+    Ok(envelope.messages)
 }
 
 fn decode_or_error<T>(status: u16, body: &str) -> Result<T, ApiError>
@@ -214,5 +232,47 @@ mod tests {
             ApiError::Server { status: 500 }.to_string(),
             "server error (status 500)"
         );
+    }
+
+    // -- parse_messages
+
+    #[test]
+    fn parse_messages_ok_decodes_server_envelope() {
+        // Server wraps messages in `{ "messages": [...], "query": "" }`.
+        let body = r#"{"messages":[{"id":"m1","role":"user","content":"hello"},{"id":"m2","role":"assistant","content":"hi"}],"query":""}"#;
+        let msgs = parse_messages(200, body).expect("decode");
+        assert_eq!(msgs.len(), 2);
+        assert_eq!(msgs[0].id, "m1");
+        assert_eq!(msgs[0].role, "user");
+        assert_eq!(msgs[1].id, "m2");
+        assert_eq!(msgs[1].role, "assistant");
+    }
+
+    #[test]
+    fn parse_messages_empty_list() {
+        let body = r#"{"messages":[],"query":""}"#;
+        let msgs = parse_messages(200, body).expect("decode");
+        assert!(msgs.is_empty());
+    }
+
+    #[test]
+    fn parse_messages_401_returns_unauthorized() {
+        let err = parse_messages(401, "nope").expect_err("must error");
+        assert_eq!(err, ApiError::Unauthorized);
+    }
+
+    #[test]
+    fn parse_messages_500_returns_server() {
+        let err = parse_messages(500, "err").expect_err("must error");
+        assert_eq!(err, ApiError::Server { status: 500 });
+    }
+
+    #[test]
+    fn parse_messages_malformed_json_returns_decode() {
+        let err = parse_messages(200, "not json").expect_err("must error");
+        match err {
+            ApiError::Decode { .. } => {}
+            other => panic!("expected Decode, got {other:?}"),
+        }
     }
 }
