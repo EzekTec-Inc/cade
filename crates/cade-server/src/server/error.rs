@@ -42,54 +42,68 @@ impl Error {
     }
 }
 
+// region:    --- P3-1: Generic 5xx responses
+
+/// Build a 5xx response body that does not leak internal detail.
+///
+/// The full `detail` is sent to `tracing::error!` along with the
+/// generated `request_id` so operators can map a client-reported id
+/// back to the real error in logs.  The client only sees:
+///
+///   `{"error": "internal error", "request_id": "<uuid>"}`
+pub(crate) fn internal_error_response(detail: &str) -> Response {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    tracing::error!(request_id = %request_id, detail = %detail, "500 Internal Server Error");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(json!({ "error": "internal error", "request_id": request_id })),
+    )
+        .into_response()
+}
+
+// endregion: --- P3-1: Generic 5xx responses
+
 impl IntoResponse for Error {
     fn into_response(self) -> Response {
         use cade_store::error::Error as StoreError;
 
-        let (status, error_message) = match self {
+        // Bucket every variant as either server-side (5xx → generic
+        // body) or client-side (4xx → echo the already-safe message).
+        match self {
             Error::Store(ref inner) => match inner {
-                StoreError::Sqlite(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Database error: {err}"),
-                ),
-                StoreError::Io(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("IO error: {err}"),
-                ),
+                // 4xx — user-triggered, message is safe by construction.
                 StoreError::SerdeJson(err) => (
                     StatusCode::BAD_REQUEST,
-                    format!("JSON serialization error: {err}"),
-                ),
-                StoreError::Crypto(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Encryption error: {err}"),
-                ),
-                StoreError::Core(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Core error: {err}"),
-                ),
-                StoreError::Ai(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("AI provider error: {err}"),
-                ),
-                StoreError::AddrParse(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Address parse error: {err}"),
-                ),
-                StoreError::Base64(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Base64 error: {err}"),
-                ),
-                StoreError::FromUtf8(err) => (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("UTF-8 error: {err}"),
-                ),
-                StoreError::Custom(msg) => (StatusCode::BAD_REQUEST, msg.clone()),
-            },
-            Error::Custom(msg) => (StatusCode::BAD_REQUEST, msg),
-        };
+                    Json(json!({ "error": format!("JSON serialization error: {err}") })),
+                )
+                    .into_response(),
+                StoreError::Custom(msg) => (
+                    StatusCode::BAD_REQUEST,
+                    Json(json!({ "error": msg })),
+                )
+                    .into_response(),
 
-        let body = Json(json!({ "error": error_message }));
-        (status, body).into_response()
+                // 5xx — internal, generic body + log correlation id.
+                StoreError::Sqlite(err) => internal_error_response(&format!("sqlite: {err}")),
+                StoreError::Io(err) => internal_error_response(&format!("io: {err}")),
+                StoreError::Crypto(err) => internal_error_response(&format!("crypto: {err}")),
+                StoreError::Core(err) => internal_error_response(&format!("core: {err}")),
+                StoreError::Ai(err) => internal_error_response(&format!("ai: {err}")),
+                StoreError::AddrParse(err) => {
+                    internal_error_response(&format!("addr_parse: {err}"))
+                }
+                StoreError::Base64(err) => internal_error_response(&format!("base64: {err}")),
+                StoreError::FromUtf8(err) => internal_error_response(&format!("from_utf8: {err}")),
+            },
+            Error::Custom(msg) => (
+                StatusCode::BAD_REQUEST,
+                Json(json!({ "error": msg })),
+            )
+                .into_response(),
+        }
     }
 }
+
+#[cfg(test)]
+#[path = "error_test.rs"]
+mod error_test;

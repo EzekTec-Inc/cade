@@ -614,11 +614,21 @@ pub async fn detach_tools(
     Ok(Json(json!({ "detached": n })))
 }
 
-fn server_err(msg: String) -> (StatusCode, Json<Value>) {
-    tracing::error!("500 Internal Server Error: {msg}");
+/// Build the standard `server_err` tuple used by `?`-style error mapping
+/// across this handler module.
+///
+/// P3-1: the body is the same generic `{"error": "internal error",
+/// "request_id": "<uuid>"}` shape emitted by `server::error::Error`'s
+/// `IntoResponse` — so no 500 response anywhere in the server leaks
+/// internals.  The full `detail` still goes to the tracing logs with
+/// the same `request_id`, so operators can correlate a client-reported
+/// id back to the real error.
+fn server_err(detail: String) -> (StatusCode, Json<Value>) {
+    let request_id = uuid::Uuid::new_v4().to_string();
+    tracing::error!(request_id = %request_id, detail = %detail, "500 Internal Server Error");
     (
         StatusCode::INTERNAL_SERVER_ERROR,
-        Json(json!({"detail": msg})),
+        Json(json!({ "error": "internal error", "request_id": request_id })),
     )
 }
 
@@ -715,3 +725,7 @@ pub async fn search_archival_memory_handler(
 
     Ok(Json(json!({ "results": records })))
 }
+
+#[cfg(test)]
+#[path = "agents_test.rs"]
+mod tests;

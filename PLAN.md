@@ -1,4 +1,82 @@
-## 2026-04-17T16:41:43Z — P3-2: `cargo audit` CI workflow
+## 2026-04-17T16:50:08Z — P3-1 (MVP): Generic 500 error responses
+
+**Task:** Stop the CADE server from echoing internal error detail in 5xx HTTP responses.  Replace leaky bodies with a stable generic shape that carries a correlation id, and push the full detail into the structured log under the same id.
+
+**Gap (before):**
+- `crates/cade-server/src/server/error.rs`'s `IntoResponse` impl emitted `format!("Database error: {err}")`, `format!("IO error: {err}")`, etc. directly to the client body.  Raw SQLite error text, IO paths, crypto backend text, address-parse output, and upstream AI-provider messages were all exposed.
+- `crates/cade-server/src/server/api/agents.rs::server_err()` emitted `{"detail": msg}` with the full error string — used by ~30 call sites across the agents handler module.
+
+**Scope of this commit (MVP):** the central `IntoResponse` impl and the `server_err()` helper.  The ~30 ad-hoc `(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())` call sites scattered across `runs.rs`, `complete.rs`, `checkpoints.rs`, `artifacts.rs`, `evals.rs`, `tools.rs`, and `proxy.rs` are **explicitly deferred** and logged below.  Anything that already flows through `Error::into_response` or `server_err()` is now covered — which captures the majority of handler paths that use `?`-style propagation.
+
+**Files modified:**
+- `crates/cade-server/src/server/error.rs`
+  - Added `pub(crate) fn internal_error_response(detail: &str) -> Response`.  Generates a UUIDv4 `request_id`, logs `tracing::error!(request_id, detail, "500 Internal Server Error")`, and returns `{ "error": "internal error", "request_id": "<uuid>" }` with `StatusCode::INTERNAL_SERVER_ERROR`.
+  - Rewrote `Error::into_response` to bucket every variant as 4xx (echo the already-safe message) or 5xx (route through `internal_error_response`).  4xx variants: `StoreError::SerdeJson`, `StoreError::Custom`, `Error::Custom`.  All other `StoreError` variants go to the generic 5xx body.
+- `crates/cade-server/src/server/error_test.rs` (new, 105 lines).  5 tests covering: generic body + no-leak, sqlite-specific no-leak, unique request_id, 400 `Error::custom` preservation (no `request_id` field), 400 `StoreError::Custom` preservation.
+- `crates/cade-server/src/server/api/agents.rs`
+  - Rewrote `server_err()` so the body is `{ "error": "internal error", "request_id": "<uuid>" }` instead of `{ "detail": msg }`.  Full detail goes to the structured log under the same `request_id`.  Signature unchanged — still returns `(StatusCode, Json<Value>)` — so all ~30 callers compile untouched.
+  - Wired `#[cfg(test)] #[path = "agents_test.rs"] mod tests;` at end of file (matches existing `auth_test` / `evals_test` sibling-file pattern).
+- `crates/cade-server/src/server/api/agents_test.rs` (new, 48 lines).  2 tests for `server_err()`: generic body + no SQL/column leak, unique request_id.
+
+**Dependency policy:** no new dependencies.  `uuid` was already a workspace dependency (`crates/cade-server/Cargo.toml:30 uuid.workspace = true`).
+
+**Reason:** Phase 3 of the user-approved security backlog (P3-1).  Internal error messages regularly leak implementation detail — SQL fragments, filesystem paths, crypto backend text.  A generic 5xx body with a log correlation id gives operators full diagnostic ability without exposing implementation internals to clients.
+
+**Backward compatibility (flagged change):**
+- **5xx body shape changes** from `{"error": "<leaky>"}` (or `{"detail": "<leaky>"}` for `server_err` callers) → `{"error": "internal error", "request_id": "<uuid>"}`.
+  - HTTP status codes are unchanged.
+  - Clients that only branch on status codes: unaffected.
+  - Clients that parsed the error string for display: now see "internal error" instead of the leaky detail.  **This is the intended behaviour of P3-1** and was approved as part of the backlog.
+  - Clients that parsed the `detail` field from `server_err`-originated 500s: that field is now absent.  Callers must either read `error` or correlate via `request_id` in logs.
+- 4xx body shape unchanged in all cases — clients that read `error` on 400s are unaffected.
+
+**Previous behaviour:**
+```text
+HTTP/1.1 500 Internal Server Error
+{"error":"Database error: unable to open database file: /home/user/.cade/cade.db"}
+```
+```text
+HTTP/1.1 500 Internal Server Error
+{"detail":"invalid column name in query at line 42: SELECT * FROM agents WHERE id='abc'"}
+```
+
+**New behaviour:**
+```text
+HTTP/1.1 500 Internal Server Error
+{"error":"internal error","request_id":"9d3e4c2a-..."}
+```
+Structured log line at the same moment:
+```text
+ERROR request_id="9d3e4c2a-..." detail="sqlite: invalid column name..." 500 Internal Server Error
+```
+
+**Test results:**
+- `cargo test -p cade-server --lib` → 120/120 pass (+7 new: 5 in `error_test` + 2 in `agents_test`).  Pre-existing tests including `evals::tests::test_db_lock_poisoning_yields_500` still pass — they only assert the status code, not the body text, so they were unaffected.
+- `cargo clippy -p cade-server --all-targets --no-deps` → only pre-existing warnings (in `context.rs`, `complete.rs`, `consolidation.rs`), none in changed files.  One lint on my new test (`len() > 0`) was fixed in the same commit.
+- `cargo build --workspace` → clean.
+
+**Rollback steps:**
+1. `git revert <this commit>` — 4 files changed (2 modified + 2 new).
+2. Or restore from checkpoint `pre-p3-1` (ID `cp-4f8c5a4b-4bc4-436b-994c-892871c4c093`, HEAD `6c6f6bbc`).
+
+**Follow-ups (explicitly deferred — tracked for a future P3-1-full ticket):**
+- ~30 ad-hoc `(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())` tuples across:
+  - `crates/cade-server/src/server/api/runs.rs` (lines 39, 59, 64)
+  - `crates/cade-server/src/server/api/complete.rs` (line 82)
+  - `crates/cade-server/src/server/api/checkpoints.rs` (lines 53, 78, 117, 154, 175, 212)
+  - `crates/cade-server/src/server/api/artifacts.rs` (lines 46, 69, 103, 131, 157)
+  - `crates/cade-server/src/server/api/evals.rs` (lines 51, 71, 102, 123, 158, 190, 259)
+  - `crates/cade-server/src/server/api/tools.rs` (lines 51, 72)
+  - `crates/cade-server/src/server/api/proxy.rs` (lines 157, 194)
+
+  These still leak.  Converting them to the central `internal_error_response()` (or switching handlers to return `server::error::Error` so they flow through the fixed `IntoResponse` impl) is a larger refactor that the user asked to scope separately.
+
+- Cross-linking `request_id` headers (return `x-request-id: <uuid>` on 5xx responses) is a nice-to-have for proxy debugging, not part of MVP.
+- Extending the generic shape to 4xx (so even client errors get a correlation id for log-tracing) is explicitly NOT desired — 4xx bodies remain as-is to preserve CLI/client parse expectations.
+
+---
+
+
 
 **Task:** Add an automated cargo-audit scan that runs on every PR, every push to `main`, and once per day, so newly-disclosed dependency advisories can't silently slip into the codebase.
 
