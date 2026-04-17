@@ -371,3 +371,68 @@
 **Previous behavior:** 5 cargo audit warnings, separate SSE/Streamable-HTTP code paths in MCP client
 **New behavior:** 2 audit warnings (accepted), unified HTTP transport with native auth support
 **Rollback:** restore checkpoint `before-dep-upgrades` (cp-4d230378)
+
+---
+
+## 2026-04-16T17:45Z — Task 1 / P1-1: Mandatory authentication
+
+**Summary:** Remove the silent no-op auth branch. Every non-health request now requires a valid `Authorization: Bearer <token>`. When `CADE_API_KEY` is unset, both server and CLI auto-bootstrap a shared persistent token at `~/.cade/api-token` (0o600).
+
+**Files modified:**
+- `crates/cade-server/src/server/api/auth.rs` — removed `None => return next.run(req).await`, now returns 401 when no key configured. Doc rewritten.
+- `crates/cade-server/src/server/api/auth_test.rs` — new test module (4 tests) covering anonymous rejection, health exemption, valid and invalid tokens.
+- `crates/cade-server/src/server/bootstrap.rs` — new module: re-exports cade-core token helpers.
+- `crates/cade-server/src/server/mod.rs` — wired `pub mod bootstrap;`.
+- `crates/cade-server/src/server/config.rs` — added `resolve_api_key()` private helper; `from_env_with_port` now calls it instead of reading `CADE_API_KEY` directly.
+- `crates/cade-server/Cargo.toml` — added `getrandom` runtime dep and `tower` + `tempfile` dev-deps.
+- `crates/cade-core/src/bootstrap_token.rs` — new shared module (~150 lines, 6 tests) implementing `default_token_path`, `load_or_create_token`, `read_existing_token`.
+- `crates/cade-core/src/lib.rs` — wired `pub mod bootstrap_token;`.
+- `crates/cade-core/Cargo.toml` — added `getrandom` workspace dep.
+- `crates/cade-core/src/settings/resolver.rs` — `api_key()` now falls back to the shared bootstrap token (read-only if present, create-on-demand otherwise) so the CLI can reach its auto-spawned server on first run.
+
+**Reason:** HIGH-severity finding in security review — with `CADE_API_KEY` unset, any localhost process (browser CSRF, other users on shared host, malicious extension) could hijack the agent, read memory, trigger bash tool execution, and pivot via the SSRF proxy. Auth is now mandatory by default.
+
+**Previous behavior:** `auth_middleware` passed every request through when `config.api_key` was `None`. CLI errored with "No CADE_API_KEY" unless user set env/settings.
+
+**New behavior:**
+- Server: non-health requests rejected 401 when no token configured; auto-creates `~/.cade/api-token` on first startup.
+- CLI: reads the same token file (creating it if missing) and uses it for `Authorization: Bearer`.
+- `CADE_API_KEY` env var still overrides everything.
+- `/v1/health` remains public.
+
+**Tests:**
+- `cargo test -p cade-server --lib server::api::auth::tests` — 4 green.
+- `cargo test -p cade-core --lib bootstrap_token` — 6 green.
+- `cargo test -p cade-core --lib` — 199 green.
+- `cargo test -p cade-server --lib` — 62 green.
+- `cargo build --workspace` — clean.
+
+**New dependencies:**
+- `getrandom` (workspace dep) added to cade-core and cade-server runtime deps.
+- `tower` 0.5 + `tempfile` added to cade-server dev-deps only (already transitively present via axum).
+
+**Rollback:** `restore_checkpoint cp-0e65ca6a-f36e-4a87-bc73-141aac431452` (label `pre-security-remediation`).
+
+---
+
+## 2026-04-16T18:18Z — Task 2 / P1-2: Global request body size limit (8 MiB)
+
+**Summary:** Applied `DefaultBodyLimit::max(8 * 1024 * 1024)` at the Axum router root so every request body is capped at 8 MiB regardless of which extractor (or raw body access) a handler uses.
+
+**Files modified:**
+- `crates/cade-server/src/server/api/mod.rs` — imported `axum::extract::DefaultBodyLimit`, added `.layer(DefaultBodyLimit::max(8 * 1024 * 1024))` to the router; added test module wiring.
+- `crates/cade-server/src/server/api/router_test.rs` — new test module (3 tests) covering oversize rejection (>8 MiB → 413), medium-body acceptance (3 MiB, between Axum default 2 MiB and our 8 MiB cap, must pass), and small-body acceptance (sanity).
+
+**Reason:** HIGH-severity finding in security review — no explicit global body cap meant streaming / raw-body handlers (e.g. the proxy stream) could buffer unbounded data. Axum's `Json` extractor has an implicit 2 MiB default, but the project needed a uniform explicit cap across all routes for defense-in-depth.
+
+**Previous behavior:** Only `Json` extractors capped requests (at Axum's 2 MiB default). Raw-body / streaming handlers had no limit.
+
+**New behavior:** Every route enforces a uniform 8 MiB body cap; requests over the cap return 413 Payload Too Large. Bodies under the cap behave as before.
+
+**Tests:**
+- `cargo test -p cade-server --lib server::api::tests` — 3 green.
+- `cargo test -p cade-server --lib` — 65 green (was 62, +3 new).
+
+**New dependencies:** none (DefaultBodyLimit lives in axum, already a dep).
+
+**Rollback:** `restore_checkpoint cp-0e65ca6a-f36e-4a87-bc73-141aac431452` reverts everything in the remediation chain. For task-level revert, delete the `DefaultBodyLimit` layer + import and remove `router_test.rs`.

@@ -8,11 +8,12 @@ use axum::{
 
 /// Bearer-token auth middleware.
 ///
-/// If `CADE_API_KEY` is set (non-empty), every request must include:
+/// Every request (except `/v1/health`) must include:
 ///   `Authorization: Bearer <token>`
 ///
-/// If the env var is not set, the middleware is a no-op (local dev mode).
-/// The `/v1/health` endpoint is always allowed through without auth.
+/// The expected token comes from `config.api_key`.  When no token is
+/// configured, all non-health requests are rejected with 401 — auth is
+/// mandatory; the server bootstrap is responsible for providing a token.
 pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: Next) -> Response {
     // Health check is always public
     if req.uri().path() == "/v1/health" {
@@ -21,7 +22,18 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
 
     let expected = match state.config.api_key.as_deref().filter(|k| !k.is_empty()) {
         Some(k) => k.to_string(),
-        None => return next.run(req).await, // no key configured → open (local dev)
+        None => {
+            tracing::warn!(
+                "Unauthorized request to {} — server has no api_key configured",
+                req.uri().path()
+            );
+            return (
+                StatusCode::UNAUTHORIZED,
+                [("WWW-Authenticate", "Bearer realm=\"cade-server\"")],
+                "Unauthorized: server has no api_key configured",
+            )
+                .into_response();
+        }
     };
 
     let provided = req
@@ -53,3 +65,7 @@ pub async fn auth_middleware(State(state): State<AppState>, req: Request, next: 
         }
     }
 }
+
+#[cfg(test)]
+#[path = "auth_test.rs"]
+mod tests;

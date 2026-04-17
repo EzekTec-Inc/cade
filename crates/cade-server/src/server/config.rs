@@ -159,7 +159,7 @@ impl ServerConfig {
                 .ok(),
             ollama_base_url: std::env::var("OLLAMA_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:11434".to_string()),
-            api_key: std::env::var("CADE_API_KEY").ok(),
+            api_key: resolve_api_key(),
         })
     }
 
@@ -171,6 +171,31 @@ impl ServerConfig {
             google_api_key: self.google_api_key.clone(),
             ollama_base_url: self.ollama_base_url.clone(),
             llm_provider: self.llm_provider.to_string(),
+        }
+    }
+}
+
+/// Resolve the server's bearer-auth token.
+///
+/// Priority:
+///   1. `CADE_API_KEY` env var (non-empty) — explicit user override
+///   2. Persistent token at `~/.cade/api-token` — created on first launch
+///
+/// When the persistent token file cannot be created (e.g. no home directory,
+/// unwritable filesystem), falls back to `None`; the auth middleware will
+/// then reject every non-health request with 401.
+fn resolve_api_key() -> Option<String> {
+    if let Ok(k) = std::env::var("CADE_API_KEY")
+        && !k.is_empty()
+    {
+        return Some(k);
+    }
+    let path = crate::server::bootstrap::default_token_path()?;
+    match crate::server::bootstrap::load_or_create_token(&path) {
+        Ok(token) => Some(token),
+        Err(e) => {
+            tracing::error!("Failed to load/create API token at {}: {e}", path.display());
+            None
         }
     }
 }

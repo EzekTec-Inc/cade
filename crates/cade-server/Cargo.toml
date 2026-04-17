@@ -37,7 +37,12 @@ tower-http.workspace   = true
 rusqlite.workspace     = true
 # -- Auth
 subtle = "2.6.1"
+getrandom = { workspace = true }
 
 [lints.rust]
 unsafe_code = "forbid"
 # unused = { level = "allow", priority = -1 } # For exploratory dev.
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+tempfile = { workspace = true }

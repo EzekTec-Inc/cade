@@ -18,7 +18,9 @@ pub mod tools;
 
 use crate::server::{rate_limit::rate_limit_middleware, state::AppState};
 use axum::{
-    Router, middleware,
+    Router,
+    extract::DefaultBodyLimit,
+    middleware,
     routing::{delete, get, post, put},
 };
 
@@ -188,10 +190,18 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/providers/presets", get(providers::list_presets))
         .route("/v1/providers/:name", delete(providers::remove_provider));
 
-    // Merge and apply auth middleware to everything
+    // Merge and apply auth middleware to everything.
+    //
+    // P1-2: cap every request body at 8 MiB so oversized payloads are
+    // rejected with 413 before any handler buffers them.
     Router::new()
         .merge(inference)
         .merge(rest)
         .with_state(state.clone())
+        .layer(DefaultBodyLimit::max(8 * 1024 * 1024))
         .layer(middleware::from_fn_with_state(state, auth::auth_middleware))
 }
+
+#[cfg(test)]
+#[path = "router_test.rs"]
+mod tests;
