@@ -1,3 +1,54 @@
+## 2026-04-17T19:12:19Z — cade-gui M6b: wire session state into app.rs render loop
+
+**Task:** Connect the pure session state machine (M6a) to the wasm render loop.  After login submit, spawn async HTTP calls and render Connecting / Connected / Failed states.
+
+**Scope guardrail:** Render wiring only.  No panel layout, no sidebar, no timeline.  Connected state shows a placeholder list of agents.  M6c adds the real layout.
+
+**Files modified:**
+- `crates/cade-gui/src/app.rs` (rewritten, ~215 lines, wasm-only).
+  - `CadeApp` struct now holds:
+    - `login: LoginState` — unchanged.
+    - `session: Rc<RefCell<Option<SessionState>>>` — shared between render loop and async task.
+    - `connect_started: bool` — guard against spawning multiple connection tasks.
+    - `ctx: egui::Context` — cloned from `CreationContext` for repaint requests.
+    - `server_url: String` — resolved from page origin at boot via `Config::resolve`.
+  - `CadeApp::new(cc)`: resolves server URL from `web_sys::window().location().origin()`, constructs `Config` for the API key query parameter.
+  - `CadeApp::spawn_connect(token)`: creates `SessionState::start(url, token)`, then `wasm_bindgen_futures::spawn_local` an async block that:
+    1. Calls `http_wasm::get_health` → `session.on_health(health)` → `ctx.request_repaint()`.
+    2. Calls `http_wasm::get_agents` → `session.on_agents(agents)` → `ctx.request_repaint()`.
+    3. On any error → `session.on_error(e.to_string())` → `ctx.request_repaint()` → return.
+  - `CadeApp::retry()`: resets `login`, `session`, and `connect_started`.
+  - `eframe::App::ui()`: deferred action pattern using `AppAction` enum (`None` | `Connect(String)` | `Retry`) to avoid borrow conflicts with `Rc<RefCell<..>>` inside the egui closure.
+  - Render logic (variant-matching only, zero conditional logic):
+    - `SessionState::Connecting` → "Connecting to server..." + spinner.
+    - `SessionState::HealthOk` → "Server reached — loading agents..." + spinner.
+    - `SessionState::Connected { health, agents }` → "Connected to cade-server v{version} — N agent(s)" + bullet list of agent names (placeholder for M6c).
+    - `SessionState::ConnectionFailed { error }` → red "Connection failed" + error message + "Retry" button.
+    - `None` → login form (unchanged from M3).
+    - `LoginState::Submitted` + `!connect_started` → defers `AppAction::Connect(key)`.
+
+**Dependency policy:** No new deps.  All imports are from existing crate deps.
+
+**Reason:** M6b of the cade-gui roadmap.  The session state machine (M6a) is now driven by real HTTP calls.  Users can see connection progress, success, or failure after submitting their API key.
+
+**Previous behavior:** `LoginState::Submitted` displayed a static placeholder string.
+
+**New behavior:**
+- After submit: async task calls `get_health` → `get_agents`.
+- On success: shows server version and agent count with bullet list.
+- On failure: shows error message with "Retry" button.
+- `egui::Context::request_repaint()` wakes the render loop after each state transition.
+- Tests: `cargo test -p cade-gui --lib` → 55 pass (unchanged — app.rs is wasm-only render code with zero testable logic).
+- `cargo test --workspace --lib` → 750 pass / 0 fail (unchanged).
+- `RUSTFLAGS="-D warnings" cargo build -p cade-gui --target wasm32-unknown-unknown` → clean.
+- `cargo clippy -p cade-gui --all-targets -- -D warnings` → clean.
+
+**Rollback steps:**
+1. `git revert <this-commit>` — reverts `app.rs` only.
+2. Checkpoint `cp-9e415b65` (label `pre-M6`, HEAD 938ccd64).
+
+---
+
 ## 2026-04-17T19:05:59Z — cade-gui M6a: pure session state machine
 
 **Task:** Add a pure, native-testable post-login session state machine that tracks the connection lifecycle after the user submits their API key.
