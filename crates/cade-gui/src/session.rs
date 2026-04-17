@@ -56,6 +56,8 @@ pub enum SessionState {
         input_buffer: String,
         /// True while we are streaming an assistant response via SSE.
         streaming: bool,
+        /// Transient error message displayed as a toast overlay.
+        error_toast: Option<String>,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -136,6 +138,7 @@ impl SessionState {
                 messages: Vec::new(),
                 input_buffer: String::new(),
                 streaming: false,
+                error_toast: None,
             };
         }
     }
@@ -307,6 +310,40 @@ impl SessionState {
     /// Only meaningful in `ConnectionFailed`.
     pub fn is_failed(&self) -> bool {
         matches!(self, Self::ConnectionFailed { .. })
+    }
+
+    // ── Error toast API ────────────────────────────────────────────────
+
+    /// Store an error message for display as a toast overlay.
+    ///
+    /// If a stream is in progress it is marked complete so the UI unblocks.
+    /// Replaces any previously stored error.
+    pub fn push_error(&mut self, msg: &str) {
+        if let Self::Connected {
+            streaming,
+            error_toast,
+            ..
+        } = self
+        {
+            *streaming = false;
+            *error_toast = Some(msg.to_string());
+        }
+    }
+
+    /// Clear the current error toast (e.g. after the user dismisses it).
+    pub fn dismiss_error(&mut self) {
+        if let Self::Connected { error_toast, .. } = self {
+            *error_toast = None;
+        }
+    }
+
+    /// The current error message, if any.
+    pub fn error_toast(&self) -> Option<&str> {
+        if let Self::Connected { error_toast, .. } = self {
+            error_toast.as_deref()
+        } else {
+            None
+        }
     }
 
     /// Whether the session is fully established.
@@ -734,5 +771,50 @@ mod tests {
         } else {
             panic!("expected Connected");
         }
+    }
+
+    // ── Error toast ────────────────────────────────────────────────────
+
+    #[test]
+    fn push_error_stores_message() {
+        let mut s = make_connected_with_agent_selected();
+        s.push_error("stream failed");
+        assert_eq!(s.error_toast(), Some("stream failed"));
+    }
+
+    #[test]
+    fn dismiss_error_clears_toast() {
+        let mut s = make_connected_with_agent_selected();
+        s.push_error("oops");
+        s.dismiss_error();
+        assert_eq!(s.error_toast(), None);
+    }
+
+    #[test]
+    fn push_error_replaces_previous() {
+        let mut s = make_connected_with_agent_selected();
+        s.push_error("first");
+        s.push_error("second");
+        assert_eq!(s.error_toast(), Some("second"));
+    }
+
+    #[test]
+    fn error_toast_none_when_no_error() {
+        let s = make_connected_with_agent_selected();
+        assert_eq!(s.error_toast(), None);
+    }
+
+    #[test]
+    fn push_error_also_clears_streaming() {
+        let mut s = make_connected_with_agent_selected();
+        // Start a stream, then an error arrives.
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "hello".to_string();
+        }
+        let _ = s.on_send();
+        assert!(s.is_streaming());
+        s.push_error("connection lost");
+        assert!(!s.is_streaming(), "streaming should be cleared on error");
+        assert_eq!(s.error_toast(), Some("connection lost"));
     }
 }

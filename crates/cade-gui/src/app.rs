@@ -208,13 +208,12 @@ impl CadeApp {
             )
             .await;
 
-            // Mark stream as done regardless of success/error.
+            // Mark stream as done and surface any error.
             if let Some(s) = session.borrow_mut().as_mut() {
-                s.on_stream_done();
-            }
-
-            if let Err(_e) = result {
-                // TODO: surface streaming errors in the UI.
+                match result {
+                    Ok(()) => s.on_stream_done(),
+                    Err(e) => s.push_error(&format!("{e}")),
+                }
             }
 
             ctx.request_repaint();
@@ -253,6 +252,7 @@ impl eframe::App for CadeApp {
                     ref messages,
                     ref input_buffer,
                     streaming,
+                    ref error_toast,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -405,6 +405,32 @@ Connected and ready.  Select an agent from the sidebar to begin.
                                     }
                                 }
                             });
+
+                        // ── Error toast overlay ────────────────────
+                        if let Some(err) = error_toast {
+                            ui.add_space(4.0);
+                            egui::Frame::new()
+                                .fill(crate::theme::ERROR.gamma_multiply(0.15))
+                                .stroke(egui::Stroke::new(1.0, crate::theme::ERROR))
+                                .corner_radius(egui::CornerRadius::same(4))
+                                .inner_margin(8.0)
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new("⚠ Error:")
+                                                .color(crate::theme::ERROR)
+                                                .strong(),
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(err.as_str())
+                                                .color(crate::theme::TEXT_PRIMARY),
+                                        );
+                                        if ui.small_button("✕").clicked() {
+                                            action = AppAction::DismissError;
+                                        }
+                                    });
+                                });
+                        }
                     });
                 }
                 Some(SessionState::ConnectionFailed { ref error, .. }) => {
@@ -461,6 +487,11 @@ Connected and ready.  Select an agent from the sidebar to begin.
             AppAction::Retry => self.retry(),
             AppAction::SelectAgent(idx) => self.spawn_fetch_messages(idx),
             AppAction::SendMessage => self.spawn_stream_message(),
+            AppAction::DismissError => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.dismiss_error();
+                }
+            }
         }
     }
 }
@@ -475,4 +506,6 @@ enum AppAction {
     SelectAgent(usize),
     /// User submitted a message — spawn the SSE stream.
     SendMessage,
+    /// User dismissed the error toast.
+    DismissError,
 }
