@@ -143,16 +143,64 @@ impl eframe::App for CadeApp {
                     ref health,
                     ..
                 }) => {
+                    // ── Connected: 3-panel layout ───────────────────
+                    // Skip vertical_centered for connected state — we
+                    // need the full area for panels.  The panels use
+                    // `show_inside` to nest within the parent `Ui`.
                     let version = health.version.as_deref().unwrap_or("unknown");
-                    ui.label(format!(
-                        "Connected to cade-server v{version} — {} agent(s)",
-                        agents.len()
-                    ));
-                    ui.add_space(8.0);
-                    // Placeholder for M6c panel layout.
-                    for agent in agents {
-                        ui.label(format!("• {} ({})", agent.name, agent.id));
-                    }
+
+                    // ── Left sidebar: agent list ────────────────────
+                    egui::Panel::left("agent_sidebar")
+                        .default_size(180.0)
+                        .resizable(true)
+                        .show_inside(ui, |ui| {
+                            ui.heading("Agents");
+                            ui.separator();
+                            if agents.is_empty() {
+                                ui.label("No agents configured.");
+                            } else {
+                                for agent in agents {
+                                    let label = format!("🤖 {}", agent.name);
+                                    let _ = ui.selectable_label(false, label);
+                                }
+                            }
+                            ui.separator();
+                            ui.add_space(4.0);
+                            ui.label(
+                                egui::RichText::new(format!("v{version}"))
+                                    .small()
+                                    .weak(),
+                            );
+                        });
+
+                    // ── Bottom panel: input bar ─────────────────────
+                    egui::Panel::bottom("input_bar")
+                        .min_size(40.0)
+                        .show_inside(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                ui.label("▸");
+                                ui.add_enabled(
+                                    false,
+                                    egui::TextEdit::singleline(
+                                        &mut String::new(),
+                                    )
+                                    .hint_text("Send a message… (coming soon)")
+                                    .desired_width(ui.available_width() - 60.0),
+                                );
+                            });
+                        });
+
+                    // ── Central area: timeline placeholder ──────────
+                    egui::CentralPanel::default().show_inside(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(80.0);
+                            ui.label(
+                                egui::RichText::new("Select an agent to start a conversation")
+                                    .weak()
+                                    .size(16.0),
+                            );
+                        });
+                    });
                 }
                 Some(SessionState::ConnectionFailed { ref error, .. }) => {
                     ui.colored_label(

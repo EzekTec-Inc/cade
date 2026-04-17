@@ -1,3 +1,41 @@
+## 2026-04-17T19:17:04Z — cade-gui M6c: 3-panel layout (sidebar, timeline, input bar)
+
+**Task:** Replace the flat placeholder agent list in the Connected state with a proper 3-panel layout: left sidebar (agent list), central timeline area (placeholder), and bottom input bar (disabled placeholder).
+
+**Scope guardrail:** Layout only.  No agent selection logic, no message sending, no timeline rendering.  All panels show static/placeholder content.  Functional wiring is M7+.
+
+**Files modified:**
+- `crates/cade-gui/src/app.rs` (modified, ~250 lines, wasm-only).
+  - Connected arm replaced with 3-panel layout using `show_inside`:
+    - `egui::Panel::left("agent_sidebar")` — 180px default, resizable.  Shows "Agents" heading, separator, selectable labels per agent (🤖 prefix), version footer.
+    - `egui::Panel::bottom("input_bar")` — 40px min height.  Shows "▸" prompt + disabled TextEdit with "Send a message… (coming soon)" hint.
+    - `egui::CentralPanel::default()` — centered "Select an agent to start a conversation" placeholder.
+  - Used `egui::Panel::left/bottom` (non-deprecated egui 0.34 API) instead of `SidePanel/TopBottomPanel`.
+  - Used `default_size` / `min_size` instead of deprecated `default_width` / `min_height`.
+  - `let _ = ui.selectable_label(...)` to consume `Response` (required by `-D unused-must-use`).
+  - All other states (Connecting, HealthOk, ConnectionFailed, login flow) unchanged.
+
+**Dependency policy:** No new deps.
+
+**Reason:** M6c completes the M6 panel-layout milestone.  Establishes the visual structure that M7 (markdown rendering), M8 (trunk build), and future milestones will fill in.
+
+**Previous behavior:** Connected state showed a flat centered text list.
+
+**New behavior:**
+- Left sidebar with agent names + version.
+- Bottom input bar (disabled placeholder).
+- Central area with "Select an agent" message.
+- Tests: `cargo test -p cade-gui --lib` → 55 pass (unchanged).
+- `cargo test --workspace --lib` → 750 pass / 0 fail (unchanged).
+- `RUSTFLAGS="-D warnings" cargo build -p cade-gui --target wasm32-unknown-unknown` → clean.
+- `cargo clippy -p cade-gui --all-targets -- -D warnings` → clean.
+
+**Rollback steps:**
+1. `git revert <this-commit>` — reverts Connected arm in `app.rs`.
+2. Checkpoint `cp-9e415b65` (label `pre-M6`, HEAD 938ccd64).
+
+---
+
 ## 2026-04-17T19:12:19Z — cade-gui M6b: wire session state into app.rs render loop
 
 **Task:** Connect the pure session state machine (M6a) to the wasm render loop.  After login submit, spawn async HTTP calls and render Connecting / Connected / Failed states.
