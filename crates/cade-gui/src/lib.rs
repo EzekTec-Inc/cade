@@ -3,6 +3,7 @@
 //! Public modules:
 //! - `config`    — pure boot-time configuration parser (native + wasm).
 //! - `login`     — pure login-screen state machine (native + wasm).
+//! - `session`   — pure post-login session state machine (native + wasm).
 //! - `api`       — pure HTTP URL/header builders and response parsers.
 //! - `sse`       — pure SSE frame parser (native + wasm).
 //! - `app`       — `eframe::App` login-screen renderer (wasm-only).
@@ -16,6 +17,7 @@
 pub mod api;
 pub mod config;
 pub mod login;
+pub mod session;
 pub mod sse;
 
 #[cfg(target_arch = "wasm32")]

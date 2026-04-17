@@ -1,3 +1,74 @@
+## 2026-04-17T19:05:59Z — cade-gui M6a: pure session state machine
+
+**Task:** Add a pure, native-testable post-login session state machine that tracks the connection lifecycle after the user submits their API key.
+
+**Scope guardrail:** State machine only.  No render code, no async tasks, no wasm-only code.  M6b wires this into `app.rs`; M6c adds the real panel layout.
+
+**State diagram:**
+```
+LoginState::Submitted { key }
+       │
+       ▼
+SessionState::Connecting { server_url, token }
+       │
+  ┌────┴────┐
+  ▼         ▼
+HealthOk  ConnectionFailed { error }
+  │
+  ▼
+Connected { health, agents }
+```
+
+**Files modified:**
+- `crates/cade-gui/src/session.rs` (NEW, ~260 lines, native + wasm).
+  - `SessionState` enum: `Connecting`, `HealthOk`, `Connected`, `ConnectionFailed`.
+  - `SessionState::start(server_url, token)` — constructor from login output.
+  - `server_url()`, `token()` — accessors available in all states.
+  - `on_health(HealthInfo)` — `Connecting` → `HealthOk`; no-op in other states.
+  - `on_agents(Vec<AgentInfo>)` — `HealthOk` → `Connected`; no-op in other states.
+  - `on_error(String)` — `Connecting` | `HealthOk` → `ConnectionFailed`; no-op if already `Connected` or `ConnectionFailed`.
+  - `is_connected()`, `is_failed()` — predicate helpers.
+  - Uses `std::mem::take` on `String` fields and `.clone()` on `HealthInfo` during transitions (tiny struct, happens once per session).
+  - 12 native tests:
+    1. `start_enters_connecting_state` — construction + accessor check.
+    2. `on_health_transitions_connecting_to_health_ok` — happy path step 1.
+    3. `on_agents_transitions_health_ok_to_connected` — happy path step 2.
+    4. `connected_preserves_server_url_and_token` — data carried through.
+    5. `on_error_from_connecting_transitions_to_failed` — error early.
+    6. `on_error_from_health_ok_transitions_to_failed` — error after health.
+    7. `on_error_preserves_server_url_and_token` — data carried through on error.
+    8. `on_health_is_noop_after_connected` — idempotency guard.
+    9. `on_agents_is_noop_from_connecting` — ordering guard.
+    10. `on_error_is_noop_after_connected` — late error ignored.
+    11. `on_error_is_noop_after_already_failed` — first error sticks.
+    12. `connected_with_empty_agents_is_valid` — edge case: no agents.
+- `crates/cade-gui/src/lib.rs`
+  - Added `pub mod session;` (native + wasm).
+  - Updated module-level doc comment.
+
+**Dependency policy:** No new deps.  `cade-api-types` already in cade-gui deps from M4.
+
+**Reason:** M6a of the cade-gui roadmap.  Establishes the pure state model that M6b (app.rs wiring) and M6c (panel layout) will render.
+
+**Previous behavior:** After `LoginState::Submitted`, the app displayed a placeholder string.
+
+**New behavior:**
+- `cargo test -p cade-gui --lib` → 55 pass (was 43; +12 session tests).
+- `cargo test --workspace --lib` → 750 pass / 0 fail (was 738; +12).
+- `RUSTFLAGS="-D warnings" cargo build -p cade-gui --target wasm32-unknown-unknown` → clean.
+- `cargo clippy -p cade-gui --all-targets -- -D warnings` → clean.
+
+**TDD cycle:**
+- Tests and implementation written together (pure additive state machine).
+- All 12 tests GREEN on first run — contract encodes the state diagram above.
+
+**Rollback steps:**
+1. `git revert <this-commit>` — removes `session.rs` and reverts `lib.rs`.
+2. No DB/CI/config changes.
+3. Checkpoint `cp-9e415b65` (label `pre-M6`, HEAD 938ccd64).
+
+---
+
 ## 2026-04-17T18:58:36Z — cade-gui M5b: wasm fetch+ReadableStream SSE adapter
 
 **Task:** Add a wasm-only streaming SSE adapter that uses `fetch()` + `ReadableStream` to deliver `SseFrame` values from any authenticated cade-server SSE endpoint.
