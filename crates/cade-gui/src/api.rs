@@ -137,6 +137,47 @@ where
 
 // ── SSE event parsing ──────────────────────────────────────────────────
 
+// ── Conversation types ──────────────────────────────────────────────────
+
+/// Minimal info about a server-side conversation.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ConversationInfo {
+    pub id: String,
+    #[serde(default)]
+    pub title: String,
+    #[serde(default)]
+    pub message_count: u32,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+/// Server envelope for `GET /v1/agents/:id/conversations`.
+#[derive(serde::Deserialize)]
+struct ConversationsEnvelope {
+    conversations: Vec<ConversationInfo>,
+}
+
+/// Parse the response from `GET /v1/agents/:id/conversations`.
+pub fn parse_conversations(status: u16, body: &str) -> Result<Vec<ConversationInfo>, ApiError> {
+    let envelope: ConversationsEnvelope = decode_or_error(status, body)?;
+    Ok(envelope.conversations)
+}
+
+/// Parse a single `ConversationInfo` from a create/get response.
+pub fn decode_conversations_single(
+    status: u16,
+    body: &str,
+) -> Result<ConversationInfo, ApiError> {
+    decode_or_error(status, body)
+}
+
+/// Build the URL for listing or creating conversations.
+pub fn conversations_url(server: &str, agent_id: &str) -> String {
+    build_url(server, &format!("/v1/agents/{agent_id}/conversations"))
+}
+
+// ── SSE event parsing (continued) ───────────────────────────────────────
+
 /// Try to convert raw SSE JSON into a typed [`StreamEvent`].
 ///
 /// Returns `None` for unrecognised `message_type` values (the caller can
@@ -424,5 +465,44 @@ mod tests {
     fn parse_unknown_event_returns_none() {
         let v = serde_json::json!({"message_type":"unknown_event"});
         assert_eq!(parse_stream_event(&v), None);
+    }
+
+    // -- conversations
+
+    #[test]
+    fn parse_conversations_normal() {
+        let body = r#"{"conversations":[
+            {"id":"c1","title":"First chat","message_count":5,"updated_at":"2025-01-01T00:00:00Z"},
+            {"id":"c2","title":"Second chat","message_count":0,"updated_at":"2025-01-02T00:00:00Z"}
+        ]}"#;
+        let convs = parse_conversations(200, body).unwrap();
+        assert_eq!(convs.len(), 2);
+        assert_eq!(convs[0].id, "c1");
+        assert_eq!(convs[0].title, "First chat");
+        assert_eq!(convs[0].message_count, 5);
+        assert_eq!(convs[1].id, "c2");
+    }
+
+    #[test]
+    fn parse_conversations_empty() {
+        let body = r#"{"conversations":[]}"#;
+        let convs = parse_conversations(200, body).unwrap();
+        assert!(convs.is_empty());
+    }
+
+    #[test]
+    fn parse_conversations_unauthorized() {
+        assert_eq!(
+            parse_conversations(401, ""),
+            Err(ApiError::Unauthorized),
+        );
+    }
+
+    #[test]
+    fn conversations_url_format() {
+        assert_eq!(
+            conversations_url("http://localhost:8284", "agent-1"),
+            "http://localhost:8284/v1/agents/agent-1/conversations"
+        );
     }
 }

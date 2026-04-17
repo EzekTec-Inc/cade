@@ -188,6 +188,78 @@ impl CadeApp {
         });
     }
 
+    /// Fetch conversations for the selected agent.
+    fn spawn_fetch_conversations(&mut self) {
+        let (server_url, token, agent_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id)
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::get_conversations(&server_url, &token, &agent_id).await {
+                Ok(convs) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_conversations(convs);
+                    }
+                }
+                Err(_e) => {
+                    // Silently ignore — conversations list stays empty.
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Fetch messages for the currently selected conversation.
+    fn spawn_fetch_conversation_messages(&mut self) {
+        let (server_url, token, agent_id, conv_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            let conv_id = match s.conversation_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id, conv_id)
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::get_messages_for_conversation(
+                &server_url, &token, &agent_id, &conv_id,
+            )
+            .await
+            {
+                Ok(msgs) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_messages(msgs);
+                    }
+                }
+                Err(_e) => {}
+            }
+            ctx.request_repaint();
+        });
+    }
+
     /// Call `on_send` on the session state, then spawn an async SSE stream
     /// that feeds chunks back into the session.
     fn spawn_stream_message(&mut self) {
@@ -299,6 +371,8 @@ impl eframe::App for CadeApp {
                     ref error_toast,
                     ref last_usage,
                     ref last_finish_reason,
+                    ref conversations,
+                    ref selected_conversation,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -352,6 +426,53 @@ impl eframe::App for CadeApp {
                                 }
                             }
                             ui.separator();
+
+                            // ── Conversations list ────────────────────
+                            if has_agent {
+                                ui.add_space(4.0);
+                                ui.horizontal(|ui| {
+                                    ui.label(
+                                        egui::RichText::new("Conversations")
+                                            .strong()
+                                            .size(13.0),
+                                    );
+                                    if ui.small_button("➕ New").clicked() {
+                                        action = AppAction::NewConversation;
+                                    }
+                                });
+                                ui.add_space(2.0);
+
+                                if conversations.is_empty() {
+                                    ui.label(
+                                        egui::RichText::new("No conversations yet.")
+                                            .weak()
+                                            .size(11.0),
+                                    );
+                                } else {
+                                    for (ci, conv) in conversations.iter().enumerate() {
+                                        let is_sel = *selected_conversation == Some(ci);
+                                        let title = if conv.title.is_empty() {
+                                            "Untitled"
+                                        } else {
+                                            &conv.title
+                                        };
+                                        let label = format!(
+                                            "💬 {} ({})",
+                                            title, conv.message_count
+                                        );
+                                        if ui
+                                            .selectable_label(is_sel, label)
+                                            .clicked()
+                                            && !is_sel
+                                        {
+                                            action =
+                                                AppAction::SelectConversation(ci);
+                                        }
+                                    }
+                                }
+                                ui.separator();
+                            }
+
                             ui.add_space(4.0);
                             if ui.button("🚪 Logout").clicked() {
                                 action = AppAction::Logout;
@@ -653,11 +774,31 @@ Connected and ready.  Select an agent from the sidebar to begin.
             AppAction::None => {}
             AppAction::Connect(token) => self.spawn_connect(&token),
             AppAction::Retry => self.retry(),
-            AppAction::SelectAgent(idx) => self.spawn_fetch_messages(idx),
+            AppAction::SelectAgent(idx) => {
+                self.spawn_fetch_messages(idx);
+                self.spawn_fetch_conversations();
+            }
             AppAction::SendMessage => self.spawn_stream_message(),
             AppAction::DismissError => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     s.dismiss_error();
+                }
+            }
+            AppAction::SelectConversation(idx) => {
+                let changed = {
+                    let mut session = self.session.borrow_mut();
+                    match session.as_mut() {
+                        Some(s) => s.on_select_conversation(idx),
+                        None => false,
+                    }
+                };
+                if changed {
+                    self.spawn_fetch_conversation_messages();
+                }
+            }
+            AppAction::NewConversation => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.on_new_conversation();
                 }
             }
             AppAction::Logout => self.logout(),
@@ -677,6 +818,10 @@ enum AppAction {
     SendMessage,
     /// User dismissed the error toast.
     DismissError,
+    /// User selected a conversation in the sidebar.
+    SelectConversation(usize),
+    /// User clicked "New Chat" — start a fresh conversation.
+    NewConversation,
     /// User clicked Logout — clear credentials and return to login.
     Logout,
 }

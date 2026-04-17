@@ -65,6 +65,10 @@ pub enum SessionState {
         last_usage: Option<(u64, u64, Option<String>)>,
         /// Finish reason from the last completed turn (e.g. "stop", "length").
         last_finish_reason: Option<String>,
+        /// Conversations for the selected agent.
+        conversations: Vec<crate::api::ConversationInfo>,
+        /// Index into `conversations` of the currently selected conversation.
+        selected_conversation: Option<usize>,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -149,6 +153,8 @@ impl SessionState {
                 conversation_id: None,
                 last_usage: None,
                 last_finish_reason: None,
+                conversations: Vec::new(),
+                selected_conversation: None,
             };
         }
     }
@@ -187,6 +193,8 @@ impl SessionState {
             selected_agent,
             messages,
             conversation_id,
+            conversations,
+            selected_conversation,
             ..
         } = self
         {
@@ -199,6 +207,8 @@ impl SessionState {
             *selected_agent = Some(idx);
             messages.clear();
             *conversation_id = None;
+            conversations.clear();
+            *selected_conversation = None;
             true
         } else {
             false
@@ -481,6 +491,87 @@ impl SessionState {
         }
     }
 
+    // ── Conversation management ─────────────────────────────────────────
+
+    /// Store conversations fetched from the server.
+    pub fn on_conversations(&mut self, convs: Vec<crate::api::ConversationInfo>) {
+        if let Self::Connected {
+            conversations, ..
+        } = self
+        {
+            *conversations = convs;
+        }
+    }
+
+    /// The current list of conversations.
+    pub fn conversations(&self) -> &[crate::api::ConversationInfo] {
+        if let Self::Connected {
+            conversations, ..
+        } = self
+        {
+            conversations
+        } else {
+            &[]
+        }
+    }
+
+    /// Currently selected conversation index.
+    pub fn selected_conversation(&self) -> Option<usize> {
+        if let Self::Connected {
+            selected_conversation,
+            ..
+        } = self
+        {
+            *selected_conversation
+        } else {
+            None
+        }
+    }
+
+    /// Select a conversation by index.  Returns `true` if the selection
+    /// changed.  When changed, clears messages and sets conversation_id
+    /// so the caller can re-fetch messages for that conversation.
+    pub fn on_select_conversation(&mut self, idx: usize) -> bool {
+        if let Self::Connected {
+            conversations,
+            selected_conversation,
+            messages,
+            conversation_id,
+            ..
+        } = self
+        {
+            if idx >= conversations.len() {
+                return false;
+            }
+            if *selected_conversation == Some(idx) {
+                return false;
+            }
+            *selected_conversation = Some(idx);
+            *conversation_id = Some(conversations[idx].id.clone());
+            messages.clear();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Start a fresh conversation — clears conversation_id, messages,
+    /// and selected_conversation so the next send creates a new one on
+    /// the server.
+    pub fn on_new_conversation(&mut self) {
+        if let Self::Connected {
+            conversation_id,
+            messages,
+            selected_conversation,
+            ..
+        } = self
+        {
+            *conversation_id = None;
+            messages.clear();
+            *selected_conversation = None;
+        }
+    }
+
     /// Whether the session is fully established.
     pub fn is_connected(&self) -> bool {
         matches!(self, Self::Connected { .. })
@@ -501,12 +592,20 @@ mod tests {
     }
 
     fn test_agents() -> Vec<AgentInfo> {
-        vec![AgentInfo {
-            id: "agent-1".to_string(),
-            name: "Test Agent".to_string(),
-            model: Some("gpt-4o".to_string()),
-            provider: None,
-        }]
+        vec![
+            AgentInfo {
+                id: "agent-1".to_string(),
+                name: "Test Agent".to_string(),
+                model: Some("gpt-4o".to_string()),
+                provider: None,
+            },
+            AgentInfo {
+                id: "agent-2".to_string(),
+                name: "Second Agent".to_string(),
+                model: None,
+                provider: None,
+            },
+        ]
     }
 
     // ── Construction ────────────────────────────────────────────────────
@@ -540,8 +639,9 @@ mod tests {
         s.on_agents(test_agents());
         match &s {
             SessionState::Connected { agents, health, .. } => {
-                assert_eq!(agents.len(), 1);
+                assert_eq!(agents.len(), 2);
                 assert_eq!(agents[0].id, "agent-1");
+                assert_eq!(agents[1].id, "agent-2");
                 assert_eq!(health.status, "ok");
             }
             other => panic!("expected Connected, got {other:?}"),
@@ -1132,5 +1232,115 @@ mod tests {
         let _ = s.on_send();
         assert_eq!(s.last_usage(), None);
         assert_eq!(s.last_finish_reason(), None);
+    }
+
+    // ── Conversation management tests ───────────────────────────────
+
+    fn test_conversations() -> Vec<crate::api::ConversationInfo> {
+        vec![
+            crate::api::ConversationInfo {
+                id: "conv-1".to_string(),
+                title: "First chat".to_string(),
+                message_count: 3,
+                updated_at: "2025-01-01T00:00:00Z".to_string(),
+            },
+            crate::api::ConversationInfo {
+                id: "conv-2".to_string(),
+                title: "Second chat".to_string(),
+                message_count: 0,
+                updated_at: "2025-01-02T00:00:00Z".to_string(),
+            },
+        ]
+    }
+
+    #[test]
+    fn on_conversations_stores_list() {
+        let mut s = make_connected_with_agent_selected();
+        assert!(s.conversations().is_empty());
+        s.on_conversations(test_conversations());
+        assert_eq!(s.conversations().len(), 2);
+        assert_eq!(s.conversations()[0].id, "conv-1");
+    }
+
+    #[test]
+    fn on_select_conversation_returns_true_when_changed() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_conversations(test_conversations());
+        assert!(s.on_select_conversation(0));
+        assert_eq!(s.selected_conversation(), Some(0));
+    }
+
+    #[test]
+    fn on_select_conversation_returns_false_when_same() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_conversations(test_conversations());
+        s.on_select_conversation(0);
+        assert!(!s.on_select_conversation(0));
+    }
+
+    #[test]
+    fn on_select_conversation_clears_messages() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_messages(vec![ChatMessage {
+            id: "m1".into(),
+            role: "user".into(),
+            content: serde_json::Value::String("hi".into()),
+            conversation_id: None,
+        }]);
+        s.on_conversations(test_conversations());
+        s.on_select_conversation(1);
+        if let SessionState::Connected { messages, .. } = &s {
+            assert!(messages.is_empty());
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn on_select_conversation_sets_conversation_id() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_conversations(test_conversations());
+        s.on_select_conversation(1);
+        assert_eq!(s.conversation_id(), Some("conv-2"));
+    }
+
+    #[test]
+    fn on_select_conversation_out_of_bounds_is_noop() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_conversations(test_conversations());
+        assert!(!s.on_select_conversation(99));
+        assert_eq!(s.selected_conversation(), None);
+    }
+
+    #[test]
+    fn on_new_conversation_clears_state() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_conversations(test_conversations());
+        s.on_select_conversation(0);
+        s.on_conversation_id("conv-1");
+        s.on_messages(vec![ChatMessage {
+            id: "m1".into(),
+            role: "user".into(),
+            content: serde_json::Value::String("hi".into()),
+            conversation_id: None,
+        }]);
+        s.on_new_conversation();
+        assert_eq!(s.conversation_id(), None);
+        assert_eq!(s.selected_conversation(), None);
+        if let SessionState::Connected { messages, .. } = &s {
+            assert!(messages.is_empty());
+        }
+    }
+
+    #[test]
+    fn on_select_agent_clears_conversations() {
+        let mut s = make_connected();
+        s.on_select_agent(0);
+        s.on_conversations(test_conversations());
+        s.on_select_conversation(0);
+        // Now switch agent — should clear conversations.
+        s.on_select_agent(1);
+        assert!(s.conversations().is_empty());
+        assert_eq!(s.selected_conversation(), None);
     }
 }

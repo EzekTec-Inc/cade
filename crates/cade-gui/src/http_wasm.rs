@@ -55,6 +55,63 @@ pub async fn get_messages(
     api::parse_messages(status, &body)
 }
 
+/// `GET /v1/agents/:id/messages?conversation_id=<cid>` — messages for one conversation.
+pub async fn get_messages_for_conversation(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    conversation_id: &str,
+) -> Result<Vec<ChatMessage>, ApiError> {
+    let path = format!(
+        "/v1/agents/{agent_id}/messages?conversation_id={conversation_id}"
+    );
+    let url = api::build_url(base_url, &path);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_messages(status, &body)
+}
+
+/// `GET /v1/agents/:id/conversations` — list conversations for an agent.
+pub async fn get_conversations(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+) -> Result<Vec<api::ConversationInfo>, ApiError> {
+    let url = api::conversations_url(base_url, agent_id);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_conversations(status, &body)
+}
+
+/// `POST /v1/agents/:id/conversations` — create a new conversation.
+#[allow(dead_code)]
+pub async fn create_conversation(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    title: &str,
+) -> Result<api::ConversationInfo, ApiError> {
+    let url = api::conversations_url(base_url, agent_id);
+    let body_json = serde_json::json!({ "title": title });
+    let resp = Request::post(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .header("Content-Type", "application/json")
+        .body(body_json.to_string())
+        .map_err(|e| ApiError::Transport {
+            message: format!("{e:?}"),
+        })?
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
+    let status = resp.status();
+    let text = resp.text().await.map_err(|e| ApiError::Transport {
+        message: e.to_string(),
+    })?;
+    let info: api::ConversationInfo =
+        crate::api::decode_conversations_single(status, &text)?;
+    Ok(info)
+}
+
 /// `POST /v1/agents/:id/messages/stream` — send a user message and stream
 /// the assistant's response via SSE.
 ///
