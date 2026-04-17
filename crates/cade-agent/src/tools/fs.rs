@@ -2,21 +2,65 @@ use crate::Result;
 use serde_json::{Value, json};
 use std::path::{Path, PathBuf};
 
-// -- SEC-A: Opt-in filesystem sandboxing
+// -- P1-4: Filesystem sandbox default-on
 //
-// When `CADE_FS_ROOT` is set, all file-tool paths are verified to resolve
-// within that directory.  When unset, tools operate without path confinement
-// (the current default — preserves backward compatibility).
+// The sandbox is ACTIVE by default.  Every file-tool path is verified to
+// resolve within the sandbox root.  The root is:
+//
+//   * `$CADE_FS_ROOT` — if set and non-empty after trim, canonicalized
+//     (falls back to the raw value if the path does not exist yet).
+//   * otherwise `std::env::current_dir()` captured once at first call.
+//
+// The only escape hatch is `CADE_FS_NO_SANDBOX=1` (exact match required
+// so operators can't accidentally disable the sandbox with truthy-looking
+// values like `0`, `true`, or empty).  When set, `fs_root()` returns
+// `None` and all file-tool paths are accepted as before P1-4.
 
-/// Returns the filesystem sandbox root when `CADE_FS_ROOT` is set.
-fn fs_root() -> Option<PathBuf> {
-    std::env::var("CADE_FS_ROOT").ok().and_then(|v| {
-        let v = v.trim().to_string();
-        if v.is_empty() {
-            return None;
+/// Policy function: pure, deterministic, unit-testable.  Takes the three
+/// inputs (env `CADE_FS_ROOT`, env `CADE_FS_NO_SANDBOX`, current dir)
+/// and returns the resolved sandbox root, or `None` if the sandbox is
+/// explicitly disabled.
+fn resolve_fs_root(
+    env_root: Option<String>,
+    no_sandbox: Option<String>,
+    cwd: PathBuf,
+) -> Option<PathBuf> {
+    // Escape hatch: exact string "1" only.
+    if matches!(no_sandbox.as_deref(), Some("1")) {
+        return None;
+    }
+
+    if let Some(raw) = env_root {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return Some(
+                std::fs::canonicalize(trimmed).unwrap_or_else(|_| PathBuf::from(trimmed)),
+            );
         }
-        Some(std::fs::canonicalize(&v).unwrap_or_else(|_| PathBuf::from(v)))
+    }
+
+    Some(cwd)
+}
+
+/// Returns the filesystem sandbox root, or `None` when the sandbox is
+/// explicitly disabled via `CADE_FS_NO_SANDBOX=1`.
+///
+/// The resolved root is cached in a process-global `OnceLock` so that
+/// subsequent calls are cheap and the sandbox can't drift mid-process
+/// (e.g. if cwd changes after a `cd`).
+fn fs_root() -> Option<PathBuf> {
+    use std::sync::OnceLock;
+    static ROOT: OnceLock<Option<PathBuf>> = OnceLock::new();
+    ROOT.get_or_init(|| {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        resolve_fs_root(
+            std::env::var("CADE_FS_ROOT").ok(),
+            std::env::var("CADE_FS_NO_SANDBOX").ok(),
+            cwd,
+        )
+        .map(|p| std::fs::canonicalize(&p).unwrap_or(p))
     })
+    .clone()
 }
 
 /// Verify that `raw_path` resolves to a location inside `root`.
@@ -482,6 +526,74 @@ mod tests {
         let root = std::env::current_dir()?;
         assert!(ensure_within_root(&root, "/etc/passwd").is_err());
         Ok(())
+    }
+
+    // -- P1-4: resolve_fs_root (default-on policy)
+
+    #[test]
+    fn p1_4_no_env_defaults_to_cwd() {
+        let cwd = PathBuf::from("/tmp/fake-cwd");
+        let got = resolve_fs_root(None, None, cwd.clone());
+        assert_eq!(got, Some(cwd));
+    }
+
+    #[test]
+    fn p1_4_no_sandbox_env_disables_sandbox() {
+        let cwd = PathBuf::from("/tmp/fake-cwd");
+        let got = resolve_fs_root(None, Some("1".into()), cwd);
+        assert_eq!(got, None);
+    }
+
+    #[test]
+    fn p1_4_no_sandbox_env_zero_does_not_disable() {
+        // Only the exact string "1" opts out; other values (0, true, "")
+        // are NOT escape hatches so operators can't accidentally disable
+        // the sandbox with a truthy-looking value.
+        let cwd = PathBuf::from("/tmp/fake-cwd");
+        assert_eq!(
+            resolve_fs_root(None, Some("0".into()), cwd.clone()),
+            Some(cwd.clone())
+        );
+        assert_eq!(
+            resolve_fs_root(None, Some("".into()), cwd.clone()),
+            Some(cwd.clone())
+        );
+        assert_eq!(resolve_fs_root(None, Some("true".into()), cwd.clone()), Some(cwd));
+    }
+
+    #[test]
+    fn p1_4_explicit_root_overrides_cwd() {
+        let cwd = PathBuf::from("/tmp/should-not-be-used");
+        let explicit = std::env::current_dir().unwrap(); // pick a real dir for canonicalize
+        let got = resolve_fs_root(Some(explicit.display().to_string()), None, cwd);
+        assert!(got.is_some());
+        let got = got.unwrap();
+        // Canonicalized form must start with the same real path.
+        assert!(
+            got == explicit || explicit.canonicalize().map(|c| c == got).unwrap_or(false),
+            "expected {got:?} to equal {explicit:?} or its canonical form"
+        );
+    }
+
+    #[test]
+    fn p1_4_explicit_empty_root_falls_back_to_cwd() {
+        let cwd = PathBuf::from("/tmp/fake-cwd");
+        let got = resolve_fs_root(Some("   ".into()), None, cwd.clone());
+        assert_eq!(
+            got,
+            Some(cwd),
+            "whitespace-only CADE_FS_ROOT must fall back to cwd, not disable sandbox"
+        );
+    }
+
+    #[test]
+    fn p1_4_no_sandbox_wins_over_explicit_root() {
+        let cwd = PathBuf::from("/tmp/fake-cwd");
+        let got = resolve_fs_root(Some("/some/root".into()), Some("1".into()), cwd);
+        assert_eq!(
+            got, None,
+            "CADE_FS_NO_SANDBOX=1 must disable the sandbox even when CADE_FS_ROOT is set"
+        );
     }
 }
 

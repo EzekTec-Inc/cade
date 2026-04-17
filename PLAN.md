@@ -508,3 +508,47 @@
 **Known limitations (deferred):**
 - **DNS resolution check not implemented yet.** A host on the allow-list could in principle resolve to a private IP if an attacker controls DNS for that host. Mitigated in practice because the allow-list contains only trusted LLM-provider domains, but a full fix (resolve host → reject if any returned IP is private/loopback/link-local) is a follow-up if an operator widens the allow-list. The `UrlRejection` enum has room for a `ResolvesToPrivateIp` variant.
 - **No per-operator extension of the allow-list** (e.g. `CADE_PROXY_ALLOWED_HOSTS` env var). Declined in design question; can be added without breaking changes.
+
+---
+
+## 2026-04-17T04:29Z — Task 4 / P1-4: Filesystem sandbox default-on
+
+**Summary:** Flipped the filesystem-tool sandbox from opt-in (required `CADE_FS_ROOT`) to default-on (active without any configuration). When neither `CADE_FS_ROOT` nor `CADE_FS_NO_SANDBOX` is set, the sandbox root defaults to `std::env::current_dir()` captured once at first use. The only way to disable the sandbox is `CADE_FS_NO_SANDBOX=1` (exact match required so operators cannot accidentally disable it with truthy-looking values like `0`, `true`, or empty strings).
+
+**Files modified:**
+- `crates/cade-agent/src/tools/fs.rs` — replaced the old `fs_root()` with a pure policy function `resolve_fs_root(env_root, no_sandbox, cwd) -> Option<PathBuf>` plus a caching wrapper `fs_root()` backed by `std::sync::OnceLock`. Updated module-level comment from "SEC-A opt-in" to "P1-4 default-on". Added 6 unit tests covering the new policy.
+
+**Behavior matrix:**
+| CADE_FS_ROOT | CADE_FS_NO_SANDBOX | Result |
+|---|---|---|
+| (unset) | (unset) | sandbox ACTIVE at cwd |
+| `/path` | (unset) | sandbox ACTIVE at /path (canonicalized) |
+| `   ` (ws-only) | (unset) | sandbox ACTIVE at cwd (whitespace-only treated as unset) |
+| (any) | `1` | sandbox DISABLED |
+| (any) | `0`, `true`, `""`, `yes` | sandbox ACTIVE (only exact `"1"` opts out) |
+
+**Reason:** CRITICAL-severity finding in the security review — the filesystem sandbox was opt-in, meaning a user who ran `cade` without setting `CADE_FS_ROOT` had no path confinement at all. A prompt-injection attack that reached a `read_file`, `write_file`, or `apply_patch` tool call could read `/etc/passwd`, write `/etc/cron.d/*`, or similar. Per the user-approved remediation contract, P1-4 ships as default-on with `CADE_FS_NO_SANDBOX=1` as the documented escape hatch.
+
+**Previous behavior:** `fs_root()` returned `Some(root)` only when `CADE_FS_ROOT` was set. When unset, all 4 file tools (read_file, write_file, list_dir, apply_patch) skipped the `ensure_within_root` check entirely and could operate on any path the process could reach.
+
+**New behavior:** `fs_root()` returns `Some(root)` by default (resolved to cwd or the explicit env value), activating `ensure_within_root` on every file-tool call. Returns `None` only when `CADE_FS_NO_SANDBOX=1` is set. The resolved root is cached in `OnceLock` so subsequent calls are cheap and behavior is deterministic across the process lifetime (e.g., a later `cd` in a shelled-out bash tool does not move the sandbox).
+
+**Design notes:**
+- **Policy/accessor split:** pure `resolve_fs_root()` takes env + cwd as explicit arguments, making it deterministic and unit-testable without process env mutation (which is racy under parallel tests). The `fs_root()` accessor is a thin caching wrapper that reads env once at first call.
+- **Strict escape-hatch matching:** we check `matches!(no_sandbox.as_deref(), Some("1"))` rather than any truthy parse, so unusual values do NOT disable the sandbox. Defense in depth against misconfiguration.
+- **Call sites unchanged:** the 4 tools already use `if let Some(root) = &fs_root() { ensure_within_root(...) }`, so the refactor is behavior-compatible at the call site. Only the semantics of what "None" means changed (was: "always, because opt-in"; now: "only when explicitly disabled").
+
+**Tests:**
+- `cargo test -p cade-agent --lib tools::fs` → 15 green (9 pre-existing + 6 new P1-4 tests).
+- `cargo test -p cade-agent` → 84/84 green, no regressions.
+- `cargo clippy -p cade-agent --lib --tests` → no warnings from fs.rs.
+- `cargo build --workspace` → clean.
+
+**New dependencies:** none. Uses `std::sync::OnceLock` (stdlib).
+
+**Rollback:** `restore_checkpoint cp-db451c65-b661-4e88-87f9-edbf0247e154` (label `before-p1-4-fs-sandbox`). For task-level revert: `git revert` the P1-4 commit — restores opt-in sandbox (re-opens the CRITICAL gap).
+
+**Operator migration:**
+- **Default install:** no change needed — sandbox activates at cwd.
+- **Was relying on skip-when-unset:** set `CADE_FS_NO_SANDBOX=1` to restore previous behavior (NOT recommended; advertises the risk).
+- **Wanted a specific root:** no change — `CADE_FS_ROOT=/path` still works as before.
