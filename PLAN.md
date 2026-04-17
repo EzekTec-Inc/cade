@@ -1,4 +1,52 @@
-## 2026-04-17T00:20:00Z — M5: Closed as already-implemented
+## 2026-04-17T16:28:32Z — P2-3: SSH cwd shell quoting
+
+**Task:** Harden `crates/cade-agent/src/backends/ssh.rs` so hostile working-directory strings cannot inject commands into the `bash -c` payload executed on the remote host.
+
+**Vulnerability (before):**
+`run_remote` built the remote command with `format!("cd {cwd_str:?} && {command}")`.  The `{:?}` Debug format wraps the path in double quotes but does **not** escape `$`, `` ` ``, `\`, or `"` — bash still expands these inside double quotes.  A `cwd` containing `/tmp/$(rm -rf ~)` or `/tmp/\`id\`` would execute on the remote host as soon as any tool call routed through the SSH backend.
+`list_dir` had the same anti-pattern: `format!("ls -1pF {:?}", path.to_string_lossy().to_string())` used Debug format for an attacker-controlled path and then passed the same path again as the cwd.
+
+**Files modified:**
+- `crates/cade-agent/src/backends/ssh.rs`
+  - Added `fn posix_shell_quote(s: &str) -> String` — single-quote wrap with `'\''` escape for embedded single quotes (POSIX-safe; no expansion, no command substitution, no globbing applies inside single quotes).
+  - Added `fn build_remote_cwd_command(command: &str, cwd: &Path) -> String` — quotes the cwd via `posix_shell_quote` and composes `cd '<cwd>' && <command>`.
+  - `run_remote` now delegates cwd wrapping to `build_remote_cwd_command` instead of using `{cwd_str:?}`.
+  - `list_dir` now uses `posix_shell_quote` on the path before embedding it in the `ls -1pF` argument.
+  - Added 8 unit tests in `mod tests` covering: plain path, `$(...)` substitution, backticks, embedded-quote breakout, verbatim command preservation, and the `posix_shell_quote` helper (plain / embedded quote / empty string).
+
+**Reason:** Close the command-injection surface in the SSH execution backend.  Part of Phase 2 of the user-approved security backlog (P2-3).  No behavioural change for well-formed paths — only the wire-format of the `bash -c` string changes from double-quoted Debug output to POSIX single-quoted.
+
+**Previous behaviour:**
+- `run_remote("ls", &PathBuf::from("/tmp"))` produced `cd "/tmp" && ls`.
+- `run_remote("ls", &PathBuf::from("/tmp/$(id)"))` produced `cd "/tmp/$(id)" && ls` — bash expanded `$(id)` on the remote host.
+- `list_dir(&PathBuf::from("/tmp/$(id)"))` likewise executed `$(id)`.
+
+**New behaviour:**
+- `run_remote("ls", &PathBuf::from("/tmp"))` produces `cd '/tmp' && ls`.
+- `run_remote("ls", &PathBuf::from("/tmp/$(id)"))` produces `cd '/tmp/$(id)' && ls` — literal, not expanded.
+- `list_dir` path argument is single-quoted before embedding in the `ls` command.
+- Embedded single quotes in cwd are handled by the `'\''` escape sequence (validated by `build_cmd_rejects_quote_breakout_in_cwd`).
+- The `command` parameter of `run_remote` is **not** re-quoted — callers remain responsible for the command string, matching the previous contract.  This is intentional to keep the change minimum-scope (the backlog item is about `cwd` only).
+
+**Test results:**
+- `cargo test -p cade-agent --features backend-ssh --lib backends::ssh` → 8/8 new tests pass.
+- `cargo test -p cade-agent` → 92/92 pass (full crate, no regressions).
+- `cargo clippy -p cade-agent --all-targets --no-deps` → clean (cade-agent).
+- `cargo build -p cade-agent` (default features) → clean.
+- `cargo build -p cade-agent --no-default-features --features backend-ssh` → clean.
+- Pre-existing `cargo clippy -p cade-core` failures (collapsible_if) observed on master; unrelated to this change, NOT fixed (TDD §9).
+
+**Rollback steps:**
+1. `git revert <this commit>` — single-file change.
+2. Or restore `crates/cade-agent/src/backends/ssh.rs` from checkpoint `pre-p2-3` (ID `cp-e5c25601-1a00-4c4c-91c9-6682334e1e75`, HEAD `d829ff7d`).
+
+**Follow-ups (explicitly out of scope for P2-3):**
+- The `command` parameter of `run_remote` is still concatenated verbatim.  If a caller ever passes attacker-influenced command text, that is a separate injection class and would need its own task.  Not part of the approved backlog.
+- `read_file`, `write_file`, `path_exists` pass the path directly as a separate argument to `ssh` (via `Command::arg`), which is already injection-safe — no quoting change needed there.
+
+---
+
+
 
 **Task:** Expose `AgentMetrics` via an HTTP endpoint.
 
