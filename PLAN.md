@@ -1,3 +1,60 @@
+## 2026-04-17T18:46:53Z — cade-gui M5: pure SSE frame parser
+
+**Task:** Add a pure, native-testable SSE frame parser for the cade-gui WASM app.  This parser consumes raw bytes (arriving in arbitrary chunks from `fetch()` + `ReadableStream`) and emits typed `SseFrame` values.  No network I/O — the wasm fetch-streaming adapter is deferred to M5b behind a separate approval gate.
+
+**Scope guardrail (strict-project-execution):** Parser only.  No EventSource, no fetch, no ReadableStream.  Zero browser dependencies.
+
+**Files modified:**
+- `crates/cade-gui/src/sse.rs` (NEW, ~310 lines, native + wasm).
+  - `SseFrame` enum: `Json(serde_json::Value)` | `Done` | `ParseError(String)`.
+  - `SseParser` struct with internal line buffer, data accumulator, and pending frame queue.
+  - `SseParser::new()` — fresh empty parser.
+  - `SseParser::feed(&mut self, bytes: &[u8])` — push arbitrary byte chunks; internally splits on `\n`, swallows `\r`, dispatches frames on blank lines.
+  - `SseParser::pop(&mut self) -> Option<SseFrame>` — drain one complete frame.
+  - `process_line()` — SSE field parser: extracts `data:` values (optional space after colon per spec), ignores unknown fields (`id:`, `event:`, `retry:`).  Multiple `data:` lines in one frame concatenated with `\n` per SSE spec.
+  - `dispatch_frame()` — maps accumulated data to `SseFrame::Done` (if `[DONE]` sentinel), `SseFrame::Json` (if valid JSON), or `SseFrame::ParseError` (otherwise).
+  - `impl Default for SseParser` delegates to `new()`.
+  - 13 native tests:
+    1. `empty_feed_yields_no_frames` — no output from empty input.
+    2. `single_json_frame` — `data: {"x":1}\n\n` → `Json({"x":1})`.
+    3. `done_sentinel` — `data: [DONE]\n\n` → `Done`.
+    4. `two_frames_in_one_feed` — two complete frames parsed from one `feed()`.
+    5. `frame_split_across_two_feeds` — frame spanning two `feed()` calls.
+    6. `frame_split_byte_by_byte` — each byte in a separate `feed()` call.
+    7. `crlf_line_endings` — `\r\n\r\n` parsed identically to `\n\n`.
+    8. `unknown_field_ignored` — `id: 42\ndata: {...}\n\n` → only `data` is used.
+    9. `malformed_json_yields_parse_error` — `data: not-json\n\n` → `ParseError("not-json")`.
+    10. `multiple_data_lines_concatenated` — two `data:` lines joined with `\n`; result is valid JSON.
+    11. `realistic_server_stream` — 5-frame sequence matching actual cade-server output (stream_start, 2× stream_delta, stream_end, [DONE]).
+    12. `blank_lines_without_data_yield_nothing` — blank lines with no preceding `data:` emit no frames.
+    13. `data_no_space_after_colon` — `data:{"tight":1}\n\n` (no space) → parsed correctly.
+- `crates/cade-gui/src/lib.rs`
+  - Added `pub mod sse;` (native + wasm).
+  - Updated module-level doc comment.
+
+**Dependency policy:** No new deps.  `serde_json` already in workspace deps of cade-gui.
+
+**Reason:** M5 of the cade-gui roadmap pinned in `working_set`.  The parser is the pure-logic foundation for M5b (wasm fetch-streaming adapter) and M6 (panel layout consuming streaming events).
+
+**Previous behavior:** cade-gui had no SSE parsing capability.
+
+**New behavior:**
+- `cargo test -p cade-gui --lib` → 43 pass (was 30; +13 sse tests).
+- `cargo test --workspace --lib` → 738 pass / 0 fail (was 725; +13).
+- `RUSTFLAGS="-D warnings" cargo build -p cade-gui --target wasm32-unknown-unknown` → clean.
+- `cargo clippy -p cade-gui --all-targets -- -D warnings` → clean.
+
+**TDD cycle summary:**
+1. RED — wrote sse.rs with 13 tests + implementation.  12/13 passed on first run; test 10 (`multiple_data_lines_concatenated`) failed — test assumption was wrong (JSON allows `\n` as whitespace between tokens).  Fixed test to assert correct behavior.  13/13 GREEN.
+2. REFACTOR — clippy flagged `single_match` lint on the `match field` block; replaced with `if field == "data"`.  All tests still green.
+
+**Rollback steps:**
+1. `git revert <this-commit>` — removes `crates/cade-gui/src/sse.rs` and reverts `lib.rs`.
+2. No DB/CI/config changes.
+3. Checkpoint `cp-2f4eda26` (label `pre-M5`, HEAD 50908476) for `restore_checkpoint`.
+
+---
+
 ## 2026-04-17T18:10:02Z — cade-gui M4: pure API client (get_health, get_agents)
 
 **Task:** Add a pure HTTP-client module for the cade-gui wasm app that can call `GET /v1/health` and `GET /v1/agents` using the user-submitted bearer token. First consumer of `cade-api-types`.

@@ -4,6 +4,7 @@
 //! - `config`    — pure boot-time configuration parser (native + wasm).
 //! - `login`     — pure login-screen state machine (native + wasm).
 //! - `api`       — pure HTTP URL/header builders and response parsers.
+//! - `sse`       — pure SSE frame parser (native + wasm).
 //! - `app`       — `eframe::App` login-screen renderer (wasm-only).
 //! - `http_wasm` — thin gloo-net adapter issuing real fetches (wasm-only).
 //!
@@ -15,6 +16,7 @@
 pub mod api;
 pub mod config;
 pub mod login;
+pub mod sse;
 
 #[cfg(target_arch = "wasm32")]
 pub mod app;
