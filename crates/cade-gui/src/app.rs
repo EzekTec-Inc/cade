@@ -310,6 +310,137 @@ impl CadeApp {
         });
     }
 
+    /// Fetch memory blocks for the selected agent.  Assumes the overlay
+    /// has already been marked as loading by the caller.
+    fn spawn_fetch_memory(&mut self) {
+        let (server_url, token, agent_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id)
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::get_memory(&server_url, &token, &agent_id).await {
+                Ok(blocks) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_memory_loaded(blocks);
+                    }
+                }
+                Err(e) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_memory_error(&format!("{e}"));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Save the currently-edited memory block via `PUT /v1/agents/:id/memory/:label`.
+    fn spawn_save_memory_block(&mut self) {
+        let (server_url, token, agent_id, label, value) = {
+            let mut session = self.session.borrow_mut();
+            let s = match session.as_mut() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            let (label, value) = match s.memory_selected_label_value() {
+                Some(pair) => pair,
+                None => return,
+            };
+            s.on_memory_save_start();
+            (
+                s.server_url().to_string(),
+                s.token().to_string(),
+                agent_id,
+                label,
+                value,
+            )
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::put_memory_block(
+                &server_url, &token, &agent_id, &label, &value, None,
+            )
+            .await
+            {
+                Ok(()) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_memory_save_ok();
+                    }
+                }
+                Err(e) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_memory_error(&format!("Save failed: {e}"));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Update the current agent's model via `PATCH /v1/agents/:id`.  On
+    /// success refreshes the agents list so the sidebar reflects the change.
+    fn spawn_set_agent_model(&mut self, model: String) {
+        let (server_url, token, agent_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id)
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::patch_agent_model(
+                &server_url, &token, &agent_id, &model,
+            )
+            .await
+            {
+                Ok(()) => {
+                    // Refetch the agents list so the sidebar shows the new model.
+                    if let Ok(agents) =
+                        crate::http_wasm::get_agents(&server_url, &token).await
+                    {
+                        if let Some(s) = session.borrow_mut().as_mut() {
+                            s.refresh_agents(agents);
+                        }
+                    }
+                }
+                Err(e) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.push_error(&format!("Model update failed: {e}"));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     /// Call `on_send` on the session state, then spawn an async SSE stream
     /// that feeds chunks back into the session.
     fn spawn_stream_message(&mut self) {
@@ -427,19 +558,58 @@ impl CadeApp {
                     s.push_error(&lines.join("\n"));
                 }
             }
+            PaletteCmd::Memory => {
+                // Require an agent to be selected.
+                let has_agent = self
+                    .session
+                    .borrow()
+                    .as_ref()
+                    .and_then(|s| s.selected_agent_id().map(|_| ()))
+                    .is_some();
+                if !has_agent {
+                    if let Some(s) = self.session.borrow_mut().as_mut() {
+                        s.push_error("Select an agent before viewing memory");
+                    }
+                    return;
+                }
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.open_memory_overlay();
+                }
+                self.spawn_fetch_memory();
+            }
+            PaletteCmd::Model(model) => {
+                let model = model.trim().to_string();
+                if model.is_empty() {
+                    if let Some(s) = self.session.borrow_mut().as_mut() {
+                        s.push_error("Usage: /model <model-id>");
+                    }
+                    return;
+                }
+                let has_agent = self
+                    .session
+                    .borrow()
+                    .as_ref()
+                    .and_then(|s| s.selected_agent_id().map(|_| ()))
+                    .is_some();
+                if !has_agent {
+                    if let Some(s) = self.session.borrow_mut().as_mut() {
+                        s.push_error("Select an agent before changing model");
+                    }
+                    return;
+                }
+                self.spawn_set_agent_model(model);
+            }
             PaletteCmd::Unknown(raw) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     s.push_error(&format!("Unknown command: /{raw}"));
                 }
             }
             // Commands that require server-side plumbing not yet wired up
-            // (M16–M18).  Surface a friendly "coming soon" toast so users
+            // (M17–M18).  Surface a friendly "coming soon" toast so users
             // know the command was recognized.
             PaletteCmd::Agent(_)
             | PaletteCmd::Agents
-            | PaletteCmd::Memory
             | PaletteCmd::Search(_)
-            | PaletteCmd::Model(_)
             | PaletteCmd::Context
             | PaletteCmd::Stats
             | PaletteCmd::Artifacts
@@ -447,7 +617,7 @@ impl CadeApp {
             | PaletteCmd::Skills
             | PaletteCmd::Mcp => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    s.push_error("Command recognized but not yet implemented (coming in M16–M18)");
+                    s.push_error("Command recognized but not yet implemented (coming in M17–M18)");
                 }
             }
         }
@@ -498,6 +668,13 @@ impl eframe::App for CadeApp {
                     palette_open,
                     ref palette_input,
                     palette_selection,
+                    memory_open,
+                    ref memory_blocks,
+                    memory_selection,
+                    ref memory_edit_buffer,
+                    memory_loading,
+                    memory_saving,
+                    ref memory_error,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -592,7 +769,63 @@ impl eframe::App for CadeApp {
 
                             // ── Conversations list ────────────────────
                             if has_agent {
-                                ui.add_space(4.0);
+                                // Agent info card — model, provider, id.
+                                if let Some(idx) = *selected_agent {
+                                    if let Some(agent) = agents.get(idx) {
+                                        ui.add_space(2.0);
+                                        egui::Frame::new()
+                                            .fill(crate::theme::BG_SURFACE0)
+                                            .corner_radius(egui::CornerRadius::same(4))
+                                            .inner_margin(6.0)
+                                            .show(ui, |ui| {
+                                                ui.vertical(|ui| {
+                                                    if let Some(model) = &agent.model {
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "model: {model}"
+                                                            ))
+                                                            .monospace()
+                                                            .color(crate::theme::PRIMARY)
+                                                            .size(11.0),
+                                                        );
+                                                    }
+                                                    if let Some(provider) =
+                                                        &agent.provider
+                                                    {
+                                                        ui.label(
+                                                            egui::RichText::new(format!(
+                                                                "provider: {provider}"
+                                                            ))
+                                                            .monospace()
+                                                            .color(
+                                                                crate::theme::TEXT_MUTED,
+                                                            )
+                                                            .size(11.0),
+                                                        );
+                                                    }
+                                                    // Show a truncated id so
+                                                    // operators can cross-
+                                                    // reference with server logs.
+                                                    let short_id = if agent.id.len() > 12
+                                                    {
+                                                        format!("{}…", &agent.id[..12])
+                                                    } else {
+                                                        agent.id.clone()
+                                                    };
+                                                    ui.label(
+                                                        egui::RichText::new(format!(
+                                                            "id: {short_id}"
+                                                        ))
+                                                        .monospace()
+                                                        .color(crate::theme::TEXT_DIM)
+                                                        .size(10.0),
+                                                    );
+                                                });
+                                            });
+                                    }
+                                }
+
+                                ui.add_space(6.0);
                                 ui.horizontal(|ui| {
                                     ui.label(
                                         egui::RichText::new("Conversations")
@@ -930,6 +1163,21 @@ Connected and ready.  Select an agent from the sidebar to begin.
                             action = new_action;
                         }
                     }
+
+                    // ── Memory-viewer overlay (M16) ───────────────
+                    if memory_open {
+                        if let Some(new_action) = render_memory_overlay(
+                            ui.ctx(),
+                            memory_blocks,
+                            memory_selection,
+                            memory_edit_buffer,
+                            memory_loading,
+                            memory_saving,
+                            memory_error.as_deref(),
+                        ) {
+                            action = new_action;
+                        }
+                    }
                 }
                 Some(SessionState::ConnectionFailed { ref error, .. }) => {
                     ui.colored_label(
@@ -1046,6 +1294,22 @@ Connected and ready.  Select an agent from the sidebar to begin.
                     self.dispatch_palette_cmd(cmd);
                 }
             }
+            AppAction::CloseMemoryOverlay => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.close_memory_overlay();
+                }
+            }
+            AppAction::SelectMemoryBlock(idx) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.select_memory_block(idx);
+                }
+            }
+            AppAction::SetMemoryEditBuffer(v) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.set_memory_edit_buffer(&v);
+                }
+            }
+            AppAction::SaveMemoryBlock => self.spawn_save_memory_block(),
         }
     }
 }
@@ -1080,6 +1344,14 @@ enum AppAction {
     MovePaletteSelection(i32),
     /// Execute whatever command the palette currently highlights.
     ExecutePaletteCmd,
+    /// Close the memory overlay.
+    CloseMemoryOverlay,
+    /// Select a memory block in the overlay sidebar.
+    SelectMemoryBlock(usize),
+    /// Replace the in-flight memory edit buffer (live TextEdit sync).
+    SetMemoryEditBuffer(String),
+    /// Save the currently-edited memory block to the server.
+    SaveMemoryBlock,
 }
 
 /// Render the slash-command palette as a centered floating window.
@@ -1225,6 +1497,220 @@ fn render_palette_overlay(
                 );
             });
         });
+
+    result
+}
+
+/// Render the memory-viewer overlay as a centered floating window.
+///
+/// Left column: list of memory labels (click to select).
+/// Right column: editable text area for the selected block's value, with
+/// Save + Close buttons and per-panel error display.
+#[allow(clippy::too_many_arguments)]
+fn render_memory_overlay(
+    ctx: &egui::Context,
+    blocks: &[crate::api::MemoryBlock],
+    selection: usize,
+    edit_buffer: &str,
+    loading: bool,
+    saving: bool,
+    error: Option<&str>,
+) -> Option<AppAction> {
+    let mut result: Option<AppAction> = None;
+
+    let screen = ctx.content_rect();
+    let w = 760.0_f32.min(screen.width() - 40.0);
+    let h = 520.0_f32.min(screen.height() - 80.0);
+    let pos = egui::pos2(
+        screen.center().x - w / 2.0,
+        screen.center().y - h / 2.0,
+    );
+
+    let mut open = true;
+    egui::Window::new("Memory")
+        .title_bar(false)
+        .resizable(false)
+        .collapsible(false)
+        .open(&mut open)
+        .fixed_pos(pos)
+        .fixed_size([w, h])
+        .frame(
+            egui::Frame::new()
+                .fill(crate::theme::BG_SURFACE1)
+                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_FOCUS))
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(12.0),
+        )
+        .show(ctx, |ui| {
+            ui.set_width(w - 24.0);
+
+            // ── Header ─────────────────────────────────────────────
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("🧠  Agent memory")
+                        .color(crate::theme::PRIMARY)
+                        .strong()
+                        .size(16.0),
+                );
+                if loading {
+                    ui.spinner();
+                    ui.label(
+                        egui::RichText::new("loading…")
+                            .color(crate::theme::TEXT_MUTED)
+                            .small(),
+                    );
+                }
+                ui.with_layout(
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
+                        if ui.small_button("✕").clicked() {
+                            result = Some(AppAction::CloseMemoryOverlay);
+                        }
+                    },
+                );
+            });
+
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(6.0);
+
+            // ── Per-overlay error ────────────────────────────────
+            if let Some(err) = error {
+                egui::Frame::new()
+                    .fill(crate::theme::ERROR.gamma_multiply(0.15))
+                    .stroke(egui::Stroke::new(1.0, crate::theme::ERROR))
+                    .corner_radius(egui::CornerRadius::same(4))
+                    .inner_margin(6.0)
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("⚠ {err}"))
+                                .color(crate::theme::ERROR)
+                                .small(),
+                        );
+                    });
+                ui.add_space(6.0);
+            }
+
+            if blocks.is_empty() && !loading {
+                ui.label(
+                    egui::RichText::new("No memory blocks — nothing to show.")
+                        .color(crate::theme::TEXT_MUTED)
+                        .italics(),
+                );
+                return;
+            }
+
+            // ── Split: left list, right editor ─────────────────
+            let body_height = ui.available_height() - 40.0;
+            let list_width = 180.0;
+
+            ui.horizontal(|ui| {
+                // Left column — block list
+                ui.allocate_ui(egui::vec2(list_width, body_height), |ui| {
+                    egui::ScrollArea::vertical()
+                        .id_salt("mem_block_list")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            for (idx, block) in blocks.iter().enumerate() {
+                                let is_sel = idx == selection;
+                                let bg = if is_sel {
+                                    crate::theme::BG_SURFACE2
+                                } else {
+                                    crate::theme::BG_SURFACE0
+                                };
+                                let resp = egui::Frame::new()
+                                    .fill(bg)
+                                    .corner_radius(egui::CornerRadius::same(4))
+                                    .inner_margin(egui::Margin::symmetric(8, 6))
+                                    .show(ui, |ui| {
+                                        ui.vertical(|ui| {
+                                            ui.label(
+                                                egui::RichText::new(&block.label)
+                                                    .color(crate::theme::PRIMARY)
+                                                    .monospace()
+                                                    .strong(),
+                                            );
+                                            if let Some(tier) = &block.tier {
+                                                ui.label(
+                                                    egui::RichText::new(tier)
+                                                        .color(crate::theme::TEXT_MUTED)
+                                                        .small(),
+                                                );
+                                            }
+                                        });
+                                    })
+                                    .response
+                                    .interact(egui::Sense::click());
+                                if resp.clicked() && !is_sel {
+                                    result = Some(AppAction::SelectMemoryBlock(idx));
+                                }
+                                ui.add_space(2.0);
+                            }
+                        });
+                });
+
+                ui.separator();
+
+                // Right column — editor
+                ui.vertical(|ui| {
+                    let selected = blocks.get(selection);
+                    if let Some(block) = selected {
+                        ui.label(
+                            egui::RichText::new(format!("/{}", block.label))
+                                .color(crate::theme::TEXT_PRIMARY)
+                                .monospace()
+                                .strong(),
+                        );
+                        if let Some(d) = &block.description {
+                            ui.label(
+                                egui::RichText::new(d)
+                                    .color(crate::theme::TEXT_MUTED)
+                                    .small(),
+                            );
+                        }
+                        ui.add_space(4.0);
+
+                        let mut buf = edit_buffer.to_string();
+                        let editor_height = body_height - 70.0;
+                        let resp = ui.add(
+                            egui::TextEdit::multiline(&mut buf)
+                                .desired_rows(12)
+                                .desired_width(ui.available_width())
+                                .min_size(egui::vec2(
+                                    ui.available_width(),
+                                    editor_height,
+                                )),
+                        );
+                        if resp.changed() {
+                            result = Some(AppAction::SetMemoryEditBuffer(buf.clone()));
+                        }
+
+                        ui.add_space(6.0);
+                        ui.horizontal(|ui| {
+                            let save = egui::Button::new(if saving {
+                                "Saving…"
+                            } else {
+                                "Save"
+                            });
+                            if ui
+                                .add_enabled(!saving, save)
+                                .clicked()
+                            {
+                                result = Some(AppAction::SaveMemoryBlock);
+                            }
+                            if saving {
+                                ui.spinner();
+                            }
+                        });
+                    }
+                });
+            });
+        });
+
+    // `open = false` from the window's built-in ✕ button.
+    if !open && result.is_none() {
+        result = Some(AppAction::CloseMemoryOverlay);
+    }
 
     result
 }

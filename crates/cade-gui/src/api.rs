@@ -160,9 +160,7 @@ pub struct ConversationInfo {
     pub message_count: u32,
     #[serde(default)]
     pub updated_at: String,
-}
-
-/// Server envelope for `GET /v1/agents/:id/conversations`.
+}/// Server envelope for `GET /v1/agents/:id/conversations`.
 #[derive(serde::Deserialize)]
 struct ConversationsEnvelope {
     conversations: Vec<ConversationInfo>,
@@ -185,6 +183,77 @@ pub fn decode_conversations_single(
 /// Build the URL for listing or creating conversations.
 pub fn conversations_url(server: &str, agent_id: &str) -> String {
     build_url(server, &format!("/v1/agents/{agent_id}/conversations"))
+}
+
+// ── Memory blocks ───────────────────────────────────────────────────────
+
+/// A single memory block returned by `GET /v1/agents/:id/memory`.
+///
+/// Mirrors the server's `{label, value, description, tier}` shape.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct MemoryBlock {
+    pub label: String,
+    #[serde(default)]
+    pub value: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tier: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct MemoryEnvelope {
+    blocks: Vec<MemoryBlock>,
+}
+
+/// Parse the response from `GET /v1/agents/:id/memory`.
+pub fn parse_memory(status: u16, body: &str) -> Result<Vec<MemoryBlock>, ApiError> {
+    let env: MemoryEnvelope = decode_or_error(status, body)?;
+    Ok(env.blocks)
+}
+
+/// Build the URL for the memory-collection endpoint.
+pub fn memory_url(server: &str, agent_id: &str) -> String {
+    build_url(server, &format!("/v1/agents/{agent_id}/memory"))
+}
+
+/// Build the URL for a single memory-block upsert/delete endpoint.
+pub fn memory_block_url(server: &str, agent_id: &str, label: &str) -> String {
+    build_url(
+        server,
+        &format!("/v1/agents/{agent_id}/memory/{label}"),
+    )
+}
+
+/// Build the request body for `PUT /v1/agents/:id/memory/:label`.
+pub fn upsert_memory_body(value: &str, description: Option<&str>) -> String {
+    match description {
+        Some(d) => serde_json::json!({ "value": value, "description": d }).to_string(),
+        None => serde_json::json!({ "value": value }).to_string(),
+    }
+}
+
+/// Classify the HTTP response for an upsert: server returns 204 on
+/// success.  Anything else is surfaced as an [`ApiError`].
+pub fn classify_upsert(status: u16) -> Result<(), ApiError> {
+    match status {
+        200..=299 => Ok(()),
+        401 => Err(ApiError::Unauthorized),
+        s => Err(ApiError::Server { status: s }),
+    }
+}
+
+// ── Agent config (PATCH /v1/agents/:id) ────────────────────────────────
+
+/// Build the URL for the agent-config PATCH endpoint.
+pub fn agent_url(server: &str, agent_id: &str) -> String {
+    build_url(server, &format!("/v1/agents/{agent_id}"))
+}
+
+/// Build the request body for `PATCH /v1/agents/:id` when only the model
+/// is being updated.
+pub fn patch_agent_model_body(model: &str) -> String {
+    serde_json::json!({ "model": model }).to_string()
 }
 
 // ── SSE event parsing (continued) ───────────────────────────────────────
@@ -515,5 +584,108 @@ mod tests {
             conversations_url("http://localhost:8284", "agent-1"),
             "http://localhost:8284/v1/agents/agent-1/conversations"
         );
+    }
+
+    // -- memory
+
+    #[test]
+    fn memory_url_format() {
+        assert_eq!(
+            memory_url("http://localhost:8284", "agent-1"),
+            "http://localhost:8284/v1/agents/agent-1/memory"
+        );
+    }
+
+    #[test]
+    fn memory_block_url_format() {
+        assert_eq!(
+            memory_block_url("http://localhost:8284", "agent-1", "human"),
+            "http://localhost:8284/v1/agents/agent-1/memory/human"
+        );
+    }
+
+    #[test]
+    fn parse_memory_decodes_blocks() {
+        let body = r#"{"blocks":[
+            {"label":"human","value":"User loves Rust","description":"User info","tier":"short"},
+            {"label":"project","value":"CADE project"}
+        ]}"#;
+        let blocks = parse_memory(200, body).expect("decode");
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].label, "human");
+        assert_eq!(blocks[0].value, "User loves Rust");
+        assert_eq!(blocks[0].description.as_deref(), Some("User info"));
+        assert_eq!(blocks[0].tier.as_deref(), Some("short"));
+        assert_eq!(blocks[1].label, "project");
+        assert!(blocks[1].description.is_none());
+        assert!(blocks[1].tier.is_none());
+    }
+
+    #[test]
+    fn parse_memory_empty_list_is_ok() {
+        let blocks = parse_memory(200, r#"{"blocks":[]}"#).expect("decode");
+        assert!(blocks.is_empty());
+    }
+
+    #[test]
+    fn parse_memory_401_unauthorized() {
+        assert_eq!(parse_memory(401, ""), Err(ApiError::Unauthorized));
+    }
+
+    #[test]
+    fn parse_memory_500_server_error() {
+        assert_eq!(
+            parse_memory(500, "boom"),
+            Err(ApiError::Server { status: 500 })
+        );
+    }
+
+    #[test]
+    fn upsert_memory_body_with_description() {
+        let s = upsert_memory_body("hello", Some("desc"));
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["value"], "hello");
+        assert_eq!(v["description"], "desc");
+    }
+
+    #[test]
+    fn upsert_memory_body_without_description() {
+        let s = upsert_memory_body("hello", None);
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["value"], "hello");
+        assert!(v.get("description").is_none());
+    }
+
+    #[test]
+    fn classify_upsert_accepts_204_and_200() {
+        assert!(classify_upsert(200).is_ok());
+        assert!(classify_upsert(204).is_ok());
+    }
+
+    #[test]
+    fn classify_upsert_401_unauthorized() {
+        assert_eq!(classify_upsert(401), Err(ApiError::Unauthorized));
+    }
+
+    #[test]
+    fn classify_upsert_400_is_server() {
+        assert_eq!(classify_upsert(400), Err(ApiError::Server { status: 400 }));
+    }
+
+    // -- agent config
+
+    #[test]
+    fn agent_url_format() {
+        assert_eq!(
+            agent_url("http://localhost:8284", "agent-1"),
+            "http://localhost:8284/v1/agents/agent-1"
+        );
+    }
+
+    #[test]
+    fn patch_agent_model_body_serializes_model() {
+        let s = patch_agent_model_body("gpt-4");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["model"], "gpt-4");
     }
 }

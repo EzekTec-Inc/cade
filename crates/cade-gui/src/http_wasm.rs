@@ -362,3 +362,65 @@ async fn send_text(url: &str, token: &str) -> Result<(u16, String), ApiError> {
     })?;
     Ok((status, body))
 }
+
+/// `GET /v1/agents/:id/memory` — returns all memory blocks or a typed error.
+pub async fn get_memory(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+) -> Result<Vec<api::MemoryBlock>, ApiError> {
+    let url = api::memory_url(base_url, agent_id);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_memory(status, &body)
+}
+
+/// `PUT /v1/agents/:id/memory/:label` — upsert a memory block's value.
+pub async fn put_memory_block(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    label: &str,
+    value: &str,
+    description: Option<&str>,
+) -> Result<(), ApiError> {
+    let url = api::memory_block_url(base_url, agent_id, label);
+    let body = api::upsert_memory_body(value, description);
+    let resp = Request::put(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .map_err(|e| ApiError::Transport {
+            message: format!("{e:?}"),
+        })?
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
+    api::classify_upsert(resp.status())
+}
+
+/// `PATCH /v1/agents/:id` — update the agent's model (only field we
+/// currently expose).  Returns `Ok(())` on 2xx, a typed error otherwise.
+pub async fn patch_agent_model(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    model: &str,
+) -> Result<(), ApiError> {
+    let url = api::agent_url(base_url, agent_id);
+    let body = api::patch_agent_model_body(model);
+    let resp = Request::patch(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .map_err(|e| ApiError::Transport {
+            message: format!("{e:?}"),
+        })?
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
+    api::classify_upsert(resp.status())
+}

@@ -77,6 +77,21 @@ pub enum SessionState {
         palette_input: String,
         /// Index of the highlighted entry in the filtered palette list.
         palette_selection: usize,
+        /// Whether the memory-viewer overlay is visible.
+        memory_open: bool,
+        /// Memory blocks fetched from `GET /v1/agents/:id/memory`.
+        memory_blocks: Vec<crate::api::MemoryBlock>,
+        /// Index into `memory_blocks` of the currently-viewed block.
+        memory_selection: usize,
+        /// Editable buffer mirrored from the selected block — saved on
+        /// "Save" click via `PUT /v1/agents/:id/memory/:label`.
+        memory_edit_buffer: String,
+        /// True while the GET request is in flight.
+        memory_loading: bool,
+        /// True while a PUT request is in flight.
+        memory_saving: bool,
+        /// Per-overlay error message (shown inside the memory window).
+        memory_error: Option<String>,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -167,6 +182,13 @@ impl SessionState {
                 palette_open: false,
                 palette_input: String::new(),
                 palette_selection: 0,
+                memory_open: false,
+                memory_blocks: Vec::new(),
+                memory_selection: 0,
+                memory_edit_buffer: String::new(),
+                memory_loading: false,
+                memory_saving: false,
+                memory_error: None,
             };
         }
     }
@@ -658,9 +680,195 @@ impl SessionState {
         }
     }
 
+    /// Replace the full agent list (e.g. after a PATCH /v1/agents/:id
+    /// so the sidebar reflects a model change).  Preserves the current
+    /// `selected_agent` index if it still points to an existing row.
+    pub fn refresh_agents(&mut self, new_agents: Vec<AgentInfo>) {
+        if let Self::Connected {
+            agents,
+            selected_agent,
+            ..
+        } = self
+        {
+            // Prefer to keep selection by agent id, not by index — the
+            // list order could theoretically change.
+            let sel_id = selected_agent
+                .and_then(|i| agents.get(i).map(|a| a.id.clone()));
+            *agents = new_agents;
+            *selected_agent = sel_id
+                .and_then(|id| agents.iter().position(|a| a.id == id));
+        }
+    }
+
     /// Whether the session is fully established.
     pub fn is_connected(&self) -> bool {
         matches!(self, Self::Connected { .. })
+    }
+
+    // ── Memory overlay state ───────────────────────────────────────
+
+    /// Open the memory overlay. Marks the panel as loading and clears any
+    /// previous error; caller is responsible for spawning the fetch.
+    pub fn open_memory_overlay(&mut self) {
+        if let Self::Connected {
+            memory_open,
+            memory_loading,
+            memory_error,
+            ..
+        } = self
+        {
+            *memory_open = true;
+            *memory_loading = true;
+            *memory_error = None;
+        }
+    }
+
+    /// Close the memory overlay.  Does not clear blocks (so reopening is
+    /// instant) but does reset the edit buffer + error.
+    pub fn close_memory_overlay(&mut self) {
+        if let Self::Connected {
+            memory_open,
+            memory_saving,
+            memory_error,
+            ..
+        } = self
+        {
+            *memory_open = false;
+            *memory_saving = false;
+            *memory_error = None;
+        }
+    }
+
+    /// Whether the memory overlay is currently open.
+    pub fn is_memory_open(&self) -> bool {
+        matches!(self, Self::Connected { memory_open: true, .. })
+    }
+
+    /// Feed the result of a successful memory fetch.  Resets selection
+    /// to 0 and seeds the edit buffer with the first block.
+    pub fn on_memory_loaded(&mut self, blocks: Vec<crate::api::MemoryBlock>) {
+        if let Self::Connected {
+            memory_blocks,
+            memory_selection,
+            memory_edit_buffer,
+            memory_loading,
+            memory_error,
+            ..
+        } = self
+        {
+            *memory_loading = false;
+            *memory_error = None;
+            *memory_selection = 0;
+            *memory_edit_buffer = blocks
+                .first()
+                .map(|b| b.value.clone())
+                .unwrap_or_default();
+            *memory_blocks = blocks;
+        }
+    }
+
+    /// Feed an error from the memory fetch.  Clears the loading flag.
+    pub fn on_memory_error(&mut self, err: &str) {
+        if let Self::Connected {
+            memory_loading,
+            memory_saving,
+            memory_error,
+            ..
+        } = self
+        {
+            *memory_loading = false;
+            *memory_saving = false;
+            *memory_error = Some(err.to_string());
+        }
+    }
+
+    /// Change which memory block is currently highlighted.  Seeds the
+    /// edit buffer with the new block's value (discarding unsaved edits).
+    /// Returns `true` if the selection changed, `false` otherwise.
+    pub fn select_memory_block(&mut self, idx: usize) -> bool {
+        if let Self::Connected {
+            memory_blocks,
+            memory_selection,
+            memory_edit_buffer,
+            ..
+        } = self
+        {
+            if idx >= memory_blocks.len() {
+                return false;
+            }
+            if *memory_selection == idx {
+                return false;
+            }
+            *memory_selection = idx;
+            *memory_edit_buffer = memory_blocks[idx].value.clone();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Replace the edit-buffer contents — called on every TextEdit change.
+    pub fn set_memory_edit_buffer(&mut self, value: &str) {
+        if let Self::Connected {
+            memory_edit_buffer,
+            ..
+        } = self
+        {
+            *memory_edit_buffer = value.to_string();
+        }
+    }
+
+    /// Mark a save request as in-flight.
+    pub fn on_memory_save_start(&mut self) {
+        if let Self::Connected {
+            memory_saving,
+            memory_error,
+            ..
+        } = self
+        {
+            *memory_saving = true;
+            *memory_error = None;
+        }
+    }
+
+    /// On successful save, persist the edit buffer into the corresponding
+    /// block so the sidebar list reflects the new value.
+    pub fn on_memory_save_ok(&mut self) {
+        if let Self::Connected {
+            memory_blocks,
+            memory_selection,
+            memory_edit_buffer,
+            memory_saving,
+            memory_error,
+            ..
+        } = self
+        {
+            *memory_saving = false;
+            *memory_error = None;
+            if let Some(b) = memory_blocks.get_mut(*memory_selection) {
+                b.value = memory_edit_buffer.clone();
+            }
+        }
+    }
+
+    /// Extract the `(label, value)` tuple currently being edited, so the
+    /// spawn-helper can issue the PUT.  Returns `None` when the overlay
+    /// is closed or no block is selected.
+    pub fn memory_selected_label_value(&self) -> Option<(String, String)> {
+        if let Self::Connected {
+            memory_open: true,
+            memory_blocks,
+            memory_selection,
+            memory_edit_buffer,
+            ..
+        } = self
+        {
+            memory_blocks
+                .get(*memory_selection)
+                .map(|b| (b.label.clone(), memory_edit_buffer.clone()))
+        } else {
+            None
+        }
     }
 
     // ── Palette (slash-command) state ──────────────────────────────
@@ -1831,5 +2039,279 @@ mod tests {
             conversation_id: None,
         }]);
         assert!(s.last_assistant_content().is_none());
+    }
+
+    // ── Memory overlay (M16) ───────────────────────────────────────
+
+    fn test_blocks() -> Vec<crate::api::MemoryBlock> {
+        vec![
+            crate::api::MemoryBlock {
+                label: "human".into(),
+                value: "User loves Rust".into(),
+                description: Some("User info".into()),
+                tier: Some("short".into()),
+            },
+            crate::api::MemoryBlock {
+                label: "project".into(),
+                value: "CADE project".into(),
+                description: None,
+                tier: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn memory_starts_closed() {
+        let s = connected_session();
+        assert!(!s.is_memory_open());
+    }
+
+    #[test]
+    fn open_memory_sets_flags() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        assert!(s.is_memory_open());
+        if let SessionState::Connected {
+            memory_loading,
+            memory_error,
+            ..
+        } = &s
+        {
+            assert!(*memory_loading);
+            assert!(memory_error.is_none());
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn close_memory_resets_transient_flags() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_error("boom");
+        assert_eq!(
+            match &s {
+                SessionState::Connected { memory_error, .. } => memory_error.clone(),
+                _ => None,
+            },
+            Some("boom".to_string())
+        );
+        s.close_memory_overlay();
+        assert!(!s.is_memory_open());
+        if let SessionState::Connected {
+            memory_error,
+            memory_saving,
+            ..
+        } = &s
+        {
+            assert!(memory_error.is_none());
+            assert!(!*memory_saving);
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn memory_loaded_seeds_edit_buffer_with_first_block() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        if let SessionState::Connected {
+            memory_blocks,
+            memory_selection,
+            memory_edit_buffer,
+            memory_loading,
+            ..
+        } = &s
+        {
+            assert_eq!(memory_blocks.len(), 2);
+            assert_eq!(*memory_selection, 0);
+            assert_eq!(memory_edit_buffer, "User loves Rust");
+            assert!(!*memory_loading);
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn memory_loaded_with_empty_list_keeps_empty_buffer() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(Vec::new());
+        if let SessionState::Connected {
+            memory_blocks,
+            memory_edit_buffer,
+            memory_loading,
+            ..
+        } = &s
+        {
+            assert!(memory_blocks.is_empty());
+            assert!(memory_edit_buffer.is_empty());
+            assert!(!*memory_loading);
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn memory_error_clears_loading_and_saving() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_save_start();
+        s.on_memory_error("nope");
+        if let SessionState::Connected {
+            memory_loading,
+            memory_saving,
+            memory_error,
+            ..
+        } = &s
+        {
+            assert!(!*memory_loading);
+            assert!(!*memory_saving);
+            assert_eq!(memory_error.as_deref(), Some("nope"));
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn select_memory_block_updates_buffer() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        // Edit the buffer — this simulates the user typing.
+        s.set_memory_edit_buffer("unsaved edit");
+        let changed = s.select_memory_block(1);
+        assert!(changed);
+        if let SessionState::Connected {
+            memory_selection,
+            memory_edit_buffer,
+            ..
+        } = &s
+        {
+            assert_eq!(*memory_selection, 1);
+            // Buffer is reset to the new block's value — unsaved edit is lost.
+            assert_eq!(memory_edit_buffer, "CADE project");
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn select_memory_block_same_index_returns_false() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        assert!(!s.select_memory_block(0));
+    }
+
+    #[test]
+    fn select_memory_block_out_of_bounds_returns_false() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        assert!(!s.select_memory_block(99));
+    }
+
+    #[test]
+    fn memory_save_ok_persists_buffer_into_block() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        s.set_memory_edit_buffer("User loves Rust AND Python");
+        s.on_memory_save_start();
+        s.on_memory_save_ok();
+        if let SessionState::Connected {
+            memory_blocks,
+            memory_saving,
+            memory_error,
+            ..
+        } = &s
+        {
+            assert_eq!(memory_blocks[0].value, "User loves Rust AND Python");
+            assert!(!*memory_saving);
+            assert!(memory_error.is_none());
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn memory_selected_label_value_returns_current() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        s.set_memory_edit_buffer("new content");
+        assert_eq!(
+            s.memory_selected_label_value(),
+            Some(("human".to_string(), "new content".to_string()))
+        );
+    }
+
+    #[test]
+    fn memory_selected_label_value_none_when_closed() {
+        let mut s = connected_session();
+        s.on_memory_loaded(test_blocks()); // noop because overlay closed
+        assert!(s.memory_selected_label_value().is_none());
+    }
+
+    #[test]
+    fn memory_methods_noop_when_not_connected() {
+        let mut s = SessionState::start("http://localhost:8080", "tok");
+        // Still in Connecting — all memory methods should be no-ops.
+        s.open_memory_overlay();
+        assert!(!s.is_memory_open());
+        s.on_memory_loaded(test_blocks());
+        s.on_memory_error("nope");
+        s.set_memory_edit_buffer("x");
+        s.on_memory_save_start();
+        s.on_memory_save_ok();
+        s.close_memory_overlay();
+        assert!(s.memory_selected_label_value().is_none());
+        assert!(!s.select_memory_block(0));
+    }
+
+    // ── refresh_agents ─────────────────────────────────────────────
+
+    #[test]
+    fn refresh_agents_preserves_selection_by_id() {
+        let mut s = connected_session();
+        s.on_select_agent(1); // pick second agent
+        let selected_id = s.selected_agent_id().unwrap().to_string();
+
+        // Simulate server returning a reordered list with an extra agent.
+        let mut new_agents = test_agents();
+        new_agents.reverse();
+        new_agents.push(AgentInfo {
+            id: "agent-3".into(),
+            name: "New Agent".into(),
+            model: None,
+            provider: None,
+        });
+        s.refresh_agents(new_agents);
+        // Selection should follow the id, so it's still the same agent.
+        assert_eq!(s.selected_agent_id(), Some(selected_id.as_str()));
+    }
+
+    #[test]
+    fn refresh_agents_drops_selection_when_agent_removed() {
+        let mut s = connected_session();
+        s.on_select_agent(0);
+        let new_agents = vec![AgentInfo {
+            id: "different-agent".into(),
+            name: "Different".into(),
+            model: None,
+            provider: None,
+        }];
+        s.refresh_agents(new_agents);
+        assert!(s.selected_agent_id().is_none());
+    }
+
+    #[test]
+    fn refresh_agents_noop_when_not_connected() {
+        let mut s = SessionState::start("http://localhost:8080", "tok");
+        s.refresh_agents(test_agents());
+        // Still Connecting — no panic, no transition.
+        assert!(!s.is_connected());
     }
 }
