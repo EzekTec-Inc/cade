@@ -593,3 +593,13 @@ pub async fn get_models(
     let (status, body) = send_text(&url, token).await?;
     api::parse_models(status, &body)
 }
+
+/// `GET /v1/mcp` — list all MCP servers loaded by the server.
+pub async fn get_mcp_status(
+    base_url: &str,
+    token: &str,
+) -> Result<Vec<api::McpServerInfo>, ApiError> {
+    let url = api::mcp_url(base_url);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_mcp_status(status, &body)
+}

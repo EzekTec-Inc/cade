@@ -177,6 +177,16 @@ pub enum SessionState {
         /// Whether the stats overlay is open.
         stats_open: bool,
 
+        // ── MCP servers overlay ───────────────────────────────────
+        /// Whether the MCP servers overlay is open.
+        mcp_open: bool,
+        /// Servers fetched from `GET /v1/mcp`.
+        mcp_servers: Vec<crate::api::McpServerInfo>,
+        /// True while the GET request is in flight.
+        mcp_loading: bool,
+        /// Per-overlay error message.
+        mcp_error: Option<String>,
+
         // ── Model picker overlay ─────────────────────────────────
         /// Whether the model picker overlay is open.
         model_picker_open: bool,
@@ -326,6 +336,12 @@ impl SessionState {
 
                 agents_open: false,
                 stats_open: false,
+
+                mcp_open: false,
+                mcp_servers: Vec::new(),
+                mcp_loading: false,
+                mcp_error: None,
+
                 model_picker_open: false,
                 model_picker_models: Vec::new(),
                 model_picker_custom_providers: Vec::new(),
@@ -1778,6 +1794,47 @@ impl SessionState {
     /// Whether the stats overlay is open.
     pub fn is_stats_open(&self) -> bool {
         matches!(self, Self::Connected { stats_open: true, .. })
+    }
+
+    // ── MCP servers overlay ────────────────────────────────────────
+
+    /// Open the MCP servers overlay and mark loading state.
+    pub fn open_mcp_overlay(&mut self) {
+        if let Self::Connected { mcp_open, mcp_loading, mcp_error, .. } = self {
+            *mcp_open = true;
+            *mcp_loading = true;
+            *mcp_error = None;
+        }
+    }
+
+    /// Close the MCP servers overlay and clear any error.
+    pub fn close_mcp_overlay(&mut self) {
+        if let Self::Connected { mcp_open, mcp_error, .. } = self {
+            *mcp_open = false;
+            *mcp_error = None;
+        }
+    }
+
+    /// Returns `true` when the MCP overlay is visible.
+    pub fn is_mcp_open(&self) -> bool {
+        matches!(self, Self::Connected { mcp_open: true, .. })
+    }
+
+    /// Store freshly-fetched MCP server list and clear loading state.
+    pub fn on_mcp_loaded(&mut self, servers: Vec<crate::api::McpServerInfo>) {
+        if let Self::Connected { mcp_servers, mcp_loading, mcp_error, .. } = self {
+            *mcp_servers = servers;
+            *mcp_loading = false;
+            *mcp_error = None;
+        }
+    }
+
+    /// Record a fetch error and clear the loading flag.
+    pub fn on_mcp_error(&mut self, err: String) {
+        if let Self::Connected { mcp_loading, mcp_error, .. } = self {
+            *mcp_loading = false;
+            *mcp_error = Some(err);
+        }
     }
 
     // ── Model picker overlay ───────────────────────────────────────
@@ -4148,5 +4205,79 @@ mod tests {
         assert_eq!(s.selected_model_id(), Some("claude-3-5-sonnet".into()));
         s.set_model_picker_selection(1);
         assert_eq!(s.selected_model_id(), Some("gpt-4o".into()));
+    }
+
+    // ── MCP overlay ─────────────────────────────────────────────────────
+
+    fn sample_mcp_servers() -> Vec<crate::api::McpServerInfo> {
+        vec![
+            crate::api::McpServerInfo {
+                key: "desktop-commander".into(),
+                command: "npx @desktop-commander/mcp-server".into(),
+                tools: vec![
+                    "desktop-commander__bash".into(),
+                    "desktop-commander__read_file".into(),
+                ],
+                disabled: false,
+            },
+            crate::api::McpServerInfo {
+                key: "old-server".into(),
+                command: "old-cmd".into(),
+                tools: vec![],
+                disabled: true,
+            },
+        ]
+    }
+
+    #[test]
+    fn mcp_overlay_open_sets_loading() {
+        let mut s = connected_session();
+        assert!(!s.is_mcp_open());
+        s.open_mcp_overlay();
+        assert!(s.is_mcp_open());
+        if let SessionState::Connected { mcp_loading, mcp_error, .. } = &s {
+            assert!(mcp_loading);
+            assert!(mcp_error.is_none());
+        } else {
+            panic!("expected Connected");
+        }
+    }
+
+    #[test]
+    fn mcp_overlay_close_resets_state() {
+        let mut s = connected_session();
+        s.open_mcp_overlay();
+        s.close_mcp_overlay();
+        assert!(!s.is_mcp_open());
+    }
+
+    #[test]
+    fn mcp_on_loaded_populates_servers() {
+        let mut s = connected_session();
+        s.open_mcp_overlay();
+        s.on_mcp_loaded(sample_mcp_servers());
+        if let SessionState::Connected { mcp_servers, mcp_loading, mcp_error, .. } = &s {
+            assert_eq!(mcp_servers.len(), 2);
+            assert_eq!(mcp_servers[0].key, "desktop-commander");
+            assert_eq!(mcp_servers[0].tools.len(), 2);
+            assert!(mcp_servers[1].disabled);
+            assert!(!mcp_loading);
+            assert!(mcp_error.is_none());
+        } else {
+            panic!("expected Connected");
+        }
+    }
+
+    #[test]
+    fn mcp_on_error_sets_message() {
+        let mut s = connected_session();
+        s.open_mcp_overlay();
+        s.on_mcp_error("connection refused".into());
+        if let SessionState::Connected { mcp_loading, mcp_error, .. } = &s {
+            assert!(!mcp_loading);
+            assert_eq!(mcp_error.as_deref(), Some("connection refused"));
+        } else {
+            panic!("expected Connected");
+        }
     }
 }

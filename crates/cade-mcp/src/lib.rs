@@ -49,7 +49,7 @@ const RECONNECT_DELAY_SECS: u64 = 2;
 // -- Types
 
 /// Public summary of a running MCP server (for `/mcp` command display).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct McpStatus {
     pub key: String,
     pub command: String,

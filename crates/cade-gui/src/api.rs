@@ -622,6 +622,45 @@ pub fn models_url(server: &str) -> String {
     build_url(server, "/v1/models")
 }
 
+// ── MCP ──────────────────────────────────────────────────────────────────────
+
+/// One MCP server as returned by `GET /v1/mcp`.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct McpServerInfo {
+    /// The key used in `settings.toml` / `cade.toml` (e.g. `"desktop-commander"`).
+    pub key: String,
+    /// The launch command (e.g. `"npx @desktop-commander/mcp-server"`).
+    pub command: String,
+    /// Prefixed tool names exposed by this server (e.g. `"desktop-commander__bash"`).
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// Whether the server has been disabled in config.
+    #[serde(default)]
+    pub disabled: bool,
+}
+
+/// Envelope for `GET /v1/mcp`.
+#[derive(Debug, serde::Deserialize)]
+struct McpResponse {
+    #[serde(default)]
+    servers: Vec<McpServerInfo>,
+}
+
+/// Parse the response from `GET /v1/mcp`.
+pub fn parse_mcp_status(status: u16, body: &str) -> Result<Vec<McpServerInfo>, ApiError> {
+    if status >= 400 {
+        return Err(ApiError::Server { status });
+    }
+    let resp: McpResponse =
+        serde_json::from_str(body).map_err(|e| ApiError::Decode { message: e.to_string() })?;
+    Ok(resp.servers)
+}
+
+/// Build the URL for the MCP status endpoint.
+pub fn mcp_url(server: &str) -> String {
+    build_url(server, "/v1/mcp")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1391,5 +1430,50 @@ mod tests {
     fn models_url_builds_correctly() {
         let u = models_url("http://localhost:3000");
         assert_eq!(u, "http://localhost:3000/v1/models");
+    }
+
+    // -- MCP
+
+    #[test]
+    fn mcp_url_builds_correctly() {
+        assert_eq!(mcp_url("http://localhost:8284"), "http://localhost:8284/v1/mcp");
+    }
+
+    #[test]
+    fn parse_mcp_status_empty() {
+        let servers = parse_mcp_status(200, r#"{"servers":[]}"#).expect("decode");
+        assert!(servers.is_empty());
+    }
+
+    #[test]
+    fn parse_mcp_status_one_server() {
+        let body = r#"{
+            "servers": [{
+                "key": "desktop-commander",
+                "command": "npx @desktop-commander/mcp-server",
+                "tools": ["desktop-commander__bash", "desktop-commander__read_file"],
+                "disabled": false
+            }]
+        }"#;
+        let servers = parse_mcp_status(200, body).expect("decode");
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers[0].key, "desktop-commander");
+        assert_eq!(servers[0].tools.len(), 2);
+        assert!(!servers[0].disabled);
+    }
+
+    #[test]
+    fn parse_mcp_status_disabled_server() {
+        let body = r#"{"servers":[{"key":"old","command":"old-cmd","tools":[],"disabled":true}]}"#;
+        let s = parse_mcp_status(200, body).expect("decode");
+        assert!(s[0].disabled);
+    }
+
+    #[test]
+    fn parse_mcp_status_500_error() {
+        assert_eq!(
+            parse_mcp_status(500, ""),
+            Err(ApiError::Server { status: 500 })
+        );
     }
 }

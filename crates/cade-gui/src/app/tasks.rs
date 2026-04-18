@@ -780,6 +780,39 @@ impl CadeApp {
         });
     }
 
+    /// Fetch the server-wide MCP server list (`GET /v1/mcp`) and populate
+    /// the MCP overlay.  The overlay must already be open so the loading
+    /// flag is set before this runs.
+    pub(super) fn spawn_fetch_mcp(&mut self) {
+        let (server_url, token) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string())
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::get_mcp_status(&server_url, &token).await {
+                Ok(servers) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_mcp_loaded(servers);
+                    }
+                }
+                Err(e) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_mcp_error(format!("{e}"));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     /// Call `on_send` on the session state, then spawn an async SSE stream
     /// that feeds chunks back into the session.
     pub(super) fn spawn_stream_message(&mut self) {
@@ -995,7 +1028,7 @@ impl CadeApp {
                     ));
                 }
             }
-            PaletteCmd::Skills | PaletteCmd::Mcp => {
+            PaletteCmd::Skills => {
                 let has_agent = self
                     .session
                     .borrow()
@@ -1004,7 +1037,7 @@ impl CadeApp {
                     .is_some();
                 if !has_agent {
                     if let Some(s) = self.session.borrow_mut().as_mut() {
-                        s.push_error("Select an agent before viewing tools/MCP");
+                        s.push_error("Select an agent before viewing skills/tools");
                     }
                     return;
                 }
@@ -1012,6 +1045,12 @@ impl CadeApp {
                     s.open_tools_overlay();
                 }
                 self.spawn_fetch_tools();
+            }
+            PaletteCmd::Mcp => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.open_mcp_overlay();
+                }
+                self.spawn_fetch_mcp();
             }
             PaletteCmd::Agents => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {

@@ -35,7 +35,7 @@ use crate::shortcuts::{ShortcutAction, poll_shortcut};
 // Bring overlay render functions into scope so `ui()` can call them unqualified.
 use overlays::{
     render_agents_overlay, render_artifacts_overlay, render_checkpoints_overlay,
-    render_context_overlay, render_memory_overlay, render_model_picker,
+    render_context_overlay, render_mcp_overlay, render_memory_overlay, render_model_picker,
     render_palette_overlay, render_question_widget, render_stats_overlay,
     render_tools_overlay,
 };
@@ -190,6 +190,11 @@ impl eframe::App for CadeApp {
                     agents_open,
                     stats_open,
 
+                    mcp_open,
+                    ref mcp_servers,
+                    mcp_loading,
+                    ref mcp_error,
+
                     model_picker_open,
                     ref model_picker_models,
                     ref model_picker_custom_providers,
@@ -283,6 +288,10 @@ impl eframe::App for CadeApp {
                     } else if stats_open {
                         if let Some(ShortcutAction::DismissError) = shortcut {
                             action = AppAction::CloseStatsOverlay;
+                        }
+                    } else if mcp_open {
+                        if let Some(ShortcutAction::DismissError) = shortcut {
+                            action = AppAction::CloseMcpOverlay;
                         }
                     } else if model_picker_open {
                         if let Some(ShortcutAction::DismissError) = shortcut {
@@ -972,6 +981,18 @@ impl eframe::App for CadeApp {
                         }
                     }
 
+                    // ── MCP servers overlay ───────────────────────
+                    if mcp_open {
+                        if let Some(new_action) = render_mcp_overlay(
+                            ui.ctx(),
+                            mcp_servers,
+                            mcp_loading,
+                            mcp_error.as_deref(),
+                        ) {
+                            action = new_action;
+                        }
+                    }
+
                     // ── Model picker overlay ─────────────────────
                     if model_picker_open {
                         if let Some(new_action) = render_model_picker(
@@ -1221,6 +1242,11 @@ impl eframe::App for CadeApp {
                     s.close_stats_overlay();
                 }
             }
+            AppAction::CloseMcpOverlay => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.close_mcp_overlay();
+                }
+            }
             AppAction::CloseModelPicker => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     s.close_model_picker();
@@ -1313,6 +1339,8 @@ pub enum AppAction {
     CloseContextOverlay,
     /// Close the stats overlay.
     CloseStatsOverlay,
+    /// Close the MCP servers overlay.
+    CloseMcpOverlay,
     /// Close the model picker overlay.
     CloseModelPicker,
     /// Update model picker search query.

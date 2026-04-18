@@ -13,6 +13,7 @@ cade-core.path       = "../cade-core"
 # -- Others
 derive_more.workspace  = true
 # -- Serialisation
+serde.workspace        = true
 serde_json.workspace   = true
 # -- Logging
 tracing.workspace      = true
