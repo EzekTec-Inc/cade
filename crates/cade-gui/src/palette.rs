@@ -47,6 +47,11 @@ pub enum PaletteCmd {
     Mcp,
     /// Log out and return to the login screen.
     Logout,
+    /// Command name is recognized as a TUI slash command, but the GUI
+    /// has no UI or action mapped for it yet.  The string is the canonical
+    /// lowercase command name (without the leading `/`) so the dispatcher
+    /// can include it in the user-facing message.
+    Unsupported(String),
     /// Unknown command — carries the raw string for error display.
     Unknown(String),
 }
@@ -198,6 +203,55 @@ pub fn parse_palette_input(raw: &str) -> PaletteCmd {
         "skills" | "skill" => PaletteCmd::Skills,
         "mcp" => PaletteCmd::Mcp,
         "logout" | "exit" | "quit" => PaletteCmd::Logout,
+        // Commands the TUI supports but the GUI has no mapped action for
+        // yet.  Accepting them here means the user gets a clear
+        // "supported in TUI, GUI panel coming soon" message rather than
+        // a bare "Unknown command".  Aliases canonicalize to the primary
+        // trigger name so the dispatcher sees a stable identifier.
+        //
+        // Tier A — agent / session lifecycle
+        "resume" => PaletteCmd::Unsupported("resume".into()),
+        "rename" => PaletteCmd::Unsupported("rename".into()),
+        "delete" | "del" | "rm-agent" => PaletteCmd::Unsupported("delete".into()),
+        "new-agent" => PaletteCmd::Unsupported("new-agent".into()),
+        "pin" => PaletteCmd::Unsupported("pin".into()),
+        "init" => PaletteCmd::Unsupported("init".into()),
+        "info" => PaletteCmd::Unsupported("info".into()),
+        "feedback" => PaletteCmd::Unsupported("feedback".into()),
+        // Tier B — mode / behavior toggles
+        "plan" => PaletteCmd::Unsupported("plan".into()),
+        "yolo" => PaletteCmd::Unsupported("yolo".into()),
+        "default" | "normal" => PaletteCmd::Unsupported("default".into()),
+        "mode" => PaletteCmd::Unsupported("mode".into()),
+        "todos" => PaletteCmd::Unsupported("todos".into()),
+        "todo" => PaletteCmd::Unsupported("todo".into()),
+        "reasoning" => PaletteCmd::Unsupported("reasoning".into()),
+        "stream" => PaletteCmd::Unsupported("stream".into()),
+        "mouse" | "select" => PaletteCmd::Unsupported("mouse".into()),
+        "toolset" => PaletteCmd::Unsupported("toolset".into()),
+        "theme" => PaletteCmd::Unsupported("theme".into()),
+        // Tier C — tools / integrations
+        "providers" | "provider-list" => PaletteCmd::Unsupported("providers".into()),
+        "connect" => PaletteCmd::Unsupported("connect".into()),
+        "disconnect" => PaletteCmd::Unsupported("disconnect".into()),
+        "permissions" => PaletteCmd::Unsupported("permissions".into()),
+        "hooks" => PaletteCmd::Unsupported("hooks".into()),
+        "subagents" | "agents-list" => PaletteCmd::Unsupported("subagents".into()),
+        "mcp-save" => PaletteCmd::Unsupported("mcp-save".into()),
+        "link" => PaletteCmd::Unsupported("link".into()),
+        "unlink" => PaletteCmd::Unsupported("unlink".into()),
+        "approve-always" => PaletteCmd::Unsupported("approve-always".into()),
+        "deny-always" => PaletteCmd::Unsupported("deny-always".into()),
+        "reflect" => PaletteCmd::Unsupported("reflect".into()),
+        "summarize" | "summary" => PaletteCmd::Unsupported("summarize".into()),
+        // Tier D — data ops
+        "export" => PaletteCmd::Unsupported("export".into()),
+        "remember" => PaletteCmd::Unsupported("remember".into()),
+        "pricing" => PaletteCmd::Unsupported("pricing".into()),
+        "backend" => PaletteCmd::Unsupported("backend".into()),
+        "compaction-model" => PaletteCmd::Unsupported("compaction-model".into()),
+        "debug-last" | "debug_last" => PaletteCmd::Unsupported("debug-last".into()),
+        "fork" => PaletteCmd::Unsupported("fork".into()),
         other => PaletteCmd::Unknown(other.to_string()),
     }
 }
@@ -326,6 +380,46 @@ mod tests {
     #[test]
     fn parse_trims_whitespace() {
         assert_eq!(parse_palette_input("  /new  "), PaletteCmd::New);
+    }
+
+    // -- Tier A: TUI-known commands that the GUI recognizes but has no
+    //    mapped behavior for yet.  These must round-trip as
+    //    `Unsupported(<canonical-name>)` so the UI can show a helpful
+    //    message instead of "Unknown command".
+    #[test]
+    fn parse_slash_tui_only_commands_are_unsupported() {
+        // One representative from each of the four tiers identified in
+        // the TUI → GUI gap analysis.  A full matrix would be noisy; this
+        // single test locks in the contract.
+        let cases = [
+            ("/providers", "providers"),   // Tier C — integrations
+            ("/plan", "plan"),             // Tier B — mode toggle
+            ("/resume", "resume"),         // Tier A — agent lifecycle
+            ("/export", "export"),         // Tier D — data op
+            ("/reflect", "reflect"),       // Tier C — memory op
+            ("/hooks", "hooks"),           // Tier C — integrations
+        ];
+        for (input, expected) in cases {
+            match parse_palette_input(input) {
+                PaletteCmd::Unsupported(name) => assert_eq!(
+                    name, expected,
+                    "input {input} should map to Unsupported({expected})"
+                ),
+                other => panic!(
+                    "expected Unsupported({expected}) for {input}, got {other:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_slash_still_unknown_for_truly_unknown() {
+        // Guard: the Unsupported path must not swallow genuinely unknown
+        // input.  `/zzzunknown` is not a TUI command, so it stays Unknown.
+        match parse_palette_input("/zzzunknown") {
+            PaletteCmd::Unknown(s) => assert_eq!(s, "zzzunknown"),
+            other => panic!("expected Unknown, got {other:?}"),
+        }
     }
 
     // -- fuzzy_filter

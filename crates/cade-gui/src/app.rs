@@ -604,6 +604,17 @@ impl CadeApp {
                     s.push_error(&format!("Unknown command: /{raw}"));
                 }
             }
+            PaletteCmd::Unsupported(name) => {
+                // TUI recognizes this command but the GUI has no UI or
+                // backing action for it yet.  Surface a message that
+                // tells the user exactly which command and where to
+                // reach it today (the CLI / TUI).
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.push_error(&format!(
+                        "/{name} is available in the CADE CLI/TUI — GUI panel coming soon"
+                    ));
+                }
+            }
             // Commands that require server-side plumbing not yet wired up
             // (M17–M18).  Surface a friendly "coming soon" toast so users
             // know the command was recognized.

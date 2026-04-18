@@ -1,4 +1,56 @@
-## 2026-04-17T19:37:00Z — cade-gui M8: trunk + rust-embed — serve real WASM at /dashboard
+## 2026-04-18T01:11:17Z — cade-gui M16.5: palette recognizes all TUI slash commands
+
+**Task:** Close the gap between TUI and GUI slash-command coverage at the palette layer. Previously, typing a TUI-only command (e.g. `/providers`, `/plan`, `/hooks`, `/reflect`) in the GUI palette hit `PaletteCmd::Unknown` and showed "Unknown command". Now those commands are recognized, canonicalized, and surface a user-facing message that tells the user the feature is available in the CLI/TUI today with a GUI panel coming soon.
+
+**Scope guardrail:** Palette parser + dispatch only. No new UI panels. No new server HTTP calls. No new egui widgets. No new dependencies. No changes to existing `PaletteCmd` variants. No changes to any other crate.
+
+**Files modified:**
+- `crates/cade-gui/src/palette.rs`
+  - Added `PaletteCmd::Unsupported(String)` variant, carrying the canonical lowercase TUI command name (without the leading `/`).
+  - Extended `parse_palette_input` to recognize 30 TUI-only commands across four tiers (lifecycle, mode toggles, integrations, data ops) and map each to `PaletteCmd::Unsupported(<canonical>)`.
+  - Canonical names and alias mappings (e.g. `del`/`rm-agent` → `delete`, `agents-list` → `subagents`, `provider-list` → `providers`, `debug_last` → `debug-last`, `normal` → `default`, `select` → `mouse`, `summary` → `summarize`) match `crates/cade-cli/src/cli/repl/slash.rs` so a user's muscle memory from the TUI works in the GUI.
+  - Added two tests:
+    - `parse_slash_tui_only_commands_are_unsupported` — locks in representative mappings across all four tiers (`/providers`, `/plan`, `/resume`, `/export`, `/reflect`, `/hooks`).
+    - `parse_slash_still_unknown_for_truly_unknown` — regression guard ensuring the new Unsupported path does not swallow genuinely unknown input.
+
+- `crates/cade-gui/src/app.rs`
+  - Added `PaletteCmd::Unsupported(name)` match arm to `dispatch_palette_cmd`, pushing a user-facing error toast: `/<name> is available in the CADE CLI/TUI — GUI panel coming soon`.
+  - No other control-flow changes.
+
+**Dependency policy:** No new dependencies. Change is entirely within existing cade-gui modules.
+
+**TDD record:**
+- RED: `cargo test -p cade-gui --lib palette::` failed with E0599 "no variant `Unsupported` found for enum PaletteCmd".
+- GREEN (parser): added variant + 30 match arms; `cargo test -p cade-gui --lib palette::` → 20/20 pass.
+- RED (dispatcher, wasm target): `cargo build -p cade-gui --target wasm32-unknown-unknown` failed with E0004 "non-exhaustive patterns: `PaletteCmd::Unsupported(_)` not covered" (expected — `app.rs` is wasm-only, native check didn't catch it).
+- GREEN (dispatcher): added match arm emitting error toast; `RUSTFLAGS="-D warnings" cargo build -p cade-gui --target wasm32-unknown-unknown` → clean.
+- Regression: full `cargo test --workspace` → all suites pass (cade-gui 197/197, workspace totals unchanged otherwise).
+
+**Build pipeline:**
+1. `trunk build --release` in `crates/cade-gui` → new dashboard bundle hash `59ac82027149375d` (was `9df6c4299304ccf`; +a few KB from the enlarged parser match table).
+2. `cargo build --release --bin cade-server` → `build.rs` fired via the new dist watch, rust-embed re-baked the fresh WASM, binary now contains the M16.5 palette.
+
+**Previous behavior:** Typing `/providers`, `/plan`, `/hooks`, `/reflect`, `/export`, `/resume`, `/permissions`, `/yolo`, `/mode`, etc. in the GUI palette produced "Unknown command: /providers" — indistinguishable from a typo.
+
+**New behavior:** Same input now produces "/providers is available in the CADE CLI/TUI — GUI panel coming soon", telling the user (a) the command name is valid, (b) where to reach it today, (c) it's on the roadmap. TUI muscle memory is preserved.
+
+**Commands now recognized (all surface the Unsupported toast):**
+- Lifecycle: `/resume`, `/rename`, `/delete` (aliases `/del`, `/rm-agent`), `/new-agent`, `/pin`, `/init`, `/info`, `/feedback`.
+- Mode toggles: `/plan`, `/yolo`, `/default` (alias `/normal`), `/mode`, `/todos`, `/todo`, `/reasoning`, `/stream`, `/mouse` (alias `/select`), `/toolset`, `/theme`.
+- Integrations: `/providers` (alias `/provider-list`), `/connect`, `/disconnect`, `/permissions`, `/hooks`, `/subagents` (alias `/agents-list`), `/mcp-save`, `/link`, `/unlink`, `/approve-always`, `/deny-always`, `/reflect`, `/summarize` (alias `/summary`).
+- Data ops: `/export`, `/remember`, `/pricing`, `/backend`, `/compaction-model`, `/debug-last` (alias `/debug_last`), `/fork`.
+
+Existing mappings unchanged: `/checkpoint`, `/checkpoints`, `/undo`, `/tree` still → `PaletteCmd::Checkpoints` (M17 stub). `/cost`, `/usage`, `/stats` still → `PaletteCmd::Stats` (M17 stub). `/memory`, `/mem` still fully wired.
+
+**Compatibility:** No breaking changes. `PaletteCmd::Unknown` remains for genuinely unknown input. Existing palette UI, `CMD_DEFS` fuzzy-search table, and keyboard shortcuts are untouched — these new commands do not appear in the palette browse list by design (they have no working action, so advertising them would be misleading). Users discover them via direct typing, matching TUI behavior.
+
+**Rollback steps:**
+1. `git revert <this-commit>` — reverts the single commit.
+2. Or restore checkpoint `cp-484fb085-db65-4b24-9e1a-5ee028c0c491` (label `before-palette-expansion`, HEAD `14e39711`) for a working-tree restore.
+
+---
+
+
 
 **Task:** Build cade-gui into a real WASM bundle via `trunk build` and serve the assets from cade-server using `rust-embed` at `/dashboard` and `/dashboard/*`.
 
