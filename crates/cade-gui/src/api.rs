@@ -561,6 +561,51 @@ pub fn context_url(server: &str, agent_id: &str) -> String {
     build_url(server, &format!("/v1/agents/{agent_id}/context"))
 }
 
+// ── Models listing ────────────────────────────────────────────────────
+
+/// A model entry from the `GET /v1/models` response.
+///
+/// Mirrors `cade_ai::catalogue::ModelEntry` shape but only the fields
+/// the GUI needs.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ModelInfo {
+    pub provider: String,
+    pub id: String,
+    #[serde(default)]
+    pub display_name: String,
+    #[serde(default)]
+    pub context_window: u32,
+}
+
+/// Envelope for `GET /v1/models`.
+#[derive(Debug, serde::Deserialize)]
+struct ModelsResponse {
+    #[serde(default)]
+    dynamic: Vec<ModelInfo>,
+    #[serde(default)]
+    custom_providers: Vec<String>,
+}
+
+/// Parse the response from `GET /v1/models`.
+///
+/// Returns `(dynamic_models, custom_provider_names)`.
+pub fn parse_models(
+    status: u16,
+    body: &str,
+) -> Result<(Vec<ModelInfo>, Vec<String>), ApiError> {
+    if status >= 400 {
+        return Err(ApiError::Server { status });
+    }
+    let resp: ModelsResponse =
+        serde_json::from_str(body).map_err(|e| ApiError::Decode { message: e.to_string() })?;
+    Ok((resp.dynamic, resp.custom_providers))
+}
+
+/// Build the URL for the models endpoint.
+pub fn models_url(server: &str) -> String {
+    build_url(server, "/v1/models")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1289,5 +1334,46 @@ mod tests {
             parse_context_stats(500, ""),
             Err(ApiError::Server { status: 500 })
         );
+    }
+
+    // ── Models ────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_models_decodes_dynamic_list() {
+        let body = r#"{
+            "supported": [],
+            "dynamic": [
+                {"provider":"anthropic","id":"claude-3-5-sonnet","display_name":"Claude 3.5 Sonnet","context_window":200000},
+                {"provider":"openai","id":"gpt-4o","display_name":"GPT-4o","context_window":128000}
+            ],
+            "custom_providers": ["my-local"]
+        }"#;
+        let (models, custom) = parse_models(200, body).expect("decode");
+        assert_eq!(models.len(), 2);
+        assert_eq!(models[0].id, "claude-3-5-sonnet");
+        assert_eq!(models[0].provider, "anthropic");
+        assert_eq!(models[1].context_window, 128000);
+        assert_eq!(custom, vec!["my-local"]);
+    }
+
+    #[test]
+    fn parse_models_empty_response() {
+        let (models, custom) = parse_models(200, r#"{"supported":[],"dynamic":[],"custom_providers":[]}"#).expect("decode");
+        assert!(models.is_empty());
+        assert!(custom.is_empty());
+    }
+
+    #[test]
+    fn parse_models_500_error() {
+        assert_eq!(
+            parse_models(500, ""),
+            Err(ApiError::Server { status: 500 })
+        );
+    }
+
+    #[test]
+    fn models_url_builds_correctly() {
+        let u = models_url("http://localhost:3000");
+        assert_eq!(u, "http://localhost:3000/v1/models");
     }
 }

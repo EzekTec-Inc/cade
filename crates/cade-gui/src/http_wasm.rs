@@ -582,3 +582,13 @@ pub async fn get_context_stats(
     let (status, body) = send_text(&url, token).await?;
     api::parse_context_stats(status, &body)
 }
+
+/// `GET /v1/models` — list all available models from all providers.
+pub async fn get_models(
+    base_url: &str,
+    token: &str,
+) -> Result<(Vec<api::ModelInfo>, Vec<String>), ApiError> {
+    let url = api::models_url(base_url);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_models(status, &body)
+}

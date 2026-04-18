@@ -176,6 +176,22 @@ pub enum SessionState {
         // ── Stats overlay (M19 item 3 /stats) ────────────────────
         /// Whether the stats overlay is open.
         stats_open: bool,
+
+        // ── Model picker overlay ─────────────────────────────────
+        /// Whether the model picker overlay is open.
+        model_picker_open: bool,
+        /// Available models fetched from `GET /v1/models`.
+        model_picker_models: Vec<crate::api::ModelInfo>,
+        /// Custom provider names (no model listing available).
+        model_picker_custom_providers: Vec<String>,
+        /// Fuzzy filter query typed in the model picker search box.
+        model_picker_query: String,
+        /// Index of the currently highlighted model in the filtered list.
+        model_picker_selection: usize,
+        /// Whether models are currently being fetched.
+        model_picker_loading: bool,
+        /// Error message from model fetch failure.
+        model_picker_error: Option<String>,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -310,6 +326,13 @@ impl SessionState {
 
                 agents_open: false,
                 stats_open: false,
+                model_picker_open: false,
+                model_picker_models: Vec::new(),
+                model_picker_custom_providers: Vec::new(),
+                model_picker_query: String::new(),
+                model_picker_selection: 0,
+                model_picker_loading: false,
+                model_picker_error: None,
             };
         }
     }
@@ -1733,6 +1756,124 @@ impl SessionState {
         matches!(self, Self::Connected { stats_open: true, .. })
     }
 
+    // ── Model picker overlay ───────────────────────────────────────
+
+    /// Open the model picker overlay and mark loading state.
+    pub fn open_model_picker(&mut self) {
+        if let Self::Connected {
+            model_picker_open,
+            model_picker_query,
+            model_picker_selection,
+            model_picker_loading,
+            model_picker_error,
+            ..
+        } = self
+        {
+            *model_picker_open = true;
+            model_picker_query.clear();
+            *model_picker_selection = 0;
+            *model_picker_loading = true;
+            *model_picker_error = None;
+        }
+    }
+
+    /// Close the model picker overlay.
+    pub fn close_model_picker(&mut self) {
+        if let Self::Connected {
+            model_picker_open, ..
+        } = self
+        {
+            *model_picker_open = false;
+        }
+    }
+
+    /// Whether the model picker overlay is open.
+    pub fn is_model_picker_open(&self) -> bool {
+        matches!(
+            self,
+            Self::Connected {
+                model_picker_open: true,
+                ..
+            }
+        )
+    }
+
+    /// Called when models are successfully fetched.
+    pub fn on_models_loaded(
+        &mut self,
+        models: Vec<crate::api::ModelInfo>,
+        custom_providers: Vec<String>,
+    ) {
+        if let Self::Connected {
+            model_picker_models,
+            model_picker_custom_providers,
+            model_picker_loading,
+            model_picker_error,
+            ..
+        } = self
+        {
+            *model_picker_models = models;
+            *model_picker_custom_providers = custom_providers;
+            *model_picker_loading = false;
+            *model_picker_error = None;
+        }
+    }
+
+    /// Called when model fetch fails.
+    pub fn on_models_error(&mut self, err: String) {
+        if let Self::Connected {
+            model_picker_loading,
+            model_picker_error,
+            ..
+        } = self
+        {
+            *model_picker_loading = false;
+            *model_picker_error = Some(err);
+        }
+    }
+
+    /// Set the model picker search query and reset selection to 0.
+    pub fn set_model_picker_query(&mut self, q: String) {
+        if let Self::Connected {
+            model_picker_query,
+            model_picker_selection,
+            ..
+        } = self
+        {
+            *model_picker_query = q;
+            *model_picker_selection = 0;
+        }
+    }
+
+    /// Set the model picker selection index.
+    pub fn set_model_picker_selection(&mut self, idx: usize) {
+        if let Self::Connected {
+            model_picker_selection,
+            ..
+        } = self
+        {
+            *model_picker_selection = idx;
+        }
+    }
+
+    /// Get the currently selected model ID from the filtered list.
+    ///
+    /// Returns `None` if no models or selection is out of range.
+    pub fn selected_model_id(&self) -> Option<String> {
+        if let Self::Connected {
+            model_picker_models,
+            model_picker_query,
+            model_picker_selection,
+            ..
+        } = self
+        {
+            let filtered = filter_models(model_picker_models, model_picker_query);
+            filtered.get(*model_picker_selection).map(|m| m.id.clone())
+        } else {
+            None
+        }
+    }
+
     // ── Palette (slash-command) state ──────────────────────────────
 
     /// Open the slash-command palette overlay.
@@ -1830,6 +1971,28 @@ impl SessionState {
             None
         }
     }
+}
+
+// ── Model filtering helper ────────────────────────────────────────────
+
+/// Filter models by a fuzzy query.  Matches against `id`, `display_name`,
+/// and `provider` (case-insensitive substring).
+pub fn filter_models<'a>(
+    models: &'a [crate::api::ModelInfo],
+    query: &str,
+) -> Vec<&'a crate::api::ModelInfo> {
+    if query.is_empty() {
+        return models.iter().collect();
+    }
+    let q = query.to_lowercase();
+    models
+        .iter()
+        .filter(|m| {
+            m.id.to_lowercase().contains(&q)
+                || m.display_name.to_lowercase().contains(&q)
+                || m.provider.to_lowercase().contains(&q)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -3847,5 +4010,119 @@ mod tests {
         assert!(s.is_stats_open());
         s.close_stats_overlay();
         assert!(!s.is_stats_open());
+    }
+
+    // ── Model picker tests ───────────────────────────────────────────
+
+    fn sample_models() -> Vec<crate::api::ModelInfo> {
+        vec![
+            crate::api::ModelInfo {
+                provider: "anthropic".into(),
+                id: "claude-3-5-sonnet".into(),
+                display_name: "Claude 3.5 Sonnet".into(),
+                context_window: 200_000,
+            },
+            crate::api::ModelInfo {
+                provider: "openai".into(),
+                id: "gpt-4o".into(),
+                display_name: "GPT-4o".into(),
+                context_window: 128_000,
+            },
+            crate::api::ModelInfo {
+                provider: "anthropic".into(),
+                id: "claude-3-haiku".into(),
+                display_name: "Claude 3 Haiku".into(),
+                context_window: 200_000,
+            },
+        ]
+    }
+
+    #[test]
+    fn model_picker_open_close() {
+        let mut s = connected_session();
+        assert!(!s.is_model_picker_open());
+        s.open_model_picker();
+        assert!(s.is_model_picker_open());
+        s.close_model_picker();
+        assert!(!s.is_model_picker_open());
+    }
+
+    #[test]
+    fn model_picker_loads_models() {
+        let mut s = connected_session();
+        s.open_model_picker();
+        s.on_models_loaded(sample_models(), vec!["custom-local".into()]);
+        if let SessionState::Connected {
+            model_picker_models,
+            model_picker_custom_providers,
+            model_picker_loading,
+            ..
+        } = &s
+        {
+            assert_eq!(model_picker_models.len(), 3);
+            assert_eq!(model_picker_custom_providers, &["custom-local"]);
+            assert!(!model_picker_loading);
+        } else {
+            panic!("expected Connected");
+        }
+    }
+
+    #[test]
+    fn model_picker_error_state() {
+        let mut s = connected_session();
+        s.open_model_picker();
+        s.on_models_error("network error".into());
+        if let SessionState::Connected {
+            model_picker_loading,
+            model_picker_error,
+            ..
+        } = &s
+        {
+            assert!(!model_picker_loading);
+            assert_eq!(model_picker_error.as_deref(), Some("network error"));
+        } else {
+            panic!("expected Connected");
+        }
+    }
+
+    #[test]
+    fn model_picker_query_resets_selection() {
+        let mut s = connected_session();
+        s.open_model_picker();
+        s.on_models_loaded(sample_models(), vec![]);
+        s.set_model_picker_selection(2);
+        s.set_model_picker_query("gpt".into());
+        if let SessionState::Connected {
+            model_picker_selection,
+            model_picker_query,
+            ..
+        } = &s
+        {
+            assert_eq!(*model_picker_selection, 0);
+            assert_eq!(model_picker_query, "gpt");
+        } else {
+            panic!("expected Connected");
+        }
+    }
+
+    #[test]
+    fn filter_models_matches_id_provider_display() {
+        let models = sample_models();
+        assert_eq!(super::filter_models(&models, "").len(), 3);
+        assert_eq!(super::filter_models(&models, "claude").len(), 2);
+        assert_eq!(super::filter_models(&models, "openai").len(), 1);
+        assert_eq!(super::filter_models(&models, "GPT").len(), 1);
+        assert_eq!(super::filter_models(&models, "haiku").len(), 1);
+        assert_eq!(super::filter_models(&models, "xyz").len(), 0);
+    }
+
+    #[test]
+    fn selected_model_id_returns_correct_id() {
+        let mut s = connected_session();
+        s.open_model_picker();
+        s.on_models_loaded(sample_models(), vec![]);
+        assert_eq!(s.selected_model_id(), Some("claude-3-5-sonnet".into()));
+        s.set_model_picker_selection(1);
+        assert_eq!(s.selected_model_id(), Some("gpt-4o".into()));
     }
 }

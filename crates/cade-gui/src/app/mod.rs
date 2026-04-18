@@ -35,8 +35,9 @@ use crate::shortcuts::{ShortcutAction, poll_shortcut};
 // Bring overlay render functions into scope so `ui()` can call them unqualified.
 use overlays::{
     render_agents_overlay, render_artifacts_overlay, render_checkpoints_overlay,
-    render_context_overlay, render_memory_overlay, render_palette_overlay, render_question_widget,
-    render_stats_overlay, render_tools_overlay,
+    render_context_overlay, render_memory_overlay, render_model_picker,
+    render_palette_overlay, render_question_widget, render_stats_overlay,
+    render_tools_overlay,
 };
 // Bring view helpers into scope.
 use views::{render_timeline_message, render_welcome};
@@ -188,6 +189,14 @@ impl eframe::App for CadeApp {
 
                     agents_open,
                     stats_open,
+
+                    model_picker_open,
+                    ref model_picker_models,
+                    ref model_picker_custom_providers,
+                    ref model_picker_query,
+                    model_picker_selection,
+                    model_picker_loading,
+                    ref model_picker_error,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -274,6 +283,10 @@ impl eframe::App for CadeApp {
                     } else if stats_open {
                         if let Some(ShortcutAction::DismissError) = shortcut {
                             action = AppAction::CloseStatsOverlay;
+                        }
+                    } else if model_picker_open {
+                        if let Some(ShortcutAction::DismissError) = shortcut {
+                            action = AppAction::CloseModelPicker;
                         }
                     } else if active_question.is_some() {
                         // Inline question widget captures arrow keys + Enter + Esc.
@@ -482,49 +495,82 @@ impl eframe::App for CadeApp {
                             );
                         });
 
-                    // ── Bottom panel: input bar ─────────────────────
+                    // ── Bottom panel: input bar (TUI-matched) ────────
                     egui::Panel::bottom("input_bar")
-                        .min_size(56.0)
+                        .min_size(48.0)
                         .show_inside(ui, |ui| {
-                            // Outer frame gives the input bar a card feel.
-                            egui::Frame::new()
-                                .fill(crate::theme::BG_SURFACE0)
-                                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_BASE))
-                                .corner_radius(egui::CornerRadius::same(10))
-                                .inner_margin(egui::Margin::symmetric(10, 8))
-                                .show(ui, |ui| {
-                                    let can_edit = has_agent && !is_streaming;
-                                    ui.horizontal(|ui| {
-                                        // Palette trigger hint chip
-                                        if has_agent && !is_streaming {
-                                            let chip = egui::Button::new(
-                                                egui::RichText::new("/")
-                                                    .color(crate::theme::TEXT_DIM)
-                                                    .monospace()
-                                                    .size(13.0),
-                                            )
-                                            .fill(crate::theme::BG_SURFACE1)
-                                            .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_BASE))
-                                            .corner_radius(egui::CornerRadius::same(6));
-                                            if ui.add(chip).on_hover_text("Open command palette (Ctrl+K or /)").clicked() {
-                                                action = AppAction::OpenPalette(String::new());
-                                            }
-                                            ui.add_space(4.0);
-                                        }
+                            let can_edit = has_agent && !is_streaming;
 
+                            // ── Top separator ─────────────────────────
+                            let sep_color = if is_streaming {
+                                crate::theme::PRIMARY
+                            } else {
+                                crate::theme::BORDER_BASE
+                            };
+                            let sep_rect = ui.available_rect_before_wrap();
+                            let sep_rect = egui::Rect::from_min_size(
+                                sep_rect.min,
+                                egui::vec2(sep_rect.width(), 1.0),
+                            );
+                            ui.painter().rect_filled(sep_rect, 0.0, sep_color);
+                            ui.advance_cursor_after_rect(sep_rect);
+
+                            // ── Input row ─────────────────────────────
+                            egui::Frame::new()
+                                .fill(crate::theme::BG_INPUT)
+                                .inner_margin(egui::Margin::symmetric(8, 6))
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        // Mode badge — mirrors TUI's input_mode_badge
+                                        let badge_text = if is_streaming {
+                                            " WAIT "
+                                        } else if !has_agent {
+                                            " ··· "
+                                        } else {
+                                            " CHAT "
+                                        };
+                                        let badge_bg = if is_streaming {
+                                            crate::theme::WARNING
+                                        } else {
+                                            crate::theme::BG_SURFACE2
+                                        };
+                                        let badge = egui::RichText::new(badge_text)
+                                            .color(crate::theme::TEXT_PRIMARY)
+                                            .strong()
+                                            .size(11.0)
+                                            .background_color(badge_bg);
+                                        ui.label(badge);
+
+                                        // Prompt prefix "> "
+                                        ui.label(
+                                            egui::RichText::new("> ")
+                                                .color(crate::theme::TEXT_DIM)
+                                                .monospace()
+                                                .size(14.0),
+                                        );
+
+                                        // Text input — multiline, full width
                                         let hint = if !has_agent {
                                             "Select an agent first…"
                                         } else if is_streaming {
                                             "Waiting for response…"
                                         } else {
-                                            "Message CADE…  (Ctrl+L to focus)"
+                                            "Type a message or paste code…"
                                         };
+
+                                        let desired_w = ui.available_width() - 40.0;
                                         let resp = ui.add_enabled(
                                             can_edit,
-                                            egui::TextEdit::singleline(&mut input_edit)
+                                            egui::TextEdit::multiline(&mut input_edit)
                                                 .id(self.input_id)
-                                                .hint_text(hint)
-                                                .desired_width(ui.available_width() - 72.0),
+                                                .hint_text(
+                                                    egui::RichText::new(hint)
+                                                        .color(crate::theme::TEXT_DIM),
+                                                )
+                                                .desired_width(desired_w)
+                                                .desired_rows(1)
+                                                .lock_focus(true)
+                                                .font(egui::TextStyle::Monospace),
                                         );
 
                                         if request_focus_input {
@@ -550,14 +596,18 @@ impl eframe::App for CadeApp {
                                             }
                                         }
 
-                                        let enter_pressed = resp.lost_focus()
-                                            && ui.input(|i| i.key_pressed(egui::Key::Enter));
-                                        let send_enabled = can_edit && !input_edit.trim().is_empty();
+                                        // Enter sends (Shift+Enter for newline in multiline)
+                                        let enter_pressed = ui.input(|i| {
+                                            i.key_pressed(egui::Key::Enter)
+                                                && !i.modifiers.shift
+                                        }) && resp.has_focus();
+                                        let send_enabled =
+                                            can_edit && !input_edit.trim().is_empty();
 
                                         if is_streaming {
-                                            ui.add_space(4.0);
                                             ui.spinner();
                                         } else {
+                                            // Send button — circular, TUI-matched
                                             let send_btn = egui::Button::new(
                                                 egui::RichText::new("↑")
                                                     .color(if send_enabled {
@@ -566,7 +616,7 @@ impl eframe::App for CadeApp {
                                                         crate::theme::TEXT_DIM
                                                     })
                                                     .strong()
-                                                    .size(16.0),
+                                                    .size(15.0),
                                             )
                                             .fill(if send_enabled {
                                                 crate::theme::PRIMARY
@@ -574,10 +624,11 @@ impl eframe::App for CadeApp {
                                                 crate::theme::BG_SURFACE2
                                             })
                                             .stroke(egui::Stroke::NONE)
-                                            .corner_radius(egui::CornerRadius::same(8))
-                                            .min_size(egui::vec2(32.0, 32.0));
+                                            .corner_radius(egui::CornerRadius::same(14))
+                                            .min_size(egui::vec2(28.0, 28.0));
 
-                                            if ui.add_enabled(send_enabled, send_btn)
+                                            if ui
+                                                .add_enabled(send_enabled, send_btn)
                                                 .on_hover_text("Send (Enter)")
                                                 .clicked()
                                                 || (enter_pressed && send_enabled)
@@ -587,6 +638,77 @@ impl eframe::App for CadeApp {
                                         }
                                     });
                                 });
+
+                            // ── Bottom separator ──────────────────────
+                            let sep_rect = ui.available_rect_before_wrap();
+                            let sep_rect = egui::Rect::from_min_size(
+                                sep_rect.min,
+                                egui::vec2(sep_rect.width(), 1.0),
+                            );
+                            ui.painter().rect_filled(sep_rect, 0.0, crate::theme::BORDER_BASE);
+                            ui.advance_cursor_after_rect(sep_rect);
+
+                            // ── Footer: model + context info ──────────
+                            ui.horizontal(|ui| {
+                                ui.add_space(4.0);
+                                // "/" palette trigger
+                                if has_agent && !is_streaming {
+                                    let chip = egui::Button::new(
+                                        egui::RichText::new(" / ")
+                                            .color(crate::theme::TEXT_DIM)
+                                            .monospace()
+                                            .size(10.0),
+                                    )
+                                    .fill(crate::theme::BG_SURFACE1)
+                                    .stroke(egui::Stroke::new(
+                                        0.5,
+                                        crate::theme::BORDER_BASE,
+                                    ))
+                                    .corner_radius(egui::CornerRadius::same(3));
+                                    if ui
+                                        .add(chip)
+                                        .on_hover_text("Command palette (Ctrl+K)")
+                                        .clicked()
+                                    {
+                                        action = AppAction::OpenPalette(String::new());
+                                    }
+                                }
+                                // Model name
+                                if let Some(idx) = selected_agent {
+                                    if let Some(agent) = agents.get(*idx) {
+                                        if let Some(model_name) = agent.model.as_deref() {
+                                            ui.add_space(6.0);
+                                            ui.label(
+                                                egui::RichText::new(model_name)
+                                                    .color(crate::theme::TEXT_DIM)
+                                                    .size(10.0),
+                                            );
+                                        }
+                                    }
+                                }
+                                // Token usage
+                                if total_input_tokens + total_output_tokens > 0 {
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            let total =
+                                                total_input_tokens + total_output_tokens;
+                                            let label = if total >= 1_000_000 {
+                                                format!("{:.1}M tok", total as f64 / 1e6)
+                                            } else if total >= 1_000 {
+                                                format!("{:.1}K tok", total as f64 / 1e3)
+                                            } else {
+                                                format!("{total} tok")
+                                            };
+                                            ui.label(
+                                                egui::RichText::new(label)
+                                                    .color(crate::theme::TEXT_DIM)
+                                                    .size(10.0),
+                                            );
+                                        },
+                                    );
+                                }
+                            });
                         });
 
                     // ── Central area: timeline ──────────────────────
@@ -850,6 +972,21 @@ impl eframe::App for CadeApp {
                         }
                     }
 
+                    // ── Model picker overlay ─────────────────────
+                    if model_picker_open {
+                        if let Some(new_action) = render_model_picker(
+                            ui.ctx(),
+                            model_picker_models,
+                            model_picker_custom_providers,
+                            model_picker_query,
+                            model_picker_selection,
+                            model_picker_loading,
+                            model_picker_error.as_deref(),
+                        ) {
+                            action = new_action;
+                        }
+                    }
+
                     // ── Inline question widget (M18) ─────────────
                     if let Some(q) = active_question {
                         if let Some(new_action) = render_question_widget(
@@ -1084,6 +1221,28 @@ impl eframe::App for CadeApp {
                     s.close_stats_overlay();
                 }
             }
+            AppAction::CloseModelPicker => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.close_model_picker();
+                }
+            }
+            AppAction::SetModelPickerQuery(q) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.set_model_picker_query(q);
+                }
+            }
+            AppAction::SetModelPickerSelection(idx) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.set_model_picker_selection(idx);
+                }
+            }
+            AppAction::SelectModel(model_id) => {
+                // Close picker, then apply the model
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.close_model_picker();
+                }
+                self.spawn_set_agent_model(model_id);
+            }
         }
     }
 }
@@ -1154,4 +1313,12 @@ pub enum AppAction {
     CloseContextOverlay,
     /// Close the stats overlay.
     CloseStatsOverlay,
+    /// Close the model picker overlay.
+    CloseModelPicker,
+    /// Update model picker search query.
+    SetModelPickerQuery(String),
+    /// Move model picker selection to index.
+    SetModelPickerSelection(usize),
+    /// User selected a model from the picker — apply it.
+    SelectModel(String),
 }
