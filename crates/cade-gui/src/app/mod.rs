@@ -606,18 +606,42 @@ impl eframe::App for CadeApp {
                                         } else {
                                             &conv.title
                                         };
-                                        let label = format!(
-                                            "💬 {} ({})",
-                                            title, conv.message_count
-                                        );
-                                        if ui
-                                            .selectable_label(is_sel, label)
-                                            .clicked()
-                                            && !is_sel
-                                        {
-                                            action =
-                                                AppAction::SelectConversation(ci);
-                                        }
+                                        // Row: [selectable label] [🗑 delete btn]
+                                        ui.horizontal(|ui| {
+                                            let label = format!(
+                                                "💬 {} ({})",
+                                                title, conv.message_count
+                                            );
+                                            if ui
+                                                .selectable_label(is_sel, label)
+                                                .clicked()
+                                                && !is_sel
+                                            {
+                                                action = AppAction::SelectConversation(ci);
+                                            }
+                                            // Push delete button to the right
+                                            ui.with_layout(
+                                                egui::Layout::right_to_left(egui::Align::Center),
+                                                |ui| {
+                                                    let del_btn = egui::Button::new(
+                                                        egui::RichText::new("🗑")
+                                                            .color(crate::theme::TEXT_DIM)
+                                                            .size(11.0),
+                                                    )
+                                                    .fill(egui::Color32::TRANSPARENT)
+                                                    .stroke(egui::Stroke::NONE)
+                                                    .min_size(egui::vec2(18.0, 18.0));
+                                                    if ui
+                                                        .add(del_btn)
+                                                        .on_hover_text("Delete conversation")
+                                                        .clicked()
+                                                    {
+                                                        action =
+                                                            AppAction::DeleteConversation(ci);
+                                                    }
+                                                },
+                                            );
+                                        });
                                     }
                                 }
                                 ui.separator();
@@ -1220,6 +1244,9 @@ impl eframe::App for CadeApp {
                     self.spawn_fetch_conversation_messages();
                 }
             }
+            AppAction::DeleteConversation(idx) => {
+                self.spawn_delete_conversation(idx);
+            }
             AppAction::NewConversation => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     s.on_new_conversation();
@@ -1412,6 +1439,8 @@ pub enum AppAction {
     DismissError,
     /// User selected a conversation in the sidebar.
     SelectConversation(usize),
+    /// User clicked the delete (🗑) button on a conversation in the sidebar.
+    DeleteConversation(usize),
     /// User clicked "New Chat" — start a fresh conversation.
     NewConversation,
     /// User clicked "Load more" to fetch older messages.

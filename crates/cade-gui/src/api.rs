@@ -192,6 +192,14 @@ pub fn conversations_url(server: &str, agent_id: &str) -> String {
     build_url(server, &format!("/v1/agents/{agent_id}/conversations"))
 }
 
+/// Build the URL for a single conversation (DELETE).
+pub fn conversation_url(server: &str, agent_id: &str, conv_id: &str) -> String {
+    build_url(
+        server,
+        &format!("/v1/agents/{agent_id}/conversations/{conv_id}"),
+    )
+}
+
 // ── Memory blocks ───────────────────────────────────────────────────────
 
 /// A single memory block returned by `GET /v1/agents/:id/memory`.
@@ -946,6 +954,14 @@ mod tests {
         assert_eq!(
             conversations_url("http://localhost:8284", "agent-1"),
             "http://localhost:8284/v1/agents/agent-1/conversations"
+        );
+    }
+
+    #[test]
+    fn conversation_url_format() {
+        assert_eq!(
+            conversation_url("http://localhost:8284", "agent-1", "conv-42"),
+            "http://localhost:8284/v1/agents/agent-1/conversations/conv-42"
         );
     }
 

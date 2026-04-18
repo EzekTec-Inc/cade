@@ -873,6 +873,40 @@ impl SessionState {
         }
     }
 
+    /// Remove a conversation at `idx` from the local list.
+    ///
+    /// If the deleted conversation was selected, the selection is cleared and
+    /// `messages` / `conversation_id` are reset so the user starts fresh.
+    pub fn on_conversation_deleted(&mut self, idx: usize) {
+        if let Self::Connected {
+            conversations,
+            selected_conversation,
+            messages,
+            conversation_id,
+            ..
+        } = self
+        {
+            if idx >= conversations.len() {
+                return;
+            }
+            conversations.remove(idx);
+            match *selected_conversation {
+                Some(sel) if sel == idx => {
+                    // Deleted the currently-active conversation — reset.
+                    *selected_conversation = None;
+                    *conversation_id = None;
+                    messages.clear();
+                }
+                Some(sel) if sel > idx => {
+                    // Shift selection down by one to keep it pointing at the
+                    // same conversation (which moved up in the list).
+                    *selected_conversation = Some(sel - 1);
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Clear the local timeline display only.  Does NOT touch the
     /// server — reselecting the agent or sending a message will refetch.
     pub fn clear_timeline_local(&mut self) {
@@ -2828,6 +2862,57 @@ mod tests {
         if let SessionState::Connected { messages, .. } = &s {
             assert!(messages.is_empty());
         }
+    }
+
+    #[test]
+    fn on_conversation_deleted_removes_entry() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_conversations(test_conversations()); // 2 conversations
+        assert_eq!(s.conversations().len(), 2);
+        s.on_conversation_deleted(0);
+        assert_eq!(s.conversations().len(), 1);
+    }
+
+    #[test]
+    fn on_conversation_deleted_out_of_bounds_is_noop() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_conversations(test_conversations());
+        s.on_conversation_deleted(99);
+        assert_eq!(s.conversations().len(), 2);
+    }
+
+    #[test]
+    fn on_conversation_deleted_clears_state_when_active() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_conversations(test_conversations());
+        s.on_select_conversation(0);
+        s.on_conversation_id("conv-1");
+        s.on_messages(vec![ChatMessage {
+            id: "m1".into(),
+            role: "user".into(),
+            content: serde_json::Value::String("hi".into()),
+            conversation_id: None,
+        }]);
+        // Delete the active conversation
+        s.on_conversation_deleted(0);
+        assert_eq!(s.selected_conversation(), None);
+        assert_eq!(s.conversation_id(), None);
+        if let SessionState::Connected { messages, .. } = &s {
+            assert!(messages.is_empty());
+        }
+    }
+
+    #[test]
+    fn on_conversation_deleted_shifts_selection_down() {
+        let mut s = make_connected_with_agent_selected();
+        s.on_conversations(test_conversations());
+        // Select second conversation (idx 1)
+        s.on_select_conversation(1);
+        assert_eq!(s.selected_conversation(), Some(1));
+        // Delete first conversation (idx 0) — selection should shift to 0
+        s.on_conversation_deleted(0);
+        assert_eq!(s.selected_conversation(), Some(0));
+        assert_eq!(s.conversations().len(), 1);
     }
 
     #[test]

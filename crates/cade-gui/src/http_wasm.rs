@@ -130,6 +130,24 @@ pub async fn create_conversation(
     Ok(info)
 }
 
+/// `DELETE /v1/agents/:id/conversations/:conv_id` — delete a conversation.
+pub async fn delete_conversation(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    conv_id: &str,
+) -> Result<(), ApiError> {
+    let url = api::conversation_url(base_url, agent_id, conv_id);
+    let resp = Request::delete(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
+    api::classify_upsert(resp.status())
+}
+
 /// `POST /v1/agents/:id/run` — send a user message and run the full
 /// server-side agentic loop (tool execution included), streaming all events
 /// (text, tool calls, tool results, finish) back via SSE.

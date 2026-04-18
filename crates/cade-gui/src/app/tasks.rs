@@ -157,6 +157,49 @@ impl CadeApp {
         });
     }
 
+    /// `DELETE /v1/agents/:id/conversations/:conv_id` — delete a conversation
+    /// by its list index.  On success, removes it locally via
+    /// `on_conversation_deleted`.  Pushes an error toast on failure.
+    pub(super) fn spawn_delete_conversation(&mut self, idx: usize) {
+        let (server_url, token, agent_id, conv_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            let conv_id = match s.conversations().get(idx) {
+                Some(c) => c.id.clone(),
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id, conv_id)
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::delete_conversation(&server_url, &token, &agent_id, &conv_id)
+                .await
+            {
+                Ok(()) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_conversation_deleted(idx);
+                    }
+                }
+                Err(e) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.push_error(&format!("Delete conversation failed: {e}"));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     /// Fetch messages for the currently selected conversation.
     pub(super) fn spawn_fetch_conversation_messages(&mut self) {
         let (server_url, token, agent_id, conv_id) = {
