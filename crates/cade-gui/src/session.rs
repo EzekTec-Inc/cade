@@ -57,6 +57,10 @@ pub enum SessionState {
         input_buffer: String,
         /// True while we are streaming an assistant response via SSE.
         streaming: bool,
+        /// Whether the timeline should auto-scroll to the bottom.
+        /// Set to `false` when the user scrolls up; restored to `true`
+        /// when they click the ↓ button or a new message arrives.
+        auto_scroll: bool,
         /// Transient error message displayed as a toast overlay.
         error_toast: Option<String>,
         /// Active conversation ID (set from SSE metadata, cleared on agent switch).
@@ -282,6 +286,7 @@ impl SessionState {
                 messages: Vec::new(),
                 input_buffer: String::new(),
                 streaming: false,
+                auto_scroll: true,
                 error_toast: None,
                 conversation_id: None,
                 last_usage: None,
@@ -542,6 +547,7 @@ impl SessionState {
         if let Self::Connected {
             messages,
             streaming: true,
+            auto_scroll,
             ..
         } = self
         {
@@ -556,7 +562,8 @@ impl SessionState {
                 }
                 return;
             }
-            // First chunk — create the assistant message.
+            // First chunk — create the assistant message and re-enable scroll.
+            *auto_scroll = true;
             messages.push(ChatMessage {
                 id: String::new(),
                 role: "assistant".to_string(),
@@ -676,6 +683,29 @@ impl SessionState {
                 ..
             }
         )
+    }
+
+    /// Whether the timeline should auto-scroll to the bottom.
+    pub fn auto_scroll(&self) -> bool {
+        if let Self::Connected { auto_scroll, .. } = self {
+            *auto_scroll
+        } else {
+            true
+        }
+    }
+
+    /// Disable auto-scroll (user scrolled up manually).
+    pub fn disable_auto_scroll(&mut self) {
+        if let Self::Connected { auto_scroll, .. } = self {
+            *auto_scroll = false;
+        }
+    }
+
+    /// Re-enable auto-scroll (user clicked ↓ button).
+    pub fn enable_auto_scroll(&mut self) {
+        if let Self::Connected { auto_scroll, .. } = self {
+            *auto_scroll = true;
+        }
     }
 
     /// Whether the caller should attempt a retry (re-enter the login flow).
@@ -2495,6 +2525,40 @@ mod tests {
         if let SessionState::Connected { messages, .. } = &s {
             assert!(messages.is_empty());
         }
+    }
+
+    #[test]
+    fn auto_scroll_true_by_default() {
+        let s = make_connected();
+        assert!(s.auto_scroll());
+    }
+
+    #[test]
+    fn disable_auto_scroll_sets_false() {
+        let mut s = make_connected();
+        s.disable_auto_scroll();
+        assert!(!s.auto_scroll());
+    }
+
+    #[test]
+    fn enable_auto_scroll_restores_true() {
+        let mut s = make_connected();
+        s.disable_auto_scroll();
+        s.enable_auto_scroll();
+        assert!(s.auto_scroll());
+    }
+
+    #[test]
+    fn on_stream_chunk_re_enables_auto_scroll() {
+        let mut s = make_connected_with_agent_selected();
+        s.disable_auto_scroll();
+        assert!(!s.auto_scroll());
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "hi".into();
+        }
+        s.on_send().unwrap();
+        s.on_stream_chunk("Hello");
+        assert!(s.auto_scroll(), "first chunk should re-enable auto_scroll");
     }
 
     #[test]

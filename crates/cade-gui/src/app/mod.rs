@@ -267,6 +267,7 @@ impl eframe::App for CadeApp {
                     ref messages,
                     ref input_buffer,
                     streaming,
+                    auto_scroll,
                     ref error_toast,
                     ref last_usage,
                     ref last_finish_reason,
@@ -880,7 +881,7 @@ impl eframe::App for CadeApp {
 
                         egui::ScrollArea::vertical()
                             .id_salt("timeline_scroll")
-                            .stick_to_bottom(true)
+                            .stick_to_bottom(auto_scroll)
                             .max_height(avail_h)
                             .show(ui, |ui| {
                                 // 16px left indent — matches TUI's indent style.
@@ -968,6 +969,69 @@ impl eframe::App for CadeApp {
                                     ui.add_space(8.0);
                                 }
                             });
+
+                        // ── Detect user scrolling up → disable auto_scroll ──
+                        // We use egui's scroll-area memory to read the current
+                        // velocity. A strong upward velocity (user dragging/wheeling
+                        // up) means they want to read history — disable auto-scroll.
+                        {
+                            let scroll_id = egui::Id::new("timeline_scroll");
+                            let mem = ui.ctx().memory(|m| {
+                                m.data.get_temp::<egui::scroll_area::State>(scroll_id)
+                            });
+                            if let Some(st) = mem {
+                                if st.velocity().y < -5.0 && auto_scroll {
+                                    action = AppAction::DisableAutoScroll;
+                                }
+                            }
+                        }
+
+                        // ── ↓ scroll-to-bottom float button ──────────
+                        if !auto_scroll {
+                            // Position: bottom-right corner of the timeline panel,
+                            // above the reserved footer area.
+                            let panel_rect = ui.max_rect();
+                            let btn_size = egui::vec2(32.0, 32.0);
+                            let btn_pos = egui::pos2(
+                                panel_rect.right() - btn_size.x - 10.0,
+                                panel_rect.bottom() - reserved - btn_size.y - 8.0,
+                            );
+                            let btn_rect = egui::Rect::from_min_size(btn_pos, btn_size);
+                            let resp = ui.interact(
+                                btn_rect,
+                                egui::Id::new("scroll_to_bottom_btn"),
+                                egui::Sense::click(),
+                            );
+                            let bg = if resp.hovered() {
+                                crate::theme::BG_SURFACE2
+                            } else {
+                                crate::theme::BG_SURFACE1
+                            };
+                            ui.painter().rect_filled(
+                                btn_rect,
+                                egui::CornerRadius::same(16),
+                                bg,
+                            );
+                            ui.painter().rect_stroke(
+                                btn_rect,
+                                egui::CornerRadius::same(16),
+                                egui::Stroke::new(1.0, crate::theme::BORDER_BASE),
+                                egui::StrokeKind::Outside,
+                            );
+                            ui.painter().text(
+                                btn_rect.center(),
+                                egui::Align2::CENTER_CENTER,
+                                "↓",
+                                egui::FontId::proportional(16.0),
+                                crate::theme::TEXT_PRIMARY,
+                            );
+                            if resp.clicked() {
+                                action = AppAction::ScrollToBottom;
+                            }
+                            if resp.hovered() {
+                                ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                            }
+                        }
 
                         // ── Usage stats footer ─────────────────────
                         if let Some((inp, out, model)) = last_usage {
@@ -1254,6 +1318,16 @@ impl eframe::App for CadeApp {
             }
             AppAction::LoadMore => self.spawn_load_more_messages(),
             AppAction::Logout => self.logout(),
+            AppAction::ScrollToBottom => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.enable_auto_scroll();
+                }
+            }
+            AppAction::DisableAutoScroll => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.disable_auto_scroll();
+                }
+            }
             AppAction::OpenPalette(initial) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     s.open_palette(&initial);
@@ -1447,6 +1521,10 @@ pub enum AppAction {
     LoadMore,
     /// User clicked Logout — clear credentials and return to login.
     Logout,
+    /// User clicked the ↓ scroll-to-bottom button — re-enable auto-scroll.
+    ScrollToBottom,
+    /// Emitted when egui detects the user has scrolled up — disable auto-scroll.
+    DisableAutoScroll,
     /// Open the slash-command palette.  Optional pre-filled query.
     OpenPalette(String),
     /// Close the palette without executing.
