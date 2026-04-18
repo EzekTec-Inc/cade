@@ -62,6 +62,11 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/config", get(health::get_config))
         // Dashboard (public, unauthenticated — see auth.rs for exemption)
         // Gzip-compressed so the ~7 MB .wasm transfers as ~2.7 MB.
+        // Both `/dashboard` and `/dashboard/` serve index.html — the nest
+        // route `/` matches the no-slash path, and we add an explicit
+        // top-level route for the trailing-slash form (axum 0.7 nests do
+        // not strip trailing slashes automatically).
+        .route("/dashboard/", get(dashboard::get_dashboard))
         .nest(
             "/dashboard",
             Router::new()
