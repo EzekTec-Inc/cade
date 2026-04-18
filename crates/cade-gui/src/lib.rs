@@ -22,6 +22,7 @@ pub mod config;
 pub mod login;
 pub mod session;
 pub mod sse;
+pub mod palette;
 pub mod shortcuts;
 pub mod storage;
 pub mod theme;

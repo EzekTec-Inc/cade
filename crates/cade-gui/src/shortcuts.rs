@@ -15,6 +15,16 @@ pub enum ShortcutAction {
     DismissError,
     /// Focus the chat input box (Ctrl+L or `/`).
     FocusInput,
+    /// Open the slash-command palette (Ctrl+K).
+    OpenPalette,
+    /// Close the palette without executing anything (Escape while open).
+    ClosePalette,
+    /// Move palette highlight up (ArrowUp while open).
+    PalettePrev,
+    /// Move palette highlight down (ArrowDown while open).
+    PaletteNext,
+    /// Execute the currently-highlighted palette entry (Enter while open).
+    PaletteExecute,
 }
 
 /// A shortcut definition: modifier flags + key.
@@ -51,6 +61,11 @@ impl Shortcut {
 ///
 /// The first match wins, so more-specific combos (Shift+Enter) must come
 /// before less-specific ones (Enter).
+///
+/// Palette-specific actions (`ClosePalette`, `PalettePrev`, `PaletteNext`,
+/// `PaletteExecute`) are **not** in this table — they share keys with
+/// non-palette actions (Esc, ArrowUp, ArrowDown, Enter) and must be
+/// disambiguated by `app.rs` based on `session.is_palette_open()`.
 pub const SHORTCUTS: &[(Shortcut, ShortcutAction)] = &[
     // Shift+Enter → newline (must be before bare Enter)
     (
@@ -64,12 +79,17 @@ pub const SHORTCUTS: &[(Shortcut, ShortcutAction)] = &[
         Shortcut::new(egui::Key::Enter).ctrl(),
         ShortcutAction::Send,
     ),
-    // Escape → dismiss error toast
+    // Escape → dismiss error toast (also closes palette, handled in app.rs)
     (Shortcut::new(egui::Key::Escape), ShortcutAction::DismissError),
     // Ctrl+L → focus input
     (
         Shortcut::new(egui::Key::L).ctrl(),
         ShortcutAction::FocusInput,
+    ),
+    // Ctrl+K → open slash-command palette
+    (
+        Shortcut::new(egui::Key::K).ctrl(),
+        ShortcutAction::OpenPalette,
     ),
 ];
 
@@ -97,6 +117,11 @@ pub fn shortcut_hint(action: ShortcutAction) -> &'static str {
         ShortcutAction::InsertNewline => "Shift+Enter",
         ShortcutAction::DismissError => "Esc",
         ShortcutAction::FocusInput => "Ctrl+L",
+        ShortcutAction::OpenPalette => "Ctrl+K",
+        ShortcutAction::ClosePalette => "Esc",
+        ShortcutAction::PalettePrev => "↑",
+        ShortcutAction::PaletteNext => "↓",
+        ShortcutAction::PaletteExecute => "Enter",
     }
 }
 
@@ -176,6 +201,11 @@ mod tests {
             ShortcutAction::InsertNewline,
             ShortcutAction::DismissError,
             ShortcutAction::FocusInput,
+            ShortcutAction::OpenPalette,
+            ShortcutAction::ClosePalette,
+            ShortcutAction::PalettePrev,
+            ShortcutAction::PaletteNext,
+            ShortcutAction::PaletteExecute,
         ];
         for action in all_actions {
             let hint = shortcut_hint(action);
@@ -185,6 +215,18 @@ mod tests {
                 action
             );
         }
+    }
+
+    #[test]
+    fn open_palette_is_bound_to_ctrl_k() {
+        let hit = SHORTCUTS
+            .iter()
+            .find(|(_, a)| *a == ShortcutAction::OpenPalette)
+            .expect("OpenPalette must be in SHORTCUTS");
+        assert_eq!(hit.0.key, egui::Key::K);
+        assert!(hit.0.ctrl);
+        assert!(!hit.0.shift);
+        assert!(!hit.0.alt);
     }
 
     #[test]

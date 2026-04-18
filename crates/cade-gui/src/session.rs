@@ -71,6 +71,12 @@ pub enum SessionState {
         selected_conversation: Option<usize>,
         /// Whether there are more messages to load (pagination).
         has_more_messages: bool,
+        /// Whether the slash-command palette overlay is visible.
+        palette_open: bool,
+        /// Current text in the palette filter input.
+        palette_input: String,
+        /// Index of the highlighted entry in the filtered palette list.
+        palette_selection: usize,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -158,6 +164,9 @@ impl SessionState {
                 conversations: Vec::new(),
                 selected_conversation: None,
                 has_more_messages: false,
+                palette_open: false,
+                palette_input: String::new(),
+                palette_selection: 0,
             };
         }
     }
@@ -624,9 +633,132 @@ impl SessionState {
         }
     }
 
+    /// Clear the local timeline display only.  Does NOT touch the
+    /// server — reselecting the agent or sending a message will refetch.
+    pub fn clear_timeline_local(&mut self) {
+        if let Self::Connected { messages, .. } = self {
+            messages.clear();
+        }
+    }
+
+    /// Return the content of the most recent assistant message, if any.
+    /// Used by the `/copy` palette command.
+    pub fn last_assistant_content(&self) -> Option<String> {
+        if let Self::Connected { messages, .. } = self {
+            messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "assistant")
+                .map(|m| match &m.content {
+                    serde_json::Value::String(s) => s.clone(),
+                    other => other.to_string(),
+                })
+        } else {
+            None
+        }
+    }
+
     /// Whether the session is fully established.
     pub fn is_connected(&self) -> bool {
         matches!(self, Self::Connected { .. })
+    }
+
+    // ── Palette (slash-command) state ──────────────────────────────
+
+    /// Open the slash-command palette overlay.
+    ///
+    /// Resets query + selection.  Optional `initial_input` pre-fills the
+    /// filter text (used when the user typed `/foo` in the input bar).
+    pub fn open_palette(&mut self, initial_input: &str) {
+        if let Self::Connected {
+            palette_open,
+            palette_input,
+            palette_selection,
+            ..
+        } = self
+        {
+            *palette_open = true;
+            *palette_input = initial_input.to_string();
+            *palette_selection = 0;
+        }
+    }
+
+    /// Close the palette.  Clears query + selection.
+    pub fn close_palette(&mut self) {
+        if let Self::Connected {
+            palette_open,
+            palette_input,
+            palette_selection,
+            ..
+        } = self
+        {
+            *palette_open = false;
+            palette_input.clear();
+            *palette_selection = 0;
+        }
+    }
+
+    /// Replace the palette filter input. Resets selection to 0 so the top
+    /// result stays highlighted as the user types.
+    pub fn set_palette_input(&mut self, query: &str) {
+        if let Self::Connected {
+            palette_input,
+            palette_selection,
+            ..
+        } = self
+        {
+            *palette_input = query.to_string();
+            *palette_selection = 0;
+        }
+    }
+
+    /// Move the palette selection up (-1) or down (+1), clamped to the
+    /// number of filtered entries for the current query.
+    pub fn move_palette_selection(&mut self, delta: i32) {
+        if let Self::Connected {
+            palette_input,
+            palette_selection,
+            ..
+        } = self
+        {
+            let count = crate::palette::fuzzy_filter(palette_input).len();
+            if count == 0 {
+                *palette_selection = 0;
+                return;
+            }
+            let max_idx = count - 1;
+            let new_idx = (*palette_selection as i32) + delta;
+            *palette_selection = new_idx.clamp(0, max_idx as i32) as usize;
+        }
+    }
+
+    /// Whether the palette overlay is currently open.
+    pub fn is_palette_open(&self) -> bool {
+        matches!(self, Self::Connected { palette_open: true, .. })
+    }
+
+    /// Parse the currently-selected palette entry into a concrete
+    /// [`crate::palette::PaletteCmd`].  Returns `None` if the palette is
+    /// closed or there are no matching entries for the query.
+    pub fn selected_palette_cmd(&self) -> Option<crate::palette::PaletteCmd> {
+        if let Self::Connected {
+            palette_open: true,
+            palette_input,
+            palette_selection,
+            ..
+        } = self
+        {
+            let filtered = crate::palette::fuzzy_filter(palette_input);
+            if filtered.is_empty() {
+                return None;
+            }
+            let idx = (*palette_selection).min(filtered.len() - 1);
+            Some(crate::palette::parse_palette_input(
+                filtered[idx].def.trigger,
+            ))
+        } else {
+            None
+        }
     }
 }
 
@@ -1464,5 +1596,240 @@ mod tests {
         let (msgs, has_more) = crate::api::parse_messages_paged(200, body).unwrap();
         assert!(msgs.is_empty());
         assert!(!has_more); // defaults to false when missing
+    }
+
+    // ── Palette (M15) ──────────────────────────────────────────────
+
+    fn connected_session() -> SessionState {
+        let mut s = SessionState::start("http://localhost:8080", "tok");
+        s.on_health(test_health());
+        s.on_agents(test_agents());
+        s
+    }
+
+    #[test]
+    fn palette_starts_closed() {
+        let s = connected_session();
+        assert!(!s.is_palette_open());
+        assert!(s.selected_palette_cmd().is_none());
+    }
+
+    #[test]
+    fn palette_open_and_close() {
+        let mut s = connected_session();
+        s.open_palette("");
+        assert!(s.is_palette_open());
+        s.close_palette();
+        assert!(!s.is_palette_open());
+    }
+
+    #[test]
+    fn palette_open_preserves_initial_input() {
+        let mut s = connected_session();
+        s.open_palette("hel");
+        if let SessionState::Connected {
+            palette_input,
+            palette_selection,
+            ..
+        } = &s
+        {
+            assert_eq!(palette_input, "hel");
+            assert_eq!(*palette_selection, 0);
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn palette_close_resets_input_and_selection() {
+        let mut s = connected_session();
+        s.open_palette("mem");
+        s.move_palette_selection(1);
+        s.close_palette();
+        if let SessionState::Connected {
+            palette_input,
+            palette_selection,
+            palette_open,
+            ..
+        } = &s
+        {
+            assert!(!*palette_open);
+            assert!(palette_input.is_empty());
+            assert_eq!(*palette_selection, 0);
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn palette_set_input_resets_selection() {
+        let mut s = connected_session();
+        s.open_palette("");
+        s.move_palette_selection(3);
+        s.set_palette_input("hel"); // typing new query — selection back to 0
+        if let SessionState::Connected {
+            palette_input,
+            palette_selection,
+            ..
+        } = &s
+        {
+            assert_eq!(palette_input, "hel");
+            assert_eq!(*palette_selection, 0);
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn palette_move_selection_clamps_to_bounds() {
+        let mut s = connected_session();
+        s.open_palette(""); // empty query → all commands
+        s.move_palette_selection(-1); // can't go below 0
+        if let SessionState::Connected {
+            palette_selection, ..
+        } = &s
+        {
+            assert_eq!(*palette_selection, 0);
+        } else {
+            panic!("not connected");
+        }
+
+        // Move down past end should clamp.
+        for _ in 0..100 {
+            s.move_palette_selection(1);
+        }
+        let filtered_count = crate::palette::fuzzy_filter("").len();
+        if let SessionState::Connected {
+            palette_selection, ..
+        } = &s
+        {
+            assert_eq!(*palette_selection, filtered_count - 1);
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn palette_selected_cmd_returns_first_match() {
+        let mut s = connected_session();
+        s.open_palette("help");
+        // `help` is an exact trigger — first filtered entry should be Help.
+        assert_eq!(
+            s.selected_palette_cmd(),
+            Some(crate::palette::PaletteCmd::Help)
+        );
+    }
+
+    #[test]
+    fn palette_selected_cmd_respects_selection_index() {
+        let mut s = connected_session();
+        s.open_palette(""); // all entries
+        s.move_palette_selection(1);
+        // The second entry's trigger should be the one returned.
+        let filtered = crate::palette::fuzzy_filter("");
+        let expected = crate::palette::parse_palette_input(filtered[1].def.trigger);
+        assert_eq!(s.selected_palette_cmd(), Some(expected));
+    }
+
+    #[test]
+    fn palette_selected_cmd_none_when_closed() {
+        let s = connected_session();
+        assert!(s.selected_palette_cmd().is_none());
+    }
+
+    #[test]
+    fn palette_selected_cmd_none_when_no_matches() {
+        let mut s = connected_session();
+        s.open_palette("zzznonexistentquery");
+        assert!(s.selected_palette_cmd().is_none());
+    }
+
+    #[test]
+    fn palette_methods_noop_when_not_connected() {
+        let mut s = SessionState::start("http://localhost:8080", "tok");
+        // Still in Connecting — all palette methods should be no-ops.
+        s.open_palette("foo");
+        assert!(!s.is_palette_open());
+        s.set_palette_input("bar");
+        s.move_palette_selection(5);
+        s.close_palette();
+        assert!(s.selected_palette_cmd().is_none());
+    }
+
+    #[test]
+    fn clear_timeline_local_clears_messages_only() {
+        let mut s = connected_session();
+        s.on_select_agent(0);
+        s.on_messages(vec![ChatMessage {
+            id: "m1".into(),
+            role: "user".into(),
+            content: serde_json::Value::String("hi".into()),
+            conversation_id: Some("c1".into()),
+        }]);
+        // Set a conversation_id to verify it's NOT cleared.
+        if let SessionState::Connected {
+            conversation_id, ..
+        } = &mut s
+        {
+            *conversation_id = Some("c1".into());
+        }
+        s.clear_timeline_local();
+        if let SessionState::Connected {
+            messages,
+            conversation_id,
+            ..
+        } = &s
+        {
+            assert!(messages.is_empty());
+            assert_eq!(conversation_id.as_deref(), Some("c1")); // preserved
+        } else {
+            panic!("not connected");
+        }
+    }
+
+    #[test]
+    fn last_assistant_content_finds_most_recent() {
+        let mut s = connected_session();
+        s.on_select_agent(0);
+        s.on_messages(vec![
+            ChatMessage {
+                id: "m1".into(),
+                role: "user".into(),
+                content: serde_json::Value::String("q1".into()),
+                conversation_id: None,
+            },
+            ChatMessage {
+                id: "m2".into(),
+                role: "assistant".into(),
+                content: serde_json::Value::String("a1".into()),
+                conversation_id: None,
+            },
+            ChatMessage {
+                id: "m3".into(),
+                role: "user".into(),
+                content: serde_json::Value::String("q2".into()),
+                conversation_id: None,
+            },
+            ChatMessage {
+                id: "m4".into(),
+                role: "assistant".into(),
+                content: serde_json::Value::String("a2 final".into()),
+                conversation_id: None,
+            },
+        ]);
+        assert_eq!(s.last_assistant_content().as_deref(), Some("a2 final"));
+    }
+
+    #[test]
+    fn last_assistant_content_none_when_no_assistant_messages() {
+        let mut s = connected_session();
+        s.on_select_agent(0);
+        s.on_messages(vec![ChatMessage {
+            id: "m1".into(),
+            role: "user".into(),
+            content: serde_json::Value::String("hi".into()),
+            conversation_id: None,
+        }]);
+        assert!(s.last_assistant_content().is_none());
     }
 }

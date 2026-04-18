@@ -381,6 +381,77 @@ impl CadeApp {
             ctx.request_repaint();
         });
     }
+
+    /// Execute a palette command.  Called after the palette overlay has
+    /// been closed, so all session borrows are released.  Each command
+    /// maps to an existing in-app behavior (logout, new conversation,
+    /// clear, etc.) or surfaces a toast for not-yet-implemented entries.
+    fn dispatch_palette_cmd(&mut self, cmd: crate::palette::PaletteCmd) {
+        use crate::palette::PaletteCmd;
+        match cmd {
+            PaletteCmd::Logout => self.logout(),
+            PaletteCmd::New => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.on_new_conversation();
+                }
+            }
+            PaletteCmd::Clear => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.clear_timeline_local();
+                }
+            }
+            PaletteCmd::Copy => {
+                let text = self
+                    .session
+                    .borrow()
+                    .as_ref()
+                    .and_then(|s| s.last_assistant_content());
+                match text {
+                    Some(t) => {
+                        self.ctx.copy_text(t);
+                    }
+                    None => {
+                        if let Some(s) = self.session.borrow_mut().as_mut() {
+                            s.push_error("No assistant message to copy");
+                        }
+                    }
+                }
+            }
+            PaletteCmd::Help => {
+                // Show the list of commands as an error-toast-style banner.
+                let mut lines = vec!["Available commands:".to_string()];
+                for def in crate::palette::CMD_DEFS {
+                    lines.push(format!("  /{} — {}", def.trigger, def.description));
+                }
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.push_error(&lines.join("\n"));
+                }
+            }
+            PaletteCmd::Unknown(raw) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.push_error(&format!("Unknown command: /{raw}"));
+                }
+            }
+            // Commands that require server-side plumbing not yet wired up
+            // (M16–M18).  Surface a friendly "coming soon" toast so users
+            // know the command was recognized.
+            PaletteCmd::Agent(_)
+            | PaletteCmd::Agents
+            | PaletteCmd::Memory
+            | PaletteCmd::Search(_)
+            | PaletteCmd::Model(_)
+            | PaletteCmd::Context
+            | PaletteCmd::Stats
+            | PaletteCmd::Artifacts
+            | PaletteCmd::Checkpoints
+            | PaletteCmd::Skills
+            | PaletteCmd::Mcp => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.push_error("Command recognized but not yet implemented (coming in M16–M18)");
+                }
+            }
+        }
+    }
 }
 
 impl eframe::App for CadeApp {
@@ -424,6 +495,9 @@ impl eframe::App for CadeApp {
                     ref conversations,
                     ref selected_conversation,
                     has_more_messages,
+                    palette_open,
+                    ref palette_input,
+                    palette_selection,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -435,7 +509,37 @@ impl eframe::App for CadeApp {
                     let mut input_edit = input_buffer.clone();
 
                     // ── Map keyboard shortcuts to actions ─────────
-                    if let Some(sc) = shortcut {
+                    //
+                    // When the palette is open, keys are reinterpreted:
+                    //   Esc      → ClosePalette (overrides DismissError)
+                    //   Enter    → ExecutePaletteCmd (overrides Send)
+                    //   ArrowUp  → MovePaletteSelection(-1)
+                    //   ArrowDown→ MovePaletteSelection(+1)
+                    if palette_open {
+                        // Arrow keys aren't in the global SHORTCUTS table,
+                        // sample them directly.
+                        let (up, down) = ui.input(|i| {
+                            (
+                                i.key_pressed(egui::Key::ArrowUp),
+                                i.key_pressed(egui::Key::ArrowDown),
+                            )
+                        });
+                        if up {
+                            action = AppAction::MovePaletteSelection(-1);
+                        } else if down {
+                            action = AppAction::MovePaletteSelection(1);
+                        } else if let Some(sc) = shortcut {
+                            match sc {
+                                ShortcutAction::DismissError => {
+                                    action = AppAction::ClosePalette;
+                                }
+                                ShortcutAction::Send => {
+                                    action = AppAction::ExecutePaletteCmd;
+                                }
+                                _ => {}
+                            }
+                        }
+                    } else if let Some(sc) = shortcut {
                         match sc {
                             ShortcutAction::Send => {
                                 if has_agent && !is_streaming && !input_edit.trim().is_empty() {
@@ -453,6 +557,14 @@ impl eframe::App for CadeApp {
                             ShortcutAction::FocusInput => {
                                 request_focus_input = true;
                             }
+                            ShortcutAction::OpenPalette => {
+                                action = AppAction::OpenPalette(String::new());
+                            }
+                            // Palette-scoped actions never fire when closed.
+                            ShortcutAction::ClosePalette
+                            | ShortcutAction::PalettePrev
+                            | ShortcutAction::PaletteNext
+                            | ShortcutAction::PaletteExecute => {}
                         }
                     }
 
@@ -564,6 +676,24 @@ impl eframe::App for CadeApp {
 
                                 // Sync edits back into session state.
                                 if resp.changed() {
+                                    // Detect `/`-trigger: when input transitions
+                                    // from empty to "/" (or starts with `/` and
+                                    // the old buffer didn't), open the palette
+                                    // instead of keeping the `/` in the input.
+                                    let typed_slash_at_start = input_edit.starts_with('/')
+                                        && !input_buffer.starts_with('/');
+                                    if typed_slash_at_start {
+                                        // Pre-fill the palette with whatever
+                                        // was typed after the `/`.
+                                        let initial = input_edit
+                                            .strip_prefix('/')
+                                            .unwrap_or("")
+                                            .to_string();
+                                        action = AppAction::OpenPalette(initial);
+                                        // Don't persist the `/` into the input.
+                                        input_edit.clear();
+                                    }
+
                                     if let Some(SessionState::Connected {
                                         input_buffer: buf, ..
                                     }) = self.session.borrow_mut().as_mut()
@@ -789,6 +919,17 @@ Connected and ready.  Select an agent from the sidebar to begin.
                                 });
                         }
                     });
+
+                    // ── Slash-command palette overlay ─────────────
+                    if palette_open {
+                        if let Some(new_action) = render_palette_overlay(
+                            ui.ctx(),
+                            palette_input,
+                            palette_selection,
+                        ) {
+                            action = new_action;
+                        }
+                    }
                 }
                 Some(SessionState::ConnectionFailed { ref error, .. }) => {
                     ui.colored_label(
@@ -871,6 +1012,40 @@ Connected and ready.  Select an agent from the sidebar to begin.
             }
             AppAction::LoadMore => self.spawn_load_more_messages(),
             AppAction::Logout => self.logout(),
+            AppAction::OpenPalette(initial) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.open_palette(&initial);
+                }
+            }
+            AppAction::ClosePalette => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.close_palette();
+                }
+            }
+            AppAction::SetPaletteInput(q) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.set_palette_input(&q);
+                }
+            }
+            AppAction::MovePaletteSelection(delta) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.move_palette_selection(delta);
+                }
+            }
+            AppAction::ExecutePaletteCmd => {
+                let cmd = self
+                    .session
+                    .borrow()
+                    .as_ref()
+                    .and_then(|s| s.selected_palette_cmd());
+                // Always close the palette after attempting to execute.
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    s.close_palette();
+                }
+                if let Some(cmd) = cmd {
+                    self.dispatch_palette_cmd(cmd);
+                }
+            }
         }
     }
 }
@@ -895,4 +1070,161 @@ enum AppAction {
     LoadMore,
     /// User clicked Logout — clear credentials and return to login.
     Logout,
+    /// Open the slash-command palette.  Optional pre-filled query.
+    OpenPalette(String),
+    /// Close the palette without executing.
+    ClosePalette,
+    /// Replace palette filter query.
+    SetPaletteInput(String),
+    /// Move palette selection (negative = up, positive = down).
+    MovePaletteSelection(i32),
+    /// Execute whatever command the palette currently highlights.
+    ExecutePaletteCmd,
+}
+
+/// Render the slash-command palette as a centered floating window.
+///
+/// Returns an optional [`AppAction`] when the user interacts with the
+/// overlay (edits the query, clicks an entry, or dismisses the window).
+fn render_palette_overlay(
+    ctx: &egui::Context,
+    palette_input: &str,
+    palette_selection: usize,
+) -> Option<AppAction> {
+    use crate::palette::fuzzy_filter;
+    let mut result: Option<AppAction> = None;
+
+    // Compute screen-centered rect for a 520x360 panel.
+    let screen = ctx.content_rect();
+    let w = 520.0_f32.min(screen.width() - 40.0);
+    let h = 360.0_f32.min(screen.height() - 80.0);
+    let pos = egui::pos2(
+        screen.center().x - w / 2.0,
+        screen.top() + 80.0,
+    );
+
+    egui::Window::new("Command palette")
+        .title_bar(false)
+        .resizable(false)
+        .collapsible(false)
+        .fixed_pos(pos)
+        .fixed_size([w, h])
+        .frame(
+            egui::Frame::new()
+                .fill(crate::theme::BG_SURFACE1)
+                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_FOCUS))
+                .corner_radius(egui::CornerRadius::same(8))
+                .inner_margin(12.0),
+        )
+        .show(ctx, |ui| {
+            ui.set_width(w - 24.0);
+
+            // Header + query input
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("⌘")
+                        .color(crate::theme::PRIMARY)
+                        .size(16.0),
+                );
+                let mut q = palette_input.to_string();
+                let resp = ui.add(
+                    egui::TextEdit::singleline(&mut q)
+                        .hint_text("Type a command…")
+                        .desired_width(ui.available_width()),
+                );
+                resp.request_focus();
+                if resp.changed() {
+                    result = Some(AppAction::SetPaletteInput(q));
+                }
+            });
+
+            ui.add_space(8.0);
+            ui.separator();
+            ui.add_space(4.0);
+
+            // Filtered entries
+            let filtered = fuzzy_filter(palette_input);
+            if filtered.is_empty() {
+                ui.label(
+                    egui::RichText::new("No matching commands")
+                        .color(crate::theme::TEXT_MUTED)
+                        .italics(),
+                );
+            } else {
+                egui::ScrollArea::vertical()
+                    .auto_shrink([false, false])
+                    .max_height(h - 90.0)
+                    .show(ui, |ui| {
+                        for (idx, entry) in filtered.iter().enumerate() {
+                            let is_sel = idx == palette_selection;
+                            let bg = if is_sel {
+                                crate::theme::BG_SURFACE2
+                            } else {
+                                crate::theme::BG_SURFACE0
+                            };
+                            let frame = egui::Frame::new()
+                                .fill(bg)
+                                .corner_radius(egui::CornerRadius::same(4))
+                                .inner_margin(egui::Margin::symmetric(8, 6));
+                            let resp = frame
+                                .show(ui, |ui| {
+                                    ui.horizontal(|ui| {
+                                        ui.label(
+                                            egui::RichText::new(format!(
+                                                "/{}",
+                                                entry.def.trigger
+                                            ))
+                                            .color(crate::theme::PRIMARY)
+                                            .monospace()
+                                            .strong(),
+                                        );
+                                        if let Some(hint) = entry.def.arg_hint {
+                                            ui.label(
+                                                egui::RichText::new(hint)
+                                                    .color(crate::theme::TEXT_MUTED)
+                                                    .monospace()
+                                                    .small(),
+                                            );
+                                        }
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                ui.label(
+                                                    egui::RichText::new(entry.def.description)
+                                                        .color(crate::theme::TEXT_MUTED)
+                                                        .small(),
+                                                );
+                                            },
+                                        );
+                                    });
+                                })
+                                .response
+                                .interact(egui::Sense::click());
+                            if resp.clicked() {
+                                // Clicking an entry sets the selection
+                                // to that index AND executes it.
+                                let delta = idx as i32 - palette_selection as i32;
+                                if delta != 0 {
+                                    result = Some(AppAction::MovePaletteSelection(delta));
+                                } else {
+                                    result = Some(AppAction::ExecutePaletteCmd);
+                                }
+                            }
+                            ui.add_space(2.0);
+                        }
+                    });
+            }
+
+            ui.add_space(6.0);
+            ui.separator();
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("↑↓ select  ⏎ run  Esc close")
+                        .color(crate::theme::TEXT_MUTED)
+                        .small(),
+                );
+            });
+        });
+
+    result
 }
