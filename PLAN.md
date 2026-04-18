@@ -1870,3 +1870,67 @@ M3 = **state-machine + minimal render + WASM entry**.  No network calls.
 - `cade-gui` WASM rebuilt, `cade-server` release binary rebuilt
 
 **Rollback:** `git revert HEAD` or restore checkpoint `cp-34a84ee1` (label `before-option-a-run-endpoint`)
+
+## 2026-04-18T07:21:15Z — cade-gui M1+M5: top toolbar, bottom status bar, context-window progress bar
+
+**Task:** Implement M1 (persistent top toolbar + bottom status bar) and M5 (context-window progress bar in chat header).
+
+**Scope:**
+- `crates/cade-gui/src/app/mod.rs` — render top/bottom panels; M5 progress bar in connected view
+- `crates/cade-gui/src/theme.rs` — `context_fill_fraction`, `context_fill_color` helpers + 6 new tests
+
+**Files modified:**
+- `crates/cade-gui/src/app/mod.rs`
+- `crates/cade-gui/src/theme.rs`
+
+**Previous behavior:** Dashboard showed a plain `ui.heading("CADE Dashboard")` with no toolbar, no status bar, no context progress bar.
+
+**New behavior:**
+- Top toolbar (32px): CADE wordmark | model badge (when connected) | status dot + version (right-aligned)
+- Bottom status bar (18px): last finish_reason label (right-aligned, DIM)
+- Context progress bar in connected chat header: colour-coded bar (SUCCESS/WARNING/ERROR) showing fraction of 128k context window consumed
+
+**Warnings fixed:** `unused variable: version` (prefixed `_version`); deprecated `egui::TopBottomPanel` + `.exact_height` replaced with `egui::Panel::top/bottom` + `.exact_size`.
+
+**WASM hash:** `2f45cd13b7f85077` (prev era: `9b1eb1ff`)
+
+**Rollback:** `git revert 30a8650c`
+
+## 2026-04-18T07:34:00Z — cade-gui M20: conversation delete button
+
+**Task:** Add per-conversation delete (🗑) button in the sidebar, wired to `DELETE /v1/agents/:id/conversations/:conv_id`.
+
+**Files modified:**
+- `crates/cade-gui/src/api.rs` — `conversation_url()` helper + test
+- `crates/cade-gui/src/http_wasm.rs` — `delete_conversation()` async fn
+- `crates/cade-gui/src/session.rs` — `on_conversation_deleted(idx)` + 4 tests
+- `crates/cade-gui/src/app/tasks.rs` — `spawn_delete_conversation(idx)`
+- `crates/cade-gui/src/app/mod.rs` — `DeleteConversation(usize)` AppAction; sidebar row layout; dispatch
+
+**Previous behavior:** Conversations listed as plain selectable labels; no way to delete.
+
+**New behavior:** Each conversation row shows a right-aligned 🗑 button; clicking fires DELETE, removes the entry locally, resets state if it was active, shifts selection index if a predecessor was deleted. Errors surface as toast.
+
+**Test counts:** api 92, session 154, cade-gui 317 (all suites green)
+
+**WASM hash:** `eab7385202db539f`
+
+**Rollback:** `git revert 96a6d325`
+
+## 2026-04-18T07:51:00Z — cade-gui M21: scroll-to-bottom float button
+
+**Task:** Allow users to scroll up through history without losing their place; restore auto-scroll via a float ↓ button.
+
+**Files modified:**
+- `crates/cade-gui/src/session.rs` — `auto_scroll` field, 3 accessors, re-enable in `on_stream_chunk`, 4 tests
+- `crates/cade-gui/src/app/mod.rs` — `stick_to_bottom(auto_scroll)`, velocity detection, float button render, 2 new AppAction variants + dispatch
+
+**Previous behavior:** `stick_to_bottom(true)` always; user could not scroll up without being immediately snapped back to bottom.
+
+**New behavior:** Upward scroll velocity disables auto-scroll. A circular ↓ button appears in the bottom-right of the timeline. Clicking it re-enables auto-scroll. First chunk of a new assistant message automatically re-enables auto-scroll.
+
+**Test counts:** session 158, cade-gui 321 (all suites green)
+
+**WASM hash:** `7b7ce15b690d483c`
+
+**Rollback:** `git revert b05df2d7`
