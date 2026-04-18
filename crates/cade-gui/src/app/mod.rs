@@ -112,10 +112,141 @@ impl eframe::App for CadeApp {
         let shortcut = ui.input(poll_shortcut);
         let mut request_focus_input = false;
 
-        ui.vertical_centered(|ui| {
-            ui.add_space(40.0);
-            ui.heading("CADE Dashboard");
-            ui.add_space(12.0);
+        // Snapshot session state once so we can read it in the toolbar
+        // without holding a borrow into the render closures below.
+        let session_snapshot_for_toolbar = self.session.borrow().clone();
+
+        // ── Top toolbar (M1) ─────────────────────────────────────────────
+        egui::Panel::top("cade_toolbar")
+            .exact_size(32.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(crate::theme::BG_SURFACE0)
+                    .inner_margin(egui::Margin::symmetric(10, 0)),
+            )
+            .show_inside(ui, |ui| {
+                ui.horizontal(|ui| {
+                    // Left: CADE wordmark
+                    ui.label(
+                        egui::RichText::new("CADE")
+                            .strong()
+                            .size(15.0)
+                            .color(crate::theme::PRIMARY),
+                    );
+
+                    // Centre: model badge (only when connected and a model is known)
+                    if let Some(crate::session::SessionState::Connected {
+                        ref last_usage, ..
+                    }) = session_snapshot_for_toolbar
+                    {
+                        if let Some((_, _, Some(ref model))) = *last_usage {
+                            ui.add_space(8.0);
+                            egui::Frame::new()
+                                .fill(crate::theme::BG_SURFACE1)
+                                .corner_radius(egui::CornerRadius::same(4))
+                                .inner_margin(egui::Margin::symmetric(6, 2))
+                                .show(ui, |ui| {
+                                    ui.label(
+                                        egui::RichText::new(model.as_str())
+                                            .monospace()
+                                            .size(11.0)
+                                            .color(crate::theme::TEXT_MUTED),
+                                    );
+                                });
+                        }
+                    }
+
+                    // Right: status dot + version
+                    if let Some(crate::session::SessionState::Connected {
+                        streaming,
+                        ref health,
+                        ..
+                    }) = session_snapshot_for_toolbar
+                    {
+                        let version = health.version.as_deref().unwrap_or("unknown");
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                ui.label(
+                                    egui::RichText::new(format!("v{version}"))
+                                        .small()
+                                        .color(crate::theme::TEXT_DIM),
+                                );
+                                ui.add_space(4.0);
+                                // Status dot via painter
+                                let dot_color = status_dot_color(streaming);
+                                let (resp, painter) =
+                                    ui.allocate_painter(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                                painter.circle_filled(resp.rect.center(), 5.0, dot_color);
+                            },
+                        );
+                    }
+                });
+            });
+
+        // ── Bottom status bar (M1) ────────────────────────────────────────
+        if let Some(crate::session::SessionState::Connected {
+            streaming,
+            ref last_usage,
+            ..
+        }) = session_snapshot_for_toolbar
+        {
+            egui::Panel::bottom("cade_status_bar")
+                .exact_size(18.0)
+                .frame(egui::Frame::new().fill(crate::theme::BG_SURFACE0))
+                .show_inside(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        if let Some((input_tokens, output_tokens, _)) = *last_usage {
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "{input_tokens}in {output_tokens}out"
+                                ))
+                                .size(10.0)
+                                .color(crate::theme::TEXT_DIM),
+                            );
+                        }
+                        ui.with_layout(
+                            egui::Layout::right_to_left(egui::Align::Center),
+                            |ui| {
+                                if streaming {
+                                    ui.label(
+                                        egui::RichText::new("streaming…")
+                                            .size(10.0)
+                                            .color(crate::theme::WARNING),
+                                    );
+                                }
+                            },
+                        );
+                    });
+                });
+        }
+
+        egui::CentralPanel::default().show_inside(ui, |ui| {
+
+            // ── M5: context-window progress bar ──────────────────────────
+            if let Some(crate::session::SessionState::Connected {
+                total_input_tokens,
+                total_output_tokens,
+                ..
+            }) = session_snapshot_for_toolbar
+            {
+                const DEFAULT_WINDOW: u64 = 128_000;
+                let total = total_input_tokens + total_output_tokens;
+                let frac = crate::theme::context_fill_fraction(total, DEFAULT_WINDOW);
+                if total > 0 {
+                    let bar_color = crate::theme::context_fill_color(frac);
+                    let hover_text = format!(
+                        "{total} / {DEFAULT_WINDOW} tokens ({:.0}%)",
+                        frac * 100.0
+                    );
+                    ui.add(
+                        egui::ProgressBar::new(frac)
+                            .desired_height(4.0)
+                            .fill(bar_color),
+                    )
+                    .on_hover_text(hover_text);
+                }
+            }
 
             // Snapshot session state for this frame's render pass.
             let session_snapshot = self.session.borrow().clone();
@@ -205,7 +336,7 @@ impl eframe::App for CadeApp {
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
-                    let version = health.version.as_deref().unwrap_or("unknown");
+                    let _version = health.version.as_deref().unwrap_or("unknown");
                     let has_agent = selected_agent.is_some();
                     let is_streaming = streaming;
 
@@ -496,12 +627,6 @@ impl eframe::App for CadeApp {
                             if ui.button("🚪 Logout").clicked() {
                                 action = AppAction::Logout;
                             }
-                            ui.add_space(4.0);
-                            ui.label(
-                                egui::RichText::new(format!("v{version}"))
-                                    .small()
-                                    .weak(),
-                            );
                         });
 
                     // ── Bottom panel: input bar (TUI-matched) ────────
@@ -1349,4 +1474,16 @@ pub enum AppAction {
     SetModelPickerSelection(usize),
     /// User selected a model from the picker — apply it.
     SelectModel(String),
+}
+
+// ── M1: toolbar helpers ───────────────────────────────────────────────────────
+
+/// Returns the colour for the live-status dot in the top toolbar.
+/// `true` (streaming) → WARNING amber; `false` (idle) → SUCCESS green.
+pub(crate) fn status_dot_color(streaming: bool) -> egui::Color32 {
+    if streaming {
+        crate::theme::WARNING
+    } else {
+        crate::theme::SUCCESS
+    }
 }

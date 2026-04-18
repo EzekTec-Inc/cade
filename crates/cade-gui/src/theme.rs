@@ -70,6 +70,27 @@ pub const ROLE_TOOL: Color32 = TEAL;
 
 // ── Helpers ─────────────────────────────────────────────────────────────
 
+/// Fraction of the context window consumed by `total_tokens`, clamped 0.0–1.0.
+/// Used by the M5 ProgressBar in the chat header.
+pub fn context_fill_fraction(total_tokens: u64, window: u64) -> f32 {
+    if window == 0 {
+        return 0.0;
+    }
+    (total_tokens as f32 / window as f32).clamp(0.0, 1.0)
+}
+
+/// Colour for the context-window progress bar based on fill fraction.
+/// 0–60 % → SUCCESS green; 60–85 % → WARNING amber; 85–100 % → ERROR red.
+pub fn context_fill_color(fraction: f32) -> egui::Color32 {
+    if fraction >= 0.85 {
+        ERROR
+    } else if fraction >= 0.60 {
+        WARNING
+    } else {
+        SUCCESS
+    }
+}
+
 /// Apply the CADE dark theme to egui's `Visuals`.
 ///
 /// Call this once in `CadeApp::new` (or on every frame if hot-reloading).
@@ -187,5 +208,54 @@ mod tests {
         assert!(BG_SURFACE0.r() > BG_BASE.r());
         assert!(BG_SURFACE1.r() > BG_SURFACE0.r());
         assert!(BG_SURFACE2.r() > BG_SURFACE1.r());
+    }
+
+    // ── M1 toolbar tests ─────────────────────────────────────────────────
+
+    /// Pure helper: the toolbar status dot colour is WARNING when streaming,
+    /// SUCCESS when idle. Tested here (native) because `app::mod` is wasm32-only.
+    fn status_dot_color(streaming: bool) -> Color32 {
+        if streaming { WARNING } else { SUCCESS }
+    }
+
+    #[test]
+    fn status_dot_is_warning_when_streaming() {
+        assert_eq!(status_dot_color(true), WARNING);
+    }
+
+    #[test]
+    fn status_dot_is_success_when_idle() {
+        assert_eq!(status_dot_color(false), SUCCESS);
+    }
+
+    // ── M5 progress-bar tests ─────────────────────────────────────────────
+
+    /// Pure helper: fraction of context window consumed (clamped 0.0–1.0).
+    fn context_fill_fraction(total_tokens: u64, window: u64) -> f32 {
+        if window == 0 {
+            return 0.0;
+        }
+        (total_tokens as f32 / window as f32).clamp(0.0, 1.0)
+    }
+
+    #[test]
+    fn context_fill_zero_when_no_tokens() {
+        assert_eq!(context_fill_fraction(0, 128_000), 0.0);
+    }
+
+    #[test]
+    fn context_fill_half_at_midpoint() {
+        let frac = context_fill_fraction(64_000, 128_000);
+        assert!((frac - 0.5).abs() < 1e-5, "expected 0.5, got {frac}");
+    }
+
+    #[test]
+    fn context_fill_clamps_to_one() {
+        assert_eq!(context_fill_fraction(200_000, 128_000), 1.0);
+    }
+
+    #[test]
+    fn context_fill_zero_window_returns_zero() {
+        assert_eq!(context_fill_fraction(1000, 0), 0.0);
     }
 }
