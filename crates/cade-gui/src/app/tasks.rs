@@ -331,6 +331,38 @@ impl CadeApp {
 
     /// Update the current agent's model via `PATCH /v1/agents/:id`.  On
     /// success refreshes the agents list so the sidebar reflects the change.
+    /// Fetch available models and populate the model picker overlay.
+    /// The overlay must already be open (so `model_picker_loading` is set).
+    pub(super) fn spawn_fetch_models(&mut self) {
+        let (server_url, token) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string())
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::get_models(&server_url, &token).await {
+                Ok((models, custom_providers)) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_models_loaded(models, custom_providers);
+                    }
+                }
+                Err(e) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_models_error(format!("Failed to load models: {e}"));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     pub(super) fn spawn_set_agent_model(&mut self, model: String) {
         let (server_url, token, agent_id) = {
             let session = self.session.borrow();
@@ -889,12 +921,6 @@ impl CadeApp {
             }
             PaletteCmd::Model(model) => {
                 let model = model.trim().to_string();
-                if model.is_empty() {
-                    if let Some(s) = self.session.borrow_mut().as_mut() {
-                        s.push_error("Usage: /model <model-id>");
-                    }
-                    return;
-                }
                 let has_agent = self
                     .session
                     .borrow()
@@ -907,7 +933,15 @@ impl CadeApp {
                     }
                     return;
                 }
-                self.spawn_set_agent_model(model);
+                if model.is_empty() {
+                    // No arg → open the model picker overlay and fetch models
+                    if let Some(s) = self.session.borrow_mut().as_mut() {
+                        s.open_model_picker();
+                    }
+                    self.spawn_fetch_models();
+                } else {
+                    self.spawn_set_agent_model(model);
+                }
             }
             PaletteCmd::Checkpoints => {
                 let has_agent = self
