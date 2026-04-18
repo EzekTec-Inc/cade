@@ -15,6 +15,7 @@ pub mod messages;
 pub mod models;
 pub mod providers;
 pub mod proxy;
+pub mod run;
 pub mod runs;
 pub mod tool_executions;
 pub mod tools;
@@ -49,6 +50,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/agents/:id/complete",
             post(complete::complete),
+        )
+        .route(
+            "/v1/agents/:id/run",
+            post(run::run_agent),
         )
         .layer(middleware::from_fn_with_state(
             state.clone(),

@@ -1343,6 +1343,7 @@ mod tests {
             llm,
             llm_router: router,
             config: Arc::new(cfg),
+            mcp: Arc::new(crate::server::state::McpManager::empty()),
             rate_limiter: RateLimiter::from_env(),
             memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             agent_activity: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),

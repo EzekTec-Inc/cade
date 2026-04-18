@@ -1836,3 +1836,37 @@ M3 = **state-machine + minimal render + WASM entry**.  No network calls.
 - Release WASM (7.6 MB) and cade-server binary rebuilt successfully
 
 **Rollback:** `git checkout crates/cade-gui/src/{api,app,session,http_wasm}.rs` to revert all GUI changes; WASM rebuild required after revert.
+
+---
+
+## 2026-04-18 — feat(server+gui): Option A — server-side agentic loop (POST /v1/agents/:id/run)
+
+**Task:** Enable MCP tool use from the GUI by implementing a server-side agentic loop endpoint.
+
+**Root cause:** The GUI (`cade-gui`) is a pure SSE consumer. It called `POST /messages/stream` which fires one LLM call and expects the *client* to execute tools and POST results back. Since WASM can't run OS tools, tool calls were silently dropped — the LLM's turn never completed.
+
+**Solution (Option A):** New `POST /v1/agents/:id/run` handler that runs the full multi-turn agentic loop on the server: persist user message → LLM stream → detect `finish_reason=tool_use` → execute tools (native + MCP) via `cade_agent::tools::manager::dispatch` → persist results → re-invoke LLM → repeat up to 20 turns, streaming all events back to the GUI as a single SSE stream.
+
+**Previous behavior:** GUI messages that required tool use would show the `tool_call` bubble but never return a final answer. MCP servers were invisible to GUI users.
+
+**New behavior:** GUI sends to `/run`; server executes the full loop; GUI receives `tool_call_message` + `tool_result_message` + final `assistant_message` in one continuous stream. MCP servers configured in the user's settings files are loaded at server startup and shared across requests.
+
+**Files modified:**
+- `crates/cade-server/Cargo.toml` — added `cade-agent` + `cade-mcp` (optional) deps
+- `crates/cade-server/src/server/state.rs` — `McpManager` re-export + `mcp: Arc<McpManager>` field on `AppState`
+- `crates/cade-server/src/server/api/run.rs` — NEW: agentic loop handler
+- `crates/cade-server/src/server/api/mod.rs` — registered `run` module + `/run` route
+- `crates/cade-server/src/server/api/messages/mod.rs` — `maybe_set_conv_title` made `pub(crate)`
+- `src/bin/cade-server.rs` — `McpManager::start()` at startup; `mcp` wired into `AppState`
+- `crates/cade-gui/src/api.rs` — `StreamEvent::ToolResult` variant + parsing
+- `crates/cade-gui/src/http_wasm.rs` — `send_message_stream` now POSTs to `/run`
+- `crates/cade-gui/src/app/tasks.rs` — handle `StreamEvent::ToolResult`
+- `crates/cade-gui/src/session.rs` — `on_stream_tool_result()` method
+- All test `AppState` constructions patched with `mcp: Arc::new(McpManager::empty())`
+
+**Build:**
+- All tests pass (workspace-wide, 0 failures)
+- Clippy clean (native + wasm32)
+- `cade-gui` WASM rebuilt, `cade-server` release binary rebuilt
+
+**Rollback:** `git revert HEAD` or restore checkpoint `cp-34a84ee1` (label `before-option-a-run-endpoint`)

@@ -795,6 +795,9 @@ impl CadeApp {
                             StreamEvent::ToolCall { id, name, arguments } => {
                                 s.on_stream_tool_call(&id, &name, &arguments);
                             }
+                            StreamEvent::ToolResult { id, name, output, is_error } => {
+                                s.on_stream_tool_result(&id, &name, &output, is_error);
+                            }
                             StreamEvent::Usage { input_tokens, output_tokens, model } => {
                                 s.on_usage(input_tokens, output_tokens, model.as_deref());
                             }

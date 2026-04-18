@@ -61,6 +61,13 @@ pub enum StreamEvent {
         name: String,
         arguments: String,
     },
+    /// The server executed a tool and this is its result (agentic loop only).
+    ToolResult {
+        id: String,
+        name: String,
+        output: String,
+        is_error: bool,
+    },
     /// Token usage statistics for the turn.
     Usage {
         input_tokens: u64,
@@ -283,6 +290,15 @@ pub fn parse_stream_event(v: &serde_json::Value) -> Option<StreamEvent> {
                 id: tc.get("id")?.as_str()?.to_string(),
                 name: tc.get("name")?.as_str()?.to_string(),
                 arguments: tc.get("arguments")?.as_str()?.to_string(),
+            })
+        }
+        "tool_result_message" => {
+            let tr = v.get("tool_result")?;
+            Some(StreamEvent::ToolResult {
+                id: tr.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                name: tr.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                output: tr.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                is_error: tr.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false),
             })
         }
         "usage_statistics" => Some(StreamEvent::Usage {

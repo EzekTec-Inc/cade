@@ -627,6 +627,30 @@ impl SessionState {
         }
     }
 
+    /// Record a tool result emitted by the server during the agentic loop.
+    ///
+    /// Appended as a `role = "tool_result"` message for display in the timeline.
+    pub fn on_stream_tool_result(&mut self, id: &str, name: &str, output: &str, is_error: bool) {
+        if let Self::Connected {
+            messages,
+            streaming: true,
+            ..
+        } = self
+        {
+            messages.push(ChatMessage {
+                id: String::new(),
+                role: "tool_result".to_string(),
+                content: serde_json::json!({
+                    "id":       id,
+                    "name":     name,
+                    "output":   output,
+                    "is_error": is_error,
+                }),
+                conversation_id: None,
+            });
+        }
+    }
+
     /// Whether the session is currently streaming an assistant response.
     pub fn is_streaming(&self) -> bool {
         matches!(

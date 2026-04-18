@@ -450,6 +450,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
             llm_provider: String::new(),
         }))),
         config,
+        mcp: std::sync::Arc::new(crate::server::state::McpManager::empty()),
         rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
         memory_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),

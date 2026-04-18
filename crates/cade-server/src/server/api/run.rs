@@ -1,0 +1,286 @@
+//! `POST /v1/agents/:id/run` — server-side agentic loop.
+//!
+//! Unlike `/messages/stream` (which fires a single LLM call and expects the
+//! client to execute tools and POST results back), this endpoint runs the
+//! full multi-turn loop entirely on the server:
+//!
+//!   1. Persist the user message.
+//!   2. Build context → call LLM → stream tokens to the client.
+//!   3. If the LLM emits tool calls, execute them (native + MCP) and persist
+//!      the results.
+//!   4. Rebuild context → call LLM again → stream — repeat until
+//!      `finish_reason` is not `"tool_use"` or the turn cap is reached.
+//!
+//! The client receives a single continuous SSE stream.  All tool_call and
+//! tool_result events are included so the GUI can render them inline.
+//!
+//! ## Request body
+//! ```json
+//! { "input": "…", "conversation_id": "…" }
+//! ```
+//!
+//! ## SSE event shapes (identical to `/messages/stream`)
+//! ```text
+//! {"message_type":"stream_start","conversation_id":"…","run_id":"…"}
+//! {"message_type":"assistant_message","content":"…"}
+//! {"message_type":"reasoning_message","reasoning":"…"}
+//! {"message_type":"tool_call_message","tool_call":{"id":"…","name":"…","arguments":"…"}}
+//! {"message_type":"tool_result_message","tool_result":{"id":"…","name":"…","output":"…","is_error":false}}
+//! {"message_type":"usage_statistics","input_tokens":N,"output_tokens":N,"model":"…"}
+//! {"message_type":"finish_reason","reason":"end_turn"}
+//! [DONE]
+//! ```
+
+use axum::{
+    extract::{Path, State},
+    response::{IntoResponse, Response, Sse, sse::Event},
+    Json,
+};
+use cade_ai::{CompletionRequest, LlmToolCall, StreamChunk, catalogue};
+use cade_store::sqlite;
+use futures::StreamExt;
+use serde_json::{Value, json};
+
+use crate::server::state::AppState;
+use super::messages::{
+    build_context, err, persist, maybe_set_conv_title, resolve_conversation,
+};
+
+/// Maximum agentic turns per request (prevents infinite loops).
+const MAX_TURNS: usize = 20;
+
+/// `POST /v1/agents/:id/run`
+pub async fn run_agent(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(body): Json<Value>,
+) -> Response {
+    // ── Resolve / create conversation ─────────────────────────────────────
+    let conv_id: Option<String> = match resolve_conversation(&state, &agent_id, &body) {
+        Ok(c) => c,
+        Err(r) => return r,
+    };
+    let conv_str = conv_id.clone();
+
+    // ── Update activity ───────────────────────────────────────────────────
+    {
+        let mut activity = state.agent_activity.write().await;
+        let entry = activity
+            .entry(agent_id.clone())
+            .or_insert(crate::server::state::AgentActivity {
+                last_active_ts: 0,
+                needs_consolidation: false,
+                conversation_id: conv_id.clone(),
+                last_consolidation_turn: 0,
+            });
+        entry.last_active_ts = chrono::Utc::now().timestamp();
+        entry.conversation_id = conv_id.clone();
+    }
+
+    // ── Persist user message ──────────────────────────────────────────────
+    let input = match body["input"].as_str().filter(|s| !s.is_empty()) {
+        Some(s) => s.to_string(),
+        None => return err(axum::http::StatusCode::BAD_REQUEST, "missing 'input'"),
+    };
+    if let Some(cid) = conv_str.as_deref() {
+        maybe_set_conv_title(&state, cid, &input);
+    }
+    persist(&state, &agent_id, conv_str.as_deref(), "user", json!({ "content": input }));
+
+    // ── Create run record ─────────────────────────────────────────────────
+    let run_row = sqlite::create_run(&state.db, &agent_id, conv_str.as_deref());
+    let run_id = run_row.map(|r| r.id).unwrap_or_else(|_| format!("run-local-{}", chrono::Utc::now().timestamp()));
+
+    // Snapshot for the async stream task
+    let state2 = state.clone();
+    let agent_id2 = agent_id.clone();
+    let conv_id2 = conv_str.clone();
+    let run_id2 = run_id.clone();
+
+    // ── Build SSE stream ──────────────────────────────────────────────────
+    // We use an mpsc channel to bridge the async loop into an SSE stream.
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(128);
+
+    tokio::spawn(async move {
+        let send = |data: Value| {
+            let tx = tx.clone();
+            let ev = Event::default().data(data.to_string());
+            async move { let _ = tx.send(Ok(ev)).await; }
+        };
+
+        // ── stream_start ──────────────────────────────────────────────────
+        send(json!({
+            "message_type": "stream_start",
+            "conversation_id": conv_id2,
+            "run_id": run_id2,
+        })).await;
+
+        let mut turns = 0usize;
+
+        loop {
+            turns += 1;
+            if turns > MAX_TURNS {
+                send(json!({
+                    "message_type": "error",
+                    "error": format!("Agentic loop exceeded {MAX_TURNS} turns — stopping"),
+                })).await;
+                break;
+            }
+
+            // ── Build context ─────────────────────────────────────────────
+            let (model, messages, tools) =
+                match build_context(&state2, &agent_id2, conv_id2.as_deref(), false).await {
+                    Ok(ctx) => ctx,
+                    Err(e) => {
+                        send(json!({ "message_type": "error", "error": e })).await;
+                        break;
+                    }
+                };
+
+            let max_tokens = catalogue::max_tokens_for_model(&model);
+            let req = CompletionRequest {
+                model: model.clone(),
+                messages,
+                tools,
+                max_tokens,
+                reasoning_effort: None,
+            };
+
+            // ── Stream LLM response ───────────────────────────────────────
+            let mut llm_stream = match state2.llm.stream(&req).await {
+                Ok(s) => s,
+                Err(e) => {
+                    send(json!({ "message_type": "error", "error": e.to_string() })).await;
+                    break;
+                }
+            };
+
+            let mut text_acc = String::new();
+            let mut tool_calls: Vec<LlmToolCall> = Vec::new();
+            let mut finish = String::new();
+
+            while let Some(chunk) = llm_stream.next().await {
+                match chunk {
+                    Ok(StreamChunk::Text(t)) => {
+                        text_acc.push_str(&t);
+                        send(json!({ "message_type": "assistant_message", "content": t })).await;
+                    }
+                    Ok(StreamChunk::Reasoning(r)) => {
+                        send(json!({ "message_type": "reasoning_message", "reasoning": r })).await;
+                    }
+                    Ok(StreamChunk::ToolCall(tc)) => {
+                        send(json!({
+                            "message_type": "tool_call_message",
+                            "tool_call": {
+                                "id": tc.id,
+                                "name": tc.name,
+                                "arguments": tc.arguments,
+                            }
+                        })).await;
+                        tool_calls.push(tc);
+                    }
+                    Ok(StreamChunk::Usage(u)) => {
+                        send(json!({
+                            "message_type": "usage_statistics",
+                            "input_tokens":  u.input_tokens,
+                            "output_tokens": u.output_tokens,
+                            "cache_read_tokens":  u.cache_read_tokens,
+                            "cache_write_tokens": u.cache_write_tokens,
+                            "model": u.model,
+                        })).await;
+                    }
+                    Ok(StreamChunk::FinishReason(r)) => {
+                        finish = r.clone();
+                        send(json!({ "message_type": "finish_reason", "reason": r })).await;
+                    }
+                    Err(e) => {
+                        send(json!({ "message_type": "error", "error": e.to_string() })).await;
+                        finish = "error".to_string();
+                    }
+                    Ok(StreamChunk::Done) => {
+                        // Stream ended cleanly (some providers emit Done before FinishReason)
+                    }
+                }
+            }
+
+            // ── Persist assistant message ─────────────────────────────────
+            let tool_calls_json: Vec<Value> = tool_calls
+                .iter()
+                .filter_map(|tc| serde_json::to_value(tc).ok())
+                .collect();
+            let has_text = !text_acc.is_empty();
+            let has_tools = !tool_calls.is_empty();
+            if has_text || has_tools {
+                persist(
+                    &state2,
+                    &agent_id2,
+                    conv_id2.as_deref(),
+                    "assistant",
+                    json!({
+                        "content": text_acc,
+                        "tool_calls": tool_calls_json,
+                    }),
+                );
+            }
+
+            // ── Done if not tool_use ──────────────────────────────────────
+            if finish != "tool_use" || tool_calls.is_empty() {
+                break;
+            }
+
+            // ── Execute tools and persist results ─────────────────────────
+            for tc in &tool_calls {
+                let result = cade_agent::tools::manager::dispatch(
+                    tc.id.clone(),
+                    &tc.name,
+                    &tc.arguments,
+                    &state2.mcp,
+                ).await;
+
+                let output_trimmed = if result.output.len() > 8_192 {
+                    format!(
+                        "{}\n[... truncated: {} bytes]",
+                        &result.output[..8_192],
+                        result.output.len()
+                    )
+                } else {
+                    result.output.clone()
+                };
+
+                // Stream the result to the GUI
+                send(json!({
+                    "message_type": "tool_result_message",
+                    "tool_result": {
+                        "id":       result.tool_call_id,
+                        "name":     result.tool_name,
+                        "output":   output_trimmed,
+                        "is_error": result.is_error,
+                    }
+                })).await;
+
+                // Persist into DB so next build_context sees it
+                persist(
+                    &state2,
+                    &agent_id2,
+                    conv_id2.as_deref(),
+                    "tool",
+                    json!({
+                        "content":      output_trimmed,
+                        "tool_call_id": result.tool_call_id,
+                        "tool_name":    result.tool_name,
+                    }),
+                );
+            }
+
+            // Loop → re-invoke LLM with tool results
+        }
+
+        let _ = sqlite::finish_run(&state2.db, &run_id2, "done");
+
+        // ── End of stream ─────────────────────────────────────────────────
+        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+    });
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Sse::new(stream).into_response()
+}

@@ -4,6 +4,9 @@ use cade_ai::{LlmProvider, LlmRouter};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Re-export so call-sites in api/ can do `use crate::server::state::McpManager`.
+pub use cade_agent::mcp::McpManager;
+
 /// Shared application state injected into every axum handler
 /// Tracks activity and consolidation state per agent.
 #[derive(Debug, Clone)]
@@ -35,6 +38,9 @@ pub struct AppState {
     /// Router behind RwLock for hot-reload — /connect adds providers without restart
     pub llm_router: Arc<RwLock<LlmRouter>>,
     pub config: Arc<ServerConfig>,
+    /// MCP manager — executes tool calls on behalf of the agentic loop.
+    /// Populated at startup from merged settings; empty when no MCP servers are configured.
+    pub mcp: Arc<McpManager>,
     /// Per-agent token-bucket rate limiter
     pub rate_limiter: RateLimiter,
     /// Per-agent system-prompt cache: key=agent_id, value=(hash, system_prompt_without_tool_rule).

@@ -7,12 +7,15 @@ edition     = "2024"
 doctest     = false
 
 [features]
+mcp = ["dep:cade-mcp", "cade-agent/mcp"]
 
 [dependencies]
 # -- Workspace crates
 cade-core.path       = "../cade-core"
 cade-ai.path         = "../cade-ai"
 cade-store.path      = "../cade-store"
+cade-agent = { path = "../cade-agent", default-features = false, optional = false }
+cade-mcp   = { path = "../cade-mcp", optional = true }
 # -- Error handling
 derive_more.workspace  = true
 # -- Serialisation

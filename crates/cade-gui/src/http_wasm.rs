@@ -130,8 +130,9 @@ pub async fn create_conversation(
     Ok(info)
 }
 
-/// `POST /v1/agents/:id/messages/stream` — send a user message and stream
-/// the assistant's response via SSE.
+/// `POST /v1/agents/:id/run` — send a user message and run the full
+/// server-side agentic loop (tool execution included), streaming all events
+/// (text, tool calls, tool results, finish) back via SSE.
 ///
 /// `on_event` is called for each parsed [`api::StreamEvent`].
 /// Returns `Ok(())` when the stream ends normally.
@@ -143,7 +144,7 @@ pub async fn send_message_stream(
     conversation_id: Option<&str>,
     mut on_event: impl FnMut(api::StreamEvent),
 ) -> Result<(), ApiError> {
-    let path = format!("/v1/agents/{agent_id}/messages/stream");
+    let path = format!("/v1/agents/{agent_id}/run");
     let url = api::build_url(base_url, &path);
 
     let mut body = serde_json::json!({ "input": input });

@@ -654,7 +654,7 @@ pub async fn stream_message(
 // -- Helpers
 
 /// Set conversation title from first user message if title is still empty.
-fn maybe_set_conv_title(state: &AppState, conv_id: &str, text: &str) {
+pub(crate) fn maybe_set_conv_title(state: &AppState, conv_id: &str, text: &str) {
     if let Ok(Some(c)) = sqlite::get_conversation(&state.db, conv_id)
         && c.title.is_empty()
     {

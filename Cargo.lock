@@ -924,8 +924,10 @@ version = "0.2.0"
 dependencies = [
  "async-trait",
  "axum",
+ "cade-agent",
  "cade-ai",
  "cade-core",
+ "cade-mcp",
  "cade-store",
  "chrono",
  "derive_more",

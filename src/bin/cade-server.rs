@@ -11,11 +11,12 @@ use cade::server::{
     api::router,
     config::ServerConfig,
     rate_limit::RateLimiter,
-    state::AppState,
+    state::{AppState, McpManager},
 };
 use cade_store::sqlite::{open as open_db, self};
 
 use cade_ai::{CompletionRequest, LlmProvider, LlmRouter};
+use cade::settings::SettingsManager;
 
 // endregion: --- Modules
 
@@ -105,11 +106,34 @@ async fn main() -> Result<()> {
         Arc::new(RouterAdapter(Arc::clone(&llm_router)))
     };
 
+    // ── MCP servers ───────────────────────────────────────────────────────────
+    // Load MCP server configs from the user's settings files (global + project)
+    // and start each as a child process. The McpManager is shared across all
+    // agentic-loop requests so connections are reused between turns.
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let mcp: Arc<McpManager> = match SettingsManager::new(&cwd) {
+        Ok(settings) => {
+            let mcp_configs = settings.merged_mcp_servers();
+            if mcp_configs.is_empty() {
+                tracing::info!("No MCP servers configured — agentic loop will use native tools only");
+                Arc::new(McpManager::empty())
+            } else {
+                tracing::info!("Starting {} MCP server(s)…", mcp_configs.len());
+                Arc::new(McpManager::start(&mcp_configs).await)
+            }
+        }
+        Err(e) => {
+            tracing::warn!("Could not load settings for MCP: {e} — continuing without MCP servers");
+            Arc::new(McpManager::empty())
+        }
+    };
+
     let state = AppState {
         db,
         llm,
         llm_router,
         config: Arc::new(config.clone()),
+        mcp,
         rate_limiter: RateLimiter::from_env(),
         memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
