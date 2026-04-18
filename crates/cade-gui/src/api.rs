@@ -298,6 +298,269 @@ pub fn parse_stream_event(v: &serde_json::Value) -> Option<StreamEvent> {
     }
 }
 
+// ── Checkpoints ────────────────────────────────────────────────────────
+
+/// A checkpoint row as returned by
+/// `GET /v1/agents/:id/checkpoints`.
+///
+/// `created_at` is a Unix timestamp (seconds).  All optional fields may
+/// be `null` on the server side — we default to `None`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct CheckpointRow {
+    pub id: String,
+    pub agent_id: String,
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    pub branch_id: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    pub created_at: i64,
+    #[serde(default)]
+    pub git_stash_ref: Option<String>,
+    #[serde(default)]
+    pub git_commit_hash: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<String>,
+}
+
+/// Parse the response from `GET /v1/agents/:id/checkpoints`.  The
+/// server returns a bare JSON array.
+pub fn parse_checkpoints(status: u16, body: &str) -> Result<Vec<CheckpointRow>, ApiError> {
+    decode_or_error(status, body)
+}
+
+/// Build the URL for the checkpoint-collection endpoint.
+pub fn checkpoints_url(server: &str, agent_id: &str) -> String {
+    build_url(server, &format!("/v1/agents/{agent_id}/checkpoints"))
+}
+
+/// Build the URL for a single checkpoint (get/delete).
+pub fn checkpoint_url(server: &str, agent_id: &str, cp_id: &str) -> String {
+    build_url(
+        server,
+        &format!("/v1/agents/{agent_id}/checkpoints/{cp_id}"),
+    )
+}
+
+/// Build the URL for the `POST …/checkpoints/:cp_id/restore` endpoint.
+pub fn checkpoint_restore_url(server: &str, agent_id: &str, cp_id: &str) -> String {
+    build_url(
+        server,
+        &format!("/v1/agents/{agent_id}/checkpoints/{cp_id}/restore"),
+    )
+}
+
+/// Build the body for `POST /v1/agents/:id/checkpoints`.
+///
+/// All fields are optional; missing fields default server-side (e.g.
+/// `branch_id` → `"main"`).
+pub fn create_checkpoint_body(
+    label: Option<&str>,
+    description: Option<&str>,
+    conversation_id: Option<&str>,
+) -> String {
+    let mut map = serde_json::Map::new();
+    if let Some(l) = label {
+        map.insert("label".into(), serde_json::Value::String(l.into()));
+    }
+    if let Some(d) = description {
+        map.insert("description".into(), serde_json::Value::String(d.into()));
+    }
+    if let Some(c) = conversation_id {
+        map.insert(
+            "conversation_id".into(),
+            serde_json::Value::String(c.into()),
+        );
+    }
+    serde_json::Value::Object(map).to_string()
+}
+
+// ── Artifacts ──────────────────────────────────────────────────────────
+
+/// Summary of an artifact as returned by
+/// `GET /v1/agents/:id/artifacts`.  The list endpoint omits `data_text`
+/// and `metadata` to keep responses small — fetch by id for detail.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct ArtifactInfo {
+    pub id: String,
+    pub kind: String,
+    pub content_type: String,
+    pub size_bytes: i64,
+    pub created_at: i64,
+    #[serde(default)]
+    pub run_id: Option<String>,
+}
+
+/// Full artifact detail including the text blob (if any).
+///
+/// `GET /v1/agents/:id/artifacts/:art_id` returns this shape.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct ArtifactDetail {
+    pub id: String,
+    pub kind: String,
+    pub content_type: String,
+    #[serde(default)]
+    pub data_text: Option<String>,
+    #[serde(default)]
+    pub metadata: serde_json::Value,
+    pub size_bytes: i64,
+    pub created_at: i64,
+}
+
+/// Parse the response from `GET /v1/agents/:id/artifacts`.
+pub fn parse_artifacts(status: u16, body: &str) -> Result<Vec<ArtifactInfo>, ApiError> {
+    decode_or_error(status, body)
+}
+
+/// Parse the response from `GET /v1/agents/:id/artifacts/:art_id`.
+pub fn parse_artifact(status: u16, body: &str) -> Result<ArtifactDetail, ApiError> {
+    decode_or_error(status, body)
+}
+
+/// Build the URL for the artifact-collection endpoint.
+pub fn artifacts_url(server: &str, agent_id: &str) -> String {
+    build_url(server, &format!("/v1/agents/{agent_id}/artifacts"))
+}
+
+/// Build the URL for a single artifact (get/delete).
+pub fn artifact_url(server: &str, agent_id: &str, art_id: &str) -> String {
+    build_url(
+        server,
+        &format!("/v1/agents/{agent_id}/artifacts/{art_id}"),
+    )
+}
+
+// ── Agent tools (MCP / skills panel) ──────────────────────────────────
+
+/// A tool entry returned by `GET /v1/agents/:id/tools`.
+///
+/// Each row represents an MCP tool that has been registered with the
+/// agent (id = stable tool uuid, name = MCP tool name as seen by the LLM).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct AgentTool {
+    pub id: String,
+    pub name: String,
+}
+
+/// Parse the response from `GET /v1/agents/:id/tools`.
+/// Server returns a bare JSON array `[{"id":"…","name":"…"}, …]`.
+pub fn parse_tools(status: u16, body: &str) -> Result<Vec<AgentTool>, ApiError> {
+    decode_or_error(status, body)
+}
+
+/// Build the URL for the agent-tools endpoint.
+pub fn tools_url(server: &str, agent_id: &str) -> String {
+    build_url(server, &format!("/v1/agents/{agent_id}/tools"))
+}
+
+// ── Question widget types (ask_user_question) ──────────────────────────
+
+/// One selectable option inside an `ask_user_question` tool call.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct QuestionOption {
+    pub label: String,
+    #[serde(default)]
+    pub description: String,
+}
+
+/// A parsed `ask_user_question` invocation extracted from a
+/// `ToolCall` SSE event.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
+pub struct Question {
+    pub header: String,
+    pub question: String,
+    pub options: Vec<QuestionOption>,
+    #[serde(rename = "multiSelect", default)]
+    pub multi_select: bool,
+}
+
+/// Try to extract a [`Question`] from the raw `arguments` JSON string of a
+/// `ToolCall` event whose `name` is `"ask_user_question"`.
+///
+/// The tool schema sends a `questions` array; we handle both single-item and
+/// multi-item arrays but only surface the *first* unanswered question (the
+/// TUI follows the same convention).
+///
+/// Returns `None` when the arguments are unparseable or the tool name is
+/// something else.
+pub fn parse_ask_question(arguments: &str) -> Option<Question> {
+    let v: serde_json::Value = serde_json::from_str(arguments).ok()?;
+    let arr = v.get("questions")?.as_array()?;
+    let first = arr.first()?;
+    serde_json::from_value(first.clone()).ok()
+}
+
+// ── Agent metrics ──────────────────────────────────────────────────────
+
+/// Server-side consolidation / compaction metrics for one agent.
+/// Mirrors `AgentMetrics` in `cade-server/src/server/state.rs`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, Default)]
+pub struct AgentMetrics {
+    #[serde(default)]
+    pub tool_outputs_compacted: u64,
+    #[serde(default)]
+    pub consolidation_runs: u64,
+    #[serde(default)]
+    pub chars_summarised: u64,
+    #[serde(default)]
+    pub chars_produced: u64,
+    #[serde(default)]
+    pub inflation_guard_hits: u64,
+}
+
+/// Parse `GET /v1/agents/:id/metrics`.
+pub fn parse_metrics(status: u16, body: &str) -> Result<AgentMetrics, ApiError> {
+    decode_or_error(status, body)
+}
+
+/// Build the URL for the metrics endpoint.
+pub fn metrics_url(server: &str, agent_id: &str) -> String {
+    build_url(server, &format!("/v1/agents/{agent_id}/metrics"))
+}
+
+// ── Context-window stats ───────────────────────────────────────────────
+
+/// Context-window statistics returned by `GET /v1/agents/:id/context`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, Default)]
+pub struct ContextStats {
+    #[serde(default)]
+    pub model: Option<String>,
+    #[serde(default)]
+    pub window_tokens: u64,
+    #[serde(default)]
+    pub turns_total: u64,
+    #[serde(default)]
+    pub turns_included: u64,
+    #[serde(default)]
+    pub turns_omitted: u64,
+    #[serde(default)]
+    pub chars_used: u64,
+    #[serde(default)]
+    pub message_budget_chars: u64,
+    #[serde(default)]
+    pub memory_chars: u64,
+    #[serde(default)]
+    pub system_prompt_chars: u64,
+    #[serde(default)]
+    pub tool_count: u64,
+    #[serde(default)]
+    pub tool_schema_reserve_chars: u64,
+    #[serde(default)]
+    pub needs_consolidation: bool,
+}
+
+/// Parse `GET /v1/agents/:id/context`.
+pub fn parse_context_stats(status: u16, body: &str) -> Result<ContextStats, ApiError> {
+    decode_or_error(status, body)
+}
+
+/// Build the URL for the context-stats endpoint.
+pub fn context_url(server: &str, agent_id: &str) -> String {
+    build_url(server, &format!("/v1/agents/{agent_id}/context"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -687,5 +950,344 @@ mod tests {
         let s = patch_agent_model_body("gpt-4");
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["model"], "gpt-4");
+    }
+
+    // -- checkpoints
+
+    #[test]
+    fn checkpoints_url_format() {
+        assert_eq!(
+            checkpoints_url("http://localhost:8284", "agent-1"),
+            "http://localhost:8284/v1/agents/agent-1/checkpoints"
+        );
+    }
+
+    #[test]
+    fn checkpoint_url_format() {
+        assert_eq!(
+            checkpoint_url("http://localhost:8284", "agent-1", "cp-abc"),
+            "http://localhost:8284/v1/agents/agent-1/checkpoints/cp-abc"
+        );
+    }
+
+    #[test]
+    fn checkpoint_restore_url_format() {
+        assert_eq!(
+            checkpoint_restore_url("http://localhost:8284", "agent-1", "cp-abc"),
+            "http://localhost:8284/v1/agents/agent-1/checkpoints/cp-abc/restore"
+        );
+    }
+
+    #[test]
+    fn parse_checkpoints_decodes_rows() {
+        let body = r#"[
+            {"id":"cp-1","agent_id":"agent-1","branch_id":"main","created_at":1700000000,
+             "label":"before-refactor","description":"safe",
+             "conversation_id":null,"git_stash_ref":"stash@{0}","git_commit_hash":null,"parent_id":null},
+            {"id":"cp-2","agent_id":"agent-1","branch_id":"main","created_at":1700001000,
+             "label":null,"description":null,
+             "conversation_id":null,"git_stash_ref":null,"git_commit_hash":null,"parent_id":null}
+        ]"#;
+        let rows = parse_checkpoints(200, body).expect("decode");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "cp-1");
+        assert_eq!(rows[0].label.as_deref(), Some("before-refactor"));
+        assert_eq!(rows[0].git_stash_ref.as_deref(), Some("stash@{0}"));
+        assert_eq!(rows[1].label, None);
+    }
+
+    #[test]
+    fn parse_checkpoints_empty_is_ok() {
+        let rows = parse_checkpoints(200, "[]").expect("decode");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn parse_checkpoints_401_unauthorized() {
+        assert_eq!(parse_checkpoints(401, ""), Err(ApiError::Unauthorized));
+    }
+
+    #[test]
+    fn parse_checkpoints_500_server_error() {
+        assert_eq!(
+            parse_checkpoints(500, "boom"),
+            Err(ApiError::Server { status: 500 })
+        );
+    }
+
+    #[test]
+    fn parse_checkpoints_tolerates_missing_optional_fields() {
+        // Server may omit default-null fields.
+        let body = r#"[{"id":"cp-1","agent_id":"a","branch_id":"main","created_at":1}]"#;
+        let rows = parse_checkpoints(200, body).expect("decode");
+        assert_eq!(rows[0].label, None);
+        assert_eq!(rows[0].parent_id, None);
+    }
+
+    #[test]
+    fn create_checkpoint_body_all_fields() {
+        let s = create_checkpoint_body(Some("label"), Some("desc"), Some("conv-1"));
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["label"], "label");
+        assert_eq!(v["description"], "desc");
+        assert_eq!(v["conversation_id"], "conv-1");
+    }
+
+    #[test]
+    fn create_checkpoint_body_no_fields() {
+        let s = create_checkpoint_body(None, None, None);
+        assert_eq!(s, "{}");
+    }
+
+    #[test]
+    fn create_checkpoint_body_partial_fields() {
+        let s = create_checkpoint_body(Some("just-label"), None, None);
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["label"], "just-label");
+        assert!(v.get("description").is_none());
+        assert!(v.get("conversation_id").is_none());
+    }
+
+    // -- artifacts
+
+    #[test]
+    fn artifacts_url_format() {
+        assert_eq!(
+            artifacts_url("http://localhost:8284", "agent-1"),
+            "http://localhost:8284/v1/agents/agent-1/artifacts"
+        );
+    }
+
+    #[test]
+    fn artifact_url_format() {
+        assert_eq!(
+            artifact_url("http://localhost:8284", "agent-1", "art-xyz"),
+            "http://localhost:8284/v1/agents/agent-1/artifacts/art-xyz"
+        );
+    }
+
+    #[test]
+    fn parse_artifacts_decodes_list() {
+        let body = r#"[
+            {"id":"art-1","kind":"log","content_type":"text/plain",
+             "size_bytes":42,"created_at":1700000000,"run_id":"run-1"},
+            {"id":"art-2","kind":"diff","content_type":"text/x-diff",
+             "size_bytes":128,"created_at":1700001000,"run_id":null}
+        ]"#;
+        let rows = parse_artifacts(200, body).expect("decode");
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].kind, "log");
+        assert_eq!(rows[0].size_bytes, 42);
+        assert_eq!(rows[0].run_id.as_deref(), Some("run-1"));
+        assert_eq!(rows[1].run_id, None);
+    }
+
+    #[test]
+    fn parse_artifacts_empty_is_ok() {
+        let rows = parse_artifacts(200, "[]").expect("decode");
+        assert!(rows.is_empty());
+    }
+
+    #[test]
+    fn parse_artifacts_401_unauthorized() {
+        assert_eq!(parse_artifacts(401, ""), Err(ApiError::Unauthorized));
+    }
+
+    #[test]
+    fn parse_artifact_decodes_detail_with_text() {
+        let body = r#"{"id":"art-1","kind":"log","content_type":"text/plain",
+                       "data_text":"hello world","metadata":{"k":"v"},
+                       "size_bytes":11,"created_at":1700000000}"#;
+        let d = parse_artifact(200, body).expect("decode");
+        assert_eq!(d.id, "art-1");
+        assert_eq!(d.data_text.as_deref(), Some("hello world"));
+        assert_eq!(d.metadata["k"], "v");
+    }
+
+    #[test]
+    fn parse_artifact_tolerates_null_data_text() {
+        let body = r#"{"id":"art-1","kind":"pdf","content_type":"application/pdf",
+                       "data_text":null,"metadata":{},"size_bytes":0,"created_at":1}"#;
+        let d = parse_artifact(200, body).expect("decode");
+        assert_eq!(d.data_text, None);
+    }
+
+    #[test]
+    fn parse_artifact_404_server_error() {
+        assert_eq!(
+            parse_artifact(404, ""),
+            Err(ApiError::Server { status: 404 })
+        );
+    }
+
+    // -- tools
+
+    #[test]
+    fn tools_url_format() {
+        assert_eq!(
+            tools_url("http://localhost:8284", "agent-1"),
+            "http://localhost:8284/v1/agents/agent-1/tools"
+        );
+    }
+
+    #[test]
+    fn parse_tools_decodes_list() {
+        let body = r#"[{"id":"t1","name":"read_file"},{"id":"t2","name":"bash"}]"#;
+        let tools = parse_tools(200, body).expect("decode");
+        assert_eq!(tools.len(), 2);
+        assert_eq!(tools[0].name, "read_file");
+        assert_eq!(tools[1].id, "t2");
+    }
+
+    #[test]
+    fn parse_tools_empty_is_ok() {
+        assert!(parse_tools(200, "[]").expect("decode").is_empty());
+    }
+
+    #[test]
+    fn parse_tools_401_unauthorized() {
+        assert_eq!(parse_tools(401, ""), Err(ApiError::Unauthorized));
+    }
+
+    // -- ask_user_question
+
+    #[test]
+    fn parse_ask_question_single_question() {
+        let args = r#"{"questions":[{
+            "header":"Auth",
+            "question":"Which method?",
+            "options":[
+                {"label":"JWT","description":"Stateless"},
+                {"label":"Sessions","description":"Stateful"}
+            ],
+            "multiSelect":false
+        }]}"#;
+        let q = parse_ask_question(args).expect("parse");
+        assert_eq!(q.header, "Auth");
+        assert_eq!(q.question, "Which method?");
+        assert_eq!(q.options.len(), 2);
+        assert_eq!(q.options[0].label, "JWT");
+        assert!(!q.multi_select);
+    }
+
+    #[test]
+    fn parse_ask_question_multi_select() {
+        let args = r#"{"questions":[{
+            "header":"Choose",
+            "question":"Pick any",
+            "options":[{"label":"A","description":""},{"label":"B","description":""}],
+            "multiSelect":true
+        }]}"#;
+        let q = parse_ask_question(args).expect("parse");
+        assert!(q.multi_select);
+    }
+
+    #[test]
+    fn parse_ask_question_returns_first_only() {
+        let args = r#"{"questions":[
+            {"header":"Q1","question":"First?","options":[{"label":"Yes","description":""}],"multiSelect":false},
+            {"header":"Q2","question":"Second?","options":[{"label":"No","description":""}],"multiSelect":false}
+        ]}"#;
+        let q = parse_ask_question(args).expect("parse");
+        assert_eq!(q.header, "Q1");
+    }
+
+    #[test]
+    fn parse_ask_question_none_on_invalid_json() {
+        assert!(parse_ask_question("not json").is_none());
+    }
+
+    #[test]
+    fn parse_ask_question_none_on_missing_questions_key() {
+        assert!(parse_ask_question(r#"{"other":"value"}"#).is_none());
+    }
+
+    #[test]
+    fn parse_ask_question_none_on_empty_array() {
+        assert!(parse_ask_question(r#"{"questions":[]}"#).is_none());
+    }
+
+    #[test]
+    fn parse_ask_question_description_defaults_to_empty() {
+        let args = r#"{"questions":[{
+            "header":"H","question":"Q?",
+            "options":[{"label":"Only"}]
+        }]}"#;
+        let q = parse_ask_question(args).expect("parse");
+        assert_eq!(q.options[0].description, "");
+    }
+
+    // -- metrics
+
+    #[test]
+    fn metrics_url_format() {
+        assert_eq!(
+            metrics_url("http://localhost:8284", "agent-1"),
+            "http://localhost:8284/v1/agents/agent-1/metrics"
+        );
+    }
+
+    #[test]
+    fn parse_metrics_decodes_all_fields() {
+        let body = r#"{"tool_outputs_compacted":3,"consolidation_runs":2,
+                       "chars_summarised":1000,"chars_produced":800,
+                       "inflation_guard_hits":1}"#;
+        let m = parse_metrics(200, body).expect("decode");
+        assert_eq!(m.tool_outputs_compacted, 3);
+        assert_eq!(m.consolidation_runs, 2);
+        assert_eq!(m.chars_summarised, 1000);
+        assert_eq!(m.chars_produced, 800);
+        assert_eq!(m.inflation_guard_hits, 1);
+    }
+
+    #[test]
+    fn parse_metrics_defaults_missing_fields() {
+        let m = parse_metrics(200, "{}").expect("decode");
+        assert_eq!(m.consolidation_runs, 0);
+    }
+
+    #[test]
+    fn parse_metrics_401_unauthorized() {
+        assert_eq!(parse_metrics(401, ""), Err(ApiError::Unauthorized));
+    }
+
+    // -- context stats
+
+    #[test]
+    fn context_url_format() {
+        assert_eq!(
+            context_url("http://localhost:8284", "agent-1"),
+            "http://localhost:8284/v1/agents/agent-1/context"
+        );
+    }
+
+    #[test]
+    fn parse_context_stats_decodes_shape() {
+        let body = r#"{"model":"gpt-4o","window_tokens":128000,
+                       "turns_total":10,"turns_included":8,"turns_omitted":2,
+                       "chars_used":5000,"message_budget_chars":6000,
+                       "memory_chars":200,"system_prompt_chars":100,
+                       "tool_count":3,"tool_schema_reserve_chars":300,
+                       "needs_consolidation":false}"#;
+        let s = parse_context_stats(200, body).expect("decode");
+        assert_eq!(s.model.as_deref(), Some("gpt-4o"));
+        assert_eq!(s.window_tokens, 128000);
+        assert_eq!(s.turns_included, 8);
+        assert!(!s.needs_consolidation);
+    }
+
+    #[test]
+    fn parse_context_stats_tolerates_missing_fields() {
+        let s = parse_context_stats(200, "{}").expect("decode");
+        assert_eq!(s.model, None);
+        assert_eq!(s.window_tokens, 0);
+    }
+
+    #[test]
+    fn parse_context_stats_500_server_error() {
+        assert_eq!(
+            parse_context_stats(500, ""),
+            Err(ApiError::Server { status: 500 })
+        );
     }
 }

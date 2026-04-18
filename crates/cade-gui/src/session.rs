@@ -92,6 +92,90 @@ pub enum SessionState {
         memory_saving: bool,
         /// Per-overlay error message (shown inside the memory window).
         memory_error: Option<String>,
+        /// Transient success notice shown after a successful save
+        /// (e.g. "Saved /project").  Cleared when the selection changes,
+        /// the overlay closes, or another save starts.
+        memory_save_notice: Option<String>,
+
+        // ── Checkpoints overlay (M17) ────────────────────────────
+        /// Whether the checkpoints overlay is visible.
+        checkpoints_open: bool,
+        /// Rows fetched from `GET /v1/agents/:id/checkpoints`.
+        checkpoints: Vec<crate::api::CheckpointRow>,
+        /// True while the GET request is in flight.
+        checkpoints_loading: bool,
+        /// True while a restore/delete/create request is in flight.
+        checkpoints_busy: bool,
+        /// Per-overlay error message.
+        checkpoints_error: Option<String>,
+        /// Transient success notice (e.g. "Restored cp-1234…").
+        checkpoints_notice: Option<String>,
+
+        // ── Artifacts overlay (M17) ──────────────────────────────
+        /// Whether the artifacts overlay is visible.
+        artifacts_open: bool,
+        /// Summary rows fetched from `GET /v1/agents/:id/artifacts`.
+        artifacts: Vec<crate::api::ArtifactInfo>,
+        /// Index of the currently-selected row; `None` when nothing selected.
+        artifact_selection: Option<usize>,
+        /// Full detail for the selected artifact — lazy-loaded on click.
+        /// `None` means not-yet-loaded; a loaded detail whose `id` differs
+        /// from the selected row's `id` means stale and will be replaced.
+        artifact_detail: Option<crate::api::ArtifactDetail>,
+        /// True while the list GET is in flight.
+        artifacts_loading: bool,
+        /// True while a per-artifact detail fetch or delete is in flight.
+        artifacts_busy: bool,
+        /// Per-overlay error message.
+        artifacts_error: Option<String>,
+
+        // ── Tools overlay (M18 — MCP / skills) ──────────────────
+        /// Whether the tools/MCP overlay is visible.
+        tools_open: bool,
+        /// Tools fetched from `GET /v1/agents/:id/tools`.
+        tools: Vec<crate::api::AgentTool>,
+        /// True while the GET request is in flight.
+        tools_loading: bool,
+        /// Per-overlay error message.
+        tools_error: Option<String>,
+
+        // ── Inline question widget (M18 — ask_user_question) ────
+        /// The currently-active question received via `ask_user_question`
+        /// SSE tool call.  `None` when no question is awaiting an answer.
+        active_question: Option<crate::api::Question>,
+        /// Index of the currently-highlighted option (single-select) or
+        /// the last-moved position (multi-select).
+        question_cursor: usize,
+        /// Set of selected option indices (multi-select only).
+        question_checked: Vec<bool>,
+
+        // ── Server metrics (M19 item 2) ──────────────────────────
+        /// Last-fetched server-side consolidation metrics for this agent.
+        agent_metrics: Option<crate::api::AgentMetrics>,
+
+        // ── Cumulative token usage totals (M19 item 3 /stats) ────
+        /// Running total of input tokens across all turns in this session.
+        total_input_tokens: u64,
+        /// Running total of output tokens across all turns in this session.
+        total_output_tokens: u64,
+
+        // ── Context stats overlay (M19 item 3 /context) ──────────
+        /// Whether the context-stats overlay is open.
+        context_open: bool,
+        /// Last-fetched context window stats.
+        context_stats: Option<crate::api::ContextStats>,
+        /// True while the GET /context request is in flight.
+        context_loading: bool,
+        /// Per-overlay error for context panel.
+        context_error: Option<String>,
+
+        // ── Agents overlay (M19 item 3 /agents) ──────────────────
+        /// Whether the agents list overlay is open.
+        agents_open: bool,
+
+        // ── Stats overlay (M19 item 3 /stats) ────────────────────
+        /// Whether the stats overlay is open.
+        stats_open: bool,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -189,6 +273,43 @@ impl SessionState {
                 memory_loading: false,
                 memory_saving: false,
                 memory_error: None,
+                memory_save_notice: None,
+
+                checkpoints_open: false,
+                checkpoints: Vec::new(),
+                checkpoints_loading: false,
+                checkpoints_busy: false,
+                checkpoints_error: None,
+                checkpoints_notice: None,
+
+                artifacts_open: false,
+                artifacts: Vec::new(),
+                artifact_selection: None,
+                artifact_detail: None,
+                artifacts_loading: false,
+                artifacts_busy: false,
+                artifacts_error: None,
+
+                tools_open: false,
+                tools: Vec::new(),
+                tools_loading: false,
+                tools_error: None,
+
+                active_question: None,
+                question_cursor: 0,
+                question_checked: Vec::new(),
+
+                agent_metrics: None,
+                total_input_tokens: 0,
+                total_output_tokens: 0,
+
+                context_open: false,
+                context_stats: None,
+                context_loading: false,
+                context_error: None,
+
+                agents_open: false,
+                stats_open: false,
             };
         }
     }
@@ -322,6 +443,15 @@ impl SessionState {
         }
     }
 
+    /// Read-only slice of the agents list.
+    pub fn agents(&self) -> &[AgentInfo] {
+        if let Self::Connected { agents, .. } = self {
+            agents
+        } else {
+            &[]
+        }
+    }
+
     /// Submit the current input buffer as a user message.
     ///
     /// Returns the trimmed input text if the send is valid (agent selected,
@@ -437,10 +567,17 @@ impl SessionState {
     ///
     /// Each tool call becomes its own message with `role = "tool_call"`
     /// and structured JSON content.
+    ///
+    /// Special case: when `name == "ask_user_question"` the arguments are
+    /// also parsed into an [`crate::api::Question`] and set as the active
+    /// question so the inline widget can render.
     pub fn on_stream_tool_call(&mut self, id: &str, name: &str, arguments: &str) {
         if let Self::Connected {
             messages,
             streaming: true,
+            active_question,
+            question_cursor,
+            question_checked,
             ..
         } = self
         {
@@ -454,6 +591,16 @@ impl SessionState {
                 }),
                 conversation_id: None,
             });
+
+            // Surface inline question widget for `ask_user_question`.
+            if name == "ask_user_question" {
+                if let Some(q) = crate::api::parse_ask_question(arguments) {
+                    let n = q.options.len();
+                    *question_cursor = 0;
+                    *question_checked = vec![false; n];
+                    *active_question = Some(q);
+                }
+            }
         }
     }
 
@@ -536,8 +683,16 @@ impl SessionState {
 
     /// Store token usage statistics from a `usage_statistics` SSE event.
     pub fn on_usage(&mut self, input_tokens: u64, output_tokens: u64, model: Option<&str>) {
-        if let Self::Connected { last_usage, .. } = self {
+        if let Self::Connected {
+            last_usage,
+            total_input_tokens,
+            total_output_tokens,
+            ..
+        } = self
+        {
             *last_usage = Some((input_tokens, output_tokens, model.map(String::from)));
+            *total_input_tokens += input_tokens;
+            *total_output_tokens += output_tokens;
         }
     }
 
@@ -714,12 +869,14 @@ impl SessionState {
             memory_open,
             memory_loading,
             memory_error,
+            memory_save_notice,
             ..
         } = self
         {
             *memory_open = true;
             *memory_loading = true;
             *memory_error = None;
+            *memory_save_notice = None;
         }
     }
 
@@ -730,12 +887,14 @@ impl SessionState {
             memory_open,
             memory_saving,
             memory_error,
+            memory_save_notice,
             ..
         } = self
         {
             *memory_open = false;
             *memory_saving = false;
             *memory_error = None;
+            *memory_save_notice = None;
         }
     }
 
@@ -773,12 +932,14 @@ impl SessionState {
             memory_loading,
             memory_saving,
             memory_error,
+            memory_save_notice,
             ..
         } = self
         {
             *memory_loading = false;
             *memory_saving = false;
             *memory_error = Some(err.to_string());
+            *memory_save_notice = None;
         }
     }
 
@@ -790,6 +951,7 @@ impl SessionState {
             memory_blocks,
             memory_selection,
             memory_edit_buffer,
+            memory_save_notice,
             ..
         } = self
         {
@@ -801,6 +963,7 @@ impl SessionState {
             }
             *memory_selection = idx;
             *memory_edit_buffer = memory_blocks[idx].value.clone();
+            *memory_save_notice = None;
             true
         } else {
             false
@@ -823,16 +986,19 @@ impl SessionState {
         if let Self::Connected {
             memory_saving,
             memory_error,
+            memory_save_notice,
             ..
         } = self
         {
             *memory_saving = true;
             *memory_error = None;
+            *memory_save_notice = None;
         }
     }
 
     /// On successful save, persist the edit buffer into the corresponding
-    /// block so the sidebar list reflects the new value.
+    /// block so the sidebar list reflects the new value, and set a
+    /// transient success notice for the overlay (e.g. "Saved /project").
     pub fn on_memory_save_ok(&mut self) {
         if let Self::Connected {
             memory_blocks,
@@ -840,6 +1006,7 @@ impl SessionState {
             memory_edit_buffer,
             memory_saving,
             memory_error,
+            memory_save_notice,
             ..
         } = self
         {
@@ -847,6 +1014,7 @@ impl SessionState {
             *memory_error = None;
             if let Some(b) = memory_blocks.get_mut(*memory_selection) {
                 b.value = memory_edit_buffer.clone();
+                *memory_save_notice = Some(format!("Saved /{}", b.label));
             }
         }
     }
@@ -869,6 +1037,700 @@ impl SessionState {
         } else {
             None
         }
+    }
+
+    /// Whether the in-memory edit buffer differs from the currently-
+    /// selected block's saved value.  Used to enable/disable the Save
+    /// button and show a dirty indicator.  Returns `false` when the
+    /// overlay is closed, no block is selected, or buffer == saved value.
+    pub fn is_memory_dirty(&self) -> bool {
+        if let Self::Connected {
+            memory_open: true,
+            memory_blocks,
+            memory_selection,
+            memory_edit_buffer,
+            ..
+        } = self
+        {
+            match memory_blocks.get(*memory_selection) {
+                Some(b) => b.value != *memory_edit_buffer,
+                None => false,
+            }
+        } else {
+            false
+        }
+    }
+
+    /// Transient success notice shown after a successful save.  Returns
+    /// `None` when no save has completed since the last open/select/error.
+    pub fn memory_save_notice(&self) -> Option<&str> {
+        if let Self::Connected {
+            memory_save_notice: Some(n),
+            ..
+        } = self
+        {
+            Some(n.as_str())
+        } else {
+            None
+        }
+    }
+
+    // ── Checkpoints overlay (M17) ──────────────────────────────────
+
+    /// Open the checkpoints overlay.  Caller is expected to spawn a
+    /// fetch; this just marks the panel as loading and clears error.
+    pub fn open_checkpoints_overlay(&mut self) {
+        if let Self::Connected {
+            checkpoints_open,
+            checkpoints_loading,
+            checkpoints_error,
+            checkpoints_notice,
+            ..
+        } = self
+        {
+            *checkpoints_open = true;
+            *checkpoints_loading = true;
+            *checkpoints_error = None;
+            *checkpoints_notice = None;
+        }
+    }
+
+    /// Close the checkpoints overlay.  Retains the cached list so a
+    /// reopen is instant; clears transient flags.
+    pub fn close_checkpoints_overlay(&mut self) {
+        if let Self::Connected {
+            checkpoints_open,
+            checkpoints_busy,
+            checkpoints_error,
+            checkpoints_notice,
+            ..
+        } = self
+        {
+            *checkpoints_open = false;
+            *checkpoints_busy = false;
+            *checkpoints_error = None;
+            *checkpoints_notice = None;
+        }
+    }
+
+    /// Whether the checkpoints overlay is currently visible.
+    pub fn is_checkpoints_open(&self) -> bool {
+        matches!(
+            self,
+            Self::Connected {
+                checkpoints_open: true,
+                ..
+            }
+        )
+    }
+
+    /// Feed the result of a successful checkpoints fetch.
+    pub fn on_checkpoints_loaded(&mut self, rows: Vec<crate::api::CheckpointRow>) {
+        if let Self::Connected {
+            checkpoints,
+            checkpoints_loading,
+            checkpoints_error,
+            ..
+        } = self
+        {
+            *checkpoints_loading = false;
+            *checkpoints_error = None;
+            *checkpoints = rows;
+        }
+    }
+
+    /// Feed an error from a checkpoint fetch or action.  Clears
+    /// loading + busy flags so the UI becomes interactable again.
+    pub fn on_checkpoints_error(&mut self, err: &str) {
+        if let Self::Connected {
+            checkpoints_loading,
+            checkpoints_busy,
+            checkpoints_error,
+            checkpoints_notice,
+            ..
+        } = self
+        {
+            *checkpoints_loading = false;
+            *checkpoints_busy = false;
+            *checkpoints_error = Some(err.to_string());
+            *checkpoints_notice = None;
+        }
+    }
+
+    /// Mark a restore/create/delete request as in-flight.
+    pub fn on_checkpoints_action_start(&mut self) {
+        if let Self::Connected {
+            checkpoints_busy,
+            checkpoints_error,
+            checkpoints_notice,
+            ..
+        } = self
+        {
+            *checkpoints_busy = true;
+            *checkpoints_error = None;
+            *checkpoints_notice = None;
+        }
+    }
+
+    /// Mark an action as completed successfully with a transient notice.
+    pub fn on_checkpoints_action_ok(&mut self, notice: &str) {
+        if let Self::Connected {
+            checkpoints_busy,
+            checkpoints_error,
+            checkpoints_notice,
+            ..
+        } = self
+        {
+            *checkpoints_busy = false;
+            *checkpoints_error = None;
+            *checkpoints_notice = Some(notice.to_string());
+        }
+    }
+
+    /// Read-only snapshot of the cached checkpoint list, for tests +
+    /// the renderer.  Returns `&[]` when not connected.
+    pub fn checkpoints_snapshot(&self) -> &[crate::api::CheckpointRow] {
+        if let Self::Connected { checkpoints, .. } = self {
+            checkpoints
+        } else {
+            &[]
+        }
+    }
+
+    /// Read the current notice string (e.g. "Restored cp-abc…").
+    pub fn checkpoints_notice(&self) -> Option<&str> {
+        if let Self::Connected {
+            checkpoints_notice: Some(n),
+            ..
+        } = self
+        {
+            Some(n.as_str())
+        } else {
+            None
+        }
+    }
+
+    // ── Artifacts overlay (M17) ────────────────────────────────────
+
+    /// Open the artifacts overlay.  Caller is expected to spawn a list
+    /// fetch; this marks the panel as loading and clears error/selection.
+    pub fn open_artifacts_overlay(&mut self) {
+        if let Self::Connected {
+            artifacts_open,
+            artifacts_loading,
+            artifacts_error,
+            artifact_selection,
+            artifact_detail,
+            ..
+        } = self
+        {
+            *artifacts_open = true;
+            *artifacts_loading = true;
+            *artifacts_error = None;
+            *artifact_selection = None;
+            *artifact_detail = None;
+        }
+    }
+
+    /// Close the artifacts overlay.  Retains cached list for instant
+    /// reopen; clears transient flags.
+    pub fn close_artifacts_overlay(&mut self) {
+        if let Self::Connected {
+            artifacts_open,
+            artifacts_busy,
+            artifacts_error,
+            ..
+        } = self
+        {
+            *artifacts_open = false;
+            *artifacts_busy = false;
+            *artifacts_error = None;
+        }
+    }
+
+    /// Whether the artifacts overlay is currently visible.
+    pub fn is_artifacts_open(&self) -> bool {
+        matches!(
+            self,
+            Self::Connected {
+                artifacts_open: true,
+                ..
+            }
+        )
+    }
+
+    /// Feed the result of a successful artifacts-list fetch.
+    pub fn on_artifacts_loaded(&mut self, rows: Vec<crate::api::ArtifactInfo>) {
+        if let Self::Connected {
+            artifacts,
+            artifacts_loading,
+            artifacts_error,
+            ..
+        } = self
+        {
+            *artifacts_loading = false;
+            *artifacts_error = None;
+            *artifacts = rows;
+        }
+    }
+
+    /// Feed an error from an artifact fetch or action.
+    pub fn on_artifacts_error(&mut self, err: &str) {
+        if let Self::Connected {
+            artifacts_loading,
+            artifacts_busy,
+            artifacts_error,
+            ..
+        } = self
+        {
+            *artifacts_loading = false;
+            *artifacts_busy = false;
+            *artifacts_error = Some(err.to_string());
+        }
+    }
+
+    /// Mark a detail/delete request as in-flight.
+    pub fn on_artifacts_action_start(&mut self) {
+        if let Self::Connected {
+            artifacts_busy,
+            artifacts_error,
+            ..
+        } = self
+        {
+            *artifacts_busy = true;
+            *artifacts_error = None;
+        }
+    }
+
+    /// Select an artifact row.  Clears stale detail so the renderer
+    /// shows a loading indicator while the per-id fetch runs.  Returns
+    /// the selected artifact id (so the spawn helper can issue the GET)
+    /// or `None` when the index is out of bounds / not connected.
+    pub fn select_artifact(&mut self, idx: usize) -> Option<String> {
+        if let Self::Connected {
+            artifacts,
+            artifact_selection,
+            artifact_detail,
+            artifacts_busy,
+            artifacts_error,
+            ..
+        } = self
+        {
+            let id = artifacts.get(idx).map(|a| a.id.clone());
+            if id.is_some() {
+                *artifact_selection = Some(idx);
+                *artifact_detail = None;
+                *artifacts_busy = true;
+                *artifacts_error = None;
+            }
+            id
+        } else {
+            None
+        }
+    }
+
+    /// Feed full detail after a successful per-id fetch.
+    pub fn on_artifact_detail_loaded(&mut self, detail: crate::api::ArtifactDetail) {
+        if let Self::Connected {
+            artifact_detail,
+            artifacts_busy,
+            artifacts_error,
+            ..
+        } = self
+        {
+            *artifacts_busy = false;
+            *artifacts_error = None;
+            *artifact_detail = Some(detail);
+        }
+    }
+
+    /// Return the id of the artifact currently selected, if any.  Used
+    /// by the delete button to pass the right id to the spawn helper.
+    pub fn selected_artifact_id(&self) -> Option<String> {
+        if let Self::Connected {
+            artifacts,
+            artifact_selection: Some(idx),
+            ..
+        } = self
+        {
+            artifacts.get(*idx).map(|a| a.id.clone())
+        } else {
+            None
+        }
+    }
+
+    /// Read-only snapshot of the cached artifact list.
+    pub fn artifacts_snapshot(&self) -> &[crate::api::ArtifactInfo] {
+        if let Self::Connected { artifacts, .. } = self {
+            artifacts
+        } else {
+            &[]
+        }
+    }
+
+    /// Read-only access to the currently-loaded artifact detail (if any).
+    pub fn artifact_detail(&self) -> Option<&crate::api::ArtifactDetail> {
+        if let Self::Connected {
+            artifact_detail, ..
+        } = self
+        {
+            artifact_detail.as_ref()
+        } else {
+            None
+        }
+    }
+
+    // ── Tools overlay (M18) ────────────────────────────────────────
+
+    /// Open the tools overlay.  Caller spawns the fetch.
+    pub fn open_tools_overlay(&mut self) {
+        if let Self::Connected {
+            tools_open,
+            tools_loading,
+            tools_error,
+            ..
+        } = self
+        {
+            *tools_open = true;
+            *tools_loading = true;
+            *tools_error = None;
+        }
+    }
+
+    /// Close the tools overlay.
+    pub fn close_tools_overlay(&mut self) {
+        if let Self::Connected {
+            tools_open,
+            tools_error,
+            ..
+        } = self
+        {
+            *tools_open = false;
+            *tools_error = None;
+        }
+    }
+
+    /// Whether the tools overlay is currently visible.
+    pub fn is_tools_open(&self) -> bool {
+        matches!(self, Self::Connected { tools_open: true, .. })
+    }
+
+    /// Feed the result of a successful tools fetch.
+    pub fn on_tools_loaded(&mut self, rows: Vec<crate::api::AgentTool>) {
+        if let Self::Connected {
+            tools,
+            tools_loading,
+            tools_error,
+            ..
+        } = self
+        {
+            *tools_loading = false;
+            *tools_error = None;
+            *tools = rows;
+        }
+    }
+
+    /// Feed an error from a tools fetch.
+    pub fn on_tools_error(&mut self, err: &str) {
+        if let Self::Connected {
+            tools_loading,
+            tools_error,
+            ..
+        } = self
+        {
+            *tools_loading = false;
+            *tools_error = Some(err.to_string());
+        }
+    }
+
+    /// Read-only snapshot of the cached tool list.
+    pub fn tools_snapshot(&self) -> &[crate::api::AgentTool] {
+        if let Self::Connected { tools, .. } = self {
+            tools
+        } else {
+            &[]
+        }
+    }
+
+    // ── Inline question widget (M18) ──────────────────────────────
+
+    /// Present a question from an `ask_user_question` tool call.
+    ///
+    /// Initialises cursor to 0 and checked-vec to all-false.  If a
+    /// question is already active it is replaced (the server serialises
+    /// tool calls so this shouldn't happen in practice).
+    pub fn set_active_question(&mut self, q: crate::api::Question) {
+        if let Self::Connected {
+            active_question,
+            question_cursor,
+            question_checked,
+            ..
+        } = self
+        {
+            let n = q.options.len();
+            *question_cursor = 0;
+            *question_checked = vec![false; n];
+            *active_question = Some(q);
+        }
+    }
+
+    /// Clear the active question (after the user answers or cancels).
+    pub fn clear_active_question(&mut self) {
+        if let Self::Connected {
+            active_question,
+            question_cursor,
+            question_checked,
+            ..
+        } = self
+        {
+            *active_question = None;
+            *question_cursor = 0;
+            question_checked.clear();
+        }
+    }
+
+    /// Whether a question is currently awaiting an answer.
+    pub fn has_active_question(&self) -> bool {
+        matches!(
+            self,
+            Self::Connected {
+                active_question: Some(_),
+                ..
+            }
+        )
+    }
+
+    /// Immutable reference to the active question, if any.
+    pub fn active_question(&self) -> Option<&crate::api::Question> {
+        if let Self::Connected {
+            active_question: Some(q),
+            ..
+        } = self
+        {
+            Some(q)
+        } else {
+            None
+        }
+    }
+
+    /// Move the question cursor up or down (wraps).  `delta` is -1 or +1.
+    pub fn move_question_cursor(&mut self, delta: i32) {
+        if let Self::Connected {
+            active_question: Some(q),
+            question_cursor,
+            ..
+        } = self
+        {
+            let n = q.options.len();
+            if n == 0 {
+                return;
+            }
+            let cur = *question_cursor as i32;
+            *question_cursor = ((cur + delta).rem_euclid(n as i32)) as usize;
+        }
+    }
+
+    /// Toggle the checked state for the option at the current cursor
+    /// (multi-select mode only).
+    pub fn toggle_question_checked(&mut self) {
+        if let Self::Connected {
+            active_question: Some(q),
+            question_cursor,
+            question_checked,
+            ..
+        } = self
+        {
+            if q.multi_select {
+                let idx = *question_cursor;
+                if let Some(v) = question_checked.get_mut(idx) {
+                    *v = !*v;
+                }
+            }
+        }
+    }
+
+    /// Build the answer string to send back to the server.
+    ///
+    /// Single-select: the label of the selected option.
+    /// Multi-select: comma-joined labels of all checked options.
+    /// Returns `None` when no question is active or nothing is selected.
+    pub fn commit_question_answer(&mut self) -> Option<String> {
+        if let Self::Connected {
+            active_question: Some(q),
+            question_cursor,
+            question_checked,
+            ..
+        } = self
+        {
+            let answer = if q.multi_select {
+                let labels: Vec<&str> = question_checked
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| **c)
+                    .filter_map(|(i, _)| q.options.get(i).map(|o| o.label.as_str()))
+                    .collect();
+                if labels.is_empty() {
+                    return None;
+                }
+                labels.join(", ")
+            } else {
+                q.options
+                    .get(*question_cursor)
+                    .map(|o| o.label.clone())?
+            };
+            Some(answer)
+        } else {
+            None
+        }
+    }
+
+    // ── Agent metrics (M19 item 2) ─────────────────────────────────
+
+    /// Store metrics fetched from `GET /v1/agents/:id/metrics`.
+    pub fn on_metrics_loaded(&mut self, m: crate::api::AgentMetrics) {
+        if let Self::Connected { agent_metrics, .. } = self {
+            *agent_metrics = Some(m);
+        }
+    }
+
+    /// Read-only access to the last-fetched agent metrics.
+    pub fn agent_metrics(&self) -> Option<&crate::api::AgentMetrics> {
+        if let Self::Connected { agent_metrics, .. } = self {
+            agent_metrics.as_ref()
+        } else {
+            None
+        }
+    }
+
+    // ── Cumulative token totals (M19 item 3 /stats) ────────────────
+
+    /// Accumulated input + output tokens for this session.
+    /// Returns `(total_in, total_out)`.
+    pub fn total_token_usage(&self) -> (u64, u64) {
+        if let Self::Connected {
+            total_input_tokens,
+            total_output_tokens,
+            ..
+        } = self
+        {
+            (*total_input_tokens, *total_output_tokens)
+        } else {
+            (0, 0)
+        }
+    }
+
+    // ── Context stats overlay (M19 item 3 /context) ────────────────
+
+    /// Open the context-stats overlay.  Caller spawns the fetch.
+    pub fn open_context_overlay(&mut self) {
+        if let Self::Connected {
+            context_open,
+            context_loading,
+            context_error,
+            ..
+        } = self
+        {
+            *context_open = true;
+            *context_loading = true;
+            *context_error = None;
+        }
+    }
+
+    /// Close the context-stats overlay.
+    pub fn close_context_overlay(&mut self) {
+        if let Self::Connected {
+            context_open,
+            context_error,
+            ..
+        } = self
+        {
+            *context_open = false;
+            *context_error = None;
+        }
+    }
+
+    /// Whether the context overlay is open.
+    pub fn is_context_open(&self) -> bool {
+        matches!(self, Self::Connected { context_open: true, .. })
+    }
+
+    /// Feed a successful context-stats response.
+    pub fn on_context_loaded(&mut self, stats: crate::api::ContextStats) {
+        if let Self::Connected {
+            context_stats,
+            context_loading,
+            context_error,
+            ..
+        } = self
+        {
+            *context_loading = false;
+            *context_error = None;
+            *context_stats = Some(stats);
+        }
+    }
+
+    /// Feed an error from the context fetch.
+    pub fn on_context_error(&mut self, err: &str) {
+        if let Self::Connected {
+            context_loading,
+            context_error,
+            ..
+        } = self
+        {
+            *context_loading = false;
+            *context_error = Some(err.to_string());
+        }
+    }
+
+    /// Read-only access to last-fetched context stats.
+    pub fn context_stats(&self) -> Option<&crate::api::ContextStats> {
+        if let Self::Connected { context_stats, .. } = self {
+            context_stats.as_ref()
+        } else {
+            None
+        }
+    }
+
+    // ── Agents overlay (M19 item 3 /agents) ────────────────────────
+
+    /// Open the agents list overlay.
+    pub fn open_agents_overlay(&mut self) {
+        if let Self::Connected { agents_open, .. } = self {
+            *agents_open = true;
+        }
+    }
+
+    /// Close the agents list overlay.
+    pub fn close_agents_overlay(&mut self) {
+        if let Self::Connected { agents_open, .. } = self {
+            *agents_open = false;
+        }
+    }
+
+    /// Whether the agents overlay is open.
+    pub fn is_agents_open(&self) -> bool {
+        matches!(self, Self::Connected { agents_open: true, .. })
+    }
+
+    // ── Stats overlay (M19 item 3 /stats) ──────────────────────────
+
+    /// Open the stats overlay.
+    pub fn open_stats_overlay(&mut self) {
+        if let Self::Connected { stats_open, .. } = self {
+            *stats_open = true;
+        }
+    }
+
+    /// Close the stats overlay.
+    pub fn close_stats_overlay(&mut self) {
+        if let Self::Connected { stats_open, .. } = self {
+            *stats_open = false;
+        }
+    }
+
+    /// Whether the stats overlay is open.
+    pub fn is_stats_open(&self) -> bool {
+        matches!(self, Self::Connected { stats_open: true, .. })
     }
 
     // ── Palette (slash-command) state ──────────────────────────────
@@ -2271,6 +3133,124 @@ mod tests {
         assert!(!s.select_memory_block(0));
     }
 
+    // ── is_memory_dirty / memory_save_notice ──────────────────────
+
+    #[test]
+    fn is_memory_dirty_false_when_closed() {
+        let s = connected_session();
+        assert!(!s.is_memory_dirty());
+    }
+
+    #[test]
+    fn is_memory_dirty_false_right_after_load() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        assert!(!s.is_memory_dirty(),
+            "fresh load should have buffer == block value, not dirty");
+    }
+
+    #[test]
+    fn is_memory_dirty_true_after_edit() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        s.set_memory_edit_buffer("something different");
+        assert!(s.is_memory_dirty());
+    }
+
+    #[test]
+    fn is_memory_dirty_false_after_save() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        s.set_memory_edit_buffer("edited");
+        assert!(s.is_memory_dirty());
+        s.on_memory_save_start();
+        s.on_memory_save_ok();
+        assert!(!s.is_memory_dirty(),
+            "after save the block's saved value == buffer, no longer dirty");
+    }
+
+    #[test]
+    fn is_memory_dirty_false_after_selecting_different_block() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        s.set_memory_edit_buffer("dirty here");
+        assert!(s.is_memory_dirty());
+        // Selecting another block seeds the buffer with its saved value,
+        // so dirty should flip back to false.
+        assert!(s.select_memory_block(1));
+        assert!(!s.is_memory_dirty());
+    }
+
+    #[test]
+    fn memory_save_notice_none_by_default() {
+        let s = connected_session();
+        assert!(s.memory_save_notice().is_none());
+    }
+
+    #[test]
+    fn memory_save_notice_set_on_save_ok() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        s.set_memory_edit_buffer("new val");
+        s.on_memory_save_start();
+        s.on_memory_save_ok();
+        assert_eq!(s.memory_save_notice(), Some("Saved /human"));
+    }
+
+    #[test]
+    fn memory_save_notice_cleared_on_select() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        s.on_memory_save_start();
+        s.on_memory_save_ok();
+        assert!(s.memory_save_notice().is_some());
+        assert!(s.select_memory_block(1));
+        assert!(s.memory_save_notice().is_none());
+    }
+
+    #[test]
+    fn memory_save_notice_cleared_on_close() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        s.on_memory_save_start();
+        s.on_memory_save_ok();
+        assert!(s.memory_save_notice().is_some());
+        s.close_memory_overlay();
+        assert!(s.memory_save_notice().is_none());
+    }
+
+    #[test]
+    fn memory_save_notice_cleared_on_error() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        s.on_memory_save_start();
+        s.on_memory_save_ok();
+        assert!(s.memory_save_notice().is_some());
+        s.on_memory_error("boom");
+        assert!(s.memory_save_notice().is_none());
+    }
+
+    #[test]
+    fn memory_save_notice_cleared_on_save_start() {
+        let mut s = connected_session();
+        s.open_memory_overlay();
+        s.on_memory_loaded(test_blocks());
+        s.on_memory_save_start();
+        s.on_memory_save_ok();
+        assert!(s.memory_save_notice().is_some());
+        // A second save begins — should clear the previous notice.
+        s.on_memory_save_start();
+        assert!(s.memory_save_notice().is_none());
+    }
+
     // ── refresh_agents ─────────────────────────────────────────────
 
     #[test]
@@ -2313,5 +3293,559 @@ mod tests {
         s.refresh_agents(test_agents());
         // Still Connecting — no panic, no transition.
         assert!(!s.is_connected());
+    }
+
+    // ── Checkpoints overlay (M17) ──────────────────────────────────
+
+    fn test_checkpoint_rows() -> Vec<crate::api::CheckpointRow> {
+        vec![
+            crate::api::CheckpointRow {
+                id: "cp-1".into(),
+                agent_id: "agent-1".into(),
+                conversation_id: None,
+                branch_id: "main".into(),
+                label: Some("before-refactor".into()),
+                description: None,
+                created_at: 1_700_000_000,
+                git_stash_ref: Some("stash@{0}".into()),
+                git_commit_hash: None,
+                parent_id: None,
+            },
+            crate::api::CheckpointRow {
+                id: "cp-2".into(),
+                agent_id: "agent-1".into(),
+                conversation_id: None,
+                branch_id: "main".into(),
+                label: None,
+                description: Some("auto-save".into()),
+                created_at: 1_700_001_000,
+                git_stash_ref: None,
+                git_commit_hash: None,
+                parent_id: Some("cp-1".into()),
+            },
+        ]
+    }
+
+    #[test]
+    fn checkpoints_starts_closed() {
+        let s = connected_session();
+        assert!(!s.is_checkpoints_open());
+        assert!(s.checkpoints_snapshot().is_empty());
+    }
+
+    #[test]
+    fn open_checkpoints_sets_loading_and_clears_error() {
+        let mut s = connected_session();
+        s.on_checkpoints_error("stale");
+        s.open_checkpoints_overlay();
+        assert!(s.is_checkpoints_open());
+        match &s {
+            SessionState::Connected {
+                checkpoints_loading,
+                checkpoints_error,
+                ..
+            } => {
+                assert!(*checkpoints_loading);
+                assert!(checkpoints_error.is_none());
+            }
+            _ => panic!("not connected"),
+        }
+    }
+
+    #[test]
+    fn checkpoints_loaded_populates_list() {
+        let mut s = connected_session();
+        s.open_checkpoints_overlay();
+        s.on_checkpoints_loaded(test_checkpoint_rows());
+        assert_eq!(s.checkpoints_snapshot().len(), 2);
+        match &s {
+            SessionState::Connected {
+                checkpoints_loading,
+                ..
+            } => assert!(!*checkpoints_loading),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn checkpoints_error_clears_loading_and_busy() {
+        let mut s = connected_session();
+        s.open_checkpoints_overlay();
+        s.on_checkpoints_action_start();
+        s.on_checkpoints_error("network down");
+        match &s {
+            SessionState::Connected {
+                checkpoints_loading,
+                checkpoints_busy,
+                checkpoints_error,
+                ..
+            } => {
+                assert!(!*checkpoints_loading);
+                assert!(!*checkpoints_busy);
+                assert_eq!(checkpoints_error.as_deref(), Some("network down"));
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn checkpoints_action_ok_sets_notice() {
+        let mut s = connected_session();
+        s.open_checkpoints_overlay();
+        s.on_checkpoints_action_start();
+        s.on_checkpoints_action_ok("Restored cp-1");
+        assert_eq!(s.checkpoints_notice(), Some("Restored cp-1"));
+    }
+
+    #[test]
+    fn checkpoints_notice_cleared_on_new_action() {
+        let mut s = connected_session();
+        s.on_checkpoints_action_ok("Done");
+        s.on_checkpoints_action_start();
+        assert!(s.checkpoints_notice().is_none());
+    }
+
+    #[test]
+    fn checkpoints_notice_cleared_on_close() {
+        let mut s = connected_session();
+        s.on_checkpoints_action_ok("Done");
+        s.close_checkpoints_overlay();
+        assert!(s.checkpoints_notice().is_none());
+    }
+
+    #[test]
+    fn checkpoints_methods_noop_when_not_connected() {
+        let mut s = SessionState::start("http://localhost:8080", "tok");
+        s.open_checkpoints_overlay();
+        assert!(!s.is_checkpoints_open());
+        s.on_checkpoints_loaded(test_checkpoint_rows());
+        assert!(s.checkpoints_snapshot().is_empty());
+        s.on_checkpoints_error("x");
+        s.on_checkpoints_action_start();
+        s.on_checkpoints_action_ok("x");
+        s.close_checkpoints_overlay();
+    }
+
+    // ── Artifacts overlay (M17) ────────────────────────────────────
+
+    fn test_artifact_rows() -> Vec<crate::api::ArtifactInfo> {
+        vec![
+            crate::api::ArtifactInfo {
+                id: "art-1".into(),
+                kind: "log".into(),
+                content_type: "text/plain".into(),
+                size_bytes: 42,
+                created_at: 1_700_000_000,
+                run_id: Some("run-1".into()),
+            },
+            crate::api::ArtifactInfo {
+                id: "art-2".into(),
+                kind: "diff".into(),
+                content_type: "text/x-diff".into(),
+                size_bytes: 128,
+                created_at: 1_700_001_000,
+                run_id: None,
+            },
+        ]
+    }
+
+    fn test_artifact_detail(id: &str) -> crate::api::ArtifactDetail {
+        crate::api::ArtifactDetail {
+            id: id.into(),
+            kind: "log".into(),
+            content_type: "text/plain".into(),
+            data_text: Some("hello".into()),
+            metadata: serde_json::json!({}),
+            size_bytes: 5,
+            created_at: 1_700_000_000,
+        }
+    }
+
+    #[test]
+    fn artifacts_starts_closed() {
+        let s = connected_session();
+        assert!(!s.is_artifacts_open());
+        assert!(s.artifacts_snapshot().is_empty());
+        assert!(s.artifact_detail().is_none());
+    }
+
+    #[test]
+    fn open_artifacts_clears_selection() {
+        let mut s = connected_session();
+        s.open_artifacts_overlay();
+        s.on_artifacts_loaded(test_artifact_rows());
+        s.select_artifact(0);
+        s.on_artifact_detail_loaded(test_artifact_detail("art-1"));
+        // Reopening (e.g. via palette) should reset selection.
+        s.open_artifacts_overlay();
+        assert!(s.selected_artifact_id().is_none());
+        assert!(s.artifact_detail().is_none());
+    }
+
+    #[test]
+    fn artifacts_loaded_populates_list() {
+        let mut s = connected_session();
+        s.open_artifacts_overlay();
+        s.on_artifacts_loaded(test_artifact_rows());
+        assert_eq!(s.artifacts_snapshot().len(), 2);
+    }
+
+    #[test]
+    fn select_artifact_returns_id_and_sets_busy() {
+        let mut s = connected_session();
+        s.open_artifacts_overlay();
+        s.on_artifacts_loaded(test_artifact_rows());
+        let id = s.select_artifact(1);
+        assert_eq!(id.as_deref(), Some("art-2"));
+        assert_eq!(s.selected_artifact_id().as_deref(), Some("art-2"));
+        match &s {
+            SessionState::Connected {
+                artifacts_busy, ..
+            } => assert!(*artifacts_busy),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn select_artifact_out_of_bounds_returns_none() {
+        let mut s = connected_session();
+        s.open_artifacts_overlay();
+        s.on_artifacts_loaded(test_artifact_rows());
+        assert!(s.select_artifact(99).is_none());
+        assert!(s.selected_artifact_id().is_none());
+    }
+
+    #[test]
+    fn artifact_detail_loaded_clears_busy() {
+        let mut s = connected_session();
+        s.open_artifacts_overlay();
+        s.on_artifacts_loaded(test_artifact_rows());
+        s.select_artifact(0);
+        s.on_artifact_detail_loaded(test_artifact_detail("art-1"));
+        match &s {
+            SessionState::Connected {
+                artifacts_busy, ..
+            } => assert!(!*artifacts_busy),
+            _ => panic!(),
+        }
+        assert_eq!(s.artifact_detail().map(|d| d.id.as_str()), Some("art-1"));
+    }
+
+    #[test]
+    fn artifacts_error_clears_busy_and_loading() {
+        let mut s = connected_session();
+        s.open_artifacts_overlay();
+        s.on_artifacts_action_start();
+        s.on_artifacts_error("oops");
+        match &s {
+            SessionState::Connected {
+                artifacts_loading,
+                artifacts_busy,
+                artifacts_error,
+                ..
+            } => {
+                assert!(!*artifacts_loading);
+                assert!(!*artifacts_busy);
+                assert_eq!(artifacts_error.as_deref(), Some("oops"));
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn artifacts_methods_noop_when_not_connected() {
+        let mut s = SessionState::start("http://localhost:8080", "tok");
+        s.open_artifacts_overlay();
+        assert!(!s.is_artifacts_open());
+        s.on_artifacts_loaded(test_artifact_rows());
+        assert!(s.artifacts_snapshot().is_empty());
+        assert!(s.select_artifact(0).is_none());
+        s.on_artifact_detail_loaded(test_artifact_detail("x"));
+        s.on_artifacts_error("x");
+        s.close_artifacts_overlay();
+    }
+
+    // ── Tools overlay (M18) ────────────────────────────────────────
+
+    #[test]
+    fn tools_starts_closed() {
+        let s = connected_session();
+        assert!(!s.is_tools_open());
+        assert!(s.tools_snapshot().is_empty());
+    }
+
+    #[test]
+    fn open_tools_sets_loading() {
+        let mut s = connected_session();
+        s.open_tools_overlay();
+        assert!(s.is_tools_open());
+        match &s {
+            SessionState::Connected { tools_loading, .. } => assert!(*tools_loading),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn tools_loaded_populates_list() {
+        let mut s = connected_session();
+        s.open_tools_overlay();
+        s.on_tools_loaded(vec![
+            crate::api::AgentTool { id: "t1".into(), name: "bash".into() },
+            crate::api::AgentTool { id: "t2".into(), name: "read_file".into() },
+        ]);
+        assert_eq!(s.tools_snapshot().len(), 2);
+    }
+
+    #[test]
+    fn tools_error_clears_loading() {
+        let mut s = connected_session();
+        s.open_tools_overlay();
+        s.on_tools_error("net error");
+        match &s {
+            SessionState::Connected { tools_loading, tools_error, .. } => {
+                assert!(!*tools_loading);
+                assert_eq!(tools_error.as_deref(), Some("net error"));
+            }
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn tools_methods_noop_when_not_connected() {
+        let mut s = SessionState::start("http://localhost", "tok");
+        s.open_tools_overlay();
+        assert!(!s.is_tools_open());
+        s.on_tools_loaded(vec![]);
+        s.on_tools_error("x");
+        s.close_tools_overlay();
+    }
+
+    // ── Question widget (M18) ──────────────────────────────────────
+
+    fn test_question() -> crate::api::Question {
+        crate::api::Question {
+            header: "Choose".into(),
+            question: "Pick one".into(),
+            options: vec![
+                crate::api::QuestionOption { label: "A".into(), description: "Alpha".into() },
+                crate::api::QuestionOption { label: "B".into(), description: "Beta".into() },
+                crate::api::QuestionOption { label: "C".into(), description: "Gamma".into() },
+            ],
+            multi_select: false,
+        }
+    }
+
+    #[test]
+    fn no_active_question_initially() {
+        let s = connected_session();
+        assert!(!s.has_active_question());
+        assert!(s.active_question().is_none());
+    }
+
+    #[test]
+    fn set_active_question_initialises_cursor() {
+        let mut s = connected_session();
+        s.set_active_question(test_question());
+        assert!(s.has_active_question());
+        match &s {
+            SessionState::Connected { question_cursor, .. } => assert_eq!(*question_cursor, 0),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn move_question_cursor_wraps() {
+        let mut s = connected_session();
+        s.set_active_question(test_question());
+        s.move_question_cursor(-1); // 0 - 1 wraps to 2 (3 options)
+        match &s {
+            SessionState::Connected { question_cursor, .. } => assert_eq!(*question_cursor, 2),
+            _ => panic!(),
+        }
+        s.move_question_cursor(1);
+        match &s {
+            SessionState::Connected { question_cursor, .. } => assert_eq!(*question_cursor, 0),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn commit_question_answer_single_select() {
+        let mut s = connected_session();
+        s.set_active_question(test_question());
+        s.move_question_cursor(1); // cursor at index 1 = "B"
+        let answer = s.commit_question_answer();
+        assert_eq!(answer.as_deref(), Some("B"));
+    }
+
+    #[test]
+    fn commit_question_answer_multi_select() {
+        let mut s = connected_session();
+        let mut q = test_question();
+        q.multi_select = true;
+        s.set_active_question(q);
+        // Check options 0 and 2
+        s.toggle_question_checked(); // cursor=0, check A
+        s.move_question_cursor(1);
+        s.move_question_cursor(1); // cursor=2
+        s.toggle_question_checked(); // check C
+        let answer = s.commit_question_answer();
+        assert_eq!(answer.as_deref(), Some("A, C"));
+    }
+
+    #[test]
+    fn commit_question_multi_select_none_checked_returns_none() {
+        let mut s = connected_session();
+        let mut q = test_question();
+        q.multi_select = true;
+        s.set_active_question(q);
+        assert!(s.commit_question_answer().is_none());
+    }
+
+    #[test]
+    fn clear_active_question_removes_it() {
+        let mut s = connected_session();
+        s.set_active_question(test_question());
+        s.clear_active_question();
+        assert!(!s.has_active_question());
+    }
+
+    #[test]
+    fn on_stream_tool_call_sets_question_for_ask_user_question() {
+        let mut s = connected_session();
+        s.on_select_agent(0);
+        // Seed input buffer then send to enter streaming state
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "hello".to_string();
+        }
+        s.on_send().unwrap();
+        let args = r#"{"questions":[{
+            "header":"Auth","question":"Which?",
+            "options":[{"label":"JWT","description":""},{"label":"Sessions","description":""}],
+            "multiSelect":false
+        }]}"#;
+        s.on_stream_tool_call("tc-1", "ask_user_question", args);
+        assert!(s.has_active_question());
+        assert_eq!(s.active_question().map(|q| q.header.as_str()), Some("Auth"));
+    }
+
+    #[test]
+    fn on_stream_tool_call_non_question_does_not_set_widget() {
+        let mut s = connected_session();
+        s.on_select_agent(0);
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "hello".to_string();
+        }
+        s.on_send().unwrap();
+        s.on_stream_tool_call("tc-1", "bash", r#"{"command":"ls"}"#);
+        assert!(!s.has_active_question());
+    }
+
+    // ── Metrics (M19 item 2) ───────────────────────────────────────
+
+    #[test]
+    fn metrics_none_initially() {
+        let s = connected_session();
+        assert!(s.agent_metrics().is_none());
+    }
+
+    #[test]
+    fn on_metrics_loaded_stores_value() {
+        let mut s = connected_session();
+        s.on_metrics_loaded(crate::api::AgentMetrics {
+            consolidation_runs: 5,
+            ..Default::default()
+        });
+        assert_eq!(s.agent_metrics().map(|m| m.consolidation_runs), Some(5));
+    }
+
+    #[test]
+    fn metrics_noop_when_not_connected() {
+        let mut s = SessionState::start("http://localhost", "tok");
+        s.on_metrics_loaded(crate::api::AgentMetrics::default());
+        assert!(s.agent_metrics().is_none());
+    }
+
+    // ── Cumulative token totals (M19 item 3) ──────────────────────
+
+    #[test]
+    fn total_tokens_zero_initially() {
+        let s = connected_session();
+        assert_eq!(s.total_token_usage(), (0, 0));
+    }
+
+    #[test]
+    fn total_tokens_accumulate_across_turns() {
+        let mut s = connected_session();
+        s.on_usage(100, 50, None);
+        s.on_usage(200, 80, None);
+        assert_eq!(s.total_token_usage(), (300, 130));
+    }
+
+    // ── Context overlay (M19 item 3) ──────────────────────────────
+
+    #[test]
+    fn context_starts_closed() {
+        let s = connected_session();
+        assert!(!s.is_context_open());
+        assert!(s.context_stats().is_none());
+    }
+
+    #[test]
+    fn open_context_sets_loading() {
+        let mut s = connected_session();
+        s.open_context_overlay();
+        assert!(s.is_context_open());
+        match &s {
+            SessionState::Connected { context_loading, .. } => assert!(*context_loading),
+            _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn context_loaded_stores_stats() {
+        let mut s = connected_session();
+        s.open_context_overlay();
+        s.on_context_loaded(crate::api::ContextStats {
+            window_tokens: 128000,
+            ..Default::default()
+        });
+        assert_eq!(s.context_stats().map(|c| c.window_tokens), Some(128000));
+    }
+
+    #[test]
+    fn context_error_clears_loading() {
+        let mut s = connected_session();
+        s.open_context_overlay();
+        s.on_context_error("timeout");
+        match &s {
+            SessionState::Connected { context_loading, context_error, .. } => {
+                assert!(!*context_loading);
+                assert_eq!(context_error.as_deref(), Some("timeout"));
+            }
+            _ => panic!(),
+        }
+    }
+
+    // ── Agents + stats overlays (M19 item 3) ──────────────────────
+
+    #[test]
+    fn agents_overlay_open_close() {
+        let mut s = connected_session();
+        assert!(!s.is_agents_open());
+        s.open_agents_overlay();
+        assert!(s.is_agents_open());
+        s.close_agents_overlay();
+        assert!(!s.is_agents_open());
+    }
+
+    #[test]
+    fn stats_overlay_open_close() {
+        let mut s = connected_session();
+        assert!(!s.is_stats_open());
+        s.open_stats_overlay();
+        assert!(s.is_stats_open());
+        s.close_stats_overlay();
+        assert!(!s.is_stats_open());
     }
 }

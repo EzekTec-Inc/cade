@@ -1804,3 +1804,35 @@ M3 = **state-machine + minimal render + WASM entry**.  No network calls.
 **New behavior:** Token saved to localStorage on successful connection. On next load, token is auto-loaded and connection starts immediately (skipping login screen). Logout button clears storage and returns to login.
 
 **Rollback:** `git revert <commit>` — single commit, no schema changes.
+
+---
+
+## 2026-04-18T02:35Z — M19: Metrics display, remaining slash commands, release rebuild
+
+**Summary:** Completed all deferred items from the M15–M18 roadmap.
+
+**Files modified:**
+- `crates/cade-gui/src/api.rs` — added `AgentMetrics`, `parse_metrics`, `metrics_url`; `ContextStats`, `parse_context_stats`, `context_url`; +8 tests (82 total)
+- `crates/cade-gui/src/http_wasm.rs` — added `get_metrics`, `get_context_stats`
+- `crates/cade-gui/src/session.rs` — added 9 new `Connected` fields: `agent_metrics`, `total_input_tokens`, `total_output_tokens`, `context_open/stats/loading/error`, `agents_open`, `stats_open`; added `agents()`, `on_metrics_loaded`, `agent_metrics`, `total_token_usage`, `open/close/is_context_overlay`, `on_context_loaded`, `on_context_error`, `context_stats`, `open/close/is_agents_overlay`, `open/close/is_stats_overlay`; extended `on_usage` to accumulate totals; +11 tests (140 total)
+- `crates/cade-gui/src/app.rs` — added `spawn_fetch_metrics` (called on SelectAgent), `spawn_fetch_context_stats`; wired `/agents`, `/agent <name>`, `/context`, `/stats` palette commands; added `CloseAgentsOverlay`, `CloseContextOverlay`, `CloseStatsOverlay` AppAction variants + match arms; ESC handling for all 3 overlays; metrics card in sidebar agent info; `render_agents_overlay`, `render_context_overlay`, `render_stats_overlay` render fns; import `cade_api_types::AgentInfo`
+- `.cade-todo.md` — marked stale M15 bullet done; item 2 metrics and item 3 commands now complete
+
+**Reason:** Items 1–4 from user-requested backlog.
+
+**Previous behavior:**
+- Metrics never displayed in GUI
+- `/agents`, `/agent`, `/context`, `/stats` palette commands showed "not yet implemented" error
+- Token usage tracked last-turn only (no session cumulative)
+- No release build since M18 landed
+
+**New behavior:**
+- Server metrics (consolidations, compacted, guard hits) shown in sidebar agent card after agent selection
+- `/agents` opens overlay listing all agents with model; clicking one switches to it
+- `/agent <name>` switches to agent by name/id prefix match
+- `/context` fetches and displays context window stats with a fill bar
+- `/stats` shows cumulative session token totals + last-turn breakdown
+- Session accumulates total_input/output_tokens across all turns
+- Release WASM (7.6 MB) and cade-server binary rebuilt successfully
+
+**Rollback:** `git checkout crates/cade-gui/src/{api,app,session,http_wasm}.rs` to revert all GUI changes; WASM rebuild required after revert.

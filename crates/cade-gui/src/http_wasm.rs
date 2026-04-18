@@ -424,3 +424,161 @@ pub async fn patch_agent_model(
         })?;
     api::classify_upsert(resp.status())
 }
+
+// ── Checkpoints ────────────────────────────────────────────────────────
+
+/// `GET /v1/agents/:id/checkpoints` — list checkpoints for an agent.
+pub async fn get_checkpoints(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+) -> Result<Vec<api::CheckpointRow>, ApiError> {
+    let url = api::checkpoints_url(base_url, agent_id);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_checkpoints(status, &body)
+}
+
+/// `POST /v1/agents/:id/checkpoints` — create a new checkpoint.
+///
+/// Returns `Ok(())` on 2xx; errors are surfaced as [`ApiError`].  The
+/// caller is expected to refresh the list after creation.
+pub async fn create_checkpoint(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    label: Option<&str>,
+    description: Option<&str>,
+    conversation_id: Option<&str>,
+) -> Result<(), ApiError> {
+    let url = api::checkpoints_url(base_url, agent_id);
+    let body = api::create_checkpoint_body(label, description, conversation_id);
+    let resp = Request::post(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .map_err(|e| ApiError::Transport {
+            message: format!("{e:?}"),
+        })?
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
+    api::classify_upsert(resp.status())
+}
+
+/// `DELETE /v1/agents/:id/checkpoints/:cp_id` — remove a checkpoint.
+pub async fn delete_checkpoint(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    cp_id: &str,
+) -> Result<(), ApiError> {
+    let url = api::checkpoint_url(base_url, agent_id, cp_id);
+    let resp = Request::delete(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
+    api::classify_upsert(resp.status())
+}
+
+/// `POST /v1/agents/:id/checkpoints/:cp_id/restore` — restore a checkpoint.
+pub async fn restore_checkpoint(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    cp_id: &str,
+) -> Result<(), ApiError> {
+    let url = api::checkpoint_restore_url(base_url, agent_id, cp_id);
+    let resp = Request::post(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
+    api::classify_upsert(resp.status())
+}
+
+// ── Artifacts ──────────────────────────────────────────────────────────
+
+/// `GET /v1/agents/:id/artifacts` — list artifact summaries.
+pub async fn get_artifacts(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+) -> Result<Vec<api::ArtifactInfo>, ApiError> {
+    let url = api::artifacts_url(base_url, agent_id);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_artifacts(status, &body)
+}
+
+/// `GET /v1/agents/:id/artifacts/:art_id` — fetch full artifact detail.
+pub async fn get_artifact(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    art_id: &str,
+) -> Result<api::ArtifactDetail, ApiError> {
+    let url = api::artifact_url(base_url, agent_id, art_id);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_artifact(status, &body)
+}
+
+/// `DELETE /v1/agents/:id/artifacts/:art_id` — remove an artifact.
+pub async fn delete_artifact(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    art_id: &str,
+) -> Result<(), ApiError> {
+    let url = api::artifact_url(base_url, agent_id, art_id);
+    let resp = Request::delete(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
+    api::classify_upsert(resp.status())
+}
+
+// ── Tools (MCP / skills panel) ─────────────────────────────────────────
+
+/// `GET /v1/agents/:id/tools` — list MCP tools registered with the agent.
+pub async fn get_tools(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+) -> Result<Vec<api::AgentTool>, ApiError> {
+    let url = api::tools_url(base_url, agent_id);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_tools(status, &body)
+}
+
+// ── Metrics + context stats ────────────────────────────────────────────
+
+/// `GET /v1/agents/:id/metrics`
+pub async fn get_metrics(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+) -> Result<api::AgentMetrics, ApiError> {
+    let url = api::metrics_url(base_url, agent_id);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_metrics(status, &body)
+}
+
+/// `GET /v1/agents/:id/context`
+pub async fn get_context_stats(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+) -> Result<api::ContextStats, ApiError> {
+    let url = api::context_url(base_url, agent_id);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_context_stats(status, &body)
+}
