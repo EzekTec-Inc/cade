@@ -146,9 +146,19 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
         }
     };
 
-    // ── 1. Fetch recent messages ──────────────────────────────────────────────
-    let all_rows = sqlite::list_messages_page(&state.db, agent_id, conversation_id, 500, 0)
-        .unwrap_or_default();
+    // ── 1. Fetch messages since the last compaction marker ───────────────────
+    // Using `list_messages_since_last_compaction` ensures we only summarise
+    // turns that have NOT yet been covered by a previous consolidation run.
+    // `list_messages_page` returned ALL rows (ignoring markers), causing the
+    // consolidation LLM to re-summarise already-compacted history on every
+    // invocation — producing duplicate session_summary entries.
+    let all_rows = sqlite::list_messages_since_last_compaction(
+        &state.db,
+        agent_id,
+        conversation_id,
+        500,
+    )
+    .unwrap_or_default();
 
     if all_rows.len() < MIN_ROWS_FOR_CONSOLIDATION {
         tracing::debug!(

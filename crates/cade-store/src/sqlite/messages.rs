@@ -110,6 +110,78 @@ pub fn list_messages(
     list_messages_page(db, agent_id, conversation_id, limit, 0)
 }
 
+/// Return all messages **after** the most recent compaction marker for the
+/// given agent+conversation, oldest-first, excluding compaction rows.
+///
+/// Used by the consolidation loop so it never re-summarises turns that were
+/// already covered by a previous compaction run.  When no marker exists, all
+/// messages are returned (same as `list_messages`).
+pub fn list_messages_since_last_compaction(
+    db: &Db,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+    limit: usize,
+) -> Result<Vec<MessageRow>> {
+    let conn = db
+        .lock()
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+
+    let sql = if conversation_id.is_some() {
+        "WITH boundary AS (
+             SELECT COALESCE(
+                 (SELECT rowid FROM messages
+                  WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'compaction'
+                  ORDER BY created_at DESC, rowid DESC LIMIT 1),
+                 0
+             ) AS marker_rowid
+         )
+         SELECT id, agent_id, conversation_id, role, content, char_count
+         FROM messages
+         WHERE agent_id = ?1 AND conversation_id = ?2
+           AND role != 'compaction'
+           AND rowid > (SELECT marker_rowid FROM boundary)
+         ORDER BY created_at ASC, rowid ASC
+         LIMIT ?3"
+    } else {
+        "WITH boundary AS (
+             SELECT COALESCE(
+                 (SELECT rowid FROM messages
+                  WHERE agent_id = ?1 AND conversation_id IS NULL AND role = 'compaction'
+                  ORDER BY created_at DESC, rowid DESC LIMIT 1),
+                 0
+             ) AS marker_rowid
+         )
+         SELECT id, agent_id, conversation_id, role, content, char_count
+         FROM messages
+         WHERE agent_id = ?1 AND conversation_id IS NULL
+           AND role != 'compaction'
+           AND rowid > (SELECT marker_rowid FROM boundary)
+         ORDER BY created_at ASC, rowid ASC
+         LIMIT ?3"
+    };
+
+    let mut stmt = conn.prepare(sql)?;
+    let conv_placeholder = conversation_id.unwrap_or("");
+    let rows = stmt
+        .query_map(params![agent_id, conv_placeholder, limit as i64], |row| {
+            Ok(MessageRow {
+                id: row.get(0)?,
+                agent_id: row.get(1)?,
+                conversation_id: row.get(2)?,
+                role: row.get(3)?,
+                content: {
+                    let s: String = row.get(4)?;
+                    serde_json::from_str(&s).unwrap_or(serde_json::Value::Null)
+                },
+                char_count: row.get(5).unwrap_or(0),
+            })
+        })?
+        .filter_map(|r| r.ok())
+        .collect();
+
+    Ok(rows)
+}
+
 /// Page through messages with limit/offset, newest-first at the SQL level,
 /// returned oldest-first for convenience.
 pub fn list_messages_page(
@@ -768,6 +840,95 @@ mod tests {
         let window = get_context_window(&db, "a1", None, 999_999)?;
         assert_eq!(window.len(), 1);
         assert_eq!(window[0].id, "new1");
+        Ok(())
+    }
+
+    // ── list_messages_since_last_compaction ──────────────────────────────────
+
+    #[test]
+    fn test_since_compaction_no_marker_returns_all() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        for (i, id) in ["m1", "m2", "m3"].iter().enumerate() {
+            insert_message_at(&db, &MessageRow {
+                id: id.to_string(), agent_id: "a1".into(), conversation_id: None,
+                role: "user".into(),
+                content: json!({"content": format!("msg{i}")}),
+                char_count: 4,
+            }, 100 + i as i64)?;
+        }
+
+        let rows = list_messages_since_last_compaction(&db, "a1", None, 100)?;
+        assert_eq!(rows.len(), 3);
+        assert_eq!(rows[0].id, "m1"); // oldest first
+        Ok(())
+    }
+
+    #[test]
+    fn test_since_compaction_with_marker_skips_old() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        // Pre-marker messages
+        insert_message_at(&db, &MessageRow {
+            id: "pre1".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "user".into(), content: json!({"content": "old"}), char_count: 3,
+        }, 100)?;
+        insert_message_at(&db, &MessageRow {
+            id: "pre2".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "assistant".into(), content: json!({"content": "old reply"}), char_count: 9,
+        }, 101)?;
+        // Compaction marker
+        insert_message_at(&db, &MessageRow {
+            id: "c1".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "compaction".into(),
+            content: json!({"content": "[compacted 2 turns]"}), char_count: 0,
+        }, 102)?;
+        // Post-marker messages
+        insert_message_at(&db, &MessageRow {
+            id: "post1".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "user".into(), content: json!({"content": "new"}), char_count: 3,
+        }, 103)?;
+        insert_message_at(&db, &MessageRow {
+            id: "post2".into(), agent_id: "a1".into(), conversation_id: None,
+            role: "assistant".into(), content: json!({"content": "new reply"}), char_count: 9,
+        }, 104)?;
+
+        let rows = list_messages_since_last_compaction(&db, "a1", None, 100)?;
+        // Only post-marker messages, no compaction row itself
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "post1");
+        assert_eq!(rows[1].id, "post2");
+        Ok(())
+    }
+
+    #[test]
+    fn test_since_compaction_uses_latest_marker() -> Result<()> {
+        let db = setup_mem_db()?;
+        make_agent(&db, "a1")?;
+
+        for (ts, id, role) in [
+            (100, "m1", "user"),
+            (101, "c1", "compaction"),
+            (102, "m2", "user"),
+            (103, "c2", "compaction"),  // latest marker
+            (104, "m3", "user"),
+            (105, "m4", "assistant"),
+        ] {
+            insert_message_at(&db, &MessageRow {
+                id: id.into(), agent_id: "a1".into(), conversation_id: None,
+                role: role.into(),
+                content: json!({"content": id}),
+                char_count: if role == "compaction" { 0 } else { 4 },
+            }, ts)?;
+        }
+
+        let rows = list_messages_since_last_compaction(&db, "a1", None, 100)?;
+        // Only m3 and m4, after the latest (c2) marker
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, "m3");
+        assert_eq!(rows[1].id, "m4");
         Ok(())
     }
 }
