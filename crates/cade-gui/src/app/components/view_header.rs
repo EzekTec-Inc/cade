@@ -1,0 +1,57 @@
+use eframe::egui;
+use crate::session::SessionState;
+use crate::app::status_dot_color;
+
+pub fn render(ctx: &egui::Context, session_snapshot: &Option<SessionState>) {
+    egui::TopBottomPanel::top("cade_toolbar")
+        .exact_size(32.0)
+        .frame(
+            egui::Frame::new()
+                .fill(crate::theme::BG_SURFACE0)
+                .inner_margin(egui::Margin::symmetric(10, 0)),
+        )
+        .show(ctx, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("CADE")
+                        .strong()
+                        .size(15.0)
+                        .color(crate::theme::PRIMARY),
+                );
+
+                if let Some(SessionState::Connected { last_usage, .. }) = session_snapshot {
+                    if let Some((_, _, Some(ref model))) = *last_usage {
+                        ui.add_space(8.0);
+                        egui::Frame::new()
+                            .fill(crate::theme::BG_SURFACE1)
+                            .corner_radius(egui::CornerRadius::same(4))
+                            .inner_margin(egui::Margin::symmetric(6, 2))
+                            .show(ui, |ui| {
+                                ui.label(
+                                    egui::RichText::new(model.as_str())
+                                        .monospace()
+                                        .size(11.0)
+                                        .color(crate::theme::TEXT_MUTED),
+                                );
+                            });
+                    }
+                }
+
+                if let Some(SessionState::Connected { streaming, health, .. }) = session_snapshot {
+                    let version = health.version.as_deref().unwrap_or("unknown");
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(
+                            egui::RichText::new(format!("v{version}"))
+                                .small()
+                                .color(crate::theme::TEXT_DIM),
+                        );
+                        ui.add_space(4.0);
+                        let dot_color = status_dot_color(*streaming);
+                        let (resp, painter) =
+                            ui.allocate_painter(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                        painter.circle_filled(resp.rect.center(), 5.0, dot_color);
+                    });
+                }
+            });
+        });
+}
