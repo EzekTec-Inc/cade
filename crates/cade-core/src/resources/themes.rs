@@ -164,6 +164,444 @@ pub struct Theme {
     pub source: PathBuf,
 }
 
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ColorDef {
+    Rgb(u8, u8, u8),
+    Reset,
+}
+
+/// Which ratatui `BorderType` the theme prefers for all overlay blocks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+pub enum BorderStyle {
+    #[default]
+    Rounded,
+    Thick,
+    Plain,
+    Double,
+}
+
+/// Resolved, Agnostic color palette for the TUI.
+///
+/// Populated from a user-supplied JSON theme (via
+/// `cade_core::resources::themes::Theme`) or from the built-in defaults.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ThemeColors {
+    // -- Core
+    pub source_path: Option<std::path::PathBuf>,
+
+    // -- Semantic Palette (Phase 1)
+    pub bg_base: ColorDef,
+    pub bg_surface0: ColorDef,
+    pub bg_surface1: ColorDef,
+    pub bg_surface2: ColorDef,
+
+    pub primary: ColorDef,
+    pub success: ColorDef,
+    pub error: ColorDef,
+    pub warning: ColorDef,
+
+    pub text_primary: ColorDef,
+    pub text_muted: ColorDef,
+    pub text_dim: ColorDef,
+
+    pub border_base: ColorDef,
+    pub border_focus: ColorDef,
+
+    // -- Diffs
+    pub diff_added: ColorDef,
+    pub diff_removed: ColorDef,
+    pub diff_context: ColorDef,
+
+    // -- Markdown
+    pub md_heading: ColorDef,
+    pub md_link: ColorDef,
+    pub md_link_url: ColorDef,
+    pub md_code: ColorDef,
+    pub md_code_block: ColorDef,
+    pub md_code_block_border: ColorDef,
+    pub md_quote: ColorDef,
+    pub md_quote_border: ColorDef,
+    pub md_hr: ColorDef,
+    pub md_list_bullet: ColorDef,
+
+    // -- Syntax highlighting
+    pub syntax_comment: ColorDef,
+    pub syntax_keyword: ColorDef,
+    pub syntax_function: ColorDef,
+    pub syntax_variable: ColorDef,
+    pub syntax_string: ColorDef,
+    pub syntax_number: ColorDef,
+    pub syntax_type: ColorDef,
+    pub syntax_operator: ColorDef,
+    pub syntax_punctuation: ColorDef,
+    pub syntax_constant: ColorDef,
+    pub syntax_string_escape: ColorDef,
+    pub syntax_type_builtin: ColorDef,
+    pub syntax_keyword_control: ColorDef,
+    pub syntax_keyword_operator: ColorDef,
+    pub syntax_entity_name_function: ColorDef,
+    pub syntax_entity_name_type: ColorDef,
+    pub syntax_variable_parameter: ColorDef,
+    pub syntax_variable_other_member: ColorDef,
+    pub syntax_support_function: ColorDef,
+    pub syntax_support_macro: ColorDef,
+
+
+    // -- Thinking level borders
+    pub thinking_off: ColorDef,
+    pub thinking_minimal: ColorDef,
+    pub thinking_low: ColorDef,
+    pub thinking_medium: ColorDef,
+    pub thinking_high: ColorDef,
+    pub thinking_xhigh: ColorDef,
+
+    // -- Bash mode editor border
+    pub bash_mode: ColorDef,
+
+    // -- Extended surface tokens (Step 1)
+    /// Preferred border character style for all overlay blocks.
+    pub border_style: BorderStyle,
+    /// Subtle card background for tool-result / message cards.
+    pub bg_card: ColorDef,
+    /// Input area background (textarea row).
+    pub bg_input: ColorDef,
+    /// Desaturated accent for secondary emphasis (badges, counts).
+    pub accent_dim: ColorDef,
+
+}
+
+impl ThemeColors {
+    // -- Built-in themes
+
+    /// Dark theme (deep blue-black, high contrast, rich depth).
+    pub fn dark() -> Self {
+        Self {
+            source_path: None,
+
+
+            // Semantic Elevation — noticeable depth between layers
+            bg_base:     ColorDef::Rgb(12,  13,  20),   // near-void blue-black
+            bg_surface0: ColorDef::Rgb(20,  22,  33),   // card base  (+8 step)
+            bg_surface1: ColorDef::Rgb(26,  28,  42),   // overlay base (+6 step)
+            bg_surface2: ColorDef::Rgb(34,  36,  54),   // selection highlight (+8 step)
+
+            primary: ColorDef::Rgb(122, 162, 247),   // vivid sky blue
+            success: ColorDef::Rgb( 73, 196, 127),   // fresh green
+            error:   ColorDef::Rgb(247,  93, 100),   // soft coral
+            warning: ColorDef::Rgb(224, 175, 104),   // warm amber
+
+            text_primary: ColorDef::Reset,
+            text_muted:   ColorDef::Rgb(122, 128, 153),  // mid-grey, blue-tinted
+            text_dim:     ColorDef::Rgb( 72,  78,  98),  // dark hint text
+
+            border_base:  ColorDef::Rgb( 41,  44,  64),  // barely-visible divider
+            border_focus: ColorDef::Rgb(122, 162, 247),  // matches primary
+
+            diff_added:   ColorDef::Rgb( 73, 196, 127),
+            diff_removed: ColorDef::Rgb(247,  93, 100),
+            diff_context: ColorDef::Rgb( 90,  98, 120),
+
+            md_heading:          ColorDef::Rgb(224, 175, 104),
+            md_link:             ColorDef::Rgb(122, 162, 247),
+            md_link_url:         ColorDef::Rgb(122, 128, 153),
+            md_code:             ColorDef::Rgb(115, 218, 202),
+            md_code_block:       ColorDef::Reset,
+            md_code_block_border: ColorDef::Rgb(48,  52,  72),
+            md_quote:            ColorDef::Rgb(122, 128, 153),
+            md_quote_border:     ColorDef::Rgb(48,  52,  72),
+            md_hr:               ColorDef::Rgb(48,  52,  72),
+            md_list_bullet:      ColorDef::Rgb(115, 218, 202),
+
+            syntax_comment:     ColorDef::Rgb( 90,  98, 120),
+            syntax_keyword:     ColorDef::Rgb(187, 154, 247),  // purple
+            syntax_function:    ColorDef::Rgb(122, 162, 247),  // blue
+            syntax_variable:    ColorDef::Rgb(224, 175, 104),  // amber
+            syntax_string:      ColorDef::Rgb(158, 206, 106),  // green
+            syntax_number:      ColorDef::Rgb(255, 158, 100),  // orange
+            syntax_type:        ColorDef::Rgb(115, 218, 202),  // teal
+            syntax_operator:    ColorDef::Rgb(187, 154, 247),
+            syntax_punctuation: ColorDef::Rgb(122, 128, 153),
+            syntax_constant: ColorDef::Rgb(255, 158, 100),
+            syntax_string_escape: ColorDef::Rgb(158, 206, 106),
+            syntax_type_builtin: ColorDef::Rgb(115, 218, 202),
+            syntax_keyword_control: ColorDef::Rgb(187, 154, 247),
+            syntax_keyword_operator: ColorDef::Rgb(187, 154, 247),
+            syntax_entity_name_function: ColorDef::Rgb(122, 162, 247),
+            syntax_entity_name_type: ColorDef::Rgb(115, 218, 202),
+            syntax_variable_parameter: ColorDef::Rgb(224, 175, 104),
+            syntax_variable_other_member: ColorDef::Rgb(224, 175, 104),
+            syntax_support_function: ColorDef::Rgb(122, 162, 247),
+            syntax_support_macro: ColorDef::Rgb(122, 162, 247),
+
+
+            thinking_off:     ColorDef::Rgb( 41,  44,  64),
+            thinking_minimal: ColorDef::Rgb(122, 162, 247),
+            thinking_low:     ColorDef::Rgb( 80, 160, 200),
+            thinking_medium:  ColorDef::Rgb(115, 218, 202),
+            thinking_high:    ColorDef::Rgb(224, 175, 104),
+            thinking_xhigh:   ColorDef::Rgb(247,  93, 100),
+            bash_mode:        ColorDef::Rgb(224, 175, 104),
+
+            border_style: BorderStyle::Rounded,
+            bg_card:      ColorDef::Rgb(20,  22,  34),
+            bg_input:     ColorDef::Rgb(22,  24,  36),
+            accent_dim:   ColorDef::Rgb(64, 102, 168),
+        }
+    }
+
+    /// Light theme (warm white base, high readability, clear depth).
+    pub fn light() -> Self {
+        Self {
+            source_path: None,
+
+
+            // Semantic Elevation — clear layering on a white surface
+            bg_base:     ColorDef::Rgb(252, 252, 255),   // near-white, slight blue
+            bg_surface0: ColorDef::Rgb(244, 246, 255),   // card base
+            bg_surface1: ColorDef::Rgb(236, 240, 255),   // overlay / panel
+            bg_surface2: ColorDef::Rgb(220, 226, 248),   // selection highlight
+
+            primary: ColorDef::Rgb( 14,  98, 200),   // rich blue
+            success: ColorDef::Rgb(  0, 135,  75),   // forest green
+            error:   ColorDef::Rgb(185,  28,  28),   // deep red
+            warning: ColorDef::Rgb(146,  88,   0),   // dark amber
+
+            text_primary: ColorDef::Reset,
+            text_muted:   ColorDef::Rgb( 90, 100, 125),
+            text_dim:     ColorDef::Rgb(148, 158, 180),
+
+            border_base:  ColorDef::Rgb(198, 206, 226),
+            border_focus: ColorDef::Rgb( 14,  98, 200),
+
+            diff_added:   ColorDef::Rgb(  0, 135,  75),
+            diff_removed: ColorDef::Rgb(185,  28,  28),
+            diff_context: ColorDef::Rgb( 90, 100, 125),
+
+            md_heading:          ColorDef::Rgb(146,  88,   0),
+            md_link:             ColorDef::Rgb( 14,  98, 200),
+            md_link_url:         ColorDef::Rgb( 90, 100, 125),
+            md_code:             ColorDef::Rgb(  0, 118, 118),
+            md_code_block:       ColorDef::Reset,
+            md_code_block_border: ColorDef::Rgb(180, 190, 215),
+            md_quote:            ColorDef::Rgb( 90, 100, 125),
+            md_quote_border:     ColorDef::Rgb(180, 190, 215),
+            md_hr:               ColorDef::Rgb(180, 190, 215),
+            md_list_bullet:      ColorDef::Rgb(  0, 118, 118),
+
+            syntax_comment:     ColorDef::Rgb( 90, 100, 125),
+            syntax_keyword:     ColorDef::Rgb(128,  30, 155),
+            syntax_function:    ColorDef::Rgb( 14,  98, 200),
+            syntax_variable:    ColorDef::Rgb(146,  88,   0),
+            syntax_string:      ColorDef::Rgb(  0, 115,  55),
+            syntax_number:      ColorDef::Rgb(155,  70,  15),
+            syntax_type:        ColorDef::Rgb(  0,  95, 155),
+            syntax_operator:    ColorDef::Rgb(128,  30, 155),
+            syntax_punctuation: ColorDef::Rgb( 90, 100, 125),
+            syntax_constant: ColorDef::Rgb(155,  70,  15),
+            syntax_string_escape: ColorDef::Rgb(  0, 115,  55),
+            syntax_type_builtin: ColorDef::Rgb(  0,  95, 155),
+            syntax_keyword_control: ColorDef::Rgb(128,  30, 155),
+            syntax_keyword_operator: ColorDef::Rgb(128,  30, 155),
+            syntax_entity_name_function: ColorDef::Rgb( 14,  98, 200),
+            syntax_entity_name_type: ColorDef::Rgb(  0,  95, 155),
+            syntax_variable_parameter: ColorDef::Rgb(146,  88,   0),
+            syntax_variable_other_member: ColorDef::Rgb(146,  88,   0),
+            syntax_support_function: ColorDef::Rgb( 14,  98, 200),
+            syntax_support_macro: ColorDef::Rgb( 14,  98, 200),
+
+
+            thinking_off:     ColorDef::Rgb(198, 206, 226),
+            thinking_minimal: ColorDef::Rgb( 14,  98, 200),
+            thinking_low:     ColorDef::Rgb(  0, 118, 160),
+            thinking_medium:  ColorDef::Rgb(  0, 135,  75),
+            thinking_high:    ColorDef::Rgb(146,  88,   0),
+            thinking_xhigh:   ColorDef::Rgb(185,  28,  28),
+            bash_mode:        ColorDef::Rgb(146,  88,   0),
+
+            border_style: BorderStyle::Rounded,
+            bg_card:      ColorDef::Rgb(242, 245, 255),
+            bg_input:     ColorDef::Rgb(236, 240, 255),
+            accent_dim:   ColorDef::Rgb( 76, 136, 210),
+        }
+    }
+
+    // -- Additional built-in themes
+
+    /// Catppuccin Mocha — warm purple-tinted dark.
+    /// Palette source: <https://github.com/catppuccin/catppuccin>
+    pub fn catppuccin_mocha() -> Self {
+        let mut c = Self::dark();
+        // Base surfaces
+        c.bg_base     = ColorDef::Rgb( 30,  30,  46);  // Crust
+        c.bg_surface0 = ColorDef::Rgb( 36,  36,  54);  // Mantle
+        c.bg_surface1 = ColorDef::Rgb( 49,  50,  68);  // Base
+        c.bg_surface2 = ColorDef::Rgb( 69,  71,  90);  // Surface0
+        c.bg_card     = ColorDef::Rgb( 36,  36,  54);
+        c.bg_input    = ColorDef::Rgb( 49,  50,  68);
+        // Accents
+        c.primary      = ColorDef::Rgb(137, 180, 250);  // Blue
+        c.success      = ColorDef::Rgb(166, 227, 161);  // Green
+        c.error        = ColorDef::Rgb(243, 139, 168);  // Red
+        c.warning      = ColorDef::Rgb(249, 226, 175);  // Yellow
+        c.accent_dim   = ColorDef::Rgb( 88, 128, 200);
+        // Text
+        c.text_muted   = ColorDef::Rgb(166, 173, 200);  // Overlay2
+        c.text_dim     = ColorDef::Rgb(108, 112, 134);  // Surface2
+        // Borders
+        c.border_base  = ColorDef::Rgb( 69,  71,  90);
+        c.border_focus = ColorDef::Rgb(137, 180, 250);
+        // Diff
+        c.diff_added   = ColorDef::Rgb(166, 227, 161);
+        c.diff_removed = ColorDef::Rgb(243, 139, 168);
+        // Markdown
+        c.md_heading    = ColorDef::Rgb(249, 226, 175);
+        c.md_link       = ColorDef::Rgb(137, 180, 250);
+        c.md_code       = ColorDef::Rgb(148, 226, 213);  // Teal
+        c.md_list_bullet = ColorDef::Rgb(148, 226, 213);
+        // Syntax
+        c.syntax_keyword    = ColorDef::Rgb(203, 166, 247);  // Mauve
+        c.syntax_function   = ColorDef::Rgb(137, 180, 250);  // Blue
+        c.syntax_string     = ColorDef::Rgb(166, 227, 161);  // Green
+        c.syntax_number     = ColorDef::Rgb(250, 179, 135);  // Peach
+        c.syntax_type       = ColorDef::Rgb(148, 226, 213);  // Teal
+        c.syntax_variable   = ColorDef::Rgb(249, 226, 175);  // Yellow
+        c.syntax_operator   = ColorDef::Rgb(203, 166, 247);
+        // Thinking
+        c.thinking_minimal  = ColorDef::Rgb(137, 180, 250);
+        c.thinking_medium   = ColorDef::Rgb(148, 226, 213);
+        c.thinking_high     = ColorDef::Rgb(249, 226, 175);
+        c.thinking_xhigh    = ColorDef::Rgb(243, 139, 168);
+        c.bash_mode         = ColorDef::Rgb(249, 226, 175);
+
+        c.syntax_constant = c.syntax_number;
+        c.syntax_string_escape = c.syntax_string;
+        c.syntax_type_builtin = c.syntax_type;
+        c.syntax_keyword_control = c.syntax_keyword;
+        c.syntax_keyword_operator = c.syntax_operator;
+        c.syntax_entity_name_function = c.syntax_function;
+        c.syntax_entity_name_type = c.syntax_type;
+        c.syntax_variable_parameter = c.syntax_variable;
+        c.syntax_variable_other_member = c.syntax_variable;
+        c.syntax_support_function = c.syntax_function;
+        c.syntax_support_macro = c.syntax_function;
+        c
+    }
+
+    /// Catppuccin Latte — warm beige light.
+    /// Palette source: <https://github.com/catppuccin/catppuccin>
+    pub fn catppuccin_latte() -> Self {
+        let mut c = Self::light();
+        // Base surfaces
+        c.bg_base     = ColorDef::Rgb(239, 241, 245);  // Base
+        c.bg_surface0 = ColorDef::Rgb(230, 233, 239);  // Mantle
+        c.bg_surface1 = ColorDef::Rgb(220, 224, 232);  // Crust
+        c.bg_surface2 = ColorDef::Rgb(204, 208, 218);  // Surface0
+        c.bg_card     = ColorDef::Rgb(230, 233, 239);
+        c.bg_input    = ColorDef::Rgb(220, 224, 232);
+        // Accents
+        c.primary      = ColorDef::Rgb( 30, 102, 245);  // Blue
+        c.success      = ColorDef::Rgb( 64, 160,  43);  // Green
+        c.error        = ColorDef::Rgb(210,  15,  57);  // Red
+        c.warning      = ColorDef::Rgb(223, 142,  29);  // Yellow
+        c.accent_dim   = ColorDef::Rgb( 80, 140, 210);
+        // Text
+        c.text_muted   = ColorDef::Rgb( 92, 106, 134);  // Overlay2
+        c.text_dim     = ColorDef::Rgb(156, 160, 176);  // Surface2
+        // Borders
+        c.border_base  = ColorDef::Rgb(188, 192, 204);
+        c.border_focus = ColorDef::Rgb( 30, 102, 245);
+        // Markdown
+        c.md_heading    = ColorDef::Rgb(223, 142,  29);
+        c.md_link       = ColorDef::Rgb( 30, 102, 245);
+        c.md_code       = ColorDef::Rgb( 23, 146, 153);  // Teal
+        c.md_list_bullet = ColorDef::Rgb( 23, 146, 153);
+        // Syntax
+        c.syntax_keyword    = ColorDef::Rgb(136,  57, 239);  // Mauve
+        c.syntax_function   = ColorDef::Rgb( 30, 102, 245);
+        c.syntax_string     = ColorDef::Rgb( 64, 160,  43);
+        c.syntax_number     = ColorDef::Rgb(254, 100,  11);  // Peach
+        c.syntax_type       = ColorDef::Rgb( 23, 146, 153);
+        c.syntax_variable   = ColorDef::Rgb(223, 142,  29);
+        c.syntax_operator   = ColorDef::Rgb(136,  57, 239);
+        c.bash_mode         = ColorDef::Rgb(223, 142,  29);
+
+        c.syntax_constant = c.syntax_number;
+        c.syntax_string_escape = c.syntax_string;
+        c.syntax_type_builtin = c.syntax_type;
+        c.syntax_keyword_control = c.syntax_keyword;
+        c.syntax_keyword_operator = c.syntax_operator;
+        c.syntax_entity_name_function = c.syntax_function;
+        c.syntax_entity_name_type = c.syntax_type;
+        c.syntax_variable_parameter = c.syntax_variable;
+        c.syntax_variable_other_member = c.syntax_variable;
+        c.syntax_support_function = c.syntax_function;
+        c.syntax_support_macro = c.syntax_function;
+        c
+    }
+
+    /// Tokyo Night — deep indigo dark with neon cyan + rose accents.
+    /// Palette source: <https://github.com/enkia/tokyo-night-vscode-theme>
+    pub fn tokyo_night() -> Self {
+        let mut c = Self::dark();
+        // Base surfaces
+        c.bg_base     = ColorDef::Rgb( 26,  27,  38);  // bg
+        c.bg_surface0 = ColorDef::Rgb( 28,  29,  44);  // bg_dark
+        c.bg_surface1 = ColorDef::Rgb( 32,  34,  51);  // bg_highlight
+        c.bg_surface2 = ColorDef::Rgb( 41,  44,  66);  // terminal_black
+        c.bg_card     = ColorDef::Rgb( 28,  29,  44);
+        c.bg_input    = ColorDef::Rgb( 32,  34,  51);
+        // Accents
+        c.primary      = ColorDef::Rgb(122, 162, 247);  // blue
+        c.success      = ColorDef::Rgb(158, 206, 106);  // green
+        c.error        = ColorDef::Rgb(247,  93, 100);  // red
+        c.warning      = ColorDef::Rgb(224, 175, 104);  // yellow
+        c.accent_dim   = ColorDef::Rgb( 65, 105, 190);
+        // Text
+        c.text_muted   = ColorDef::Rgb(169, 177, 214);  // fg_dark
+        c.text_dim     = ColorDef::Rgb( 86,  95, 137);  // comment
+        // Borders
+        c.border_base  = ColorDef::Rgb( 41,  44,  66);
+        c.border_focus = ColorDef::Rgb(122, 162, 247);
+        // Diff
+        c.diff_added   = ColorDef::Rgb(158, 206, 106);
+        c.diff_removed = ColorDef::Rgb(247,  93, 100);
+        // Markdown
+        c.md_heading    = ColorDef::Rgb(224, 175, 104);
+        c.md_link       = ColorDef::Rgb(122, 162, 247);
+        c.md_code       = ColorDef::Rgb(  42, 195, 222);  // cyan
+        c.md_list_bullet = ColorDef::Rgb( 42, 195, 222);
+        // Syntax
+        c.syntax_keyword    = ColorDef::Rgb(187, 154, 247);  // purple
+        c.syntax_function   = ColorDef::Rgb(122, 162, 247);  // blue
+        c.syntax_string     = ColorDef::Rgb(158, 206, 106);  // green
+        c.syntax_number     = ColorDef::Rgb(255, 158, 100);  // orange
+        c.syntax_type       = ColorDef::Rgb( 42, 195, 222);  // cyan
+        c.syntax_variable   = ColorDef::Rgb(224, 175, 104);  // yellow
+        c.syntax_operator   = ColorDef::Rgb(187, 154, 247);
+        // Thinking
+        c.thinking_minimal  = ColorDef::Rgb(122, 162, 247);
+        c.thinking_medium   = ColorDef::Rgb( 42, 195, 222);
+        c.thinking_high     = ColorDef::Rgb(224, 175, 104);
+        c.thinking_xhigh    = ColorDef::Rgb(247,  93, 100);
+        c.bash_mode         = ColorDef::Rgb(224, 175, 104);
+
+        c.syntax_constant = c.syntax_number;
+        c.syntax_string_escape = c.syntax_string;
+        c.syntax_type_builtin = c.syntax_type;
+        c.syntax_keyword_control = c.syntax_keyword;
+        c.syntax_keyword_operator = c.syntax_operator;
+        c.syntax_entity_name_function = c.syntax_function;
+        c.syntax_entity_name_type = c.syntax_type;
+        c.syntax_variable_parameter = c.syntax_variable;
+        c.syntax_variable_other_member = c.syntax_variable;
+        c.syntax_support_function = c.syntax_function;
+        c.syntax_support_macro = c.syntax_function;
+        c
+    }
+
+}
+
 // endregion: --- Types
 
 // region:    --- Discovery

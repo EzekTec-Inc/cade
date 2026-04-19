@@ -1,11 +1,12 @@
+use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crate::app::*;
 
 pub(crate) fn input_mode_badge(mode: InputMode, colors: &ThemeColors) -> (&'static str, RC) {
     match mode {
-        InputMode::Regular => (" CHAT ", colors.bg_surface2),
-        InputMode::BashCommand { silent: false } => (" SHELL ", colors.warning),
-        InputMode::BashCommand { silent: true } => (" LOCAL ", colors.border_base),
-        InputMode::SlashCommand => (" COMMAND ", colors.primary),
+        InputMode::Regular => (" CHAT ", colors.bg_surface2.to_ratatui()),
+        InputMode::BashCommand { silent: false } => (" SHELL ", colors.warning.to_ratatui()),
+        InputMode::BashCommand { silent: true } => (" LOCAL ", colors.border_base.to_ratatui()),
+        InputMode::SlashCommand => (" COMMAND ", colors.primary.to_ratatui()),
     }
 }
 

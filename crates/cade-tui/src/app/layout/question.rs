@@ -1,3 +1,4 @@
+use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crate::app::*;
 /// Calculate the number of rows needed for the inline question panel.
 /// Counts: 1 header + 1 blank + wrapped-question-rows + 1 blank
@@ -80,7 +81,7 @@ pub(crate) fn render_question_inline(
         Span::styled(
             q.header.clone(),
             Style::default()
-                .fg(colors.md_heading)
+                .fg(colors.md_heading.to_ratatui())
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
@@ -111,7 +112,7 @@ pub(crate) fn render_question_inline(
         if idx == aq.submit_idx {
             let style = if is_selected {
                 Style::default()
-                    .fg(colors.success)
+                    .fg(colors.success.to_ratatui())
                     .add_modifier(Modifier::BOLD)
             } else {
                 colors.text_muted()
@@ -141,15 +142,15 @@ pub(crate) fn render_question_inline(
                 Span::styled(
                     format!(" {selector} {}.  ", idx + 1),
                     Style::default().fg(if is_selected {
-                        colors.success
+                        colors.success.to_ratatui()
                     } else {
-                        colors.text_muted
+                        colors.text_muted.to_ratatui()
                     }),
                 ),
                 Span::styled(
                     display,
                     Style::default()
-                        .fg(colors.text_dim)
+                        .fg(colors.text_dim.to_ratatui())
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -171,7 +172,7 @@ pub(crate) fn render_question_inline(
         };
         let label_style = if is_selected {
             Style::default()
-                .fg(colors.text_primary)
+                .fg(colors.text_primary.to_ratatui())
                 .add_modifier(Modifier::BOLD)
         } else {
             colors.text_primary()

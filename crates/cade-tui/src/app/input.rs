@@ -1,5 +1,6 @@
 //! User input loop — read_input and handle_key_input.
 
+use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
     MouseEventKind,

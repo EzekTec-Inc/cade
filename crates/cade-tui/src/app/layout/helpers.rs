@@ -1,3 +1,4 @@
+use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crate::app::*;
 /// Abbreviate a filesystem path for the footer: last 2 components, with ~/
 /// prefix when the path is under the user's home directory.
@@ -46,19 +47,19 @@ pub(crate) fn abbreviate_cwd(path: &std::path::Path) -> String {
 
 pub(crate) fn mode_sep_color(mode: PermissionMode, colors: &ThemeColors) -> RC {
     match mode {
-        PermissionMode::Default => colors.border_base,
-        PermissionMode::AcceptEdits => colors.thinking_minimal,
-        PermissionMode::Plan => colors.success,
-        PermissionMode::BypassPermissions => colors.error,
+        PermissionMode::Default => colors.border_base.to_ratatui(),
+        PermissionMode::AcceptEdits => colors.thinking_minimal.to_ratatui(),
+        PermissionMode::Plan => colors.success.to_ratatui(),
+        PermissionMode::BypassPermissions => colors.error.to_ratatui(),
     }
 }
 
 pub(crate) fn mode_footer_left<'a>(mode: PermissionMode, colors: &ThemeColors) -> (&'a str, &'a str, RC) {
     match mode {
-        PermissionMode::Default => ("Press / for commands", "", colors.border_base),
-        PermissionMode::AcceptEdits => ("accept edits", "⏵⏵", colors.thinking_minimal),
-        PermissionMode::Plan => ("plan mode", "⏸", colors.success),
-        PermissionMode::BypassPermissions => ("bypass (allow all)", "⚡", colors.error),
+        PermissionMode::Default => ("Press / for commands", "", colors.border_base.to_ratatui()),
+        PermissionMode::AcceptEdits => ("accept edits", "⏵⏵", colors.thinking_minimal.to_ratatui()),
+        PermissionMode::Plan => ("plan mode", "⏸", colors.success.to_ratatui()),
+        PermissionMode::BypassPermissions => ("bypass (allow all)", "⚡", colors.error.to_ratatui()),
     }
 }
 

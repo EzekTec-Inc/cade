@@ -1,3 +1,4 @@
+use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crate::{Result, colors::ThemeColors, overlay};
 use cade_core::settings::McpServerConfig;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -114,7 +115,7 @@ pub fn show_mcp_manager(
 
                     let style = if is_sel {
                         Style::default()
-                            .bg(colors.bg_surface1)
+                            .bg(colors.bg_surface1.to_ratatui())
                             .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
@@ -129,11 +130,11 @@ pub fn show_mcp_manager(
                     };
 
                     let status_color = if s.config.disabled {
-                        colors.text_muted
+                        colors.text_muted.to_ratatui()
                     } else if s.tool_count.is_some() {
-                        colors.success
+                        colors.success.to_ratatui()
                     } else {
-                        colors.error
+                        colors.error.to_ratatui()
                     };
 
                     let kind_str = if s.config.url.is_some() {
@@ -146,14 +147,14 @@ pub fn show_mcp_manager(
                         Cell::from(Span::styled(
                             if is_sel { "▶ " } else { "  " },
                             Style::default().fg(if is_sel {
-                                colors.primary
+                                colors.primary.to_ratatui()
                             } else {
-                                colors.text_muted
+                                colors.text_muted.to_ratatui()
                             }),
                         )),
                         Cell::from(Span::styled(
                             s.key.clone(),
-                            Style::default().fg(if is_sel { colors.text_primary } else { colors.text_primary }),
+                            Style::default().fg(if is_sel { colors.text_primary.to_ratatui() } else { colors.text_primary.to_ratatui() }),
                         )),
                         Cell::from(Span::styled(
                             kind_str,
@@ -177,7 +178,7 @@ pub fn show_mcp_manager(
             .header(
                 Row::new(vec!["", "Server", "Type", "Status"]).style(
                     Style::default()
-                        .fg(colors.primary)
+                        .fg(colors.primary.to_ratatui())
                         .add_modifier(Modifier::BOLD),
                 ),
             )

@@ -1,3 +1,4 @@
+use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crate::app::*;
 
 
@@ -64,7 +65,7 @@ pub(crate) fn render_context_bar_item(
         Span::styled(
             "  ◆ Context  ",
             Style::default()
-                .fg(colors.primary)
+                .fg(colors.primary.to_ratatui())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(
@@ -83,7 +84,7 @@ pub(crate) fn render_context_bar_item(
             } else if pct >= 75 {
                 RC::Rgb(245, 158, 11)
             } else {
-                colors.success
+                colors.success.to_ratatui()
             }),
         ),
     ]));
@@ -158,7 +159,7 @@ pub(crate) fn render_user_message_item(
     out.push(Line::from(vec![Span::styled(
         "You",
         Style::default()
-            .fg(colors.text_primary)
+            .fg(colors.text_primary.to_ratatui())
             .add_modifier(Modifier::BOLD),
     )]));
     out.extend(crate::markdown::parse_markdown_lines_with_theme(
@@ -170,7 +171,7 @@ pub(crate) fn render_assistant_item(text: &str, out: &mut Vec<Line<'static>>, co
     out.push(Line::from(vec![Span::styled(
         "▍ CADE",
         Style::default()
-            .fg(colors.primary)
+            .fg(colors.primary.to_ratatui())
             .add_modifier(Modifier::BOLD),
     )]));
     let md_lines = crate::markdown::parse_markdown_lines_with_theme(text, colors);
@@ -195,7 +196,7 @@ pub(crate) fn render_tool_call_item(
     let icon = crate::icons::tool_icon(&display, nerd);
     let name_style = Style::default()
         .add_modifier(Modifier::BOLD)
-        .fg(colors.primary);
+        .fg(colors.primary.to_ratatui());
     let budget = width.saturating_sub(display.len() + icon.len() + 15);
     let args_span = if preview.is_empty() {
         Span::styled(")", colors.text_dim())
@@ -209,7 +210,7 @@ pub(crate) fn render_tool_call_item(
         Span::styled(
             format!("{icon} "),
             Style::default()
-                .fg(colors.primary)
+                .fg(colors.primary.to_ratatui())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(display.to_string(), name_style.add_modifier(Modifier::BOLD)),
@@ -229,9 +230,9 @@ pub(crate) fn render_tool_result_item(
     nerd: bool,
 ) {
     let color = if is_error {
-        colors.diff_removed
+        colors.diff_removed.to_ratatui()
     } else {
-        colors.diff_added
+        colors.diff_added.to_ratatui()
     };
     let status_label = if is_error {
         format!("{} ERR ", crate::icons::error_icon(nerd))
@@ -325,7 +326,7 @@ pub(crate) fn render_tool_result_item(
                 Span::styled(
                     hint,
                     Style::default()
-                        .fg(colors.text_dim)
+                        .fg(colors.text_dim.to_ratatui())
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -347,8 +348,8 @@ pub(crate) fn render_reasoning_item(
         Span::styled(
             " THINKING ",
             Style::default()
-                .fg(colors.text_primary)
-                .bg(colors.bg_surface1)
+                .fg(colors.text_primary.to_ratatui())
+                .bg(colors.bg_surface1.to_ratatui())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
@@ -370,7 +371,7 @@ pub(crate) fn render_reasoning_item(
                 Span::styled(
                     truncate_str(ln, inner_w),
                     Style::default()
-                        .fg(colors.text_muted)
+                        .fg(colors.text_muted.to_ratatui())
                         .add_modifier(Modifier::ITALIC),
                 ),
             ]));
@@ -388,7 +389,7 @@ pub(crate) fn render_live_output_item(
     colors: &ThemeColors,
 ) {
     let inner_w = width.saturating_sub(11);
-    let color = colors.diff_added;
+    let color = colors.diff_added.to_ratatui();
 
     if lines.is_empty() {
         out.push(Line::from(vec![
@@ -397,14 +398,14 @@ pub(crate) fn render_live_output_item(
                 " LIVE ",
                 Style::default()
                     .fg(color)
-                    .bg(colors.bg_surface1)
+                    .bg(colors.bg_surface1.to_ratatui())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
             Span::styled(
                 "(starting…)",
                 Style::default()
-                    .fg(colors.text_dim)
+                    .fg(colors.text_dim.to_ratatui())
                     .add_modifier(Modifier::ITALIC),
             ),
         ]));
@@ -426,7 +427,7 @@ pub(crate) fn render_live_output_item(
             Span::styled(
                 hint,
                 Style::default()
-                    .fg(colors.text_dim)
+                    .fg(colors.text_dim.to_ratatui())
                     .add_modifier(Modifier::ITALIC),
             ),
         ]));
@@ -441,7 +442,7 @@ pub(crate) fn render_live_output_item(
                 " LIVE ",
                 Style::default()
                     .fg(color)
-                    .bg(colors.bg_surface1)
+                    .bg(colors.bg_surface1.to_ratatui())
                     .add_modifier(Modifier::BOLD),
             ));
             spans.push(Span::raw(" "));
@@ -494,8 +495,8 @@ pub(crate) fn render_system_item(text: &str, out: &mut Vec<Line<'static>>, color
             Span::styled(
                 if i == 0 { " INFO " } else { "      " },
                 Style::default()
-                    .fg(colors.primary)
-                    .bg(colors.bg_base)
+                    .fg(colors.primary.to_ratatui())
+                    .bg(colors.bg_base.to_ratatui())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -510,8 +511,8 @@ pub(crate) fn render_success_item(text: &str, out: &mut Vec<Line<'static>>, colo
             Span::styled(
                 if i == 0 { " OK " } else { "    " },
                 Style::default()
-                    .fg(colors.success)
-                    .bg(colors.bg_surface1)
+                    .fg(colors.success.to_ratatui())
+                    .bg(colors.bg_surface1.to_ratatui())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -525,7 +526,7 @@ pub(crate) fn render_info_header_item(text: &str, out: &mut Vec<Line<'static>>, 
         out.push(Line::from(Span::styled(
             ln.to_string(),
             Style::default()
-                .fg(colors.primary)
+                .fg(colors.primary.to_ratatui())
                 .add_modifier(Modifier::BOLD),
         )));
     }
@@ -553,8 +554,8 @@ pub(crate) fn render_error_item(text: &str, out: &mut Vec<Line<'static>>, colors
             Span::styled(
                 if i == 0 { " ERR " } else { "     " },
                 Style::default()
-                    .fg(colors.error)
-                    .bg(colors.bg_surface1)
+                    .fg(colors.error.to_ratatui())
+                    .bg(colors.bg_surface1.to_ratatui())
                     .add_modifier(Modifier::BOLD),
             ),
             Span::raw(" "),
@@ -573,15 +574,15 @@ pub(crate) fn render_question_result_item(
         Span::styled(
             " DONE ",
             Style::default()
-                .fg(colors.success)
-                .bg(colors.bg_surface1)
+                .fg(colors.success.to_ratatui())
+                .bg(colors.bg_surface1.to_ratatui())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::raw(" "),
         Span::styled(
             format!("{header}: "),
             Style::default()
-                .fg(colors.primary)
+                .fg(colors.primary.to_ratatui())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(answer.to_string(), colors.text_primary()),
@@ -612,9 +613,9 @@ pub(crate) fn render_heuristic_summary_item(
         ]));
     };
 
-    render_row("Intent", intent, colors.text_primary);
-    render_row("Safety", safety, colors.success);
-    render_row("Directives", directives, colors.text_primary);
+    render_row("Intent", intent, colors.text_primary.to_ratatui());
+    render_row("Safety", safety, colors.success.to_ratatui());
+    render_row("Directives", directives, colors.text_primary.to_ratatui());
 
     let bot = format!("╰{}╯", "─".repeat(w));
     out.push(Line::from(Span::styled(bot, colors.text_dim())));
@@ -647,7 +648,7 @@ pub(crate) fn render_table_item(
         header_spans.push(Span::styled(
             format!("  {:<width$}  ", h, width = widths[i]),
             Style::default()
-                .fg(colors.primary)
+                .fg(colors.primary.to_ratatui())
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         ));
     }

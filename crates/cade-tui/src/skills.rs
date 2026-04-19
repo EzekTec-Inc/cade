@@ -1,3 +1,4 @@
+use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crate::{Result, colors::ThemeColors, overlay};
 use cade_core::skills::Skill;
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -60,7 +61,7 @@ pub fn show_skills_manager(
                     let is_sel = i == selected_idx;
                     let row_style = if is_sel {
                         Style::default()
-                            .bg(colors.bg_surface1)
+                            .bg(colors.bg_surface1.to_ratatui())
                             .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default()
@@ -72,7 +73,7 @@ pub fn show_skills_manager(
                             Style::default().fg(if is_sel {
                                 RC::White
                             } else {
-                                colors.text_primary
+                                colors.text_primary.to_ratatui()
                             }),
                         )),
                         Cell::from(Span::styled(
@@ -80,7 +81,7 @@ pub fn show_skills_manager(
                             Style::default().fg(if is_sel {
                                 RC::White
                             } else {
-                                colors.text_primary
+                                colors.text_primary.to_ratatui()
                             }),
                         )),
                         Cell::from(Span::styled(
@@ -103,7 +104,7 @@ pub fn show_skills_manager(
             .header(
                 Row::new(vec!["Scope", "Name", "Category"]).style(
                     Style::default()
-                        .fg(colors.primary)
+                        .fg(colors.primary.to_ratatui())
                         .add_modifier(Modifier::BOLD),
                 ),
             )

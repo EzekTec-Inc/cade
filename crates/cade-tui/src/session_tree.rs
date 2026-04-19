@@ -6,6 +6,7 @@
 ///   - Press Enter to select one (returns the checkpoint ID for restore)
 ///   - Press 'n' to start a new conversation from this point
 ///   - Press Esc / 'q' to cancel
+use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crate::{Result, colors::ThemeColors, overlay};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use ratatui::{
@@ -158,7 +159,7 @@ fn draw_tree(
                     label.to_string(),
                     if list_state.selected() == Some(i) {
                         Style::default()
-                            .fg(colors.primary)
+                            .fg(colors.primary.to_ratatui())
                             .add_modifier(Modifier::BOLD)
                     } else {
                         colors.text_primary()
@@ -176,7 +177,7 @@ fn draw_tree(
         .collect();
 
     let list = List::new(items)
-        .block(Block::default().style(Style::default().bg(colors.bg_surface2)))
+        .block(Block::default().style(Style::default().bg(colors.bg_surface2.to_ratatui())))
         .highlight_style(overlay::overlay_selected_style(colors))
         .highlight_symbol("▶ ");
     frame.render_stateful_widget(list, list_area, list_state);

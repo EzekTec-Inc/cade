@@ -38,6 +38,7 @@ pub fn strip_orchestrator_prompts(text: &str) -> std::borrow::Cow<'_, str> {
 /// │  mode ✦          AgentName [model]      │  1  (footer)
 /// └─────────────────────────────────────────┘
 /// ```
+use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use std::io::Write;
 use std::sync::Arc;
 use parking_lot::Mutex;

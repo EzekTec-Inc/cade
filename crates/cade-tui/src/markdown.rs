@@ -1,3 +1,4 @@
+use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crate::colors::ThemeColors;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
@@ -127,13 +128,13 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
 
                     let style = match level {
                         HeadingLevel::H1 => Style::default()
-                            .fg(colors.md_heading)
+                            .fg(colors.md_heading.to_ratatui())
                             .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
                         HeadingLevel::H2 => Style::default()
-                            .fg(colors.md_heading)
+                            .fg(colors.md_heading.to_ratatui())
                             .add_modifier(Modifier::BOLD),
                         HeadingLevel::H3 => Style::default()
-                            .fg(colors.md_heading)
+                            .fg(colors.md_heading.to_ratatui())
                             .add_modifier(Modifier::BOLD),
                         _ => colors.md_heading(),
                     };
@@ -173,10 +174,8 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                             .find_syntax_by_token(&current_lang)
                             .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
 
-                        let theme = colors
-                            .syntect_theme
-                            .as_deref()
-                            .unwrap_or(&THEME_SET.themes["base16-ocean.dark"]);
+                        let dyn_theme = crate::colors::generate_syntect_theme(colors);
+                        let theme = &dyn_theme;
                         highlighter = Some(HighlightLines::new(syntax, theme));
                     }
 
@@ -205,7 +204,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                             current_spans.push(Span::styled(
                                 format!("{count}. "),
                                 Style::default()
-                                    .fg(colors.md_link)
+                                    .fg(colors.md_link.to_ratatui())
                                     .add_modifier(Modifier::BOLD),
                             ));
                             *count += 1;
@@ -231,7 +230,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .fg(colors.text_primary)
+                        .fg(colors.text_primary.to_ratatui())
                         .add_modifier(Modifier::BOLD);
                     style_stack.push(s);
                 }
@@ -262,7 +261,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                         .last()
                         .copied()
                         .unwrap_or_default()
-                        .fg(colors.md_link)
+                        .fg(colors.md_link.to_ratatui())
                         .add_modifier(Modifier::UNDERLINED);
                     style_stack.push(s);
                 }
@@ -388,7 +387,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                     current_cell.push_str(&format!("`{text}`"));
                 } else {
                     // Inline code: bright on a subtle background via reversed dim
-                    let style = colors.md_code().bg(colors.bg_surface1);
+                    let style = colors.md_code().bg(colors.bg_surface1.to_ratatui());
                     current_spans.push(Span::styled(format!(" {text} "), style));
                 }
             }
@@ -452,7 +451,7 @@ fn render_table_data(data: &[Vec<String>], colors: &ThemeColors) -> Vec<Line<'st
         for (i, cell) in row.iter().take(num_cols).enumerate() {
             let style = if row_idx == 0 {
                 Style::default()
-                    .fg(colors.md_heading)
+                    .fg(colors.md_heading.to_ratatui())
                     .add_modifier(Modifier::BOLD)
             } else {
                 Style::default()

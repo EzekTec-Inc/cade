@@ -1,3 +1,4 @@
+use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crate::app::layout::question::{question_height, render_question_inline};
 use crate::app::layout::pickers::{render_picker, render_theme_picker};
 use crate::app::layout::command_palette::render_command_palette;
@@ -353,7 +354,7 @@ pub(crate) fn render_frame(
                 ratatui::style::Color::Rgb(r, g, b),
             )
         } else {
-            (t.to_string(), colors.primary)
+            (t.to_string(), colors.primary.to_ratatui())
         };
         (
             spinner_text,
@@ -361,9 +362,9 @@ pub(crate) fn render_frame(
         )
     } else if let Some(s) = last_status {
         let fg_color = if s.starts_with('⚠') || s.starts_with('✗') {
-            colors.error
+            colors.error.to_ratatui()
         } else {
-            colors.success
+            colors.success.to_ratatui()
         };
         (
             s.clone(),
@@ -421,7 +422,7 @@ pub(crate) fn render_frame(
         RC::Rgb(r, g, b)
     } else if streaming.is_some() {
         // Pure text streaming (thinking animation already stopped): fixed bright cyan.
-        colors.primary
+        colors.primary.to_ratatui()
     } else {
         mode_color
     };
@@ -461,7 +462,7 @@ pub(crate) fn render_frame(
         ];
         frame.render_widget(
             Paragraph::new(Line::from(prefix_spans))
-                .style(Style::default().bg(colors.bg_input)),
+                .style(Style::default().bg(colors.bg_input.to_ratatui())),
             input_chunks[0],
         );
 
@@ -473,11 +474,11 @@ pub(crate) fn render_frame(
 
         textarea.set_placeholder_text(input_placeholder);
         textarea.set_placeholder_style(colors.text_muted());
-        textarea.set_cursor_line_style(Style::default().bg(colors.bg_input));
+        textarea.set_cursor_line_style(Style::default().bg(colors.bg_input.to_ratatui()));
         textarea.set_cursor_style(Style::default().add_modifier(Modifier::REVERSED));
         // Apply bg_input as the textarea base style so the whole row has the
         // themed background even when the line is shorter than the terminal width.
-        textarea.set_style(Style::default().bg(colors.bg_input));
+        textarea.set_style(Style::default().bg(colors.bg_input.to_ratatui()));
 
         frame.render_widget(&*textarea, input_chunks[1]);
         input_cursor_pos = Some((
@@ -508,10 +509,10 @@ pub(crate) fn render_frame(
             .unwrap_or_default()
     };
     let (right_ctx, right_ctx_color) = match context_pct {
-        Some(p) if p >= 90 => (format!(" {p}%"), colors.error),
-        Some(p) if p >= 80 => (format!(" {p}%"), colors.warning),
-        Some(p) => (format!(" {p}%"), colors.text_muted),
-        None => (String::new(), colors.text_muted),
+        Some(p) if p >= 90 => (format!(" {p}%"), colors.error.to_ratatui()),
+        Some(p) if p >= 80 => (format!(" {p}%"), colors.warning.to_ratatui()),
+        Some(p) => (format!(" {p}%"), colors.text_muted.to_ratatui()),
+        None => (String::new(), colors.text_muted.to_ratatui()),
     };
     // Token counter: show cumulative output tokens in compact form.
     let right_tokens = if sidebar_open || session_tokens == (0, 0) {
@@ -635,18 +636,18 @@ pub(crate) fn render_frame(
         let mut items = Vec::new();
         for step in &plan.steps {
             let (prefix, color) = if step.is_done {
-                ("[✓] ", colors.text_muted)
+                ("[✓] ", colors.text_muted.to_ratatui())
             } else {
-                ("[ ] ", colors.success)
+                ("[ ] ", colors.success.to_ratatui())
             };
             items.push(ListItem::new(Line::from(vec![
                 Span::styled(prefix, Style::default().fg(color)),
                 Span::styled(
                     format!("{}. {}", step.id, step.description),
                     Style::default().fg(if step.is_done {
-                        colors.text_muted
+                        colors.text_muted.to_ratatui()
                     } else {
-                        colors.text_primary
+                        colors.text_primary.to_ratatui()
                     }),
                 ),
             ])));

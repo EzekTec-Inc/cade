@@ -1,3 +1,4 @@
+use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crate::app::*;
 use crate::colors::ThemeColors as TC;
 use ratatui::style::{Modifier, Style};
@@ -30,7 +31,7 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
         Span::styled(
             format!(" @ {}", pk.query),
             Style::default()
-                .fg(colors.thinking_minimal)
+                .fg(colors.thinking_minimal.to_ratatui())
                 .add_modifier(Modifier::BOLD),
         ),
         Span::styled(no_match, colors.text_muted()),
@@ -49,7 +50,7 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
     }
 
     frame.render_widget(
-        Paragraph::new(lines).style(Style::default().bg(colors.bg_surface1)),
+        Paragraph::new(lines).style(Style::default().bg(colors.bg_surface1.to_ratatui())),
         area,
     );
 }
@@ -64,7 +65,7 @@ pub(crate) fn render_picker(frame: &mut Frame, pk: &PickerState, area: Rect, col
 /// Build the 5-cell swatch spans for a `ThemeColors`.
 /// Returns a `Vec<Span>` of coloured `█` characters.
 fn theme_swatches(tc: &TC) -> Vec<Span<'static>> {
-    [tc.primary, tc.success, tc.error, tc.warning, tc.bg_surface2]
+    [tc.primary.to_ratatui(), tc.success.to_ratatui(), tc.error.to_ratatui(), tc.warning.to_ratatui(), tc.bg_surface2.to_ratatui()]
         .iter()
         .map(|&fg| Span::styled("█", Style::default().fg(fg)))
         .collect()
@@ -92,7 +93,7 @@ fn theme_row<'a>(
 ) -> Row<'a> {
     let cursor_span = Span::styled(
         if is_sel { " ❯ " } else { "   " },
-        Style::default().fg(if is_sel { colors.primary } else { colors.text_dim }),
+        Style::default().fg(if is_sel { colors.primary.to_ratatui() } else { colors.text_dim.to_ratatui() }),
     );
 
     // Swatch cell
@@ -104,7 +105,7 @@ fn theme_row<'a>(
     // Name cell
     let name_style = if is_sel {
         Style::default()
-            .fg(colors.text_primary)
+            .fg(colors.text_primary.to_ratatui())
             .add_modifier(Modifier::BOLD)
     } else {
         colors.text_primary()
@@ -116,7 +117,7 @@ fn theme_row<'a>(
     let desc_cell = Cell::from(Span::styled(desc, colors.text_muted()));
 
     let row_style = if is_sel {
-        Style::default().bg(colors.bg_surface1)
+        Style::default().bg(colors.bg_surface1.to_ratatui())
     } else {
         Style::default()
     };
@@ -163,11 +164,11 @@ pub(crate) fn render_theme_picker(
         .title(Span::styled(
             title,
             Style::default()
-                .fg(colors.primary)
+                .fg(colors.primary.to_ratatui())
                 .add_modifier(Modifier::BOLD),
         ))
         .border_style(colors.border_base())
-        .style(Style::default().bg(colors.bg_surface0));
+        .style(Style::default().bg(colors.bg_surface0.to_ratatui()));
 
     let inner_table_area = outer_block.inner(table_area);
     frame.render_widget(outer_block, table_area);
@@ -222,13 +223,13 @@ pub(crate) fn render_theme_picker(
                 Cell::from(Span::styled(
                     "  Built-in",
                     Style::default()
-                        .fg(colors.accent_dim)
+                        .fg(colors.accent_dim.to_ratatui())
                         .add_modifier(Modifier::BOLD | Modifier::DIM),
                 )),
                 Cell::from(""),
                 Cell::from(""),
             ])
-            .style(Style::default().bg(colors.bg_surface0)),
+            .style(Style::default().bg(colors.bg_surface0.to_ratatui())),
         );
         all_rows.extend(builtin_rows.into_iter().map(|(_, r)| r));
     }
@@ -238,13 +239,13 @@ pub(crate) fn render_theme_picker(
                 Cell::from(Span::styled(
                     "  Custom",
                     Style::default()
-                        .fg(colors.accent_dim)
+                        .fg(colors.accent_dim.to_ratatui())
                         .add_modifier(Modifier::BOLD | Modifier::DIM),
                 )),
                 Cell::from(""),
                 Cell::from(""),
             ])
-            .style(Style::default().bg(colors.bg_surface0)),
+            .style(Style::default().bg(colors.bg_surface0.to_ratatui())),
         );
         all_rows.extend(custom_rows.into_iter().map(|(_, r)| r));
     }
@@ -259,7 +260,7 @@ pub(crate) fn render_theme_picker(
         ],
     )
     .column_spacing(1)
-    .style(Style::default().bg(colors.bg_surface0));
+    .style(Style::default().bg(colors.bg_surface0.to_ratatui()));
 
     let mut ts = ratatui::widgets::TableState::default()
         .with_selected(flat_cursor);
@@ -271,10 +272,10 @@ pub(crate) fn render_theme_picker(
         .border_type(colors.border_style.to_ratatui())
         .title(Span::styled(
             " Filter — type to search  ↑↓ navigate  Enter confirm  Esc cancel ",
-            Style::default().fg(colors.text_muted).add_modifier(Modifier::DIM),
+            Style::default().fg(colors.text_muted.to_ratatui()).add_modifier(Modifier::DIM),
         ))
         .border_style(colors.border_base())
-        .style(Style::default().bg(colors.bg_surface1));
+        .style(Style::default().bg(colors.bg_surface1.to_ratatui()));
     let filter_text = Paragraph::new(format!("> {}█", tp.query))
         .block(filter_block)
         .style(colors.text_primary());
@@ -313,21 +314,21 @@ mod tests {
     #[test]
     fn test_builtin_colors_dark() {
         let tc = builtin_colors("dark");
-        assert_ne!(tc.primary, ratatui::style::Color::Reset);
+        assert_ne!(tc.primary.to_ratatui(), ratatui::style::Color::Reset);
     }
 
     #[test]
     fn test_builtin_colors_unknown_falls_back_to_dark() {
         let tc = builtin_colors("totally-unknown-theme");
         let dark = TC::dark();
-        assert_eq!(tc.primary, dark.primary);
+        assert_eq!(tc.primary.to_ratatui(), dark.primary);
     }
 
     #[test]
     fn test_builtin_colors_all_named() {
         for name in ["dark", "light", "catppuccin-mocha", "catppuccin-latte", "tokyo-night"] {
             let tc = builtin_colors(name);
-            assert_ne!(tc.primary, ratatui::style::Color::Reset, "theme {name} primary must not be Reset");
+            assert_ne!(tc.primary.to_ratatui(), ratatui::style::Color::Reset, "theme {name} primary must not be Reset");
         }
     }
 }
