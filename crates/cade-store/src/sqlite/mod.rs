@@ -257,6 +257,18 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
         );
         CREATE INDEX IF NOT EXISTS idx_reflection_log_agent ON reflection_log(agent_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS event_log (
+            id              TEXT PRIMARY KEY,
+            agent_id        TEXT NOT NULL,
+            conversation_id TEXT,
+            event_type      TEXT NOT NULL,
+            content         TEXT NOT NULL,
+            created_at      INTEGER NOT NULL,
+            FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+        );
+        CREATE INDEX IF NOT EXISTS idx_event_log_agent ON event_log(agent_id, created_at DESC);
+        CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(event_type);
     "#)?;
 
     // FTS5 Tables
@@ -282,6 +294,14 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             agent_id UNINDEXED,
             content,
             tags,
+            created_at UNINDEXED
+        );
+
+        CREATE VIRTUAL TABLE IF NOT EXISTS event_log_fts USING fts5(
+            id UNINDEXED,
+            agent_id UNINDEXED,
+            event_type UNINDEXED,
+            content,
             created_at UNINDEXED
         );
     "#);
@@ -400,6 +420,27 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 2", [])?;
     }
 
+    if current_version < 3 {
+        let _ = conn.execute_batch(r#"
+            CREATE TABLE IF NOT EXISTS event_log (
+                id              TEXT PRIMARY KEY,
+                agent_id        TEXT NOT NULL,
+                conversation_id TEXT,
+                event_type      TEXT NOT NULL,
+                content         TEXT NOT NULL,
+                created_at      INTEGER NOT NULL,
+                FOREIGN KEY (agent_id) REFERENCES agents(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_event_log_agent ON event_log(agent_id, created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(event_type);
+            
+            CREATE VIRTUAL TABLE IF NOT EXISTS event_log_fts USING fts5(
+                id UNINDEXED, agent_id UNINDEXED, event_type UNINDEXED, content, created_at UNINDEXED
+            );
+        "#);
+        conn.execute("PRAGMA user_version = 3", [])?;
+    }
+
     Ok(())
 }
 
@@ -436,6 +477,7 @@ pub mod messages;
 pub mod providers;
 pub mod runs;
 pub mod tools;
+pub mod event_log;
 
 pub use agents::*;
 pub use conversations::*;

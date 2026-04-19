@@ -117,6 +117,7 @@ impl Toolset {
                 // recover archived context even on long coding sessions
                 "search_memory",
                 "conversation_search",
+                "query_event_log",
                 "archival_memory_insert",
                 "archival_memory_search",
                 // skills / subagents
@@ -133,6 +134,7 @@ impl Toolset {
                 // recover archived context even on long coding sessions
                 "search_memory",
                 "conversation_search",
+                "query_event_log",
                 "archival_memory_insert",
                 "archival_memory_search",
                 // skills / subagents

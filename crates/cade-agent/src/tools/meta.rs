@@ -37,6 +37,7 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_archival_memory_insert(),
         schema_archival_memory_search(),
         schema_conversation_search(),
+        schema_query_event_log(),
         schema_search_memory(),
         schema_load_skill(),
         schema_install_skill(),
@@ -169,6 +170,21 @@ fn schema_conversation_search() -> Value {
                 "query": { "type": "string", "description": "Keyword or phrase to search for in past messages" }
             },
             "required": ["query"]
+        }
+    })
+}
+
+fn schema_query_event_log() -> Value {
+    json!({
+        "name": "query_event_log",
+        "description": "Query the exact, uncompressed history of your file edits, commands, and subagent executions. Retrieves exact historical data with zero compression loss.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "keyword": { "type": "string", "description": "Keyword to search for in past events" },
+                "limit": { "type": "integer", "description": "Max results to return (default 10)" }
+            },
+            "required": ["keyword"]
         }
     })
 }

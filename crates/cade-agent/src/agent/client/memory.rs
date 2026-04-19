@@ -360,4 +360,51 @@ impl HttpTransport {
         let body: Value = resp.json().await?;
         Ok(body["messages"].as_array().cloned().unwrap_or_default())
     }
+
+    /// Query the immutable event log for an agent.
+    pub async fn query_event_log(&self, agent_id: &str, keyword: &str, limit: Option<usize>) -> Result<Vec<Value>> {
+        let mut query_params = vec![("q", keyword.to_string())];
+        if let Some(l) = limit {
+            query_params.push(("limit", l.to_string()));
+        }
+        let resp = self
+            .client
+            .get(self.url(&format!("/agents/{agent_id}/events")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .query(&query_params)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "query_event_log failed {}",
+                resp.status()
+            )));
+        }
+        let body: Value = resp.json().await?;
+        Ok(body["events"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// Insert an event into the immutable event log.
+    pub async fn insert_event_log(&self, agent_id: &str, conversation_id: Option<&str>, event_type: &str, content: &str) -> Result<String> {
+        let req_body = json!({
+            "conversation_id": conversation_id,
+            "event_type": event_type,
+            "content": content
+        });
+        let resp = self
+            .client
+            .post(self.url(&format!("/agents/{agent_id}/events")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&req_body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "insert_event_log failed {}",
+                resp.status()
+            )));
+        }
+        let body: Value = resp.json().await?;
+        Ok(body["id"].as_str().unwrap_or("").to_string())
+    }
 }

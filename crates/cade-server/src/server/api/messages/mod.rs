@@ -38,6 +38,7 @@ pub(crate) const RECENT_WINDOW: usize = 20;
 pub(crate) const ALWAYS_INCLUDE_TOOL_NAMES: &[&str] = &[
     "search_memory",
     "conversation_search",
+    "query_event_log",
     "archival_memory_insert",
     "archival_memory_search",
     "update_memory",
@@ -91,7 +92,7 @@ pub(crate) fn tool_output_limit(tool_name: &str) -> usize {
         | "desktop-commander__get_more_search_results" => 3_072,
 
         // Memory retrieval — excerpts only
-        "archival_memory_search" | "conversation_search" | "search_memory" => 2_048,
+        "archival_memory_search" | "conversation_search" | "search_memory" | "query_event_log" => 2_048,
 
         // Glob / list — compact
         "glob" | "GlobGemini" | "developer__list_directory"

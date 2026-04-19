@@ -96,6 +96,10 @@ pub fn router(state: AppState) -> Router {
                 .delete(agents::delete_agent)
                 .patch(agents::patch_agent),
         )
+        .route(
+            "/v1/agents/:id/events",
+            post(agents::insert_event_handler).get(agents::query_events_handler),
+        )
         .route("/v1/agents/:id/metrics", get(agents::get_agent_metrics))
         // Agent tools
         .route(

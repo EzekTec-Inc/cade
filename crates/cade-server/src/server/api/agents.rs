@@ -515,6 +515,67 @@ pub async fn latest_assistant_message(
     }
 }
 
+#[derive(serde::Deserialize)]
+pub struct InsertEventRequest {
+    pub conversation_id: Option<String>,
+    pub event_type: String,
+    pub content: String,
+}
+
+/// POST /v1/agents/:id/events — insert a new event into the event log
+pub async fn insert_event_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(req): Json<InsertEventRequest>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let id = sqlite::event_log::insert_event(
+        &state.db,
+        &agent_id,
+        req.conversation_id.as_deref(),
+        &req.event_type,
+        &req.content,
+    )
+    .map_err(|e| server_err(e.to_string()))?;
+    Ok(Json(json!({ "id": id })))
+}
+
+/// GET /v1/agents/:id/events?q=<query>&limit=<limit> — search or list event log history
+pub async fn query_events_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
+    let query = params.get("q").map(String::as_str).unwrap_or("");
+    let limit = params
+        .get("limit")
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(10);
+
+    let rows = if query.is_empty() {
+        sqlite::event_log::list_recent_events(&state.db, &agent_id, limit)
+            .map_err(|e| server_err(e.to_string()))?
+    } else {
+        sqlite::event_log::query_event_log(&state.db, &agent_id, query, limit)
+            .map_err(|e| server_err(e.to_string()))?
+    };
+
+    let events: Vec<Value> = rows
+        .into_iter()
+        .map(|r| {
+            json!({
+                "id":              r.id,
+                "agent_id":        r.agent_id,
+                "conversation_id": r.conversation_id,
+                "event_type":      r.event_type,
+                "content":         r.content,
+                "created_at":      r.created_at,
+            })
+        })
+        .collect();
+        
+    Ok(Json(json!({ "events": events, "query": query })))
+}
+
 // -- Conversation endpoints
 
 use cade_store::sqlite::ConversationRow;

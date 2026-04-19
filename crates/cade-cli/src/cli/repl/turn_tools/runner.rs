@@ -482,6 +482,14 @@ impl Repl {
         // streams back the assistant response with full context of all results.
         let mut follow = Vec::new();
         for result in &results {
+            // Event Logging (Immutable Audit)
+            let _ = self.client.insert_event_log(
+                &self.agent_id(),
+                self.conversation_id().as_deref(),
+                &format!("tool_execution:{}", result.tool_name),
+                &result.output,
+            ).await;
+
             follow = self
                 .stream_turn(
                     stdout,

@@ -43,6 +43,7 @@ pub const UPDATE_MEMORY: &str = "update_memory";
 pub const MEMORY_APPLY_PATCH: &str = "memory_apply_patch";
 pub const SEARCH_MEMORY: &str = "search_memory";
 pub const CONVERSATION_SEARCH: &str = "conversation_search";
+pub const QUERY_EVENT_LOG: &str = "query_event_log";
 pub const ARCHIVAL_MEMORY_INSERT: &str = "archival_memory_insert";
 pub const ARCHIVAL_MEMORY_SEARCH: &str = "archival_memory_search";
 
