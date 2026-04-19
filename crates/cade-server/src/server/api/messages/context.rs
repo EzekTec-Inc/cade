@@ -240,11 +240,15 @@ pub(crate) async fn build_context(
                     if len > margin && cut_remaining > 0 {
                         let cut_here = cut_remaining.min(len.saturating_sub(margin));
                         let keep = len - cut_here;
-                        let mut new_content: String = m.content.chars().take(keep).collect();
+                        let keep_head = (keep as f64 * 0.2) as usize;
+                        let keep_tail = keep.saturating_sub(keep_head);
+                        let mut new_content: String = m.content.chars().take(keep_head).collect();
                         new_content.push_str(&format!(
-                            "\n... [{} chars truncated to fit context window]",
+                            "\n... [{} chars truncated to fit context window] ...\n",
                             cut_here
                         ));
+                        let tail: String = m.content.chars().skip(keep_head + cut_here).take(keep_tail).collect();
+                        new_content.push_str(&tail);
                         m.content = new_content;
                         cut_remaining -= cut_here;
                     }
@@ -821,4 +825,56 @@ pub(crate) async fn compute_context_stats(
         "tool_schema_reserve_chars": tool_schema_reserve,
         "needs_consolidation":     needs_consolidation,
     }))
+}
+
+#[cfg(test)]
+mod head_tail_tests {
+    use super::*;
+
+    #[test]
+    fn test_head_tail_truncation_logic() {
+        // We replicate the exact logic from context.rs inside a unit test to verify it works
+        let original_text = "0123456789".repeat(100); // 1000 chars
+        let mut turn = vec![LlmMessage {
+            role: "tool".to_string(),
+            content: original_text.clone(),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+        }];
+        
+        let margin = 200;
+        let cut_remaining_initial = 600;
+        let mut cut_remaining = cut_remaining_initial;
+        
+        for m in turn.iter_mut().filter(|m| m.role == "tool") {
+            let len = m.content.chars().count();
+            if len > margin && cut_remaining > 0 {
+                let cut_here = cut_remaining.min(len.saturating_sub(margin));
+                let keep = len - cut_here;
+                let keep_head = (keep as f64 * 0.2) as usize;
+                let keep_tail = keep.saturating_sub(keep_head);
+                
+                let mut new_content: String = m.content.chars().take(keep_head).collect();
+                new_content.push_str(&format!(
+                    "\n... [{} chars truncated to fit context window] ...\n",
+                    cut_here
+                ));
+                let tail: String = m.content.chars().skip(keep_head + cut_here).take(keep_tail).collect();
+                new_content.push_str(&tail);
+                m.content = new_content;
+                cut_remaining -= cut_here;
+            }
+        }
+        
+        let content = &turn[0].content;
+        assert!(content.starts_with("0123456789"));
+        assert!(content.ends_with("0123456789"));
+        assert!(content.contains("600 chars truncated to fit context window"));
+        
+        let head_part: String = original_text.chars().take(80).collect();
+        let tail_part: String = original_text.chars().skip(80 + 600).take(320).collect();
+        assert!(content.starts_with(&head_part));
+        assert!(content.ends_with(&tail_part));
+    }
 }

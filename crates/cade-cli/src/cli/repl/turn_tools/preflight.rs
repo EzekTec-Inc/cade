@@ -17,7 +17,7 @@ impl Repl {
         args: &serde_json::Value,
     ) -> Result<ToolPreflightResult> {
         let canonical_name = cade_agent::tools::manager::canonical_name(tool_name);
-        let is_mcp_write = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
+        let is_mcp_write = cade_agent::tools::is_mcp_write_tool(tool_name, &self.mcp).await;
 
         // Unified permission resolution
         use cade_core::permissions::Verdict;

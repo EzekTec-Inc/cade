@@ -362,19 +362,7 @@ impl Repl {
             .await?;
         }
 
-        // C3: Once per session, after enough write activity, check whether the
-        // agent has been updating its working_set block.  If it's still empty
-        // inject a single ephemeral reminder so the model fills it in — this
-        // ensures the block survives context rotation during long coding sessions.
-        const WORKING_SET_WRITE_THRESHOLD: u32 = 8;
-        if self.write_tool_calls.load(Ordering::SeqCst) >= WORKING_SET_WRITE_THRESHOLD
-            && !self.working_set_notified.load(Ordering::SeqCst)
-        {
-            self.working_set_notified.store(true, Ordering::SeqCst);
-            if let Err(e) = self.inject_working_set_reminder(stdout).await {
-                tracing::debug!("working_set reminder failed: {e}");
-            }
-        }
+        // (The ephemeral working_set reminder was removed in favor of a hard block in dispatch_tool_calls)
 
         // Blank line after every agent turn for visual block separation.
         let _ = self

@@ -40,9 +40,23 @@ impl Repl {
             .iter()
             .filter(|(_, name, _)| WRITE_TOOL_NAMES.contains(&name.as_str()))
             .count() as u32;
+        let mut block_all_writes = false;
         if wc > 0 {
-            self.write_tool_calls
-                .fetch_add(wc, std::sync::atomic::Ordering::SeqCst);
+            let total_writes = self.write_tool_calls.fetch_add(wc, std::sync::atomic::Ordering::SeqCst);
+            if total_writes + wc >= 8 {
+                let is_empty = self
+                    .client
+                    .get_memory(&self.agent_id())
+                    .await
+                    .unwrap_or_default()
+                    .into_iter()
+                    .find(|b| b.label == "working_set")
+                    .map(|b| b.value.trim().is_empty())
+                    .unwrap_or(true);
+                if is_empty {
+                    block_all_writes = true;
+                }
+            }
         }
 
         // Update turn statistics
@@ -219,6 +233,28 @@ impl Repl {
         // Tools that pass get queued for execution.
         let mut preflight: Vec<ToolPreflightResult> = Vec::with_capacity(tool_calls.len());
         for (call_id, tool_name, args) in &tool_calls {
+            let base_name = if let Some(pos) = tool_name.rfind("__") {
+                &tool_name[pos + 2..]
+            } else {
+                tool_name
+            };
+            let canonical_name = cade_agent::tools::manager::canonical_name(base_name);
+            let is_mcp_write = cade_agent::tools::is_mcp_write_tool(tool_name, &self.mcp).await;
+            let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp_write || canonical_name == "bash";
+
+            if block_all_writes && is_write && tool_name != &"update_memory" && tool_name != &"update_memory_typed" {
+                let msg = "[BLOCKED: You must call update_memory with label='working_set' to record your current task, modified files, and next steps before executing further write operations.]".to_string();
+                let _ = self
+                    .app
+                    .lock()
+                    .push(RenderLine::ToolResult {
+                        is_error: true,
+                        content: msg.clone(),
+                    });
+                preflight.push(super::super::turn_loop::blocked_result(call_id, tool_name, msg));
+                continue;
+            }
+
             // Native tool intercepts that require &self must run sequentially
             // in Phase 1 because they access Repl state (client, skills, etc.).
             let native_result = self.try_native_intercept(call_id, tool_name, args).await;
@@ -272,7 +308,7 @@ impl Repl {
             };
             let canonical_name = cade_agent::tools::manager::canonical_name(base_name);
 
-            let is_mcp_write = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
+            let is_mcp_write = cade_agent::tools::is_mcp_write_tool(tool_name, &self.mcp).await;
             let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp_write || canonical_name == "bash";
 
             if is_write {
@@ -816,7 +852,7 @@ impl Repl {
                 let mut new_ids = Vec::new();
                 for (id, name) in attached {
                     let canonical_name = cade_agent::tools::manager::canonical_name(&name);
-                    let is_mcp = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
+                    let is_mcp = cade_agent::tools::is_mcp_write_tool(&name, &self.mcp).await;
                     let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
                     if !is_write && canonical_name != "exitplanmode" {
                         new_ids.push(id);
@@ -843,7 +879,7 @@ impl Repl {
                     // We can just add them back if their capability is enabled.
                     
                     let canonical_name = cade_agent::tools::manager::canonical_name(&t.name);
-                    let is_mcp = cade_agent::tools::is_mcp_write_tool(canonical_name, &self.mcp).await;
+                    let is_mcp = cade_agent::tools::is_mcp_write_tool(&t.name, &self.mcp).await;
                     let is_write_tool = cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
                     if !is_write_tool {
                         new_ids.push(t.id);
