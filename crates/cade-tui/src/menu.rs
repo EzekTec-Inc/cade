@@ -2,7 +2,7 @@
 ///
 /// Renders a navigable list of all slash commands grouped by category.
 /// Returns the selected command string (e.g. "/agents") or None if cancelled.
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::{ThemeColorsExt, ColorDefExt};
 use crate::{Result, colors::ThemeColors, overlay};
 use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use ratatui::{

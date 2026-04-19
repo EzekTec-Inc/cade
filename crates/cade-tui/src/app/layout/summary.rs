@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::{ThemeColorsExt, BorderStyleExt};
 use ratatui::{
     Frame,
     layout::Rect,

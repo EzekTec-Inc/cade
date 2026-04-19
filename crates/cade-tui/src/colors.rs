@@ -156,7 +156,7 @@ impl ThemeColorsExt for ThemeColors {
 
 #[cfg(feature = "syntax-highlighting")]
 pub fn generate_syntect_theme(colors: &ThemeColors) -> syntect::highlighting::Theme {
-    use syntect::highlighting::{Color, ThemeItem, ThemeSettings, FontStyle, ScopeSelectors};
+    use syntect::highlighting::{Color, ThemeItem, ThemeSettings, ScopeSelectors};
     use std::str::FromStr;
 
     let to_color = |c: &ColorDef| -> Color {

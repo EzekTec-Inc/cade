@@ -310,6 +310,48 @@ pub fn extract_message_text(msg: &Value) -> String {
     "<no text>".to_string()
 }
 
+// ── query_event_log ─────────────────────────────────────────────────────────────
+
+pub struct QueryEventLogTool;
+impl QueryEventLogTool {
+    pub async fn run(
+        client: &crate::agent::client::HttpTransport,
+        agent_id: &str,
+        args: &serde_json::Value,
+    ) -> crate::Result<String> {
+        let keyword = args["keyword"].as_str().unwrap_or_default();
+        let limit = args["limit"].as_u64().map(|v| v as usize).unwrap_or(10);
+        
+        if keyword.is_empty() {
+            return Ok("Error: keyword cannot be empty".to_string());
+        }
+
+        let results = client.query_event_log(agent_id, keyword, Some(limit)).await?;
+        if results.is_empty() {
+            return Ok(format!("No events matched '{keyword}'."));
+        }
+
+        let mut out = format!("Found {} result(s) for '{keyword}' in event history:\n\n", results.len());
+
+        for event in results {
+            let event_type = event["event_type"].as_str().unwrap_or("unknown");
+            let content = event["content"].as_str().unwrap_or("");
+            let created_at = event["created_at"].as_u64().unwrap_or(0);
+            
+            // Format timestamp as naive ISO8601-like string for debugging context
+            let dt = std::time::UNIX_EPOCH + std::time::Duration::from_secs(created_at);
+            let time_str = match dt.elapsed() {
+                Ok(dur) => format!("{}s ago", dur.as_secs()),
+                Err(_) => "future".to_string()
+            };
+
+            out.push_str(&format!("[{time_str}] [{event_type}]\n{content}\n---\n"));
+        }
+
+        Ok(out.trim_end().to_string())
+    }
+}
+
 // ── tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -461,47 +503,5 @@ mod tests {
                 .any(|v| v.as_str() == Some("query")),
             "query must be required"
         );
-    }
-}
-
-// ── query_event_log ─────────────────────────────────────────────────────────────
-
-pub struct QueryEventLogTool;
-impl QueryEventLogTool {
-    pub async fn run(
-        client: &crate::agent::client::HttpTransport,
-        agent_id: &str,
-        args: &serde_json::Value,
-    ) -> crate::Result<String> {
-        let keyword = args["keyword"].as_str().unwrap_or_default();
-        let limit = args["limit"].as_u64().map(|v| v as usize).unwrap_or(10);
-        
-        if keyword.is_empty() {
-            return Ok("Error: keyword cannot be empty".to_string());
-        }
-
-        let results = client.query_event_log(agent_id, keyword, Some(limit)).await?;
-        if results.is_empty() {
-            return Ok(format!("No events matched '{keyword}'."));
-        }
-
-        let mut out = format!("Found {} result(s) for '{keyword}' in event history:\n\n", results.len());
-
-        for event in results {
-            let event_type = event["event_type"].as_str().unwrap_or("unknown");
-            let content = event["content"].as_str().unwrap_or("");
-            let created_at = event["created_at"].as_u64().unwrap_or(0);
-            
-            // Format timestamp as naive ISO8601-like string for debugging context
-            let dt = std::time::UNIX_EPOCH + std::time::Duration::from_secs(created_at);
-            let time_str = match dt.elapsed() {
-                Ok(dur) => format!("{}s ago", dur.as_secs()),
-                Err(_) => "future".to_string()
-            };
-
-            out.push_str(&format!("[{time_str}] [{event_type}]\n{content}\n---\n"));
-        }
-
-        Ok(out.trim_end().to_string())
     }
 }

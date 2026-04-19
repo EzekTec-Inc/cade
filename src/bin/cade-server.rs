@@ -197,11 +197,10 @@ async fn main() -> Result<()> {
         format!("http://127.0.0.1:{}", config.addr.port()).parse::<HeaderValue>().expect("valid header"),
     ];
 
-    if let Some(origin) = &config.allowed_origin {
-        if let Ok(parsed) = origin.parse::<HeaderValue>() {
+    if let Some(origin) = &config.allowed_origin
+        && let Ok(parsed) = origin.parse::<HeaderValue>() {
             allowed_origins.push(parsed);
         }
-    }
 
     let app = router(state)
         .layer(axum::middleware::map_response(add_version_header))

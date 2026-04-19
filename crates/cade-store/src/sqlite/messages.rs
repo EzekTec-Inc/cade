@@ -697,7 +697,7 @@ mod tests {
     /// Helper: insert a message with a specific created_at timestamp.
     fn insert_message_at(db: &Db, row: &MessageRow, ts: i64) -> Result<()> {
         let conn = db.lock().map_err(|e| {
-            Box::new(std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))
+            Box::new(std::io::Error::other(e.to_string()))
                 as Box<dyn std::error::Error>
         })?;
         conn.execute(

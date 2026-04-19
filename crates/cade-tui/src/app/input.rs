@@ -1,6 +1,5 @@
 //! User input loop — read_input and handle_key_input.
 
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
     MouseEventKind,
@@ -154,12 +153,11 @@ impl TuiApp {
                     }
                 }
                 (KeyCode::Enter, _) => {
-                    if let Some(cp) = self.command_palette.take() {
-                        if let Some(cmd) = cp.selected_command() {
+                    if let Some(cp) = self.command_palette.take()
+                        && let Some(cmd) = cp.selected_command() {
                             let cmd = cmd.to_string();
                             return Ok(Some(Some(cmd)));
                         }
-                    }
                 }
                 (KeyCode::Backspace, _) => {
                     if let Some(cp) = &mut self.command_palette {

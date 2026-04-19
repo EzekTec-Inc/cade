@@ -4,7 +4,7 @@
 //! key shortcuts — visible on ALL terminal widths (complements the sidebar
 //! which only appears on wide terminals ≥ 110 cols).
 
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::{ColorDefExt, ThemeColorsExt};
 use crate::colors::ThemeColors;
 use ratatui::{
     Frame,

@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::ColorDefExt;
 use crate::app::*;
 
 pub(crate) fn input_mode_badge(mode: InputMode, colors: &ThemeColors) -> (&'static str, RC) {

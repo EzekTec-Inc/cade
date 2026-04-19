@@ -69,13 +69,11 @@ pub(crate) fn supports_adaptive_thinking(model: &str) -> bool {
     let bare = bare_model(model);
     for family in ["sonnet", "opus", "haiku"] {
         let prefix = format!("claude-{family}-");
-        if let Some(rest) = bare.strip_prefix(&prefix) {
-            if let Some(first) = rest.split('-').next() {
-                if let Ok(n) = first.parse::<u32>() {
+        if let Some(rest) = bare.strip_prefix(&prefix)
+            && let Some(first) = rest.split('-').next()
+                && let Ok(n) = first.parse::<u32>() {
                     return n >= 4;
                 }
-            }
-        }
     }
     false
 }

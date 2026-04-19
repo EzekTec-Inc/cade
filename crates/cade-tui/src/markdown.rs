@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::{ThemeColorsExt, ColorDefExt};
 use crate::colors::ThemeColors;
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 #[cfg(feature = "syntax-highlighting")]
 use syntect::easy::HighlightLines;
 #[cfg(feature = "syntax-highlighting")]
-use syntect::highlighting::{Style as SyntectStyle, ThemeSet};
+use syntect::highlighting::Style as SyntectStyle;
 #[cfg(feature = "syntax-highlighting")]
 use syntect::parsing::SyntaxSet;
 #[cfg(feature = "syntax-highlighting")]
@@ -19,8 +19,6 @@ use syntect::util::LinesWithEndings;
 #[cfg(feature = "syntax-highlighting")]
 pub(crate) static SYNTAX_SET: LazyLock<SyntaxSet> =
     LazyLock::new(SyntaxSet::load_defaults_newlines);
-#[cfg(feature = "syntax-highlighting")]
-pub(crate) static THEME_SET: LazyLock<ThemeSet> = LazyLock::new(ThemeSet::load_defaults);
 
 #[cfg(feature = "syntax-highlighting")]
 pub(crate) fn syntect_to_tui_style(style: SyntectStyle) -> Style {
@@ -78,6 +76,8 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
     let mut in_blockquote = false;
     let mut in_code_block = false;
     let mut current_lang = String::new();
+    #[cfg(feature = "syntax-highlighting")]
+    let dyn_theme = crate::colors::generate_syntect_theme(colors);
     #[cfg(feature = "syntax-highlighting")]
     let mut highlighter: Option<HighlightLines<'_>> = None;
     #[cfg(not(feature = "syntax-highlighting"))]
@@ -174,9 +174,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                             .find_syntax_by_token(&current_lang)
                             .unwrap_or_else(|| SYNTAX_SET.find_syntax_plain_text());
 
-                        let dyn_theme = crate::colors::generate_syntect_theme(colors);
-                        let theme = &dyn_theme;
-                        highlighter = Some(HighlightLines::new(syntax, theme));
+                        highlighter = Some(HighlightLines::new(syntax, &dyn_theme));
                     }
 
                     // Top border with optional language label

@@ -151,12 +151,11 @@ impl Repl {
                 let mut text = String::new();
                 if let Some(content_arr) = msg["content"].as_array() {
                     for part in content_arr {
-                        if part["type"].as_str() == Some("text") {
-                            if let Some(t) = part["text"].as_str() {
+                        if part["type"].as_str() == Some("text")
+                            && let Some(t) = part["text"].as_str() {
                                 text.push_str(t);
                                 text.push('\n');
                             }
-                        }
                     }
                 }
                 

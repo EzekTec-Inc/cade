@@ -2143,6 +2143,13 @@ pub fn filter_models<'a>(
         })
         .collect()
 }
+impl SessionState {
+    pub fn on_theme_update(&mut self, theme: crate::theme::ThemeColors) {
+        if let Self::Connected { theme_update, .. } = self {
+            *theme_update = Some(theme);
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -4431,13 +4438,6 @@ mod tests {
             assert_eq!(mcp_error.as_deref(), Some("connection refused"));
         } else {
             panic!("expected Connected");
-        }
-    }
-}
-impl SessionState {
-    pub fn on_theme_update(&mut self, theme: crate::theme::ThemeColors) {
-        if let Self::Connected { theme_update, .. } = self {
-            *theme_update = Some(theme);
         }
     }
 }

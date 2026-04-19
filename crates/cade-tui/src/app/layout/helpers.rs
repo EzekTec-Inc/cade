@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::ColorDefExt;
 use crate::app::*;
 /// Abbreviate a filesystem path for the footer: last 2 components, with ~/
 /// prefix when the path is under the user's home directory.

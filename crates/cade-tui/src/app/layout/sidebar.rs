@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::{ThemeColorsExt, ColorDefExt};
 use crate::app::*;
 use crate::app::layout::cursor::input_mode_badge;
 use crate::app::layout::helpers::mode_sep_color;

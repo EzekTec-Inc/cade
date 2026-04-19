@@ -209,8 +209,8 @@ impl Repl {
                 }
                 
                 // Verify Proof of Work
-                if !is_error {
-                    if let Some(cmd) = test_command_c {
+                if !is_error
+                    && let Some(cmd) = test_command_c {
                         match std::process::Command::new("bash")
                             .arg("-c")
                             .arg(&cmd)
@@ -233,7 +233,6 @@ impl Repl {
                             }
                         }
                     }
-                }
 
                 (last_output, is_error)
             }

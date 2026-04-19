@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::{ColorDefExt, BorderStyleExt};
 use crate::app::*;
 pub(crate) fn render_toast(
     frame: &mut Frame,

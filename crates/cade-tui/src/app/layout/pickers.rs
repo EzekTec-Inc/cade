@@ -321,7 +321,7 @@ mod tests {
     fn test_builtin_colors_unknown_falls_back_to_dark() {
         let tc = builtin_colors("totally-unknown-theme");
         let dark = TC::dark();
-        assert_eq!(tc.primary.to_ratatui(), dark.primary);
+        assert_eq!(tc.primary.to_ratatui(), dark.primary.to_ratatui());
     }
 
     #[test]

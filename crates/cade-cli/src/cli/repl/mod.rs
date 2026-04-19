@@ -221,9 +221,6 @@ pub struct Repl {
     /// Cumulative count of file-write / edit / bash tool calls this session.
     /// Used to trigger the one-time `working_set` reminder (C3).
     pub(crate) write_tool_calls: std::sync::Arc<std::sync::atomic::AtomicU32>,
-    /// Set to `true` once the working_set reminder has been injected so it
-    /// fires at most once per session.
-    pub(crate) working_set_notified: std::sync::Arc<std::sync::atomic::AtomicBool>,
     /// `true` if an auto-checkpoint has been taken for the current turn.
     pub(crate) turn_checkpoint_taken: bool,
 }
@@ -308,7 +305,6 @@ impl Repl {
             last_modal_close_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             pending_turn_images: Vec::new(),
             write_tool_calls: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
-            working_set_notified: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             turn_checkpoint_taken: false,
             capabilities,
         }

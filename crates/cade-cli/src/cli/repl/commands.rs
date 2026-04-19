@@ -25,7 +25,7 @@ impl Repl {
         &mut self,
         cmd: SlashCmd,
         input: &str,
-        mut stdout: &mut io::Stdout,
+        stdout: &mut io::Stdout,
         pending_input: &mut Option<String>,
     ) -> Result<bool> {
         match cmd {
@@ -62,7 +62,7 @@ impl Repl {
                         "[Skill invoked: /{skill_id}]\n\nFollow this skill:\n\n{body}"
                     );
                     self.tui_sys(format!("  Running skill: /{skill_id}"));
-                    self.agent_turn(&mut stdout, &prompt).await?;
+                    self.agent_turn(stdout, &prompt).await?;
                 } else {
                     self.tui_err(format!(
                         "  Skill '{skill_id}' not found. Try /skills reload"

@@ -605,7 +605,9 @@ fn assemble_system_prompt_memory(
         !pinned_parts.is_empty() || !short_parts.is_empty() || !long_parts.is_empty();
     let base = agent.system_prompt.clone().unwrap_or_default();
 
-    let system_core = if !has_any_memory {
+    
+
+    if !has_any_memory {
         base
     } else {
         let mut sections: Vec<String> = vec![base];
@@ -640,9 +642,7 @@ fn assemble_system_prompt_memory(
         let mut core = sections.join("\n\n");
         core.push_str(MEMORY_AWARENESS_FOOTER);
         core
-    };
-
-    system_core
+    }
 }
 
 
@@ -661,7 +661,7 @@ fn calculate_context_budget(
     //  char_budget    = input_budget × CHARS_PER_TOKEN           (e.g. 435k chars)
     //  tool_reserve   = n_tools × TOOL_SCHEMA_CHARS_ESTIMATE     (subtracted below)
     //  message_budget = char_budget - tool_reserve
-    let window_tokens = catalogue::context_window_for_model(&model.to_string());
+    let window_tokens = catalogue::context_window_for_model(model);
     let output_reserve_tokens = ((window_tokens as f64) * OUTPUT_RESERVE_FRACTION).round() as usize;
     let input_budget_tokens = (window_tokens as usize).saturating_sub(output_reserve_tokens);
     let context_char_budget = {
@@ -835,7 +835,7 @@ mod head_tail_tests {
     fn test_head_tail_truncation_logic() {
         // We replicate the exact logic from context.rs inside a unit test to verify it works
         let original_text = "0123456789".repeat(100); // 1000 chars
-        let mut turn = vec![LlmMessage {
+        let mut turn = [LlmMessage {
             role: "tool".to_string(),
             content: original_text.clone(),
             tool_call_id: None,

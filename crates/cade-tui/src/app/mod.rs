@@ -18,27 +18,6 @@ pub fn strip_orchestrator_prompts(text: &str) -> std::borrow::Cow<'_, str> {
     re.replace_all(text, "")
 }
 
-/// TuiApp — single-terminal, pure ratatui fullscreen rendering for CADE.
-/// Replaces the old hybrid (OutputRenderer DECSTBM + InputWidget Inline viewport +
-/// ThinkingBar raw crossterm).  A single `Terminal<CrosstermBackend<Stdout>>`
-/// (alternate screen, raw mode) is owned here.  Every piece of output — agent
-/// streaming, tool results, slash-command text, errors — is represented as a
-/// `RenderLine` pushed into `lines`.  `draw()` redraws the whole screen on every
-/// state change, eliminating all the CPR / DECSTBM / blank-row-tracking hacks.
-/// Layout (each frame):
-/// ```text
-/// ┌─────────────────────────────────────────┐
-/// │       Content area  (scrollable)        │  term_h - (4 + input_rows)
-/// ├─────────────────────────────────────────┤
-/// │  ⠋ assessing…  OR  ✻ Considered for…   │  1  (status row)
-/// ├─────────────────────────────────────────┤
-/// │  ──────────────────────────── (sep)     │  1
-/// │  > user input                           │  1..MAX_INPUT_ROWS
-/// │  ──────────────────────────── (sep)     │  1
-/// │  mode ✦          AgentName [model]      │  1  (footer)
-/// └─────────────────────────────────────────┘
-/// ```
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use std::io::Write;
 use std::sync::Arc;
 use parking_lot::Mutex;
@@ -552,11 +531,10 @@ impl TuiApp {
         self.draw_dirty = false;
         self.last_draw_at = Instant::now();
         // Auto-dismiss expired toasts
-        if let Some(t) = &self.toast {
-            if t.is_expired() {
+        if let Some(t) = &self.toast
+            && t.is_expired() {
                 self.toast = None;
             }
-        }
         self.tick_streaming_reveal();
         self.tick_smooth_scroll();
         self.draw_impl()

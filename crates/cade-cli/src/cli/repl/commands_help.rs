@@ -46,7 +46,7 @@ impl Repl {
                     *pending_input = Some(cmd);
                 }
             }
-            return Ok(false);
+            Ok(false)
     }
 
     pub(crate) async fn cmd_info(

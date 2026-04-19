@@ -242,7 +242,7 @@ impl Repl {
             let is_mcp_write = cade_agent::tools::is_mcp_write_tool(tool_name, &self.mcp).await;
             let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp_write || canonical_name == "bash";
 
-            if block_all_writes && is_write && tool_name != &"update_memory" && tool_name != &"update_memory_typed" {
+            if block_all_writes && is_write && tool_name != "update_memory" && tool_name != "update_memory_typed" {
                 let msg = "[BLOCKED: You must call update_memory with label='working_set' to record your current task, modified files, and next steps before executing further write operations.]".to_string();
                 let _ = self
                     .app
@@ -907,61 +907,6 @@ impl Repl {
                 let _ = self.client.attach_agent_tools(&agent_id, &new_ids).await;
             }
         }
-    }
-
-    /// C3: Inject a one-time ephemeral reminder prompting the agent to fill its
-    /// `working_set` memory block after significant file-write activity.
-    ///
-    /// Only fires when the block is actually empty so the model is not nagged
-    /// when it has already been diligently updating its own memory.
-    pub(crate) async fn inject_working_set_reminder(
-        &mut self,
-        stdout: &mut io::Stdout,
-    ) -> Result<()> {
-        let agent_id = self.agent_id();
-
-        // Fetch the current working_set value — one async call, performed once
-        // per session at most.
-        let is_empty = self
-            .client
-            .get_memory(&agent_id)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .find(|b| b.label == "working_set")
-            .map(|b| b.value.trim().is_empty())
-            .unwrap_or(true);
-
-        if !is_empty {
-            // Already populated — no reminder needed.
-            return Ok(());
-        }
-
-        let reminder = "[System: You have made several file changes this session. \
-            Your `working_set` memory block is currently empty. \
-            Please call update_memory now with label='working_set' and a value that records: \
-            (1) the current task / goal, \
-            (2) files you have modified, \
-            (3) your immediate next steps. \
-            Keep it under 200 words. This block persists when older context is dropped.]";
-
-        tracing::debug!(
-            "Injecting working_set reminder (write_tool_calls={})",
-            self.write_tool_calls
-                .load(std::sync::atomic::Ordering::SeqCst)
-        );
-
-        // Send as an ephemeral user message so it is not stored in the
-        // conversation history but the agent still sees it and can respond
-        // with an update_memory call.
-        let msgs = self
-            .stream_turn(stdout, reminder, false, "", "", "", true, None, None)
-            .await?;
-
-        // Dispatch any tool calls the model makes in response (usually update_memory).
-        // reprompt_done=true prevents re-entry loops.
-        let mut turn_stats = TurnStats::default();
-        Box::pin(self.dispatch_tool_calls(stdout, msgs, "", None, true, &mut turn_stats)).await
-    }
 
 }
+    }

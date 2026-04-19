@@ -26,8 +26,8 @@ pub fn load_or_create_token(path: &Path) -> std::io::Result<String> {
         return Ok(token);
     }
 
-    if let Some(parent) = path.parent() {
-        if !parent.as_os_str().is_empty() && !parent.exists() {
+    if let Some(parent) = path.parent()
+        && !parent.as_os_str().is_empty() && !parent.exists() {
             #[cfg(unix)]
             {
                 use std::os::unix::fs::DirBuilderExt;
@@ -41,7 +41,6 @@ pub fn load_or_create_token(path: &Path) -> std::io::Result<String> {
                 std::fs::create_dir_all(parent)?;
             }
         }
-    }
 
     let mut bytes = [0u8; 32];
     getrandom::getrandom(&mut bytes)

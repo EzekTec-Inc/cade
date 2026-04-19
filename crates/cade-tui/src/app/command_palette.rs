@@ -207,12 +207,11 @@ fn word_boundary_bonus(query: &str, label: &str) -> i32 {
         if qi >= query_chars.len() {
             break;
         }
-        if let Some(lc) = label.chars().nth(bi) {
-            if lc == query_chars[qi] {
+        if let Some(lc) = label.chars().nth(bi)
+            && lc == query_chars[qi] {
                 bonus += 5;
                 qi += 1;
             }
-        }
     }
     bonus
 }

@@ -1,4 +1,4 @@
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::{ThemeColorsExt, ColorDefExt};
 use crate::app::*;
 /// Calculate the number of rows needed for the inline question panel.
 /// Counts: 1 header + 1 blank + wrapped-question-rows + 1 blank

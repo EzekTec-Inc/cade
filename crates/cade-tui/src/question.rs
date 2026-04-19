@@ -28,7 +28,7 @@
 ///
 /// Enter to toggle · ↑↓ navigate · Enter on Submit to confirm · Esc to cancel
 /// ```
-use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
+use crate::colors::{ThemeColorsExt, ColorDefExt};
 use crate::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
