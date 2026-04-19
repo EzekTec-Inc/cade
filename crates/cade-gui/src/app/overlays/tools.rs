@@ -1,5 +1,6 @@
 //! Tools / MCP overlay and ask_user_question widget.
 
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 use super::super::AppAction;
@@ -8,6 +9,7 @@ pub fn render_tools_overlay(
     tools: &[crate::api::AgentTool],
     loading: bool,
     error: Option<&str>,
+    theme: &crate::theme::ThemeColors, 
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
@@ -29,8 +31,8 @@ pub fn render_tools_overlay(
         .fixed_size([w, h])
         .frame(
             egui::Frame::new()
-                .fill(crate::theme::BG_SURFACE1)
-                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_FOCUS))
+                .fill(theme.bg_surface1())
+                .stroke(egui::Stroke::new(1.0, theme.border_focus()))
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(12.0),
         )
@@ -41,7 +43,7 @@ pub fn render_tools_overlay(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("🔧  Tools / MCP")
-                        .color(crate::theme::PRIMARY)
+                        .color(theme.primary())
                         .strong()
                         .size(16.0),
                 );
@@ -54,7 +56,7 @@ pub fn render_tools_overlay(
                     }
                     ui.label(
                         egui::RichText::new("Esc to close")
-                            .color(crate::theme::TEXT_DIM)
+                            .color(theme.text_dim())
                             .small(),
                     );
                 });
@@ -66,14 +68,14 @@ pub fn render_tools_overlay(
 
             if let Some(err) = error {
                 egui::Frame::new()
-                    .fill(crate::theme::ERROR.gamma_multiply(0.15))
-                    .stroke(egui::Stroke::new(1.0, crate::theme::ERROR))
+                    .fill(theme.error().gamma_multiply(0.15))
+                    .stroke(egui::Stroke::new(1.0, theme.error()))
                     .corner_radius(egui::CornerRadius::same(4))
                     .inner_margin(6.0)
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(format!("⚠ {err}"))
-                                .color(crate::theme::ERROR)
+                                .color(theme.error())
                                 .small(),
                         );
                     });
@@ -85,7 +87,7 @@ pub fn render_tools_overlay(
                     egui::RichText::new(
                         "No tools attached — attach MCP servers via the CLI or settings.",
                     )
-                    .color(crate::theme::TEXT_MUTED)
+                    .color(theme.text_muted())
                     .italics(),
                 );
                 return;
@@ -95,7 +97,7 @@ pub fn render_tools_overlay(
             if !tools.is_empty() {
                 ui.label(
                     egui::RichText::new(format!("{} tool(s) registered", tools.len()))
-                        .color(crate::theme::TEXT_MUTED)
+                        .color(theme.text_muted())
                         .small(),
                 );
                 ui.add_space(4.0);
@@ -107,18 +109,18 @@ pub fn render_tools_overlay(
                 .show(ui, |ui| {
                     for tool in tools.iter() {
                         egui::Frame::new()
-                            .fill(crate::theme::BG_SURFACE0)
+                            .fill(theme.bg_surface0())
                             .corner_radius(egui::CornerRadius::same(4))
                             .inner_margin(egui::Margin::symmetric(10, 6))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
                                     ui.label(
                                         egui::RichText::new("⚙")
-                                            .color(crate::theme::TEAL),
+                                            .color(theme.teal()),
                                     );
                                     ui.label(
                                         egui::RichText::new(&tool.name)
-                                            .color(crate::theme::TEXT_PRIMARY)
+                                            .color(theme.text_primary())
                                             .monospace()
                                             .strong(),
                                     );
@@ -127,7 +129,7 @@ pub fn render_tools_overlay(
                                         |ui| {
                                             ui.label(
                                                 egui::RichText::new(&tool.id)
-                                                    .color(crate::theme::TEXT_DIM)
+                                                    .color(theme.text_dim())
                                                     .monospace()
                                                     .size(10.0),
                                             );
@@ -159,6 +161,7 @@ pub fn render_question_widget(
     question: &crate::api::Question,
     cursor: usize,
     checked: &[bool],
+    theme: &crate::theme::ThemeColors, 
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
@@ -182,8 +185,8 @@ pub fn render_question_widget(
         .fixed_size([w, h])
         .frame(
             egui::Frame::new()
-                .fill(crate::theme::BG_SURFACE1)
-                .stroke(egui::Stroke::new(1.5, crate::theme::BORDER_FOCUS))
+                .fill(theme.bg_surface1())
+                .stroke(egui::Stroke::new(1.5, theme.border_focus()))
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(14.0),
         )
@@ -192,13 +195,13 @@ pub fn render_question_widget(
 
             // Header chip
             egui::Frame::new()
-                .fill(crate::theme::PRIMARY.gamma_multiply(0.2))
+                .fill(theme.primary().gamma_multiply(0.2))
                 .corner_radius(egui::CornerRadius::same(4))
                 .inner_margin(egui::Margin::symmetric(8, 3))
                 .show(ui, |ui| {
                     ui.label(
                         egui::RichText::new(&question.header)
-                            .color(crate::theme::PRIMARY)
+                            .color(theme.primary())
                             .strong()
                             .small(),
                     );
@@ -208,7 +211,7 @@ pub fn render_question_widget(
             // Question text
             ui.label(
                 egui::RichText::new(&question.question)
-                    .color(crate::theme::TEXT_PRIMARY)
+                    .color(theme.text_primary())
                     .strong()
                     .size(14.0),
             );
@@ -220,15 +223,15 @@ pub fn render_question_widget(
                 let is_checked = checked.get(idx).copied().unwrap_or(false);
 
                 let bg = if is_cursor {
-                    crate::theme::BG_SURFACE2
+                    theme.bg_surface2()
                 } else {
-                    crate::theme::BG_SURFACE0
+                    theme.bg_surface0()
                 };
 
                 let resp = egui::Frame::new()
                     .fill(bg)
                     .stroke(if is_cursor {
-                        egui::Stroke::new(1.0, crate::theme::PRIMARY)
+                        egui::Stroke::new(1.0, theme.primary())
                     } else {
                         egui::Stroke::NONE
                     })
@@ -240,13 +243,13 @@ pub fn render_question_widget(
                             if is_cursor {
                                 ui.label(
                                     egui::RichText::new("❯")
-                                        .color(crate::theme::PRIMARY)
+                                        .color(theme.primary())
                                         .strong(),
                                 );
                             } else {
                                 ui.label(
                                     egui::RichText::new(" ")
-                                        .color(crate::theme::TEXT_DIM),
+                                        .color(theme.text_dim()),
                                 );
                             }
 
@@ -256,9 +259,9 @@ pub fn render_question_widget(
                                 ui.label(
                                     egui::RichText::new(cb)
                                         .color(if is_checked {
-                                            crate::theme::SUCCESS
+                                            theme.success()
                                         } else {
-                                            crate::theme::TEXT_MUTED
+                                            theme.text_muted()
                                         }),
                                 );
                             }
@@ -271,16 +274,16 @@ pub fn render_question_widget(
                                         opt.label
                                     ))
                                     .color(if is_cursor {
-                                        crate::theme::TEXT_PRIMARY
+                                        theme.text_primary()
                                     } else {
-                                        crate::theme::TEXT_MUTED
+                                        theme.text_muted()
                                     })
                                     .strong(),
                                 );
                                 if !opt.description.is_empty() {
                                     ui.label(
                                         egui::RichText::new(&opt.description)
-                                            .color(crate::theme::TEXT_DIM)
+                                            .color(theme.text_dim())
                                             .small(),
                                     );
                                 }
@@ -335,7 +338,7 @@ pub fn render_question_widget(
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.label(
                         egui::RichText::new("↑↓ navigate · Enter submit · Esc dismiss")
-                            .color(crate::theme::TEXT_DIM)
+                            .color(theme.text_dim())
                             .small(),
                     );
                 });

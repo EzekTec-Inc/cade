@@ -82,10 +82,17 @@ pub async fn run_agent(
         Some(s) => s.to_string(),
         None => return err(axum::http::StatusCode::BAD_REQUEST, "missing 'input'"),
     };
-    if let Some(cid) = conv_str.as_deref() {
-        maybe_set_conv_title(&state, cid, &input);
+
+    let mut theme_cmd = None;
+    if input.starts_with("/theme ") {
+        theme_cmd = Some(input.trim_start_matches("/theme ").trim().to_string());
+    } else {
+        if let Some(cid) = conv_str.as_deref() {
+            maybe_set_conv_title(&state, cid, &input);
+        }
+        persist(&state, &agent_id, conv_str.as_deref(), "user", json!({ "content": input }));
     }
-    persist(&state, &agent_id, conv_str.as_deref(), "user", json!({ "content": input }));
+
 
     // ── Create run record ─────────────────────────────────────────────────
     let run_row = sqlite::create_run(&state.db, &agent_id, conv_str.as_deref());
@@ -114,6 +121,29 @@ pub async fn run_agent(
             "conversation_id": conv_id2,
             "run_id": run_id2,
         })).await;
+
+        if let Some(t_name) = theme_cmd {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+            let agent_dir = dirs::home_dir().map(|h| h.join(".cade")).unwrap_or_else(|| std::path::PathBuf::from(".cade"));
+            let all_themes = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
+            if let Some(t) = all_themes.iter().find(|t| t.name == t_name) {
+                let colors = cade_core::resources::themes::ThemeColors::from_theme(t);
+                send(json!({
+                    "message_type": "theme_update",
+                    "theme": colors,
+                })).await;
+            } else {
+                send(json!({
+                    "message_type": "assistant_message",
+                    "content": format!("Theme '{}' not found. Available themes: {}", t_name, all_themes.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")),
+                })).await;
+            }
+            
+            let _ = sqlite::finish_run(&state2.db, &run_id2, "done");
+            let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+            return;
+        }
+
 
         let mut turns = 0usize;
 

@@ -1,5 +1,6 @@
 //! Model picker overlay — lets users browse and select from available models.
 
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 use super::super::AppAction;
@@ -28,6 +29,7 @@ pub fn render_model_picker(
     selection: usize,
     loading: bool,
     error: Option<&str>,
+    theme: &crate::theme::ThemeColors, 
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
@@ -57,8 +59,8 @@ pub fn render_model_picker(
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::new()
-                .fill(crate::theme::BG_SURFACE0)
-                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_BASE))
+                .fill(theme.bg_surface0())
+                .stroke(egui::Stroke::new(1.0, theme.border_base()))
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(egui::Margin::same(16))
                 .show(ui, |ui| {
@@ -69,7 +71,7 @@ pub fn render_model_picker(
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("Select Model")
-                                .color(crate::theme::TEXT_PRIMARY)
+                                .color(theme.text_primary())
                                 .strong()
                                 .size(16.0),
                         );
@@ -79,7 +81,7 @@ pub fn render_model_picker(
                                 if ui
                                     .button(
                                         egui::RichText::new("✕")
-                                            .color(crate::theme::TEXT_DIM),
+                                            .color(theme.text_dim()),
                                     )
                                     .clicked()
                                 {
@@ -96,7 +98,7 @@ pub fn render_model_picker(
                         egui::TextEdit::singleline(&mut query_buf)
                             .hint_text(
                                 egui::RichText::new("Search models…")
-                                    .color(crate::theme::TEXT_DIM),
+                                    .color(theme.text_dim()),
                             )
                             .desired_width(ui.available_width()),
                     );
@@ -113,7 +115,7 @@ pub fn render_model_picker(
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!("⚠ {err}"))
-                                    .color(crate::theme::ERROR)
+                                    .color(theme.error())
                                     .size(12.0),
                             );
                         });
@@ -126,7 +128,7 @@ pub fn render_model_picker(
                             ui.spinner();
                             ui.label(
                                 egui::RichText::new("Loading models…")
-                                    .color(crate::theme::TEXT_MUTED),
+                                    .color(theme.text_muted()),
                             );
                         });
                         return;
@@ -139,7 +141,7 @@ pub fn render_model_picker(
                     if filtered.is_empty() && custom_providers.is_empty() {
                         ui.label(
                             egui::RichText::new("No models found")
-                                .color(crate::theme::TEXT_MUTED),
+                                .color(theme.text_muted()),
                         );
                         return;
                     }
@@ -175,7 +177,7 @@ pub fn render_model_picker(
                             filtered.len(),
                             if filtered.len() == 1 { "" } else { "s" }
                         ))
-                        .color(crate::theme::TEXT_DIM)
+                        .color(theme.text_dim())
                         .size(11.0),
                     );
                     ui.add_space(4.0);
@@ -198,7 +200,7 @@ pub fn render_model_picker(
                                         egui::RichText::new(
                                             m.provider.to_uppercase(),
                                         )
-                                        .color(crate::theme::TEXT_DIM)
+                                        .color(theme.text_dim())
                                         .strong()
                                         .size(10.0),
                                     );
@@ -207,7 +209,7 @@ pub fn render_model_picker(
 
                                 let is_selected = i == selection;
                                 let bg = if is_selected {
-                                    crate::theme::BG_SURFACE2
+                                    theme.bg_surface2()
                                 } else {
                                     egui::Color32::TRANSPARENT
                                 };
@@ -228,9 +230,9 @@ pub fn render_model_picker(
                                                 ui.label(
                                                     egui::RichText::new(name)
                                                         .color(if is_selected {
-                                                            crate::theme::PRIMARY
+                                                            theme.primary()
                                                         } else {
-                                                            crate::theme::TEXT_PRIMARY
+                                                            theme.text_primary()
                                                         })
                                                         .size(13.0),
                                                 );
@@ -242,7 +244,7 @@ pub fn render_model_picker(
                                                     ui.label(
                                                         egui::RichText::new(&m.id)
                                                             .color(
-                                                                crate::theme::TEXT_DIM,
+                                                                theme.text_dim(),
                                                             )
                                                             .size(11.0),
                                                     );
@@ -276,7 +278,7 @@ pub fn render_model_picker(
                                                                     ctx_label,
                                                                 )
                                                                 .color(
-                                                                    crate::theme::TEXT_DIM,
+                                                                    theme.text_dim(),
                                                                 )
                                                                 .size(10.0),
                                                             );
@@ -309,7 +311,7 @@ pub fn render_model_picker(
                                 ui.add_space(12.0);
                                 ui.label(
                                     egui::RichText::new("CUSTOM PROVIDERS (type model ID manually)")
-                                        .color(crate::theme::TEXT_DIM)
+                                        .color(theme.text_dim())
                                         .strong()
                                         .size(10.0),
                                 );
@@ -317,7 +319,7 @@ pub fn render_model_picker(
                                 for p in custom_providers {
                                     ui.label(
                                         egui::RichText::new(format!("  • {p}"))
-                                            .color(crate::theme::TEXT_MUTED)
+                                            .color(theme.text_muted())
                                             .size(12.0),
                                     );
                                 }

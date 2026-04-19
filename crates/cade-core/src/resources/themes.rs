@@ -185,7 +185,7 @@ pub enum BorderStyle {
 ///
 /// Populated from a user-supplied JSON theme (via
 /// `cade_core::resources::themes::Theme`) or from the built-in defaults.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ThemeColors {
     // -- Core
     pub source_path: Option<std::path::PathBuf>,
@@ -351,6 +351,48 @@ impl ThemeColors {
     }
 
     /// Light theme (warm white base, high readability, clear depth).
+    pub fn from_theme(theme: &Theme) -> ThemeColors {
+        let mut base = Self::dark();
+        base.source_path = Some(theme.source.clone());
+
+        let resolve =
+            |c: &ThemeColor| -> ColorDef { resolve_color(c, &theme.vars) };
+        let t = &theme.colors;
+        
+        base.primary = resolve(&t.accent);
+        
+        // Map legacy UI backgrounds to semantic elevations
+        base.bg_base = resolve(&t.custom_message_bg); 
+        base.bg_surface0 = resolve(&t.user_message_bg);
+        base.bg_surface1 = resolve(&t.tool_pending_bg);
+        base.bg_surface2 = resolve(&t.selected_bg);
+        
+        base.border_base = resolve(&t.border);
+        base.border_focus = resolve(&t.border_accent);
+        
+        base.text_primary = resolve(&t.text);
+        base.text_muted = resolve(&t.muted);
+        base.text_dim = resolve(&t.dim);
+
+        base.success = resolve(&t.success);
+        base.error = resolve(&t.error);
+        base.warning = resolve(&t.warning);
+
+        base.diff_added = resolve(&t.tool_diff_added);
+        base.diff_removed = resolve(&t.tool_diff_removed);
+        base.diff_context = resolve(&t.tool_diff_context);
+        
+        base.md_heading = resolve(&t.md_heading);
+        base.md_link = resolve(&t.md_link);
+        base.md_code = resolve(&t.md_code);
+        base.thinking_off = resolve(&t.thinking_off);
+        base.thinking_high = resolve(&t.thinking_high);
+        base.thinking_xhigh = resolve(&t.thinking_xhigh);
+        base.bash_mode = resolve(&t.bash_mode);
+
+        base
+    }
+
     pub fn light() -> Self {
         Self {
             source_path: None,
@@ -972,3 +1014,41 @@ mod tests {
 }
 
 // endregion: --- Tests
+
+
+// region:    --- Support
+
+fn resolve_color(
+    c: &ThemeColor,
+    vars: &std::collections::HashMap<String, ThemeColor>,
+) -> ColorDef {
+    use ThemeColor;
+    match c {
+        ThemeColor::Index(_i) => ColorDef::Reset, // ColorDef doesn't support index natively
+        ThemeColor::Hex(s) if s.is_empty() => ColorDef::Reset,
+        ThemeColor::Hex(s) => {
+            // Might be a variable reference
+            if let Some(var_val) = vars.get(s) {
+                return resolve_color(var_val, vars);
+            }
+            // Try to parse as hex
+            if let Some(rgb) = parse_hex(s) {
+                return ColorDef::Rgb(rgb.0, rgb.1, rgb.2);
+            }
+            ColorDef::Reset
+        }
+    }
+}
+
+fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
+    let s = s.trim_start_matches('#');
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some((r, g, b))
+}
+
+// endregion: --- Support

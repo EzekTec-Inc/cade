@@ -76,6 +76,8 @@ pub enum StreamEvent {
     },
     /// The reason the stream ended (e.g. "stop", "length").
     FinishReason(String),
+    /// A dynamic theme update from the server (e.g. via `/theme` slash command).
+    ThemeUpdate(cade_core::resources::themes::ThemeColors),
 }
 
 /// Build the absolute URL for an API path.
@@ -317,6 +319,11 @@ pub fn parse_stream_event(v: &serde_json::Value) -> Option<StreamEvent> {
         "finish_reason" => {
             let reason = v.get("reason")?.as_str()?;
             Some(StreamEvent::FinishReason(reason.to_string()))
+        }
+        "theme_update" => {
+            let t = v.get("theme")?;
+            let colors: cade_core::resources::themes::ThemeColors = serde_json::from_value(t.clone()).ok()?;
+            Some(StreamEvent::ThemeUpdate(colors))
         }
         _ => None,
     }

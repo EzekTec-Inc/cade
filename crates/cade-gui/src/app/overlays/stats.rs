@@ -1,5 +1,6 @@
 //! Usage statistics overlay.
 
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 use super::super::AppAction;
@@ -8,6 +9,7 @@ pub fn render_stats_overlay(
     total_in: u64,
     total_out: u64,
     last_usage: Option<&(u64, u64, Option<String>)>,
+    theme: &crate::theme::ThemeColors, 
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
     let screen = ctx.content_rect();
@@ -25,8 +27,8 @@ pub fn render_stats_overlay(
         .fixed_size([w, h])
         .frame(
             egui::Frame::new()
-                .fill(crate::theme::BG_SURFACE1)
-                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_FOCUS))
+                .fill(theme.bg_surface1())
+                .stroke(egui::Stroke::new(1.0, theme.border_focus()))
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(12.0),
         )
@@ -35,7 +37,7 @@ pub fn render_stats_overlay(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("📊  Token Usage")
-                        .color(crate::theme::PRIMARY)
+                        .color(theme.primary())
                         .strong()
                         .size(16.0),
                 );
@@ -50,32 +52,32 @@ pub fn render_stats_overlay(
             ui.add_space(6.0);
 
             // Session totals
-            ui.label(egui::RichText::new("Session totals").color(crate::theme::TEXT_MUTED).strong().size(12.0));
+            ui.label(egui::RichText::new("Session totals").color(theme.text_muted()).strong().size(12.0));
             egui::Grid::new("stats_totals").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
-                ui.label(egui::RichText::new("input tokens").color(crate::theme::TEXT_MUTED).monospace().size(11.0));
-                ui.label(egui::RichText::new(total_in.to_string()).color(crate::theme::TEXT_PRIMARY).monospace().size(11.0));
+                ui.label(egui::RichText::new("input tokens").color(theme.text_muted()).monospace().size(11.0));
+                ui.label(egui::RichText::new(total_in.to_string()).color(theme.text_primary()).monospace().size(11.0));
                 ui.end_row();
-                ui.label(egui::RichText::new("output tokens").color(crate::theme::TEXT_MUTED).monospace().size(11.0));
-                ui.label(egui::RichText::new(total_out.to_string()).color(crate::theme::TEXT_PRIMARY).monospace().size(11.0));
+                ui.label(egui::RichText::new("output tokens").color(theme.text_muted()).monospace().size(11.0));
+                ui.label(egui::RichText::new(total_out.to_string()).color(theme.text_primary()).monospace().size(11.0));
                 ui.end_row();
-                ui.label(egui::RichText::new("total tokens").color(crate::theme::TEXT_MUTED).monospace().size(11.0));
-                ui.label(egui::RichText::new((total_in + total_out).to_string()).color(crate::theme::SUCCESS).monospace().strong().size(11.0));
+                ui.label(egui::RichText::new("total tokens").color(theme.text_muted()).monospace().size(11.0));
+                ui.label(egui::RichText::new((total_in + total_out).to_string()).color(theme.success()).monospace().strong().size(11.0));
                 ui.end_row();
             });
 
             if let Some((lin, lout, model)) = last_usage {
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new("Last turn").color(crate::theme::TEXT_MUTED).strong().size(12.0));
+                ui.label(egui::RichText::new("Last turn").color(theme.text_muted()).strong().size(12.0));
                 egui::Grid::new("stats_last").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
-                    ui.label(egui::RichText::new("input").color(crate::theme::TEXT_MUTED).monospace().size(11.0));
-                    ui.label(egui::RichText::new(lin.to_string()).color(crate::theme::TEXT_PRIMARY).monospace().size(11.0));
+                    ui.label(egui::RichText::new("input").color(theme.text_muted()).monospace().size(11.0));
+                    ui.label(egui::RichText::new(lin.to_string()).color(theme.text_primary()).monospace().size(11.0));
                     ui.end_row();
-                    ui.label(egui::RichText::new("output").color(crate::theme::TEXT_MUTED).monospace().size(11.0));
-                    ui.label(egui::RichText::new(lout.to_string()).color(crate::theme::TEXT_PRIMARY).monospace().size(11.0));
+                    ui.label(egui::RichText::new("output").color(theme.text_muted()).monospace().size(11.0));
+                    ui.label(egui::RichText::new(lout.to_string()).color(theme.text_primary()).monospace().size(11.0));
                     ui.end_row();
                     if let Some(m) = model {
-                        ui.label(egui::RichText::new("model").color(crate::theme::TEXT_MUTED).monospace().size(11.0));
-                        ui.label(egui::RichText::new(m).color(crate::theme::TEXT_MUTED).monospace().size(11.0));
+                        ui.label(egui::RichText::new("model").color(theme.text_muted()).monospace().size(11.0));
+                        ui.label(egui::RichText::new(m).color(theme.text_muted()).monospace().size(11.0));
                         ui.end_row();
                     }
                 });

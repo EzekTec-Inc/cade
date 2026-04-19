@@ -1,3 +1,4 @@
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 use crate::app::AppAction;
 use crate::session::SessionState;
@@ -8,6 +9,7 @@ pub fn render(
     md_cache: &mut CommonMarkCache,
     session_snapshot: &Option<SessionState>,
     action: &mut AppAction,
+    theme: &crate::theme::ThemeColors, 
 ) {
     egui::CentralPanel::default().show(ctx, |ui| {
         if let Some(crate::session::SessionState::Connected {
@@ -59,11 +61,11 @@ pub fn render(
                 let is_streaming = *streaming;
 
                 egui::Frame::NONE
-                    .fill(crate::theme::BG_BASE)
+                    .fill(theme.bg_base())
                     .inner_margin(egui::Margin::symmetric(20, 16))
                     .show(ui, |ui| {
                         if !has_agent {
-                            crate::app::views::render_welcome(ui, md_cache);
+                            crate::app::views::render_welcome(ui, md_cache, theme);
                         } else {
                             let footer_h = if last_usage.is_some() { 22.0 } else { 0.0 };
                             let toast_h = if error_toast.is_some() { 42.0 } else { 0.0 };
@@ -89,7 +91,7 @@ pub fn render(
                                         ui.add_space(pad);
                                         ui.label(
                                             egui::RichText::new("No messages yet. Send one to start a conversation.")
-                                                .color(crate::theme::TEXT_MUTED)
+                                                .color(theme.text_muted())
                                                 .italics()
                                                 .size(12.0),
                                         );
@@ -101,11 +103,11 @@ pub fn render(
                                             if ui.add(
                                                 egui::Button::new(
                                                     egui::RichText::new("⬆  Load older messages")
-                                                        .color(crate::theme::TEXT_MUTED)
+                                                        .color(theme.text_muted())
                                                         .size(11.0),
                                                 )
                                                 .fill(egui::Color32::TRANSPARENT)
-                                                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_BASE))
+                                                .stroke(egui::Stroke::new(1.0, theme.border_base()))
                                             ).clicked() {
                                                 *action = AppAction::LoadMore;
                                             }
@@ -127,6 +129,7 @@ pub fn render(
                                                     ui,
                                                     md_cache,
                                                     msg,
+                                                    theme,
                                                 ) {
                                                     *action = a;
                                                 }
@@ -143,7 +146,7 @@ pub fn render(
                                             ui.add_space(pad);
                                             ui.label(
                                                 egui::RichText::new("▍ CADE")
-                                                    .color(crate::theme::PRIMARY)
+                                                    .color(theme.primary())
                                                     .strong()
                                                     .size(13.0),
                                             );
@@ -179,9 +182,9 @@ pub fn render(
                                     egui::Sense::click(),
                                 );
                                 let bg = if resp.hovered() {
-                                    crate::theme::BG_SURFACE2
+                                    theme.bg_surface2()
                                 } else {
-                                    crate::theme::BG_SURFACE1
+                                    theme.bg_surface1()
                                 };
                                 ui.painter().rect_filled(
                                     btn_rect,
@@ -191,7 +194,7 @@ pub fn render(
                                 ui.painter().rect_stroke(
                                     btn_rect,
                                     egui::CornerRadius::same(16),
-                                    egui::Stroke::new(1.0, crate::theme::BORDER_BASE),
+                                    egui::Stroke::new(1.0, theme.border_base()),
                                     egui::StrokeKind::Outside,
                                 );
                                 ui.painter().text(
@@ -199,7 +202,7 @@ pub fn render(
                                     egui::Align2::CENTER_CENTER,
                                     "↓",
                                     egui::FontId::proportional(16.0),
-                                    crate::theme::TEXT_PRIMARY,
+                                    theme.text_primary(),
                                 );
                                 if resp.clicked() {
                                     *action = AppAction::ScrollToBottom;
@@ -224,25 +227,25 @@ pub fn render(
                                         "{inp} tokens in · {out} tokens out{model_str}{finish}"
                                     ))
                                     .size(10.0)
-                                    .color(crate::theme::TEXT_DIM),
+                                    .color(theme.text_dim()),
                                 );
                             }
 
                             if let Some(e) = error_toast {
                                 ui.add_space(8.0);
                                 egui::Frame::new()
-                                    .fill(crate::theme::ERROR.linear_multiply(0.1))
-                                    .stroke(egui::Stroke::new(1.0, crate::theme::ERROR))
+                                    .fill(theme.error().linear_multiply(0.1))
+                                    .stroke(egui::Stroke::new(1.0, theme.error()))
                                     .corner_radius(egui::CornerRadius::same(4))
                                     .inner_margin(8.0)
                                     .show(ui, |ui| {
                                         ui.horizontal(|ui| {
                                             ui.label(
                                                 egui::RichText::new("⚠")
-                                                    .color(crate::theme::ERROR),
+                                                    .color(theme.error()),
                                             );
                                             ui.label(
-                                                egui::RichText::new(e).color(crate::theme::ERROR),
+                                                egui::RichText::new(e).color(theme.error()),
                                             );
                                         });
                                     });

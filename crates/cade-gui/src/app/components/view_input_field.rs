@@ -1,3 +1,4 @@
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 use crate::app::AppAction;
 
@@ -9,6 +10,7 @@ pub fn render(
     input_id: egui::Id,
     request_focus_input: bool,
     action: &mut AppAction,
+    theme: &crate::theme::ThemeColors, 
 ) {
     egui::TopBottomPanel::bottom("input_bar")
         .min_size(48.0)
@@ -16,9 +18,9 @@ pub fn render(
             let can_edit = has_agent && !is_streaming;
 
             let sep_color = if is_streaming {
-                crate::theme::PRIMARY
+                theme.primary()
             } else {
-                crate::theme::BORDER_BASE
+                theme.border_base()
             };
             let sep_rect = ui.available_rect_before_wrap();
             let sep_rect = egui::Rect::from_min_size(
@@ -29,7 +31,7 @@ pub fn render(
             ui.advance_cursor_after_rect(sep_rect);
 
             egui::Frame::new()
-                .fill(crate::theme::BG_INPUT)
+                .fill(theme.bg_input())
                 .inner_margin(egui::Margin::symmetric(8, 6))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
@@ -41,12 +43,12 @@ pub fn render(
                             " CHAT "
                         };
                         let badge_bg = if is_streaming {
-                            crate::theme::WARNING
+                            theme.warning()
                         } else {
-                            crate::theme::BG_SURFACE2
+                            theme.bg_surface2()
                         };
                         let badge = egui::RichText::new(badge_text)
-                            .color(crate::theme::TEXT_PRIMARY)
+                            .color(theme.text_primary())
                             .strong()
                             .size(11.0)
                             .background_color(badge_bg);
@@ -54,7 +56,7 @@ pub fn render(
 
                         ui.label(
                             egui::RichText::new("> ")
-                                .color(crate::theme::TEXT_DIM)
+                                .color(theme.text_dim())
                                 .monospace()
                                 .size(14.0),
                         );
@@ -75,7 +77,7 @@ pub fn render(
                                 .id(input_id)
                                 .hint_text(
                                     egui::RichText::new(hint)
-                                        .color(crate::theme::TEXT_DIM),
+                                        .color(theme.text_dim()),
                                 )
                                 .desired_width(desired_w)
                                 .desired_rows(1)
@@ -104,17 +106,17 @@ pub fn render(
                             let send_btn = egui::Button::new(
                                 egui::RichText::new("↑")
                                     .color(if send_enabled {
-                                        crate::theme::BG_BASE
+                                        theme.bg_base()
                                     } else {
-                                        crate::theme::TEXT_DIM
+                                        theme.text_dim()
                                     })
                                     .strong()
                                     .size(15.0),
                             )
                             .fill(if send_enabled {
-                                crate::theme::PRIMARY
+                                theme.primary()
                             } else {
-                                crate::theme::BG_SURFACE2
+                                theme.bg_surface2()
                             })
                             .stroke(egui::Stroke::NONE)
                             .corner_radius(egui::CornerRadius::same(14))

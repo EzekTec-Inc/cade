@@ -1,5 +1,6 @@
 //! Agents overview overlay.
 
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 use cade_api_types::AgentInfo;
 
@@ -8,6 +9,7 @@ pub fn render_agents_overlay(
     ctx: &egui::Context,
     agents: &[AgentInfo],
     selected: Option<usize>,
+    theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
     let screen = ctx.content_rect();
@@ -25,8 +27,8 @@ pub fn render_agents_overlay(
         .fixed_size([w, h])
         .frame(
             egui::Frame::new()
-                .fill(crate::theme::BG_SURFACE1)
-                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_FOCUS))
+                .fill(theme.bg_surface1())
+                .stroke(egui::Stroke::new(1.0, theme.border_focus()))
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(12.0),
         )
@@ -35,7 +37,7 @@ pub fn render_agents_overlay(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("🤖  Agents")
-                        .color(crate::theme::PRIMARY)
+                        .color(theme.primary())
                         .strong()
                         .size(16.0),
                 );
@@ -45,7 +47,7 @@ pub fn render_agents_overlay(
                     }
                     ui.label(
                         egui::RichText::new("Esc to close")
-                            .color(crate::theme::TEXT_DIM)
+                            .color(theme.text_dim())
                             .small(),
                     );
                 });
@@ -60,25 +62,25 @@ pub fn render_agents_overlay(
                 .show(ui, |ui| {
                     for (idx, agent) in agents.iter().enumerate() {
                         let is_sel = selected == Some(idx);
-                        let bg = if is_sel { crate::theme::BG_SURFACE2 } else { crate::theme::BG_SURFACE0 };
+                        let bg = if is_sel { theme.bg_surface2() } else { theme.bg_surface0() };
                         let resp = egui::Frame::new()
                             .fill(bg)
                             .corner_radius(egui::CornerRadius::same(4))
                             .inner_margin(egui::Margin::symmetric(10, 6))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(&agent.name).color(crate::theme::TEXT_PRIMARY).strong());
+                                    ui.label(egui::RichText::new(&agent.name).color(theme.text_primary()).strong());
                                     if is_sel {
-                                        ui.label(egui::RichText::new("← current").color(crate::theme::PRIMARY).small());
+                                        ui.label(egui::RichText::new("← current").color(theme.primary()).small());
                                     }
                                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                                         if let Some(model) = &agent.model {
-                                            ui.label(egui::RichText::new(model).color(crate::theme::TEXT_MUTED).monospace().size(10.0));
+                                            ui.label(egui::RichText::new(model).color(theme.text_muted()).monospace().size(10.0));
                                         }
                                     });
                                 });
                                 let short_id = if agent.id.len() > 16 { format!("{}…", &agent.id[..16]) } else { agent.id.clone() };
-                                ui.label(egui::RichText::new(short_id).color(crate::theme::TEXT_DIM).monospace().size(10.0));
+                                ui.label(egui::RichText::new(short_id).color(theme.text_dim()).monospace().size(10.0));
                             })
                             .response
                             .interact(egui::Sense::click());

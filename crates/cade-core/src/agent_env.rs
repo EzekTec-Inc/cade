@@ -26,6 +26,7 @@ impl CommandAgentEnv for std::process::Command {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl CommandAgentEnv for tokio::process::Command {
     fn set_agent_env_var(&mut self, key: &str, value: &str) {
         self.env(key, value);

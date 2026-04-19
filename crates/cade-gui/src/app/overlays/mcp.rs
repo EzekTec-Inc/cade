@@ -1,6 +1,7 @@
 //! MCP servers overlay — shows all MCP servers configured on the server,
 //! their tool lists, and connected/disabled status.
 
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 use super::super::AppAction;
@@ -13,6 +14,7 @@ pub fn render_mcp_overlay(
     servers: &[crate::api::McpServerInfo],
     loading: bool,
     error: Option<&str>,
+    theme: &crate::theme::ThemeColors, 
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
@@ -39,8 +41,8 @@ pub fn render_mcp_overlay(
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::new()
-                .fill(crate::theme::BG_SURFACE0)
-                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_BASE))
+                .fill(theme.bg_surface0())
+                .stroke(egui::Stroke::new(1.0, theme.border_base()))
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(egui::Margin::same(16))
                 .show(ui, |ui| {
@@ -51,7 +53,7 @@ pub fn render_mcp_overlay(
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("MCP Servers")
-                                .color(crate::theme::TEXT_PRIMARY)
+                                .color(theme.text_primary())
                                 .strong()
                                 .size(16.0),
                         );
@@ -61,7 +63,7 @@ pub fn render_mcp_overlay(
                                 if ui
                                     .button(
                                         egui::RichText::new("✕")
-                                            .color(crate::theme::TEXT_DIM),
+                                            .color(theme.text_dim()),
                                     )
                                     .clicked()
                                 {
@@ -80,7 +82,7 @@ pub fn render_mcp_overlay(
                         ui.horizontal(|ui| {
                             ui.label(
                                 egui::RichText::new(format!("⚠ {err}"))
-                                    .color(crate::theme::ERROR)
+                                    .color(theme.error())
                                     .size(12.0),
                             );
                         });
@@ -93,7 +95,7 @@ pub fn render_mcp_overlay(
                             ui.spinner();
                             ui.label(
                                 egui::RichText::new("Loading MCP servers…")
-                                    .color(crate::theme::TEXT_DIM)
+                                    .color(theme.text_dim())
                                     .size(13.0),
                             );
                         });
@@ -106,7 +108,7 @@ pub fn render_mcp_overlay(
                             ui.add_space(40.0);
                             ui.label(
                                 egui::RichText::new("No MCP servers configured")
-                                    .color(crate::theme::TEXT_DIM)
+                                    .color(theme.text_dim())
                                     .size(14.0),
                             );
                             ui.add_space(8.0);
@@ -115,7 +117,7 @@ pub fn render_mcp_overlay(
                                     "Add MCP servers to ~/.config/cade/settings.toml\n\
                                      or a project-level cade.toml",
                                 )
-                                .color(crate::theme::TEXT_MUTED)
+                                .color(theme.text_muted())
                                 .size(12.0),
                             );
                         });
@@ -133,7 +135,7 @@ pub fn render_mcp_overlay(
                             total_tools,
                             if total_tools == 1 { "" } else { "s" },
                         ))
-                        .color(crate::theme::TEXT_DIM)
+                        .color(theme.text_dim())
                         .size(11.0),
                     );
                     ui.add_space(8.0);
@@ -144,17 +146,17 @@ pub fn render_mcp_overlay(
                         .show(ui, |ui| {
                             for server in servers {
                                 let (status_color, status_label) = if server.disabled {
-                                    (crate::theme::TEXT_MUTED, "DISABLED")
+                                    (theme.text_muted(), "DISABLED")
                                 } else {
-                                    (crate::theme::SUCCESS, "ACTIVE")
+                                    (theme.success(), "ACTIVE")
                                 };
 
                                 // Server card
                                 egui::Frame::new()
-                                    .fill(crate::theme::BG_SURFACE1)
+                                    .fill(theme.bg_surface1())
                                     .stroke(egui::Stroke::new(
                                         1.0,
-                                        crate::theme::BORDER_BASE,
+                                        theme.border_base(),
                                     ))
                                     .corner_radius(egui::CornerRadius::same(6))
                                     .inner_margin(egui::Margin::same(10))
@@ -163,7 +165,7 @@ pub fn render_mcp_overlay(
                                         ui.horizontal(|ui| {
                                             ui.label(
                                                 egui::RichText::new(&server.key)
-                                                    .color(crate::theme::TEXT_PRIMARY)
+                                                    .color(theme.text_primary())
                                                     .strong()
                                                     .size(13.0),
                                             );
@@ -188,7 +190,7 @@ pub fn render_mcp_overlay(
                                                                 "s"
                                                             }
                                                         ))
-                                                        .color(crate::theme::TEXT_DIM)
+                                                        .color(theme.text_dim())
                                                         .size(11.0),
                                                     );
                                                 },
@@ -198,7 +200,7 @@ pub fn render_mcp_overlay(
                                         // Command line
                                         ui.label(
                                             egui::RichText::new(&server.command)
-                                                .color(crate::theme::TEXT_MUTED)
+                                                .color(theme.text_muted())
                                                 .monospace()
                                                 .size(11.0),
                                         );
@@ -208,7 +210,7 @@ pub fn render_mcp_overlay(
                                             ui.add_space(6.0);
                                             egui::CollapsingHeader::new(
                                                 egui::RichText::new("Tools")
-                                                    .color(crate::theme::TEXT_DIM)
+                                                    .color(theme.text_dim())
                                                     .size(11.0),
                                             )
                                             .id_salt(format!(
@@ -227,7 +229,7 @@ pub fn render_mcp_overlay(
                                                         ui.label(
                                                             egui::RichText::new("·  ")
                                                                 .color(
-                                                                    crate::theme::BORDER_BASE,
+                                                                    theme.border_base(),
                                                                 )
                                                                 .monospace()
                                                                 .size(11.0),
@@ -235,7 +237,7 @@ pub fn render_mcp_overlay(
                                                         ui.label(
                                                             egui::RichText::new(display)
                                                                 .color(
-                                                                    crate::theme::TEXT_DIM,
+                                                                    theme.text_dim(),
                                                                 )
                                                                 .monospace()
                                                                 .size(11.0),

@@ -912,6 +912,9 @@ impl CadeApp {
                             StreamEvent::FinishReason(reason) => {
                                 s.on_finish_reason(&reason);
                             }
+                            StreamEvent::ThemeUpdate(theme) => {
+                                s.on_theme_update(theme);
+                            }
                         }
                     }
                     ctx_clone.request_repaint();

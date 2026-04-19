@@ -191,6 +191,9 @@ pub enum SessionState {
         /// Per-overlay error message.
         mcp_error: Option<String>,
 
+        /// A pending theme update from the backend.
+        theme_update: Option<crate::theme::ThemeColors>,
+
         // ── Model picker overlay ─────────────────────────────────
         /// Whether the model picker overlay is open.
         model_picker_open: bool,
@@ -346,6 +349,7 @@ impl SessionState {
                 mcp_servers: Vec::new(),
                 mcp_loading: false,
                 mcp_error: None,
+                theme_update: None,
 
                 model_picker_open: false,
                 model_picker_models: Vec::new(),
@@ -4427,6 +4431,13 @@ mod tests {
             assert_eq!(mcp_error.as_deref(), Some("connection refused"));
         } else {
             panic!("expected Connected");
+        }
+    }
+}
+impl SessionState {
+    pub fn on_theme_update(&mut self, theme: crate::theme::ThemeColors) {
+        if let Self::Connected { theme_update, .. } = self {
+            *theme_update = Some(theme);
         }
     }
 }

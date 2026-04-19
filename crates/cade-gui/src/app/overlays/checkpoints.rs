@@ -1,5 +1,6 @@
 //! Checkpoints browser overlay.
 
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 use super::super::AppAction;
@@ -11,6 +12,7 @@ pub fn render_checkpoints_overlay(
     busy: bool,
     error: Option<&str>,
     notice: Option<&str>,
+    theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
@@ -32,8 +34,8 @@ pub fn render_checkpoints_overlay(
         .fixed_size([w, h])
         .frame(
             egui::Frame::new()
-                .fill(crate::theme::BG_SURFACE1)
-                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_FOCUS))
+                .fill(theme.bg_surface1())
+                .stroke(egui::Stroke::new(1.0, theme.border_focus()))
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(12.0),
         )
@@ -44,7 +46,7 @@ pub fn render_checkpoints_overlay(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("🔖  Checkpoints")
-                        .color(crate::theme::PRIMARY)
+                        .color(theme.primary())
                         .strong()
                         .size(16.0),
                 );
@@ -57,7 +59,7 @@ pub fn render_checkpoints_overlay(
                     }
                     ui.label(
                         egui::RichText::new("Esc to close")
-                            .color(crate::theme::TEXT_DIM)
+                            .color(theme.text_dim())
                             .small(),
                     );
                 });
@@ -70,14 +72,14 @@ pub fn render_checkpoints_overlay(
             // ── Banners ───────────────────────────────────────────
             if let Some(err) = error {
                 egui::Frame::new()
-                    .fill(crate::theme::ERROR.gamma_multiply(0.15))
-                    .stroke(egui::Stroke::new(1.0, crate::theme::ERROR))
+                    .fill(theme.error().gamma_multiply(0.15))
+                    .stroke(egui::Stroke::new(1.0, theme.error()))
                     .corner_radius(egui::CornerRadius::same(4))
                     .inner_margin(6.0)
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(format!("⚠ {err}"))
-                                .color(crate::theme::ERROR)
+                                .color(theme.error())
                                 .small(),
                         );
                     });
@@ -86,14 +88,14 @@ pub fn render_checkpoints_overlay(
 
             if let Some(msg) = notice {
                 egui::Frame::new()
-                    .fill(crate::theme::SUCCESS.gamma_multiply(0.15))
-                    .stroke(egui::Stroke::new(1.0, crate::theme::SUCCESS))
+                    .fill(theme.success().gamma_multiply(0.15))
+                    .stroke(egui::Stroke::new(1.0, theme.success()))
                     .corner_radius(egui::CornerRadius::same(4))
                     .inner_margin(6.0)
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(format!("✓ {msg}"))
-                                .color(crate::theme::SUCCESS)
+                                .color(theme.success())
                                 .small(),
                         );
                     });
@@ -103,7 +105,7 @@ pub fn render_checkpoints_overlay(
             if checkpoints.is_empty() && !loading {
                 ui.label(
                     egui::RichText::new("No checkpoints yet — create one via /checkpoints or the CLI.")
-                        .color(crate::theme::TEXT_MUTED)
+                        .color(theme.text_muted())
                         .italics(),
                 );
                 return;
@@ -116,7 +118,7 @@ pub fn render_checkpoints_overlay(
                 .show(ui, |ui| {
                     for cp in checkpoints.iter() {
                         egui::Frame::new()
-                            .fill(crate::theme::BG_SURFACE0)
+                            .fill(theme.bg_surface0())
                             .corner_radius(egui::CornerRadius::same(4))
                             .inner_margin(egui::Margin::symmetric(10, 6))
                             .show(ui, |ui| {
@@ -129,7 +131,7 @@ pub fn render_checkpoints_overlay(
                                             .unwrap_or("(unlabelled)");
                                         ui.label(
                                             egui::RichText::new(title)
-                                                .color(crate::theme::TEXT_PRIMARY)
+                                                .color(theme.text_primary())
                                                 .strong(),
                                         );
                                         // Short id + branch
@@ -143,14 +145,14 @@ pub fn render_checkpoints_overlay(
                                                 "{short_id}  •  {}",
                                                 cp.branch_id
                                             ))
-                                            .color(crate::theme::TEXT_MUTED)
+                                            .color(theme.text_muted())
                                             .monospace()
                                             .size(10.0),
                                         );
                                         if let Some(desc) = &cp.description {
                                             ui.label(
                                                 egui::RichText::new(desc)
-                                                    .color(crate::theme::TEXT_MUTED)
+                                                    .color(theme.text_muted())
                                                     .small(),
                                             );
                                         }
@@ -158,7 +160,7 @@ pub fn render_checkpoints_overlay(
                                         let age_secs = unix_now() - cp.created_at;
                                         ui.label(
                                             egui::RichText::new(format_age(age_secs))
-                                                .color(crate::theme::TEXT_DIM)
+                                                .color(theme.text_dim())
                                                 .small(),
                                         );
                                     });
@@ -169,7 +171,7 @@ pub fn render_checkpoints_overlay(
                                         |ui| {
                                             let del = egui::Button::new(
                                                 egui::RichText::new("🗑")
-                                                    .color(crate::theme::ERROR),
+                                                    .color(theme.error()),
                                             )
                                             .small();
                                             if ui

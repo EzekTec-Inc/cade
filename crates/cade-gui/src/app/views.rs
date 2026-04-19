@@ -1,10 +1,13 @@
 //! Standalone view functions: welcome screen and timeline message renderer.
 
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 use super::AppAction;
 
-pub fn render_welcome(ui: &mut egui::Ui, md_cache: &mut egui_commonmark::CommonMarkCache) {
+pub fn render_welcome(ui: &mut egui::Ui, md_cache: &mut egui_commonmark::CommonMarkCache,
+    theme: &crate::theme::ThemeColors, 
+) {
     ui.add_space(24.0);
     // dim horizontal rule
     ui.add(egui::Separator::default().horizontal().spacing(0.0));
@@ -12,7 +15,7 @@ pub fn render_welcome(ui: &mut egui::Ui, md_cache: &mut egui_commonmark::CommonM
 
     ui.label(
         egui::RichText::new("CADE")
-            .color(crate::theme::PRIMARY)
+            .color(theme.primary())
             .strong()
             .size(15.0),
     );
@@ -41,6 +44,7 @@ pub fn render_timeline_message(
     ui: &mut egui::Ui,
     md_cache: &mut egui_commonmark::CommonMarkCache,
     msg: &cade_api_types::ChatMessage,
+    theme: &crate::theme::ThemeColors, 
 ) -> Option<AppAction> {
     match msg.role.as_str() {
 
@@ -51,14 +55,14 @@ pub fn render_timeline_message(
             ui.add_space(4.0);
             ui.label(
                 egui::RichText::new("You")
-                    .color(crate::theme::TEXT_PRIMARY)
+                    .color(theme.text_primary())
                     .strong()
                     .size(13.0),
             );
             // Plain text — no markdown rendering for user messages (mirrors TUI)
             ui.label(
                 egui::RichText::new(&text)
-                    .color(crate::theme::TEXT_PRIMARY)
+                    .color(theme.text_primary())
                     .size(13.0),
             );
             None
@@ -71,7 +75,7 @@ pub fn render_timeline_message(
             // "▍ CADE" header
             ui.label(
                 egui::RichText::new("▍ CADE")
-                    .color(crate::theme::PRIMARY)
+                    .color(theme.primary())
                     .strong()
                     .size(13.0),
             );
@@ -94,7 +98,7 @@ pub fn render_timeline_message(
             ui.add_space(4.0);
             egui::CollapsingHeader::new(
                 egui::RichText::new(header)
-                    .color(crate::theme::TEXT_MUTED)
+                    .color(theme.text_muted())
                     .italics()
                     .size(12.0),
             )
@@ -105,12 +109,12 @@ pub fn render_timeline_message(
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("│ ")
-                                .color(crate::theme::BORDER_BASE)
+                                .color(theme.border_base())
                                 .size(12.0),
                         );
                         ui.label(
                             egui::RichText::new(ln)
-                                .color(crate::theme::TEXT_MUTED)
+                                .color(theme.text_muted())
                                 .italics()
                                 .size(12.0),
                         );
@@ -137,7 +141,7 @@ pub fn render_timeline_message(
             // Single-line invocation row: "⚙ name(args…)"
             egui::CollapsingHeader::new(
                 egui::RichText::new(format!("⚙ {}({preview}{preview_suffix})", name))
-                    .color(crate::theme::PRIMARY)
+                    .color(theme.primary())
                     .strong()
                     .monospace()
                     .size(12.0),
@@ -154,12 +158,12 @@ pub fn render_timeline_message(
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("│ ")
-                                .color(crate::theme::BORDER_BASE)
+                                .color(theme.border_base())
                                 .size(11.0),
                         );
                         ui.label(
                             egui::RichText::new(ln)
-                                .color(crate::theme::TEXT_DIM)
+                                .color(theme.text_dim())
                                 .monospace()
                                 .size(11.0),
                         );
@@ -179,9 +183,9 @@ pub fn render_timeline_message(
                 || content.starts_with("ERR");
 
             let (status_label, status_color) = if is_error {
-                (" ERR ", crate::theme::ERROR)
+                (" ERR ", theme.error())
             } else {
-                (" OK ", crate::theme::SUCCESS)
+                (" OK ", theme.success())
             };
 
             let lines: Vec<&str> = content.lines().collect();
@@ -207,7 +211,7 @@ pub fn render_timeline_message(
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("│      ")
-                                .color(crate::theme::BORDER_BASE)
+                                .color(theme.border_base())
                                 .monospace()
                                 .size(11.0),
                         );
@@ -232,15 +236,15 @@ pub fn render_timeline_message(
                 ui.horizontal(|ui| {
                     ui.label(
                         egui::RichText::new(if i == 0 { " INFO " } else { "      " })
-                            .color(crate::theme::PRIMARY)
-                            .background_color(crate::theme::BG_BASE)
+                            .color(theme.primary())
+                            .background_color(theme.bg_base())
                             .strong()
                             .size(11.0),
                     );
                     ui.add_space(4.0);
                     ui.label(
                         egui::RichText::new(ln)
-                            .color(crate::theme::TEXT_MUTED)
+                            .color(theme.text_muted())
                             .size(12.0),
                     );
                 });
@@ -257,14 +261,14 @@ pub fn render_timeline_message(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(format!(" {role} "))
-                        .color(crate::theme::TEXT_DIM)
+                        .color(theme.text_dim())
                         .monospace()
                         .size(11.0),
                 );
                 ui.add_space(4.0);
                 ui.label(
                     egui::RichText::new(&text)
-                        .color(crate::theme::TEXT_MUTED)
+                        .color(theme.text_muted())
                         .size(12.0),
                 );
             });

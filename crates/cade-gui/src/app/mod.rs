@@ -21,6 +21,7 @@ pub mod overlays;
 mod tasks;
 mod views;
 
+use crate::theme::EguiThemeExt;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -61,13 +62,14 @@ pub struct CadeApp {
     md_cache: CommonMarkCache,
     /// Stable ID for the chat input field — used by Ctrl+L to request focus.
     input_id: egui::Id,
+    theme: crate::theme::ThemeColors,
 }
 
 impl CadeApp {
     /// Construct from the `CreationContext` handed to us by eframe.
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         // Apply the CADE dark theme once at startup.
-        crate::theme::apply_theme(&cc.egui_ctx);
+        crate::theme::apply_theme(&cc.egui_ctx, &crate::theme::ThemeColors::dark());
 
         // Resolve the server URL from the page origin.  In production
         // the dashboard is served by cade-server, so origin == API host.
@@ -96,6 +98,7 @@ impl CadeApp {
             server_url: config.server_url,
             md_cache: CommonMarkCache::default(),
             input_id: egui::Id::new("chat_input"),
+            theme: crate::theme::ThemeColors::dark(),
         }
     }
 
@@ -121,7 +124,7 @@ impl eframe::App for CadeApp {
             .exact_size(32.0)
             .frame(
                 egui::Frame::new()
-                    .fill(crate::theme::BG_SURFACE0)
+                    .fill(self.theme.bg_surface0())
                     .inner_margin(egui::Margin::symmetric(10, 0)),
             )
             .show_inside(ui, |ui| {
@@ -131,7 +134,7 @@ impl eframe::App for CadeApp {
                         egui::RichText::new("CADE")
                             .strong()
                             .size(15.0)
-                            .color(crate::theme::PRIMARY),
+                            .color(self.theme.primary()),
                     );
 
                     // Centre: model badge (only when connected and a model is known)
@@ -142,7 +145,7 @@ impl eframe::App for CadeApp {
                         if let Some((_, _, Some(ref model))) = *last_usage {
                             ui.add_space(8.0);
                             egui::Frame::new()
-                                .fill(crate::theme::BG_SURFACE1)
+                                .fill(self.theme.bg_surface1())
                                 .corner_radius(egui::CornerRadius::same(4))
                                 .inner_margin(egui::Margin::symmetric(6, 2))
                                 .show(ui, |ui| {
@@ -150,7 +153,7 @@ impl eframe::App for CadeApp {
                                         egui::RichText::new(model.as_str())
                                             .monospace()
                                             .size(11.0)
-                                            .color(crate::theme::TEXT_MUTED),
+                                            .color(self.theme.text_muted()),
                                     );
                                 });
                         }
@@ -170,11 +173,11 @@ impl eframe::App for CadeApp {
                                 ui.label(
                                     egui::RichText::new(format!("v{version}"))
                                         .small()
-                                        .color(crate::theme::TEXT_DIM),
+                                        .color(self.theme.text_dim()),
                                 );
                                 ui.add_space(4.0);
                                 // Status dot via painter
-                                let dot_color = status_dot_color(streaming);
+                                let dot_color = status_dot_color(streaming, &self.theme);
                                 let (resp, painter) =
                                     ui.allocate_painter(egui::vec2(14.0, 14.0), egui::Sense::hover());
                                 painter.circle_filled(resp.rect.center(), 5.0, dot_color);
@@ -193,7 +196,7 @@ impl eframe::App for CadeApp {
         {
             egui::Panel::bottom("cade_status_bar")
                 .exact_size(18.0)
-                .frame(egui::Frame::new().fill(crate::theme::BG_SURFACE0))
+                .frame(egui::Frame::new().fill(self.theme.bg_surface0()))
                 .show_inside(ui, |ui| {
                     ui.horizontal(|ui| {
                         if let Some((input_tokens, output_tokens, _)) = *last_usage {
@@ -202,7 +205,7 @@ impl eframe::App for CadeApp {
                                     "{input_tokens}in {output_tokens}out"
                                 ))
                                 .size(10.0)
-                                .color(crate::theme::TEXT_DIM),
+                                .color(self.theme.text_dim()),
                             );
                         }
                         ui.with_layout(
@@ -212,7 +215,7 @@ impl eframe::App for CadeApp {
                                     ui.label(
                                         egui::RichText::new("streaming…")
                                             .size(10.0)
-                                            .color(crate::theme::WARNING),
+                                            .color(self.theme.warning()),
                                     );
                                 }
                             },
@@ -234,7 +237,7 @@ impl eframe::App for CadeApp {
                 let total = total_input_tokens + total_output_tokens;
                 let frac = crate::theme::context_fill_fraction(total, DEFAULT_WINDOW);
                 if total > 0 {
-                    let bar_color = crate::theme::context_fill_color(frac);
+                    let bar_color = crate::theme::context_fill_color(frac, &self.theme);
                     let hover_text = format!(
                         "{total} / {DEFAULT_WINDOW} tokens ({:.0}%)",
                         frac * 100.0
@@ -249,7 +252,7 @@ impl eframe::App for CadeApp {
             }
 
             // Snapshot session state for this frame's render pass.
-            let session_snapshot = self.session.borrow().clone();
+            let mut session_snapshot = self.session.borrow().clone();
 
             match session_snapshot {
                 Some(SessionState::Connecting { .. }) => {
@@ -326,6 +329,7 @@ impl eframe::App for CadeApp {
                     ref mcp_servers,
                     mcp_loading,
                     ref mcp_error,
+                ref mut theme_update,
 
                     model_picker_open,
                     ref model_picker_models,
@@ -338,7 +342,13 @@ impl eframe::App for CadeApp {
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
                     let _version = health.version.as_deref().unwrap_or("unknown");
-                    let has_agent = selected_agent.is_some();
+                    
+                if let Some(new_theme) = theme_update.take() {
+                    self.theme = new_theme;
+                    crate::theme::apply_theme(ui.ctx(), &self.theme);
+                }
+
+                let has_agent = selected_agent.is_some();
                     let is_streaming = streaming;
 
                     // Clone input buffer for the editable text field.
@@ -510,7 +520,7 @@ impl eframe::App for CadeApp {
                                     if let Some(agent) = agents.get(idx) {
                                         ui.add_space(2.0);
                                         egui::Frame::new()
-                                            .fill(crate::theme::BG_SURFACE0)
+                                            .fill(self.theme.bg_surface0())
                                             .corner_radius(egui::CornerRadius::same(4))
                                             .inner_margin(6.0)
                                             .show(ui, |ui| {
@@ -521,7 +531,7 @@ impl eframe::App for CadeApp {
                                                                 "model: {model}"
                                                             ))
                                                             .monospace()
-                                                            .color(crate::theme::PRIMARY)
+                                                            .color(self.theme.primary())
                                                             .size(11.0),
                                                         );
                                                     }
@@ -534,7 +544,7 @@ impl eframe::App for CadeApp {
                                                             ))
                                                             .monospace()
                                                             .color(
-                                                                crate::theme::TEXT_MUTED,
+                                                                self.theme.text_muted(),
                                                             )
                                                             .size(11.0),
                                                         );
@@ -553,7 +563,7 @@ impl eframe::App for CadeApp {
                                                             "id: {short_id}"
                                                         ))
                                                         .monospace()
-                                                        .color(crate::theme::TEXT_DIM)
+                                                        .color(self.theme.text_dim())
                                                         .size(10.0),
                                                     );
 
@@ -570,7 +580,7 @@ impl eframe::App for CadeApp {
                                                                 egui::RichText::new(
                                                                     format!("{label}: {val}"),
                                                                 )
-                                                                .color(crate::theme::TEXT_DIM)
+                                                                .color(self.theme.text_dim())
                                                                 .size(10.0),
                                                             );
                                                         }
@@ -626,7 +636,7 @@ impl eframe::App for CadeApp {
                                                 |ui| {
                                                     let del_btn = egui::Button::new(
                                                         egui::RichText::new("🗑")
-                                                            .color(crate::theme::TEXT_DIM)
+                                                            .color(self.theme.text_dim())
                                                             .size(11.0),
                                                     )
                                                     .fill(egui::Color32::TRANSPARENT)
@@ -662,9 +672,9 @@ impl eframe::App for CadeApp {
 
                             // ── Top separator ─────────────────────────
                             let sep_color = if is_streaming {
-                                crate::theme::PRIMARY
+                                self.theme.primary()
                             } else {
-                                crate::theme::BORDER_BASE
+                                self.theme.border_base()
                             };
                             let sep_rect = ui.available_rect_before_wrap();
                             let sep_rect = egui::Rect::from_min_size(
@@ -676,7 +686,7 @@ impl eframe::App for CadeApp {
 
                             // ── Input row ─────────────────────────────
                             egui::Frame::new()
-                                .fill(crate::theme::BG_INPUT)
+                                .fill(self.theme.bg_input())
                                 .inner_margin(egui::Margin::symmetric(8, 6))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
@@ -689,12 +699,12 @@ impl eframe::App for CadeApp {
                                             " CHAT "
                                         };
                                         let badge_bg = if is_streaming {
-                                            crate::theme::WARNING
+                                            self.theme.warning()
                                         } else {
-                                            crate::theme::BG_SURFACE2
+                                            self.theme.bg_surface2()
                                         };
                                         let badge = egui::RichText::new(badge_text)
-                                            .color(crate::theme::TEXT_PRIMARY)
+                                            .color(self.theme.text_primary())
                                             .strong()
                                             .size(11.0)
                                             .background_color(badge_bg);
@@ -703,7 +713,7 @@ impl eframe::App for CadeApp {
                                         // Prompt prefix "> "
                                         ui.label(
                                             egui::RichText::new("> ")
-                                                .color(crate::theme::TEXT_DIM)
+                                                .color(self.theme.text_dim())
                                                 .monospace()
                                                 .size(14.0),
                                         );
@@ -724,7 +734,7 @@ impl eframe::App for CadeApp {
                                                 .id(self.input_id)
                                                 .hint_text(
                                                     egui::RichText::new(hint)
-                                                        .color(crate::theme::TEXT_DIM),
+                                                        .color(self.theme.text_dim()),
                                                 )
                                                 .desired_width(desired_w)
                                                 .desired_rows(1)
@@ -760,17 +770,17 @@ impl eframe::App for CadeApp {
                                             let send_btn = egui::Button::new(
                                                 egui::RichText::new("↑")
                                                     .color(if send_enabled {
-                                                        crate::theme::BG_BASE
+                                                        self.theme.bg_base()
                                                     } else {
-                                                        crate::theme::TEXT_DIM
+                                                        self.theme.text_dim()
                                                     })
                                                     .strong()
                                                     .size(15.0),
                                             )
                                             .fill(if send_enabled {
-                                                crate::theme::PRIMARY
+                                                self.theme.primary()
                                             } else {
-                                                crate::theme::BG_SURFACE2
+                                                self.theme.bg_surface2()
                                             })
                                             .stroke(egui::Stroke::NONE)
                                             .corner_radius(egui::CornerRadius::same(14))
@@ -794,7 +804,7 @@ impl eframe::App for CadeApp {
                                 sep_rect.min,
                                 egui::vec2(sep_rect.width(), 1.0),
                             );
-                            ui.painter().rect_filled(sep_rect, 0.0, crate::theme::BORDER_BASE);
+                            ui.painter().rect_filled(sep_rect, 0.0, self.theme.border_base());
                             ui.advance_cursor_after_rect(sep_rect);
 
                             // ── Footer: model + context info ──────────
@@ -804,14 +814,14 @@ impl eframe::App for CadeApp {
                                 if has_agent && !is_streaming {
                                     let chip = egui::Button::new(
                                         egui::RichText::new(" / ")
-                                            .color(crate::theme::TEXT_DIM)
+                                            .color(self.theme.text_dim())
                                             .monospace()
                                             .size(10.0),
                                     )
-                                    .fill(crate::theme::BG_SURFACE1)
+                                    .fill(self.theme.bg_surface1())
                                     .stroke(egui::Stroke::new(
                                         0.5,
-                                        crate::theme::BORDER_BASE,
+                                        self.theme.border_base(),
                                     ))
                                     .corner_radius(egui::CornerRadius::same(3));
                                     if ui
@@ -829,7 +839,7 @@ impl eframe::App for CadeApp {
                                             ui.add_space(6.0);
                                             ui.label(
                                                 egui::RichText::new(model_name)
-                                                    .color(crate::theme::TEXT_DIM)
+                                                    .color(self.theme.text_dim())
                                                     .size(10.0),
                                             );
                                         }
@@ -851,7 +861,7 @@ impl eframe::App for CadeApp {
                                             };
                                             ui.label(
                                                 egui::RichText::new(label)
-                                                    .color(crate::theme::TEXT_DIM)
+                                                    .color(self.theme.text_dim())
                                                     .size(10.0),
                                             );
                                         },
@@ -882,7 +892,7 @@ impl eframe::App for CadeApp {
                                     ui.horizontal(|ui| {
                                         ui.add_space(pad);
                                         ui.vertical(|ui| {
-                                            render_welcome(ui, &mut self.md_cache);
+                                            render_welcome(ui, &mut self.md_cache, &self.theme);
                                         });
                                     });
                                 } else if messages.is_empty() && !is_streaming {
@@ -891,7 +901,7 @@ impl eframe::App for CadeApp {
                                         ui.add_space(pad);
                                         ui.label(
                                             egui::RichText::new("No messages yet. Send one to start a conversation.")
-                                                .color(crate::theme::TEXT_MUTED)
+                                                .color(self.theme.text_muted())
                                                 .italics()
                                                 .size(12.0),
                                         );
@@ -904,11 +914,11 @@ impl eframe::App for CadeApp {
                                             if ui.add(
                                                 egui::Button::new(
                                                     egui::RichText::new("⬆  Load older messages")
-                                                        .color(crate::theme::TEXT_MUTED)
+                                                        .color(self.theme.text_muted())
                                                         .size(11.0),
                                                 )
                                                 .fill(egui::Color32::TRANSPARENT)
-                                                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_BASE))
+                                                .stroke(egui::Stroke::new(1.0, self.theme.border_base()))
                                             ).clicked() {
                                                 action = AppAction::LoadMore;
                                             }
@@ -931,6 +941,7 @@ impl eframe::App for CadeApp {
                                                     ui,
                                                     &mut self.md_cache,
                                                     msg,
+                                                    &self.theme,
                                                 ) {
                                                     action = a;
                                                 }
@@ -948,7 +959,7 @@ impl eframe::App for CadeApp {
                                             ui.add_space(pad);
                                             ui.label(
                                                 egui::RichText::new("▍ CADE")
-                                                    .color(crate::theme::PRIMARY)
+                                                    .color(self.theme.primary())
                                                     .strong()
                                                     .size(13.0),
                                             );
@@ -993,9 +1004,9 @@ impl eframe::App for CadeApp {
                                 egui::Sense::click(),
                             );
                             let bg = if resp.hovered() {
-                                crate::theme::BG_SURFACE2
+                                self.theme.bg_surface2()
                             } else {
-                                crate::theme::BG_SURFACE1
+                                self.theme.bg_surface1()
                             };
                             ui.painter().rect_filled(
                                 btn_rect,
@@ -1005,7 +1016,7 @@ impl eframe::App for CadeApp {
                             ui.painter().rect_stroke(
                                 btn_rect,
                                 egui::CornerRadius::same(16),
-                                egui::Stroke::new(1.0, crate::theme::BORDER_BASE),
+                                egui::Stroke::new(1.0, self.theme.border_base()),
                                 egui::StrokeKind::Outside,
                             );
                             ui.painter().text(
@@ -1013,7 +1024,7 @@ impl eframe::App for CadeApp {
                                 egui::Align2::CENTER_CENTER,
                                 "↓",
                                 egui::FontId::proportional(16.0),
-                                crate::theme::TEXT_PRIMARY,
+                                self.theme.text_primary(),
                             );
                             if resp.clicked() {
                                 action = AppAction::ScrollToBottom;
@@ -1038,7 +1049,7 @@ impl eframe::App for CadeApp {
                                 egui::RichText::new(format!(
                                     "↑{inp} ↓{out} tokens{model_str}{finish}"
                                 ))
-                                .color(crate::theme::TEXT_DIM)
+                                .color(self.theme.text_dim())
                                 .size(11.0),
                             );
                         }
@@ -1047,20 +1058,20 @@ impl eframe::App for CadeApp {
                         if let Some(err) = error_toast {
                             ui.add_space(4.0);
                             egui::Frame::new()
-                                .fill(crate::theme::ERROR.gamma_multiply(0.12))
-                                .stroke(egui::Stroke::new(1.0, crate::theme::ERROR))
+                                .fill(self.theme.error().gamma_multiply(0.12))
+                                .stroke(egui::Stroke::new(1.0, self.theme.error()))
                                 .corner_radius(egui::CornerRadius::same(6))
                                 .inner_margin(egui::Margin::symmetric(10, 6))
                                 .show(ui, |ui| {
                                     ui.horizontal(|ui| {
                                         ui.label(
                                             egui::RichText::new("⚠")
-                                                .color(crate::theme::ERROR)
+                                                .color(self.theme.error())
                                                 .strong(),
                                         );
                                         ui.label(
                                             egui::RichText::new(err.as_str())
-                                                .color(crate::theme::TEXT_PRIMARY)
+                                                .color(self.theme.text_primary())
                                                 .size(12.0),
                                         );
                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1079,6 +1090,7 @@ impl eframe::App for CadeApp {
                             ui.ctx(),
                             palette_input,
                             palette_selection,
+                            &self.theme,
                         ) {
                             action = new_action;
                         }
@@ -1103,6 +1115,7 @@ impl eframe::App for CadeApp {
                             memory_error.as_deref(),
                             memory_save_notice.as_deref(),
                             dirty,
+                            &self.theme,
                         ) {
                             action = new_action;
                         }
@@ -1117,6 +1130,7 @@ impl eframe::App for CadeApp {
                             checkpoints_busy,
                             checkpoints_error.as_deref(),
                             checkpoints_notice.as_deref(),
+                            &self.theme,
                         ) {
                             action = new_action;
                         }
@@ -1132,6 +1146,7 @@ impl eframe::App for CadeApp {
                             artifacts_loading,
                             artifacts_busy,
                             artifacts_error.as_deref(),
+                            &self.theme,
                         ) {
                             action = new_action;
                         }
@@ -1144,6 +1159,7 @@ impl eframe::App for CadeApp {
                             tools,
                             tools_loading,
                             tools_error.as_deref(),
+                            &self.theme,
                         ) {
                             action = new_action;
                         }
@@ -1155,6 +1171,7 @@ impl eframe::App for CadeApp {
                             ui.ctx(),
                             agents,
                             *selected_agent,
+                            &self.theme,
                         ) {
                             action = new_action;
                         }
@@ -1167,6 +1184,7 @@ impl eframe::App for CadeApp {
                             context_stats.as_ref(),
                             context_loading,
                             context_error.as_deref(),
+                            &self.theme,
                         ) {
                             action = new_action;
                         }
@@ -1179,6 +1197,7 @@ impl eframe::App for CadeApp {
                             total_input_tokens,
                             total_output_tokens,
                             last_usage.as_ref(),
+                            &self.theme,
                         ) {
                             action = new_action;
                         }
@@ -1191,6 +1210,7 @@ impl eframe::App for CadeApp {
                             mcp_servers,
                             mcp_loading,
                             mcp_error.as_deref(),
+                            &self.theme,
                         ) {
                             action = new_action;
                         }
@@ -1206,6 +1226,7 @@ impl eframe::App for CadeApp {
                             model_picker_selection,
                             model_picker_loading,
                             model_picker_error.as_deref(),
+                            &self.theme,
                         ) {
                             action = new_action;
                         }
@@ -1218,6 +1239,7 @@ impl eframe::App for CadeApp {
                             q,
                             question_cursor,
                             question_checked,
+                            &self.theme,
                         ) {
                             action = new_action;
                         }
@@ -1577,10 +1599,10 @@ pub enum AppAction {
 
 /// Returns the colour for the live-status dot in the top toolbar.
 /// `true` (streaming) → WARNING amber; `false` (idle) → SUCCESS green.
-pub(crate) fn status_dot_color(streaming: bool) -> egui::Color32 {
+pub(crate) fn status_dot_color(streaming: bool, theme: &crate::theme::ThemeColors) -> egui::Color32 {
     if streaming {
-        crate::theme::WARNING
+        theme.warning()
     } else {
-        crate::theme::SUCCESS
+        theme.success()
     }
 }

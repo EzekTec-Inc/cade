@@ -1,5 +1,6 @@
 //! Memory-block viewer and editor overlay.
 
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 use super::super::AppAction;
@@ -14,6 +15,7 @@ pub fn render_memory_overlay(
     error: Option<&str>,
     save_notice: Option<&str>,
     dirty: bool,
+    theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
@@ -35,8 +37,8 @@ pub fn render_memory_overlay(
         .fixed_size([w, h])
         .frame(
             egui::Frame::new()
-                .fill(crate::theme::BG_SURFACE1)
-                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_FOCUS))
+                .fill(theme.bg_surface1())
+                .stroke(egui::Stroke::new(1.0, theme.border_focus()))
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(12.0),
         )
@@ -47,7 +49,7 @@ pub fn render_memory_overlay(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("🧠  Agent memory")
-                        .color(crate::theme::PRIMARY)
+                        .color(theme.primary())
                         .strong()
                         .size(16.0),
                 );
@@ -55,7 +57,7 @@ pub fn render_memory_overlay(
                     ui.spinner();
                     ui.label(
                         egui::RichText::new("loading…")
-                            .color(crate::theme::TEXT_MUTED)
+                            .color(theme.text_muted())
                             .small(),
                     );
                 }
@@ -76,14 +78,14 @@ pub fn render_memory_overlay(
             // ── Per-overlay error ────────────────────────────────
             if let Some(err) = error {
                 egui::Frame::new()
-                    .fill(crate::theme::ERROR.gamma_multiply(0.15))
-                    .stroke(egui::Stroke::new(1.0, crate::theme::ERROR))
+                    .fill(theme.error().gamma_multiply(0.15))
+                    .stroke(egui::Stroke::new(1.0, theme.error()))
                     .corner_radius(egui::CornerRadius::same(4))
                     .inner_margin(6.0)
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(format!("⚠ {err}"))
-                                .color(crate::theme::ERROR)
+                                .color(theme.error())
                                 .small(),
                         );
                     });
@@ -93,14 +95,14 @@ pub fn render_memory_overlay(
             // ── Per-overlay save-success notice ──────────────────
             if let Some(notice) = save_notice {
                 egui::Frame::new()
-                    .fill(crate::theme::SUCCESS.gamma_multiply(0.15))
-                    .stroke(egui::Stroke::new(1.0, crate::theme::SUCCESS))
+                    .fill(theme.success().gamma_multiply(0.15))
+                    .stroke(egui::Stroke::new(1.0, theme.success()))
                     .corner_radius(egui::CornerRadius::same(4))
                     .inner_margin(6.0)
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(format!("✓ {notice}"))
-                                .color(crate::theme::SUCCESS)
+                                .color(theme.success())
                                 .small(),
                         );
                     });
@@ -110,7 +112,7 @@ pub fn render_memory_overlay(
             if blocks.is_empty() && !loading {
                 ui.label(
                     egui::RichText::new("No memory blocks — nothing to show.")
-                        .color(crate::theme::TEXT_MUTED)
+                        .color(theme.text_muted())
                         .italics(),
                 );
                 return;
@@ -130,9 +132,9 @@ pub fn render_memory_overlay(
                             for (idx, block) in blocks.iter().enumerate() {
                                 let is_sel = idx == selection;
                                 let bg = if is_sel {
-                                    crate::theme::BG_SURFACE2
+                                    theme.bg_surface2()
                                 } else {
-                                    crate::theme::BG_SURFACE0
+                                    theme.bg_surface0()
                                 };
                                 let resp = egui::Frame::new()
                                     .fill(bg)
@@ -142,14 +144,14 @@ pub fn render_memory_overlay(
                                         ui.vertical(|ui| {
                                             ui.label(
                                                 egui::RichText::new(&block.label)
-                                                    .color(crate::theme::PRIMARY)
+                                                    .color(theme.primary())
                                                     .monospace()
                                                     .strong(),
                                             );
                                             if let Some(tier) = &block.tier {
                                                 ui.label(
                                                     egui::RichText::new(tier)
-                                                        .color(crate::theme::TEXT_MUTED)
+                                                        .color(theme.text_muted())
                                                         .small(),
                                                 );
                                             }
@@ -173,14 +175,14 @@ pub fn render_memory_overlay(
                     if let Some(block) = selected {
                         ui.label(
                             egui::RichText::new(format!("/{}", block.label))
-                                .color(crate::theme::TEXT_PRIMARY)
+                                .color(theme.text_primary())
                                 .monospace()
                                 .strong(),
                         );
                         if let Some(d) = &block.description {
                             ui.label(
                                 egui::RichText::new(d)
-                                    .color(crate::theme::TEXT_MUTED)
+                                    .color(theme.text_muted())
                                     .small(),
                             );
                         }
@@ -231,7 +233,7 @@ pub fn render_memory_overlay(
                                     if dirty {
                                         ui.label(
                                             egui::RichText::new("● unsaved changes")
-                                                .color(crate::theme::WARNING)
+                                                .color(theme.warning())
                                                 .small(),
                                         );
                                     }

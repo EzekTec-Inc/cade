@@ -1,5 +1,6 @@
 //! Artifacts browser overlay.
 
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 use super::super::AppAction;
@@ -11,6 +12,7 @@ pub fn render_artifacts_overlay(
     loading: bool,
     busy: bool,
     error: Option<&str>,
+    theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
@@ -32,8 +34,8 @@ pub fn render_artifacts_overlay(
         .fixed_size([w, h])
         .frame(
             egui::Frame::new()
-                .fill(crate::theme::BG_SURFACE1)
-                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_FOCUS))
+                .fill(theme.bg_surface1())
+                .stroke(egui::Stroke::new(1.0, theme.border_focus()))
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(12.0),
         )
@@ -44,7 +46,7 @@ pub fn render_artifacts_overlay(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("📦  Artifacts")
-                        .color(crate::theme::PRIMARY)
+                        .color(theme.primary())
                         .strong()
                         .size(16.0),
                 );
@@ -57,7 +59,7 @@ pub fn render_artifacts_overlay(
                     }
                     ui.label(
                         egui::RichText::new("Esc to close")
-                            .color(crate::theme::TEXT_DIM)
+                            .color(theme.text_dim())
                             .small(),
                     );
                 });
@@ -70,14 +72,14 @@ pub fn render_artifacts_overlay(
             // ── Error banner ──────────────────────────────────────
             if let Some(err) = error {
                 egui::Frame::new()
-                    .fill(crate::theme::ERROR.gamma_multiply(0.15))
-                    .stroke(egui::Stroke::new(1.0, crate::theme::ERROR))
+                    .fill(theme.error().gamma_multiply(0.15))
+                    .stroke(egui::Stroke::new(1.0, theme.error()))
                     .corner_radius(egui::CornerRadius::same(4))
                     .inner_margin(6.0)
                     .show(ui, |ui| {
                         ui.label(
                             egui::RichText::new(format!("⚠ {err}"))
-                                .color(crate::theme::ERROR)
+                                .color(theme.error())
                                 .small(),
                         );
                     });
@@ -87,7 +89,7 @@ pub fn render_artifacts_overlay(
             if artifacts.is_empty() && !loading {
                 ui.label(
                     egui::RichText::new("No artifacts yet.")
-                        .color(crate::theme::TEXT_MUTED)
+                        .color(theme.text_muted())
                         .italics(),
                 );
                 return;
@@ -107,9 +109,9 @@ pub fn render_artifacts_overlay(
                             for (idx, art) in artifacts.iter().enumerate() {
                                 let is_sel = selection == Some(idx);
                                 let bg = if is_sel {
-                                    crate::theme::BG_SURFACE2
+                                    theme.bg_surface2()
                                 } else {
-                                    crate::theme::BG_SURFACE0
+                                    theme.bg_surface0()
                                 };
                                 let resp = egui::Frame::new()
                                     .fill(bg)
@@ -120,7 +122,7 @@ pub fn render_artifacts_overlay(
                                         ui.vertical(|ui| {
                                             ui.label(
                                                 egui::RichText::new(kind_icon(&art.kind))
-                                                    .color(kind_color(&art.kind))
+                                                    .color(kind_color(&art.kind, theme))
                                                     .strong()
                                                     .size(11.0),
                                             );
@@ -131,13 +133,13 @@ pub fn render_artifacts_overlay(
                                             };
                                             ui.label(
                                                 egui::RichText::new(&short_id)
-                                                    .color(crate::theme::TEXT_MUTED)
+                                                    .color(theme.text_muted())
                                                     .monospace()
                                                     .size(9.0),
                                             );
                                             ui.label(
                                                 egui::RichText::new(format_size(art.size_bytes))
-                                                    .color(crate::theme::TEXT_DIM)
+                                                    .color(theme.text_dim())
                                                     .size(9.0),
                                             );
                                         });
@@ -162,7 +164,7 @@ pub fn render_artifacts_overlay(
                             ui.spinner();
                             ui.label(
                                 egui::RichText::new("Loading…")
-                                    .color(crate::theme::TEXT_MUTED)
+                                    .color(theme.text_muted())
                                     .small(),
                             );
                         }
@@ -170,7 +172,7 @@ pub fn render_artifacts_overlay(
                             ui.add_space(40.0);
                             ui.label(
                                 egui::RichText::new("← Select an artifact")
-                                    .color(crate::theme::TEXT_MUTED)
+                                    .color(theme.text_muted())
                                     .italics(),
                             );
                         }
@@ -183,7 +185,7 @@ pub fn render_artifacts_overlay(
                                         kind_icon(&d.kind),
                                         d.kind
                                     ))
-                                    .color(kind_color(&d.kind))
+                                    .color(kind_color(&d.kind, theme))
                                     .strong(),
                                 );
                                 ui.with_layout(
@@ -191,7 +193,7 @@ pub fn render_artifacts_overlay(
                                     |ui| {
                                         let del = egui::Button::new(
                                             egui::RichText::new("🗑 Delete")
-                                                .color(crate::theme::ERROR)
+                                                .color(theme.error())
                                                 .small(),
                                         );
                                         if ui
@@ -212,18 +214,18 @@ pub fn render_artifacts_overlay(
                             ui.label(
                                 egui::RichText::new(&d.id)
                                     .monospace()
-                                    .color(crate::theme::TEXT_MUTED)
+                                    .color(theme.text_muted())
                                     .size(10.0),
                             );
                             ui.horizontal(|ui| {
                                 ui.label(
                                     egui::RichText::new(&d.content_type)
-                                        .color(crate::theme::TEXT_DIM)
+                                        .color(theme.text_dim())
                                         .size(10.0),
                                 );
                                 ui.label(
                                     egui::RichText::new(format_size(d.size_bytes))
-                                        .color(crate::theme::TEXT_DIM)
+                                        .color(theme.text_dim())
                                         .size(10.0),
                                 );
                             });
@@ -261,7 +263,7 @@ pub fn render_artifacts_overlay(
                                 _ => {
                                     ui.label(
                                         egui::RichText::new("(binary / no text content)")
-                                            .color(crate::theme::TEXT_DIM)
+                                            .color(theme.text_dim())
                                             .italics()
                                             .small(),
                                     );
@@ -339,14 +341,14 @@ pub fn kind_icon(kind: &str) -> String {
 }
 
 /// Pick a theme color for a known artifact kind.
-pub fn kind_color(kind: &str) -> egui::Color32 {
+pub fn kind_color(kind: &str, theme: &crate::theme::ThemeColors) -> egui::Color32 {
     match kind {
-        "log" => crate::theme::TEXT_PRIMARY,
-        "diff" => crate::theme::WARNING,
-        "test_report" => crate::theme::SUCCESS,
-        "screenshot" => crate::theme::TEAL,
-        "fetched_doc" => crate::theme::PRIMARY,
-        "pdf" => crate::theme::PURPLE,
-        _ => crate::theme::TEXT_MUTED,
+        "log" => theme.text_primary(),
+        "diff" => theme.warning(),
+        "test_report" => theme.success(),
+        "screenshot" => theme.teal(),
+        "fetched_doc" => theme.primary(),
+        "pdf" => theme.purple(),
+        _ => theme.text_muted(),
     }
 }

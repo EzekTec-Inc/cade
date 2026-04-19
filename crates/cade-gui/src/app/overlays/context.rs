@@ -1,5 +1,6 @@
 //! Context-stats overlay.
 
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 use super::super::AppAction;
@@ -8,6 +9,7 @@ pub fn render_context_overlay(
     stats: Option<&crate::api::ContextStats>,
     loading: bool,
     error: Option<&str>,
+    theme: &crate::theme::ThemeColors, 
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
     let screen = ctx.content_rect();
@@ -25,8 +27,8 @@ pub fn render_context_overlay(
         .fixed_size([w, h])
         .frame(
             egui::Frame::new()
-                .fill(crate::theme::BG_SURFACE1)
-                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_FOCUS))
+                .fill(theme.bg_surface1())
+                .stroke(egui::Stroke::new(1.0, theme.border_focus()))
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(12.0),
         )
@@ -35,7 +37,7 @@ pub fn render_context_overlay(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("📐  Context Window")
-                        .color(crate::theme::PRIMARY)
+                        .color(theme.primary())
                         .strong()
                         .size(16.0),
                 );
@@ -51,12 +53,12 @@ pub fn render_context_overlay(
             ui.add_space(6.0);
 
             if let Some(err) = error {
-                ui.label(egui::RichText::new(format!("⚠ {err}")).color(crate::theme::ERROR).small());
+                ui.label(egui::RichText::new(format!("⚠ {err}")).color(theme.error()).small());
                 return;
             }
 
             let Some(s) = stats else {
-                ui.label(egui::RichText::new("Loading…").color(crate::theme::TEXT_MUTED).italics());
+                ui.label(egui::RichText::new("Loading…").color(theme.text_muted()).italics());
                 return;
             };
 
@@ -78,8 +80,8 @@ pub fn render_context_overlay(
                 .spacing([16.0, 4.0])
                 .show(ui, |ui| {
                     for (k, v) in rows {
-                        ui.label(egui::RichText::new(*k).color(crate::theme::TEXT_MUTED).monospace().size(11.0));
-                        ui.label(egui::RichText::new(v).color(crate::theme::TEXT_PRIMARY).monospace().size(11.0));
+                        ui.label(egui::RichText::new(*k).color(theme.text_muted()).monospace().size(11.0));
+                        ui.label(egui::RichText::new(v).color(theme.text_primary()).monospace().size(11.0));
                         ui.end_row();
                     }
                 });
@@ -91,13 +93,13 @@ pub fn render_context_overlay(
                 let bar_w = ui.available_width();
                 let (resp, painter) = ui.allocate_painter(egui::vec2(bar_w, 10.0), egui::Sense::hover());
                 let r = resp.rect;
-                painter.rect_filled(r, 3.0, crate::theme::BG_SURFACE0);
+                painter.rect_filled(r, 3.0, theme.bg_surface0());
                 painter.rect_filled(
                     egui::Rect::from_min_size(r.min, egui::vec2(r.width() * pct, r.height())),
                     3.0,
-                    if pct > 0.85 { crate::theme::WARNING } else { crate::theme::PRIMARY },
+                    if pct > 0.85 { theme.warning() } else { theme.primary() },
                 );
-                ui.label(egui::RichText::new(format!("{:.0}% context used", pct * 100.0)).color(crate::theme::TEXT_DIM).size(10.0));
+                ui.label(egui::RichText::new(format!("{:.0}% context used", pct * 100.0)).color(theme.text_dim()).size(10.0));
             }
         });
 

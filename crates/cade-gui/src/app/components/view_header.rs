@@ -1,13 +1,16 @@
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 use crate::session::SessionState;
 use crate::app::status_dot_color;
 
-pub fn render(ctx: &egui::Context, session_snapshot: &Option<SessionState>) {
+pub fn render(ctx: &egui::Context, session_snapshot: &Option<SessionState>,
+    theme: &crate::theme::ThemeColors,
+) {
     egui::TopBottomPanel::top("cade_toolbar")
         .exact_size(32.0)
         .frame(
             egui::Frame::new()
-                .fill(crate::theme::BG_SURFACE0)
+                .fill(theme.bg_surface0())
                 .inner_margin(egui::Margin::symmetric(10, 0)),
         )
         .show(ctx, |ui| {
@@ -16,14 +19,14 @@ pub fn render(ctx: &egui::Context, session_snapshot: &Option<SessionState>) {
                     egui::RichText::new("CADE")
                         .strong()
                         .size(15.0)
-                        .color(crate::theme::PRIMARY),
+                        .color(theme.primary()),
                 );
 
                 if let Some(SessionState::Connected { last_usage, .. }) = session_snapshot {
                     if let Some((_, _, Some(ref model))) = *last_usage {
                         ui.add_space(8.0);
                         egui::Frame::new()
-                            .fill(crate::theme::BG_SURFACE1)
+                            .fill(theme.bg_surface1())
                             .corner_radius(egui::CornerRadius::same(4))
                             .inner_margin(egui::Margin::symmetric(6, 2))
                             .show(ui, |ui| {
@@ -31,7 +34,7 @@ pub fn render(ctx: &egui::Context, session_snapshot: &Option<SessionState>) {
                                     egui::RichText::new(model.as_str())
                                         .monospace()
                                         .size(11.0)
-                                        .color(crate::theme::TEXT_MUTED),
+                                        .color(theme.text_muted()),
                                 );
                             });
                     }
@@ -43,10 +46,10 @@ pub fn render(ctx: &egui::Context, session_snapshot: &Option<SessionState>) {
                         ui.label(
                             egui::RichText::new(format!("v{version}"))
                                 .small()
-                                .color(crate::theme::TEXT_DIM),
+                                .color(theme.text_dim()),
                         );
                         ui.add_space(4.0);
-                        let dot_color = status_dot_color(*streaming);
+                        let dot_color = crate::app::status_dot_color(*streaming, theme);
                         let (resp, painter) =
                             ui.allocate_painter(egui::vec2(14.0, 14.0), egui::Sense::hover());
                         painter.circle_filled(resp.rect.center(), 5.0, dot_color);

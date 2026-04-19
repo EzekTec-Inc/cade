@@ -1,3 +1,4 @@
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 use cade_api_types::AgentInfo;
 use crate::api::AgentMetrics;
@@ -13,6 +14,7 @@ pub fn render(
     selected_conversation: Option<usize>,
     agent_metrics: &Option<AgentMetrics>,
     action: &mut AppAction,
+    theme: &crate::theme::ThemeColors, 
 ) {
     egui::SidePanel::left("agent_sidebar")
         .default_size(180.0)
@@ -38,7 +40,7 @@ pub fn render(
                     if let Some(agent) = agents.get(idx) {
                         ui.add_space(2.0);
                         egui::Frame::new()
-                            .fill(crate::theme::BG_SURFACE0)
+                            .fill(theme.bg_surface0())
                             .corner_radius(egui::CornerRadius::same(4))
                             .inner_margin(6.0)
                             .show(ui, |ui| {
@@ -47,7 +49,7 @@ pub fn render(
                                         ui.label(
                                             egui::RichText::new(format!("model: {model}"))
                                                 .monospace()
-                                                .color(crate::theme::PRIMARY)
+                                                .color(theme.primary())
                                                 .size(11.0),
                                         );
                                     }
@@ -55,7 +57,7 @@ pub fn render(
                                         ui.label(
                                             egui::RichText::new(format!("provider: {provider}"))
                                                 .monospace()
-                                                .color(crate::theme::TEXT_MUTED)
+                                                .color(theme.text_muted())
                                                 .size(11.0),
                                         );
                                     }
@@ -67,7 +69,7 @@ pub fn render(
                                     ui.label(
                                         egui::RichText::new(format!("id: {short_id}"))
                                             .monospace()
-                                            .color(crate::theme::TEXT_DIM)
+                                            .color(theme.text_dim())
                                             .size(10.0),
                                     );
 
@@ -81,7 +83,7 @@ pub fn render(
                                         ] {
                                             ui.label(
                                                 egui::RichText::new(format!("{label}: {val}"))
-                                                    .color(crate::theme::TEXT_DIM)
+                                                    .color(theme.text_dim())
                                                     .size(10.0),
                                             );
                                         }
@@ -120,7 +122,7 @@ pub fn render(
                                 |ui| {
                                     let del_btn = egui::Button::new(
                                         egui::RichText::new("🗑")
-                                            .color(crate::theme::TEXT_DIM)
+                                            .color(theme.text_dim())
                                             .size(11.0),
                                     )
                                     .fill(egui::Color32::TRANSPARENT)

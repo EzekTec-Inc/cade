@@ -1,5 +1,6 @@
 //! Slash-command palette overlay.
 
+use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 use super::super::AppAction;
@@ -8,6 +9,7 @@ pub fn render_palette_overlay(
     ctx: &egui::Context,
     palette_input: &str,
     palette_selection: usize,
+    theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     use crate::palette::fuzzy_filter;
     let mut result: Option<AppAction> = None;
@@ -29,8 +31,8 @@ pub fn render_palette_overlay(
         .fixed_size([w, h])
         .frame(
             egui::Frame::new()
-                .fill(crate::theme::BG_SURFACE1)
-                .stroke(egui::Stroke::new(1.0, crate::theme::BORDER_FOCUS))
+                .fill(theme.bg_surface1())
+                .stroke(egui::Stroke::new(1.0, theme.border_focus()))
                 .corner_radius(egui::CornerRadius::same(8))
                 .inner_margin(12.0),
         )
@@ -41,7 +43,7 @@ pub fn render_palette_overlay(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("⌘")
-                        .color(crate::theme::PRIMARY)
+                        .color(theme.primary())
                         .size(16.0),
                 );
                 let mut q = palette_input.to_string();
@@ -65,7 +67,7 @@ pub fn render_palette_overlay(
             if filtered.is_empty() {
                 ui.label(
                     egui::RichText::new("No matching commands")
-                        .color(crate::theme::TEXT_MUTED)
+                        .color(theme.text_muted())
                         .italics(),
                 );
             } else {
@@ -76,9 +78,9 @@ pub fn render_palette_overlay(
                         for (idx, entry) in filtered.iter().enumerate() {
                             let is_sel = idx == palette_selection;
                             let bg = if is_sel {
-                                crate::theme::BG_SURFACE2
+                                theme.bg_surface2()
                             } else {
-                                crate::theme::BG_SURFACE0
+                                theme.bg_surface0()
                             };
                             let frame = egui::Frame::new()
                                 .fill(bg)
@@ -92,14 +94,14 @@ pub fn render_palette_overlay(
                                                 "/{}",
                                                 entry.def.trigger
                                             ))
-                                            .color(crate::theme::PRIMARY)
+                                            .color(theme.primary())
                                             .monospace()
                                             .strong(),
                                         );
                                         if let Some(hint) = entry.def.arg_hint {
                                             ui.label(
                                                 egui::RichText::new(hint)
-                                                    .color(crate::theme::TEXT_MUTED)
+                                                    .color(theme.text_muted())
                                                     .monospace()
                                                     .small(),
                                             );
@@ -109,7 +111,7 @@ pub fn render_palette_overlay(
                                             |ui| {
                                                 ui.label(
                                                     egui::RichText::new(entry.def.description)
-                                                        .color(crate::theme::TEXT_MUTED)
+                                                        .color(theme.text_muted())
                                                         .small(),
                                                 );
                                             },
@@ -138,7 +140,7 @@ pub fn render_palette_overlay(
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("↑↓ select  ⏎ run  Esc close")
-                        .color(crate::theme::TEXT_MUTED)
+                        .color(theme.text_muted())
                         .small(),
                 );
             });
