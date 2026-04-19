@@ -14,6 +14,8 @@ pub struct ServerConfig {
     pub ollama_base_url: String,
     /// Auth token required for CLI requests (optional; empty = no auth)
     pub api_key: Option<String>,
+    /// Optional explicitly allowed CORS origin for remote deployments
+    pub allowed_origin: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -160,6 +162,7 @@ impl ServerConfig {
             ollama_base_url: std::env::var("OLLAMA_BASE_URL")
                 .unwrap_or_else(|_| "http://localhost:11434".to_string()),
             api_key: resolve_api_key(),
+            allowed_origin: std::env::var("CADE_ALLOWED_ORIGIN").ok(),
         })
     }
 

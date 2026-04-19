@@ -36,6 +36,8 @@ async fn test_db_lock_poisoning_yields_500() {
         google_api_key: None,
         ollama_base_url: String::new(),
         api_key: None,
+
+        allowed_origin: None,
     });
 
     let state = AppState {

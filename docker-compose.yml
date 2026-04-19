@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  cade-server:
+    # Build from local source or use official image when available
+    build: .
+    restart: unless-stopped
+    ports:
+      # Expose native port for local access if needed
+      - "8284:8284"
+    volumes:
+      # Persist SQLite memory, agent settings, and skills
+      - cade_data:/root/.cade
+      # Optional: Mount a workspace for the agent to modify
+      - ./workspace:/workspace
+    environment:
+      - RUST_LOG=info
+      - CADE_SERVER_PORT=8284
+      - CADE_ALLOWED_ORIGIN=https://${CADE_DOMAIN:-cade.yourdomain.com}
+      # Required LLM Provider keys
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+
+  caddy:
+    image: caddy:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Mount the Caddyfile
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      # Persist Let's Encrypt certificates
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - CADE_DOMAIN=${CADE_DOMAIN:-cade.yourdomain.com}
+    depends_on:
+      - cade-server
+
+volumes:
+  cade_data:
+  caddy_data:
+  caddy_config:

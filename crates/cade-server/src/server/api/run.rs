@@ -157,7 +157,6 @@ pub async fn run_agent(
 
             let mut text_acc = String::new();
             let mut tool_calls: Vec<LlmToolCall> = Vec::new();
-            let mut finish = String::new();
 
             while let Some(chunk) = llm_stream.next().await {
                 match chunk {
@@ -190,12 +189,10 @@ pub async fn run_agent(
                         })).await;
                     }
                     Ok(StreamChunk::FinishReason(r)) => {
-                        finish = r.clone();
                         send(json!({ "message_type": "finish_reason", "reason": r })).await;
                     }
                     Err(e) => {
                         send(json!({ "message_type": "error", "error": e.to_string() })).await;
-                        finish = "error".to_string();
                     }
                     Ok(StreamChunk::Done) => {
                         // Stream ended cleanly (some providers emit Done before FinishReason)
@@ -223,8 +220,8 @@ pub async fn run_agent(
                 );
             }
 
-            // ── Done if not tool_use ──────────────────────────────────────
-            if finish != "tool_use" || tool_calls.is_empty() {
+            // ── Done if no tool calls ──────────────────────────────────────
+            if tool_calls.is_empty() {
                 break;
             }
 

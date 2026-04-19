@@ -1346,6 +1346,8 @@ mod tests {
             google_api_key: None,
             ollama_base_url: "http://localhost:11434".into(),
             api_key: None,
+
+        allowed_origin: None,
         };
 
         AppState {

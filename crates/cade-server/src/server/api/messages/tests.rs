@@ -431,6 +431,8 @@ async fn send_message_blocking_triggers_needs_consolidation() {
         google_api_key: None,
         ollama_base_url: String::new(),
         api_key: None,
+
+        allowed_origin: None,
     });
     
     let state = AppState {

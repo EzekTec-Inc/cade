@@ -737,16 +737,6 @@ impl eframe::App for CadeApp {
                                         }
 
                                         if resp.changed() {
-                                            let typed_slash_at_start = input_edit.starts_with('/')
-                                                && !input_buffer.starts_with('/');
-                                            if typed_slash_at_start {
-                                                let initial = input_edit
-                                                    .strip_prefix('/')
-                                                    .unwrap_or("")
-                                                    .to_string();
-                                                action = AppAction::OpenPalette(initial);
-                                                input_edit.clear();
-                                            }
                                             if let Some(SessionState::Connected {
                                                 input_buffer: buf, ..
                                             }) = self.session.borrow_mut().as_mut()

@@ -25,6 +25,7 @@ fn make_state(api_key: Option<String>) -> AppState {
         google_api_key: None,
         ollama_base_url: String::new(),
         api_key,
+        allowed_origin: None,
     });
 
     AppState {

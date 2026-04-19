@@ -190,25 +190,25 @@ async fn main() -> Result<()> {
             tower_http::trace::DefaultOnFailure::new().level(tracing::Level::ERROR)
         );
 
+    let mut allowed_origins = vec![
+        "http://localhost".parse::<HeaderValue>().expect("valid header"),
+        format!("http://localhost:{}", config.addr.port()).parse::<HeaderValue>().expect("valid header"),
+        "http://127.0.0.1".parse::<HeaderValue>().expect("valid header"),
+        format!("http://127.0.0.1:{}", config.addr.port()).parse::<HeaderValue>().expect("valid header"),
+    ];
+
+    if let Some(origin) = &config.allowed_origin {
+        if let Ok(parsed) = origin.parse::<HeaderValue>() {
+            allowed_origins.push(parsed);
+        }
+    }
+
     let app = router(state)
         .layer(axum::middleware::map_response(add_version_header))
         .layer(
             // H-03: Restrict CORS to localhost origins only (not permissive/open)
             CorsLayer::new()
-                .allow_origin([
-                    "http://localhost"
-                        .parse::<HeaderValue>()
-                        .expect("valid header"),
-                    format!("http://localhost:{}", config.addr.port())
-                        .parse::<HeaderValue>()
-                        .expect("valid header"),
-                    "http://127.0.0.1"
-                        .parse::<HeaderValue>()
-                        .expect("valid header"),
-                    format!("http://127.0.0.1:{}", config.addr.port())
-                        .parse::<HeaderValue>()
-                        .expect("valid header"),
-                ])
+                .allow_origin(allowed_origins)
                 .allow_methods([
                     Method::GET,
                     Method::POST,
