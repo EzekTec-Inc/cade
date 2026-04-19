@@ -16,10 +16,11 @@ impl Repl {
             .unwrap_or("build")
             .trim()
             .to_string();
-        let prompt = args["prompt"].as_str().unwrap_or("").trim().to_string();
+        let mut prompt = args["prompt"].as_str().unwrap_or("").trim().to_string();
         let background = args["background"].as_bool().unwrap_or(false);
         let silent_stream = args["silent_stream"].as_bool().unwrap_or(false)
             || self.settings.lock().silent_subagents();
+        let test_command = args["test_command"].as_str().map(|s| s.trim().to_string());
         let agent_id_arg = args["agent_id"].as_str().map(|s| s.trim().to_string());
         let model_override = args["model"].as_str().map(|s| s.trim().to_string());
         let custom_system_prompt = args["system_prompt"].as_str().map(|s| s.trim().to_string());
@@ -32,6 +33,12 @@ impl Repl {
                 output: "error: 'prompt' is required".to_string(),
                 is_error: true,
             });
+        }
+
+        if let Some(cmd) = &test_command {
+            prompt.push_str(&format!(
+                "\n\nCRITICAL PROOF OF WORK REQUIRED: You MUST run the following test command to verify your fix: `{cmd}`. Do not return until this command passes. The main agent will execute this command on the host system to verify your work. If it fails, your answer will be rejected."
+            ));
         }
 
         // Resolve subagent definition - we now always use the unified worker
@@ -58,6 +65,8 @@ impl Repl {
         let parent_agent_id = self.agent_id();
         let hooks = self.hooks.clone();
 
+        let test_command_c = test_command.clone();
+        let cwd_c = self.cwd.clone();
         let task_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
         let task_id_c = task_id.clone();
         let prompt_preview: String = prompt.chars().take(60).collect();
@@ -189,7 +198,7 @@ impl Repl {
                 )
                 .await;
 
-                let (last_output, is_error) = match result {
+                let (mut last_output, mut is_error) = match result {
                     Ok((output, _)) => (output, false),
                     Err(e) => (format!("Subagent error: {e}"), true),
                 };
@@ -197,6 +206,33 @@ impl Repl {
                 // Delete ephemeral agent
                 if ephemeral {
                     let _ = client.delete_agent(&sub_agent_id).await;
+                }
+                
+                // Verify Proof of Work
+                if !is_error {
+                    if let Some(cmd) = test_command_c {
+                        match std::process::Command::new("bash")
+                            .arg("-c")
+                            .arg(&cmd)
+                            .current_dir(&cwd_c)
+                            .output()
+                        {
+                            Ok(output) => {
+                                if !output.status.success() {
+                                    is_error = true;
+                                    let stdout = String::from_utf8_lossy(&output.stdout);
+                                    let stderr = String::from_utf8_lossy(&output.stderr);
+                                    last_output = format!("PROOF OF WORK FAILED: Subagent claimed success, but the test command `{cmd}` failed on the host.\n\nSubagent output:\n{last_output}\n\nTest stdout:\n{stdout}\nTest stderr:\n{stderr}\n\nYou must re-run the subagent or fix the remaining issues yourself.");
+                                } else {
+                                    last_output.push_str(&format!("\n\n[PROOF OF WORK VERIFIED: `{cmd}` exited with code 0]"));
+                                }
+                            }
+                            Err(e) => {
+                                is_error = true;
+                                last_output = format!("PROOF OF WORK FAILED: Failed to execute test command `{cmd}`: {e}\n\nSubagent output:\n{last_output}");
+                            }
+                        }
+                    }
                 }
 
                 (last_output, is_error)

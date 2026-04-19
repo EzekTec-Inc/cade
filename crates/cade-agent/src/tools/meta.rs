@@ -335,6 +335,10 @@ fn schema_run_subagent() -> Value {
                 "description": {
                     "type": "string",
                     "description": "Optional: a short description of the subagent's role or purpose"
+                },
+                "test_command": {
+                    "type": "string",
+                    "description": "Optional: a bash test command that the subagent MUST run and pass (e.g. 'cargo test'). The subagent's response will be rejected if it does not prove this test passed."
                 }
             },
             "required": ["prompt"]
