@@ -133,8 +133,18 @@ impl McpManager {
         let mut entries: Vec<(&String, &McpServerConfig)> = configs.iter().collect();
         entries.sort_by_key(|(k, _)| k.as_str());
 
+        let mut join_set = tokio::task::JoinSet::new();
         for (key, config) in entries {
-            match Self::connect_server(key, config).await {
+            let k = key.clone();
+            let c = config.clone();
+            join_set.spawn(async move {
+                let res = Self::connect_server(&k, &c).await;
+                (k, res)
+            });
+        }
+
+        while let Some(Ok((key, result))) = join_set.join_next().await {
+            match result {
                 Ok(server) => {
                     info!(
                         "MCP server '{}' ready — {} tool(s)",
@@ -188,6 +198,7 @@ impl McpManager {
             old_servers.drain(..).map(|s| (s.key.clone(), s)).collect();
 
         let mut new_servers: Vec<McpServer> = Vec::new();
+        let mut join_set = tokio::task::JoinSet::new();
 
         for (key, config) in &entries {
             // Keep existing connection if the server identity is unchanged and
@@ -218,7 +229,16 @@ impl McpManager {
             // Identity changed or server was disabled — drop and reconnect.
 
             // Start a new connection
-            match Self::connect_server(key, config).await {
+            let k = (*key).clone();
+            let c = (*config).clone();
+            join_set.spawn(async move {
+                let res = Self::connect_server(&k, &c).await;
+                (k, res)
+            });
+        }
+
+        while let Some(Ok((key, result))) = join_set.join_next().await {
+            match result {
                 Ok(server) => {
                     info!(
                         "MCP reload: started server '{key}' — {} tool(s)",

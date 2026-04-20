@@ -15,10 +15,6 @@ use super::{
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
 const OPENAI_RESPONSES_URL: &str = "https://api.openai.com/v1/responses";
 
-/// Recursively fix JSON Schema fields that OpenAI rejects.
-/// OpenAI requires every object-type node to have a `properties` field.
-/// Missing `properties` on an object causes a 400 "object schema missing properties".
-
 fn needs_max_completion_tokens(model: &str) -> bool {
     let bare = model.to_lowercase();
     bare.starts_with("gpt-5")
@@ -164,6 +160,11 @@ impl OpenAiProvider {
     }
 
     fn to_openai_messages(req: &CompletionRequest) -> Value {
+        let is_o_series = {
+            let bare = bare_model(&req.model).to_lowercase();
+            bare.starts_with("o1") || bare.starts_with("o3") || bare.starts_with("o4")
+        };
+        
         let messages: Vec<Value> = req
             .messages
             .iter()
@@ -207,7 +208,8 @@ impl OpenAiProvider {
                             }
                             return json!({"role": m.role, "content": parts});
                         }
-                        json!({"role": m.role, "content": m.content})
+                        let role = if m.role == "system" && is_o_series { "user" } else { m.role.as_str() };
+                        json!({"role": role, "content": m.content})
                     }
                 }
             })
@@ -300,6 +302,10 @@ impl OpenAiProvider {
     }
 
     fn to_responses_input(req: &CompletionRequest) -> Value {
+        let is_o_series = {
+            let bare = bare_model(&req.model).to_lowercase();
+            bare.starts_with("o1") || bare.starts_with("o3") || bare.starts_with("o4")
+        };
         let mut items: Vec<Value> = Vec::new();
         for m in &req.messages {
             match m.role.as_str() {
@@ -321,7 +327,10 @@ impl OpenAiProvider {
                         }));
                     }
                 }
-                _ => items.push(json!({"role": m.role, "content": m.content})),
+                _ => {
+                    let role = if m.role == "system" && is_o_series { "user" } else { m.role.as_str() };
+                    items.push(json!({"role": role, "content": m.content}))
+                },
             }
         }
         json!(items)

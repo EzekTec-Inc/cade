@@ -202,8 +202,11 @@ mod tests {
 
     #[test]
     fn complete_max_tokens_is_reasonable() {
-        assert!(COMPLETE_MAX_TOKENS <= 1024);
-        assert!(COMPLETE_MAX_TOKENS >= 128);
+        #[allow(clippy::assertions_on_constants)]
+        {
+            assert!(COMPLETE_MAX_TOKENS <= 1024);
+            assert!(COMPLETE_MAX_TOKENS >= 128);
+        }
     }
 
     #[test]

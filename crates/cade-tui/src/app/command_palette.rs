@@ -33,6 +33,12 @@ pub struct CommandPaletteState {
     pub cursor: usize,
 }
 
+impl Default for CommandPaletteState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CommandPaletteState {
     /// Create a new palette with all commands and an empty query.
     pub fn new() -> Self {

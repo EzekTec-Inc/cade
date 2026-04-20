@@ -1126,8 +1126,11 @@ mod tests {
         // The threshold must be > 0 (else eager fires on every turn) and should
         // be well below the 80-turn STALE_THRESHOLD so consolidation wins the
         // race against promote_stale_blocks. A value in 10..=40 is reasonable.
-        assert!(EAGER_CONSOLIDATION_TURN_THRESHOLD >= 10);
-        assert!(EAGER_CONSOLIDATION_TURN_THRESHOLD <= 40);
+        #[allow(clippy::assertions_on_constants)]
+        {
+            assert!(EAGER_CONSOLIDATION_TURN_THRESHOLD >= 10);
+            assert!(EAGER_CONSOLIDATION_TURN_THRESHOLD <= 40);
+        }
     }
 
     // ── Phase C: DB-backed ring tests ────────────────────────────────────

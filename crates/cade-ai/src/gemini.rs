@@ -15,15 +15,6 @@ use super::{
     bare_model, provider_error, retry_with_backoff, clean_gemini_schema, inline_schema_refs
 };
 
-/// Recursively strip JSON Schema fields that Gemini's functionDeclarations format rejects.
-///
-/// Gemini accepts a strict subset of JSON Schema — the following fields cause 400 errors
-/// when present anywhere in the parameter schema tree:
-///   - `$schema`            — JSON Schema meta-schema declaration
-///   - `additionalProperties` — not supported in Gemini's schema dialect
-///
-/// This function walks the entire Value tree and removes those keys in-place.
-
 const GEMINI_BASE: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 const GEMINI_LIST_URL: &str =
     "https://generativelanguage.googleapis.com/v1beta/models?pageSize=200";

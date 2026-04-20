@@ -17,6 +17,7 @@ use ratatui::{
 /// Render the breadcrumb bar.
 ///
 /// Layout: ` Turn 5 │ model-name │ ↑42% ctx │ Ctrl+P palette `
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn render_breadcrumb(
     frame: &mut Frame,
     area: Rect,

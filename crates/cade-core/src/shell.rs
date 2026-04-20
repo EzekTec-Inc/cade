@@ -1,12 +1,12 @@
-/// Platform-appropriate shell command builders.
-///
-/// Every crate that needs to spawn a shell command should call one of these
-/// helpers instead of hard-coding `Command::new("bash")`.
-///
-/// | Platform        | Shell used       |
-/// |-----------------|------------------|
-/// | Unix (Linux/macOS) | `bash -c`     |
-/// | Windows         | `cmd.exe /C`     |
+//! Platform-appropriate shell command builders.
+//!
+//! Every crate that needs to spawn a shell command should call one of these
+//! helpers instead of hard-coding `Command::new("bash")`.
+//!
+//! | Platform        | Shell used       |
+//! |-----------------|------------------|
+//! | Unix (Linux/macOS) | `bash -c`     |
+//! | Windows         | `cmd.exe /C`     |
 
 /// Build an async (`tokio`) shell command pre-configured for the host platform.
 ///
