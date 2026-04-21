@@ -25,6 +25,7 @@ impl Repl {
         let model_override = args["model"].as_str().map(|s| s.trim().to_string());
         let custom_system_prompt = args["system_prompt"].as_str().map(|s| s.trim().to_string());
         let custom_description = args["description"].as_str().map(|s| s.trim().to_string());
+        let human_review = args["human_review"].as_bool().unwrap_or(false);
 
         if prompt.is_empty() {
             return Ok(cade_agent::tools::ToolResult {
@@ -352,18 +353,48 @@ impl Repl {
             }
 
             // If hook blocked, append its reason to the output so the agent sees it
-            let final_output = match hook_outcome {
+            let mut final_output = match hook_outcome {
                 cade_core::hooks::HookOutcome::Block { reason } => {
                     format!("{output}\n\n[SubagentStop hook: {reason}]")
                 }
                 cade_core::hooks::HookOutcome::Allow => output,
             };
 
+            let mut final_is_error = is_error;
+
+            if !final_is_error && human_review {
+                use crate::ui::question::{Question, QuestionOption};
+                let q = Question {
+                    header: format!("Subagent [{subagent_mode}] Completed"),
+                    text: "Review the subagent's work. Select Approve, or type feedback to Reject and re-task:".to_string(),
+                    options: vec![
+                        QuestionOption { label: "Approve".to_string(), description: String::new() },
+                    ],
+                    multi_select: false,
+                    allow_other: true,
+                    progress: None,
+                };
+                
+                // Use a block to ensure we don't hold the app lock across await if this was an issue
+                // ask_question is blocking, which blocks the executor thread temporarily.
+                let ans_opt = self.app.lock().ask_question(&q).unwrap_or(None);
+                
+                if let Some(ans) = ans_opt {
+                    let val = ans.as_str();
+                    if val != "Approve" {
+                        final_is_error = true;
+                        final_output = format!(
+                            "HUMAN REVIEW REJECTED: The user reviewed the subagent's work and rejected it with the following feedback:\n\n\"{val}\"\n\nYou MUST re-invoke the subagent with these additional instructions to fix the issue.\n\nPrevious subagent output:\n{final_output}"
+                        );
+                    }
+                }
+            }
+
             Ok(cade_agent::tools::ToolResult {
                 tool_call_id: call_id_owned,
                 tool_name: "run_subagent".to_string(),
                 output: final_output,
-                is_error,
+                is_error: final_is_error,
             })
         }
     }

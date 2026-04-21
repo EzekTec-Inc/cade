@@ -41,8 +41,8 @@ pub fn render(
                         ui.add_space(2.0);
                         egui::Frame::new()
                             .fill(theme.bg_surface0())
-                            .corner_radius(egui::CornerRadius::same(4))
-                            .inner_margin(6.0)
+                            .corner_radius(egui::CornerRadius::ZERO)
+                            .inner_margin(4.0)
                             .show(ui, |ui| {
                                 ui.vertical(|ui| {
                                     if let Some(model) = &agent.model {

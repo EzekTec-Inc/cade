@@ -8,18 +8,19 @@ use super::AppAction;
 pub fn render_welcome(ui: &mut egui::Ui, md_cache: &mut egui_commonmark::CommonMarkCache,
     theme: &crate::theme::ThemeColors, 
 ) {
-    ui.add_space(24.0);
+    ui.add_space(8.0);
     // dim horizontal rule
     ui.add(egui::Separator::default().horizontal().spacing(0.0));
-    ui.add_space(16.0);
+    ui.add_space(4.0);
 
     ui.label(
         egui::RichText::new("CADE")
             .color(theme.primary())
             .strong()
-            .size(15.0),
+            .monospace()
+            .size(13.0),
     );
-    ui.add_space(6.0);
+    ui.add_space(2.0);
     egui_commonmark::CommonMarkViewer::new().show(
         ui,
         md_cache,
@@ -29,7 +30,7 @@ pub fn render_welcome(ui: &mut egui::Ui, md_cache: &mut egui_commonmark::CommonM
         - Inspect tool calls, reasoning, and results\n\
         - Use `/` or `Ctrl+K` to open the command palette",
     );
-    ui.add_space(16.0);
+    ui.add_space(4.0);
     ui.add(egui::Separator::default().horizontal().spacing(0.0));
 }
 
@@ -125,18 +126,19 @@ pub fn render_timeline_message(
         "user" => {
             let text = msg.content.as_str().unwrap_or("").trim().to_string();
             // "You" label
-            ui.add_space(4.0);
+            ui.add_space(2.0);
             ui.label(
                 egui::RichText::new("You")
                     .color(theme.text_primary())
                     .strong()
-                    .size(13.0),
+                    .monospace()
+                    .size(12.0),
             );
             // Plain text — no markdown rendering for user messages (mirrors TUI)
             ui.label(
                 egui::RichText::new(&text)
                     .color(theme.text_primary())
-                    .size(13.0),
+                    .size(12.0),
             );
             None
         }
@@ -144,13 +146,14 @@ pub fn render_timeline_message(
         // ── Assistant ─────────────────────────────────────────────────
         "assistant" => {
             let text = msg.content.as_str().unwrap_or("").trim().to_string();
-            ui.add_space(4.0);
+            ui.add_space(2.0);
             // "▍ CADE" header
             ui.label(
                 egui::RichText::new("▍ CADE")
                     .color(theme.primary())
                     .strong()
-                    .size(13.0),
+                    .monospace()
+                    .size(12.0),
             );
             // Markdown-rendered content
             egui_commonmark::CommonMarkViewer::new().show(ui, md_cache, &text);
@@ -168,7 +171,7 @@ pub fn render_timeline_message(
                 format!("╭ THINKING  {} words · collapsed", word_count)
             };
 
-            ui.add_space(4.0);
+            ui.add_space(1.0);
             egui::CollapsingHeader::new(
                 egui::RichText::new(header)
                     .color(theme.text_muted())
@@ -210,7 +213,7 @@ pub fn render_timeline_message(
                 .collect();
             let preview_suffix = if args_raw.len() > 60 { "…" } else { "" };
 
-            ui.add_space(2.0);
+            ui.add_space(1.0);
             // Single-line invocation row: "⚙ name(args…)"
             let icon = tool_icon(name);
             egui::CollapsingHeader::new(
@@ -265,7 +268,7 @@ pub fn render_timeline_message(
             let lines: Vec<&str> = content.lines().collect();
             let show_limit = 3usize;
 
-            ui.add_space(2.0);
+            ui.add_space(1.0);
             egui::CollapsingHeader::new({
                 // Header: "│ ✓ <first line>"
                 let first = lines.first().copied().unwrap_or("(no output)");
@@ -305,7 +308,7 @@ pub fn render_timeline_message(
         // ── System ────────────────────────────────────────────────────
         "system" => {
             let text = msg.content.as_str().unwrap_or("");
-            ui.add_space(2.0);
+            ui.add_space(1.0);
             for (i, ln) in text.lines().enumerate() {
                 ui.horizontal(|ui| {
                     ui.label(

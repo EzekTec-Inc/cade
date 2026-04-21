@@ -339,6 +339,10 @@ fn schema_run_subagent() -> Value {
                 "test_command": {
                     "type": "string",
                     "description": "Optional: a bash test command that the subagent MUST run and pass (e.g. 'cargo test'). The subagent's response will be rejected if it does not prove this test passed."
+                },
+                "human_review": {
+                    "type": "boolean",
+                    "description": "Optional: prompt the user to review, approve, or provide feedback to re-task the subagent before its output is accepted. Set to true for sensitive or highly destructive tasks."
                 }
             },
             "required": ["prompt"]

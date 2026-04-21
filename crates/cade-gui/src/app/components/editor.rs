@@ -19,7 +19,7 @@ pub fn render(
     let can_edit = has_agent && !is_streaming;
 
     egui::Panel::bottom("input_bar")
-        .min_size(48.0)
+        .min_size(36.0)
         .show_inside(ui, |ui| {
             // ── Top separator ─────────────────────────
             let sep_color = if is_streaming {
@@ -38,7 +38,7 @@ pub fn render(
             // ── Input row ─────────────────────────────
             egui::Frame::new()
                 .fill(theme.bg_input())
-                .inner_margin(egui::Margin::symmetric(8, 6))
+                .inner_margin(egui::Margin::symmetric(4, 3))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
                         // Mode badge — mirrors TUI's input_mode_badge
@@ -117,7 +117,7 @@ pub fn render(
                         if is_streaming {
                             ui.spinner();
                         } else {
-                            // Send button — circular, TUI-matched
+                            // Send button — square, TUI-matched
                             let send_btn = egui::Button::new(
                                 egui::RichText::new("↑")
                                     .color(if send_enabled {
@@ -126,7 +126,8 @@ pub fn render(
                                         theme.text_dim()
                                     })
                                     .strong()
-                                    .size(15.0),
+                                    .monospace()
+                                    .size(14.0),
                             )
                             .fill(if send_enabled {
                                 theme.primary()
@@ -134,8 +135,8 @@ pub fn render(
                                 theme.bg_surface2()
                             })
                             .stroke(egui::Stroke::NONE)
-                            .corner_radius(egui::CornerRadius::same(14))
-                            .min_size(egui::vec2(28.0, 28.0));
+                            .corner_radius(egui::CornerRadius::ZERO)
+                            .min_size(egui::vec2(24.0, 24.0));
 
                             if ui
                                 .add_enabled(send_enabled, send_btn)

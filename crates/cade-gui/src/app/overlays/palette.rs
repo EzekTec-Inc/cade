@@ -14,14 +14,15 @@ pub fn render_palette_overlay(
     use crate::palette::fuzzy_filter;
     let mut result: Option<AppAction> = None;
 
-    // Compute screen-centered rect for a 520x360 panel.
+    // TUI-fication: full-width bar anchored at top, not a floating centered modal.
     let screen = ctx.content_rect();
-    let w = 520.0_f32.min(screen.width() - 40.0);
-    let h = 360.0_f32.min(screen.height() - 80.0);
-    let pos = egui::pos2(
-        screen.center().x - w / 2.0,
-        screen.top() + 80.0,
-    );
+    let w = screen.width();
+    let max_rows = 12;
+    let filtered = fuzzy_filter(palette_input);
+    let row_count = filtered.len().min(max_rows);
+    // Height: input row (~28) + separator + rows (~24 each) + hint row
+    let h = (36.0 + (row_count as f32 * 26.0) + 24.0).min(screen.height() - 20.0);
+    let pos = egui::pos2(screen.left(), screen.top());
 
     egui::Window::new("Command palette")
         .title_bar(false)
@@ -31,25 +32,28 @@ pub fn render_palette_overlay(
         .fixed_size([w, h])
         .frame(
             egui::Frame::new()
-                .fill(theme.bg_surface1())
-                .stroke(egui::Stroke::new(1.0, theme.border_focus()))
-                .corner_radius(egui::CornerRadius::same(8))
-                .inner_margin(12.0),
+                .fill(theme.bg_surface0())
+                .stroke(egui::Stroke::new(1.0, theme.border_base()))
+                .corner_radius(egui::CornerRadius::ZERO)
+                .inner_margin(egui::Margin::symmetric(8, 4)),
         )
         .show(ctx, |ui| {
-            ui.set_width(w - 24.0);
+            ui.set_width(w - 16.0);
 
-            // Header + query input
+            // Header + query input — compact, single line
             ui.horizontal(|ui| {
                 ui.label(
-                    egui::RichText::new("⌘")
+                    egui::RichText::new(">")
                         .color(theme.primary())
-                        .size(16.0),
+                        .monospace()
+                        .strong()
+                        .size(14.0),
                 );
                 let mut q = palette_input.to_string();
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut q)
                         .hint_text("Type a command…")
+                        .font(egui::TextStyle::Monospace)
                         .desired_width(ui.available_width()),
                 );
                 resp.request_focus();
@@ -58,71 +62,81 @@ pub fn render_palette_overlay(
                 }
             });
 
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(4.0);
+            ui.add_space(2.0);
+            // Thin separator line
+            let sep_rect = ui.available_rect_before_wrap();
+            let sep_rect = egui::Rect::from_min_size(
+                sep_rect.min,
+                egui::vec2(sep_rect.width(), 1.0),
+            );
+            ui.painter().rect_filled(sep_rect, 0.0, theme.border_base());
+            ui.advance_cursor_after_rect(sep_rect);
+            ui.add_space(2.0);
 
-            // Filtered entries
-            let filtered = fuzzy_filter(palette_input);
+            // Filtered entries — dense, monospace, no card frames
             if filtered.is_empty() {
                 ui.label(
-                    egui::RichText::new("No matching commands")
+                    egui::RichText::new("  No matching commands")
                         .color(theme.text_muted())
-                        .italics(),
+                        .monospace()
+                        .italics()
+                        .size(12.0),
                 );
             } else {
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .max_height(h - 90.0)
+                    .max_height(h - 64.0)
                     .show(ui, |ui| {
-                        for (idx, entry) in filtered.iter().enumerate() {
+                        for (idx, entry) in filtered.iter().take(max_rows).enumerate() {
                             let is_sel = idx == palette_selection;
                             let bg = if is_sel {
                                 theme.bg_surface2()
                             } else {
-                                theme.bg_surface0()
+                                egui::Color32::TRANSPARENT
                             };
-                            let frame = egui::Frame::new()
-                                .fill(bg)
-                                .corner_radius(egui::CornerRadius::same(4))
-                                .inner_margin(egui::Margin::symmetric(8, 6));
-                            let resp = frame
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        ui.label(
-                                            egui::RichText::new(format!(
-                                                "/{}",
-                                                entry.def.trigger
-                                            ))
-                                            .color(theme.primary())
+
+                            let resp = ui.horizontal(|ui| {
+                                // Selection highlight — full-width background
+                                let row_rect = ui.available_rect_before_wrap();
+                                let row_rect = egui::Rect::from_min_size(
+                                    row_rect.min,
+                                    egui::vec2(row_rect.width(), 22.0),
+                                );
+                                if is_sel {
+                                    ui.painter().rect_filled(row_rect, 0.0, bg);
+                                }
+
+                                // Trigger
+                                ui.label(
+                                    egui::RichText::new(format!("/{}", entry.def.trigger))
+                                        .color(theme.primary())
+                                        .monospace()
+                                        .strong()
+                                        .size(12.0),
+                                );
+                                // Arg hint
+                                if let Some(hint) = entry.def.arg_hint {
+                                    ui.label(
+                                        egui::RichText::new(hint)
+                                            .color(theme.text_dim())
                                             .monospace()
-                                            .strong(),
+                                            .size(11.0),
+                                    );
+                                }
+                                // Description — pushed right
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        ui.label(
+                                            egui::RichText::new(entry.def.description)
+                                                .color(theme.text_muted())
+                                                .size(11.0),
                                         );
-                                        if let Some(hint) = entry.def.arg_hint {
-                                            ui.label(
-                                                egui::RichText::new(hint)
-                                                    .color(theme.text_muted())
-                                                    .monospace()
-                                                    .small(),
-                                            );
-                                        }
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
-                                                ui.label(
-                                                    egui::RichText::new(entry.def.description)
-                                                        .color(theme.text_muted())
-                                                        .small(),
-                                                );
-                                            },
-                                        );
-                                    });
-                                })
-                                .response
-                                .interact(egui::Sense::click());
+                                    },
+                                );
+                            }).response.interact(egui::Sense::click());
+
                             if resp.clicked() {
-                                // Clicking an entry sets the selection
-                                // to that index AND executes it.
                                 let delta = idx as i32 - palette_selection as i32;
                                 if delta != 0 {
                                     result = Some(AppAction::MovePaletteSelection(delta));
@@ -130,18 +144,26 @@ pub fn render_palette_overlay(
                                     result = Some(AppAction::ExecutePaletteCmd);
                                 }
                             }
-                            ui.add_space(2.0);
                         }
                     });
             }
 
-            ui.add_space(6.0);
-            ui.separator();
+            ui.add_space(2.0);
+            // Thin bottom separator
+            let sep_rect = ui.available_rect_before_wrap();
+            let sep_rect = egui::Rect::from_min_size(
+                sep_rect.min,
+                egui::vec2(sep_rect.width(), 1.0),
+            );
+            ui.painter().rect_filled(sep_rect, 0.0, theme.border_base());
+            ui.advance_cursor_after_rect(sep_rect);
+
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("↑↓ select  ⏎ run  Esc close")
-                        .color(theme.text_muted())
-                        .small(),
+                        .color(theme.text_dim())
+                        .monospace()
+                        .size(10.0),
                 );
             });
         });

@@ -29,8 +29,8 @@ pub fn render(
             .stick_to_bottom(auto_scroll)
             .max_height(avail_h)
             .show(ui, |ui| {
-                let pad = 16.0;
-                ui.add_space(4.0);
+                let pad = 4.0;
+                ui.add_space(2.0);
 
                 if selected_agent.is_none() {
                     ui.horizontal(|ui| {
@@ -94,7 +94,7 @@ pub fn render(
                     if is_streaming {
                         ui.horizontal(|ui| {
                             ui.add_space(pad);
-                            ui.add(egui::Separator::default().horizontal().spacing(2.0));
+                            ui.add(egui::Separator::default().horizontal().spacing(1.0));
                         });
                         ui.horizontal(|ui| {
                             ui.add_space(pad);
@@ -104,11 +104,11 @@ pub fn render(
                                     .strong()
                                     .size(13.0),
                             );
-                            ui.add_space(6.0);
+                            ui.add_space(4.0);
                             ui.spinner();
                         });
                     }
-                    ui.add_space(8.0);
+                    ui.add_space(4.0);
                 }
             });
 
@@ -142,12 +142,12 @@ pub fn render(
             };
             ui.painter().rect_filled(
                 btn_rect,
-                egui::CornerRadius::same(16),
+                egui::CornerRadius::ZERO,
                 bg,
             );
             ui.painter().rect_stroke(
                 btn_rect,
-                egui::CornerRadius::same(16),
+                egui::CornerRadius::ZERO,
                 egui::Stroke::new(1.0, theme.border_base()),
                 egui::StrokeKind::Outside,
             );
@@ -203,8 +203,8 @@ pub fn render(
                     egui::Frame::new()
                         .fill(theme.error().linear_multiply(0.12))
                         .stroke(egui::Stroke::new(1.0, theme.error()))
-                        .corner_radius(egui::CornerRadius::same(6))
-                        .inner_margin(egui::Margin::symmetric(12, 10)),
+                        .corner_radius(egui::CornerRadius::ZERO)
+                        .inner_margin(egui::Margin::symmetric(8, 6)),
                 )
                 .show(ui.ctx(), |ui| {
                     ui.set_width(toast_width);

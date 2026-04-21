@@ -84,14 +84,14 @@ pub fn context_fill_color(fraction: f32, theme: &CoreThemeColors) -> Color32 {
 pub fn apply_theme(ctx: &egui::Context, theme: &CoreThemeColors) {
     use egui::{style::WidgetVisuals, CornerRadius, Stroke, Visuals};
 
-    let rounding_sm = CornerRadius::same(4);
-    let rounding_md = CornerRadius::same(6);
+    // TUI-fication: zero rounding for sharp, terminal-like edges.
+    let rounding_none = CornerRadius::ZERO;
 
     let widget_base = WidgetVisuals {
         bg_fill: theme.bg_surface1(),
         weak_bg_fill: theme.bg_surface0(),
         bg_stroke: Stroke::new(1.0, theme.border_base()),
-        corner_radius: rounding_sm,
+        corner_radius: rounding_none,
         fg_stroke: Stroke::new(1.0, theme.text_primary()),
         expansion: 0.0,
     };
@@ -102,14 +102,14 @@ pub fn apply_theme(ctx: &egui::Context, theme: &CoreThemeColors) {
         panel_fill: theme.bg_base(),
         window_fill: theme.bg_surface0(),
         window_stroke: Stroke::new(1.0, theme.border_base()),
-        window_corner_radius: rounding_md,
+        window_corner_radius: rounding_none,
 
         widgets: egui::style::Widgets {
             noninteractive: WidgetVisuals {
                 bg_fill: theme.bg_surface0(),
                 weak_bg_fill: theme.bg_base(),
                 bg_stroke: Stroke::new(1.0, theme.border_base()),
-                corner_radius: rounding_sm,
+                corner_radius: rounding_none,
                 fg_stroke: Stroke::new(1.0, theme.text_muted()),
                 expansion: 0.0,
             },
@@ -118,23 +118,23 @@ pub fn apply_theme(ctx: &egui::Context, theme: &CoreThemeColors) {
                 bg_fill: theme.bg_surface2(),
                 weak_bg_fill: theme.bg_surface1(),
                 bg_stroke: Stroke::new(1.0, theme.primary()),
-                corner_radius: rounding_sm,
+                corner_radius: rounding_none,
                 fg_stroke: Stroke::new(1.0, theme.text_primary()),
-                expansion: 1.0,
+                expansion: 0.0, // no hover expansion — keeps it tight like TUI
             },
             active: WidgetVisuals {
                 bg_fill: theme.accent_dim(),
                 weak_bg_fill: theme.bg_surface2(),
-                bg_stroke: Stroke::new(1.5, theme.primary()),
-                corner_radius: rounding_sm,
-                fg_stroke: Stroke::new(1.5, theme.text_primary()),
+                bg_stroke: Stroke::new(1.0, theme.primary()),
+                corner_radius: rounding_none,
+                fg_stroke: Stroke::new(1.0, theme.text_primary()),
                 expansion: 0.0,
             },
             open: WidgetVisuals {
                 bg_fill: theme.bg_surface1(),
                 weak_bg_fill: theme.bg_surface0(),
                 bg_stroke: Stroke::new(1.0, theme.border_focus()),
-                corner_radius: rounding_sm,
+                corner_radius: rounding_none,
                 fg_stroke: Stroke::new(1.0, theme.text_primary()),
                 expansion: 0.0,
             },
@@ -153,21 +153,20 @@ pub fn apply_theme(ctx: &egui::Context, theme: &CoreThemeColors) {
         warn_fg_color: theme.warning(),
         error_fg_color: theme.error(),
 
-        window_shadow: egui::Shadow {
-            offset: [0, 4],
-            blur: 12,
-            spread: 0,
-            color: Color32::from_black_alpha(80),
-        },
-        popup_shadow: egui::Shadow {
-            offset: [0, 2],
-            blur: 8,
-            spread: 0,
-            color: Color32::from_black_alpha(60),
-        },
+        // TUI-fication: no shadows — flat, terminal-like appearance.
+        window_shadow: egui::Shadow::NONE,
+        popup_shadow: egui::Shadow::NONE,
 
         ..Visuals::dark()
     };
 
     ctx.set_visuals(visuals);
+
+    // TUI-fication: tighten spacing to match character-cell density.
+    let mut style = (*ctx.global_style()).clone();
+    style.spacing.item_spacing = egui::vec2(4.0, 2.0);
+    style.spacing.button_padding = egui::vec2(4.0, 2.0);
+    style.spacing.window_margin = egui::Margin::same(4);
+    style.spacing.indent = 12.0;
+    ctx.set_global_style(style);
 }

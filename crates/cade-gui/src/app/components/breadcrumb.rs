@@ -6,33 +6,33 @@ pub fn render(ui: &mut egui::Ui, session_snapshot: &Option<SessionState>,
     theme: &crate::theme::ThemeColors,
 ) {
     egui::Panel::top("cade_toolbar")
-        .exact_size(32.0)
+        .exact_size(24.0)
         .frame(
             egui::Frame::new()
                 .fill(theme.bg_surface0())
-                .inner_margin(egui::Margin::symmetric(10, 0)),
+                .inner_margin(egui::Margin::symmetric(6, 0)),
         )
         .show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("CADE")
                         .strong()
-                        .size(15.0)
+                        .size(13.0)
                         .color(theme.primary()),
                 );
 
                 if let Some(SessionState::Connected { last_usage, .. }) = session_snapshot {
                     if let Some((_, _, Some(ref model))) = *last_usage {
-                        ui.add_space(8.0);
+                        ui.add_space(4.0);
                         egui::Frame::new()
                             .fill(theme.bg_surface1())
-                            .corner_radius(egui::CornerRadius::same(4))
-                            .inner_margin(egui::Margin::symmetric(6, 2))
+                            .corner_radius(egui::CornerRadius::ZERO)
+                            .inner_margin(egui::Margin::symmetric(4, 1))
                             .show(ui, |ui| {
                                 ui.label(
                                     egui::RichText::new(model.as_str())
                                         .monospace()
-                                        .size(11.0)
+                                        .size(10.0)
                                         .color(theme.text_muted()),
                                 );
                             });
