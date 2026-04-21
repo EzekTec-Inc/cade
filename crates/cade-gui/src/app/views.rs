@@ -354,3 +354,46 @@ pub fn render_timeline_message(
     }
 }
 
+/// Render a live-output block in the timeline.
+///
+/// Mirrors the TUI's `LiveOutput` render: a fixed-height scrollable area
+/// showing streaming output lines from a long-running tool execution.
+pub fn render_live_output(
+    ui: &mut egui::Ui,
+    block: &crate::session::LiveOutputBlock,
+    theme: &crate::theme::ThemeColors,
+) {
+    let status = if block.done { "done" } else { "running…" };
+    let status_color = if block.done { theme.text_muted() } else { theme.warning() };
+
+    ui.add_space(1.0);
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!("┃ {} · {}", block.tool_name, status))
+                .color(status_color)
+                .monospace()
+                .size(11.0),
+        );
+        if !block.done {
+            ui.spinner();
+        }
+    });
+
+    // Scrollable output area — show last N lines
+    let max_h = (block.max_visible.max(4) as f32) * 16.0;
+    egui::ScrollArea::vertical()
+        .id_salt(format!("live_{}", block.call_id))
+        .max_height(max_h)
+        .stick_to_bottom(true)
+        .show(ui, |ui| {
+            for ln in &block.lines {
+                ui.label(
+                    egui::RichText::new(ln.as_str())
+                        .color(theme.text_dim())
+                        .monospace()
+                        .size(11.0),
+                );
+            }
+        });
+}
+

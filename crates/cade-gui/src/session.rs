@@ -38,6 +38,40 @@ pub struct Toast {
     pub level: ToastLevel,
 }
 
+// ── Plan panel types (mirrors cade-tui PlanState) ─────────────────────
+
+/// A single step in the agent's plan checklist.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanStep {
+    pub id: usize,
+    pub description: String,
+    pub is_done: bool,
+}
+
+/// The full plan state — a list of steps with a visibility toggle.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlanState {
+    pub steps: Vec<PlanStep>,
+    pub is_visible: bool,
+}
+
+// ── Live output types (mirrors cade-tui LiveOutput) ───────────────────
+
+/// A block of streaming output lines from a long-running tool execution.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiveOutputBlock {
+    /// Tool call ID that produced this output.
+    pub call_id: String,
+    /// Tool name (e.g. "bash").
+    pub tool_name: String,
+    /// Accumulated output lines.
+    pub lines: Vec<String>,
+    /// Whether the tool has finished executing.
+    pub done: bool,
+    /// Maximum visible lines before scrolling (0 = show all).
+    pub max_visible: usize,
+}
+
 /// Post-login session state.
 ///
 /// Created from `LoginState::Submitted` — the token and server URL are
@@ -229,6 +263,16 @@ pub enum SessionState {
         model_picker_loading: bool,
         /// Error message from model fetch failure.
         model_picker_error: Option<String>,
+
+        // ── Plan panel (mirrors TUI PlanState) ──────────────────
+        /// Active plan steps. `None` when no plan has been set.
+        active_plan: Option<PlanState>,
+
+        // ── Live output (mirrors TUI LiveOutput) ─────────────────
+        /// Active live-output blocks keyed by tool call ID.
+        /// Each entry is a scrollable block of output lines shown in the
+        /// timeline while a long-running tool (e.g. `bash`) is executing.
+        live_outputs: Vec<LiveOutputBlock>,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -381,6 +425,9 @@ impl SessionState {
                 model_picker_selection: 0,
                 model_picker_loading: false,
                 model_picker_error: None,
+
+                active_plan: None,
+                live_outputs: Vec::new(),
             };
         }
     }
@@ -651,6 +698,7 @@ impl SessionState {
             active_question,
             question_cursor,
             question_checked,
+            active_plan,
             ..
         } = self
         {
@@ -672,6 +720,46 @@ impl SessionState {
                     *question_cursor = 0;
                     *question_checked = vec![false; n];
                     *active_question = Some(q);
+                }
+            }
+
+            // Intercept plan panel tool calls.
+            if name == "set_plan" {
+                let steps: Vec<String> = serde_json::from_str::<serde_json::Value>(arguments)
+                    .ok()
+                    .and_then(|v| v["steps"].as_array().map(|arr| {
+                        arr.iter()
+                            .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                            .collect()
+                    }))
+                    .unwrap_or_default();
+                if steps.is_empty() {
+                    *active_plan = None;
+                } else {
+                    *active_plan = Some(PlanState {
+                        steps: steps
+                            .into_iter()
+                            .enumerate()
+                            .map(|(i, desc)| PlanStep {
+                                id: i + 1,
+                                description: desc,
+                                is_done: false,
+                            })
+                            .collect(),
+                        is_visible: true,
+                    });
+                }
+            }
+
+            if name == "UpdatePlan" {
+                if let Ok(v) = serde_json::from_str::<serde_json::Value>(arguments) {
+                    let step_id = v["step_id"].as_u64().unwrap_or(0) as usize;
+                    let done = v["done"].as_bool().unwrap_or(true);
+                    if let Some(plan) = active_plan {
+                        if let Some(step) = plan.steps.iter_mut().find(|s| s.id == step_id) {
+                            step.is_done = done;
+                        }
+                    }
                 }
             }
         }
@@ -2261,6 +2349,96 @@ impl SessionState {
     pub fn on_theme_update(&mut self, theme: crate::theme::ThemeColors) {
         if let Self::Connected { theme_update, .. } = self {
             *theme_update = Some(theme);
+        }
+    }
+}
+
+// ── Plan panel methods ──────────────────────────────────────────────────
+
+impl SessionState {
+    /// Set the plan from a `set_plan` tool call. Replaces any existing plan.
+    pub fn set_plan(&mut self, steps: Vec<String>) {
+        if let Self::Connected { active_plan, .. } = self {
+            if steps.is_empty() {
+                *active_plan = None;
+            } else {
+                *active_plan = Some(PlanState {
+                    steps: steps
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, desc)| PlanStep {
+                            id: i + 1,
+                            description: desc,
+                            is_done: false,
+                        })
+                        .collect(),
+                    is_visible: true,
+                });
+            }
+        }
+    }
+
+    /// Mark a plan step as done or not done. `step_id` is 1-based.
+    pub fn update_plan_step(&mut self, step_id: usize, done: bool) -> bool {
+        if let Self::Connected { active_plan: Some(plan), .. } = self {
+            if let Some(step) = plan.steps.iter_mut().find(|s| s.id == step_id) {
+                step.is_done = done;
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Read-only access to the active plan.
+    pub fn active_plan(&self) -> Option<&PlanState> {
+        if let Self::Connected { active_plan, .. } = self {
+            active_plan.as_ref()
+        } else {
+            None
+        }
+    }
+}
+
+// ── Live output methods ─────────────────────────────────────────────────
+
+impl SessionState {
+    /// Begin a new live-output block for a tool call.
+    pub fn begin_live_output(&mut self, call_id: &str, tool_name: &str) {
+        if let Self::Connected { live_outputs, .. } = self {
+            live_outputs.push(LiveOutputBlock {
+                call_id: call_id.to_string(),
+                tool_name: tool_name.to_string(),
+                lines: Vec::new(),
+                done: false,
+                max_visible: 8,
+            });
+        }
+    }
+
+    /// Append a line to an existing live-output block.
+    pub fn append_live_output(&mut self, call_id: &str, line: String) {
+        if let Self::Connected { live_outputs, .. } = self {
+            if let Some(block) = live_outputs.iter_mut().find(|b| b.call_id == call_id) {
+                block.lines.push(line);
+            }
+        }
+    }
+
+    /// Mark a live-output block as finished.
+    pub fn finish_live_output(&mut self, call_id: &str) {
+        if let Self::Connected { live_outputs, .. } = self {
+            if let Some(block) = live_outputs.iter_mut().find(|b| b.call_id == call_id) {
+                block.done = true;
+            }
+        }
+    }
+
+    /// Read-only access to live output blocks.
+    pub fn live_outputs(&self) -> &[LiveOutputBlock] {
+        if let Self::Connected { live_outputs, .. } = self {
+            live_outputs
+        } else {
+            &[]
         }
     }
 }
@@ -4553,5 +4731,124 @@ mod tests {
         } else {
             panic!("expected Connected");
         }
+    }
+
+    // ── Plan panel tests ──────────────────────────────────────────
+
+    #[test]
+    fn no_active_plan_initially() {
+        let s = connected_session();
+        assert!(s.active_plan().is_none());
+    }
+
+    #[test]
+    fn set_plan_creates_steps() {
+        let mut s = connected_session();
+        s.set_plan(vec!["Step 1".into(), "Step 2".into(), "Step 3".into()]);
+        let plan = s.active_plan().unwrap();
+        assert_eq!(plan.steps.len(), 3);
+        assert!(plan.is_visible);
+        assert_eq!(plan.steps[0].id, 1);
+        assert_eq!(plan.steps[0].description, "Step 1");
+        assert!(!plan.steps[0].is_done);
+        assert_eq!(plan.steps[2].id, 3);
+    }
+
+    #[test]
+    fn set_plan_empty_clears() {
+        let mut s = connected_session();
+        s.set_plan(vec!["A".into()]);
+        assert!(s.active_plan().is_some());
+        s.set_plan(vec![]);
+        assert!(s.active_plan().is_none());
+    }
+
+    #[test]
+    fn update_plan_step_marks_done() {
+        let mut s = connected_session();
+        s.set_plan(vec!["A".into(), "B".into()]);
+        assert!(s.update_plan_step(1, true));
+        let plan = s.active_plan().unwrap();
+        assert!(plan.steps[0].is_done);
+        assert!(!plan.steps[1].is_done);
+    }
+
+    #[test]
+    fn update_plan_step_invalid_id_returns_false() {
+        let mut s = connected_session();
+        s.set_plan(vec!["A".into()]);
+        assert!(!s.update_plan_step(99, true));
+    }
+
+    #[test]
+    fn on_stream_tool_call_intercepts_set_plan() {
+        let mut s = connected_session();
+        s.on_select_agent(0);
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "go".to_string();
+        }
+        s.on_send();
+        s.on_stream_tool_call("tc-1", "set_plan", r#"{"steps":["Read","Write","Test"]}"#);
+        let plan = s.active_plan().unwrap();
+        assert_eq!(plan.steps.len(), 3);
+        assert_eq!(plan.steps[0].description, "Read");
+    }
+
+    #[test]
+    fn on_stream_tool_call_intercepts_update_plan() {
+        let mut s = connected_session();
+        s.on_select_agent(0);
+        if let SessionState::Connected { input_buffer, .. } = &mut s {
+            *input_buffer = "go".to_string();
+        }
+        s.on_send();
+        s.on_stream_tool_call("tc-1", "set_plan", r#"{"steps":["A","B"]}"#);
+        s.on_stream_tool_call("tc-2", "UpdatePlan", r#"{"step_id":1,"done":true}"#);
+        let plan = s.active_plan().unwrap();
+        assert!(plan.steps[0].is_done);
+        assert!(!plan.steps[1].is_done);
+    }
+
+    // ── Live output tests ─────────────────────────────────────────
+
+    #[test]
+    fn live_outputs_empty_initially() {
+        let s = connected_session();
+        assert!(s.live_outputs().is_empty());
+    }
+
+    #[test]
+    fn begin_live_output_creates_block() {
+        let mut s = connected_session();
+        s.begin_live_output("tc-1", "bash");
+        assert_eq!(s.live_outputs().len(), 1);
+        assert_eq!(s.live_outputs()[0].call_id, "tc-1");
+        assert_eq!(s.live_outputs()[0].tool_name, "bash");
+        assert!(!s.live_outputs()[0].done);
+    }
+
+    #[test]
+    fn append_live_output_adds_lines() {
+        let mut s = connected_session();
+        s.begin_live_output("tc-1", "bash");
+        s.append_live_output("tc-1", "line 1".into());
+        s.append_live_output("tc-1", "line 2".into());
+        assert_eq!(s.live_outputs()[0].lines.len(), 2);
+    }
+
+    #[test]
+    fn finish_live_output_marks_done() {
+        let mut s = connected_session();
+        s.begin_live_output("tc-1", "bash");
+        s.finish_live_output("tc-1");
+        assert!(s.live_outputs()[0].done);
+    }
+
+    #[test]
+    fn append_to_unknown_call_id_is_noop() {
+        let mut s = connected_session();
+        s.begin_live_output("tc-1", "bash");
+        s.append_live_output("tc-99", "orphan".into());
+        assert!(s.live_outputs()[0].lines.is_empty());
     }
 }

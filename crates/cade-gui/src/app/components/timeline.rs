@@ -15,6 +15,7 @@ pub fn render(
     error_toast: Option<&String>,
     last_usage: Option<&(u64, u64, Option<String>)>,
     last_finish_reason: Option<&String>,
+    live_outputs: &[crate::session::LiveOutputBlock],
     theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut action = None;
@@ -92,6 +93,16 @@ pub fn render(
                     }
 
                     if is_streaming {
+                        // Render any active live-output blocks
+                        for block in live_outputs.iter().filter(|b| !b.done) {
+                            ui.horizontal(|ui| {
+                                ui.add_space(pad);
+                                ui.vertical(|ui| {
+                                    crate::app::views::render_live_output(ui, block, theme);
+                                });
+                            });
+                        }
+
                         ui.horizontal(|ui| {
                             ui.add_space(pad);
                             ui.add(egui::Separator::default().horizontal().spacing(1.0));

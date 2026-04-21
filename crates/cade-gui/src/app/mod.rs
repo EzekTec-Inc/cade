@@ -242,6 +242,9 @@ impl eframe::App for CadeApp {
                     model_picker_selection,
                     model_picker_loading,
                     ref model_picker_error,
+
+                    ref active_plan,
+                    ref live_outputs,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -436,6 +439,16 @@ impl eframe::App for CadeApp {
                         action = new_action;
                     }
 
+                    // ── Plan panel (inside sidebar area) ────────────
+                    if let Some(plan) = active_plan {
+                        egui::Panel::left("plan_panel")
+                            .default_size(180.0)
+                            .resizable(false)
+                            .show_inside(ui, |ui| {
+                                components::plan::render(ui, plan, &self.theme);
+                            });
+                    }
+
                     // ── Bottom panel: input bar (TUI-matched) ────────
                     if let Some(new_action) = components::editor::render(
                         ui,
@@ -462,6 +475,7 @@ impl eframe::App for CadeApp {
                         error_toast.as_ref(),
                         last_usage.as_ref(),
                         last_finish_reason.as_ref(),
+                        live_outputs,
                         &self.theme,
                     ) {
                         action = new_action;
