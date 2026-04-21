@@ -26,7 +26,7 @@ impl Repl {
         let tool_calls: Vec<(String, String, serde_json::Value)> =
             messages.iter().filter_map(|m| m.as_tool_call()).collect();
 
-        // C3: Track file-write/edit/bash tool calls for the working_set reminder.
+        // C3: Track file-write/edit/bash tool calls for the active_goal reminder.
         const WRITE_TOOL_NAMES: &[&str] = &[
             "bash",
             "write_file",
@@ -50,7 +50,7 @@ impl Repl {
                     .await
                     .unwrap_or_default()
                     .into_iter()
-                    .find(|b| b.label == "working_set")
+                    .find(|b| b.label == "active_goal")
                     .map(|b| b.value.trim().is_empty())
                     .unwrap_or(true);
                 if is_empty {
@@ -243,7 +243,7 @@ impl Repl {
             let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp_write || canonical_name == "bash";
 
             if block_all_writes && is_write && tool_name != "update_memory" && tool_name != "update_memory_typed" {
-                let msg = "[BLOCKED: You must call update_memory with label='working_set' to record your current task, modified files, and next steps before executing further write operations.]".to_string();
+                let msg = "[BLOCKED: You must call update_memory with label='active_goal' to record your current task, modified files, and next steps before executing further write operations.]".to_string();
                 let _ = self
                     .app
                     .lock()
@@ -670,14 +670,12 @@ impl Repl {
                     let path = args["file_path"]
                         .as_str()
                         .or(args["path"].as_str())
-                        .unwrap_or("unknown");
-                    let msg = format!("Recently edited: {path}\n");
+                        .unwrap_or("unknown")
+                        .to_string();
                     let c = runtime.client.clone();
                     let a = runtime.agent_id.clone();
                     tokio::spawn(async move {
-                        let _ = c
-                            .append_memory_with_limit(&a, "working_set", &msg, None, Some(3000))
-                            .await;
+                        let _ = c.record_recent_edit(&a, &path).await;
                     });
                 }
                 _ => {}

@@ -2,7 +2,7 @@ use crate::theme::EguiThemeExt;
 use eframe::egui;
 use crate::session::SessionState;
 
-pub fn render(ctx: &egui::Context, session_snapshot: &Option<SessionState>,
+pub fn render(ui: &mut egui::Ui, session_snapshot: &Option<SessionState>,
     theme: &crate::theme::ThemeColors,
 ) {
     if let Some(SessionState::Connected {
@@ -11,10 +11,10 @@ pub fn render(ctx: &egui::Context, session_snapshot: &Option<SessionState>,
         ..
     }) = session_snapshot
     {
-        egui::TopBottomPanel::bottom("cade_status_bar")
+        egui::Panel::bottom("cade_status_bar")
             .exact_size(18.0)
             .frame(egui::Frame::new().fill(theme.bg_surface0()))
-            .show(ctx, |ui| {
+            .show_inside(ui, |ui| {
                 ui.horizontal(|ui| {
                     if let Some((input_tokens, output_tokens, _)) = *last_usage {
                         ui.label(

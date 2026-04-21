@@ -102,6 +102,10 @@ pub struct GlobalSettings {
     /// Extra skill directories beyond the standard locations.
     #[serde(default)]
     pub extra_skills: Vec<std::path::PathBuf>,
+
+    /// Maximum context budget (in characters). Caps the default token-based limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_budget: Option<usize>,
     /// Extra context file paths (appended to AGENTS.md discovery results).
     #[serde(default)]
     pub extra_context_files: Vec<std::path::PathBuf>,
@@ -224,6 +228,9 @@ pub struct ProjectSettings {
     /// Whether to silence the live streaming output of subagents.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub silent_subagents: Option<bool>,
+    /// Maximum context budget (in characters). Caps the default token-based limit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_context_budget: Option<usize>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

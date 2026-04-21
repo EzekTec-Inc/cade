@@ -294,7 +294,24 @@ impl GeminiProvider {
             let msg = &req.messages[i];
             match msg.role.as_str() {
                 "system" => {
-                    system_text = Some(msg.content.clone());
+                    if system_text.is_none() {
+                        system_text = Some(msg.content.clone());
+                    } else {
+                        // For Gemini, dynamic system messages (like working_set) are appended
+                        // as a user message to avoid busting the systemInstruction cache.
+                        if let Some(last) = contents.last_mut()
+                            && last["role"].as_str() == Some("user")
+                        {
+                            if let Some(parts) = last["parts"].as_array_mut() {
+                                parts.push(json!({ "text": msg.content }));
+                            }
+                        } else {
+                            contents.push(json!({
+                                "role": "user",
+                                "parts": [{ "text": msg.content }]
+                            }));
+                        }
+                    }
                     i += 1;
                 }
                 "tool" => {

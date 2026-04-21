@@ -4,6 +4,7 @@ pub mod context_files;
 pub mod packages;
 pub mod prompts;
 pub mod themes;
+pub mod palette;
 
 // endregion: --- Modules
 

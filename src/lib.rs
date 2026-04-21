@@ -30,10 +30,17 @@ pub const DEFAULT_MEMORY_BLOCKS: &[(&str, &str, &str, usize, &str)] = &[
         "pinned",
     ),
     (
-        "working_set",
+        "active_goal",
         "",
-        "Active task, files currently being edited, recent changes, and immediate next steps.",
+        "Main goal, current task, blockers, and immediate next steps.",
         3_000,
+        "short",
+    ),
+    (
+        "recent_edits",
+        "",
+        "Automatically maintained list of recently edited files and telemetry.",
+        2_000,
         "short",
     ),
 ];

@@ -322,14 +322,12 @@ async fn finalize_tool_result(
                 let path = args["file_path"]
                     .as_str()
                     .or(args["path"].as_str())
-                    .unwrap_or("unknown");
-                let msg = format!("Recently edited: {path}\n");
+                    .unwrap_or("unknown")
+                    .to_string();
                 let c = client.clone();
                 let a = agent_id.to_string();
                 tokio::spawn(async move {
-                    let _ = c
-                        .append_memory_with_limit(&a, "working_set", &msg, None, Some(3000))
-                        .await;
+                    let _ = c.record_recent_edit(&a, &path).await;
                 });
             }
             _ => {}

@@ -46,6 +46,79 @@ pub fn render_timeline_message(
     msg: &cade_api_types::ChatMessage,
     theme: &crate::theme::ThemeColors, 
 ) -> Option<AppAction> {
+    let tool_icon = |name: &str| -> &'static str {
+        match name {
+            // -- Shell / process
+            "bash" | "shell" | "run_command" | "execute_command"
+            | "start_process" | "RunShellCommand" => "\u{f120}",  // 
+            
+            // -- File read
+            "read_file" | "ReadFileGemini" | "read_multiple_files" => "\u{f15c}",  // 
+            
+            // -- File write / edit
+            "write_file" | "edit_file" | "create_file" | "edit_block"
+            | "replace_in_file" => "\u{f0f6}",  // 
+            
+            // -- Patch / diff
+            "apply_patch" | "ide_apply_patch" => "\u{f440}",  // 
+            
+            // -- Search / grep
+            "grep" | "grep_search" | "GlobGemini" | "SearchFileContent"
+            | "start_search" | "find_references" | "symbol_search" => "\u{f002}",  // 
+            
+            // -- Directory / glob
+            "list_directory" | "glob" | "get_file_info" => "\u{f07b}",  // 
+            
+            // -- Git
+            "commit" | "push" | "pull" | "branch" | "merge" | "rebase_op"
+            | "stash_op" | "log" | "diff" | "status" | "add" | "reset"
+            | "restore" | "fetch" | "remote" | "tag" | "show" | "blame"
+            | "cherry_pick" | "clean" | "revert" | "config"
+            | "repository" => "\u{e725}",  // 
+            
+            // -- GitHub
+            "create_pull_request" | "create_issue" | "list_issues"
+            | "search_issues" | "search_code" | "get_issue"
+            | "add_issue_comment" | "list_commits" | "get_file_contents"
+            | "get_repository" | "create_branch" | "search_repositories"
+            | "update_issue" | "get_user" => "\u{f09b}",  // 
+            
+            // -- Memory / knowledge
+            "update_memory" | "memory_apply_patch" | "search_memory"
+            | "conversation_search" | "archival_memory_insert"
+            | "archival_memory_search" | "update_memory_typed"
+            | "link_memory_evidence" | "reflect" => "\u{f0eb}",  // 
+            
+            // -- Skills
+            "load_skill" | "install_skill" | "run_skill_script"
+            | "load_skill_ref" => "\u{f085}",  // 
+            
+            // -- Subagents
+            "run_subagent" | "list_agents" | "message_agent" => "\u{f0c0}",  // 
+            
+            // -- Plan / task
+            "EnterPlanMode" | "ExitPlanMode" | "TodoWrite"
+            | "UpdatePlan" | "WriteTodos" | "set_plan" | "workflow" => "\u{f0ae}",  // 
+            
+            // -- Checkpoints / artifacts
+            "create_checkpoint" | "restore_checkpoint"
+            | "list_checkpoints" | "store_artifact" => "\u{f0c7}",  // 
+            
+            // -- Web / network
+            "web_search" | "fetch_doc" | "browser_screenshot"
+            | "http_request" | "get-library-docs"
+            | "resolve-library-id" => "\u{f0ac}",  // 
+            
+            // -- Desktop
+            "screen_capture" | "desktop_screenshot" | "list_windows"
+            | "desktop_list_windows" | "desktop_control"
+            | "image_processor" => "\u{f108}",  // 
+            
+            // -- Default
+            _ => "\u{f0ad}",  //  (wrench — generic tool)
+        }
+    };
+
     match msg.role.as_str() {
 
         // ── User ─────────────────────────────────────────────────────
@@ -139,8 +212,9 @@ pub fn render_timeline_message(
 
             ui.add_space(2.0);
             // Single-line invocation row: "⚙ name(args…)"
+            let icon = tool_icon(name);
             egui::CollapsingHeader::new(
-                egui::RichText::new(format!("⚙ {}({preview}{preview_suffix})", name))
+                egui::RichText::new(format!("{icon} {}({preview}{preview_suffix})", name))
                     .color(theme.primary())
                     .strong()
                     .monospace()
@@ -183,9 +257,9 @@ pub fn render_timeline_message(
                 || content.starts_with("ERR");
 
             let (status_label, status_color) = if is_error {
-                (" ERR ", theme.error())
+                ("\u{f057}", theme.error()) // 
             } else {
-                (" OK ", theme.success())
+                ("\u{f058}", theme.success()) // 
             };
 
             let lines: Vec<&str> = content.lines().collect();
@@ -193,11 +267,11 @@ pub fn render_timeline_message(
 
             ui.add_space(2.0);
             egui::CollapsingHeader::new({
-                // Header: "│ ✓ OK  <first line>"
+                // Header: "│ ✓ <first line>"
                 let first = lines.first().copied().unwrap_or("(no output)");
                 let first_trunc: String = first.chars().take(72).collect();
                 let suffix = if first.len() > 72 { "…" } else { "" };
-                egui::RichText::new(format!("│ {status_label}  {first_trunc}{suffix}"))
+                egui::RichText::new(format!("│ {status_label} {first_trunc}{suffix}"))
                     .color(status_color)
                     .monospace()
                     .size(12.0)

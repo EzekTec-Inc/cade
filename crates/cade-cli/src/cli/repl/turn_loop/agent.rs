@@ -362,7 +362,7 @@ impl Repl {
             .await?;
         }
 
-        // (The ephemeral working_set reminder was removed in favor of a hard block in dispatch_tool_calls)
+        // (The ephemeral active_goal reminder was removed in favor of a hard block in dispatch_tool_calls)
 
         // Blank line after every agent turn for visual block separation.
         let _ = self

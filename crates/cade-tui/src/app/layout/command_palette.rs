@@ -104,15 +104,15 @@ pub(crate) fn render_command_palette(
     for (display_idx, &cmd_idx) in cp.filtered[start..end].iter().enumerate() {
         let absolute_idx = start + display_idx;
         let is_selected = absolute_idx == cp.cursor;
-        let cmd = &cp.commands[cmd_idx];
+        let cmd = &cade_core::resources::palette::CMD_DEFS[cmd_idx];
 
         let max_label_w = (results_area.width as usize).saturating_sub(4) / 2;
         let max_desc_w = (results_area.width as usize).saturating_sub(max_label_w + 6);
 
-        let label = if cmd.label.len() > max_label_w {
-            format!("{}…", &cmd.label[..max_label_w - 1])
+        let label = if cmd.trigger.len() > max_label_w {
+            format!("{}…", &cmd.trigger[..max_label_w - 1])
         } else {
-            cmd.label.to_string()
+            cmd.trigger.to_string()
         };
 
         let desc = if cmd.description.len() > max_desc_w {
@@ -148,8 +148,15 @@ pub(crate) fn render_command_palette(
         let label_padded = format!("{:<width$}", label, width = max_label_w);
 
         // Section tag — shown when query is active to help orient results
+        let section_str = match cmd.category {
+            cade_core::resources::palette::CmdCategory::Navigation => "Navigation",
+            cade_core::resources::palette::CmdCategory::Memory => "Memory",
+            cade_core::resources::palette::CmdCategory::Tools => "Tools",
+            cade_core::resources::palette::CmdCategory::Session => "Session",
+            cade_core::resources::palette::CmdCategory::Display => "Display",
+        };
         let section_tag = if !cp.query.is_empty() {
-            format!("  [{}]", cmd.section)
+            format!("  [{}]", section_str)
         } else {
             String::new()
         };
@@ -177,7 +184,7 @@ pub(crate) fn render_command_palette(
     frame.render_widget(Paragraph::new(lines), results_area);
 
     // -- Hint bar
-    let total = cp.commands.len();
+    let total = cade_core::resources::palette::CMD_DEFS.len();
     let shown = cp.filtered.len();
     let hint = if shown < total {
         format!(" ↑↓ Navigate  Enter Select  Esc Cancel  ({}/{})", shown, total)

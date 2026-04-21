@@ -16,6 +16,8 @@ pub struct ServerConfig {
     pub api_key: Option<String>,
     /// Optional explicitly allowed CORS origin for remote deployments
     pub allowed_origin: Option<String>,
+    /// Optional maximum context budget in characters
+    pub max_context_budget: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -147,6 +149,22 @@ impl ServerConfig {
 
         let (llm_provider, default_model) = detect_provider();
 
+        let mut max_context_budget = std::env::var("CADE_MAX_CONTEXT_BUDGET")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        if max_context_budget.is_none() {
+            if let Some(home) = dirs::home_dir() {
+                let settings_path = home.join(".cade").join("settings.json");
+                if let Ok(content) = std::fs::read_to_string(&settings_path) {
+                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
+                        if let Some(budget) = json.get("max_context_budget").and_then(|v| v.as_u64()) {
+                            max_context_budget = Some(budget as usize);
+                        }
+                    }
+                }
+            }
+        }
+
         Ok(Self {
             addr,
             db_path,
@@ -163,6 +181,7 @@ impl ServerConfig {
                 .unwrap_or_else(|_| "http://localhost:11434".to_string()),
             api_key: resolve_api_key(),
             allowed_origin: std::env::var("CADE_ALLOWED_ORIGIN").ok(),
+            max_context_budget,
         })
     }
 

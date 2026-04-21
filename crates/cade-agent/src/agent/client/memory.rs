@@ -98,6 +98,47 @@ impl HttpTransport {
             .await
     }
 
+    /// Record a recent edit by smartly deduplicating and limiting the recent edits list 
+    /// at the bottom of the recent_edits block, avoiding blind truncation.
+    pub async fn record_recent_edit(&self, agent_id: &str, path: &str) -> Result<()> {
+        let label = "recent_edits";
+        let target_line = format!("Recently edited: {path}");
+        
+        let blocks = self.get_memory(agent_id).await.unwrap_or_default();
+        let ws = blocks.into_iter().find(|b| b.label == label);
+        
+        let mut lines: Vec<String> = if let Some(block) = ws {
+            block.value.lines().map(String::from).collect()
+        } else {
+            Vec::new()
+        };
+        
+        // Remove any existing identical "Recently edited:" lines
+        lines.retain(|l| l != &target_line);
+        lines.push(target_line);
+        
+        // Count how many "Recently edited:" lines exist
+        let mut recent_edits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.starts_with("Recently edited:"))
+            .map(|(i, _)| i)
+            .collect();
+            
+        // Keep only the last 10 unique edits
+        while recent_edits.len() > 10 {
+            let oldest_idx = recent_edits.remove(0);
+            lines.remove(oldest_idx);
+            // Adjust remaining indices down by 1 since we removed an element
+            for idx in recent_edits.iter_mut() {
+                *idx -= 1;
+            }
+        }
+        
+        let new_value = lines.join("\n");
+        self.upsert_memory_with_limit(agent_id, label, &new_value, None, Some(2000)).await
+    }
+
     pub async fn upsert_memory_with_options(
         &self,
         agent_id: &str,

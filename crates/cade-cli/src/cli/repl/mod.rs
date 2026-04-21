@@ -219,7 +219,7 @@ pub struct Repl {
     /// Consumed (and cleared) by the first `send_message*` call inside `agent_turn`.
     pub(crate) pending_turn_images: Vec<serde_json::Value>,
     /// Cumulative count of file-write / edit / bash tool calls this session.
-    /// Used to trigger the one-time `working_set` reminder (C3).
+    /// Used to trigger the one-time `active_goal` reminder (C3).
     pub(crate) write_tool_calls: std::sync::Arc<std::sync::atomic::AtomicU32>,
     /// `true` if an auto-checkpoint has been taken for the current turn.
     pub(crate) turn_checkpoint_taken: bool,
@@ -477,8 +477,8 @@ impl Repl {
         {
             let agent_id = self.agent_id();
             let blocks = self.client.get_memory(&agent_id).await.unwrap_or_default();
-            let working_set = blocks.iter().find(|b| b.label == "working_set");
-            if let Some(ws) = working_set {
+            let active_goal = blocks.iter().find(|b| b.label == "active_goal");
+            if let Some(ws) = active_goal {
                 let summary = ws.value.lines().take(3).collect::<Vec<_>>().join("\n");
                 if !summary.trim().is_empty() {
                     let mut app = self.app.lock();

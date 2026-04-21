@@ -155,7 +155,7 @@ impl TuiApp {
                 (KeyCode::Enter, _) => {
                     if let Some(cp) = self.command_palette.take()
                         && let Some(cmd) = cp.selected_command() {
-                            let cmd = cmd.to_string();
+                            let cmd = format!("/{}", cmd);
                             return Ok(Some(Some(cmd)));
                         }
                 }

@@ -1,22 +1,27 @@
 use crate::theme::EguiThemeExt;
 use eframe::egui;
 use crate::app::AppAction;
+use crate::session::SessionState;
+use std::rc::Rc;
+use std::cell::RefCell;
 
 pub fn render(
-    ctx: &egui::Context,
+    ui: &mut egui::Ui,
+    mut input_edit: String,
     has_agent: bool,
     is_streaming: bool,
-    input_buffer: &mut String,
-    input_id: egui::Id,
     request_focus_input: bool,
-    action: &mut AppAction,
-    theme: &crate::theme::ThemeColors, 
-) {
-    egui::TopBottomPanel::bottom("input_bar")
-        .min_size(48.0)
-        .show(ctx, |ui| {
-            let can_edit = has_agent && !is_streaming;
+    input_id: egui::Id,
+    session: &Rc<RefCell<Option<SessionState>>>,
+    theme: &crate::theme::ThemeColors,
+) -> Option<AppAction> {
+    let mut action: Option<AppAction> = None;
+    let can_edit = has_agent && !is_streaming;
 
+    egui::Panel::bottom("input_bar")
+        .min_size(48.0)
+        .show_inside(ui, |ui| {
+            // ── Top separator ─────────────────────────
             let sep_color = if is_streaming {
                 theme.primary()
             } else {
@@ -30,11 +35,13 @@ pub fn render(
             ui.painter().rect_filled(sep_rect, 0.0, sep_color);
             ui.advance_cursor_after_rect(sep_rect);
 
+            // ── Input row ─────────────────────────────
             egui::Frame::new()
                 .fill(theme.bg_input())
                 .inner_margin(egui::Margin::symmetric(8, 6))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
+                        // Mode badge — mirrors TUI's input_mode_badge
                         let badge_text = if is_streaming {
                             " WAIT "
                         } else if !has_agent {
@@ -54,6 +61,7 @@ pub fn render(
                             .background_color(badge_bg);
                         ui.label(badge);
 
+                        // Prompt prefix "> "
                         ui.label(
                             egui::RichText::new("> ")
                                 .color(theme.text_dim())
@@ -61,6 +69,7 @@ pub fn render(
                                 .size(14.0),
                         );
 
+                        // Text input — multiline, full width
                         let hint = if !has_agent {
                             "Select an agent first…"
                         } else if is_streaming {
@@ -70,10 +79,9 @@ pub fn render(
                         };
 
                         let desired_w = ui.available_width() - 40.0;
-                        let mut temp_input = input_buffer.clone();
                         let resp = ui.add_enabled(
                             can_edit,
-                            egui::TextEdit::multiline(&mut temp_input)
+                            egui::TextEdit::multiline(&mut input_edit)
                                 .id(input_id)
                                 .hint_text(
                                     egui::RichText::new(hint)
@@ -90,19 +98,26 @@ pub fn render(
                         }
 
                         if resp.changed() {
-                            *input_buffer = temp_input.clone();
+                            if let Some(SessionState::Connected {
+                                input_buffer: buf, ..
+                            }) = session.borrow_mut().as_mut()
+                            {
+                                *buf = input_edit.clone();
+                            }
                         }
 
+                        // Enter sends (Shift+Enter for newline in multiline)
                         let enter_pressed = ui.input(|i| {
                             i.key_pressed(egui::Key::Enter)
                                 && !i.modifiers.shift
                         }) && resp.has_focus();
                         let send_enabled =
-                            can_edit && !temp_input.trim().is_empty();
+                            can_edit && !input_edit.trim().is_empty();
 
                         if is_streaming {
                             ui.spinner();
                         } else {
+                            // Send button — circular, TUI-matched
                             let send_btn = egui::Button::new(
                                 egui::RichText::new("↑")
                                     .color(if send_enabled {
@@ -124,14 +139,25 @@ pub fn render(
 
                             if ui
                                 .add_enabled(send_enabled, send_btn)
-                                .on_hover_text("Send message (Enter)")
+                                .on_hover_text("Send (Enter)")
                                 .clicked()
                                 || (enter_pressed && send_enabled)
                             {
-                                *action = AppAction::SendMessage;
+                                action = Some(AppAction::SendMessage);
                             }
                         }
                     });
                 });
+
+            // ── Bottom separator ──────────────────────
+            let sep_rect = ui.available_rect_before_wrap();
+            let sep_rect = egui::Rect::from_min_size(
+                sep_rect.min,
+                egui::vec2(sep_rect.width(), 1.0),
+            );
+            ui.painter().rect_filled(sep_rect, 0.0, theme.border_base());
+            ui.advance_cursor_after_rect(sep_rect);
         });
+
+    action
 }

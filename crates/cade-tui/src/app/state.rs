@@ -1,6 +1,7 @@
 use super::*;
 
 impl TuiApp {
+    /// Apply a new theme dynamically from the backend and force a redraw.
     /// Commit any in-progress streaming, push a line, and redraw.
     pub fn push(&mut self, line: RenderLine) -> Result<()> {
         self.commit_streaming_inner();

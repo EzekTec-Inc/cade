@@ -335,7 +335,7 @@ fn test_low_confidence_still_demoted() -> Result<()> {
 // These tests protect the invariant that lets an agent recover what it was
 // working on after context truncation or a process restart:
 //
-//   1. `working_set` and `session_summary` are persisted to SQLite, not only
+//   1. `active_goal` and `session_summary` are persisted to SQLite, not only
 //      to the in-process prompt builder.
 //   2. Pinned blocks survive an arbitrary number of "idle turns" without being
 //      demoted to long-term.
@@ -343,7 +343,7 @@ fn test_low_confidence_still_demoted() -> Result<()> {
 //      (drop Db handle, reopen same file, re-read).
 
 #[test]
-fn survival_working_set_persists_across_reopen() -> Result<()> {
+fn survival_active_goal_persists_across_reopen() -> Result<()> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -365,9 +365,9 @@ fn survival_working_set_persists_across_reopen() -> Result<()> {
         let task = "Current task: implement Phase B.\n\
                     Files modified: crates/cade-embed/*\n\
                     Next: wire hybrid retrieval.";
-        upsert_memory_block(&db, "survivor", "working_set", task, Some("active task"), None)?;
+        upsert_memory_block(&db, "survivor", "active_goal", task, Some("active task"), None)?;
 
-        // Simulate many idle turns elapsing WITHOUT touching working_set
+        // Simulate many idle turns elapsing WITHOUT touching active_goal
         for _ in 0..200 {
             increment_turn_counter(&db, "survivor")?;
         }
@@ -383,11 +383,11 @@ fn survival_working_set_persists_across_reopen() -> Result<()> {
     let blocks = get_memory_blocks(&db, "survivor")?;
     let ws = blocks
         .iter()
-        .find(|(l, _, _)| l == "working_set")
-        .ok_or("working_set missing after reopen")?;
+        .find(|(l, _, _)| l == "active_goal")
+        .ok_or("active_goal missing after reopen")?;
     assert!(
         ws.1.contains("Phase B") && ws.1.contains("crates/cade-embed"),
-        "working_set content corrupted on reopen: {:?}",
+        "active_goal content corrupted on reopen: {:?}",
         ws.1
     );
     let _ = std::fs::remove_file(&path);
@@ -645,13 +645,13 @@ fn export_sanitizes_pathological_labels() -> Result<()> {
 
 
 // ─────────────────────────────────────────────────────────────────────────────
-// M1 — working_set auto-pin on first non-empty write
+// M1 — active_goal auto-pin on first non-empty write
 // ─────────────────────────────────────────────────────────────────────────────
 //
-// Contract: when an agent first writes a non-empty value to `working_set`,
+// Contract: when an agent first writes a non-empty value to `active_goal`,
 // `upsert_memory_block` must flip the block's tier from the default `short`
 // to `pinned` so that `promote_stale_blocks` never archives it. This closes
-// the race where `working_set` could be demoted to `long` before
+// the race where `active_goal` could be demoted to `long` before
 // `consolidate_agent` had a chance to pin it.
 //
 // Invariants preserved:
@@ -661,70 +661,70 @@ fn export_sanitizes_pathological_labels() -> Result<()> {
 //   * Once pinned, subsequent writes stay pinned (never downgraded).
 
 #[test]
-fn m1_working_set_auto_pins_on_first_nonempty_write() -> Result<()> {
+fn m1_active_goal_auto_pins_on_first_nonempty_write() -> Result<()> {
     let db = setup_mem_db()?;
     make_agent(&db, "a1")?;
 
-    upsert_memory_block(&db, "a1", "working_set", "Active task: implement M1", None, None)?;
+    upsert_memory_block(&db, "a1", "active_goal", "Active task: implement M1", None, None)?;
 
     let active = get_active_blocks(&db, "a1")?;
     let (_, _, _, tier, _) = active
         .iter()
-        .find(|(l, _, _, _, _)| l == "working_set")
-        .expect("working_set must exist after upsert");
+        .find(|(l, _, _, _, _)| l == "active_goal")
+        .expect("active_goal must exist after upsert");
     assert_eq!(
         tier, "pinned",
-        "working_set must be auto-pinned on first non-empty write"
+        "active_goal must be auto-pinned on first non-empty write"
     );
     Ok(())
 }
 
 #[test]
-fn m1_working_set_empty_seed_stays_short() -> Result<()> {
+fn m1_active_goal_empty_seed_stays_short() -> Result<()> {
     // Seeding step in bootstrap writes empty values from DEFAULT_MEMORY_BLOCKS.
     // That initial blank write MUST NOT flip the tier to pinned — the existing
-    // `r06_working_set_is_short_not_pinned` invariant depends on tier being
+    // `r06_active_goal_is_short_not_pinned` invariant depends on tier being
     // `short` after seed.
     let db = setup_mem_db()?;
     make_agent(&db, "a1")?;
 
-    upsert_memory_block(&db, "a1", "working_set", "", None, None)?;
+    upsert_memory_block(&db, "a1", "active_goal", "", None, None)?;
 
     let active = get_active_blocks(&db, "a1")?;
     let (_, _, _, tier, _) = active
         .iter()
-        .find(|(l, _, _, _, _)| l == "working_set")
-        .expect("working_set must exist after empty seed");
+        .find(|(l, _, _, _, _)| l == "active_goal")
+        .expect("active_goal must exist after empty seed");
     assert_eq!(
         tier, "short",
-        "empty-value seed must leave working_set in short tier"
+        "empty-value seed must leave active_goal in short tier"
     );
     Ok(())
 }
 
 #[test]
-fn m1_working_set_whitespace_only_value_stays_short() -> Result<()> {
+fn m1_active_goal_whitespace_only_value_stays_short() -> Result<()> {
     // Whitespace-only values are effectively empty — they must not pin.
     let db = setup_mem_db()?;
     make_agent(&db, "a1")?;
 
-    upsert_memory_block(&db, "a1", "working_set", "   \n\t  ", None, None)?;
+    upsert_memory_block(&db, "a1", "active_goal", "   \n\t  ", None, None)?;
 
     let active = get_active_blocks(&db, "a1")?;
     let (_, _, _, tier, _) = active
         .iter()
-        .find(|(l, _, _, _, _)| l == "working_set")
-        .expect("working_set must exist");
+        .find(|(l, _, _, _, _)| l == "active_goal")
+        .expect("active_goal must exist");
     assert_eq!(
         tier, "short",
-        "whitespace-only value must leave working_set in short tier"
+        "whitespace-only value must leave active_goal in short tier"
     );
     Ok(())
 }
 
 #[test]
 fn m1_other_labels_are_not_auto_pinned() -> Result<()> {
-    // Only `working_set` is auto-pinned. `project`, `persona`, `human`, custom
+    // Only `active_goal` is auto-pinned. `project`, `persona`, `human`, custom
     // labels — all must still default to `short` on first write. (The existing
     // bootstrap code explicitly pins `persona`/`human`/`project` via
     // set_memory_tier AFTER insert; we must not short-circuit that via
@@ -738,33 +738,33 @@ fn m1_other_labels_are_not_auto_pinned() -> Result<()> {
 
     let active = get_active_blocks(&db, "a1")?;
     for (label, _, _, tier, _) in &active {
-        if label == "working_set" {
+        if label == "active_goal" {
             continue;
         }
         assert_eq!(
             tier, "short",
-            "label '{label}' must default to short tier (only working_set auto-pins)"
+            "label '{label}' must default to short tier (only active_goal auto-pins)"
         );
     }
     Ok(())
 }
 
 #[test]
-fn m1_working_set_remains_pinned_on_subsequent_writes() -> Result<()> {
+fn m1_active_goal_remains_pinned_on_subsequent_writes() -> Result<()> {
     // Once pinned, further upserts must keep tier = pinned. The existing
     // CASE WHEN tier = 'pinned' THEN 'pinned' ELSE 'short' END clause in the
     // UPDATE path already protects this, but a regression test guards it.
     let db = setup_mem_db()?;
     make_agent(&db, "a1")?;
 
-    upsert_memory_block(&db, "a1", "working_set", "v1", None, None)?;
-    upsert_memory_block(&db, "a1", "working_set", "v2", None, None)?;
+    upsert_memory_block(&db, "a1", "active_goal", "v1", None, None)?;
+    upsert_memory_block(&db, "a1", "active_goal", "v2", None, None)?;
 
     let active = get_active_blocks(&db, "a1")?;
     let (_, value, _, tier, _) = active
         .iter()
-        .find(|(l, _, _, _, _)| l == "working_set")
-        .expect("working_set must exist");
+        .find(|(l, _, _, _, _)| l == "active_goal")
+        .expect("active_goal must exist");
     assert_eq!(tier, "pinned");
     assert_eq!(value, "v2");
     Ok(())

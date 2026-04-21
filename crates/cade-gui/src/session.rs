@@ -24,6 +24,20 @@
 
 use cade_api_types::{AgentInfo, ChatMessage, HealthInfo};
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastLevel {
+    Info,
+    Success,
+    Warning,
+    Error,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Toast {
+    pub message: String,
+    pub level: ToastLevel,
+}
+
 /// Post-login session state.
 ///
 /// Created from `LoginState::Submitted` — the token and server URL are
@@ -81,6 +95,12 @@ pub enum SessionState {
         palette_input: String,
         /// Index of the highlighted entry in the filtered palette list.
         palette_selection: usize,
+        /// Whether the full-screen command menu overlay is visible.
+        menu_open: bool,
+        /// Current text in the menu filter input.
+        menu_input: String,
+        /// Index of the highlighted entry in the filtered menu list.
+        menu_selection: usize,
         /// Whether the memory-viewer overlay is visible.
         memory_open: bool,
         /// Memory blocks fetched from `GET /v1/agents/:id/memory`.
@@ -300,6 +320,9 @@ impl SessionState {
                 palette_open: false,
                 palette_input: String::new(),
                 palette_selection: 0,
+                menu_open: false,
+                menu_input: String::new(),
+                menu_selection: 0,
                 memory_open: false,
                 memory_blocks: Vec::new(),
                 memory_selection: 0,
@@ -2113,6 +2136,97 @@ impl SessionState {
                 return None;
             }
             let idx = (*palette_selection).min(filtered.len() - 1);
+            Some(crate::palette::parse_palette_input(
+                filtered[idx].def.trigger,
+            ))
+        } else {
+            None
+        }
+    }
+
+    // ── Full-Screen Command Menu State ──────────────────────────
+
+    /// Open the full-screen command menu overlay.
+    pub fn open_menu(&mut self, initial_input: &str) {
+        if let Self::Connected {
+            menu_open,
+            menu_input,
+            menu_selection,
+            ..
+        } = self
+        {
+            *menu_open = true;
+            *menu_input = initial_input.to_string();
+            *menu_selection = 0;
+        }
+    }
+
+    /// Close the command menu.
+    pub fn close_menu(&mut self) {
+        if let Self::Connected {
+            menu_open,
+            menu_input,
+            menu_selection,
+            ..
+        } = self
+        {
+            *menu_open = false;
+            menu_input.clear();
+            *menu_selection = 0;
+        }
+    }
+
+    /// Replace the menu filter input and reset selection.
+    pub fn set_menu_input(&mut self, query: &str) {
+        if let Self::Connected {
+            menu_input,
+            menu_selection,
+            ..
+        } = self
+        {
+            *menu_input = query.to_string();
+            *menu_selection = 0;
+        }
+    }
+
+    /// Move the menu selection up (-1) or down (+1).
+    pub fn move_menu_selection(&mut self, delta: i32) {
+        if let Self::Connected {
+            menu_input,
+            menu_selection,
+            ..
+        } = self
+        {
+            let count = crate::palette::fuzzy_filter(menu_input).len();
+            if count == 0 {
+                *menu_selection = 0;
+                return;
+            }
+            let max_idx = count - 1;
+            let new_idx = (*menu_selection as i32) + delta;
+            *menu_selection = new_idx.clamp(0, max_idx as i32) as usize;
+        }
+    }
+
+    /// Whether the menu overlay is currently open.
+    pub fn is_menu_open(&self) -> bool {
+        matches!(self, Self::Connected { menu_open: true, .. })
+    }
+
+    /// Parse the currently-selected menu entry.
+    pub fn selected_menu_cmd(&self) -> Option<crate::palette::PaletteCmd> {
+        if let Self::Connected {
+            menu_open: true,
+            menu_input,
+            menu_selection,
+            ..
+        } = self
+        {
+            let filtered = crate::palette::fuzzy_filter(menu_input);
+            if filtered.is_empty() {
+                return None;
+            }
+            let idx = (*menu_selection).min(filtered.len() - 1);
             Some(crate::palette::parse_palette_input(
                 filtered[idx].def.trigger,
             ))

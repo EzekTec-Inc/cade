@@ -159,6 +159,7 @@ cade-tui = { version = "0.2.0", path = "crates/cade-tui" }
 ratatui.workspace = true
 indicatif.workspace = true
 rmcp.workspace = true
+lru = "0.12"
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -970,13 +970,8 @@ impl CadeApp {
                 }
             }
             PaletteCmd::Help => {
-                // Show the list of commands as an error-toast-style banner.
-                let mut lines = vec!["Available commands:".to_string()];
-                for def in crate::palette::CMD_DEFS {
-                    lines.push(format!("  /{} — {}", def.trigger, def.description));
-                }
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    s.push_error(&lines.join("\n"));
+                    s.open_menu("");
                 }
             }
             PaletteCmd::Memory => {

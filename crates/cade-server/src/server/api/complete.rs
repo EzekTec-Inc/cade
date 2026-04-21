@@ -237,6 +237,7 @@ mod tests {
             api_key: None,
 
         allowed_origin: None,
+        max_context_budget: None,
         });
         AppState {
             db,
@@ -268,6 +269,7 @@ mod tests {
             agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
+            context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
         }
     }
 

@@ -216,6 +216,11 @@ impl SettingsManager {
         self.project.silent_subagents.unwrap_or(self.global.silent_subagents.unwrap_or(false))
     }
 
+    /// Retrieve the optional maximum context budget limit (in chars).
+    pub fn max_context_budget(&self) -> Option<usize> {
+        self.project.max_context_budget.or(self.global.max_context_budget)
+    }
+
     /// Remove the API key from global settings and persist.
     /// Used by `/logout` to clear stored credentials.
     pub fn clear_api_key(&mut self) {

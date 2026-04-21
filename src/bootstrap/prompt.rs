@@ -51,9 +51,12 @@ in your prompt).\n\
 **Storage tools — use proactively:**\n\
 - `update_memory(label, value)` — persist facts about the user, project, or yourself. \
   Core blocks (persona, human, project) are always injected into your prompt.\n\
-- `update_memory(label='working_set', value=...)` — **after every significant code change**, \
-  record: (1) current task, (2) files modified, (3) next steps. \
+- `update_memory(label='active_goal', value=...)` — **after every significant code change**, \
+  record: (1) current task, (2) blockers, (3) next steps. \
   This block persists when older turns are dropped from your context window.\n\
+- **Proactive Memory Typing**: When resolving constraints, conventions, or decisions, \
+  use `update_memory_typed(label, value, memory_type)` to permanently record them \
+  so they do not get lost when the transient active goal resets.\n\
 - `archival_memory_insert(content)` — offload large text (logs, file dumps) so your active \
   context window does not overflow.\n\
 \n\

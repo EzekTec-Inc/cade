@@ -1,19 +1,18 @@
 use crate::theme::EguiThemeExt;
 use eframe::egui;
 use crate::session::SessionState;
-use crate::app::status_dot_color;
 
-pub fn render(ctx: &egui::Context, session_snapshot: &Option<SessionState>,
+pub fn render(ui: &mut egui::Ui, session_snapshot: &Option<SessionState>,
     theme: &crate::theme::ThemeColors,
 ) {
-    egui::TopBottomPanel::top("cade_toolbar")
+    egui::Panel::top("cade_toolbar")
         .exact_size(32.0)
         .frame(
             egui::Frame::new()
                 .fill(theme.bg_surface0())
                 .inner_margin(egui::Margin::symmetric(10, 0)),
         )
-        .show(ctx, |ui| {
+        .show_inside(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new("CADE")

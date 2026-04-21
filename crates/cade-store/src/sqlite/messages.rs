@@ -1,5 +1,23 @@
 use super::*;
 
+pub fn get_max_rowid(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<u64> {
+    let conn = db
+        .lock()
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+    let sql = if conversation_id.is_some() {
+        "SELECT COALESCE(MAX(rowid), 0) FROM messages WHERE agent_id = ?1 AND conversation_id = ?2"
+    } else {
+        "SELECT COALESCE(MAX(rowid), 0) FROM messages WHERE agent_id = ?1 AND conversation_id IS NULL"
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let val: i64 = if let Some(cid) = conversation_id {
+        stmt.query_row(params![agent_id, cid], |r| r.get(0))?
+    } else {
+        stmt.query_row(params![agent_id], |r| r.get(0))?
+    };
+    Ok(val as u64)
+}
+
 pub fn last_assistant_message(
     db: &Db,
     agent_id: &str,

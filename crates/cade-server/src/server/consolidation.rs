@@ -102,7 +102,7 @@ fn should_skip_noisy_tool(_role: &str, _trimmed: &str) -> bool {
 /// that timer may never expire between turns, so we also fire consolidation
 /// once every `EAGER_CONSOLIDATION_TURN_THRESHOLD` turns that produce a
 /// `needs_consolidation` signal. 20 is comfortably below the 80-turn
-/// `STALE_THRESHOLD` so `working_set`'s pin (see M1) and the session_summary
+/// `STALE_THRESHOLD` so `active_goal`'s pin (see M1) and the session_summary
 /// block are refreshed before `promote_stale_blocks` could archive them.
 pub(crate) const EAGER_CONSOLIDATION_TURN_THRESHOLD: i64 = 20;
 
@@ -394,14 +394,14 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     // P5-C: Ensure session_summary remains pinned across restarts.
     let _ = sqlite::set_memory_tier(&state.db, agent_id, "session_summary", "pinned", true);
 
-    // P6: Ensure working_set (the agent's primary decision record) never ages
+    // P6: Ensure active_goal (the agent's primary decision record) never ages
     // out.  Pin it if it exists — the agent writes this block at decision time
     // with full reasoning, so it must survive consolidation cycles.
-    let has_working_set = existing_blocks
+    let has_active_goal = existing_blocks
         .iter()
-        .any(|(label, val, _)| label == "working_set" && !val.trim().is_empty());
-    if has_working_set {
-        let _ = sqlite::set_memory_tier(&state.db, agent_id, "working_set", "pinned", true);
+        .any(|(label, val, _)| label == "active_goal" && !val.trim().is_empty());
+    if has_active_goal {
+        let _ = sqlite::set_memory_tier(&state.db, agent_id, "active_goal", "pinned", true);
     }
 
     tracing::info!(
@@ -1351,6 +1351,7 @@ mod tests {
             api_key: None,
 
         allowed_origin: None,
+        max_context_budget: None,
         };
 
         AppState {
@@ -1363,6 +1364,7 @@ mod tests {
             memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             agent_activity: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
             agent_metrics: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
+            context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
         }
     }
 

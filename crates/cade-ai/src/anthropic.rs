@@ -98,12 +98,17 @@ impl AnthropicProvider {
         // Separate system messages from the conversation
         let (system, messages): (Vec<_>, Vec<_>) =
             req.messages.iter().partition(|m| m.role == "system");
-        let mut system_text = String::new();
-        for (i, m) in system.iter().enumerate() {
-            if i > 0 {
-                system_text.push_str("\n\n");
-            }
-            system_text.push_str(&m.content);
+        let mut system_blocks: Vec<Value> = Vec::new();
+        for m in system.iter() {
+            system_blocks.push(json!({
+                "type": "text",
+                "text": m.content,
+            }));
+        }
+
+        // Apply cache_control to the first system block (static context)
+        if let Some(first) = system_blocks.first_mut() {
+            first["cache_control"] = json!({ "type": "ephemeral" });
         }
 
         // Anthropic rule: all tool_result blocks for a given assistant turn MUST be
@@ -270,12 +275,8 @@ impl AnthropicProvider {
         }
 
         // System prompt: use structured block form so we can attach cache_control.
-        if !system_text.is_empty() {
-            body["system"] = json!([{
-                "type": "text",
-                "text": system_text,
-                "cache_control": { "type": "ephemeral" }
-            }]);
+        if !system_blocks.is_empty() {
+            body["system"] = json!(system_blocks);
         }
         if !tools.is_empty() {
             body["tools"] = json!(tools);

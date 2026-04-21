@@ -116,16 +116,13 @@ pub(crate) async fn build_context(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
 
-    let system_core = assemble_system_prompt_memory(state, &agent, agent_id, is_tool_return);
+    let (system_static, system_dynamic) = assemble_system_prompt_memory(state, &agent, agent_id, is_tool_return);
 
-    // Memory-change detection: cache the assembled system_core per agent.
-    // If the content hash matches the last cached value the string is identical
-    // to the previous turn, so the LLM provider's implicit prompt cache
-    // (OpenAI KV cache, Gemini implicit cache) is guaranteed to hit.
-    let system_prompt = {
+    // Memory-change detection: cache the assembled static system_core per agent.
+    let system_prompt_static = {
         use std::hash::{Hash, Hasher};
         let mut h = std::collections::hash_map::DefaultHasher::new();
-        system_core.hash(&mut h);
+        system_static.hash(&mut h);
         let new_hash = h.finish();
         let mut cache = state.memory_cache.lock().unwrap_or_else(|e| e.into_inner());
         let entry = cache
@@ -133,19 +130,49 @@ pub(crate) async fn build_context(
             .or_insert((0, String::new()));
         if entry.0 != new_hash {
             entry.0 = new_hash;
-            entry.1 = system_core;
+            entry.1 = system_static.clone();
         }
-        format!("{}{TOOL_RESPONSE_RULE}", entry.1)
+        entry.1.clone()
     };
 
+    let max_rowid = sqlite::get_max_rowid(&state.db, agent_id, conversation_id).unwrap_or(0);
+    let cache_key = format!("{agent_id}:{conversation_id:?}");
+    let state_hash = {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        system_prompt_static.hash(&mut h);
+        system_dynamic.hash(&mut h);
+        max_rowid.hash(&mut h);
+        agent.model.hash(&mut h);
+        h.finish()
+    };
+
+    {
+        let mut cache = state.context_cache.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((cached_hash, cached_tuple)) = cache.get(&cache_key) {
+            if *cached_hash == state_hash {
+                return Ok(cached_tuple.clone());
+            }
+        }
+    }
+
     // Message history from DB — oldest first, scoped to conversation
-    let mut messages: Vec<LlmMessage> = vec![LlmMessage {
-        role: "system".to_string(),
-        content: system_prompt,
-        tool_call_id: None,
-        tool_calls: None,
-        images: None,
-    }];
+    let mut messages: Vec<LlmMessage> = vec![
+        LlmMessage {
+            role: "system".to_string(),
+            content: system_prompt_static,
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+        },
+        LlmMessage {
+            role: "system".to_string(),
+            content: format!("{}{TOOL_RESPONSE_RULE}", system_dynamic),
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+        }
+    ];
 
 
     let context_char_budget = calculate_context_budget(state, agent_id, &agent.model);
@@ -454,20 +481,6 @@ pub(crate) async fn build_context(
     // Tool schemas — use agent-specific tools if wired, else all tools
     let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, agent_id).unwrap_or_default();
     let all_tools = sqlite::list_tools(&state.db).unwrap_or_default();
-    let budget_exhausted = omitted_turns > 0;
-
-    let mut recently_used = std::collections::HashSet::new();
-    if budget_exhausted {
-        let recent_start = messages.len().saturating_sub(RECENT_WINDOW);
-        for msg in &messages[recent_start..] {
-            if let Some(calls) = &msg.tool_calls {
-                for tc in calls {
-                    recently_used.insert(tc.name.as_str());
-                }
-            }
-        }
-    }
-
     let tool_schemas: Vec<Value> = if agent_tool_ids.is_empty() {
         // Not yet wired → provide all registered tools (backwards-compatible)
         all_tools
@@ -478,40 +491,53 @@ pub(crate) async fn build_context(
         all_tools
             .into_iter()
             .filter(|t| agent_tool_ids.contains(&t.id))
-            .filter_map(|t| {
-                let schema = t.json_schema?;
-                let is_core = t.tags.contains(&"core_mcp".to_string());
-                
+            .filter_map(|t| t.json_schema)
+            .collect()
+    };
+
+    // Lazy tool schema loading: on long conversations, desktop_* tools are pruned
+    // unless they were actually called in the recent message window.  This saves
+    // prompt tokens for sessions that never use desktop features.
+    //
+    // ALWAYS_INCLUDE_TOOL_NAMES are never pruned — they are the agent's primary
+    // mechanism for recovering archived/dropped context and must always be present.
+    const EXTENDED_TOOL_PREFIXES: &[&str] = &["desktop_"];
+    let tool_schemas: Vec<Value> = if messages.len() > 1 + RECENT_WINDOW {
+        // Collect tool names called in the recent window.
+        let recent_start = messages.len().saturating_sub(RECENT_WINDOW);
+        let mut recently_used: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for msg in &messages[recent_start..] {
+            if let Some(calls) = &msg.tool_calls {
+                for tc in calls {
+                    recently_used.insert(tc.name.as_str());
+                }
+            }
+        }
+        tool_schemas
+            .into_iter()
+            .filter(|schema| {
                 let name = schema["name"].as_str().unwrap_or("");
-                
                 // Memory/retrieval tools are always included.
                 if ALWAYS_INCLUDE_TOOL_NAMES.contains(&name) {
-                    return Some(schema);
+                    return true;
                 }
-                
-                // Native tools are never pruned (no "__" in name).
-                let is_mcp = name.contains("__");
-                if !is_mcp || is_core {
-                    return Some(schema);
-                }
-                
-                // If budget is NOT exhausted, keep all MCP tools
-                if !budget_exhausted {
-                    return Some(schema);
-                }
-                
-                if recently_used.contains(name) {
-                    Some(schema)
-                } else {
-                    None
-                }
+                let is_extended = EXTENDED_TOOL_PREFIXES.iter().any(|p| name.starts_with(p));
+                !is_extended || recently_used.contains(name)
             })
             .collect()
+    } else {
+        tool_schemas
     };
 
     // ── Intelligent tool selection ────────────────────────────────────────────
 
-    Ok((agent.model, messages, tool_schemas))
+    let result_tuple = (agent.model, messages, tool_schemas);
+    {
+        let mut cache = state.context_cache.lock().unwrap_or_else(|e| e.into_inner());
+        cache.put(cache_key, (state_hash, result_tuple.clone()));
+    }
+
+    Ok(result_tuple)
 }
 
 
@@ -520,7 +546,7 @@ fn assemble_system_prompt_memory(
     agent: &cade_store::sqlite::AgentRow,
     agent_id: &str,
     is_tool_return: bool,
-) -> String {
+) -> (String, String) {
     // -- Three-tier memory injection
     //
     // Tiers:  pinned (always, full)  |  short (active, full)  |  long (archived, excerpt)
@@ -542,6 +568,7 @@ fn assemble_system_prompt_memory(
     let active_blocks = sqlite::get_active_blocks(&state.db, agent_id).unwrap_or_default();
     let mut pinned_parts: Vec<String> = Vec::new();
     let mut short_parts: Vec<String> = Vec::new();
+    let mut dynamic_parts: Vec<String> = Vec::new();
     let mut pinned_remaining = PINNED_BUDGET;
     let mut short_remaining = SHORT_BUDGET;
     let mut active_omitted = 0usize;
@@ -557,9 +584,21 @@ fn assemble_system_prompt_memory(
             val.to_string()
         };
 
+        let entry = if tier == "pinned" {
+            format!("📌 [{label}]\n{formatted_val}")
+        } else {
+            format!("[{label}]\n{formatted_val}")
+        };
+
+        let chars = entry.chars().count();
+        let is_dynamic = label == "active_goal" || label == "recent_edits" || label == "session_summary";
+
+        if is_dynamic {
+            dynamic_parts.push(entry);
+            continue;
+        }
+
         if tier == "pinned" {
-            let entry = format!("📌 [{label}]\n{formatted_val}");
-            let chars = entry.chars().count();
             if chars <= pinned_remaining {
                 pinned_remaining -= chars;
                 pinned_parts.push(entry);
@@ -567,8 +606,6 @@ fn assemble_system_prompt_memory(
                 active_omitted += 1;
             }
         } else {
-            let entry = format!("[{label}]\n{formatted_val}");
-            let chars = entry.chars().count();
             if chars <= short_remaining {
                 short_remaining -= chars;
                 short_parts.push(entry);
@@ -607,8 +644,8 @@ fn assemble_system_prompt_memory(
 
     
 
-    if !has_any_memory {
-        base
+    if !has_any_memory && dynamic_parts.is_empty() {
+        (base, String::new())
     } else {
         let mut sections: Vec<String> = vec![base];
 
@@ -638,10 +675,16 @@ fn assemble_system_prompt_memory(
             ));
         }
 
-        // Append awareness footer when any memory exists
-        let mut core = sections.join("\n\n");
-        core.push_str(MEMORY_AWARENESS_FOOTER);
-        core
+        let static_core = sections.join("\n\n");
+        let mut dynamic_core = String::new();
+        
+        if !dynamic_parts.is_empty() {
+            dynamic_core = format!("# Working State\n{}", dynamic_parts.join("\n\n"));
+            dynamic_core.push_str("\n\n");
+        }
+        dynamic_core.push_str(MEMORY_AWARENESS_FOOTER);
+        
+        (static_core, dynamic_core)
     }
 }
 
@@ -666,7 +709,11 @@ fn calculate_context_budget(
     let input_budget_tokens = (window_tokens as usize).saturating_sub(output_reserve_tokens);
     let context_char_budget = {
         let raw = input_budget_tokens.saturating_mul(CHARS_PER_TOKEN);
-        raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)
+        let mut budget = raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS);
+        if let Some(max_budget) = state.config.max_context_budget {
+            budget = budget.min(max_budget);
+        }
+        budget
     };
     // Estimate tool-schema overhead and subtract from the message budget.
     // Tool schemas are loaded at the end of build_context, but their token cost
@@ -742,7 +789,11 @@ pub(crate) async fn compute_context_stats(
     let tool_schema_reserve = agent_tool_count * TOOL_SCHEMA_CHARS_ESTIMATE;
     let context_char_budget = {
         let raw = input_budget_tokens.saturating_mul(CHARS_PER_TOKEN);
-        raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS)
+        let mut budget = raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS);
+        if let Some(max_budget) = state.config.max_context_budget {
+            budget = budget.min(max_budget);
+        }
+        budget
             .saturating_sub(tool_schema_reserve)
             .max(MIN_CONTEXT_CHARS)
     };

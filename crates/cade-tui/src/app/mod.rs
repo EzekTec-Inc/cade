@@ -487,6 +487,7 @@ impl TuiApp {
     /// Apply a new theme without re-initializing the terminal.
     pub fn apply_theme(&mut self, colors: ThemeColors) {
         self.colors = colors;
+        self.draw_dirty = true;
         let _ = self.draw();
     }
 

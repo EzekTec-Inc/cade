@@ -145,7 +145,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "export" => Some(SlashCmd::Export(arg)),
         "checkpoint" | "cp" => Some(SlashCmd::Checkpoint(arg)),
         "undo" => Some(SlashCmd::Undo),
-        "tree" | "session-tree" => Some(SlashCmd::Tree),
+        "tree" | "session-tree" | "checkpoints" => Some(SlashCmd::Tree),
         "fork" => Some(SlashCmd::Fork(arg)),
         "artifacts" => Some(SlashCmd::Artifacts),
         "reflect" => Some(SlashCmd::Reflect(arg)),

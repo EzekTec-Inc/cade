@@ -30,6 +30,7 @@ fn make_state(api_key: Option<String>) -> AppState {
         ollama_base_url: String::new(),
         api_key,
         allowed_origin: None,
+        max_context_budget: None,
     });
     AppState {
         db,
@@ -53,6 +54,7 @@ fn make_state(api_key: Option<String>) -> AppState {
         memory_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
     }
 }
 

@@ -433,6 +433,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
         api_key: None,
 
         allowed_origin: None,
+        max_context_budget: None,
     });
     
     let state = AppState {
@@ -457,6 +458,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
         memory_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
     };
     
     // Call blocking endpoint

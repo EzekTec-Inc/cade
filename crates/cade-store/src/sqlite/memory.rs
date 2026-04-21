@@ -56,14 +56,14 @@ pub fn upsert_memory_block(
         )
         .unwrap_or(0);
 
-    // M1: auto-pin `working_set` the first time it receives a non-empty value.
+    // M1: auto-pin `active_goal` the first time it receives a non-empty value.
     // The block is seeded as `short` (see DEFAULT_MEMORY_BLOCKS) so it can
     // age out when the agent moves on to a new task, but once the agent has
     // written real task state the block must survive `promote_stale_blocks`
     // until consolidation explicitly manages it. Without this, a long session
-    // (≥80 idle turns between working_set writes) would archive the block
+    // (≥80 idle turns between active_goal writes) would archive the block
     // before `consolidate_agent` could pin it.
-    let is_nonempty_working_set = label == "working_set" && !final_value.trim().is_empty();
+    let is_nonempty_active_goal = label == "active_goal" && !final_value.trim().is_empty();
 
     if let Some((block_id, old_value, _)) = existing {
         // Snapshot old value into history (skip if unchanged)
@@ -86,9 +86,9 @@ pub fn upsert_memory_block(
 
         // Tier transition rule for UPDATE:
         //   * already pinned → stay pinned
-        //   * working_set with non-empty value → pinned (M1)
+        //   * active_goal with non-empty value → pinned (M1)
         //   * else → short
-        let tier_sql = if is_nonempty_working_set {
+        let tier_sql = if is_nonempty_active_goal {
             "'pinned'"
         } else {
             "CASE WHEN tier = 'pinned' THEN 'pinned' ELSE 'short' END"
@@ -127,8 +127,8 @@ pub fn upsert_memory_block(
         }
     } else {
         // Create a new shared block and link it to the agent.
-        // INSERT tier: `pinned` for non-empty working_set (M1), else `short`.
-        let insert_tier = if is_nonempty_working_set { "pinned" } else { "short" };
+        // INSERT tier: `pinned` for non-empty active_goal (M1), else `short`.
+        let insert_tier = if is_nonempty_active_goal { "pinned" } else { "short" };
         let id = uuid::Uuid::new_v4().to_string();
         conn.execute(
             "INSERT INTO shared_memory_blocks (id, label, value, description, max_chars, updated_at, tier, last_turn)

@@ -43,6 +43,7 @@ subtle = "2.6.1"
 getrandom = { workspace = true }
 # -- Embedded WASM dashboard assets (built by `trunk build` in cade-gui)
 rust-embed = "8.11.0"
+lru = "0.12"
 
 [lints.rust]
 unsafe_code = "forbid"

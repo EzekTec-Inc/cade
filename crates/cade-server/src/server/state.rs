@@ -1,6 +1,7 @@
 use crate::server::{config::ServerConfig, rate_limit::RateLimiter};
 use cade_store::sqlite::Db;
-use cade_ai::{LlmProvider, LlmRouter};
+use cade_ai::{LlmProvider, LlmRouter, LlmMessage};
+use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -56,4 +57,8 @@ pub struct AppState {
     pub agent_activity: Arc<RwLock<std::collections::HashMap<String, AgentActivity>>>,
     /// Tracks lifetime context efficiency metrics per agent.
     pub agent_metrics: Arc<RwLock<std::collections::HashMap<String, AgentMetrics>>>,
+    /// LRU cache for `build_context` outputs to avoid recomputing history loops.
+    /// Key: `format!("{agent_id}:{conversation_id}")`
+    /// Value: `(max_rowid, cached_context_tuple)`
+    pub context_cache: Arc<std::sync::Mutex<lru::LruCache<String, (u64, (String, Vec<LlmMessage>, Vec<Value>))>>>,
 }
