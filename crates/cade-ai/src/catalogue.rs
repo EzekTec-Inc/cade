@@ -231,7 +231,7 @@ pub fn fast_model_for_main_model(main_model: &str) -> String {
     match provider {
         "anthropic" => "anthropic/claude-3-5-haiku-20241022".to_string(),
         "openai" => "openai/gpt-4o-mini".to_string(),
-        "gemini" => "gemini/gemini-2.5-flash".to_string(),
+        "gemini" => "gemini/gemini-2.5-pro".to_string(),
         _ => main_model.to_string(), // Fallback: use exactly what the user is using
     }
 }

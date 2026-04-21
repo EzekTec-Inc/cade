@@ -304,7 +304,7 @@ fn schema_load_skill_ref() -> Value {
 fn schema_run_subagent() -> Value {
     json!({
         "name": "run_subagent",
-        "description": "Spawn a subagent to handle a task autonomously. Only the final answer is returned — your context stays clean. Use 'claude-3-5-haiku-latest' or 'gemini-2.0-flash' as the model for fast, read-heavy tasks like codebase search, log summarization, or deep exploration.",
+        "description": "Spawn a subagent to handle a task autonomously. Only the final answer is returned — your context stays clean. Use 'claude-3-5-haiku-latest' or 'gemini-2.5-pro' as the model for fast, read-heavy tasks like codebase search, log summarization, or deep exploration.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -326,7 +326,7 @@ fn schema_run_subagent() -> Value {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Optional: override the subagent's model. Strongly recommended to specify a fast model like 'claude-3-5-haiku-latest' or 'gemini-2.0-flash' for simple tasks to increase speed."
+                    "description": "Optional: override the subagent's model. Strongly recommended to specify a fast model like 'claude-3-5-haiku-latest' or 'gemini-2.5-pro' for simple tasks to increase speed."
                 },
                 "system_prompt": {
                     "type": "string",

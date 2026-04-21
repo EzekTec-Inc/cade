@@ -59,7 +59,7 @@ pub fn default_model_for(provider: &LlmProviderKind) -> &'static str {
     match provider {
         LlmProviderKind::Anthropic => "claude-opus-4-5",
         LlmProviderKind::OpenAI => "gpt-4o",
-        LlmProviderKind::Gemini => "gemini-2.0-flash",
+        LlmProviderKind::Gemini => "gemini-2.5-pro",
         LlmProviderKind::Ollama => "llama3.2", // most likely installed; user can override
     }
 }
