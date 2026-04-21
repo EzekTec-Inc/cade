@@ -270,6 +270,8 @@ mod tests {
                 std::collections::HashMap::new(),
             )),
             context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
+            all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
+            agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         }
     }
 

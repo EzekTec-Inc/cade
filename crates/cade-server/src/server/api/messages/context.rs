@@ -116,7 +116,27 @@ pub(crate) async fn build_context(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
 
-    let (system_static, system_dynamic) = assemble_system_prompt_memory(state, &agent, agent_id, is_tool_return);
+    let (system_static, mut system_dynamic) = assemble_system_prompt_memory(state, &agent, agent_id, is_tool_return);
+
+    // Inject loaded skills into the dynamic system prompt section.
+    {
+        let agent_skills = state.agent_skills.read().await;
+        if let Some(loaded_ids) = agent_skills.get(agent_id) {
+            if !loaded_ids.is_empty() {
+                let all_skills = state.all_skills.read().await;
+                let mut skills_section = String::from("\n\n# Loaded Skills\n");
+                for id in loaded_ids {
+                    if let Some(skill) = all_skills.iter().find(|s| s.id == *id) {
+                        skills_section.push_str(&format!(
+                            "\n## Skill: {} ({})\n{}\n",
+                            skill.name, skill.id, skill.body
+                        ));
+                    }
+                }
+                system_dynamic.push_str(&skills_section);
+            }
+        }
+    }
 
     // Memory-change detection: cache the assembled static system_core per agent.
     let system_prompt_static = {
@@ -932,8 +952,22 @@ async fn compute_context_breakdown(
         .sum::<usize>()
         / 3) as u64;
 
-    // Cat 4: skills — server doesn't hold skill bodies; use 0 (CLI-only feature)
-    let skills_tok = 0u64;
+    // Cat 4: skills loaded for this agent
+    let skills_tok = {
+        let agent_skills = state.agent_skills.read().await;
+        let loaded_ids = agent_skills.get(agent_id).cloned().unwrap_or_default();
+        if loaded_ids.is_empty() {
+            0u64
+        } else {
+            let all = state.all_skills.read().await;
+            (loaded_ids
+                .iter()
+                .filter_map(|id| all.iter().find(|s| s.id == *id))
+                .map(|s| s.body.chars().count())
+                .sum::<usize>()
+                / 3) as u64
+        }
+    };
 
     // Cat 5: conversation messages
     let output_reserve = ((window_tokens as f64) * OUTPUT_RESERVE_FRACTION).round() as usize;

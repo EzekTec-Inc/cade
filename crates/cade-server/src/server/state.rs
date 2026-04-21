@@ -1,6 +1,7 @@
 use crate::server::{config::ServerConfig, rate_limit::RateLimiter};
 use cade_store::sqlite::Db;
 use cade_ai::{LlmProvider, LlmRouter, LlmMessage};
+use cade_core::skills::Skill;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::RwLock;
@@ -61,4 +62,14 @@ pub struct AppState {
     /// Key: `format!("{agent_id}:{conversation_id}")`
     /// Value: `(max_rowid, cached_context_tuple)`
     pub context_cache: Arc<std::sync::Mutex<lru::LruCache<String, (u64, (String, Vec<LlmMessage>, Vec<Value>))>>>,
+
+    // ── Skills ──────────────────────────────────────────────────────────────
+    /// All discovered skills (global + project). Populated at boot from
+    /// `discover_all_skills()`. Immutable after boot unless reloaded.
+    pub all_skills: Arc<RwLock<Vec<Skill>>>,
+    /// Per-agent loaded (activated) skill IDs. Only these skills' bodies are
+    /// injected into the system prompt during `build_context`.
+    /// Key: agent_id, Value: set of skill IDs that have been loaded via
+    /// `load_skill` tool or auto-trigger.
+    pub agent_skills: Arc<RwLock<std::collections::HashMap<String, Vec<String>>>>,
 }

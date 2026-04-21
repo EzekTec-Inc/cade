@@ -64,6 +64,8 @@ async fn test_db_lock_poisoning_yields_500() {
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
         context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
+        all_skills: Arc::new(RwLock::new(Vec::new())),
+        agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),
     };
 
     // 3. Call the handler directly

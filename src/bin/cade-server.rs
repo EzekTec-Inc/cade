@@ -128,6 +128,11 @@ async fn main() -> Result<()> {
         }
     };
 
+    // ── Discover skills at boot ────────────────────────────────────────────
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let all_skills = cade_core::skills::discover_all_skills(&cwd, None, None);
+    tracing::info!("Discovered {} skills", all_skills.len());
+
     let state = AppState {
         db,
         llm,
@@ -139,6 +144,8 @@ async fn main() -> Result<()> {
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
         context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
+        all_skills: Arc::new(RwLock::new(all_skills)),
+        agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),
     };
 
     // ── Sleeptime consolidation task ─────────────────────────────────────────

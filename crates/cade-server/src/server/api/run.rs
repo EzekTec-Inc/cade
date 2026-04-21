@@ -257,12 +257,18 @@ pub async fn run_agent(
 
             // ── Execute tools and persist results ─────────────────────────
             for tc in &tool_calls {
-                let result = cade_agent::tools::manager::dispatch(
-                    tc.id.clone(),
-                    &tc.name,
-                    &tc.arguments,
-                    &state2.mcp,
-                ).await;
+                // Intercept `load_skill` — handle server-side instead of dispatching.
+                let result = if tc.name == "load_skill" {
+                    let args_str = tc.arguments.to_string();
+                    handle_load_skill_tool(&state2, &agent_id2, &tc.id, &args_str).await
+                } else {
+                    cade_agent::tools::manager::dispatch(
+                        tc.id.clone(),
+                        &tc.name,
+                        &tc.arguments,
+                        &state2.mcp,
+                    ).await
+                };
 
                 let output_trimmed = if result.output.len() > 8_192 {
                     format!(
@@ -310,4 +316,78 @@ pub async fn run_agent(
 
     let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
     Sse::new(stream).into_response()
+}
+
+/// Handle `load_skill` tool call server-side.
+///
+/// Parses the `id` argument, finds the skill in `all_skills`, activates it
+/// for the agent, invalidates the context cache, and returns the skill body.
+async fn handle_load_skill_tool(
+    state: &AppState,
+    agent_id: &str,
+    tool_call_id: &str,
+    arguments: &str,
+) -> cade_agent::tools::manager::ToolResult {
+    use cade_agent::tools::manager::ToolResult;
+
+    let skill_id = serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .and_then(|v| v["id"].as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    if skill_id.is_empty() {
+        return ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "load_skill".to_string(),
+            output: "Error: missing 'id' parameter".to_string(),
+            is_error: true,
+        };
+    }
+
+    // Find skill
+    let all = state.all_skills.read().await;
+    let skill = all.iter().find(|s| s.id == skill_id).cloned();
+    drop(all);
+
+    match skill {
+        Some(skill) => {
+            // Activate for agent
+            {
+                let mut agent_skills = state.agent_skills.write().await;
+                let loaded = agent_skills.entry(agent_id.to_string()).or_default();
+                if !loaded.contains(&skill_id) {
+                    loaded.push(skill_id.clone());
+                }
+            }
+
+            // Invalidate context cache
+            if let Ok(mut cache) = state.context_cache.lock() {
+                let keys: Vec<String> = cache
+                    .iter()
+                    .filter(|(k, _)| k.starts_with(&format!("{agent_id}:")))
+                    .map(|(k, _)| k.clone())
+                    .collect();
+                for k in keys {
+                    cache.pop(&k);
+                }
+            }
+
+            ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: "load_skill".to_string(),
+                output: format!(
+                    "Skill '{}' loaded ({} chars). It is now active in your system prompt.",
+                    skill.name,
+                    skill.body.chars().count()
+                ),
+                is_error: false,
+            }
+        }
+        None => ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "load_skill".to_string(),
+            output: format!("Error: skill '{skill_id}' not found"),
+            is_error: true,
+        },
+    }
 }
