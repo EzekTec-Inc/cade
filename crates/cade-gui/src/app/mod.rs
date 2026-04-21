@@ -434,15 +434,20 @@ impl eframe::App for CadeApp {
                         agent_metrics.as_ref(),
                         &conversations,
                         &selected_conversation,
+                        is_streaming,
+                        active_plan.as_ref(),
+                        (total_input_tokens, total_output_tokens),
                         &self.theme,
                     ) {
                         action = new_action;
                     }
 
-                    // ── Plan panel (inside sidebar area) ────────────
+                    // ── Plan panel (inside sidebar, shown when plan active) ──
                     if let Some(plan) = active_plan {
+                        // Plan steps already summarized in sidebar Status section.
+                        // Full checklist rendered inline below sidebar.
                         egui::Panel::left("plan_panel")
-                            .default_size(180.0)
+                            .default_size(200.0)
                             .resizable(false)
                             .show_inside(ui, |ui| {
                                 components::plan::render(ui, plan, &self.theme);

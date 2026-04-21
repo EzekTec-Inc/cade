@@ -93,10 +93,10 @@ pub fn render_context_overlay(
                 let bar_w = ui.available_width();
                 let (resp, painter) = ui.allocate_painter(egui::vec2(bar_w, 10.0), egui::Sense::hover());
                 let r = resp.rect;
-                painter.rect_filled(r, 3.0, theme.bg_surface0());
+                painter.rect_filled(r, 0.0, theme.bg_surface0());
                 painter.rect_filled(
                     egui::Rect::from_min_size(r.min, egui::vec2(r.width() * pct, r.height())),
-                    3.0,
+                    0.0,
                     if pct > 0.85 { theme.warning() } else { theme.primary() },
                 );
                 ui.label(egui::RichText::new(format!("{:.0}% context used", pct * 100.0)).color(theme.text_dim()).size(10.0));
