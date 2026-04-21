@@ -273,6 +273,11 @@ pub enum SessionState {
         /// Each entry is a scrollable block of output lines shown in the
         /// timeline while a long-running tool (e.g. `bash`) is executing.
         live_outputs: Vec<LiveOutputBlock>,
+
+        /// Per-category context-window breakdown (fetched on demand).
+        context_breakdown: Option<crate::api::ContextBreakdown>,
+        /// Whether a context-breakdown fetch is in progress.
+        context_breakdown_loading: bool,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -428,6 +433,9 @@ impl SessionState {
 
                 active_plan: None,
                 live_outputs: Vec::new(),
+
+                context_breakdown: None,
+                context_breakdown_loading: false,
             };
         }
     }
@@ -1869,12 +1877,14 @@ impl SessionState {
             context_open,
             context_loading,
             context_error,
+            context_breakdown_loading,
             ..
         } = self
         {
             *context_open = true;
             *context_loading = true;
             *context_error = None;
+            *context_breakdown_loading = true;
         }
     }
 
@@ -2439,6 +2449,50 @@ impl SessionState {
             live_outputs
         } else {
             &[]
+        }
+    }
+}
+
+// ── Context breakdown methods ───────────────────────────────────────────
+
+impl SessionState {
+    /// Start loading context breakdown.
+    pub fn start_context_breakdown_loading(&mut self) {
+        if let Self::Connected { context_breakdown_loading, .. } = self {
+            *context_breakdown_loading = true;
+        }
+    }
+
+    /// Store fetched context breakdown.
+    pub fn on_context_breakdown(&mut self, breakdown: crate::api::ContextBreakdown) {
+        if let Self::Connected { context_breakdown, context_breakdown_loading, .. } = self {
+            *context_breakdown = Some(breakdown);
+            *context_breakdown_loading = false;
+        }
+    }
+
+    /// Clear context breakdown on error.
+    pub fn on_context_breakdown_error(&mut self) {
+        if let Self::Connected { context_breakdown_loading, .. } = self {
+            *context_breakdown_loading = false;
+        }
+    }
+
+    /// Read-only access to context breakdown.
+    pub fn context_breakdown(&self) -> Option<&crate::api::ContextBreakdown> {
+        if let Self::Connected { context_breakdown, .. } = self {
+            context_breakdown.as_ref()
+        } else {
+            None
+        }
+    }
+
+    /// Whether a context breakdown fetch is in progress.
+    pub fn is_context_breakdown_loading(&self) -> bool {
+        if let Self::Connected { context_breakdown_loading, .. } = self {
+            *context_breakdown_loading
+        } else {
+            false
         }
     }
 }

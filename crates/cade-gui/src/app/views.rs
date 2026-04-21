@@ -397,3 +397,141 @@ pub fn render_live_output(
         });
 }
 
+// ── Context bar (per-category breakdown) ──────────────────────────────
+
+/// Category glyphs matching TUI's ContextBar (indices 0–7).
+const CATEGORY_GLYPHS: [&str; 8] = ["█", "▓", "▒", "░", "▪", "■", "·", "⎹"];
+
+/// Category colors — returns a color for each category index.
+fn category_color(idx: usize, theme: &crate::theme::ThemeColors) -> egui::Color32 {
+    match idx {
+        0 => theme.primary(),     // system
+        1 => theme.teal(),        // tools
+        2 => theme.purple(),      // mcp
+        3 => theme.warning(),     // memory
+        4 => theme.success(),     // skills
+        5 => theme.text_primary(),// messages
+        6 => theme.text_dim(),    // free
+        7 => theme.text_muted(),  // buffer
+        _ => theme.text_dim(),
+    }
+}
+
+/// Render a per-category context-window bar chart, mirroring TUI's `ContextBar`.
+///
+/// Layout:
+///   Header: model · pct% (used/window tokens)
+///   Bar:    proportional colored segments
+///   Legend: one row per non-zero category
+pub fn render_context_bar(
+    ui: &mut egui::Ui,
+    breakdown: &crate::api::ContextBreakdown,
+    theme: &crate::theme::ThemeColors,
+) {
+    let pct_color = if breakdown.pct >= 90 {
+        theme.error()
+    } else if breakdown.pct >= 60 {
+        theme.warning()
+    } else {
+        theme.text_primary()
+    };
+
+    let total_used: u64 = breakdown
+        .categories
+        .iter()
+        .filter(|c| c.name != "free" && c.name != "buffer")
+        .map(|c| c.tokens)
+        .sum();
+
+    // Header line
+    ui.horizontal(|ui| {
+        ui.label(
+            egui::RichText::new(format!(
+                "{} · {}% ({}/{})",
+                breakdown.model,
+                breakdown.pct,
+                format_tok_compact(total_used),
+                format_tok_compact(breakdown.window_tokens),
+            ))
+            .color(pct_color)
+            .monospace()
+            .strong()
+            .size(11.0),
+        );
+    });
+
+    ui.add_space(2.0);
+
+    // Proportional bar — painted as adjacent rects
+    if breakdown.window_tokens > 0 {
+        let bar_w = ui.available_width();
+        let bar_h = 12.0;
+        let (resp, painter) = ui.allocate_painter(egui::vec2(bar_w, bar_h), egui::Sense::hover());
+        let r = resp.rect;
+
+        // Background
+        painter.rect_filled(r, 0.0, theme.bg_surface0());
+
+        // Segments
+        let mut x = r.min.x;
+        for (idx, cat) in breakdown.categories.iter().enumerate() {
+            if cat.tokens == 0 {
+                continue;
+            }
+            let frac = cat.tokens as f32 / breakdown.window_tokens as f32;
+            let seg_w = (frac * bar_w).max(1.0);
+            let seg_rect = egui::Rect::from_min_size(
+                egui::pos2(x, r.min.y),
+                egui::vec2(seg_w, bar_h),
+            );
+            painter.rect_filled(seg_rect, 0.0, category_color(idx, theme));
+            x += seg_w;
+        }
+    }
+
+    ui.add_space(2.0);
+
+    // Legend rows (non-zero only)
+    for (idx, cat) in breakdown.categories.iter().enumerate() {
+        if cat.tokens == 0 {
+            continue;
+        }
+        let pct_cat = if breakdown.window_tokens > 0 {
+            (cat.tokens as f64 / breakdown.window_tokens as f64 * 100.0) as u8
+        } else {
+            0
+        };
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(CATEGORY_GLYPHS.get(idx).unwrap_or(&"?"))
+                    .color(category_color(idx, theme))
+                    .monospace()
+                    .size(10.0),
+            );
+            ui.label(
+                egui::RichText::new(format!(
+                    "{:<8} {:>6}  {}%",
+                    cat.name,
+                    format_tok_compact(cat.tokens),
+                    pct_cat,
+                ))
+                .color(theme.text_muted())
+                .monospace()
+                .size(10.0),
+            );
+        });
+    }
+}
+
+fn format_tok_compact(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 10_000 {
+        format!("{}k", n / 1_000)
+    } else if n >= 1_000 {
+        format!("{:.1}k", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
+}
+

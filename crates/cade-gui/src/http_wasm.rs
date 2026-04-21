@@ -602,6 +602,17 @@ pub async fn get_context_stats(
     api::parse_context_stats(status, &body)
 }
 
+/// `GET /v1/agents/:id/context-breakdown` — per-category context breakdown.
+pub async fn get_context_breakdown(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+) -> Result<api::ContextBreakdown, ApiError> {
+    let url = api::context_breakdown_url(base_url, agent_id);
+    let (status, body) = send_text(&url, token).await?;
+    api::parse_context_breakdown(status, &body)
+}
+
 /// `GET /v1/models` — list all available models from all providers.
 pub async fn get_models(
     base_url: &str,

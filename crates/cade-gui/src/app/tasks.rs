@@ -787,6 +787,39 @@ impl CadeApp {
         });
     }
 
+    /// Fetch per-category context breakdown from the server.
+    pub(super) fn spawn_fetch_context_breakdown(&mut self) {
+        let (server_url, token, agent_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id)
+        };
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::get_context_breakdown(&server_url, &token, &agent_id).await {
+                Ok(breakdown) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_context_breakdown(breakdown);
+                    }
+                }
+                Err(_) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_context_breakdown_error();
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     // ── Tools spawn helper (M18) ────────────────────────────────────
 
     pub(super) fn spawn_fetch_tools(&mut self) {
@@ -1151,6 +1184,7 @@ impl CadeApp {
                     s.open_context_overlay();
                 }
                 self.spawn_fetch_context_stats();
+                self.spawn_fetch_context_breakdown();
             }
             PaletteCmd::Stats => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {

@@ -85,6 +85,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/agents/:id/context",
             get(messages::get_context_stats_handler),
         )
+        .route(
+            "/v1/agents/:id/context-breakdown",
+            get(messages::get_context_breakdown_handler),
+        )
         // Agents
         .route(
             "/v1/agents",

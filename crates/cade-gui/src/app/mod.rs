@@ -245,6 +245,8 @@ impl eframe::App for CadeApp {
 
                     ref active_plan,
                     ref live_outputs,
+                    ref context_breakdown,
+                    context_breakdown_loading,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -598,6 +600,8 @@ impl eframe::App for CadeApp {
                             context_stats.as_ref(),
                             context_loading,
                             context_error.as_deref(),
+                            context_breakdown.as_ref(),
+                            context_breakdown_loading,
                             &self.theme,
                         ) {
                             action = new_action;

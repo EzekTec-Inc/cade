@@ -9,6 +9,8 @@ pub fn render_context_overlay(
     stats: Option<&crate::api::ContextStats>,
     loading: bool,
     error: Option<&str>,
+    context_breakdown: Option<&crate::api::ContextBreakdown>,
+    context_breakdown_loading: bool,
     theme: &crate::theme::ThemeColors, 
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
@@ -100,6 +102,28 @@ pub fn render_context_overlay(
                     if pct > 0.85 { theme.warning() } else { theme.primary() },
                 );
                 ui.label(egui::RichText::new(format!("{:.0}% context used", pct * 100.0)).color(theme.text_dim()).size(10.0));
+            }
+
+            // ── Per-category breakdown (ContextBar) ──────────────
+            if let Some(breakdown) = context_breakdown {
+                ui.add_space(8.0);
+                let sep = ui.available_rect_before_wrap();
+                let sep = egui::Rect::from_min_size(sep.min, egui::vec2(sep.width(), 1.0));
+                ui.painter().rect_filled(sep, 0.0, theme.border_base());
+                ui.advance_cursor_after_rect(sep);
+                ui.add_space(4.0);
+                crate::app::views::render_context_bar(ui, breakdown, theme);
+            } else if context_breakdown_loading {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(
+                        egui::RichText::new("Loading breakdown…")
+                            .color(theme.text_dim())
+                            .monospace()
+                            .size(10.0),
+                    );
+                });
             }
         });
 

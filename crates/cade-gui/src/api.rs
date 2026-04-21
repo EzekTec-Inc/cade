@@ -592,6 +592,38 @@ pub fn context_url(server: &str, agent_id: &str) -> String {
     build_url(server, &format!("/v1/agents/{agent_id}/context"))
 }
 
+// ── Context breakdown (per-category) ──────────────────────────────────
+
+/// A single category in the context-window breakdown.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct ContextCategory {
+    pub name: String,
+    pub tokens: u64,
+}
+
+/// Per-category context-window breakdown from `GET /v1/agents/:id/context-breakdown`.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct ContextBreakdown {
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub window_tokens: u64,
+    #[serde(default)]
+    pub pct: u8,
+    #[serde(default)]
+    pub categories: Vec<ContextCategory>,
+}
+
+/// Parse `GET /v1/agents/:id/context-breakdown`.
+pub fn parse_context_breakdown(status: u16, body: &str) -> Result<ContextBreakdown, ApiError> {
+    decode_or_error(status, body)
+}
+
+/// Build the URL for the context-breakdown endpoint.
+pub fn context_breakdown_url(server: &str, agent_id: &str) -> String {
+    build_url(server, &format!("/v1/agents/{agent_id}/context-breakdown"))
+}
+
 // ── Models listing ────────────────────────────────────────────────────
 
 /// A model entry from the `GET /v1/models` response.

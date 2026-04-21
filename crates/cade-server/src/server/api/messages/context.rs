@@ -878,6 +878,132 @@ pub(crate) async fn compute_context_stats(
     }))
 }
 
+
+// ── Per-category context breakdown ─────────────────────────────────────────────
+
+/// GET /v1/agents/:id/context-breakdown?conversation_id=<id>
+///
+/// Returns per-category token estimates for the context window, suitable for
+/// rendering a proportional bar chart in the GUI dashboard.
+pub async fn get_context_breakdown_handler(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    axum::extract::Query(params): axum::extract::Query<std::collections::HashMap<String, String>>,
+) -> Response {
+    let conv_id = params.get("conversation_id").map(String::as_str);
+    match compute_context_breakdown(&state, &agent_id, conv_id).await {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => err(StatusCode::NOT_FOUND, &e).into_response(),
+    }
+}
+
+async fn compute_context_breakdown(
+    state: &AppState,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+) -> core::result::Result<Value, String> {
+    let agent = sqlite::get_agent(&state.db, agent_id)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
+
+    let window_tokens = catalogue::context_window_for_model(&agent.model) as u64;
+
+    // Cat 0: system prompt tokens (~chars/3)
+    let sys_tok = agent
+        .system_prompt
+        .as_deref()
+        .map(|s| (s.chars().count() / 3) as u64)
+        .unwrap_or(0);
+
+    // Cat 2: MCP tool schemas
+    let mcp_schemas = state.mcp.all_tool_schemas().await;
+    let mcp_tok = (mcp_schemas
+        .iter()
+        .filter_map(|s| serde_json::to_string(s).ok())
+        .map(|s| s.len())
+        .sum::<usize>()
+        / 3) as u64;
+
+    // Cat 3: memory blocks
+    let mem_blocks = sqlite::get_active_blocks(&state.db, agent_id).unwrap_or_default();
+    let mem_tok = (mem_blocks
+        .iter()
+        .map(|(_, v, _, _, _)| v.chars().count())
+        .sum::<usize>()
+        / 3) as u64;
+
+    // Cat 4: skills — server doesn't hold skill bodies; use 0 (CLI-only feature)
+    let skills_tok = 0u64;
+
+    // Cat 5: conversation messages
+    let output_reserve = ((window_tokens as f64) * OUTPUT_RESERVE_FRACTION).round() as usize;
+    let input_budget_tokens = (window_tokens as usize).saturating_sub(output_reserve);
+    let context_char_budget = {
+        let raw = input_budget_tokens.saturating_mul(CHARS_PER_TOKEN);
+        let mut budget = raw.clamp(MIN_CONTEXT_CHARS, MAX_CONTEXT_CHARS);
+        if let Some(max_budget) = state.config.max_context_budget {
+            budget = budget.min(max_budget);
+        }
+        budget
+    };
+    let all_rows =
+        sqlite::get_context_window(&state.db, agent_id, conversation_id, context_char_budget)
+            .unwrap_or_default();
+    let msg_chars: usize = all_rows.iter().map(|r| r.char_count).sum();
+    let msg_tok = (msg_chars / 3) as u64;
+
+    // Cat 1: native tools = total used - known categories (residual)
+    let known_excl_tools = sys_tok + mcp_tok + mem_tok + skills_tok + msg_tok;
+    let total_used_estimate = {
+        // Use the server-side context stats if available
+        let stats_result = compute_context_stats(state, agent_id, conversation_id).await;
+        if let Ok(ref stats) = stats_result {
+            let chars_used = stats["chars_used"].as_u64().unwrap_or(0);
+            let budget = stats["message_budget_chars"].as_u64().unwrap_or(1);
+            if budget > 0 {
+                (chars_used as f64 / budget as f64 * window_tokens as f64) as u64
+            } else {
+                known_excl_tools
+            }
+        } else {
+            known_excl_tools
+        }
+    };
+    let tools_tok = total_used_estimate.saturating_sub(known_excl_tools);
+
+    let total_used = known_excl_tools + tools_tok;
+    let buffer_tok = window_tokens * 3 / 100;
+    let free_tok = window_tokens.saturating_sub(total_used + buffer_tok);
+    let pct = if window_tokens > 0 {
+        (total_used * 100 / window_tokens).min(100) as u8
+    } else {
+        0
+    };
+
+    let model_short = agent
+        .model
+        .rsplit('/')
+        .next()
+        .unwrap_or(&agent.model)
+        .to_string();
+
+    Ok(json!({
+        "model": model_short,
+        "window_tokens": window_tokens,
+        "pct": pct,
+        "categories": [
+            { "name": "system",   "tokens": sys_tok },
+            { "name": "tools",    "tokens": tools_tok },
+            { "name": "mcp",      "tokens": mcp_tok },
+            { "name": "memory",   "tokens": mem_tok },
+            { "name": "skills",   "tokens": skills_tok },
+            { "name": "messages", "tokens": msg_tok },
+            { "name": "free",     "tokens": free_tok },
+            { "name": "buffer",   "tokens": buffer_tok },
+        ]
+    }))
+}
+
 #[cfg(test)]
 mod head_tail_tests {
     use super::*;
