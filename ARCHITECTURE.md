@@ -6,7 +6,7 @@ This document describes the internal architecture of CADE — a stateful, self-i
 
 ## Workspace Overview
 
-CADE is a Cargo workspace with **fourteen crates** and a root package that owns the two binaries (`cade` CLI and `cade-server`).
+CADE is a Cargo workspace with **fifteen crates** and a root package that owns the two binaries (`cade` CLI and `cade-server`).
 
 ```
 src/
@@ -17,25 +17,30 @@ src/
 crates/
 ├── cade-core/                  # Shared types (no workspace deps)
 │   └── permissions, settings, skills, hooks, toolsets, capabilities,
-│       resources (context files)
+│       resources (context files, palette, themes)
 ├── cade-ai/                    # LLM providers (no workspace deps)
 │   └── anthropic, openai, gemini, ollama, model catalogue
-├── cade-desktop/               # Desktop extensions (no workspace deps)
+├── cade-api-types/             # Shared API types (no workspace deps)
+│   └── ChatMessage, AgentInfo, HealthInfo, tool schemas
+├── cade-desktop/               # Desktop extensions (→ cade-core)
 │   └── capture, control, notify — cross-platform (Linux/macOS/Windows)
 ├── cade-store/                 # SQLite persistence + crypto (→ cade-core, cade-ai)
 │   └── sqlite/ (agents, messages, conversations, memory, tools,
 │       providers, runs, evidence), crypto (AES-GCM encryption)
-├── cade-server/                # HTTP API + consolidation (→ cade-core, cade-ai, cade-store)
+├── cade-server/                # HTTP API + consolidation (→ cade-core, cade-ai, cade-store, cade-agent)
 │   └── api/, config, rate_limit, consolidation (sleeptime memory)
-├── cade-agent/                 # REST client + tool implementations (→ cade-core, cade-desktop)
+├── cade-agent/                 # REST client + tool implementations (→ cade-core, cade-desktop, cade-mcp, cade-web)
 │   └── agent/ (client, session, consolidation), tools/, mcp/, subagents/
-├── cade-cli/                   # TUI + REPL (→ cade-core, cade-agent, cade-ai)
+├── cade-cli/                   # TUI + REPL (→ cade-core, cade-agent, cade-ai, cade-tui)
 │   └── cli/, ui/
-├── cade-mcp/                   # MCP (Model Context Protocol) server integration
-├── cade-web/                   # Web search and scraping capabilities
-├── cade-tui/                   # Standalone TUI component library (Ratatui)
-├── cade-plugin/                # Plugin loading and manifests
-├── cade-sdk/                   # Rust SDK for programmatic agent control
+├── cade-tui/                   # Standalone TUI component library (→ cade-core)
+│   └── Ratatui-based render, timeline, layout, colors
+├── cade-gui/                   # WASM dashboard (→ cade-core, cade-api-types)
+│   └── egui/eframe app, SSE streaming, overlays, components
+├── cade-mcp/                   # MCP (Model Context Protocol) server integration (→ cade-core)
+├── cade-web/                   # Web search and scraping capabilities (→ cade-core)
+├── cade-plugin/                # Plugin loading and manifests (→ cade-core, cade-agent)
+├── cade-sdk/                   # Rust SDK for programmatic agent control (→ cade-core, cade-agent)
 └── cade-ide-mcp/               # IDE MCP bridge (editor integrations)
 ```
 
@@ -44,19 +49,21 @@ crates/
 ## Dependency Graph (acyclic)
 
 ```
-cade-core, cade-ai, cade-desktop    ← leaf crates (zero workspace deps)
+cade-core, cade-ai, cade-api-types, cade-ide-mcp   ← leaf crates (zero workspace deps)
+cade-desktop → cade-core
 cade-store   → cade-core, cade-ai
-cade-server  → cade-core, cade-ai, cade-store
-cade-agent   → cade-core, cade-desktop
-cade-cli     → cade-core, cade-agent, cade-ai
 cade-mcp     → cade-core
-cade-web     → (standalone)
-cade-tui     → (standalone)
-cade-plugin  → (standalone)
+cade-web     → cade-core
+cade-tui     → cade-core
+cade-gui     → cade-core, cade-api-types
+cade-agent   → cade-core, cade-desktop(?), cade-mcp(?), cade-web(?)
+cade-server  → cade-core, cade-ai, cade-store, cade-agent, cade-mcp(?)
+cade-cli     → cade-core, cade-agent, cade-ai, cade-tui
+cade-plugin  → cade-core, cade-agent
 cade-sdk     → cade-core, cade-agent
 ```
 
-All dependencies flow downward. No circular references.
+`(?)` = optional feature-gated dependency. All dependencies flow downward. No circular references.
 
 ---
 
@@ -107,6 +114,22 @@ User input → cade-agent → POST /v1/agents/:id/messages/stream → cade-serve
                                                             Continue streaming
 ```
 
+### SSE Protocol (Server-Sent Events)
+
+The server streams typed events to clients over SSE. The GUI dashboard (`cade-gui`) and TUI (`cade-tui`) both consume these events:
+
+| Event type | Payload | Purpose |
+|------------|---------|---------|
+| `text` | String chunk | Streaming assistant text |
+| `reasoning` | String chunk | Streaming reasoning/thinking text |
+| `tool_call` | `{name, arguments, call_id}` | Tool invocation by the LLM |
+| `tool_result` | `{call_id, content}` | Result of a tool execution |
+| `conversation_id` | String | Assigned conversation ID |
+| `usage` | `{input, output, model}` | Token usage for the turn |
+| `finish` | `{reason}` | Stream completion signal |
+| `error` | `{message}` | Error during processing |
+| `theme_update` | `ThemeColors` JSON | Live theme change broadcast |
+
 ### Tool Selection Pipeline
 
 ```
@@ -122,6 +145,36 @@ Available tools (from capabilities + MCP servers)
     └── --tools CLI filter (optional)
         Restricts what's registered in the LLM context window
 ```
+
+---
+
+## MCP Server Boot
+
+MCP (Model Context Protocol) servers are spawned in parallel using `tokio::task::JoinSet` for O(1) boot time regardless of server count. Each server process undergoes a handshake to register its tool definitions, which are then merged into the agent's available tool set.
+
+---
+
+## Theme System
+
+CADE uses a unified theme system defined in `cade-core/src/resources/themes/`:
+
+```
+ThemeColors (cade-core)
+    │
+    ├── cade-tui/src/colors.rs
+    │   ThemeColorsExt trait → ratatui::style::Style
+    │   ColorDefExt trait    → ratatui::style::Color
+    │   BorderStyleExt trait → ratatui::widgets::BorderType
+    │
+    └── cade-gui/src/theme.rs
+        EguiThemeExt trait   → egui::Color32
+        EguiColorExt trait   → egui::Color32
+        apply_theme()        → sets egui::Visuals + spacing
+```
+
+Both UIs consume the same `ThemeColors` struct. Themes are defined as TOML files on disk and can be switched at runtime via the `/theme <name>` command, which broadcasts a `theme_update` SSE event to connected clients.
+
+The GUI follows a "TUI-fied" design language: zero corner rounding, no shadows, compact spacing, monospace fonts for role headers, and a full-width command palette — matching the terminal aesthetic of the TUI.
 
 ---
 
@@ -174,6 +227,21 @@ CLI:      --flags and env vars            (highest priority)
 ```
 
 Merge logic is in `crates/cade-core/src/settings/resolver.rs`.
+
+---
+
+## GUI Dashboard (cade-gui)
+
+The GUI is an **egui/eframe WASM application** compiled to `wasm32-unknown-unknown` and served by `cade-server` at `/dashboard` via `rust-embed`. It provides a browser-based interface for:
+
+- Agent selection and conversation management
+- Real-time streaming responses via SSE
+- Tool call inspection with collapsible details
+- Command palette (`Ctrl+K` or `/`)
+- Overlay panels: memory, MCP servers, model picker, artifacts, checkpoints, stats
+- Live theme synchronization with the server
+
+The GUI shares the `ThemeColors` system with the TUI and follows the same flat, dense, terminal-inspired design language.
 
 ---
 
