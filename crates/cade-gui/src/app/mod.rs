@@ -256,7 +256,7 @@ impl eframe::App for CadeApp {
                     let is_streaming = streaming;
 
                     // Clone input buffer for the editable text field.
-                    let mut input_edit = input_buffer.clone();
+                    let input_edit = input_buffer.clone();
 
                     // ── Map keyboard shortcuts to actions ─────────
                     //
