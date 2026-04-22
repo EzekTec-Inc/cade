@@ -192,3 +192,121 @@ fn build_tools_wraps_in_function_type() -> Result<()> {
 
     Ok(())
 }
+
+// ── o-series developer role remapping ─────────────────────────────────────
+
+#[test]
+fn o_series_system_maps_to_developer_role() -> Result<()> {
+    let req = CompletionRequest {
+        model: "openai/o3-mini".into(),
+        messages: vec![
+            super::super::LlmMessage {
+                role: "system".into(),
+                content: "You are helpful.".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+            },
+            super::super::LlmMessage {
+                role: "user".into(),
+                content: "Hello".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+            },
+        ],
+        tools: vec![],
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+    let messages = OpenAiProvider::to_openai_messages(&req);
+    let arr = messages.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr[0]["role"], "developer", "system should map to developer for o-series");
+    assert_eq!(arr[1]["role"], "user");
+    Ok(())
+}
+
+#[test]
+fn non_o_series_preserves_system_role() -> Result<()> {
+    let req = CompletionRequest {
+        model: "gpt-4.1".into(),
+        messages: vec![
+            super::super::LlmMessage {
+                role: "system".into(),
+                content: "You are helpful.".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+            },
+        ],
+        tools: vec![],
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+    let messages = OpenAiProvider::to_openai_messages(&req);
+    let arr = messages.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr[0]["role"], "system");
+    Ok(())
+}
+
+#[test]
+fn responses_api_o_series_maps_system_to_developer() -> Result<()> {
+    let req = CompletionRequest {
+        model: "openai/o4-mini".into(),
+        messages: vec![
+            super::super::LlmMessage {
+                role: "system".into(),
+                content: "Instructions.".into(),
+                tool_call_id: None,
+                tool_calls: None,
+                images: None,
+            },
+        ],
+        tools: vec![],
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+    let input = OpenAiProvider::to_responses_input(&req);
+    let arr = input.as_array().ok_or("Should be an array")?;
+    assert_eq!(arr[0]["role"], "developer");
+    Ok(())
+}
+
+// ── Tool param sealing (top-level additionalProperties only) ──────────────
+
+#[test]
+fn build_tools_seals_top_level_only() -> Result<()> {
+    let req = CompletionRequest {
+        model: "gpt-4o".into(),
+        messages: vec![],
+        tools: vec![json!({
+            "name": "test_tool",
+            "description": "test",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "nested": {
+                        "type": "object",
+                        "properties": {
+                            "inner": {"type": "string"}
+                        }
+                    },
+                    "name": {"type": "string"}
+                },
+                "required": ["name"]
+            }
+        })],
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+    let tools = OpenAiProvider::build_tools(&req);
+    let arr = tools.as_array().ok_or("Should be an array")?;
+    let params = &arr[0]["function"]["parameters"];
+    // Top-level sealed
+    assert_eq!(params["additionalProperties"], json!(false),
+        "top-level params must have additionalProperties: false");
+    // Nested object NOT sealed — preserves loose MCP tool shape
+    assert!(params["properties"]["nested"].get("additionalProperties").is_none(),
+        "nested object must NOT have additionalProperties set");
+    Ok(())
+}

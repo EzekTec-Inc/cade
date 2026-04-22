@@ -86,6 +86,13 @@ pub fn bare_model(model: &str) -> &str {
 }
 
 /// Recursively fix JSON Schema fields that OpenAI rejects.
+///
+/// Strips unsupported meta keys (`$schema`, `title`, `x-google-*`) at every
+/// nesting level. Ensures object-type schemas have a `properties` field.
+///
+/// NOTE: does NOT add `additionalProperties: false` — that's controlled by
+/// `seal_top_level_additional_properties` so it only affects the tool params
+/// root, not nested objects (which commonly have loose shapes in MCP tools).
 pub fn clean_openai_schema(v: &mut Value) {
     match v {
         Value::Object(map) => {
@@ -94,6 +101,12 @@ pub fn clean_openai_schema(v: &mut Value) {
             {
                 map.insert("properties".to_string(), json!({}));
             }
+            // Strip keys OpenAI doesn't support in tool schemas
+            map.remove("$schema");
+            map.remove("title");
+            map.remove("x-google-enum-descriptions");
+            map.remove("x-google-enum-deprecated");
+            map.remove("x-google-identifier");
             for val in map.values_mut() {
                 clean_openai_schema(val);
             }
@@ -104,6 +117,20 @@ pub fn clean_openai_schema(v: &mut Value) {
             }
         }
         _ => {}
+    }
+}
+
+/// Seal ONLY the top-level object schema with `additionalProperties: false`.
+///
+/// OpenAI's fallback validation prefers this at the params root to reject
+/// unknown top-level keys. Nested objects are left loose because MCP tools
+/// frequently have optional sub-fields.
+pub fn seal_top_level_additional_properties(v: &mut Value) {
+    if let Value::Object(map) = v
+        && map.get("type").and_then(|t| t.as_str()) == Some("object")
+        && !map.contains_key("additionalProperties")
+    {
+        map.insert("additionalProperties".to_string(), json!(false));
     }
 }
 

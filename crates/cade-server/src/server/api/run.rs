@@ -479,7 +479,7 @@ async fn handle_run_subagent_tool(
     let mode = args["mode"].as_str().unwrap_or("build").to_string();
     let background = args["background"].as_bool().unwrap_or(false);
     let model_override = args["model"].as_str().map(|s| s.to_string());
-    let description = args["description"].as_str().unwrap_or("subagent task").to_string();
+    let _description = args["description"].as_str().unwrap_or("subagent task").to_string();
 
     if prompt.is_empty() {
         return ToolResult {

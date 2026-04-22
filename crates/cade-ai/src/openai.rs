@@ -9,7 +9,7 @@ use tokio_stream::Stream;
 
 use super::{
     CompletionRequest, CompletionResponse, LlmProvider, LlmToolCall, StreamChunk, TokenUsage,
-    bare_model, provider_error, retry_with_backoff, clean_openai_schema
+    bare_model, provider_error, retry_with_backoff, clean_openai_schema, seal_top_level_additional_properties
 };
 
 const OPENAI_URL: &str = "https://api.openai.com/v1/chat/completions";
@@ -208,7 +208,8 @@ impl OpenAiProvider {
                             }
                             return json!({"role": m.role, "content": parts});
                         }
-                        let role = if m.role == "system" && is_o_series { "user" } else { m.role.as_str() };
+                        // o-series models use "developer" instead of "system"
+                        let role = if m.role == "system" && is_o_series { "developer" } else { m.role.as_str() };
                         json!({"role": role, "content": m.content})
                     }
                 }
@@ -265,6 +266,7 @@ impl OpenAiProvider {
                     .cloned()
                     .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
                 clean_openai_schema(&mut params);
+                seal_top_level_additional_properties(&mut params);
                 json!({
                     "type": "function",
                     "function": {
@@ -290,6 +292,7 @@ impl OpenAiProvider {
                     .cloned()
                     .unwrap_or(json!({"type": "object", "properties": {}, "required": []}));
                 clean_openai_schema(&mut params);
+                seal_top_level_additional_properties(&mut params);
                 json!({
                     "type": "function",
                     "name": s["name"],
@@ -328,7 +331,8 @@ impl OpenAiProvider {
                     }
                 }
                 _ => {
-                    let role = if m.role == "system" && is_o_series { "user" } else { m.role.as_str() };
+                    // o-series models use "developer" instead of "system"
+                    let role = if m.role == "system" && is_o_series { "developer" } else { m.role.as_str() };
                     items.push(json!({"role": role, "content": m.content}))
                 },
             }
@@ -410,10 +414,15 @@ impl LlmProvider for OpenAiProvider {
             if !req.tools.is_empty() {
                 body["tools"] = Self::build_responses_tools(req);
             }
-            if let Some(effort) = &req.reasoning_effort
-                && ["low", "medium", "high"].contains(&effort.as_str())
-            {
-                body["reasoning_effort"] = effort.clone().into();
+            if let Some(effort) = &req.reasoning_effort {
+                let mapped = match effort.as_str() {
+                    "xhigh" => "high",
+                    e @ ("low" | "medium" | "high") => e,
+                    _ => "",
+                };
+                if !mapped.is_empty() {
+                    body["reasoning_effort"] = mapped.into();
+                }
             }
             return retry_with_backoff(
                 "OpenAI::complete",
@@ -457,12 +466,17 @@ impl LlmProvider for OpenAiProvider {
         if !req.tools.is_empty() {
             body["tools"] = Self::build_tools(req);
         }
-        if let Some(effort) = &req.reasoning_effort
-            && ["low", "medium", "high"].contains(&effort.as_str())
-        {
-            body["reasoning_effort"] = effort.clone().into();
+        if let Some(effort) = &req.reasoning_effort {
+            let mapped = match effort.as_str() {
+                "xhigh" => "high",
+                e @ ("low" | "medium" | "high") => e,
+                _ => "",
+            };
+            if !mapped.is_empty() {
+                body["reasoning_effort"] = mapped.into();
+            }
         }
-        if self.base_url.contains("openrouter.ai") {
+        if self.base_url.contains("openrouter.ai") && req.reasoning_effort.is_some() {
             body["include_reasoning"] = true.into();
         }
 
@@ -515,10 +529,15 @@ impl LlmProvider for OpenAiProvider {
             if !req.tools.is_empty() {
                 body["tools"] = Self::build_responses_tools(req);
             }
-            if let Some(effort) = &req.reasoning_effort
-                && ["low", "medium", "high"].contains(&effort.as_str())
-            {
-                body["reasoning_effort"] = effort.clone().into();
+            if let Some(effort) = &req.reasoning_effort {
+                let mapped = match effort.as_str() {
+                    "xhigh" => "high",
+                    e @ ("low" | "medium" | "high") => e,
+                    _ => "",
+                };
+                if !mapped.is_empty() {
+                    body["reasoning_effort"] = mapped.into();
+                }
             }
 
             let resp = retry_with_backoff(
@@ -686,12 +705,17 @@ impl LlmProvider for OpenAiProvider {
         if !req.tools.is_empty() {
             body["tools"] = Self::build_tools(req);
         }
-        if let Some(effort) = &req.reasoning_effort
-            && ["low", "medium", "high"].contains(&effort.as_str())
-        {
-            body["reasoning_effort"] = effort.clone().into();
+        if let Some(effort) = &req.reasoning_effort {
+            let mapped = match effort.as_str() {
+                "xhigh" => "high",
+                e @ ("low" | "medium" | "high") => e,
+                _ => "",
+            };
+            if !mapped.is_empty() {
+                body["reasoning_effort"] = mapped.into();
+            }
         }
-        if self.base_url.contains("openrouter.ai") {
+        if self.base_url.contains("openrouter.ai") && req.reasoning_effort.is_some() {
             body["include_reasoning"] = true.into();
         }
 
