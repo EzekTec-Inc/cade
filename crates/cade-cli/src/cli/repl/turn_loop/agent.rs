@@ -37,11 +37,11 @@ impl Repl {
         };
 
         // -- Skill trigger auto-detection
-        // If the input matches any skill trigger, silently pre-load the skill
-        // body by injecting it as a system context note before the user message.
-        let effective_input = {
+        // If the input matches any skill trigger, notify the server to load the
+        // skill (server-side injection handles the actual context injection).
+        {
             let skills = self.skills.lock();
-            let matched: Vec<String> = skills
+            let triggered_ids: Vec<String> = skills
                 .iter()
                 .filter(|s| s.matches_trigger(&effective_input))
                 .map(|s| {
@@ -54,18 +54,20 @@ impl Repl {
                             .unwrap_or_default(),
                         s.id
                     );
-                    s.to_context_block()
+                    s.id.clone()
                 })
                 .collect();
             drop(skills);
 
-            if matched.is_empty() {
-                effective_input
-            } else {
-                let injection = matched.join("\n---\n");
-                format!("<skill_context>\n{injection}\n</skill_context>\n\n{effective_input}")
+            // Load triggered skills server-side (fire-and-forget)
+            for skill_id in &triggered_ids {
+                let agent_id = self.agent_id();
+                let _ = self.client.load_skill_on_server(&agent_id, skill_id).await;
+                tracing::info!("Auto-loaded skill '{}' server-side", skill_id);
             }
-        };
+        }
+
+        let effective_input = effective_input;
 
         // -- Thinking animation
         let bar_text = self

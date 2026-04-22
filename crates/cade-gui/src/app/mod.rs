@@ -267,6 +267,11 @@ impl eframe::App for CadeApp {
                     ref current_backend,
                     reasoning_open,
                     ref current_reasoning_effort,
+                    skills_overlay_open,
+                    ref all_skills_list,
+                    ref loaded_skill_ids,
+                    skills_loading,
+                    ref skills_filter,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -711,6 +716,12 @@ impl eframe::App for CadeApp {
                             ui.ctx(), current_reasoning_effort, &self.theme,
                         ) { action = a; }
                     }
+                    if skills_overlay_open {
+                        if let Some(a) = overlays::skills::render_skills_overlay(
+                            ui.ctx(), all_skills_list, loaded_skill_ids,
+                            skills_loading, skills_filter, &self.theme,
+                        ) { action = a; }
+                    }
 
                     // ── Inline question widget (M18) ─────────────
                     if let Some(q) = active_question {
@@ -1124,6 +1135,39 @@ impl eframe::App for CadeApp {
                 }
                 // TODO: propagate reasoning_effort to server via PATCH /v1/agents/:id
             }
+            AppAction::CloseSkillsOverlay => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { skills_overlay_open, skills_filter, .. } = s {
+                        *skills_overlay_open = false;
+                        *skills_filter = String::new();
+                    }
+                }
+            }
+            AppAction::SetSkillsFilter(q) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { skills_filter, .. } = s {
+                        *skills_filter = q;
+                    }
+                }
+            }
+            AppAction::LoadSkill(id) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { loaded_skill_ids, .. } = s {
+                        if !loaded_skill_ids.contains(&id) {
+                            loaded_skill_ids.push(id.clone());
+                        }
+                    }
+                }
+                // TODO: POST /v1/agents/:id/skills/load { id }
+            }
+            AppAction::UnloadSkill(id) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { loaded_skill_ids, .. } = s {
+                        loaded_skill_ids.retain(|x| x != &id);
+                    }
+                }
+                // TODO: POST /v1/agents/:id/skills/unload { id }
+            }
         }
     }
 }
@@ -1250,6 +1294,15 @@ pub enum AppAction {
     CloseReasoningOverlay,
     /// Set reasoning effort.
     SetReasoning(String),
+    // ── Skills overlay actions ───────────────────────────────
+    /// Close skills overlay.
+    CloseSkillsOverlay,
+    /// Set skills filter text.
+    SetSkillsFilter(String),
+    /// Load a skill by ID.
+    LoadSkill(String),
+    /// Unload a skill by ID.
+    UnloadSkill(String),
 }
 
 // ── M1: toolbar helpers ───────────────────────────────────────────────────────

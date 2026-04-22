@@ -541,6 +541,42 @@ impl HttpTransport {
         }
         Ok(resp.json::<Vec<AgentState>>().await?)
     }
+
+    /// Load a skill server-side for an agent.
+    pub async fn load_skill_on_server(&self, agent_id: &str, skill_id: &str) -> Result<()> {
+        let resp = self
+            .client
+            .post(self.url(&format!("/agents/{agent_id}/skills/load")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&serde_json::json!({ "id": skill_id }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "load_skill_on_server failed: {}",
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Unload a skill server-side for an agent.
+    pub async fn unload_skill_on_server(&self, agent_id: &str, skill_id: &str) -> Result<()> {
+        let resp = self
+            .client
+            .post(self.url(&format!("/agents/{agent_id}/skills/unload")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&serde_json::json!({ "id": skill_id }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "unload_skill_on_server failed: {}",
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
 }
 
 pub mod extensions;

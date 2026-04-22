@@ -10,6 +10,7 @@ pub mod menu;
 pub mod models;
 pub mod palette;
 pub mod settings;
+pub mod skills;
 pub mod stats;
 pub mod tools;
 

@@ -661,6 +661,24 @@ pub struct HookInfo {
     pub command: String,
 }
 
+// ── Skill entry ───────────────────────────────────────────────────────
+
+/// Skill summary for the skills overlay.
+#[derive(Debug, Clone, Default, PartialEq, serde::Deserialize)]
+pub struct SkillEntry {
+    pub id: String,
+    #[serde(default)]
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub scope: String,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub body_chars: usize,
+}
+
 /// Envelope for `GET /v1/models`.
 #[derive(Debug, serde::Deserialize)]
 struct ModelsResponse {

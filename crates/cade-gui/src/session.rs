@@ -299,6 +299,12 @@ pub enum SessionState {
         current_backend: String,
         reasoning_open: bool,
         current_reasoning_effort: String,
+        // ── Skills overlay ───────────────────────────────────
+        skills_overlay_open: bool,
+        all_skills_list: Vec<crate::api::SkillEntry>,
+        loaded_skill_ids: Vec<String>,
+        skills_loading: bool,
+        skills_filter: String,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -483,6 +489,11 @@ impl SessionState {
                 current_backend: "local".to_string(),
                 reasoning_open: false,
                 current_reasoning_effort: "none".to_string(),
+                skills_overlay_open: false,
+                all_skills_list: Vec::new(),
+                loaded_skill_ids: Vec::new(),
+                skills_loading: false,
+                skills_filter: String::new(),
             };
         }
     }

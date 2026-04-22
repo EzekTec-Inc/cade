@@ -241,12 +241,12 @@ fn separator(ui: &mut egui::Ui, theme: &crate::theme::ThemeColors) {
 }
 
 /// Group filtered entries by category, preserving category order.
-fn group_by_category<'a>(
-    entries: &[crate::palette::FilteredCmd<'a>],
-) -> Vec<(cade_core::resources::palette::CmdCategory, Vec<&crate::palette::FilteredCmd<'a>>)> {
+fn group_by_category<'a, 'b>(
+    entries: &'b [crate::palette::FilteredCmd<'a>],
+) -> Vec<(cade_core::resources::palette::CmdCategory, Vec<&'b crate::palette::FilteredCmd<'a>>)> {
     use std::collections::BTreeMap;
 
-    let mut map: BTreeMap<u8, (cade_core::resources::palette::CmdCategory, Vec<&crate::palette::FilteredCmd<'a>>)> =
+    let mut map: BTreeMap<u8, (cade_core::resources::palette::CmdCategory, Vec<&'b crate::palette::FilteredCmd<'a>>)> =
         BTreeMap::new();
 
     for entry in entries {
@@ -261,10 +261,10 @@ fn group_by_category<'a>(
 }
 
 /// Get the flat-indexed entry (matching the selection index in the grouped display).
-fn get_flat_entry<'a>(
-    entries: &[crate::palette::FilteredCmd<'a>],
+fn get_flat_entry<'a, 'b>(
+    entries: &'b [crate::palette::FilteredCmd<'a>],
     idx: usize,
-) -> Option<&crate::palette::FilteredCmd<'a>> {
+) -> Option<&'b crate::palette::FilteredCmd<'a>> {
     // When grouped, we iterate categories in order and flatten
     let grouped = group_by_category(entries);
     let mut flat = 0;

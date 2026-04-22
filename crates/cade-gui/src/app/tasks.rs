@@ -1168,21 +1168,13 @@ impl CadeApp {
                 }
             }
             PaletteCmd::Skills => {
-                let has_agent = self
-                    .session
-                    .borrow()
-                    .as_ref()
-                    .and_then(|s| s.selected_agent_id().map(|_| ()))
-                    .is_some();
-                if !has_agent {
-                    if let Some(s) = self.session.borrow_mut().as_mut() {
-                        s.push_error("Select an agent before viewing skills/tools");
-                    }
-                    return;
-                }
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    s.open_tools_overlay();
+                    if let SessionState::Connected { skills_overlay_open, skills_loading, .. } = s {
+                        *skills_overlay_open = true;
+                        *skills_loading = true;
+                    }
                 }
+                // TODO: fetch /v1/skills + /v1/agents/:id/skills to populate overlay
                 self.spawn_fetch_tools();
             }
             PaletteCmd::Mcp => {
