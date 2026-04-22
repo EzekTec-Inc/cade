@@ -643,10 +643,10 @@ pub async fn get_providers(
     let url = api::build_url(base_url, "/v1/providers");
     let (status, body) = send_text(&url, token).await?;
     if status != 200 {
-        return Err(ApiError::HttpStatus { code: status, body });
+        return Err(ApiError::Server { status });
     }
     let v: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| ApiError::Parse { message: e.to_string() })?;
+        .map_err(|e| ApiError::Decode { message: e.to_string() })?;
     Ok(v["providers"].as_array().cloned().unwrap_or_default())
 }
 
@@ -660,15 +660,15 @@ pub async fn get_all_skills(
     let url = api::build_url(base_url, "/v1/skills");
     let (status, body) = send_text(&url, token).await?;
     if status != 200 {
-        return Err(ApiError::HttpStatus { code: status, body });
+        return Err(ApiError::Server { status });
     }
     let v: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| ApiError::Parse { message: e.to_string() })?;
+        .map_err(|e| ApiError::Decode { message: e.to_string() })?;
     let skills: Vec<api::SkillEntry> = v["skills"]
         .as_array()
         .map(|arr| {
             arr.iter()
-                .filter_map(|s| serde_json::from_value(s.clone()).ok())
+                .filter_map(|s| serde_json::from_value::<api::SkillEntry>(s.clone()).ok())
                 .collect()
         })
         .unwrap_or_default();
@@ -684,13 +684,13 @@ pub async fn get_agent_skills(
     let url = api::build_url(base_url, &format!("/v1/agents/{agent_id}/skills"));
     let (status, body) = send_text(&url, token).await?;
     if status != 200 {
-        return Err(ApiError::HttpStatus { code: status, body });
+        return Err(ApiError::Server { status });
     }
     let v: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| ApiError::Parse { message: e.to_string() })?;
+        .map_err(|e| ApiError::Decode { message: e.to_string() })?;
     Ok(v["loaded_skill_ids"]
         .as_array()
-        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect::<Vec<String>>())
         .unwrap_or_default())
 }
 

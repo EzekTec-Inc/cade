@@ -124,9 +124,6 @@ pub fn render_palette_overlay(
                             ui.add_space(1.0);
 
                             for entry in entries {
-                                if flat_idx >= max_rows {
-                                    break;
-                                }
                                 let is_sel = flat_idx == palette_selection;
                                 let bg = if is_sel {
                                     theme.bg_surface2()
@@ -184,20 +181,6 @@ pub fn render_palette_overlay(
 
                                 flat_idx += 1;
                             }
-                        }
-
-                        // Scroll indicator if more items exist
-                        if filtered.len() > max_rows {
-                            ui.add_space(2.0);
-                            ui.label(
-                                egui::RichText::new(format!(
-                                    "  ▼ {} more…",
-                                    filtered.len() - total_visible
-                                ))
-                                .color(theme.text_dim())
-                                .monospace()
-                                .size(10.0),
-                            );
                         }
                     });
             }
