@@ -1071,11 +1071,14 @@ impl eframe::App for CadeApp {
             AppAction::SetTheme(name) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected { current_theme_name, theme_picker_open, .. } = s {
-                        *current_theme_name = name;
+                        *current_theme_name = name.clone();
                         *theme_picker_open = false;
                     }
                 }
-                // TODO: actually apply theme via ThemeColors resolution
+                // Send `/theme <name>` as a user message — the server intercepts
+                // it, resolves the theme from disk, and broadcasts a theme_update
+                // SSE event which the GUI's on_theme_update handler applies.
+                self.send_prompt(format!("/theme {name}"));
             }
             AppAction::CloseHooksOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
@@ -1129,13 +1132,14 @@ impl eframe::App for CadeApp {
                 }
             }
             AppAction::SetReasoning(level) => {
+                let effort_str = level.clone();
                 if let Some(s) = self.session.borrow_mut().as_mut() {
                     if let SessionState::Connected { current_reasoning_effort, reasoning_open, .. } = s {
                         *current_reasoning_effort = level;
                         *reasoning_open = false;
                     }
                 }
-                // TODO: propagate reasoning_effort to server via PATCH /v1/agents/:id
+                self.spawn_patch_reasoning(effort_str);
             }
             AppAction::CloseSkillsOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
@@ -1153,22 +1157,10 @@ impl eframe::App for CadeApp {
                 }
             }
             AppAction::LoadSkill(id) => {
-                if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { loaded_skill_ids, .. } = s {
-                        if !loaded_skill_ids.contains(&id) {
-                            loaded_skill_ids.push(id.clone());
-                        }
-                    }
-                }
-                // TODO: POST /v1/agents/:id/skills/load { id }
+                self.spawn_load_skill(id);
             }
             AppAction::UnloadSkill(id) => {
-                if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { loaded_skill_ids, .. } = s {
-                        loaded_skill_ids.retain(|x| x != &id);
-                    }
-                }
-                // TODO: POST /v1/agents/:id/skills/unload { id }
+                self.spawn_unload_skill(id);
             }
         }
     }

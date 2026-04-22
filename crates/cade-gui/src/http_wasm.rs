@@ -632,3 +632,124 @@ pub async fn get_mcp_status(
     let (status, body) = send_text(&url, token).await?;
     api::parse_mcp_status(status, &body)
 }
+
+// ── Providers ───────────────────────────────────────────────────────────
+
+/// `GET /v1/providers` — list configured providers.
+pub async fn get_providers(
+    base_url: &str,
+    token: &str,
+) -> Result<Vec<serde_json::Value>, ApiError> {
+    let url = api::build_url(base_url, "/v1/providers");
+    let (status, body) = send_text(&url, token).await?;
+    if status != 200 {
+        return Err(ApiError::HttpStatus { code: status, body });
+    }
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| ApiError::Parse { message: e.to_string() })?;
+    Ok(v["providers"].as_array().cloned().unwrap_or_default())
+}
+
+// ── Skills ──────────────────────────────────────────────────────────────
+
+/// `GET /v1/skills` — list all discovered skills.
+pub async fn get_all_skills(
+    base_url: &str,
+    token: &str,
+) -> Result<Vec<api::SkillEntry>, ApiError> {
+    let url = api::build_url(base_url, "/v1/skills");
+    let (status, body) = send_text(&url, token).await?;
+    if status != 200 {
+        return Err(ApiError::HttpStatus { code: status, body });
+    }
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| ApiError::Parse { message: e.to_string() })?;
+    let skills: Vec<api::SkillEntry> = v["skills"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|s| serde_json::from_value(s.clone()).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(skills)
+}
+
+/// `GET /v1/agents/:id/skills` — list loaded skill IDs for an agent.
+pub async fn get_agent_skills(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+) -> Result<Vec<String>, ApiError> {
+    let url = api::build_url(base_url, &format!("/v1/agents/{agent_id}/skills"));
+    let (status, body) = send_text(&url, token).await?;
+    if status != 200 {
+        return Err(ApiError::HttpStatus { code: status, body });
+    }
+    let v: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|e| ApiError::Parse { message: e.to_string() })?;
+    Ok(v["loaded_skill_ids"]
+        .as_array()
+        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect())
+        .unwrap_or_default())
+}
+
+/// `POST /v1/agents/:id/skills/load` — load a skill by ID.
+pub async fn post_load_skill(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    skill_id: &str,
+) -> Result<(), ApiError> {
+    let url = api::build_url(base_url, &format!("/v1/agents/{agent_id}/skills/load"));
+    let body_str = serde_json::json!({ "id": skill_id }).to_string();
+    let resp = Request::post(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .header("Content-Type", "application/json")
+        .body(body_str)
+        .map_err(|e| ApiError::Transport { message: format!("{e:?}") })?
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport { message: e.to_string() })?;
+    api::classify_upsert(resp.status())
+}
+
+/// `POST /v1/agents/:id/skills/unload` — unload a skill by ID.
+pub async fn post_unload_skill(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    skill_id: &str,
+) -> Result<(), ApiError> {
+    let url = api::build_url(base_url, &format!("/v1/agents/{agent_id}/skills/unload"));
+    let body_str = serde_json::json!({ "id": skill_id }).to_string();
+    let resp = Request::post(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .header("Content-Type", "application/json")
+        .body(body_str)
+        .map_err(|e| ApiError::Transport { message: format!("{e:?}") })?
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport { message: e.to_string() })?;
+    api::classify_upsert(resp.status())
+}
+
+/// `PATCH /v1/agents/:id` — update reasoning effort.
+pub async fn patch_agent_reasoning(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    effort: &str,
+) -> Result<(), ApiError> {
+    let url = api::agent_url(base_url, agent_id);
+    let body_str = serde_json::json!({ "reasoning_effort": effort }).to_string();
+    let resp = Request::patch(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .header("Content-Type", "application/json")
+        .body(body_str)
+        .map_err(|e| ApiError::Transport { message: format!("{e:?}") })?
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport { message: e.to_string() })?;
+    api::classify_upsert(resp.status())
+}

@@ -1107,7 +1107,7 @@ impl CadeApp {
                         *providers_loading = true;
                     }
                 }
-                // TODO: spawn_fetch_providers() when server exposes /v1/providers
+                self.spawn_fetch_providers();
             }
             PaletteCmd::Permissions => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
@@ -1183,7 +1183,7 @@ impl CadeApp {
                         *skills_loading = true;
                     }
                 }
-                // TODO: fetch /v1/skills + /v1/agents/:id/skills to populate overlay
+                self.spawn_fetch_skills();
                 self.spawn_fetch_tools();
             }
             PaletteCmd::Mcp => {
@@ -1264,5 +1264,128 @@ impl CadeApp {
                 }
             }
         }
+    }
+
+    // ── Provider / Skills / Reasoning wiring ────────────────────────────────
+
+    /// Fetch configured providers from server and store in session.
+    pub(super) fn spawn_fetch_providers(&mut self) {
+        let (server_url, token) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() { Some(s) => s, None => return };
+            (s.server_url().to_string(), s.token().to_string())
+        };
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::get_providers(&server_url, &token).await {
+                Ok(providers) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_providers_loaded(providers);
+                    }
+                }
+                Err(e) => {
+                    web_sys::console::warn_1(&format!("fetch providers: {e:?}").into());
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// Fetch all discovered skills + agent's loaded skills.
+    pub(super) fn spawn_fetch_skills(&mut self) {
+        let (server_url, token, agent_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() { Some(s) => s, None => return };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(), None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id)
+        };
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let all = crate::http_wasm::get_all_skills(&server_url, &token).await.unwrap_or_default();
+            let loaded = crate::http_wasm::get_agent_skills(&server_url, &token, &agent_id).await.unwrap_or_default();
+            if let Some(s) = session.borrow_mut().as_mut() {
+                s.on_skills_loaded(all, loaded);
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// POST load a skill for the current agent.
+    pub(super) fn spawn_load_skill(&mut self, skill_id: String) {
+        let (server_url, token, agent_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() { Some(s) => s, None => return };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(), None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id)
+        };
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::post_load_skill(&server_url, &token, &agent_id, &skill_id).await {
+                Ok(()) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_skill_loaded(&skill_id);
+                    }
+                }
+                Err(e) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.push_error(&format!("load skill: {e:?}"));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// POST unload a skill for the current agent.
+    pub(super) fn spawn_unload_skill(&mut self, skill_id: String) {
+        let (server_url, token, agent_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() { Some(s) => s, None => return };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(), None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id)
+        };
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::post_unload_skill(&server_url, &token, &agent_id, &skill_id).await {
+                Ok(()) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.on_skill_unloaded(&skill_id);
+                    }
+                }
+                Err(e) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.push_error(&format!("unload skill: {e:?}"));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
+    /// PATCH reasoning effort to server.
+    pub(super) fn spawn_patch_reasoning(&mut self, effort: String) {
+        let (server_url, token, agent_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() { Some(s) => s, None => return };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(), None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id)
+        };
+        let ctx = self.ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = crate::http_wasm::patch_agent_reasoning(&server_url, &token, &agent_id, &effort).await;
+            ctx.request_repaint();
+        });
     }
 }
