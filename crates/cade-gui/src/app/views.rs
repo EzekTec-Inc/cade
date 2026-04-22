@@ -155,8 +155,21 @@ pub fn render_timeline_message(
                     .monospace()
                     .size(12.0),
             );
-            // Markdown-rendered content
-            egui_commonmark::CommonMarkViewer::new().show(ui, md_cache, &text);
+            // Width-constrained markdown rendering
+            let max_w = ui.available_width();
+            ui.allocate_ui_with_layout(
+                egui::vec2(max_w, 0.0),
+                egui::Layout::top_down(egui::Align::LEFT),
+                |ui| {
+                    ui.set_max_width(max_w);
+                    egui_commonmark::CommonMarkViewer::new()
+                        .default_width(Some(max_w as usize))
+                        .max_image_width(Some((max_w * 0.9) as usize))
+                        .syntax_theme_dark("base16-ocean.dark")
+                        .syntax_theme_light("base16-ocean.light")
+                        .show(ui, md_cache, &text);
+                },
+            );
             None
         }
 

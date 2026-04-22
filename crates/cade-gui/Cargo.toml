@@ -27,7 +27,7 @@ egui                 = "0.34"
 eframe               = { version = "0.34", default-features = false, features = ["web_screen_reader", "wgpu"] }
 uuid                 = { version = "1.2", features = ["js", "v4"] }
 getrandom            = { version = "0.2", features = ["js"] }
-egui_commonmark      = "0.23"
+egui_commonmark      = { version = "0.23", features = ["better_syntax_highlighting"] }
 wasm-bindgen         = "0.2"
 wasm-bindgen-futures = "0.4"
 web-sys              = { version = "0.3", features = ["Window", "Document", "Location", "UrlSearchParams", "HtmlCanvasElement", "Element", "ReadableStream", "ReadableStreamDefaultReader", "Storage"] }
