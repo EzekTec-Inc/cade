@@ -264,6 +264,13 @@ pub async fn run_agent(
                 } else if tc.name == "unload_skill" {
                     let args_str = tc.arguments.to_string();
                     handle_unload_skill_tool(&state2, &agent_id2, &tc.id, &args_str).await
+                } else if tc.name == "run_subagent" {
+                    let args: serde_json::Value = serde_json::from_str(
+                        &tc.arguments.to_string()
+                    ).unwrap_or_default();
+                    handle_run_subagent_tool(
+                        &state2, &agent_id2, &tc.id, &args, tx.clone(),
+                    ).await
                 } else {
                     cade_agent::tools::manager::dispatch(
                         tc.id.clone(),
@@ -450,5 +457,161 @@ async fn handle_unload_skill_tool(
             output: format!("Skill '{}' is not currently loaded", skill_id),
             is_error: true,
         }
+    }
+}
+
+/// Handle `run_subagent` tool call server-side.
+///
+/// Runs a single-turn LLM call as a child subagent and streams lifecycle
+/// events (started/complete) to the parent's SSE connection so the GUI
+/// can render progress cards.
+async fn handle_run_subagent_tool(
+    state: &AppState,
+    parent_agent_id: &str,
+    tool_call_id: &str,
+    args: &serde_json::Value,
+    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
+) -> cade_agent::tools::manager::ToolResult {
+    use cade_agent::tools::manager::ToolResult;
+    use cade_ai::LlmMessage;
+
+    let prompt = args["prompt"].as_str().unwrap_or("").trim().to_string();
+    let mode = args["mode"].as_str().unwrap_or("build").to_string();
+    let background = args["background"].as_bool().unwrap_or(false);
+    let model_override = args["model"].as_str().map(|s| s.to_string());
+    let description = args["description"].as_str().unwrap_or("subagent task").to_string();
+
+    if prompt.is_empty() {
+        return ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "run_subagent".to_string(),
+            output: "error: 'prompt' is required".to_string(),
+            is_error: true,
+        };
+    }
+
+    // Acquire semaphore permit
+    let permit = match state.subagent_semaphore.try_acquire() {
+        Ok(p) => p,
+        Err(_) => {
+            return ToolResult {
+                tool_call_id: tool_call_id.to_string(),
+                tool_name: "run_subagent".to_string(),
+                output: "error: subagent concurrency limit reached. Try again later.".to_string(),
+                is_error: true,
+            };
+        }
+    };
+
+    let subagent_id = format!("sa_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let task_preview: String = prompt.chars().take(80).collect();
+
+    // Resolve model
+    let model = model_override.unwrap_or_else(|| {
+        cade_store::sqlite::get_agent(&state.db, parent_agent_id)
+            .ok()
+            .flatten()
+            .map(|a| a.model)
+            .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string())
+    });
+
+    // Stream subagent_started event
+    let started_event = json!({
+        "message_type": "subagent_started",
+        "subagent_id": &subagent_id,
+        "task": &task_preview,
+        "mode": &mode,
+        "model": &model,
+    });
+    let ev = axum::response::sse::Event::default().data(started_event.to_string());
+    let _ = sse_tx.send(Ok(ev)).await;
+
+    let start_time = std::time::Instant::now();
+
+    let system_prompt = if mode == "plan" {
+        format!(
+            "You are a read-only planning subagent. Analyze and report. \
+             Do NOT modify files.\n\nTask: {prompt}"
+        )
+    } else {
+        format!(
+            "You are a subagent. Complete the task and return a concise summary.\n\nTask: {prompt}"
+        )
+    };
+
+    let messages = vec![
+        LlmMessage {
+            role: "system".to_string(),
+            content: system_prompt,
+            tool_calls: None,
+            tool_call_id: None,
+            images: None,
+        },
+        LlmMessage {
+            role: "user".to_string(),
+            content: prompt.clone(),
+            tool_calls: None,
+            tool_call_id: None,
+            images: None,
+        },
+    ];
+
+    let llm_req = cade_ai::CompletionRequest {
+        model: model.clone(),
+        messages,
+        tools: Vec::new(),
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    let llm_result = state.llm.complete(&llm_req).await;
+    let elapsed = start_time.elapsed().as_secs() as u32;
+    drop(permit);
+
+    let (output, is_error) = match llm_result {
+        Ok(resp) => (resp.content.unwrap_or_default(), false),
+        Err(e) => (format!("Subagent error: {e}"), true),
+    };
+
+    // Stream subagent_complete event
+    let result_preview: String = output.chars().take(200).collect();
+    let complete_event = json!({
+        "message_type": "subagent_complete",
+        "subagent_id": &subagent_id,
+        "status": if is_error { "error" } else { "success" },
+        "result_preview": &result_preview,
+        "elapsed_secs": elapsed,
+        "is_error": is_error,
+    });
+    let ev = axum::response::sse::Event::default().data(complete_event.to_string());
+    let _ = sse_tx.send(Ok(ev)).await;
+
+    if background {
+        let sr = crate::server::state::SubagentResult {
+            subagent_id: subagent_id.clone(),
+            tool_call_id: tool_call_id.to_string(),
+            task_preview: task_preview.clone(),
+            result: output.clone(),
+            is_error,
+            elapsed_secs: elapsed,
+        };
+        let mut pending = state.pending_subagent_results.write().await;
+        pending
+            .entry(parent_agent_id.to_string())
+            .or_default()
+            .push(sr);
+    }
+
+    let output_final = if output.len() > 8_192 {
+        format!("{}…\n[truncated: {} chars total]", &output[..8_192], output.len())
+    } else {
+        output
+    };
+
+    ToolResult {
+        tool_call_id: tool_call_id.to_string(),
+        tool_name: "run_subagent".to_string(),
+        output: output_final,
+        is_error,
     }
 }

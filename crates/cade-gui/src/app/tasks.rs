@@ -948,6 +948,15 @@ impl CadeApp {
                             StreamEvent::ThemeUpdate(theme) => {
                                 s.on_theme_update(theme);
                             }
+                            StreamEvent::SubagentStarted { subagent_id, task, mode, model } => {
+                                s.on_subagent_started(&subagent_id, &task, &mode, &model);
+                            }
+                            StreamEvent::SubagentProgress { subagent_id, status, tool_calls, output_lines, elapsed_secs } => {
+                                s.on_subagent_progress(&subagent_id, &status, tool_calls, output_lines, elapsed_secs);
+                            }
+                            StreamEvent::SubagentComplete { subagent_id, status, result_preview, elapsed_secs, is_error } => {
+                                s.on_subagent_complete(&subagent_id, &status, &result_preview, elapsed_secs, is_error);
+                            }
                         }
                     }
                     ctx_clone.request_repaint();

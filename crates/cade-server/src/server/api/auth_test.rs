@@ -52,6 +52,8 @@ fn make_state(api_key: Option<String>) -> AppState {
         context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
         all_skills: Arc::new(RwLock::new(Vec::new())),
         agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            pending_subagent_results: Arc::new(RwLock::new(std::collections::HashMap::new())),
+            subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
     }
 }
 

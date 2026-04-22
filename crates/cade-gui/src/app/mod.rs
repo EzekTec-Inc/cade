@@ -272,6 +272,7 @@ impl eframe::App for CadeApp {
                     ref loaded_skill_ids,
                     skills_loading,
                     ref skills_filter,
+                    ref subagent_cards,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -508,6 +509,7 @@ impl eframe::App for CadeApp {
                         last_usage.as_ref(),
                         last_finish_reason.as_ref(),
                         live_outputs,
+                        subagent_cards,
                         &self.theme,
                     ) {
                         action = new_action;

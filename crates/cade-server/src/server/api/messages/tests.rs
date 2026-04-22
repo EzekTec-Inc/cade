@@ -461,6 +461,8 @@ async fn send_message_blocking_triggers_needs_consolidation() {
         context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
         all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
         agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        pending_subagent_results: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
     };
     
     // Call blocking endpoint

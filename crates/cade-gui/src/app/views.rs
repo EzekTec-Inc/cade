@@ -902,3 +902,127 @@ fn render_patch(
             }
         });
 }
+
+// ── Subagent progress card ────────────────────────────────────────────────────
+
+/// State for a single subagent tracked in the timeline.
+#[derive(Debug, Clone)]
+pub struct SubagentCard {
+    pub subagent_id: String,
+    pub task: String,
+    pub mode: String,
+    pub model: String,
+    pub status: SubagentStatus,
+    pub elapsed_secs: u32,
+    pub tool_calls: u32,
+    pub output_lines: u32,
+    pub result_preview: String,
+    pub is_error: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SubagentStatus {
+    Running,
+    Complete,
+    Error,
+}
+
+/// Render a subagent progress card in the timeline.
+pub fn render_subagent_card(
+    ui: &mut egui::Ui,
+    card: &SubagentCard,
+    theme: &crate::theme::ThemeColors,
+) {
+    use crate::theme::EguiThemeExt;
+
+    let (status_icon, status_color, border_color) = match card.status {
+        SubagentStatus::Running => ("⟳", theme.warning(), theme.warning()),
+        SubagentStatus::Complete => ("✓", theme.success(), theme.success()),
+        SubagentStatus::Error => ("✗", theme.error(), theme.error()),
+    };
+
+    let bg = egui::Color32::from_rgba_unmultiplied(
+        border_color.r(),
+        border_color.g(),
+        border_color.b(),
+        10,
+    );
+
+    let frame = egui::Frame::new()
+        .fill(bg)
+        .stroke(egui::Stroke::new(1.0, border_color))
+        .corner_radius(egui::CornerRadius::ZERO)
+        .inner_margin(egui::Margin::symmetric(8, 6));
+
+    frame.show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(format!("{status_icon} 🤖 Subagent [{}]", card.mode))
+                    .color(status_color)
+                    .monospace()
+                    .strong()
+                    .size(12.0),
+            );
+            ui.label(
+                egui::RichText::new(format!("· {}", card.model))
+                    .color(theme.text_dim())
+                    .monospace()
+                    .size(10.0),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.label(
+                    egui::RichText::new(format!("{}s", card.elapsed_secs))
+                        .color(theme.text_dim())
+                        .monospace()
+                        .size(10.0),
+                );
+            });
+        });
+
+        ui.label(
+            egui::RichText::new(format!("  \"{}\"", card.task))
+                .color(theme.text_primary())
+                .monospace()
+                .size(11.0),
+        );
+
+        match card.status {
+            SubagentStatus::Running => {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "  {} tool calls · {} output lines",
+                            card.tool_calls, card.output_lines,
+                        ))
+                        .color(theme.text_dim())
+                        .monospace()
+                        .size(10.0),
+                    );
+                });
+            }
+            SubagentStatus::Complete | SubagentStatus::Error => {
+                if !card.result_preview.is_empty() {
+                    egui::CollapsingHeader::new(
+                        egui::RichText::new("  result")
+                            .color(theme.text_muted())
+                            .monospace()
+                            .size(10.0),
+                    )
+                    .id_salt(format!("sa_{}", card.subagent_id))
+                    .default_open(false)
+                    .show(ui, |ui| {
+                        for ln in card.result_preview.lines().take(10) {
+                            ui.label(
+                                egui::RichText::new(format!("  {ln}"))
+                                    .color(theme.text_dim())
+                                    .monospace()
+                                    .size(10.0),
+                            );
+                        }
+                    });
+                }
+            }
+        }
+    });
+}

@@ -1367,6 +1367,8 @@ mod tests {
             context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
             all_skills: Arc::new(AsyncRwLock::new(Vec::new())),
             agent_skills: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
+            pending_subagent_results: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
+            subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
 

@@ -16,6 +16,7 @@ pub fn render(
     last_usage: Option<&(u64, u64, Option<String>)>,
     last_finish_reason: Option<&String>,
     live_outputs: &[crate::session::LiveOutputBlock],
+    subagent_cards: &[crate::session::SubagentCardState],
     theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut action = None;
@@ -101,6 +102,33 @@ pub fn render(
                                     crate::app::views::render_live_output(ui, block, theme);
                                 });
                             });
+                        }
+
+                        // Render subagent progress cards
+                        for card_state in subagent_cards {
+                            let card = crate::app::views::SubagentCard {
+                                subagent_id: card_state.subagent_id.clone(),
+                                task: card_state.task.clone(),
+                                mode: card_state.mode.clone(),
+                                model: card_state.model.clone(),
+                                status: match card_state.status.as_str() {
+                                    "complete" => crate::app::views::SubagentStatus::Complete,
+                                    "error" => crate::app::views::SubagentStatus::Error,
+                                    _ => crate::app::views::SubagentStatus::Running,
+                                },
+                                elapsed_secs: card_state.elapsed_secs,
+                                tool_calls: card_state.tool_calls,
+                                output_lines: card_state.output_lines,
+                                result_preview: card_state.result_preview.clone(),
+                                is_error: card_state.is_error,
+                            };
+                            ui.horizontal(|ui| {
+                                ui.add_space(pad);
+                                ui.vertical(|ui| {
+                                    crate::app::views::render_subagent_card(ui, &card, theme);
+                                });
+                            });
+                            ui.add_space(2.0);
                         }
 
                         ui.horizontal(|ui| {

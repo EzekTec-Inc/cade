@@ -72,6 +72,21 @@ pub struct LiveOutputBlock {
     pub max_visible: usize,
 }
 
+/// Subagent tracking state (independent of `app::views` to avoid cfg issues).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SubagentCardState {
+    pub subagent_id: String,
+    pub task: String,
+    pub mode: String,
+    pub model: String,
+    pub status: String,
+    pub elapsed_secs: u32,
+    pub tool_calls: u32,
+    pub output_lines: u32,
+    pub result_preview: String,
+    pub is_error: bool,
+}
+
 /// Post-login session state.
 ///
 /// Created from `LoginState::Submitted` — the token and server URL are
@@ -305,6 +320,8 @@ pub enum SessionState {
         loaded_skill_ids: Vec<String>,
         skills_loading: bool,
         skills_filter: String,
+        // ── Subagent tracking ────────────────────────────────
+        subagent_cards: Vec<SubagentCardState>,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -494,6 +511,7 @@ impl SessionState {
                 loaded_skill_ids: Vec::new(),
                 skills_loading: false,
                 skills_filter: String::new(),
+                subagent_cards: Vec::new(),
             };
         }
     }
@@ -2417,6 +2435,47 @@ impl SessionState {
     pub fn on_theme_update(&mut self, theme: crate::theme::ThemeColors) {
         if let Self::Connected { theme_update, .. } = self {
             *theme_update = Some(theme);
+        }
+    }
+
+    /// A subagent started running.
+    pub fn on_subagent_started(&mut self, id: &str, task: &str, mode: &str, model: &str) {
+        if let Self::Connected { subagent_cards, .. } = self {
+            subagent_cards.push(SubagentCardState {
+                subagent_id: id.to_string(),
+                task: task.to_string(),
+                mode: mode.to_string(),
+                model: model.to_string(),
+                status: "running".to_string(),
+                elapsed_secs: 0,
+                tool_calls: 0,
+                output_lines: 0,
+                result_preview: String::new(),
+                is_error: false,
+            });
+        }
+    }
+
+    /// A running subagent sent a progress update.
+    pub fn on_subagent_progress(&mut self, id: &str, _status: &str, tool_calls: u32, output_lines: u32, elapsed: u32) {
+        if let Self::Connected { subagent_cards, .. } = self {
+            if let Some(card) = subagent_cards.iter_mut().find(|c| c.subagent_id == id) {
+                card.tool_calls = tool_calls;
+                card.output_lines = output_lines;
+                card.elapsed_secs = elapsed;
+            }
+        }
+    }
+
+    /// A subagent finished (success or error).
+    pub fn on_subagent_complete(&mut self, id: &str, _status: &str, result_preview: &str, elapsed: u32, is_error: bool) {
+        if let Self::Connected { subagent_cards, .. } = self {
+            if let Some(card) = subagent_cards.iter_mut().find(|c| c.subagent_id == id) {
+                card.status = if is_error { "error" } else { "complete" }.to_string();
+                card.elapsed_secs = elapsed;
+                card.result_preview = result_preview.to_string();
+                card.is_error = is_error;
+            }
         }
     }
 }

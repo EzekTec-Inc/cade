@@ -78,6 +78,29 @@ pub enum StreamEvent {
     FinishReason(String),
     /// A dynamic theme update from the server (e.g. via `/theme` slash command).
     ThemeUpdate(cade_core::resources::themes::ThemeColors),
+    /// A subagent was spawned and started running.
+    SubagentStarted {
+        subagent_id: String,
+        task: String,
+        mode: String,
+        model: String,
+    },
+    /// Periodic progress update from a running subagent.
+    SubagentProgress {
+        subagent_id: String,
+        status: String,
+        tool_calls: u32,
+        output_lines: u32,
+        elapsed_secs: u32,
+    },
+    /// A subagent finished (success or error).
+    SubagentComplete {
+        subagent_id: String,
+        status: String,
+        result_preview: String,
+        elapsed_secs: u32,
+        is_error: bool,
+    },
 }
 
 /// Build the absolute URL for an API path.
@@ -325,6 +348,26 @@ pub fn parse_stream_event(v: &serde_json::Value) -> Option<StreamEvent> {
             let colors: cade_core::resources::themes::ThemeColors = serde_json::from_value(t.clone()).ok()?;
             Some(StreamEvent::ThemeUpdate(colors))
         }
+        "subagent_started" => Some(StreamEvent::SubagentStarted {
+            subagent_id: v.get("subagent_id")?.as_str()?.to_string(),
+            task: v.get("task").and_then(|t| t.as_str()).unwrap_or("").to_string(),
+            mode: v.get("mode").and_then(|m| m.as_str()).unwrap_or("build").to_string(),
+            model: v.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string(),
+        }),
+        "subagent_progress" => Some(StreamEvent::SubagentProgress {
+            subagent_id: v.get("subagent_id")?.as_str()?.to_string(),
+            status: v.get("status").and_then(|s| s.as_str()).unwrap_or("running").to_string(),
+            tool_calls: v.get("tool_calls").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
+            output_lines: v.get("output_lines").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
+            elapsed_secs: v.get("elapsed_secs").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
+        }),
+        "subagent_complete" => Some(StreamEvent::SubagentComplete {
+            subagent_id: v.get("subagent_id")?.as_str()?.to_string(),
+            status: v.get("status").and_then(|s| s.as_str()).unwrap_or("success").to_string(),
+            result_preview: v.get("result_preview").and_then(|r| r.as_str()).unwrap_or("").to_string(),
+            elapsed_secs: v.get("elapsed_secs").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
+            is_error: v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false),
+        }),
         _ => None,
     }
 }

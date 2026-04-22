@@ -33,6 +33,18 @@ pub struct AgentMetrics {
     pub inflation_guard_hits: usize,
 }
 
+/// Result of a completed background subagent, waiting for injection
+/// into the parent agent's next agentic loop iteration.
+#[derive(Debug, Clone)]
+pub struct SubagentResult {
+    pub subagent_id: String,
+    pub tool_call_id: String,
+    pub task_preview: String,
+    pub result: String,
+    pub is_error: bool,
+    pub elapsed_secs: u32,
+}
+
 #[derive(Clone)]
 pub struct AppState {
     pub db: Db,
@@ -72,4 +84,12 @@ pub struct AppState {
     /// Key: agent_id, Value: set of skill IDs that have been loaded via
     /// `load_skill` tool or auto-trigger.
     pub agent_skills: Arc<RwLock<std::collections::HashMap<String, Vec<String>>>>,
+
+    // ── Subagents ───────────────────────────────────────────────────────────
+    /// Completed background subagent results waiting to be injected into the
+    /// parent agent's next agentic loop iteration.
+    /// Key: parent agent_id, Value: vec of completed results.
+    pub pending_subagent_results: Arc<RwLock<std::collections::HashMap<String, Vec<SubagentResult>>>>,
+    /// Semaphore limiting concurrent subagent LLM calls server-side.
+    pub subagent_semaphore: Arc<tokio::sync::Semaphore>,
 }

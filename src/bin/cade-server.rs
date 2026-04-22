@@ -146,6 +146,13 @@ async fn main() -> Result<()> {
         context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
         all_skills: Arc::new(RwLock::new(all_skills)),
         agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        pending_subagent_results: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(
+            std::env::var("CADE_MAX_SUBAGENTS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .unwrap_or(4),
+        )),
     };
 
     // ── Sleeptime consolidation task ─────────────────────────────────────────
