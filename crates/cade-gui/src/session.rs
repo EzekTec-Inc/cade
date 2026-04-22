@@ -297,6 +297,8 @@ pub enum SessionState {
         pricing_info: String,
         backend_open: bool,
         current_backend: String,
+        reasoning_open: bool,
+        current_reasoning_effort: String,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -479,6 +481,8 @@ impl SessionState {
                 pricing_info: String::new(),
                 backend_open: false,
                 current_backend: "local".to_string(),
+                reasoning_open: false,
+                current_reasoning_effort: "none".to_string(),
             };
         }
     }

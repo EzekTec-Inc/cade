@@ -1149,6 +1149,13 @@ impl CadeApp {
                     }
                 }
             }
+            PaletteCmd::Reasoning(_level_arg) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { reasoning_open, .. } = s {
+                        *reasoning_open = true;
+                    }
+                }
+            }
             PaletteCmd::Unsupported(name) => {
                 // TUI recognizes this command but the GUI has no UI or
                 // backing action for it yet.  Surface a message that

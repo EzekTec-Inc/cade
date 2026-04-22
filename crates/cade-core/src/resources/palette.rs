@@ -27,6 +27,7 @@ pub enum PaletteCmd {
     Mode(String),
     Toolset(String),
     Backend(String),
+    Reasoning(String),
     Unsupported(String),
     Unknown(String),
 }
@@ -158,6 +159,12 @@ pub const CMD_DEFS: &[CmdDef] = &[
         category: CmdCategory::Display,
     },
     CmdDef {
+        trigger: "reasoning",
+        description: "Set reasoning effort (none/low/medium/high/xhigh)",
+        arg_hint: Some("<level>"),
+        category: CmdCategory::Session,
+    },
+    CmdDef {
         trigger: "pricing",
         description: "Manage token pricing rules",
         arg_hint: None,
@@ -226,7 +233,7 @@ pub fn parse_palette_input(raw: &str) -> PaletteCmd {
         "mode" => PaletteCmd::Mode(arg),
         "todos" => PaletteCmd::Unsupported("todos".into()),
         "todo" => PaletteCmd::Unsupported("todo".into()),
-        "reasoning" => PaletteCmd::Unsupported("reasoning".into()),
+        "reasoning" => PaletteCmd::Reasoning(arg),
         "stream" => PaletteCmd::Unsupported("stream".into()),
         "mouse" | "select" => PaletteCmd::Unsupported("mouse".into()),
         "toolset" => PaletteCmd::Toolset(arg),

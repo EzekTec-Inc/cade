@@ -265,6 +265,8 @@ impl eframe::App for CadeApp {
                     ref pricing_info,
                     backend_open,
                     ref current_backend,
+                    reasoning_open,
+                    ref current_reasoning_effort,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -704,6 +706,11 @@ impl eframe::App for CadeApp {
                             ui.ctx(), current_backend, &self.theme,
                         ) { action = a; }
                     }
+                    if reasoning_open {
+                        if let Some(a) = overlays::settings::render_reasoning_overlay(
+                            ui.ctx(), current_reasoning_effort, &self.theme,
+                        ) { action = a; }
+                    }
 
                     // ── Inline question widget (M18) ─────────────
                     if let Some(q) = active_question {
@@ -1101,6 +1108,22 @@ impl eframe::App for CadeApp {
                     }
                 }
             }
+            AppAction::CloseReasoningOverlay => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { reasoning_open, .. } = s {
+                        *reasoning_open = false;
+                    }
+                }
+            }
+            AppAction::SetReasoning(level) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { current_reasoning_effort, reasoning_open, .. } = s {
+                        *current_reasoning_effort = level;
+                        *reasoning_open = false;
+                    }
+                }
+                // TODO: propagate reasoning_effort to server via PATCH /v1/agents/:id
+            }
         }
     }
 }
@@ -1223,6 +1246,10 @@ pub enum AppAction {
     CloseBackendOverlay,
     /// Set backend.
     SetBackend(String),
+    /// Close reasoning overlay.
+    CloseReasoningOverlay,
+    /// Set reasoning effort.
+    SetReasoning(String),
 }
 
 // ── M1: toolbar helpers ───────────────────────────────────────────────────────

@@ -292,3 +292,51 @@ pub fn render_backend_overlay(
     if !open && result.is_none() { result = Some(AppAction::CloseBackendOverlay); }
     result
 }
+
+// ── Reasoning overlay ───────────────────────────────────────────────────
+
+pub fn render_reasoning_overlay(
+    ctx: &egui::Context,
+    current_effort: &str,
+    theme: &crate::theme::ThemeColors,
+) -> Option<AppAction> {
+    let mut result = None;
+    let tiers = [
+        ("none", "No explicit reasoning budget (default)"),
+        ("low", "Low reasoning effort (~25% budget)"),
+        ("medium", "Medium reasoning effort (~50% budget)"),
+        ("high", "High reasoning effort (~75% budget)"),
+        ("xhigh", "Maximum reasoning effort (~100% budget)"),
+    ];
+    let open = overlay_frame(ctx, "Reasoning Effort", 440.0, 280.0, theme, |ui| {
+        ui.label(
+            egui::RichText::new("Controls extended thinking / reasoning budget for supported models:")
+                .color(theme.text_muted())
+                .monospace()
+                .size(10.0),
+        );
+        ui.add_space(4.0);
+        for (level, desc) in &tiers {
+            let is_active = current_effort == *level;
+            let prefix = if is_active { "● " } else { "○ " };
+            let color = if is_active { theme.primary() } else { theme.text_primary() };
+            if ui.add(egui::Label::new(
+                egui::RichText::new(format!("{prefix}{level}"))
+                    .color(color)
+                    .monospace()
+                    .strong()
+                    .size(12.0),
+            ).sense(egui::Sense::click())).clicked() && !is_active {
+                result = Some(AppAction::SetReasoning(level.to_string()));
+            }
+            ui.label(
+                egui::RichText::new(format!("  {desc}"))
+                    .color(theme.text_dim())
+                    .monospace()
+                    .size(10.0),
+            );
+        }
+    });
+    if !open && result.is_none() { result = Some(AppAction::CloseReasoningOverlay); }
+    result
+}
