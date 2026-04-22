@@ -503,7 +503,7 @@ pub fn render_context_bar(
         };
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new(CATEGORY_GLYPHS.get(idx).unwrap_or(&"?"))
+                egui::RichText::new(*CATEGORY_GLYPHS.get(idx).unwrap_or(&"?"))
                     .color(category_color(idx, theme))
                     .monospace()
                     .size(10.0),
