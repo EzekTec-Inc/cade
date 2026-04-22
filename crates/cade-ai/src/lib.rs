@@ -16,7 +16,7 @@ pub mod utils;
 pub mod types;
 
 pub use catalogue::{CATALOGUE, ModelEntry};
-pub use registry::{ModelPricing, ModelRegistry};
+pub use registry::{ModelPricing, ModelRegistry, PricingRule};
 pub use types::*;
 pub use router::*;
 pub use utils::*;
