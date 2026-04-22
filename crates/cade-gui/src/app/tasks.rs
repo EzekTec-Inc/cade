@@ -1388,4 +1388,49 @@ impl CadeApp {
             ctx.request_repaint();
         });
     }
+
+    /// Send `/theme <name>` silently through the run endpoint.
+    ///
+    /// The server intercepts the `/theme` prefix, resolves the named theme
+    /// from disk, and broadcasts a `theme_update` SSE event.  The GUI's
+    /// existing `on_theme_update` handler then applies the new colors.
+    ///
+    /// We use `send_message_stream` with a no-op event handler so the theme
+    /// command doesn't pollute the chat timeline.
+    pub(super) fn spawn_apply_theme(&mut self, name: String) {
+        let (server_url, token, agent_id, conv_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() { Some(s) => s, None => return };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(), None => return,
+            };
+            let conv_id = s.conversation_id().map(String::from);
+            (s.server_url().to_string(), s.token().to_string(), agent_id, conv_id)
+        };
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let session_clone = Rc::clone(&session);
+            let ctx_clone = ctx.clone();
+            let _ = crate::http_wasm::send_message_stream(
+                &server_url,
+                &token,
+                &agent_id,
+                &format!("/theme {name}"),
+                conv_id.as_deref(),
+                move |evt| {
+                    // Only handle theme_update — ignore all other events so
+                    // the command stays invisible in the chat timeline.
+                    if let crate::api::StreamEvent::ThemeUpdate(colors) = evt {
+                        if let Some(s) = session_clone.borrow_mut().as_mut() {
+                            s.on_theme_update(colors);
+                        }
+                        ctx_clone.request_repaint();
+                    }
+                },
+            )
+            .await;
+            ctx.request_repaint();
+        });
+    }
 }

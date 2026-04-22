@@ -1075,10 +1075,10 @@ impl eframe::App for CadeApp {
                         *theme_picker_open = false;
                     }
                 }
-                // Send `/theme <name>` as a user message — the server intercepts
-                // it, resolves the theme from disk, and broadcasts a theme_update
-                // SSE event which the GUI's on_theme_update handler applies.
-                self.send_prompt(format!("/theme {name}"));
+                // Send `/theme <name>` silently through the run endpoint.
+                // The server intercepts it, resolves the theme from disk,
+                // and broadcasts a theme_update SSE event.
+                self.spawn_apply_theme(name);
             }
             AppAction::CloseHooksOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {

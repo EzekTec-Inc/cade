@@ -5,12 +5,12 @@
 //! crate's re-exports and require no running server.
 //!
 //! Scenarios covered:
-//!   R01 – `working_set` is present in DEFAULT_MEMORY_BLOCKS and is `short` tier
+//!   R01 – `active_goal` + `recent_edits` are present in DEFAULT_MEMORY_BLOCKS
 //!   R02 – All memory-retrieval tools are in `meta_tool_names` for every toolset
 //!   R03 – `search_memory` is NOT in the extended-tool prefix list (was hidden bug)
 //!   R04 – auto_trim_to_limit keeps newest content and inserts a trim note
 //!   R05 – parse_limit_from_error extracts the right number from the error string
-//!   R06 – DEFAULT_MEMORY_BLOCKS tiers: core blocks pinned, working_set short
+//!   R06 – DEFAULT_MEMORY_BLOCKS tiers: core blocks pinned, active_goal/recent_edits short
 //!   R07 – Toolset meta_tool_names contains conversation_search + archival tools
 //!   R08 – All toolsets expose all memory-retrieval tool names
 
@@ -20,22 +20,26 @@ use cade::toolsets::Toolset;
 
 // endregion: --- Imports
 
-// ── R01 — working_set in DEFAULT_MEMORY_BLOCKS ───────────────────────────────
+// ── R01 — active_goal in DEFAULT_MEMORY_BLOCKS ──────────────────────────────
 
-/// The `working_set` block must be seeded when a new agent is created.
+/// The `active_goal` block must be seeded when a new agent is created.
 /// Without it the model has nowhere to persist active task state between
-/// context rotations.
+/// context rotations.  (Replaced `working_set` which was split into
+/// `active_goal` + `recent_edits`.)
 #[test]
-fn r01_working_set_is_in_default_memory_blocks() {
-    // DEFAULT_MEMORY_BLOCKS is (label, value, description, max_chars, tier)
+fn r01_active_goal_is_in_default_memory_blocks() {
     let labels: Vec<&str> = cade::DEFAULT_MEMORY_BLOCKS
         .iter()
         .map(|(l, _, _, _, _)| *l)
         .collect();
 
     assert!(
-        labels.contains(&"working_set"),
-        "working_set must be in DEFAULT_MEMORY_BLOCKS; found: {labels:?}"
+        labels.contains(&"active_goal"),
+        "active_goal must be in DEFAULT_MEMORY_BLOCKS; found: {labels:?}"
+    );
+    assert!(
+        labels.contains(&"recent_edits"),
+        "recent_edits must be in DEFAULT_MEMORY_BLOCKS; found: {labels:?}"
     );
 }
 
@@ -206,17 +210,16 @@ fn r06_core_blocks_are_pinned() {
 }
 
 #[test]
-fn r06_working_set_is_short_not_pinned() {
-    let ws = cade::DEFAULT_MEMORY_BLOCKS
-        .iter()
-        .find(|(l, _, _, _, _)| *l == "working_set")
-        .expect("working_set must exist in DEFAULT_MEMORY_BLOCKS");
-    let (_, _, _, _, tier) = ws;
-    assert_eq!(
-        *tier, "short",
-        "working_set should be 'short' tier so it can age out when stale, \
-         not 'pinned' (that wastes the pinned budget)"
-    );
+fn r06_active_goal_and_recent_edits_are_short() {
+    for (label, _, _, _, tier) in cade::DEFAULT_MEMORY_BLOCKS {
+        if matches!(*label, "active_goal" | "recent_edits") {
+            assert_eq!(
+                *tier, "short",
+                "'{label}' should be 'short' tier so it can age out when stale, \
+                 not 'pinned' (that wastes the pinned budget)"
+            );
+        }
+    }
 }
 
 // ── R07 — Toolset all_tool_names includes all retrieval tools ─────────────────
