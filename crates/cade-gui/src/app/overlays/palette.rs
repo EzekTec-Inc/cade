@@ -1,9 +1,33 @@
-//! Slash-command palette overlay.
+//! Slash-command palette overlay — modernised, TUI-aligned.
 
 use crate::theme::EguiThemeExt;
 use eframe::egui;
 
 use super::super::AppAction;
+
+/// Category display label + order.
+fn category_label(cat: cade_core::resources::palette::CmdCategory) -> &'static str {
+    use cade_core::resources::palette::CmdCategory;
+    match cat {
+        CmdCategory::Navigation => "Navigation",
+        CmdCategory::Session => "Session & Config",
+        CmdCategory::Memory => "Memory",
+        CmdCategory::Tools => "Tools",
+        CmdCategory::Display => "Display",
+    }
+}
+
+/// Category ordering for grouped display.
+fn category_order(cat: cade_core::resources::palette::CmdCategory) -> u8 {
+    use cade_core::resources::palette::CmdCategory;
+    match cat {
+        CmdCategory::Navigation => 0,
+        CmdCategory::Session => 1,
+        CmdCategory::Memory => 2,
+        CmdCategory::Tools => 3,
+        CmdCategory::Display => 4,
+    }
+}
 
 pub fn render_palette_overlay(
     ctx: &egui::Context,
@@ -14,15 +38,16 @@ pub fn render_palette_overlay(
     use crate::palette::fuzzy_filter;
     let mut result: Option<AppAction> = None;
 
-    // TUI-fication: full-width bar anchored at top, not a floating centered modal.
     let screen = ctx.content_rect();
-    let w = screen.width();
-    let max_rows = 12;
+    let w = (screen.width() * 0.6).max(420.0).min(screen.width());
     let filtered = fuzzy_filter(palette_input);
+    let max_rows = 16;
     let row_count = filtered.len().min(max_rows);
-    // Height: input row (~28) + separator + rows (~24 each) + hint row
-    let h = (36.0 + (row_count as f32 * 26.0) + 24.0).min(screen.height() - 20.0);
-    let pos = egui::pos2(screen.left(), screen.top());
+    let h = (44.0 + (row_count as f32 * 24.0) + 32.0).min(screen.height() - 20.0);
+    let pos = egui::pos2(
+        (screen.width() - w) / 2.0,
+        screen.top() + 40.0,
+    );
 
     egui::Window::new("Command palette")
         .title_bar(false)
@@ -35,12 +60,12 @@ pub fn render_palette_overlay(
                 .fill(theme.bg_surface0())
                 .stroke(egui::Stroke::new(1.0, theme.border_base()))
                 .corner_radius(egui::CornerRadius::ZERO)
-                .inner_margin(egui::Margin::symmetric(8, 4)),
+                .inner_margin(egui::Margin::symmetric(8, 6)),
         )
         .show(ctx, |ui| {
             ui.set_width(w - 16.0);
 
-            // Header + query input — compact, single line
+            // ── Search input ────────────────────────────────────
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(">")
@@ -63,17 +88,10 @@ pub fn render_palette_overlay(
             });
 
             ui.add_space(2.0);
-            // Thin separator line
-            let sep_rect = ui.available_rect_before_wrap();
-            let sep_rect = egui::Rect::from_min_size(
-                sep_rect.min,
-                egui::vec2(sep_rect.width(), 1.0),
-            );
-            ui.painter().rect_filled(sep_rect, 0.0, theme.border_base());
-            ui.advance_cursor_after_rect(sep_rect);
+            separator(ui, theme);
             ui.add_space(2.0);
 
-            // Filtered entries — dense, monospace, no card frames
+            // ── Results (grouped by category) ───────────────────
             if filtered.is_empty() {
                 ui.label(
                     egui::RichText::new("  No matching commands")
@@ -83,90 +101,180 @@ pub fn render_palette_overlay(
                         .size(12.0),
                 );
             } else {
+                // Group entries by category for display
+                let grouped = group_by_category(&filtered);
+                let total_visible = filtered.len().min(max_rows);
+
+                // Track flat index for selection highlight
+                let mut flat_idx = 0usize;
+
                 egui::ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .max_height(h - 64.0)
+                    .max_height(h - 80.0)
                     .show(ui, |ui| {
-                        for (idx, entry) in filtered.iter().take(max_rows).enumerate() {
-                            let is_sel = idx == palette_selection;
-                            let bg = if is_sel {
-                                theme.bg_surface2()
-                            } else {
-                                egui::Color32::TRANSPARENT
-                            };
+                        for (cat, entries) in &grouped {
+                            // Category header
+                            ui.add_space(2.0);
+                            ui.label(
+                                egui::RichText::new(format!("── {} ──", category_label(*cat)))
+                                    .color(theme.text_muted())
+                                    .monospace()
+                                    .size(10.0),
+                            );
+                            ui.add_space(1.0);
 
-                            let resp = ui.horizontal(|ui| {
-                                // Selection highlight — full-width background
-                                let row_rect = ui.available_rect_before_wrap();
-                                let row_rect = egui::Rect::from_min_size(
-                                    row_rect.min,
-                                    egui::vec2(row_rect.width(), 22.0),
-                                );
-                                if is_sel {
-                                    ui.painter().rect_filled(row_rect, 0.0, bg);
+                            for entry in entries {
+                                if flat_idx >= max_rows {
+                                    break;
                                 }
-
-                                // Trigger
-                                ui.label(
-                                    egui::RichText::new(format!("/{}", entry.def.trigger))
-                                        .color(theme.primary())
-                                        .monospace()
-                                        .strong()
-                                        .size(12.0),
-                                );
-                                // Arg hint
-                                if let Some(hint) = entry.def.arg_hint {
-                                    ui.label(
-                                        egui::RichText::new(hint)
-                                            .color(theme.text_dim())
-                                            .monospace()
-                                            .size(11.0),
-                                    );
-                                }
-                                // Description — pushed right
-                                ui.with_layout(
-                                    egui::Layout::right_to_left(egui::Align::Center),
-                                    |ui| {
-                                        ui.label(
-                                            egui::RichText::new(entry.def.description)
-                                                .color(theme.text_muted())
-                                                .size(11.0),
-                                        );
-                                    },
-                                );
-                            }).response.interact(egui::Sense::click());
-
-                            if resp.clicked() {
-                                let delta = idx as i32 - palette_selection as i32;
-                                if delta != 0 {
-                                    result = Some(AppAction::MovePaletteSelection(delta));
+                                let is_sel = flat_idx == palette_selection;
+                                let bg = if is_sel {
+                                    theme.bg_surface2()
                                 } else {
-                                    result = Some(AppAction::ExecutePaletteCmd);
+                                    egui::Color32::TRANSPARENT
+                                };
+
+                                let resp = ui.horizontal(|ui| {
+                                    let row_rect = ui.available_rect_before_wrap();
+                                    let row_rect = egui::Rect::from_min_size(
+                                        row_rect.min,
+                                        egui::vec2(row_rect.width(), 22.0),
+                                    );
+                                    ui.painter().rect_filled(row_rect, 0.0, bg);
+
+                                    // Trigger label
+                                    ui.label(
+                                        egui::RichText::new(format!("/{}", entry.def.trigger))
+                                            .color(if is_sel { theme.primary() } else { theme.text_primary() })
+                                            .monospace()
+                                            .strong()
+                                            .size(12.0),
+                                    );
+
+                                    // Arg hint (if any)
+                                    if let Some(hint) = entry.def.arg_hint {
+                                        ui.label(
+                                            egui::RichText::new(hint)
+                                                .color(theme.text_dim())
+                                                .monospace()
+                                                .italics()
+                                                .size(10.0),
+                                        );
+                                    }
+
+                                    // Description (right-aligned)
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            ui.label(
+                                                egui::RichText::new(entry.def.description)
+                                                    .color(theme.text_muted())
+                                                    .monospace()
+                                                    .size(10.0),
+                                            );
+                                        },
+                                    );
+                                });
+
+                                if resp.response.interact(egui::Sense::click()).clicked() {
+                                    result = Some(AppAction::ExecutePaletteCommand(
+                                        entry.def.trigger.to_string(),
+                                    ));
                                 }
+
+                                flat_idx += 1;
                             }
+                        }
+
+                        // Scroll indicator if more items exist
+                        if filtered.len() > max_rows {
+                            ui.add_space(2.0);
+                            ui.label(
+                                egui::RichText::new(format!(
+                                    "  ▼ {} more…",
+                                    filtered.len() - total_visible
+                                ))
+                                .color(theme.text_dim())
+                                .monospace()
+                                .size(10.0),
+                            );
                         }
                     });
             }
 
             ui.add_space(2.0);
-            // Thin bottom separator
-            let sep_rect = ui.available_rect_before_wrap();
-            let sep_rect = egui::Rect::from_min_size(
-                sep_rect.min,
-                egui::vec2(sep_rect.width(), 1.0),
-            );
-            ui.painter().rect_filled(sep_rect, 0.0, theme.border_base());
-            ui.advance_cursor_after_rect(sep_rect);
+            separator(ui, theme);
+            ui.add_space(2.0);
 
+            // ── Footer: selected item description + key hints ───
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("↑↓ select  ⏎ run  Esc close")
-                        .color(theme.text_dim())
-                        .monospace()
-                        .size(10.0),
-                );
+                // Show description of selected item
+                if let Some(entry) = get_flat_entry(&filtered, palette_selection) {
+                    ui.label(
+                        egui::RichText::new(entry.def.description)
+                            .color(theme.text_primary())
+                            .monospace()
+                            .size(10.0),
+                    );
+                }
+
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(
+                        egui::RichText::new("↑↓ navigate  ⏎ run  Esc close")
+                            .color(theme.text_dim())
+                            .monospace()
+                            .size(9.0),
+                    );
+                });
             });
         });
 
     result
+}
+
+/// Draw a thin 1px separator.
+fn separator(ui: &mut egui::Ui, theme: &crate::theme::ThemeColors) {
+    let r = ui.available_rect_before_wrap();
+    let r = egui::Rect::from_min_size(r.min, egui::vec2(r.width(), 1.0));
+    ui.painter().rect_filled(r, 0.0, theme.border_base());
+    ui.advance_cursor_after_rect(r);
+}
+
+/// Group filtered entries by category, preserving category order.
+fn group_by_category<'a>(
+    entries: &[crate::palette::FilteredCmd<'a>],
+) -> Vec<(cade_core::resources::palette::CmdCategory, Vec<&crate::palette::FilteredCmd<'a>>)> {
+    use std::collections::BTreeMap;
+
+    let mut map: BTreeMap<u8, (cade_core::resources::palette::CmdCategory, Vec<&crate::palette::FilteredCmd<'a>>)> =
+        BTreeMap::new();
+
+    for entry in entries {
+        let order = category_order(entry.def.category);
+        map.entry(order)
+            .or_insert_with(|| (entry.def.category, Vec::new()))
+            .1
+            .push(entry);
+    }
+
+    map.into_values().collect()
+}
+
+/// Get the flat-indexed entry (matching the selection index in the grouped display).
+fn get_flat_entry<'a>(
+    entries: &[crate::palette::FilteredCmd<'a>],
+    idx: usize,
+) -> Option<&crate::palette::FilteredCmd<'a>> {
+    // When grouped, we iterate categories in order and flatten
+    let grouped = group_by_category(entries);
+    let mut flat = 0;
+    for (_cat, group) in &grouped {
+        for entry in group {
+            if flat == idx {
+                return Some(entry);
+            }
+            flat += 1;
+        }
+    }
+    None
 }

@@ -1091,6 +1091,64 @@ impl CadeApp {
                     s.push_error(&format!("Unknown command: /{raw}"));
                 }
             }
+            PaletteCmd::Providers => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { providers_open, providers_loading, .. } = s {
+                        *providers_open = true;
+                        *providers_loading = true;
+                    }
+                }
+                // TODO: spawn_fetch_providers() when server exposes /v1/providers
+            }
+            PaletteCmd::Permissions => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { permissions_open, .. } = s {
+                        *permissions_open = true;
+                    }
+                }
+            }
+            PaletteCmd::Theme => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { theme_picker_open, .. } = s {
+                        *theme_picker_open = true;
+                    }
+                }
+            }
+            PaletteCmd::Hooks => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { hooks_open, .. } = s {
+                        *hooks_open = true;
+                    }
+                }
+            }
+            PaletteCmd::Mode(_mode_arg) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { permissions_open, .. } = s {
+                        *permissions_open = true;
+                    }
+                }
+            }
+            PaletteCmd::Toolset(_ts_arg) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { toolset_open, .. } = s {
+                        *toolset_open = true;
+                    }
+                }
+            }
+            PaletteCmd::Pricing => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { pricing_open, .. } = s {
+                        *pricing_open = true;
+                    }
+                }
+            }
+            PaletteCmd::Backend(_be_arg) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { backend_open, .. } = s {
+                        *backend_open = true;
+                    }
+                }
+            }
             PaletteCmd::Unsupported(name) => {
                 // TUI recognizes this command but the GUI has no UI or
                 // backing action for it yet.  Surface a message that

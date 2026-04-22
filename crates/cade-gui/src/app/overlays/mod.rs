@@ -9,6 +9,7 @@ pub mod memory;
 pub mod menu;
 pub mod models;
 pub mod palette;
+pub mod settings;
 pub mod stats;
 pub mod tools;
 

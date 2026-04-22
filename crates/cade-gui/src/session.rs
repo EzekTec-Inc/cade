@@ -278,6 +278,25 @@ pub enum SessionState {
         context_breakdown: Option<crate::api::ContextBreakdown>,
         /// Whether a context-breakdown fetch is in progress.
         context_breakdown_loading: bool,
+
+        // ── Settings overlays ────────────────────────────────────
+        providers_open: bool,
+        providers: Vec<crate::api::ProviderInfo>,
+        providers_loading: bool,
+        permissions_open: bool,
+        current_permission_mode: String,
+        theme_picker_open: bool,
+        available_themes: Vec<String>,
+        current_theme_name: String,
+        hooks_open: bool,
+        hooks: Vec<crate::api::HookInfo>,
+        hooks_loading: bool,
+        toolset_open: bool,
+        current_toolset: String,
+        pricing_open: bool,
+        pricing_info: String,
+        backend_open: bool,
+        current_backend: String,
     },
     /// One of the bootstrap requests failed.
     ConnectionFailed {
@@ -436,6 +455,30 @@ impl SessionState {
 
                 context_breakdown: None,
                 context_breakdown_loading: false,
+
+                providers_open: false,
+                providers: Vec::new(),
+                providers_loading: false,
+                permissions_open: false,
+                current_permission_mode: "default".to_string(),
+                theme_picker_open: false,
+                available_themes: vec![
+                    "tokyo-night".into(),
+                    "catppuccin-mocha".into(),
+                    "catppuccin-latte".into(),
+                    "dark".into(),
+                    "light".into(),
+                ],
+                current_theme_name: "tokyo-night".to_string(),
+                hooks_open: false,
+                hooks: Vec::new(),
+                hooks_loading: false,
+                toolset_open: false,
+                current_toolset: "default".to_string(),
+                pricing_open: false,
+                pricing_info: String::new(),
+                backend_open: false,
+                current_backend: "local".to_string(),
             };
         }
     }

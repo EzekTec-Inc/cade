@@ -247,6 +247,24 @@ impl eframe::App for CadeApp {
                     ref live_outputs,
                     ref context_breakdown,
                     context_breakdown_loading,
+
+                    providers_open,
+                    ref providers,
+                    providers_loading,
+                    permissions_open,
+                    ref current_permission_mode,
+                    theme_picker_open,
+                    ref available_themes,
+                    ref current_theme_name,
+                    hooks_open,
+                    ref hooks,
+                    hooks_loading,
+                    toolset_open,
+                    ref current_toolset,
+                    pricing_open,
+                    ref pricing_info,
+                    backend_open,
+                    ref current_backend,
                     ..
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
@@ -650,6 +668,43 @@ impl eframe::App for CadeApp {
                         }
                     }
 
+                    // ── Settings overlays ─────────────────────────
+                    if providers_open {
+                        if let Some(a) = overlays::settings::render_providers_overlay(
+                            ui.ctx(), providers, providers_loading, &self.theme,
+                        ) { action = a; }
+                    }
+                    if permissions_open {
+                        if let Some(a) = overlays::settings::render_permissions_overlay(
+                            ui.ctx(), current_permission_mode, &self.theme,
+                        ) { action = a; }
+                    }
+                    if theme_picker_open {
+                        if let Some(a) = overlays::settings::render_theme_overlay(
+                            ui.ctx(), available_themes, current_theme_name, &self.theme,
+                        ) { action = a; }
+                    }
+                    if hooks_open {
+                        if let Some(a) = overlays::settings::render_hooks_overlay(
+                            ui.ctx(), hooks, hooks_loading, &self.theme,
+                        ) { action = a; }
+                    }
+                    if toolset_open {
+                        if let Some(a) = overlays::settings::render_toolset_overlay(
+                            ui.ctx(), current_toolset, &self.theme,
+                        ) { action = a; }
+                    }
+                    if pricing_open {
+                        if let Some(a) = overlays::settings::render_pricing_overlay(
+                            ui.ctx(), pricing_info, &self.theme,
+                        ) { action = a; }
+                    }
+                    if backend_open {
+                        if let Some(a) = overlays::settings::render_backend_overlay(
+                            ui.ctx(), current_backend, &self.theme,
+                        ) { action = a; }
+                    }
+
                     // ── Inline question widget (M18) ─────────────
                     if let Some(q) = active_question {
                         if let Some(new_action) = render_question_widget(
@@ -958,6 +1013,94 @@ impl eframe::App for CadeApp {
                 }
                 self.spawn_set_agent_model(model_id);
             }
+
+            // ── Settings overlay actions ─────────────────────────
+            AppAction::ExecutePaletteCommand(trigger) => {
+                let cmd = cade_core::resources::palette::parse_palette_input(&trigger);
+                self.dispatch_palette_cmd(cmd);
+            }
+            AppAction::CloseProvidersOverlay => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { providers_open, .. } = s {
+                        *providers_open = false;
+                    }
+                }
+            }
+            AppAction::ClosePermissionsOverlay => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { permissions_open, .. } = s {
+                        *permissions_open = false;
+                    }
+                }
+            }
+            AppAction::SetPermissionMode(mode) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { current_permission_mode, permissions_open, .. } = s {
+                        *current_permission_mode = mode;
+                        *permissions_open = false;
+                    }
+                }
+            }
+            AppAction::CloseThemeOverlay => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { theme_picker_open, .. } = s {
+                        *theme_picker_open = false;
+                    }
+                }
+            }
+            AppAction::SetTheme(name) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { current_theme_name, theme_picker_open, .. } = s {
+                        *current_theme_name = name;
+                        *theme_picker_open = false;
+                    }
+                }
+                // TODO: actually apply theme via ThemeColors resolution
+            }
+            AppAction::CloseHooksOverlay => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { hooks_open, .. } = s {
+                        *hooks_open = false;
+                    }
+                }
+            }
+            AppAction::CloseToolsetOverlay => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { toolset_open, .. } = s {
+                        *toolset_open = false;
+                    }
+                }
+            }
+            AppAction::SetToolset(ts) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { current_toolset, toolset_open, .. } = s {
+                        *current_toolset = ts;
+                        *toolset_open = false;
+                    }
+                }
+            }
+            AppAction::ClosePricingOverlay => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { pricing_open, .. } = s {
+                        *pricing_open = false;
+                    }
+                }
+            }
+            AppAction::CloseBackendOverlay => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { backend_open, .. } = s {
+                        *backend_open = false;
+                    }
+                }
+            }
+            AppAction::SetBackend(be) => {
+                if let Some(s) = self.session.borrow_mut().as_mut() {
+                    if let SessionState::Connected { current_backend, backend_open, .. } = s {
+                        *current_backend = be;
+                        *backend_open = false;
+                    }
+                }
+            }
         }
     }
 }
@@ -1054,6 +1197,32 @@ pub enum AppAction {
     SetModelPickerSelection(usize),
     /// User selected a model from the picker — apply it.
     SelectModel(String),
+
+    // ── Settings overlay actions ─────────────────────────────────
+    /// Execute a palette command by trigger name (for click dispatch).
+    ExecutePaletteCommand(String),
+    /// Close providers overlay.
+    CloseProvidersOverlay,
+    /// Close permissions overlay.
+    ClosePermissionsOverlay,
+    /// Set permission mode.
+    SetPermissionMode(String),
+    /// Close theme overlay.
+    CloseThemeOverlay,
+    /// Set theme.
+    SetTheme(String),
+    /// Close hooks overlay.
+    CloseHooksOverlay,
+    /// Close toolset overlay.
+    CloseToolsetOverlay,
+    /// Set toolset.
+    SetToolset(String),
+    /// Close pricing overlay.
+    ClosePricingOverlay,
+    /// Close backend overlay.
+    CloseBackendOverlay,
+    /// Set backend.
+    SetBackend(String),
 }
 
 // ── M1: toolbar helpers ───────────────────────────────────────────────────────

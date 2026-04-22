@@ -640,6 +640,27 @@ pub struct ModelInfo {
     pub context_window: u32,
 }
 
+// ── Provider info ─────────────────────────────────────────────────────
+
+/// Provider info for the providers overlay.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct ProviderInfo {
+    pub name: String,
+    #[serde(default)]
+    pub is_connected: bool,
+    #[serde(default)]
+    pub model_count: usize,
+}
+
+// ── Hook info ─────────────────────────────────────────────────────────
+
+/// Hook info for the hooks overlay.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+pub struct HookInfo {
+    pub event: String,
+    pub command: String,
+}
+
 /// Envelope for `GET /v1/models`.
 #[derive(Debug, serde::Deserialize)]
 struct ModelsResponse {
