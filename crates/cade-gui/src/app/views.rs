@@ -92,7 +92,7 @@ pub fn render_timeline_message(
             
             // -- Skills
             "load_skill" | "install_skill" | "run_skill_script"
-            | "load_skill_ref" => "\u{f085}",  // 
+            | "load_skill_ref" | "unload_skill" => "\u{f085}",  // 
             
             // -- Subagents
             "run_subagent" | "list_agents" | "message_agent" => "\u{f0c0}",  // 

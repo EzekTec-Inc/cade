@@ -40,6 +40,7 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_query_event_log(),
         schema_search_memory(),
         schema_load_skill(),
+        schema_unload_skill(),
         schema_install_skill(),
         schema_run_skill_script(),
         schema_load_skill_ref(),
@@ -217,6 +218,23 @@ fn schema_load_skill() -> Value {
                 "id": {
                     "type": "string",
                     "description": "The skill ID to load (from the Available Skills list)"
+                }
+            },
+            "required": ["id"]
+        }
+    })
+}
+
+fn schema_unload_skill() -> Value {
+    json!({
+        "name": "unload_skill",
+        "description": "Unload a previously loaded skill from context to free up context window budget. The skill body will no longer be injected into the system prompt on the next turn. Use when a skill is no longer needed for the current task.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "id": {
+                    "type": "string",
+                    "description": "The skill ID to unload (must be currently loaded)"
                 }
             },
             "required": ["id"]

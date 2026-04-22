@@ -261,6 +261,9 @@ pub async fn run_agent(
                 let result = if tc.name == "load_skill" {
                     let args_str = tc.arguments.to_string();
                     handle_load_skill_tool(&state2, &agent_id2, &tc.id, &args_str).await
+                } else if tc.name == "unload_skill" {
+                    let args_str = tc.arguments.to_string();
+                    handle_unload_skill_tool(&state2, &agent_id2, &tc.id, &args_str).await
                 } else {
                     cade_agent::tools::manager::dispatch(
                         tc.id.clone(),
@@ -389,5 +392,63 @@ async fn handle_load_skill_tool(
             output: format!("Error: skill '{skill_id}' not found"),
             is_error: true,
         },
+    }
+}
+
+/// Handle `unload_skill` tool call server-side.
+///
+/// Removes the skill from the agent's active set. Does **not** invalidate
+/// the context cache — the stale entry expires naturally on the next turn
+/// when message history changes.
+async fn handle_unload_skill_tool(
+    state: &AppState,
+    agent_id: &str,
+    tool_call_id: &str,
+    arguments: &str,
+) -> cade_agent::tools::manager::ToolResult {
+    use cade_agent::tools::manager::ToolResult;
+
+    let skill_id = serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .and_then(|v| v["id"].as_str().map(|s| s.to_string()))
+        .unwrap_or_default();
+
+    if skill_id.is_empty() {
+        return ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "unload_skill".to_string(),
+            output: "Error: missing 'id' parameter".to_string(),
+            is_error: true,
+        };
+    }
+
+    let removed = {
+        let mut agent_skills = state.agent_skills.write().await;
+        if let Some(loaded) = agent_skills.get_mut(agent_id) {
+            let before = loaded.len();
+            loaded.retain(|id| id != &skill_id);
+            before != loaded.len()
+        } else {
+            false
+        }
+    };
+
+    if removed {
+        ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "unload_skill".to_string(),
+            output: format!(
+                "Skill '{}' unloaded. It will no longer appear in your system prompt on the next turn.",
+                skill_id
+            ),
+            is_error: false,
+        }
+    } else {
+        ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "unload_skill".to_string(),
+            output: format!("Skill '{}' is not currently loaded", skill_id),
+            is_error: true,
+        }
     }
 }

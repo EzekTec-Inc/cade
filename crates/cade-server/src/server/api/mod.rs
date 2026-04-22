@@ -182,6 +182,10 @@ pub fn router(state: AppState) -> Router {
             "/v1/agents/:id/skills/load",
             post(skills::load_skill),
         )
+        .route(
+            "/v1/agents/:id/skills/unload",
+            post(skills::unload_skill),
+        )
         // Tool execution log
         .route(
             "/v1/agents/:id/tool_executions",

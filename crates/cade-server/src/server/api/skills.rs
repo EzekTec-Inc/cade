@@ -123,3 +123,44 @@ pub async fn load_skill(
     }))
     .into_response()
 }
+
+/// `POST /v1/agents/:id/skills/unload` — unload (deactivate) a skill for an agent.
+///
+/// Request body: `{ "id": "skill-id" }`
+///
+/// Removes the skill from the agent's active set. The skill body will no longer
+/// be injected into the system prompt on the next `build_context` call.
+/// Does **not** invalidate the context cache — the stale cache entry naturally
+/// expires when message history changes on the next turn.
+pub async fn unload_skill(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Response {
+    let skill_id = match body["id"].as_str() {
+        Some(id) => id.to_string(),
+        None => return err(StatusCode::BAD_REQUEST, "Missing 'id' field"),
+    };
+
+    let removed = {
+        let mut agent_skills = state.agent_skills.write().await;
+        if let Some(loaded) = agent_skills.get_mut(&agent_id) {
+            let before = loaded.len();
+            loaded.retain(|id| id != &skill_id);
+            before != loaded.len()
+        } else {
+            false
+        }
+    };
+
+    if removed {
+        Json(json!({
+            "id": skill_id,
+            "status": "unloaded",
+            "message": format!("Skill '{}' removed from active context. Takes effect on next turn.", skill_id),
+        }))
+        .into_response()
+    } else {
+        err(StatusCode::NOT_FOUND, &format!("Skill '{skill_id}' is not loaded for agent '{agent_id}'"))
+    }
+}
