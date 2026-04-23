@@ -41,7 +41,12 @@ crates/
 ├── cade-web/                   # Web search and scraping capabilities (→ cade-core)
 ├── cade-plugin/                # Plugin loading and manifests (→ cade-core, cade-agent)
 ├── cade-sdk/                   # Rust SDK for programmatic agent control (→ cade-core, cade-agent)
-└── cade-ide-mcp/               # IDE MCP bridge (editor integrations)
+└── cade-ide-mcp/               # IDE MCP bridge — serves editor state (open files,
+                                #   selection, diagnostics, workspace folders, visible
+                                #   range, file content) to CADE agents as MCP tools.
+                                #   Runs as a stdio subprocess; editor adapters (VS
+                                #   Code, JetBrains, tests) populate the shared
+                                #   EditorState through the EditorChannel trait.
 ```
 
 ---

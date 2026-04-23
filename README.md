@@ -333,10 +333,15 @@ Configure in `~/.cade/settings.json`:
     "openviking": {
       "command": "/path/to/openviking/.venv/bin/python",
       "args": ["/path/to/openviking/openviking_mcp.py"]
+    },
+    "cade-ide": {
+      "command": "/path/to/cade/target/release/cade-ide-mcp"
     }
   }
 }
 ```
+
+`cade-ide-mcp` is an in-tree MCP server that exposes the connected editor's state (open files, selection, diagnostics, workspace folders, visible range, file content) as MCP tools with the `cade-ide__` prefix. In M-IDE-1a it serves against an empty `EditorState` — a later milestone adds editor-adapter transports (VS Code extension, JetBrains plugin) that push live updates into the shared state.
 
 View connected servers and tools with `/mcp`.
 

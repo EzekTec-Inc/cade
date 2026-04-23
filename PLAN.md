@@ -1,3 +1,30 @@
+## 2026-04-23T20:10:00Z — cade-ide-mcp M-IDE-1a.23: docs (cycle 23, closes M-IDE-1a)
+
+**Task:** Document the new IDE-MCP bridge so future contributors and users understand what shipped, how to run it, and what comes next. Closes M-IDE-1a.
+
+**Scope guardrail:** Docs only. No source changes. No deps. Not a TDD cycle — docs fall outside tdd-guide.
+
+**Files modified:**
+- `ARCHITECTURE.md` — expanded the `cade-ide-mcp` crate description from a one-liner stub to three lines naming the tool surface and the adapter pattern.
+- `README.md` — added `cade-ide` as a third example under the `mcpServers` block and a short paragraph explaining its role and current scope.
+- `docs/ide-integration-plan.md` — **new**. Phased roadmap (M-IDE-1a complete, 1b edit tools, 1c adapter protocol, 2 VS Code extension, 3 JetBrains plugin). Includes architecture diagram, the seven shipped tools in a table, operational notes (stderr-only logging, no filesystem fallback, NullEditorChannel semantics), and a turn-key `~/.cade/settings.json` registration example.
+
+**Test record:**
+- All 29 tests still pass. `cargo check --workspace` clean.
+
+**Previous behavior:** `cade-ide-mcp` was described in one line in the architecture doc and nowhere else.
+
+**New behavior:** The crate has a dedicated plan doc, is referenced from the README MCP section, and has an expanded ARCHITECTURE entry.
+
+**Milestone closed:** M-IDE-1a (scaffold + read-only tool surface + stdio binary). 14 commits in total — `1e3ad1bf` through this one.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T19:58:00Z — cade-ide-mcp M-IDE-1a.22: stdio binary (TDD cycle 22)
 
 **Task:** Make `cade-ide-mcp` runnable as a subprocess. Editor adapters spawn the binary and speak MCP over stdin/stdout.
