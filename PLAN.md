@@ -1,3 +1,19 @@
+## 2026-04-23T21:00:00Z — cade-ide-mcp M-IDE-1b.4: open_file MCP tool (TDD cycle 4 of M-IDE-1b)
+
+Wire the open_file tool on top of cycle-3's reveal_file callback. Same pattern as apply_edit.
+
+TDD record:
+  RED   open_file_forwards_path_to_channel +
+        tool_router_registers_open_file: E0599 + E0282
+  GREEN added OpenFileIn / OpenFileOut, open_file_impl,
+        #[tool] open_file with Parameters<OpenFileIn>.
+        33 unit + 2 e2e = 35/35 pass. workspace clean.
+  REFACTOR  none
+
+**Files modified:** `crates/cade-ide-mcp/src/server.rs`
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T20:55:00Z — cade-ide-mcp M-IDE-1b.3: reveal_file callback on EditorChannel (TDD cycle 3 of M-IDE-1b)
 
 Second mutating callback. Pattern identical to cycle 1's apply_edit: default impl returns -32601 method_not_found with the adapter label echoed.

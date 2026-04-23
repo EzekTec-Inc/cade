@@ -135,6 +135,17 @@ pub struct GetFileContentOut {
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct ApplyEditOut {}
 
+/// Input of the `open_file` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct OpenFileIn {
+    /// Absolute filesystem path of the file to open and reveal.
+    pub path: String,
+}
+
+/// Output of the `open_file` tool. Empty on success.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct OpenFileOut {}
+
 impl IdeMcpServer {
     /// Test-friendly accessor behind `get_active_file`. The `#[tool]`
     /// method delegates here so unit tests can drive the logic without
@@ -229,6 +240,13 @@ impl IdeMcpServer {
         self.channel.apply_edit(req).await?;
         Ok(ApplyEditOut {})
     }
+
+    /// Test-friendly accessor behind `open_file`. Forwards `path` to
+    /// `EditorChannel::reveal_file`; errors bubble up unchanged.
+    async fn open_file_impl(&self, path: String) -> Result<OpenFileOut, ErrorData> {
+        self.channel.reveal_file(path).await?;
+        Ok(OpenFileOut {})
+    }
 }
 
 #[tool_router]
@@ -310,6 +328,18 @@ impl IdeMcpServer {
         Parameters(req): Parameters<crate::state::ApplyEditRequest>,
     ) -> Result<Json<ApplyEditOut>, ErrorData> {
         self.apply_edit_impl(req).await.map(Json)
+    }
+
+    /// Open a file in the editor and bring it into focus.
+    #[tool(
+        name = "open_file",
+        description = "Open the file at `path` in the editor and bring it into focus, creating a tab if it is not already open. Errors with method_not_found if no editor adapter is attached."
+    )]
+    async fn open_file(
+        &self,
+        Parameters(OpenFileIn { path }): Parameters<OpenFileIn>,
+    ) -> Result<Json<OpenFileOut>, ErrorData> {
+        self.open_file_impl(path).await.map(Json)
     }
 }
 
@@ -594,6 +624,49 @@ mod tests {
     #[test]
     fn tool_router_registers_apply_edit() {
         assert!(IdeMcpServer::tool_router().has_route("apply_edit"));
+    }
+
+    #[tokio::test]
+    async fn open_file_forwards_path_to_channel() {
+        use crate::channel::EditorChannel;
+        use async_trait::async_trait;
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingChannel {
+            calls: Mutex<Vec<String>>,
+        }
+
+        #[async_trait]
+        impl EditorChannel for RecordingChannel {
+            fn label(&self) -> &str {
+                "recording"
+            }
+            fn is_connected(&self) -> bool {
+                true
+            }
+            async fn reveal_file(&self, path: String) -> Result<(), rmcp::model::ErrorData> {
+                self.calls.lock().unwrap().push(path);
+                Ok(())
+            }
+        }
+
+        let channel = Arc::new(RecordingChannel {
+            calls: Mutex::new(Vec::new()),
+        });
+        let server = IdeMcpServer::new(EditorState::new(), channel.clone());
+
+        server
+            .open_file_impl("/tmp/a.rs".to_string())
+            .await
+            .expect("open_file should succeed");
+
+        let calls = channel.calls.lock().unwrap();
+        assert_eq!(calls.as_slice(), &["/tmp/a.rs".to_string()]);
+    }
+
+    #[test]
+    fn tool_router_registers_open_file() {
+        assert!(IdeMcpServer::tool_router().has_route("open_file"));
     }
 
     #[test]
