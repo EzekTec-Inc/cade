@@ -1,3 +1,31 @@
+## 2026-04-23T17:35:00Z — cade-ide-mcp M-IDE-1a.11: ServerHandler impl + get_info (TDD cycle 11)
+
+**Task:** Implement `rmcp::ServerHandler` for `IdeMcpServer` via `#[tool_handler]` and expose an `initialize`-friendly `get_info()` advertising the crate name, version, tool capability, and an instructions string.
+
+**Scope guardrail:** Only `server.rs`. No new dependencies. No stdio transport yet (lands with a later TDD cycle that drives a real end-to-end call through an in-process duplex).
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/server.rs`:
+  - Added `rmcp::ServerHandler` and `rmcp::tool_handler` to the import list; added `rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo}`.
+  - Added `#[tool_handler] impl ServerHandler for IdeMcpServer { fn get_info(…) }`. Because `ServerInfo` and `Implementation` are `#[non_exhaustive]`, `get_info` constructs them by mutating `Default::default()` instead of struct-literal syntax.
+  - Replaced the `#[allow(dead_code)]` stale comment on the `tool_router` field with a comment that explains the attribute is necessary because the macro reads the field via an associated-fn indirection invisible to the dead-code lint.
+
+**TDD record:**
+- RED: added `server_implements_server_handler_with_expected_name` asserting trait bound + inspecting `get_info().server_info.{name,version}` and tool capability. `cargo test -p cade-ide-mcp --lib` failed with E0277 (`ServerHandler` not implemented).
+- GREEN: added `#[tool_handler]` impl + `get_info()`. `cargo test -p cade-ide-mcp --lib` → 12/12 pass with zero warnings. `cargo check --workspace` clean.
+- REFACTOR: none.
+
+**Previous behavior:** `IdeMcpServer` was a standalone struct; rmcp had no way to serve tool calls through it.
+
+**New behavior:** `IdeMcpServer` is a full `rmcp::ServerHandler`. Once a transport (stdio, in-process duplex, HTTP) is attached in a later cycle, `initialize` returns our advertised server info and `tools/call get_active_file` routes through the generated router.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T17:20:00Z — cade-ide-mcp M-IDE-1a.10: first MCP tool `get_active_file` (TDD cycle 10)
 
 **Task:** First real MCP tool. Wire `rmcp` server-side features and register `get_active_file` via `#[tool_router]` + `#[tool]` so the router reports a single route named `get_active_file`.

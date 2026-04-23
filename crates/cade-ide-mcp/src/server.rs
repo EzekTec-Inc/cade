@@ -7,7 +7,8 @@ use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Json;
-use rmcp::{tool, tool_router};
+use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo};
+use rmcp::{ServerHandler, tool, tool_handler, tool_router};
 use serde::Serialize;
 
 use crate::channel::{EditorChannel, NullEditorChannel};
@@ -26,7 +27,9 @@ use crate::state::EditorState;
 pub struct IdeMcpServer {
     state: EditorState,
     channel: Arc<dyn EditorChannel>,
-    #[allow(dead_code)] // ServerHandler impl lands in a later TDD cycle
+    // Read by rmcp's `#[tool_handler]` expansion through `Self::tool_router()`;
+    // the compiler can't see that indirection and warns the field is unused.
+    #[allow(dead_code)]
     tool_router: ToolRouter<Self>,
 }
 
@@ -81,6 +84,33 @@ impl IdeMcpServer {
     }
 }
 
+/// Expose [`IdeMcpServer`] as an MCP `ServerHandler`.
+///
+/// The `tool_router` field is used automatically by `#[tool_handler]`
+/// to route `tools/call` requests; we override `get_info()` so the
+/// crate name, version, capabilities, and instructions are advertised
+/// via the MCP `initialize` response.
+#[tool_handler]
+impl ServerHandler for IdeMcpServer {
+    fn get_info(&self) -> ServerInfo {
+        let mut server_info = Implementation::default();
+        server_info.name = "cade-ide-mcp".into();
+        server_info.version = env!("CARGO_PKG_VERSION").into();
+
+        let mut info = ServerInfo::default();
+        info.protocol_version = ProtocolVersion::LATEST;
+        info.capabilities = ServerCapabilities::builder().enable_tools().build();
+        info.server_info = server_info;
+        info.instructions = Some(
+            "CADE IDE MCP bridge — exposes the connected editor's state \
+             (open files, selection, diagnostics, workspace folders, …) \
+             to CADE agents as MCP tools."
+                .into(),
+        );
+        info
+    }
+}
+
 // region:    --- Tests
 
 #[cfg(test)]
@@ -104,6 +134,18 @@ mod tests {
             "expected get_active_file in tool list, got {:?}",
             router.list_all().iter().map(|t| t.name.clone()).collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn server_implements_server_handler_with_expected_name() {
+        fn assert_impl<T: rmcp::ServerHandler>() {}
+        assert_impl::<IdeMcpServer>();
+
+        let s = IdeMcpServer::with_null_channel(EditorState::new());
+        let info = rmcp::ServerHandler::get_info(&s);
+        assert_eq!(info.server_info.name, "cade-ide-mcp");
+        assert_eq!(info.server_info.version, env!("CARGO_PKG_VERSION"));
+        assert!(info.capabilities.tools.is_some());
     }
 }
 
