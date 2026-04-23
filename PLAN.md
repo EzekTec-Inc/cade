@@ -1,3 +1,29 @@
+## 2026-04-23T17:55:00Z — cade-ide-mcp M-IDE-1a.12: end-to-end tool_call characterization test (TDD cycle 12)
+
+**Task:** Prove that the `get_active_file` tool registered in cycle 10 and exposed through the `ServerHandler` impl of cycle 11 is actually reachable through a real rmcp client↔server roundtrip. The test spawns `IdeMcpServer` on one end of a `tokio::io::duplex` pair and an empty `()` client on the other, then issues a `tools/call` via `client.peer().call_tool(…)` and asserts the result JSON contains `"path":null` for an empty `EditorState`.
+
+**Scope guardrail:** Only the new integration test file. No new dependencies. No production code changed. Single assertion — the adapter-side mutation path is deferred to the next cycle (which must first add shared state between the adapter and the server).
+
+**Honest TDD note:** This is a **characterization test**, not a red → green cycle. The behavior under test was already implemented in cycles 10 + 11; running the code end-to-end exposes nothing new. The value is (1) a regression guard against future rmcp upgrades breaking wire compatibility, and (2) a worked example of driving the server in-process, which future test cycles will reuse.
+
+**Files modified:**
+- `crates/cade-ide-mcp/tests/e2e_tool_call.rs` — **new**. Single `#[tokio::test]` using `rmcp::ServiceExt::serve` on both ends of a `tokio::io::duplex(4096)` and `CallToolRequestParams::new("get_active_file")`.
+
+**Test record:**
+- `cargo test -p cade-ide-mcp` → 12 unit + 1 integration + 0 doc = 13 passed, 0 failed.
+- `cargo check --workspace` clean.
+
+**Previous behavior:** The MCP tool was registered and routed, but no test exercised the wire path.
+
+**New behavior:** The wire path is regression-guarded. Any future rmcp upgrade that breaks `tools/call` framing, the `#[tool_handler]` macro output, or the `Json<T>` wrapper's content encoding will surface as a test failure.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T17:35:00Z — cade-ide-mcp M-IDE-1a.11: ServerHandler impl + get_info (TDD cycle 11)
 
 **Task:** Implement `rmcp::ServerHandler` for `IdeMcpServer` via `#[tool_handler]` and expose an `initialize`-friendly `get_info()` advertising the crate name, version, tool capability, and an instructions string.
