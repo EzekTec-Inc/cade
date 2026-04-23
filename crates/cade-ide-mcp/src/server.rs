@@ -69,6 +69,41 @@ pub struct GetActiveFileOut {
     pub path: Option<String>,
 }
 
+/// One entry in the `get_open_files` tool response.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct OpenFileSummary {
+    /// Absolute filesystem path. `None` for unsaved scratch buffers.
+    pub path: Option<String>,
+}
+
+/// Output of the `get_open_files` tool.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct GetOpenFilesOut {
+    pub files: Vec<OpenFileSummary>,
+}
+
+impl IdeMcpServer {
+    /// Test-friendly accessor behind `get_active_file`. The `#[tool]`
+    /// method delegates here so unit tests can drive the logic without
+    /// constructing a `ToolCallContext`.
+    async fn get_active_file_impl(&self) -> GetActiveFileOut {
+        GetActiveFileOut {
+            path: self.state.active_file().await,
+        }
+    }
+
+    /// Test-friendly accessor behind `get_open_files`.
+    async fn get_open_files_impl(&self) -> GetOpenFilesOut {
+        let open = self.state.open_files_snapshot().await;
+        GetOpenFilesOut {
+            files: open
+                .into_iter()
+                .map(|f| OpenFileSummary { path: f.path })
+                .collect(),
+        }
+    }
+}
+
 #[tool_router]
 impl IdeMcpServer {
     /// Return the path of the file the user is currently focused on,
@@ -78,9 +113,16 @@ impl IdeMcpServer {
         description = "Return the path of the file the user is currently focused on in the editor."
     )]
     async fn get_active_file(&self) -> Json<GetActiveFileOut> {
-        Json(GetActiveFileOut {
-            path: self.state.active_file().await,
-        })
+        Json(self.get_active_file_impl().await)
+    }
+
+    /// Return the list of files currently open in editor tabs.
+    #[tool(
+        name = "get_open_files",
+        description = "Return the list of files currently open in editor tabs."
+    )]
+    async fn get_open_files(&self) -> Json<GetOpenFilesOut> {
+        Json(self.get_open_files_impl().await)
     }
 }
 
@@ -134,6 +176,29 @@ mod tests {
             "expected get_active_file in tool list, got {:?}",
             router.list_all().iter().map(|t| t.name.clone()).collect::<Vec<_>>()
         );
+    }
+
+    #[tokio::test]
+    async fn get_open_files_returns_adapter_pushed_list() {
+        let state = EditorState::new();
+        let server = IdeMcpServer::with_null_channel(state.clone());
+
+        state
+            .replace_open_files(vec![
+                crate::state::OpenFile { path: Some("/tmp/a.rs".into()) },
+                crate::state::OpenFile { path: Some("/tmp/b.rs".into()) },
+            ])
+            .await;
+
+        let out = server.get_open_files_impl().await;
+        assert_eq!(out.files.len(), 2);
+        assert_eq!(out.files[0].path.as_deref(), Some("/tmp/a.rs"));
+        assert_eq!(out.files[1].path.as_deref(), Some("/tmp/b.rs"));
+    }
+
+    #[test]
+    fn tool_router_registers_get_open_files() {
+        assert!(IdeMcpServer::tool_router().has_route("get_open_files"));
     }
 
     #[test]

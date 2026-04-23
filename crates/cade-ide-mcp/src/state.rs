@@ -92,6 +92,11 @@ impl EditorState {
         self.inner.read().await.open_files.len()
     }
 
+    /// Snapshot of all files currently open in editor tabs.
+    pub async fn open_files_snapshot(&self) -> Vec<OpenFile> {
+        self.inner.read().await.open_files.clone()
+    }
+
     /// Replace the open-file list with a fresh snapshot from the adapter.
     pub async fn replace_open_files(&self, files: Vec<OpenFile>) {
         self.inner.write().await.open_files = files;

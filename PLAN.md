@@ -1,3 +1,35 @@
+## 2026-04-23T18:45:00Z — cade-ide-mcp M-IDE-1a.15: get_open_files tool (TDD cycle 15)
+
+**Task:** Second read tool. Expose the adapter-pushed open-file list via an MCP `get_open_files` tool that returns `{ files: [{ path }] }`.
+
+**Scope guardrail:** Only `state.rs` (one new snapshot accessor) and `server.rs` (new output types + `get_open_files_impl` + `#[tool]` method). No new deps. Establishes the pattern used for the remaining five read tools: delegate each `#[tool]` to a test-friendly `…_impl` method on the same struct.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/state.rs` — added `pub async fn open_files_snapshot(&self) -> Vec<OpenFile>` (a cloning snapshot accessor, parallel to the existing `active_file()` / `selection()` / `diagnostics()` family).
+- `crates/cade-ide-mcp/src/server.rs`:
+  - Added `pub struct OpenFileSummary { path: Option<String> }` and `pub struct GetOpenFilesOut { files: Vec<OpenFileSummary> }` (both `Serialize + JsonSchema`).
+  - Refactored `get_active_file` to delegate to a new inherent `get_active_file_impl()` method on an `impl IdeMcpServer` block. The `#[tool]` method now just `Json(self.get_active_file_impl().await)`.
+  - Added sibling `get_open_files_impl()` method + `#[tool(name = "get_open_files", …)]` wrapping it.
+  - Two new tests in `server::tests`:
+    - `get_open_files_returns_adapter_pushed_list` — pushes two files through a shared `EditorState` clone, asserts the `_impl` method returns both in order.
+    - `tool_router_registers_get_open_files` — router exposes the new tool name.
+
+**TDD record:**
+- RED: both new tests fail with E0599 (`get_open_files_impl` / route missing).
+- GREEN: added state snapshot accessor, output structs, inherent impl method, and the `#[tool]` method. `cargo test -p cade-ide-mcp` → 15 unit + 2 integration = 17/17 pass. `cargo check --workspace` clean.
+- REFACTOR: extracted `get_active_file_impl` (previously inlined in the `#[tool]` body). Same behavior; now cycle-15 establishes the idiom for all remaining read tools.
+
+**Previous behavior:** Only `get_active_file` was exposed.
+
+**New behavior:** The agent can now query the editor's open tabs through MCP.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T18:28:00Z — cade-ide-mcp M-IDE-1a.14: adapter-push e2e test (TDD cycle 14)
 
 **Task:** Prove the new shared-storage `EditorState` (cycle 13) wired end-to-end: adapter clones the state, pushes `active_file = Some("/tmp/foo.rs")`, MCP client calls `get_active_file`, and the response contains the pushed path.
