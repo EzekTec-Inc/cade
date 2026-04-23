@@ -154,7 +154,7 @@ pub const CMD_DEFS: &[CmdDef] = &[
     },
     CmdDef {
         trigger: "theme",
-        description: "Change UI color theme",
+        description: "Change UI color theme (`/theme reload` to re-read from disk)",
         arg_hint: None,
         category: CmdCategory::Display,
     },

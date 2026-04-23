@@ -335,6 +335,38 @@ mod tests {
     }
 
     #[test]
+    fn update_agent_theme_round_trip() -> Result<()> {
+        let db = setup_mem_db()?;
+        create_agent(&db, &test_agent("theme-1"))?;
+
+        // Initially no theme
+        let before = get_agent(&db, "theme-1")?.unwrap();
+        assert_eq!(before.theme, None, "fresh agent must have no theme");
+
+        // Set
+        let changed = update_agent_theme(&db, "theme-1", Some("tokyo-night"))?;
+        assert!(changed, "update_agent_theme must report change");
+
+        let after = get_agent(&db, "theme-1")?.unwrap();
+        assert_eq!(after.theme.as_deref(), Some("tokyo-night"));
+
+        // Clear
+        update_agent_theme(&db, "theme-1", None)?;
+        let cleared = get_agent(&db, "theme-1")?.unwrap();
+        assert_eq!(cleared.theme, None, "passing None must clear the theme");
+
+        Ok(())
+    }
+
+    #[test]
+    fn update_agent_theme_missing_agent_returns_false() -> Result<()> {
+        let db = setup_mem_db()?;
+        let changed = update_agent_theme(&db, "nope", Some("dark"))?;
+        assert!(!changed, "update on missing agent must return false");
+        Ok(())
+    }
+
+    #[test]
     fn test_get_agent_tools_with_names() -> Result<()> {
         let db = setup_mem_db()?;
         create_agent(&db, &test_agent("a1"))?;

@@ -126,28 +126,48 @@ pub async fn run_agent(
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let agent_dir = dirs::home_dir().map(|h| h.join(".cade")).unwrap_or_else(|| std::path::PathBuf::from(".cade"));
 
+            // `/theme reload` — re-resolve the agent's persisted theme from
+            // disk.  Useful after editing a JSON/tmTheme file: the user
+            // doesn't need to retype the name.  If no theme was persisted,
+            // fall through to literal name resolution (which will fail
+            // loudly with "not found").
+            let effective_name = if t_name == "reload" {
+                cade_store::sqlite::agents::get_agent(&state2.db, &agent_id2)
+                    .ok()
+                    .flatten()
+                    .and_then(|row| row.theme)
+                    .unwrap_or_else(|| t_name.clone())
+            } else {
+                t_name.clone()
+            };
+
             // Resolution order: built-in registry first, then on-disk themes.
-            let colors_opt = cade_core::resources::themes::ThemeColors::builtin_by_name(&t_name)
+            let colors_opt = cade_core::resources::themes::ThemeColors::builtin_by_name(&effective_name)
                 .or_else(|| {
                     let all = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
                     all.iter()
-                        .find(|t| t.name == t_name)
+                        .find(|t| t.name == effective_name)
                         .map(cade_core::resources::themes::ThemeColors::from_theme)
                 });
 
             if let Some(colors) = colors_opt {
                 // Persist the chosen theme on the agent row so GUI reloads
-                // restore it automatically.
-                let _ = cade_store::sqlite::agents::update_agent_theme(
-                    &state2.db,
-                    &agent_id2,
-                    Some(&t_name),
-                );
+                // restore it automatically.  (Skip persist for `reload`
+                // when the lookup already returned the persisted name —
+                // writing the same value back is a no-op but clutters
+                // audit trails; check string equality to avoid it.)
+                if effective_name != t_name || t_name != "reload" {
+                    let _ = cade_store::sqlite::agents::update_agent_theme(
+                        &state2.db,
+                        &agent_id2,
+                        Some(&effective_name),
+                    );
+                }
 
                 send(json!({
                     "message_type": "theme_update",
                     "theme": colors,
-                    "theme_name": t_name,
+                    "theme_name": effective_name,
                 })).await;
             } else {
                 let all_themes = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
