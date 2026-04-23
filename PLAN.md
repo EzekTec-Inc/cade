@@ -1,3 +1,39 @@
+## 2026-04-23T17:20:00Z — cade-ide-mcp M-IDE-1a.10: first MCP tool `get_active_file` (TDD cycle 10)
+
+**Task:** First real MCP tool. Wire `rmcp` server-side features and register `get_active_file` via `#[tool_router]` + `#[tool]` so the router reports a single route named `get_active_file`.
+
+**Scope guardrail:** Only `server.rs` + crate `Cargo.toml` + workspace `Cargo.toml`. No ServerHandler impl yet (deferred to the cycle that introduces stdio transport). No editor adapter. One tool only.
+
+**Dependency additions (user-approved this cycle):**
+- Workspace `Cargo.toml`:
+  - Added `server` and `macros` to the feature list of the **existing** `rmcp = "1.4"` workspace entry. No net-new crate — only more features of an already-present dep.
+  - Added `schemars = "1"` as a workspace dep. Already present transitively (pulled by `rmcp`); now declared directly so `cade-ide-mcp` can `#[derive(JsonSchema)]` on tool output types.
+- `crates/cade-ide-mcp/Cargo.toml`:
+  - Added `rmcp.workspace`, `schemars.workspace`, `serde.workspace`, `serde_json.workspace`, `tokio.workspace`, `tracing.workspace`. Every addition uses `.workspace = true`; nothing pulls in a new top-level crate.
+
+**Files modified:**
+- `Cargo.toml` — feature + workspace-dep additions above.
+- `crates/cade-ide-mcp/Cargo.toml` — crate dep wiring.
+- `crates/cade-ide-mcp/src/server.rs`:
+  - `IdeMcpServer` gains a `tool_router: ToolRouter<Self>` field (marked `#[allow(dead_code)]` until the ServerHandler impl lands in the next cycle).
+  - `IdeMcpServer::new` populates the field from the macro-generated `Self::tool_router()`.
+  - New `#[tool_router] impl IdeMcpServer { ... }` block with a single `#[tool(name = "get_active_file", …)]` async method that returns `Json<GetActiveFileOut>` reading `self.state.active_file()`.
+  - New `pub struct GetActiveFileOut { path: Option<String> }` as the tool's output schema.
+
+**TDD record:**
+- RED: added `tool_router_registers_get_active_file` asserting `IdeMcpServer::tool_router().has_route("get_active_file")`. `cargo test -p cade-ide-mcp --lib` failed with E0599 (associated `tool_router` missing).
+- GREEN: added workspace + crate dep wiring, added the macro-decorated impl block and the `GetActiveFileOut` struct. `cargo test -p cade-ide-mcp --lib` → 11/11 pass. `cargo check --workspace` clean.
+- REFACTOR: none.
+
+**Previous behavior:** `cade-ide-mcp` had no MCP tools and no rmcp deps.
+
+**New behavior:** The generated `IdeMcpServer::tool_router()` returns a `ToolRouter<Self>` with `get_active_file` registered. Calling the tool (once `ServerHandler` is implemented next cycle) will return `{ "path": <active_file_or_null> }` JSON.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T16:55:00Z — cade-ide-mcp M-IDE-1a.9: IdeMcpServer wrapper (TDD cycle 9)
 
 **Task:** Introduce the top-level `IdeMcpServer` struct that wraps `EditorState` and `Arc<dyn EditorChannel>`. Ninth TDD cycle. Deliberately minimal: no rmcp transport yet, no `#[tool]` macros yet — that lands in a later cycle once the approval to extend rmcp features is exercised.

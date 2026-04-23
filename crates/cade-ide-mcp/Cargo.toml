@@ -10,6 +10,12 @@ name = "cade_ide_mcp"
 path = "src/lib.rs"
 
 [dependencies]
+rmcp.workspace       = true
+schemars.workspace   = true
+serde.workspace      = true
+serde_json.workspace = true
+tokio.workspace      = true
+tracing.workspace    = true
 
 [lints.rust]
 unsafe_code = "forbid"

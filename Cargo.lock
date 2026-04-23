@@ -874,6 +874,14 @@ dependencies = [
 [[package]]
 name = "cade-ide-mcp"
 version = "0.1.0"
+dependencies = [
+ "rmcp",
+ "schemars",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
 
 [[package]]
 name = "cade-mcp"
