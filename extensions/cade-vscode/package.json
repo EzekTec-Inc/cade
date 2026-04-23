@@ -1,0 +1,42 @@
+{
+  "name": "cade-vscode",
+  "displayName": "CADE IDE Bridge",
+  "description": "Connects VS Code to the CADE agent via the cade-ide-mcp adapter transport protocol.",
+  "version": "0.1.0",
+  "publisher": "cade",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cade.reconnect",
+        "title": "CADE: Reconnect to cade-ide-mcp"
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "tsc --noEmit",
+    "build": "node esbuild.mjs",
+    "package": "npm run build && npx vsce package --no-dependencies",
+    "test": "jest"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.21.5",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.4",
+    "typescript": "^5.4.5"
+  },
+  "jest": {
+    "preset": "ts-jest",
+    "testEnvironment": "node",
+    "moduleNameMapper": {
+      "^vscode$": "<rootDir>/src/__mocks__/vscode.ts"
+    },
+    "testMatch": ["**/*.test.ts"]
+  }
+}
