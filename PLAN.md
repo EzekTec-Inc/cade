@@ -1,3 +1,31 @@
+## 2026-04-23T16:28:00Z — cade-ide-mcp M-IDE-1a.6: Workspace folders (TDD cycle 6)
+
+**Task:** Let the adapter push the list of workspace roots the editor has open. Sixth TDD cycle.
+
+**Scope guardrail:** Only `state.rs`. No new dependencies.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/state.rs`
+  - Added `pub struct WorkspaceFolder { path: String, name: String }`.
+  - Added `workspace_folders: Vec<WorkspaceFolder>` field on `EditorState`.
+  - Added `workspace_folders(&self) -> &[WorkspaceFolder]` and `replace_workspace_folders(&mut self, Vec<WorkspaceFolder>)`.
+
+**TDD record:**
+- RED: added `replace_workspace_folders_updates_slice`. `cargo test -p cade-ide-mcp --lib` failed with E0422 (WorkspaceFolder) and 3× E0599 (missing methods).
+- GREEN: added the struct, field, and two methods. `cargo test -p cade-ide-mcp --lib` → 6/6 pass.
+- REFACTOR: none.
+
+**Previous behavior:** `EditorState` could not expose workspace roots.
+
+**New behavior:** Adapters push `WorkspaceFolder` snapshots via `replace_workspace_folders()`; tools read them via `workspace_folders()`.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T16:20:00Z — cade-ide-mcp M-IDE-1a.5: Diagnostics state (TDD cycle 5)
 
 **Task:** Let the adapter report LSP-style diagnostics into the shared state. Fifth TDD cycle.

@@ -67,14 +67,24 @@ pub struct Diagnostic {
     pub code: Option<String>,
 }
 
+/// A workspace root opened in the editor (e.g. a repo checkout).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceFolder {
+    /// Absolute path to the folder root.
+    pub path: String,
+    /// Human-readable label shown in the editor (e.g. `"proj"`).
+    pub name: String,
+}
+
 /// Shared editor-state handle. Phase M-IDE-1a ships an empty skeleton;
-/// later phases add workspace-folder fields and async accessors.
+/// later phases add async accessors.
 #[derive(Debug, Default, Clone)]
 pub struct EditorState {
     open_files: Vec<OpenFile>,
     active_file: Option<String>,
     selection: Option<Selection>,
     diagnostics: Vec<Diagnostic>,
+    workspace_folders: Vec<WorkspaceFolder>,
 }
 
 impl EditorState {
@@ -121,6 +131,16 @@ impl EditorState {
     /// Replace the full diagnostic list with a fresh snapshot.
     pub fn replace_diagnostics(&mut self, diags: Vec<Diagnostic>) {
         self.diagnostics = diags;
+    }
+
+    /// Workspace roots the editor currently has open.
+    pub fn workspace_folders(&self) -> &[WorkspaceFolder] {
+        &self.workspace_folders
+    }
+
+    /// Replace the workspace-folder list with a fresh snapshot.
+    pub fn replace_workspace_folders(&mut self, folders: Vec<WorkspaceFolder>) {
+        self.workspace_folders = folders;
     }
 }
 
@@ -194,6 +214,19 @@ mod tests {
         };
         s.replace_diagnostics(vec![d.clone()]);
         assert_eq!(s.diagnostics(), &[d]);
+    }
+
+    #[test]
+    fn replace_workspace_folders_updates_slice() {
+        let mut s = EditorState::new();
+        assert_eq!(s.workspace_folders().len(), 0);
+
+        let f = WorkspaceFolder {
+            path: "/home/eng/proj".into(),
+            name: "proj".into(),
+        };
+        s.replace_workspace_folders(vec![f.clone()]);
+        assert_eq!(s.workspace_folders(), &[f]);
     }
 }
 
