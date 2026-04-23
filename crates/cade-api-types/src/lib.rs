@@ -22,6 +22,10 @@ pub struct AgentInfo {
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider: Option<String>,
+    /// Theme name last persisted via `/theme <name>` (built-in or user theme).
+    /// `None` → GUI should use the default dark theme.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
 }
 
 /// Response shape of `GET /v1/health`.

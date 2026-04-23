@@ -21,7 +21,7 @@ fn make_agent(db: &Db, id: &str) -> Result<()> {
             description: None,
             system_prompt: None,
             created_at: None,
-            compaction_model: None,
+            compaction_model: None, theme: None,
         },
     )?;
     Ok(())
@@ -476,6 +476,7 @@ fn schema_snapshot_locks_known_tables() -> Result<()> {
             "created_at",
             "memory_turn_counter",
             "compaction_model",
+            "theme",
         ],
         "agents table drift detected"
     );

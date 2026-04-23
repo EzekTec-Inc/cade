@@ -136,9 +136,18 @@ pub async fn run_agent(
                 });
 
             if let Some(colors) = colors_opt {
+                // Persist the chosen theme on the agent row so GUI reloads
+                // restore it automatically.
+                let _ = cade_store::sqlite::agents::update_agent_theme(
+                    &state2.db,
+                    &agent_id2,
+                    Some(&t_name),
+                );
+
                 send(json!({
                     "message_type": "theme_update",
                     "theme": colors,
+                    "theme_name": t_name,
                 })).await;
             } else {
                 let all_themes = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);

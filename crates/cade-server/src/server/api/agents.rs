@@ -53,6 +53,9 @@ pub struct AgentResponse {
     pub created_at: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compaction_model: Option<String>,
+    /// Theme name last persisted via `/theme <name>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
 }
 
 impl From<AgentRow> for AgentResponse {
@@ -71,6 +74,7 @@ impl From<AgentRow> for AgentResponse {
             system_prompt: r.system_prompt,
             created_at,
             compaction_model: r.compaction_model,
+            theme: r.theme,
         }
     }
 }
@@ -96,6 +100,7 @@ pub async fn create_agent(
         system_prompt: Some(system_prompt),
         created_at: None, // populated by DB via now_ts()
         compaction_model: None,
+        theme: None,
     };
 
     sqlite::create_agent(&state.db, &row).map_err(|e| server_err(e.to_string()))?;

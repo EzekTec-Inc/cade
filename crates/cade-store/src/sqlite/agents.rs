@@ -24,7 +24,7 @@ pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
         .lock()
         .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, model, description, system_prompt, created_at, compaction_model FROM agents WHERE id = ?1",
+        "SELECT id, name, model, description, system_prompt, created_at, compaction_model, theme FROM agents WHERE id = ?1",
     )?;
     let mut rows = stmt.query(params![id])?;
     if let Some(row) = rows.next()? {
@@ -36,6 +36,7 @@ pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
             system_prompt: row.get(4)?,
             created_at: row.get(5)?,
             compaction_model: row.get(6)?,
+            theme: row.get(7)?,
         }))
     } else {
         Ok(None)
@@ -47,7 +48,7 @@ pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
         .lock()
         .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
     let mut stmt = conn.prepare(
-        "SELECT id, name, model, description, system_prompt, created_at, compaction_model FROM agents ORDER BY created_at DESC"
+        "SELECT id, name, model, description, system_prompt, created_at, compaction_model, theme FROM agents ORDER BY created_at DESC"
     )?;
     let rows = stmt.query_map([], |row| {
         Ok(AgentRow {
@@ -58,6 +59,7 @@ pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
             system_prompt: row.get(4)?,
             created_at: row.get(5)?,
             compaction_model: row.get(6)?,
+            theme: row.get(7)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -114,6 +116,19 @@ pub fn update_agent_compaction_model(db: &Db, id: &str, model: Option<&str>) -> 
     let n = conn.execute(
         "UPDATE agents SET compaction_model = ?1 WHERE id = ?2",
         params![model, id],
+    )?;
+    Ok(n > 0)
+}
+
+/// Persist the theme name for an agent (set by `/theme <name>`).
+/// Pass `None` to clear the override and inherit the global setting.
+pub fn update_agent_theme(db: &Db, id: &str, theme: Option<&str>) -> Result<bool> {
+    let conn = db
+        .lock()
+        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+    let n = conn.execute(
+        "UPDATE agents SET theme = ?1 WHERE id = ?2",
+        params![theme, id],
     )?;
     Ok(n > 0)
 }
@@ -208,7 +223,7 @@ mod tests {
             description: None,
             system_prompt: None,
             created_at: None,
-            compaction_model: None,
+            compaction_model: None, theme: None,
         }
     }
 

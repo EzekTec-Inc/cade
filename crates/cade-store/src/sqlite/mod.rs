@@ -441,6 +441,17 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 3", [])?;
     }
 
+    if current_version < 4 {
+        // Phase 5: persist theme name per agent so GUI `/theme` survives reload.
+        // Stored as nullable TEXT holding the theme name (e.g. "dark", "tokyo-night",
+        // or a user theme file stem). NULL = inherit the global setting.
+        let _ = conn.execute(
+            "ALTER TABLE agents ADD COLUMN theme TEXT",
+            [],
+        );
+        conn.execute("PRAGMA user_version = 4", [])?;
+    }
+
     Ok(())
 }
 
@@ -467,6 +478,11 @@ pub struct AgentRow {
     /// Optional cheaper model used for Sleeptime consolidation summaries.
     /// When `None`, consolidation falls back to `model`.
     pub compaction_model: Option<String>,
+    /// Optional theme name (built-in or user-defined) last set via `/theme`.
+    /// Persisted so GUI restores the theme across page reloads.
+    /// `None` → inherit from global settings.
+    #[serde(default)]
+    pub theme: Option<String>,
 }
 
 pub mod agents;

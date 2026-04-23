@@ -81,12 +81,19 @@ impl CadeApp {
     /// Select an agent and spawn an async task to fetch its messages.
     pub(super) fn spawn_fetch_messages(&mut self, idx: usize) {
         // Extract what we need while holding the borrow briefly.
-        let (changed, server_url, token, agent_id) = {
+        let (changed, server_url, token, agent_id, saved_theme) = {
             let mut session = self.session.borrow_mut();
             let s = match session.as_mut() {
                 Some(s) => s,
                 None => return,
             };
+            // Capture the selected agent's persisted theme (if any) before
+            // the on_select_agent() call, so we can restore it after
+            // selection — Phase 5: GUI theme persistence across reloads.
+            let saved_theme = s
+                .agents()
+                .get(idx)
+                .and_then(|a| a.theme.clone());
             let changed = s.on_select_agent(idx);
             if !changed {
                 return;
@@ -94,11 +101,17 @@ impl CadeApp {
             let server_url = s.server_url().to_string();
             let token = s.token().to_string();
             let agent_id = s.selected_agent_id().unwrap().to_string();
-            (changed, server_url, token, agent_id)
+            (changed, server_url, token, agent_id, saved_theme)
         };
 
         if !changed {
             return;
+        }
+
+        // Restore persisted theme if the agent has one.  Fires before the
+        // messages fetch; theme_update SSE comes back asynchronously.
+        if let Some(name) = saved_theme {
+            self.spawn_apply_theme(name);
         }
 
         let session = Rc::clone(&self.session);
