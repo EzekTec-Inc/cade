@@ -1,3 +1,13 @@
+## 2026-04-23T22:20:00Z — cade-ide-mcp M-IDE-1b.15: docs closing M-IDE-1b
+
+**Task:** Update `docs/ide-integration-plan.md` to reflect M-IDE-1b completion. Move the M-IDE-1b section to a ✅ status block with the final 9-tool / 7-callback table, document the two collapsed callbacks (save + debug_control) as deliberate design choices.
+
+Not a TDD cycle — docs only. All 50 tests still pass.
+
+**Files modified:** `docs/ide-integration-plan.md`.
+
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T22:15:00Z — cade-ide-mcp M-IDE-1b.14: start_debug + stop_debug MCP tools (closes M-IDE-1b)
 
 **Task:** Wire the last pair of mutating tools. `start_debug` forwards `DebugAction::Start { config }`, `stop_debug` forwards `DebugAction::Stop`, both through the single `debug_control` callback added in cycle 13.
