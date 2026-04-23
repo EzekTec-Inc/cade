@@ -10,11 +10,13 @@ export const window = {
   activeTextEditor: undefined as unknown,
   onDidChangeActiveTextEditor: jest.fn(() => ({ dispose: jest.fn() })),
   onDidChangeTextEditorSelection: jest.fn(() => ({ dispose: jest.fn() })),
+  showTextDocument: jest.fn(async () => ({})),
   createOutputChannel: jest.fn(() => ({
     appendLine: jest.fn(),
     show: jest.fn(),
     dispose: jest.fn(),
   })),
+  createTerminal: jest.fn(() => ({ show: jest.fn(), sendText: jest.fn() })),
 };
 
 export const workspace = {
