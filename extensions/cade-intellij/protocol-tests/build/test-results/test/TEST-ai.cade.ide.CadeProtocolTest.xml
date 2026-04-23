@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="ai.cade.ide.CadeProtocolTest" tests="17" skipped="0" failures="0" errors="0" timestamp="2026-04-23T23:48:08" hostname="pop-os" time="0.125">
+  <properties/>
+  <testcase name="CallbackRequest SetSelection deserialises correctly()" classname="ai.cade.ide.CadeProtocolTest" time="0.077"/>
+  <testcase name="StateUpdate empty snapshot round-trips()" classname="ai.cade.ide.CadeProtocolTest" time="0.013"/>
+  <testcase name="encode produces no embedded newlines()" classname="ai.cade.ide.CadeProtocolTest" time="0.001"/>
+  <testcase name="CallbackRequest ApplyEdit deserialises correctly()" classname="ai.cade.ide.CadeProtocolTest" time="0.002"/>
+  <testcase name="StateUpdate full snapshot round-trips()" classname="ai.cade.ide.CadeProtocolTest" time="0.003"/>
+  <testcase name="CallbackResponse Ok round-trips()" classname="ai.cade.ide.CadeProtocolTest" time="0.003"/>
+  <testcase name="CallbackResponse Err round-trips()" classname="ai.cade.ide.CadeProtocolTest" time="0.001"/>
+  <testcase name="CallbackRequest RunTask deserialises correctly()" classname="ai.cade.ide.CadeProtocolTest" time="0.001"/>
+  <testcase name="Hello round-trips()" classname="ai.cade.ide.CadeProtocolTest" time="0.0"/>
+  <testcase name="HelloAck deserialises correctly()" classname="ai.cade.ide.CadeProtocolTest" time="0.001"/>
+  <testcase name="Hello serialises type tag()" classname="ai.cade.ide.CadeProtocolTest" time="0.0"/>
+  <testcase name="CallbackRequest RevealFile deserialises correctly()" classname="ai.cade.ide.CadeProtocolTest" time="0.001"/>
+  <testcase name="CallbackRequest RunTerminal deserialises correctly()" classname="ai.cade.ide.CadeProtocolTest" time="0.002"/>
+  <testcase name="CallbackRequest DebugControl stop deserialises correctly()" classname="ai.cade.ide.CadeProtocolTest" time="0.002"/>
+  <testcase name="CallbackRequest Save single deserialises correctly()" classname="ai.cade.ide.CadeProtocolTest" time="0.001"/>
+  <testcase name="CallbackRequest DebugControl start deserialises correctly()" classname="ai.cade.ide.CadeProtocolTest" time="0.0"/>
+  <testcase name="CallbackRequest Save all deserialises correctly()" classname="ai.cade.ide.CadeProtocolTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
