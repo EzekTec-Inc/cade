@@ -6,7 +6,7 @@
 //!   - [`parse_palette_input`] — converts raw text into a `PaletteCmd`.
 //!   - [`fuzzy_filter`] — ranks entries by how well they match a query.
 //!
-//! The wasm-side render loop (`app.rs`) opens the palette on `Ctrl+K` or
+//! The wasm-side render loop (`app.rs`) opens the palette on `Ctrl+P` or
 //! when the user types `/` at the start of a blank input, and dispatches
 //! the resolved command.
 

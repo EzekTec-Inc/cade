@@ -28,7 +28,7 @@ pub fn render_welcome(ui: &mut egui::Ui, md_cache: &mut egui_commonmark::CommonM
         - **Chat** with any configured agent\n\
         - View *streaming* responses in real time\n\
         - Inspect tool calls, reasoning, and results\n\
-        - Use `/` or `Ctrl+K` to open the command palette",
+        - Use `/` or `Ctrl+P` to open the command palette",
     );
     ui.add_space(4.0);
     ui.add(egui::Separator::default().horizontal().spacing(0.0));

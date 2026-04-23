@@ -15,7 +15,7 @@ pub enum ShortcutAction {
     DismissError,
     /// Focus the chat input box (Ctrl+L or `/`).
     FocusInput,
-    /// Open the slash-command palette (Ctrl+K).
+    /// Open the slash-command palette (Ctrl+P).
     OpenPalette,
     /// Close the palette without executing anything (Escape while open).
     ClosePalette,
@@ -86,9 +86,9 @@ pub const SHORTCUTS: &[(Shortcut, ShortcutAction)] = &[
         Shortcut::new(egui::Key::L).ctrl(),
         ShortcutAction::FocusInput,
     ),
-    // Ctrl+K → open slash-command palette
+    // Ctrl+P → open slash-command palette
     (
-        Shortcut::new(egui::Key::K).ctrl(),
+        Shortcut::new(egui::Key::P).ctrl(),
         ShortcutAction::OpenPalette,
     ),
 ];
@@ -117,7 +117,7 @@ pub fn shortcut_hint(action: ShortcutAction) -> &'static str {
         ShortcutAction::InsertNewline => "Shift+Enter",
         ShortcutAction::DismissError => "Esc",
         ShortcutAction::FocusInput => "Ctrl+L",
-        ShortcutAction::OpenPalette => "Ctrl+K",
+        ShortcutAction::OpenPalette => "Ctrl+P",
         ShortcutAction::ClosePalette => "Esc",
         ShortcutAction::PalettePrev => "↑",
         ShortcutAction::PaletteNext => "↓",
@@ -218,12 +218,12 @@ mod tests {
     }
 
     #[test]
-    fn open_palette_is_bound_to_ctrl_k() {
+    fn open_palette_is_bound_to_ctrl_p() {
         let hit = SHORTCUTS
             .iter()
             .find(|(_, a)| *a == ShortcutAction::OpenPalette)
             .expect("OpenPalette must be in SHORTCUTS");
-        assert_eq!(hit.0.key, egui::Key::K);
+        assert_eq!(hit.0.key, egui::Key::P);
         assert!(hit.0.ctrl);
         assert!(!hit.0.shift);
         assert!(!hit.0.alt);

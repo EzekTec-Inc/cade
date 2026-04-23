@@ -161,7 +161,6 @@ pub fn render(
                         // ── Keys section ──────────────────────────────
                         section_header(ui, "Keys", theme);
                         for hint in [
-                            "Ctrl+K  command palette",
                             "Ctrl+P  command palette",
                             "/       slash commands",
                             "Esc     close overlay",
