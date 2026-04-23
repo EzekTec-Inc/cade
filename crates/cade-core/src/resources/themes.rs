@@ -274,6 +274,43 @@ pub struct ThemeColors {
 impl ThemeColors {
     // -- Built-in themes
 
+    /// Resolve a built-in theme name to `ThemeColors`.
+    ///
+    /// Returns `None` if `name` is not a recognised built-in.  Call sites that
+    /// want fallback behaviour should use `.unwrap_or_else(Self::dark)` or
+    /// cascade to [`discover_themes`] + [`Self::from_theme`] for custom themes.
+    ///
+    /// This is the single source of truth for the built-in theme registry —
+    /// the CLI, TUI picker, GUI palette, and server `/theme` handler all
+    /// delegate here so the list cannot drift.
+    pub fn builtin_by_name(name: &str) -> Option<Self> {
+        match name {
+            "dark"              => Some(Self::dark()),
+            "light"             => Some(Self::light()),
+            "catppuccin-mocha"  => Some(Self::catppuccin_mocha()),
+            "catppuccin-latte"  => Some(Self::catppuccin_latte()),
+            "tokyo-night"       => Some(Self::tokyo_night()),
+            _                   => None,
+        }
+    }
+
+    /// List all built-in theme names in display order.
+    pub fn builtin_names() -> &'static [&'static str] {
+        &["dark", "light", "catppuccin-mocha", "catppuccin-latte", "tokyo-night"]
+    }
+
+    /// Metadata for every built-in theme (name, description, variant).
+    /// Used to populate pickers without fabricating phantom `Theme` structs.
+    pub fn builtin_listing() -> &'static [(&'static str, &'static str, &'static str)] {
+        &[
+            ("dark",              "Built-in dark theme",              "dark"),
+            ("light",             "Built-in light theme",             "light"),
+            ("catppuccin-mocha",  "Catppuccin Mocha (dark pastel)",   "dark"),
+            ("catppuccin-latte",  "Catppuccin Latte (light pastel)",  "light"),
+            ("tokyo-night",       "Tokyo Night (dark neon)",          "dark"),
+        ]
+    }
+
     /// Dark theme (deep blue-black, high contrast, rich depth).
     pub fn dark() -> Self {
         Self {
@@ -350,49 +387,104 @@ impl ThemeColors {
         }
     }
 
-    /// Light theme (warm white base, high readability, clear depth).
+    /// Resolve a full `Theme` into a runtime `ThemeColors`.
+    ///
+    /// Maps every `ThemeTokens` field to the corresponding semantic slot in
+    /// `ThemeColors`.  Unmapped fields fall back to the `dark()` defaults.
+    ///
+    /// The mapping is deliberately dense — imported VS Code / Sublime /
+    /// TextMate themes populate `ThemeTokens` via `load_theme()` / `.tmTheme`
+    /// parsing, and we want those to render fully, not just accent + bg.
     pub fn from_theme(theme: &Theme) -> ThemeColors {
         let mut base = Self::dark();
         base.source_path = Some(theme.source.clone());
 
-        let resolve =
-            |c: &ThemeColor| -> ColorDef { resolve_color(c, &theme.vars) };
+        let resolve = |c: &ThemeColor| -> ColorDef { resolve_color(c, &theme.vars) };
         let t = &theme.colors;
-        
-        base.primary = resolve(&t.accent);
-        
-        // Map legacy UI backgrounds to semantic elevations
-        base.bg_base = resolve(&t.custom_message_bg); 
-        base.bg_surface0 = resolve(&t.user_message_bg);
-        base.bg_surface1 = resolve(&t.tool_pending_bg);
-        base.bg_surface2 = resolve(&t.selected_bg);
-        
-        base.border_base = resolve(&t.border);
+
+        // -- Primary / semantic
+        base.primary      = resolve(&t.accent);
+        base.success      = resolve(&t.success);
+        base.error        = resolve(&t.error);
+        base.warning      = resolve(&t.warning);
+        // Accent-dim: re-use accent (user themes rarely define a dim variant)
+        base.accent_dim   = resolve(&t.accent);
+
+        // -- Backgrounds (semantic elevations)
+        base.bg_base      = resolve(&t.custom_message_bg);
+        base.bg_surface0  = resolve(&t.user_message_bg);
+        base.bg_surface1  = resolve(&t.tool_pending_bg);
+        base.bg_surface2  = resolve(&t.selected_bg);
+        base.bg_card      = resolve(&t.tool_success_bg);
+        base.bg_input     = resolve(&t.user_message_bg);
+
+        // -- Borders
+        base.border_base  = resolve(&t.border);
         base.border_focus = resolve(&t.border_accent);
-        
+
+        // -- Text
         base.text_primary = resolve(&t.text);
-        base.text_muted = resolve(&t.muted);
-        base.text_dim = resolve(&t.dim);
+        base.text_muted   = resolve(&t.muted);
+        base.text_dim     = resolve(&t.dim);
 
-        base.success = resolve(&t.success);
-        base.error = resolve(&t.error);
-        base.warning = resolve(&t.warning);
-
-        base.diff_added = resolve(&t.tool_diff_added);
+        // -- Diffs
+        base.diff_added   = resolve(&t.tool_diff_added);
         base.diff_removed = resolve(&t.tool_diff_removed);
         base.diff_context = resolve(&t.tool_diff_context);
-        
-        base.md_heading = resolve(&t.md_heading);
-        base.md_link = resolve(&t.md_link);
-        base.md_code = resolve(&t.md_code);
-        base.thinking_off = resolve(&t.thinking_off);
-        base.thinking_high = resolve(&t.thinking_high);
-        base.thinking_xhigh = resolve(&t.thinking_xhigh);
+
+        // -- Markdown
+        base.md_heading           = resolve(&t.md_heading);
+        base.md_link              = resolve(&t.md_link);
+        base.md_link_url          = resolve(&t.md_link_url);
+        base.md_code              = resolve(&t.md_code);
+        base.md_code_block        = resolve(&t.md_code_block);
+        base.md_code_block_border = resolve(&t.md_code_block_border);
+        base.md_quote             = resolve(&t.md_quote);
+        base.md_quote_border      = resolve(&t.md_quote_border);
+        base.md_hr                = resolve(&t.md_hr);
+        base.md_list_bullet       = resolve(&t.md_list_bullet);
+
+        // -- Syntax (primary nine)
+        base.syntax_comment     = resolve(&t.syntax_comment);
+        base.syntax_keyword     = resolve(&t.syntax_keyword);
+        base.syntax_function    = resolve(&t.syntax_function);
+        base.syntax_variable    = resolve(&t.syntax_variable);
+        base.syntax_string      = resolve(&t.syntax_string);
+        base.syntax_number      = resolve(&t.syntax_number);
+        base.syntax_type        = resolve(&t.syntax_type);
+        base.syntax_operator    = resolve(&t.syntax_operator);
+        base.syntax_punctuation = resolve(&t.syntax_punctuation);
+
+        // -- Syntax (extended — reuse the closest ThemeTokens field since
+        //    the JSON schema doesn't expose all granular slots).  These are
+        //    the fine-grained TextMate scopes we approximate.
+        base.syntax_constant               = resolve(&t.syntax_number);
+        base.syntax_string_escape          = resolve(&t.syntax_string);
+        base.syntax_type_builtin           = resolve(&t.syntax_type);
+        base.syntax_keyword_control        = resolve(&t.syntax_keyword);
+        base.syntax_keyword_operator       = resolve(&t.syntax_operator);
+        base.syntax_entity_name_function   = resolve(&t.syntax_function);
+        base.syntax_entity_name_type       = resolve(&t.syntax_type);
+        base.syntax_variable_parameter     = resolve(&t.syntax_variable);
+        base.syntax_variable_other_member  = resolve(&t.syntax_variable);
+        base.syntax_support_function       = resolve(&t.syntax_function);
+        base.syntax_support_macro          = resolve(&t.syntax_function);
+
+        // -- Reasoning / thinking tiers
+        base.thinking_off     = resolve(&t.thinking_off);
+        base.thinking_minimal = resolve(&t.thinking_minimal);
+        base.thinking_low     = resolve(&t.thinking_low);
+        base.thinking_medium  = resolve(&t.thinking_medium);
+        base.thinking_high    = resolve(&t.thinking_high);
+        base.thinking_xhigh   = resolve(&t.thinking_xhigh);
+
+        // -- Bash mode indicator
         base.bash_mode = resolve(&t.bash_mode);
 
         base
     }
 
+    /// Light theme (warm white base, high readability, clear depth).
     pub fn light() -> Self {
         Self {
             source_path: None,
@@ -854,6 +946,178 @@ mod tests {
 
         // -- Check
         assert!(themes.is_empty());
+    }
+
+    // -- Built-in registry tests (Phase 1)
+
+    #[test]
+    fn builtin_by_name_resolves_all_known_themes() {
+        for name in ThemeColors::builtin_names() {
+            let tc = ThemeColors::builtin_by_name(name)
+                .unwrap_or_else(|| panic!("builtin '{name}' must resolve"));
+            assert_ne!(
+                tc.primary, ColorDef::Reset,
+                "builtin '{name}' primary must not be Reset"
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_by_name_returns_none_for_unknown() {
+        assert!(ThemeColors::builtin_by_name("totally-not-a-theme").is_none());
+        assert!(ThemeColors::builtin_by_name("").is_none());
+    }
+
+    #[test]
+    fn builtin_names_and_listing_are_consistent() {
+        let names: Vec<&str> = ThemeColors::builtin_names().iter().copied().collect();
+        let listing_names: Vec<&str> = ThemeColors::builtin_listing()
+            .iter()
+            .map(|(n, _, _)| *n)
+            .collect();
+        assert_eq!(
+            names, listing_names,
+            "builtin_names() and builtin_listing() must be in sync"
+        );
+    }
+
+    #[test]
+    fn builtin_listing_has_description_and_variant() {
+        for (name, desc, variant) in ThemeColors::builtin_listing() {
+            assert!(!name.is_empty(), "builtin name cannot be empty");
+            assert!(!desc.is_empty(), "builtin '{name}' description missing");
+            assert!(
+                matches!(*variant, "dark" | "light"),
+                "builtin '{name}' variant must be 'dark' or 'light', got '{variant}'"
+            );
+        }
+    }
+
+    #[test]
+    fn builtin_dark_is_resolvable_by_name() {
+        let by_name = ThemeColors::builtin_by_name("dark").expect("dark must resolve");
+        let direct = ThemeColors::dark();
+        assert_eq!(by_name.primary, direct.primary);
+        assert_eq!(by_name.bg_base, direct.bg_base);
+        assert_eq!(by_name.error, direct.error);
+    }
+
+    #[test]
+    fn from_theme_maps_all_token_fields() {
+        // Build a ThemeTokens where every field holds a unique sentinel color.
+        // After from_theme(), the corresponding ThemeColors slot must NOT be
+        // the dark()-fallback — meaning the token was actually applied.
+        fn hex(v: u32) -> ThemeColor {
+            ThemeColor::Hex(format!("#{:06X}", v))
+        }
+
+        let mut t = ThemeTokens::default();
+        // assign unique non-default hex to every token
+        t.accent = hex(0x010203);
+        t.border = hex(0x040506);
+        t.border_accent = hex(0x070809);
+        t.border_muted = hex(0x0a0b0c);
+        t.success = hex(0x0d0e0f);
+        t.error = hex(0x101112);
+        t.warning = hex(0x131415);
+        t.muted = hex(0x161718);
+        t.dim = hex(0x191a1b);
+        t.text = hex(0x1c1d1e);
+        t.thinking_text = hex(0x1f2021);
+        t.selected_bg = hex(0x222324);
+        t.user_message_bg = hex(0x252627);
+        t.user_message_text = hex(0x282930);
+        t.custom_message_bg = hex(0x313233);
+        t.custom_message_text = hex(0x343536);
+        t.custom_message_label = hex(0x373839);
+        t.tool_pending_bg = hex(0x3a3b3c);
+        t.tool_success_bg = hex(0x3d3e3f);
+        t.tool_error_bg = hex(0x404142);
+        t.tool_title = hex(0x434445);
+        t.tool_output = hex(0x464748);
+        t.md_heading = hex(0x494a4b);
+        t.md_link = hex(0x4c4d4e);
+        t.md_link_url = hex(0x4f5051);
+        t.md_code = hex(0x525354);
+        t.md_code_block = hex(0x555657);
+        t.md_code_block_border = hex(0x585960);
+        t.md_quote = hex(0x616263);
+        t.md_quote_border = hex(0x646566);
+        t.md_hr = hex(0x676869);
+        t.md_list_bullet = hex(0x6a6b6c);
+        t.tool_diff_added = hex(0x6d6e6f);
+        t.tool_diff_removed = hex(0x707172);
+        t.tool_diff_context = hex(0x737475);
+        t.syntax_comment = hex(0x767778);
+        t.syntax_keyword = hex(0x797a7b);
+        t.syntax_function = hex(0x7c7d7e);
+        t.syntax_variable = hex(0x7f8081);
+        t.syntax_string = hex(0x828384);
+        t.syntax_number = hex(0x858687);
+        t.syntax_type = hex(0x888990);
+        t.syntax_operator = hex(0x919293);
+        t.syntax_punctuation = hex(0x949596);
+        t.thinking_off = hex(0x979899);
+        t.thinking_minimal = hex(0x9a9b9c);
+        t.thinking_low = hex(0x9d9e9f);
+        t.thinking_medium = hex(0xa0a1a2);
+        t.thinking_high = hex(0xa3a4a5);
+        t.thinking_xhigh = hex(0xa6a7a8);
+        t.bash_mode = hex(0xa9aaab);
+
+        let theme = Theme {
+            name: "test".to_string(),
+            description: None,
+            author: None,
+            variant: None,
+            vars: Default::default(),
+            colors: t,
+            source: PathBuf::new(),
+        };
+
+        let tc = ThemeColors::from_theme(&theme);
+        let dark = ThemeColors::dark();
+
+        // Every semantic slot that we mapped must differ from the dark()
+        // fallback — proving the token applied.
+        assert_ne!(tc.primary, dark.primary, "primary not mapped");
+        assert_ne!(tc.success, dark.success, "success not mapped");
+        assert_ne!(tc.error, dark.error, "error not mapped");
+        assert_ne!(tc.warning, dark.warning, "warning not mapped");
+        assert_ne!(tc.border_base, dark.border_base, "border_base not mapped");
+        assert_ne!(tc.border_focus, dark.border_focus, "border_focus not mapped");
+        assert_ne!(tc.text_primary, dark.text_primary, "text_primary not mapped");
+        assert_ne!(tc.text_muted, dark.text_muted, "text_muted not mapped");
+        assert_ne!(tc.text_dim, dark.text_dim, "text_dim not mapped");
+        assert_ne!(tc.diff_added, dark.diff_added, "diff_added not mapped");
+        assert_ne!(tc.diff_removed, dark.diff_removed, "diff_removed not mapped");
+        assert_ne!(tc.diff_context, dark.diff_context, "diff_context not mapped");
+        assert_ne!(tc.md_heading, dark.md_heading, "md_heading not mapped");
+        assert_ne!(tc.md_link, dark.md_link, "md_link not mapped");
+        assert_ne!(tc.md_link_url, dark.md_link_url, "md_link_url not mapped");
+        assert_ne!(tc.md_code, dark.md_code, "md_code not mapped");
+        assert_ne!(tc.md_code_block, dark.md_code_block, "md_code_block not mapped");
+        assert_ne!(tc.md_code_block_border, dark.md_code_block_border, "md_code_block_border not mapped");
+        assert_ne!(tc.md_quote, dark.md_quote, "md_quote not mapped");
+        assert_ne!(tc.md_quote_border, dark.md_quote_border, "md_quote_border not mapped");
+        assert_ne!(tc.md_hr, dark.md_hr, "md_hr not mapped");
+        assert_ne!(tc.md_list_bullet, dark.md_list_bullet, "md_list_bullet not mapped");
+        assert_ne!(tc.syntax_comment, dark.syntax_comment, "syntax_comment not mapped");
+        assert_ne!(tc.syntax_keyword, dark.syntax_keyword, "syntax_keyword not mapped");
+        assert_ne!(tc.syntax_function, dark.syntax_function, "syntax_function not mapped");
+        assert_ne!(tc.syntax_variable, dark.syntax_variable, "syntax_variable not mapped");
+        assert_ne!(tc.syntax_string, dark.syntax_string, "syntax_string not mapped");
+        assert_ne!(tc.syntax_number, dark.syntax_number, "syntax_number not mapped");
+        assert_ne!(tc.syntax_type, dark.syntax_type, "syntax_type not mapped");
+        assert_ne!(tc.syntax_operator, dark.syntax_operator, "syntax_operator not mapped");
+        assert_ne!(tc.syntax_punctuation, dark.syntax_punctuation, "syntax_punctuation not mapped");
+        assert_ne!(tc.thinking_off, dark.thinking_off, "thinking_off not mapped");
+        assert_ne!(tc.thinking_minimal, dark.thinking_minimal, "thinking_minimal not mapped");
+        assert_ne!(tc.thinking_low, dark.thinking_low, "thinking_low not mapped");
+        assert_ne!(tc.thinking_medium, dark.thinking_medium, "thinking_medium not mapped");
+        assert_ne!(tc.thinking_high, dark.thinking_high, "thinking_high not mapped");
+        assert_ne!(tc.thinking_xhigh, dark.thinking_xhigh, "thinking_xhigh not mapped");
+        assert_ne!(tc.bash_mode, dark.bash_mode, "bash_mode not mapped");
     }
 
     #[test]

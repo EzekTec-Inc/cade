@@ -1,127 +1,101 @@
 //! /theme command handler.
+//!
+//! Resolution order:
+//!   1. Built-in registry (`ThemeColors::builtin_by_name`) — dark, light, etc.
+//!   2. User JSON themes discovered in project `.cade/themes/` + `~/.cade/themes/`
+//!
+//! Both sources are merged for the picker list so built-ins and custom themes
+//! appear together with no duplicates.
 
 use crate::Result;
 use super::Repl;
+use cade_core::resources::themes::ThemeColors;
 
 impl Repl {
     pub(crate) async fn cmd_theme(
         &mut self,
         theme_arg: Option<String>,
     ) -> Result<bool> {
-            let new_theme = if let Some(t) = theme_arg {
-                t.trim().to_string()
-            } else {
-                String::new()
-            };
-            let name = if new_theme.is_empty() {
-                let agent_dir = self
-                    .settings
-                    .lock()
-                    .global_path()
-                    .parent()
-                    .unwrap()
-                    .to_path_buf();
-                let mut discovered =
-                    cade_core::resources::discover_themes(&self.cwd, &agent_dir);
-                if !discovered.iter().any(|t| t.name == "dark") {
+        let new_theme = theme_arg.map(|t| t.trim().to_string()).unwrap_or_default();
+
+        // -- Bare `/theme` → open picker
+        if new_theme.is_empty() {
+            let agent_dir = self
+                .settings
+                .lock()
+                .global_path()
+                .parent()
+                .unwrap()
+                .to_path_buf();
+
+            // Discovered on-disk themes
+            let mut discovered = cade_core::resources::discover_themes(&self.cwd, &agent_dir);
+
+            // Merge built-ins that aren't already on disk — using the
+            // canonical `builtin_listing()` registry from cade-core so the
+            // CLI picker cannot drift from other surfaces.
+            for (idx, (name, desc, variant)) in
+                ThemeColors::builtin_listing().iter().enumerate()
+            {
+                if !discovered.iter().any(|t| t.name == *name) {
                     discovered.insert(
-                        0,
+                        idx,
                         cade_core::resources::Theme {
-                            name: "dark".to_string(),
-                            description: Some("Built-in dark theme".to_string()),
+                            name: name.to_string(),
+                            description: Some(desc.to_string()),
                             author: Some("CADE".to_string()),
-                            variant: Some("dark".to_string()),
+                            variant: Some(variant.to_string()),
                             vars: Default::default(),
                             colors: Default::default(),
                             source: std::path::PathBuf::from("builtin"),
                         },
                     );
                 }
-                if !discovered.iter().any(|t| t.name == "light") {
-                    discovered.insert(
-                        1,
-                        cade_core::resources::Theme {
-                            name: "light".to_string(),
-                            description: Some("Built-in light theme".to_string()),
-                            author: Some("CADE".to_string()),
-                            variant: Some("light".to_string()),
-                            vars: Default::default(),
-                            colors: Default::default(),
-                            source: std::path::PathBuf::from("builtin"),
-                        },
-                    );
-                }
-                for (idx, (n, desc, var)) in [
-                    ("catppuccin-mocha", "Warm purple-tinted dark",  "dark"),
-                    ("catppuccin-latte", "Warm beige light",         "light"),
-                    ("tokyo-night",      "Deep indigo dark, neon accents", "dark"),
-                ].iter().enumerate() {
-                    if !discovered.iter().any(|t| t.name == *n) {
-                        discovered.insert(
-                            2 + idx,
-                            cade_core::resources::Theme {
-                                name: n.to_string(),
-                                description: Some(desc.to_string()),
-                                author: Some("CADE".to_string()),
-                                variant: Some(var.to_string()),
-                                vars: Default::default(),
-                                colors: Default::default(),
-                                source: std::path::PathBuf::from("builtin"),
-                            },
-                        );
-                    }
-                }
-                let current_colors =
-                    self.app.lock().colors.clone();
-                self.app
-                    .lock()
-                    .open_theme_picker(discovered, current_colors);
-                return Ok(false);
-            } else {
-                new_theme
-            };
-            let (target_theme_colors, found_name) = if name == "dark" {
-                (cade_tui::ThemeColors::dark(), "dark".to_string())
-            } else if name == "light" {
-                (cade_tui::ThemeColors::light(), "light".to_string())
-            } else if name == "catppuccin-mocha" {
-                (cade_tui::ThemeColors::catppuccin_mocha(), "catppuccin-mocha".to_string())
-            } else if name == "catppuccin-latte" {
-                (cade_tui::ThemeColors::catppuccin_latte(), "catppuccin-latte".to_string())
-            } else if name == "tokyo-night" {
-                (cade_tui::ThemeColors::tokyo_night(), "tokyo-night".to_string())
-            } else {
-                let agent_dir = self
-                    .settings
-                    .lock()
-                    .global_path()
-                    .parent()
-                    .unwrap()
-                    .to_path_buf();
-                let discovered =
-                    cade_core::resources::discover_themes(&self.cwd, &agent_dir);
-                if let Some(t) = discovered.iter().find(|t| t.name == name) {
-                    (cade_tui::ThemeColors::from_theme(t), t.name.clone())
-                } else {
-                    (cade_tui::ThemeColors::dark(), String::new())
-                }
-            };
-            if found_name.is_empty() {
-                self.tui_err(format!("  ✗ Theme '{name}' not found."));
-            } else {
-                // Apply it dynamically
-                {
-                    let mut app = self.app.lock();
-                    app.apply_theme(target_theme_colors);
-                }
-                // Save to settings
-                {
-                    let mut s = self.settings.lock();
-                    s.global_settings_mut().theme = Some(found_name.clone());
-                    let _ = s.save_global();
-                }
-                self.tui_ok(format!("  ✓ Theme changed to '{found_name}'"));
             }
+
+            let current_colors = self.app.lock().colors.clone();
+            self.app
+                .lock()
+                .open_theme_picker(discovered, current_colors);
+            return Ok(false);
+        }
+
+        // -- `/theme <name>` → resolve + apply
+        let name = new_theme;
+        let (target_theme_colors, found_name) = if let Some(tc) =
+            ThemeColors::builtin_by_name(&name)
+        {
+            (tc, name.clone())
+        } else {
+            let agent_dir = self
+                .settings
+                .lock()
+                .global_path()
+                .parent()
+                .unwrap()
+                .to_path_buf();
+            let discovered = cade_core::resources::discover_themes(&self.cwd, &agent_dir);
+            if let Some(t) = discovered.iter().find(|t| t.name == name) {
+                (ThemeColors::from_theme(t), t.name.clone())
+            } else {
+                (ThemeColors::dark(), String::new())
+            }
+        };
+
+        if found_name.is_empty() {
+            self.tui_err(format!("  ✗ Theme '{name}' not found."));
+        } else {
+            {
+                let mut app = self.app.lock();
+                app.apply_theme(target_theme_colors);
+            }
+            {
+                let mut s = self.settings.lock();
+                s.global_settings_mut().theme = Some(found_name.clone());
+                let _ = s.save_global();
+            }
+            self.tui_ok(format!("  ✓ Theme changed to '{found_name}'"));
+        }
         Ok(false)
     }
 }

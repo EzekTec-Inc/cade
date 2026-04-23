@@ -125,17 +125,28 @@ pub async fn run_agent(
         if let Some(t_name) = theme_cmd {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
             let agent_dir = dirs::home_dir().map(|h| h.join(".cade")).unwrap_or_else(|| std::path::PathBuf::from(".cade"));
-            let all_themes = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
-            if let Some(t) = all_themes.iter().find(|t| t.name == t_name) {
-                let colors = cade_core::resources::themes::ThemeColors::from_theme(t);
+
+            // Resolution order: built-in registry first, then on-disk themes.
+            let colors_opt = cade_core::resources::themes::ThemeColors::builtin_by_name(&t_name)
+                .or_else(|| {
+                    let all = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
+                    all.iter()
+                        .find(|t| t.name == t_name)
+                        .map(cade_core::resources::themes::ThemeColors::from_theme)
+                });
+
+            if let Some(colors) = colors_opt {
                 send(json!({
                     "message_type": "theme_update",
                     "theme": colors,
                 })).await;
             } else {
+                let all_themes = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
+                let mut available: Vec<&str> = cade_core::resources::themes::ThemeColors::builtin_names().iter().copied().collect();
+                available.extend(all_themes.iter().map(|t| t.name.as_str()));
                 send(json!({
                     "message_type": "assistant_message",
-                    "content": format!("Theme '{}' not found. Available themes: {}", t_name, all_themes.iter().map(|t| t.name.as_str()).collect::<Vec<_>>().join(", ")),
+                    "content": format!("Theme '{}' not found. Available themes: {}", t_name, available.join(", ")),
                 })).await;
             }
             

@@ -71,16 +71,15 @@ fn theme_swatches(tc: &TC) -> Vec<Span<'static>> {
         .collect()
 }
 
-/// Resolve a built-in theme name to a `ThemeColors`.
-/// Falls back to `dark()` for unknown names (custom JSON themes).
+/// Resolve a built-in theme name to `ThemeColors`.
+///
+/// Falls back to `dark()` for unknown names (custom JSON themes, which
+/// cannot be resolved here because they need filesystem access).
+///
+/// Delegates to `cade_core::resources::themes::ThemeColors::builtin_by_name`
+/// — single source of truth for the built-in registry.
 fn builtin_colors(name: &str) -> TC {
-    match name {
-        "light"              => TC::light(),
-        "catppuccin-mocha"   => TC::catppuccin_mocha(),
-        "catppuccin-latte"   => TC::catppuccin_latte(),
-        "tokyo-night"        => TC::tokyo_night(),
-        _                    => TC::dark(),
-    }
+    TC::builtin_by_name(name).unwrap_or_else(TC::dark)
 }
 
 
