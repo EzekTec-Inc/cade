@@ -101,6 +101,16 @@ pub struct GetWorkspaceFoldersOut {
     pub folders: Vec<crate::state::WorkspaceFolder>,
 }
 
+/// Output of the `get_visible_range` tool.
+///
+/// `start_line` and `end_line` are 0-indexed inclusive. Both fields are
+/// `None` when no editor is focused.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct GetVisibleRangeOut {
+    pub start_line: Option<u32>,
+    pub end_line: Option<u32>,
+}
+
 impl IdeMcpServer {
     /// Test-friendly accessor behind `get_active_file`. The `#[tool]`
     /// method delegates here so unit tests can drive the logic without
@@ -140,6 +150,20 @@ impl IdeMcpServer {
     async fn get_workspace_folders_impl(&self) -> GetWorkspaceFoldersOut {
         GetWorkspaceFoldersOut {
             folders: self.state.workspace_folders().await,
+        }
+    }
+
+    /// Test-friendly accessor behind `get_visible_range`.
+    async fn get_visible_range_impl(&self) -> GetVisibleRangeOut {
+        match self.state.visible_range().await {
+            Some((s, e)) => GetVisibleRangeOut {
+                start_line: Some(s),
+                end_line: Some(e),
+            },
+            None => GetVisibleRangeOut {
+                start_line: None,
+                end_line: None,
+            },
         }
     }
 }
@@ -190,6 +214,15 @@ impl IdeMcpServer {
     )]
     async fn get_workspace_folders(&self) -> Json<GetWorkspaceFoldersOut> {
         Json(self.get_workspace_folders_impl().await)
+    }
+
+    /// Return the line range visible in the active editor's viewport.
+    #[tool(
+        name = "get_visible_range",
+        description = "Return the (start_line, end_line) range currently visible in the active editor's viewport, 0-indexed inclusive. Both fields are null when no editor is focused."
+    )]
+    async fn get_visible_range(&self) -> Json<GetVisibleRangeOut> {
+        Json(self.get_visible_range_impl().await)
     }
 }
 
@@ -343,6 +376,22 @@ mod tests {
     #[test]
     fn tool_router_registers_get_workspace_folders() {
         assert!(IdeMcpServer::tool_router().has_route("get_workspace_folders"));
+    }
+
+    #[tokio::test]
+    async fn get_visible_range_returns_adapter_pushed_range() {
+        let state = EditorState::new();
+        let server = IdeMcpServer::with_null_channel(state.clone());
+        state.set_visible_range(Some((5, 42))).await;
+
+        let out = server.get_visible_range_impl().await;
+        assert_eq!(out.start_line, Some(5));
+        assert_eq!(out.end_line, Some(42));
+    }
+
+    #[test]
+    fn tool_router_registers_get_visible_range() {
+        assert!(IdeMcpServer::tool_router().has_route("get_visible_range"));
     }
 
     #[test]

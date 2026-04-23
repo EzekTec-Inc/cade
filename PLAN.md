@@ -1,3 +1,18 @@
+## 2026-04-23T19:20:00Z — cade-ide-mcp M-IDE-1a.19: get_visible_range tool (TDD cycle 19)
+
+Sixth read tool. Drop-in applying the established pattern. Output flattens `Option<(u32, u32)>` → `{ start_line: Option<u32>, end_line: Option<u32> }` for a friendlier JSON shape than `"visible": [5, 42]`.
+
+TDD record:
+  RED   get_visible_range_returns_adapter_pushed_range +
+        tool_router_registers_get_visible_range: E0599
+  GREEN added GetVisibleRangeOut + _impl + #[tool].
+        23 unit + 2 e2e = 25/25 pass. workspace clean.
+  REFACTOR  none
+
+**Files modified:** `crates/cade-ide-mcp/src/server.rs`
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T19:12:00Z — cade-ide-mcp M-IDE-1a.18: get_workspace_folders tool (TDD cycle 18)
 
 Fifth read tool. Drop-in applying the established pattern.
