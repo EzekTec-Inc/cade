@@ -1,3 +1,31 @@
+## 2026-04-23T22:15:00Z — cade-ide-mcp M-IDE-1b.14: start_debug + stop_debug MCP tools (closes M-IDE-1b)
+
+**Task:** Wire the last pair of mutating tools. `start_debug` forwards `DebugAction::Start { config }`, `stop_debug` forwards `DebugAction::Stop`, both through the single `debug_control` callback added in cycle 13.
+
+**Closes M-IDE-1b.** All 7 planned mutating tools (apply_edit, open_file, set_selection, save_file, save_all, run_task, run_terminal, start_debug, stop_debug — 9 tool-names over 7 callbacks) now live on the wire.
+
+**Files modified:** `crates/cade-ide-mcp/src/server.rs`.
+
+**TDD record:**
+- RED: `start_debug_and_stop_debug_forward_to_channel` + `tool_router_registers_start_and_stop_debug` — E0599.
+- GREEN: added `StartDebugIn`, `DebugOut`, `start_debug_impl` + `stop_debug_impl`, `#[tool] start_debug` + `#[tool] stop_debug`. 48 unit + 2 e2e = 50/50 pass. `cargo check --workspace` clean.
+- REFACTOR: none.
+
+**End-to-end binary smoke test (informational, not a regression test):**
+```sh
+( initialize; initialized; tools/list ) | ./target/debug/cade-ide-mcp
+```
+Returns the expected 16 tool names: 7 read (get_active_file, get_open_files, get_selection, get_diagnostics, get_workspace_folders, get_visible_range, get_file_content) + 9 write (apply_edit, open_file, set_selection, save_file, save_all, run_task, run_terminal, start_debug, stop_debug). Binary exits cleanly on stdin close.
+
+**Dependency policy:** No new dependencies.
+
+**M-IDE-1a + M-IDE-1b summary:** 37 atomic commits, 50 tests (48 unit + 2 integration), 0 warnings, 16 MCP tools live on the wire, 2 workspace-level dep-feature additions across both sub-phases (schemars + rmcp features in M-IDE-1a.10; async-trait dep on crate in M-IDE-1b.1 — both already in the workspace).
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T22:05:00Z — cade-ide-mcp M-IDE-1b.13: debug_control callback on EditorChannel
 
 Seventh (and last M-IDE-1b) mutating callback. Single method covers start + stop via a tagged enum argument — analogous to the save(Option<String>) pattern.

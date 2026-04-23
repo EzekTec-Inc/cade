@@ -197,6 +197,19 @@ pub struct RunTerminalIn {
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct RunTerminalOut {}
 
+/// Input of the `start_debug` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct StartDebugIn {
+    /// Name of the debug configuration to launch (a `launch.json`
+    /// entry, an IntelliJ run configuration with the debugger enabled,
+    /// …).
+    pub config: String,
+}
+
+/// Output of the `start_debug` / `stop_debug` tools. Empty on success.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct DebugOut {}
+
 impl IdeMcpServer {
     /// Test-friendly accessor behind `get_active_file`. The `#[tool]`
     /// method delegates here so unit tests can drive the logic without
@@ -337,6 +350,22 @@ impl IdeMcpServer {
     async fn run_terminal_impl(&self, command: String) -> Result<RunTerminalOut, ErrorData> {
         self.channel.run_terminal(command).await?;
         Ok(RunTerminalOut {})
+    }
+
+    /// Test-friendly accessor behind `start_debug`.
+    async fn start_debug_impl(&self, config: String) -> Result<DebugOut, ErrorData> {
+        self.channel
+            .debug_control(crate::state::DebugAction::Start { config })
+            .await?;
+        Ok(DebugOut {})
+    }
+
+    /// Test-friendly accessor behind `stop_debug`.
+    async fn stop_debug_impl(&self) -> Result<DebugOut, ErrorData> {
+        self.channel
+            .debug_control(crate::state::DebugAction::Stop)
+            .await?;
+        Ok(DebugOut {})
     }
 }
 
@@ -488,6 +517,27 @@ impl IdeMcpServer {
         Parameters(RunTerminalIn { command }): Parameters<RunTerminalIn>,
     ) -> Result<Json<RunTerminalOut>, ErrorData> {
         self.run_terminal_impl(command).await.map(Json)
+    }
+
+    /// Start a named debug configuration.
+    #[tool(
+        name = "start_debug",
+        description = "Launch the named debug configuration (a launch.json entry or equivalent). Returns once the debugger has been started; further lifecycle events stay inside the editor. Errors with method_not_found if no editor adapter is attached."
+    )]
+    async fn start_debug(
+        &self,
+        Parameters(StartDebugIn { config }): Parameters<StartDebugIn>,
+    ) -> Result<Json<DebugOut>, ErrorData> {
+        self.start_debug_impl(config).await.map(Json)
+    }
+
+    /// Stop the currently-running debug session.
+    #[tool(
+        name = "stop_debug",
+        description = "Stop the currently-running debug session, if any. Errors with method_not_found if no editor adapter is attached."
+    )]
+    async fn stop_debug(&self) -> Result<Json<DebugOut>, ErrorData> {
+        self.stop_debug_impl().await.map(Json)
     }
 }
 
@@ -1007,6 +1057,62 @@ mod tests {
     #[test]
     fn tool_router_registers_run_terminal() {
         assert!(IdeMcpServer::tool_router().has_route("run_terminal"));
+    }
+
+    #[tokio::test]
+    async fn start_debug_and_stop_debug_forward_to_channel() {
+        use crate::channel::EditorChannel;
+        use crate::state::DebugAction;
+        use async_trait::async_trait;
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingChannel {
+            calls: Mutex<Vec<DebugAction>>,
+        }
+
+        #[async_trait]
+        impl EditorChannel for RecordingChannel {
+            fn label(&self) -> &str {
+                "recording"
+            }
+            fn is_connected(&self) -> bool {
+                true
+            }
+            async fn debug_control(
+                &self,
+                action: DebugAction,
+            ) -> Result<(), rmcp::model::ErrorData> {
+                self.calls.lock().unwrap().push(action);
+                Ok(())
+            }
+        }
+
+        let channel = Arc::new(RecordingChannel {
+            calls: Mutex::new(Vec::new()),
+        });
+        let server = IdeMcpServer::new(EditorState::new(), channel.clone());
+
+        server
+            .start_debug_impl("unit-tests".to_string())
+            .await
+            .expect("start_debug should succeed");
+        server.stop_debug_impl().await.expect("stop_debug should succeed");
+
+        let calls = channel.calls.lock().unwrap();
+        assert_eq!(
+            calls.as_slice(),
+            &[
+                DebugAction::Start { config: "unit-tests".into() },
+                DebugAction::Stop,
+            ]
+        );
+    }
+
+    #[test]
+    fn tool_router_registers_start_and_stop_debug() {
+        let r = IdeMcpServer::tool_router();
+        assert!(r.has_route("start_debug"));
+        assert!(r.has_route("stop_debug"));
     }
 
     #[test]
