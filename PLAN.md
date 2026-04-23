@@ -1,3 +1,19 @@
+## 2026-04-23T21:30:00Z — cade-ide-mcp M-IDE-1b.8: save_file + save_all MCP tools
+
+Two tools on the single save callback: save_file maps to save(Some(path)), save_all to save(None). Bundled into one cycle because they expose the same single behavior (forwarding through EditorChannel::save) at two callable names.
+
+TDD record:
+  RED   save_file_and_save_all_forward_args_to_channel +
+        tool_router_registers_save_file_and_save_all: E0599
+  GREEN added SaveFileIn + SaveOut, save_file_impl + save_all_impl,
+        #[tool] save_file + #[tool] save_all.
+        39 unit + 2 e2e = 41/41 pass. workspace clean.
+  REFACTOR  none
+
+**Files modified:** `crates/cade-ide-mcp/src/server.rs`
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T21:20:00Z — cade-ide-mcp M-IDE-1b.7: save callback on EditorChannel
 
 Fourth mutating callback. Single method handles both single-file save and save-all via `path: Option<String>` (None = save every dirty buffer). Avoids a redundant save_all callback.

@@ -160,6 +160,17 @@ pub struct SetSelectionIn {
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct SetSelectionOut {}
 
+/// Input of the `save_file` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SaveFileIn {
+    /// Absolute filesystem path of the buffer to save.
+    pub path: String,
+}
+
+/// Output of the `save_file` / `save_all` tools. Empty on success.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct SaveOut {}
+
 impl IdeMcpServer {
     /// Test-friendly accessor behind `get_active_file`. The `#[tool]`
     /// method delegates here so unit tests can drive the logic without
@@ -273,6 +284,20 @@ impl IdeMcpServer {
         self.channel.set_selection(path, range).await?;
         Ok(SetSelectionOut {})
     }
+
+    /// Test-friendly accessor behind `save_file`. Forwards `Some(path)`
+    /// to `EditorChannel::save`.
+    async fn save_file_impl(&self, path: String) -> Result<SaveOut, ErrorData> {
+        self.channel.save(Some(path)).await?;
+        Ok(SaveOut {})
+    }
+
+    /// Test-friendly accessor behind `save_all`. Forwards `None` to
+    /// `EditorChannel::save` to signal save-every-dirty-buffer.
+    async fn save_all_impl(&self) -> Result<SaveOut, ErrorData> {
+        self.channel.save(None).await?;
+        Ok(SaveOut {})
+    }
 }
 
 #[tool_router]
@@ -378,6 +403,27 @@ impl IdeMcpServer {
         Parameters(SetSelectionIn { path, range }): Parameters<SetSelectionIn>,
     ) -> Result<Json<SetSelectionOut>, ErrorData> {
         self.set_selection_impl(path, range).await.map(Json)
+    }
+
+    /// Save a single open buffer to disk.
+    #[tool(
+        name = "save_file",
+        description = "Save the open buffer at `path` to disk. Errors with method_not_found if no editor adapter is attached."
+    )]
+    async fn save_file(
+        &self,
+        Parameters(SaveFileIn { path }): Parameters<SaveFileIn>,
+    ) -> Result<Json<SaveOut>, ErrorData> {
+        self.save_file_impl(path).await.map(Json)
+    }
+
+    /// Save every dirty buffer in the editor.
+    #[tool(
+        name = "save_all",
+        description = "Save every dirty open buffer in the editor. Errors with method_not_found if no editor adapter is attached."
+    )]
+    async fn save_all(&self) -> Result<Json<SaveOut>, ErrorData> {
+        self.save_all_impl().await.map(Json)
     }
 }
 
@@ -759,6 +805,61 @@ mod tests {
     #[test]
     fn tool_router_registers_set_selection() {
         assert!(IdeMcpServer::tool_router().has_route("set_selection"));
+    }
+
+    #[tokio::test]
+    async fn save_file_and_save_all_forward_args_to_channel() {
+        use crate::channel::EditorChannel;
+        use async_trait::async_trait;
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingChannel {
+            calls: Mutex<Vec<Option<String>>>,
+        }
+
+        #[async_trait]
+        impl EditorChannel for RecordingChannel {
+            fn label(&self) -> &str {
+                "recording"
+            }
+            fn is_connected(&self) -> bool {
+                true
+            }
+            async fn save(
+                &self,
+                path: Option<String>,
+            ) -> Result<(), rmcp::model::ErrorData> {
+                self.calls.lock().unwrap().push(path);
+                Ok(())
+            }
+        }
+
+        let channel = Arc::new(RecordingChannel {
+            calls: Mutex::new(Vec::new()),
+        });
+        let server = IdeMcpServer::new(EditorState::new(), channel.clone());
+
+        server
+            .save_file_impl("/tmp/a.rs".to_string())
+            .await
+            .expect("save_file should succeed");
+        server
+            .save_all_impl()
+            .await
+            .expect("save_all should succeed");
+
+        let calls = channel.calls.lock().unwrap();
+        assert_eq!(
+            calls.as_slice(),
+            &[Some("/tmp/a.rs".to_string()), None]
+        );
+    }
+
+    #[test]
+    fn tool_router_registers_save_file_and_save_all() {
+        let r = IdeMcpServer::tool_router();
+        assert!(r.has_route("save_file"));
+        assert!(r.has_route("save_all"));
     }
 
     #[test]
