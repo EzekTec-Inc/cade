@@ -1,3 +1,18 @@
+## 2026-04-23T20:55:00Z — cade-ide-mcp M-IDE-1b.3: reveal_file callback on EditorChannel (TDD cycle 3 of M-IDE-1b)
+
+Second mutating callback. Pattern identical to cycle 1's apply_edit: default impl returns -32601 method_not_found with the adapter label echoed.
+
+TDD record:
+  RED   default_reveal_file_returns_method_not_supported: E0599
+  GREEN added `async fn reveal_file(&self, path: String) -> Result<(), ErrorData>`
+        with default method_not_found impl.
+        31 unit + 2 e2e = 33/33 pass. workspace clean.
+  REFACTOR  none
+
+**Files modified:** `crates/cade-ide-mcp/src/channel.rs`
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T20:45:00Z — cade-ide-mcp M-IDE-1b.2: apply_edit MCP tool (TDD cycle 2 of M-IDE-1b)
 
 **Task:** Wire the first mutating MCP tool — `apply_edit` — on top of the callback added in cycle 1. The tool forwards the full `ApplyEditRequest` to the attached `EditorChannel` and returns an empty success object on `Ok(())`; any `ErrorData` from the channel bubbles up unchanged.

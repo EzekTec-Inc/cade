@@ -47,6 +47,20 @@ pub trait EditorChannel: Send + Sync + 'static {
             None,
         ))
     }
+
+    /// Open the file at `path` in the editor and bring it into focus,
+    /// creating a tab if it is not already open. Default implementation
+    /// refuses with `ErrorData::method_not_found`.
+    async fn reveal_file(&self, _path: String) -> Result<(), ErrorData> {
+        Err(ErrorData::new(
+            rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+            format!(
+                "editor adapter '{}' does not support reveal_file",
+                self.label()
+            ),
+            None,
+        ))
+    }
 }
 
 /// No-op channel used before a real adapter attaches and by tests that
@@ -101,6 +115,16 @@ mod tests {
             })
             .await
             .expect_err("NullEditorChannel must refuse apply_edit");
+        assert_eq!(err.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
+    }
+
+    #[tokio::test]
+    async fn default_reveal_file_returns_method_not_supported() {
+        let c = NullEditorChannel;
+        let err = c
+            .reveal_file("/tmp/a.rs".into())
+            .await
+            .expect_err("NullEditorChannel must refuse reveal_file");
         assert_eq!(err.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
     }
 }
