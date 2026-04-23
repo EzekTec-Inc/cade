@@ -1,3 +1,33 @@
+## 2026-04-23T16:13:00Z — cade-ide-mcp M-IDE-1a.4: Selection state (TDD cycle 4)
+
+**Task:** Let the adapter report the user's current selection. Fourth TDD cycle.
+
+**Scope guardrail:** Only `state.rs`. No new dependencies. Position + Range + Selection types introduced as plain structs with `PartialEq + Eq`, no serde yet (added in a later cycle when the MCP tool layer demands it).
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/state.rs`
+  - Added `pub struct Position { line: u32, character: u32 }` (0-indexed LSP convention).
+  - Added `pub struct Range { start: Position, end: Position }`.
+  - Added `pub struct Selection { path: String, range: Range, text: String }`.
+  - Added `selection: Option<Selection>` field on `EditorState`.
+  - Added `selection(&self) -> Option<&Selection>` and `set_selection(&mut self, Option<Selection>)`.
+
+**TDD record:**
+- RED: added `selection_round_trips_through_setter` exercising the getter returning `None`, setting a selection, reading it back, clearing, and reading `None` again. `cargo test -p cade-ide-mcp --lib` failed with 4× E0422 (Selection/Range/Position missing) and 5× E0599 (set_selection / selection methods missing).
+- GREEN: added the three types + field + getter/setter. `cargo test -p cade-ide-mcp --lib` → 4/4 pass.
+- REFACTOR: none.
+
+**Previous behavior:** `EditorState` could not expose the current text selection.
+
+**New behavior:** Adapters push a `Selection { path, range, text }` via `set_selection()`; tools read it via `selection()`.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T16:04:00Z — cade-ide-mcp M-IDE-1a.3: active_file getter/setter (TDD cycle 3)
 
 **Task:** Let the adapter report which file the user is focused on. Third TDD cycle.

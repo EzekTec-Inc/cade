@@ -12,12 +12,44 @@ pub struct OpenFile {
     pub path: Option<String>,
 }
 
+/// 0-indexed line + UTF-16 code-unit offset within that line (LSP
+/// convention). Matching LSP keeps the VS Code and JetBrains adapters
+/// straightforward to wire up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Position {
+    pub line: u32,
+    pub character: u32,
+}
+
+/// An inclusive-start / exclusive-end range in a text document.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Range {
+    pub start: Position,
+    pub end: Position,
+}
+
+/// The user's current text selection in the active editor.
+///
+/// An empty [`Range`] (start == end) represents a caret position with no
+/// highlighted selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Selection {
+    /// File path the selection lives in. Must be one of the open files.
+    pub path: String,
+    /// The selected range.
+    pub range: Range,
+    /// Convenience: the text covered by `range`.
+    pub text: String,
+}
+
 /// Shared editor-state handle. Phase M-IDE-1a ships an empty skeleton;
-/// later phases add selection / diagnostic fields and async accessors.
+/// later phases add diagnostic / workspace-folder fields and async
+/// accessors.
 #[derive(Debug, Default, Clone)]
 pub struct EditorState {
     open_files: Vec<OpenFile>,
     active_file: Option<String>,
+    selection: Option<Selection>,
 }
 
 impl EditorState {
@@ -44,6 +76,16 @@ impl EditorState {
     /// Update the currently-focused file. Pass `None` to clear.
     pub fn set_active_file(&mut self, path: Option<String>) {
         self.active_file = path;
+    }
+
+    /// The user's current selection, if any.
+    pub fn selection(&self) -> Option<&Selection> {
+        self.selection.as_ref()
+    }
+
+    /// Update the current selection. Pass `None` to clear.
+    pub fn set_selection(&mut self, sel: Option<Selection>) {
+        self.selection = sel;
     }
 }
 
@@ -77,6 +119,26 @@ mod tests {
         assert_eq!(s.active_file(), Some("/tmp/a.rs"));
         s.set_active_file(None);
         assert_eq!(s.active_file(), None);
+    }
+
+    #[test]
+    fn selection_round_trips_through_setter() {
+        let mut s = EditorState::new();
+        assert_eq!(s.selection(), None);
+
+        let sel = Selection {
+            path: "/tmp/a.rs".into(),
+            range: Range {
+                start: Position { line: 1, character: 0 },
+                end:   Position { line: 1, character: 5 },
+            },
+            text: "hello".into(),
+        };
+        s.set_selection(Some(sel.clone()));
+        assert_eq!(s.selection(), Some(&sel));
+
+        s.set_selection(None);
+        assert_eq!(s.selection(), None);
     }
 }
 
