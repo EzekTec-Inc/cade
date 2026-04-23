@@ -1,3 +1,32 @@
+## 2026-04-23T16:20:00Z — cade-ide-mcp M-IDE-1a.5: Diagnostics state (TDD cycle 5)
+
+**Task:** Let the adapter report LSP-style diagnostics into the shared state. Fifth TDD cycle.
+
+**Scope guardrail:** Only `state.rs`. No new dependencies. `DiagnosticSeverity` is a plain enum with four variants (no serde, no schemars yet).
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/state.rs`
+  - Added `pub enum DiagnosticSeverity { Error, Warning, Info, Hint }`.
+  - Added `pub struct Diagnostic { path, range, severity, message, source, code }` — mirrors LSP diagnostic shape.
+  - Added `diagnostics: Vec<Diagnostic>` field on `EditorState`.
+  - Added `diagnostics(&self) -> &[Diagnostic]` and `replace_diagnostics(&mut self, Vec<Diagnostic>)`.
+
+**TDD record:**
+- RED: added `replace_diagnostics_updates_slice` exercising the empty-state slice, then replace with one Diagnostic and expect it back. `cargo test -p cade-ide-mcp --lib` failed with E0422 (Diagnostic missing), E0433 (DiagnosticSeverity missing), 3× E0599 (diagnostics / replace_diagnostics missing).
+- GREEN: added the enum, struct, field, and two methods. `cargo test -p cade-ide-mcp --lib` → 5/5 pass.
+- REFACTOR: none.
+
+**Previous behavior:** `EditorState` could not report diagnostics.
+
+**New behavior:** Adapters push a full diagnostic snapshot via `replace_diagnostics()`; tools read it via `diagnostics()` as a slice.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T16:13:00Z — cade-ide-mcp M-IDE-1a.4: Selection state (TDD cycle 4)
 
 **Task:** Let the adapter report the user's current selection. Fourth TDD cycle.

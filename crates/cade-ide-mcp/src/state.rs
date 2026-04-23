@@ -42,14 +42,39 @@ pub struct Selection {
     pub text: String,
 }
 
+/// Severity of a diagnostic reported by the editor's language services.
+/// Mirrors the LSP `DiagnosticSeverity` enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DiagnosticSeverity {
+    Error,
+    Warning,
+    Info,
+    Hint,
+}
+
+/// A single diagnostic (compile error, lint warning, etc.) reported by
+/// the editor's language services.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Diagnostic {
+    pub path: String,
+    pub range: Range,
+    pub severity: DiagnosticSeverity,
+    /// Human-readable message (e.g. `"unused variable: `x`"`).
+    pub message: String,
+    /// Producer (e.g. `"rustc"`, `"tsc"`, `"eslint"`).
+    pub source: Option<String>,
+    /// Optional rule code (e.g. `"E0001"`, `"noUnusedLocals"`).
+    pub code: Option<String>,
+}
+
 /// Shared editor-state handle. Phase M-IDE-1a ships an empty skeleton;
-/// later phases add diagnostic / workspace-folder fields and async
-/// accessors.
+/// later phases add workspace-folder fields and async accessors.
 #[derive(Debug, Default, Clone)]
 pub struct EditorState {
     open_files: Vec<OpenFile>,
     active_file: Option<String>,
     selection: Option<Selection>,
+    diagnostics: Vec<Diagnostic>,
 }
 
 impl EditorState {
@@ -86,6 +111,16 @@ impl EditorState {
     /// Update the current selection. Pass `None` to clear.
     pub fn set_selection(&mut self, sel: Option<Selection>) {
         self.selection = sel;
+    }
+
+    /// All diagnostics currently reported across the workspace.
+    pub fn diagnostics(&self) -> &[Diagnostic] {
+        &self.diagnostics
+    }
+
+    /// Replace the full diagnostic list with a fresh snapshot.
+    pub fn replace_diagnostics(&mut self, diags: Vec<Diagnostic>) {
+        self.diagnostics = diags;
     }
 }
 
@@ -139,6 +174,26 @@ mod tests {
 
         s.set_selection(None);
         assert_eq!(s.selection(), None);
+    }
+
+    #[test]
+    fn replace_diagnostics_updates_slice() {
+        let mut s = EditorState::new();
+        assert_eq!(s.diagnostics().len(), 0);
+
+        let d = Diagnostic {
+            path: "/tmp/a.rs".into(),
+            range: Range {
+                start: Position { line: 0, character: 0 },
+                end:   Position { line: 0, character: 4 },
+            },
+            severity: DiagnosticSeverity::Error,
+            message: "unused variable: `x`".into(),
+            source: Some("rustc".into()),
+            code: Some("E0001".into()),
+        };
+        s.replace_diagnostics(vec![d.clone()]);
+        assert_eq!(s.diagnostics(), &[d]);
     }
 }
 
