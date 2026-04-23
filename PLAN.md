@@ -1,3 +1,15 @@
+## 2026-04-23T21:55:00Z — cade-ide-mcp M-IDE-1b.12: run_terminal MCP tool
+
+TDD record:
+  RED   run_terminal_forwards_command_to_channel + tool_router_registers_run_terminal: E0599
+  GREEN added RunTerminalIn/Out + run_terminal_impl + #[tool] run_terminal.
+        45 unit + 2 e2e = 47/47 pass. workspace clean.
+  REFACTOR  none
+
+**Files modified:** `crates/cade-ide-mcp/src/server.rs`
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T21:48:00Z — cade-ide-mcp M-IDE-1b.11: run_terminal callback
 
 Sixth mutating callback.

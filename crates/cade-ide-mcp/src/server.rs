@@ -184,6 +184,19 @@ pub struct RunTaskIn {
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct RunTaskOut {}
 
+/// Input of the `run_terminal` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RunTerminalIn {
+    /// Shell command line to submit into a fresh editor terminal pane.
+    pub command: String,
+}
+
+/// Output of the `run_terminal` tool. Empty on success — the command
+/// has been submitted; stdout/stderr remain inside the editor's
+/// terminal pane.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct RunTerminalOut {}
+
 impl IdeMcpServer {
     /// Test-friendly accessor behind `get_active_file`. The `#[tool]`
     /// method delegates here so unit tests can drive the logic without
@@ -317,6 +330,13 @@ impl IdeMcpServer {
     async fn run_task_impl(&self, name: String) -> Result<RunTaskOut, ErrorData> {
         self.channel.run_task(name).await?;
         Ok(RunTaskOut {})
+    }
+
+    /// Test-friendly accessor behind `run_terminal`. Forwards `command`
+    /// to `EditorChannel::run_terminal`.
+    async fn run_terminal_impl(&self, command: String) -> Result<RunTerminalOut, ErrorData> {
+        self.channel.run_terminal(command).await?;
+        Ok(RunTerminalOut {})
     }
 }
 
@@ -456,6 +476,18 @@ impl IdeMcpServer {
         Parameters(RunTaskIn { name }): Parameters<RunTaskIn>,
     ) -> Result<Json<RunTaskOut>, ErrorData> {
         self.run_task_impl(name).await.map(Json)
+    }
+
+    /// Run a shell command in a fresh editor terminal.
+    #[tool(
+        name = "run_terminal",
+        description = "Submit `command` to a fresh terminal pane inside the editor. Output stays in the pane; the agent does not see it. Returns once the command has been submitted, not when it exits. Errors with method_not_found if no editor adapter is attached."
+    )]
+    async fn run_terminal(
+        &self,
+        Parameters(RunTerminalIn { command }): Parameters<RunTerminalIn>,
+    ) -> Result<Json<RunTerminalOut>, ErrorData> {
+        self.run_terminal_impl(command).await.map(Json)
     }
 }
 
@@ -932,6 +964,49 @@ mod tests {
     #[test]
     fn tool_router_registers_run_task() {
         assert!(IdeMcpServer::tool_router().has_route("run_task"));
+    }
+
+    #[tokio::test]
+    async fn run_terminal_forwards_command_to_channel() {
+        use crate::channel::EditorChannel;
+        use async_trait::async_trait;
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingChannel {
+            calls: Mutex<Vec<String>>,
+        }
+
+        #[async_trait]
+        impl EditorChannel for RecordingChannel {
+            fn label(&self) -> &str {
+                "recording"
+            }
+            fn is_connected(&self) -> bool {
+                true
+            }
+            async fn run_terminal(&self, command: String) -> Result<(), rmcp::model::ErrorData> {
+                self.calls.lock().unwrap().push(command);
+                Ok(())
+            }
+        }
+
+        let channel = Arc::new(RecordingChannel {
+            calls: Mutex::new(Vec::new()),
+        });
+        let server = IdeMcpServer::new(EditorState::new(), channel.clone());
+        server
+            .run_terminal_impl("cargo test".to_string())
+            .await
+            .expect("run_terminal should succeed");
+        assert_eq!(
+            channel.calls.lock().unwrap().as_slice(),
+            &["cargo test".to_string()]
+        );
+    }
+
+    #[test]
+    fn tool_router_registers_run_terminal() {
+        assert!(IdeMcpServer::tool_router().has_route("run_terminal"));
     }
 
     #[test]
