@@ -146,6 +146,20 @@ pub struct OpenFileIn {
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct OpenFileOut {}
 
+/// Input of the `set_selection` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct SetSelectionIn {
+    /// Absolute filesystem path of the file whose selection to update.
+    /// Must currently be open.
+    pub path: String,
+    /// Inclusive-start, exclusive-end range to select.
+    pub range: crate::state::Range,
+}
+
+/// Output of the `set_selection` tool. Empty on success.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct SetSelectionOut {}
+
 impl IdeMcpServer {
     /// Test-friendly accessor behind `get_active_file`. The `#[tool]`
     /// method delegates here so unit tests can drive the logic without
@@ -247,6 +261,18 @@ impl IdeMcpServer {
         self.channel.reveal_file(path).await?;
         Ok(OpenFileOut {})
     }
+
+    /// Test-friendly accessor behind `set_selection`. Forwards the
+    /// path + range to `EditorChannel::set_selection`; errors bubble up
+    /// unchanged.
+    async fn set_selection_impl(
+        &self,
+        path: String,
+        range: crate::state::Range,
+    ) -> Result<SetSelectionOut, ErrorData> {
+        self.channel.set_selection(path, range).await?;
+        Ok(SetSelectionOut {})
+    }
 }
 
 #[tool_router]
@@ -340,6 +366,18 @@ impl IdeMcpServer {
         Parameters(OpenFileIn { path }): Parameters<OpenFileIn>,
     ) -> Result<Json<OpenFileOut>, ErrorData> {
         self.open_file_impl(path).await.map(Json)
+    }
+
+    /// Move the editor's active selection to the given range.
+    #[tool(
+        name = "set_selection",
+        description = "Move the editor's active selection to `range` inside `path`. The file must currently be open. Errors with method_not_found if no editor adapter is attached."
+    )]
+    async fn set_selection(
+        &self,
+        Parameters(SetSelectionIn { path, range }): Parameters<SetSelectionIn>,
+    ) -> Result<Json<SetSelectionOut>, ErrorData> {
+        self.set_selection_impl(path, range).await.map(Json)
     }
 }
 
@@ -667,6 +705,60 @@ mod tests {
     #[test]
     fn tool_router_registers_open_file() {
         assert!(IdeMcpServer::tool_router().has_route("open_file"));
+    }
+
+    #[tokio::test]
+    async fn set_selection_forwards_args_to_channel() {
+        use crate::channel::EditorChannel;
+        use crate::state::{Position, Range};
+        use async_trait::async_trait;
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingChannel {
+            calls: Mutex<Vec<(String, Range)>>,
+        }
+
+        #[async_trait]
+        impl EditorChannel for RecordingChannel {
+            fn label(&self) -> &str {
+                "recording"
+            }
+            fn is_connected(&self) -> bool {
+                true
+            }
+            async fn set_selection(
+                &self,
+                path: String,
+                range: Range,
+            ) -> Result<(), rmcp::model::ErrorData> {
+                self.calls.lock().unwrap().push((path, range));
+                Ok(())
+            }
+        }
+
+        let channel = Arc::new(RecordingChannel {
+            calls: Mutex::new(Vec::new()),
+        });
+        let server = IdeMcpServer::new(EditorState::new(), channel.clone());
+
+        let range = Range {
+            start: Position { line: 2, character: 3 },
+            end:   Position { line: 2, character: 8 },
+        };
+        server
+            .set_selection_impl("/tmp/a.rs".to_string(), range)
+            .await
+            .expect("set_selection should succeed");
+
+        let calls = channel.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0].0, "/tmp/a.rs");
+        assert_eq!(calls[0].1, range);
+    }
+
+    #[test]
+    fn tool_router_registers_set_selection() {
+        assert!(IdeMcpServer::tool_router().has_route("set_selection"));
     }
 
     #[test]

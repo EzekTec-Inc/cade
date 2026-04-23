@@ -1,3 +1,18 @@
+## 2026-04-23T21:12:00Z — cade-ide-mcp M-IDE-1b.6: set_selection MCP tool
+
+Wire set_selection tool on top of cycle-5's callback.
+
+TDD record:
+  RED   set_selection_forwards_args_to_channel +
+        tool_router_registers_set_selection: E0599
+  GREEN added SetSelectionIn/Out + set_selection_impl + #[tool].
+        36 unit + 2 e2e = 38/38 pass. workspace clean.
+  REFACTOR  none
+
+**Files modified:** `crates/cade-ide-mcp/src/server.rs`
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T21:05:00Z — cade-ide-mcp M-IDE-1b.5: set_selection callback on EditorChannel
 
 Third mutating callback.
