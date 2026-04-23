@@ -1,3 +1,34 @@
+## 2026-04-23T20:45:00Z — cade-ide-mcp M-IDE-1b.2: apply_edit MCP tool (TDD cycle 2 of M-IDE-1b)
+
+**Task:** Wire the first mutating MCP tool — `apply_edit` — on top of the callback added in cycle 1. The tool forwards the full `ApplyEditRequest` to the attached `EditorChannel` and returns an empty success object on `Ok(())`; any `ErrorData` from the channel bubbles up unchanged.
+
+**Scope guardrail:** Only `server.rs`. No new deps. No change to state or channel layers.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/server.rs`:
+  - New `pub struct ApplyEditOut {}` (empty success; the editor itself is the source of truth for resulting buffer state, which the adapter will push back via `EditorState` as a follow-up update).
+  - New inherent `apply_edit_impl(&self, ApplyEditRequest) -> Result<ApplyEditOut, ErrorData>` that calls `self.channel.apply_edit(req).await?`.
+  - New `#[tool(name = "apply_edit", …)]` wrapping the `_impl` method via `Parameters<ApplyEditRequest>`.
+  - Two new tests:
+    - `apply_edit_forwards_request_to_channel` — defines a local `RecordingChannel` that captures the forwarded request, constructs an `IdeMcpServer` with it, calls `apply_edit_impl`, asserts the channel saw the exact request.
+    - `tool_router_registers_apply_edit` — router registration.
+
+**TDD record:**
+- RED: both tests fail with E0599 (`apply_edit_impl` missing) and E0282.
+- GREEN: added output type + `_impl` method + `#[tool]` method. `cargo test -p cade-ide-mcp` → 30 unit + 2 e2e = 32/32 pass. `cargo check --workspace` clean.
+- REFACTOR: none.
+
+**Previous behavior:** No mutating MCP tools existed; `EditorChannel::apply_edit` had a default but no tool reached it.
+
+**New behavior:** Agents can now call `apply_edit`. With the default `NullEditorChannel` (and any adapter that hasn't overridden `apply_edit`), the tool returns JSON-RPC `-32601 method_not_found`. With an adapter that does override, the adapter applies the edit and the tool returns `{}`.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T20:30:00Z — cade-ide-mcp M-IDE-1b.1: apply_edit callback on EditorChannel (TDD cycle 1 of M-IDE-1b)
 
 **Task:** Open M-IDE-1b (edit tools). First cycle extends the `EditorChannel` trait with an `apply_edit` mutating callback. Ships the callback shape + default "method not found" behavior; tool wiring in the next cycle.

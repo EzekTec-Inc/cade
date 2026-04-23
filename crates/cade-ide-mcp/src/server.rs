@@ -129,6 +129,12 @@ pub struct GetFileContentOut {
     pub is_dirty: bool,
 }
 
+/// Output of the `apply_edit` tool. Empty on success — the editor is
+/// the source of truth for the resulting buffer state, which the
+/// adapter will push back through `EditorState` as a follow-up update.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct ApplyEditOut {}
+
 impl IdeMcpServer {
     /// Test-friendly accessor behind `get_active_file`. The `#[tool]`
     /// method delegates here so unit tests can drive the logic without
@@ -212,6 +218,17 @@ impl IdeMcpServer {
             )),
         }
     }
+
+    /// Test-friendly accessor behind `apply_edit`. Forwards the request
+    /// to the attached `EditorChannel`; errors bubble up as-is (e.g.
+    /// `method_not_found` from `NullEditorChannel`).
+    async fn apply_edit_impl(
+        &self,
+        req: crate::state::ApplyEditRequest,
+    ) -> Result<ApplyEditOut, ErrorData> {
+        self.channel.apply_edit(req).await?;
+        Ok(ApplyEditOut {})
+    }
 }
 
 #[tool_router]
@@ -281,6 +298,18 @@ impl IdeMcpServer {
         Parameters(GetFileContentIn { path }): Parameters<GetFileContentIn>,
     ) -> Result<Json<GetFileContentOut>, ErrorData> {
         self.get_file_content_impl(path).await.map(Json)
+    }
+
+    /// Apply a batch of text edits to a single open file.
+    #[tool(
+        name = "apply_edit",
+        description = "Apply a batch of text edits (LSP TextEdit shape) to a single open file. Errors with method_not_found if no editor adapter is attached, or with invalid_params when the path is not open."
+    )]
+    async fn apply_edit(
+        &self,
+        Parameters(req): Parameters<crate::state::ApplyEditRequest>,
+    ) -> Result<Json<ApplyEditOut>, ErrorData> {
+        self.apply_edit_impl(req).await.map(Json)
     }
 }
 
@@ -506,6 +535,65 @@ mod tests {
     #[test]
     fn tool_router_registers_get_file_content() {
         assert!(IdeMcpServer::tool_router().has_route("get_file_content"));
+    }
+
+    #[tokio::test]
+    async fn apply_edit_forwards_request_to_channel() {
+        use crate::channel::EditorChannel;
+        use crate::state::{ApplyEditRequest, Position, Range, TextEdit};
+        use async_trait::async_trait;
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingChannel {
+            calls: Mutex<Vec<ApplyEditRequest>>,
+        }
+
+        #[async_trait]
+        impl EditorChannel for RecordingChannel {
+            fn label(&self) -> &str {
+                "recording"
+            }
+            fn is_connected(&self) -> bool {
+                true
+            }
+            async fn apply_edit(
+                &self,
+                req: ApplyEditRequest,
+            ) -> Result<(), rmcp::model::ErrorData> {
+                self.calls.lock().unwrap().push(req);
+                Ok(())
+            }
+        }
+
+        let channel = Arc::new(RecordingChannel {
+            calls: Mutex::new(Vec::new()),
+        });
+        let state = EditorState::new();
+        let server = IdeMcpServer::new(state, channel.clone());
+
+        let req = ApplyEditRequest {
+            path: "/tmp/a.rs".into(),
+            text_edits: vec![TextEdit {
+                range: Range {
+                    start: Position { line: 0, character: 0 },
+                    end:   Position { line: 0, character: 0 },
+                },
+                new_text: "// hi\n".into(),
+            }],
+        };
+        server
+            .apply_edit_impl(req.clone())
+            .await
+            .expect("apply_edit should succeed");
+
+        let calls = channel.calls.lock().unwrap();
+        assert_eq!(calls.len(), 1);
+        assert_eq!(calls[0], req);
+    }
+
+    #[test]
+    fn tool_router_registers_apply_edit() {
+        assert!(IdeMcpServer::tool_router().has_route("apply_edit"));
     }
 
     #[test]
