@@ -1,3 +1,27 @@
+## 2026-04-23T19:35:00Z — cade-ide-mcp M-IDE-1a.20: OpenFile LSP shape (TDD cycle 20)
+
+**Task:** Extend `OpenFile` with the four LSP-standard fields the next tool (`get_file_content`, cycle 21) needs: `text`, `language_id`, `version`, `is_dirty`. Keeps the state type alone in this cycle; no new tool yet.
+
+**Scope guardrail:** Only `state.rs` + minimal caller patches in `server.rs` for the one existing test that constructs `OpenFile` literals. No new deps.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/state.rs` — `OpenFile` gains `text: String`, `language_id: String`, `version: u64`, `is_dirty: bool`. Docs call out the LSP `TextDocumentItem` correspondence.
+- `crates/cade-ide-mcp/src/server.rs` — existing `get_open_files_returns_adapter_pushed_list` test now supplies the full shape. `OpenFileSummary` (the output shape of `get_open_files`) intentionally stays `{ path }` only; the heavier body+metadata comes via `get_file_content` in cycle 21.
+
+**TDD record:**
+- RED: added `open_file_round_trips_full_shape` round-tripping all five fields; existing `replace_open_files_updates_count` rewritten to supply the full shape. Both failed with E0560 (missing fields).
+- GREEN: added the four fields, patched the server-side test site. `cargo test -p cade-ide-mcp` → 24 unit + 2 e2e = 26/26 pass. `cargo check --workspace` clean.
+- REFACTOR: none.
+
+**Public API change (internal to cade-ide-mcp):** `OpenFile` literal construction now requires five fields instead of one. No outside callers exist; no migration needed.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T19:20:00Z — cade-ide-mcp M-IDE-1a.19: get_visible_range tool (TDD cycle 19)
 
 Sixth read tool. Drop-in applying the established pattern. Output flattens `Option<(u32, u32)>` → `{ start_line: Option<u32>, end_line: Option<u32> }` for a friendlier JSON shape than `"visible": [5, 42]`.

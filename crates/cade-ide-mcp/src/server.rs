@@ -285,8 +285,20 @@ mod tests {
 
         state
             .replace_open_files(vec![
-                crate::state::OpenFile { path: Some("/tmp/a.rs".into()) },
-                crate::state::OpenFile { path: Some("/tmp/b.rs".into()) },
+                crate::state::OpenFile {
+                    path: Some("/tmp/a.rs".into()),
+                    text: String::new(),
+                    language_id: "rust".into(),
+                    version: 1,
+                    is_dirty: false,
+                },
+                crate::state::OpenFile {
+                    path: Some("/tmp/b.rs".into()),
+                    text: String::new(),
+                    language_id: "rust".into(),
+                    version: 1,
+                    is_dirty: false,
+                },
             ])
             .await;
 

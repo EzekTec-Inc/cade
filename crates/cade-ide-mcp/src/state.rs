@@ -11,10 +11,23 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 /// A single file currently open in an editor tab.
+///
+/// Shape matches the LSP `TextDocumentItem` conventions so editor
+/// adapters can map their native buffer representation onto it with
+/// minimal translation.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OpenFile {
     /// Absolute filesystem path. `None` for unsaved scratch buffers.
     pub path: Option<String>,
+    /// Full text of the buffer.
+    pub text: String,
+    /// Language identifier (e.g. `"rust"`, `"typescript"`). Matches LSP.
+    pub language_id: String,
+    /// Monotonically-increasing version counter. Adapters bump this on
+    /// every edit so tools applying changes can detect stale snapshots.
+    pub version: u64,
+    /// `true` when the buffer has unsaved changes.
+    pub is_dirty: bool,
 }
 
 /// 0-indexed line + UTF-16 code-unit offset (LSP convention).
@@ -182,11 +195,38 @@ mod tests {
     async fn replace_open_files_updates_count() {
         let s = EditorState::new();
         s.replace_open_files(vec![
-            OpenFile { path: Some("/tmp/a.rs".into()) },
-            OpenFile { path: Some("/tmp/b.rs".into()) },
+            OpenFile {
+                path: Some("/tmp/a.rs".into()),
+                text: String::new(),
+                language_id: "rust".into(),
+                version: 1,
+                is_dirty: false,
+            },
+            OpenFile {
+                path: Some("/tmp/b.rs".into()),
+                text: String::new(),
+                language_id: "rust".into(),
+                version: 1,
+                is_dirty: false,
+            },
         ])
         .await;
         assert_eq!(s.open_file_count().await, 2);
+    }
+
+    #[tokio::test]
+    async fn open_file_round_trips_full_shape() {
+        let s = EditorState::new();
+        let f = OpenFile {
+            path: Some("/tmp/a.rs".into()),
+            text: "fn main() {}\n".into(),
+            language_id: "rust".into(),
+            version: 7,
+            is_dirty: true,
+        };
+        s.replace_open_files(vec![f.clone()]).await;
+        let snap = s.open_files_snapshot().await;
+        assert_eq!(snap, vec![f]);
     }
 
     #[tokio::test]
