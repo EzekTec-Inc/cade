@@ -328,7 +328,7 @@ impl ThemeColors {
             error:   ColorDef::Rgb(247,  93, 100),   // soft coral
             warning: ColorDef::Rgb(224, 175, 104),   // warm amber
 
-            text_primary: ColorDef::Reset,
+            text_primary: ColorDef::Rgb(205, 214, 244),  // near-white (Catppuccin "Text")
             text_muted:   ColorDef::Rgb(122, 128, 153),  // mid-grey, blue-tinted
             text_dim:     ColorDef::Rgb( 72,  78,  98),  // dark hint text
 
@@ -501,7 +501,7 @@ impl ThemeColors {
             error:   ColorDef::Rgb(185,  28,  28),   // deep red
             warning: ColorDef::Rgb(146,  88,   0),   // dark amber
 
-            text_primary: ColorDef::Reset,
+            text_primary: ColorDef::Rgb( 30,  36,  58),   // dark charcoal — readable on white
             text_muted:   ColorDef::Rgb( 90, 100, 125),
             text_dim:     ColorDef::Rgb(148, 158, 180),
 
@@ -516,7 +516,7 @@ impl ThemeColors {
             md_link:             ColorDef::Rgb( 14,  98, 200),
             md_link_url:         ColorDef::Rgb( 90, 100, 125),
             md_code:             ColorDef::Rgb(  0, 118, 118),
-            md_code_block:       ColorDef::Reset,
+            md_code_block:       ColorDef::Rgb( 30,  36,  58),   // explicit dark (not Reset)
             md_code_block_border: ColorDef::Rgb(180, 190, 215),
             md_quote:            ColorDef::Rgb( 90, 100, 125),
             md_quote_border:     ColorDef::Rgb(180, 190, 215),
@@ -640,6 +640,7 @@ impl ThemeColors {
         c.warning      = ColorDef::Rgb(223, 142,  29);  // Yellow
         c.accent_dim   = ColorDef::Rgb( 80, 140, 210);
         // Text
+        c.text_primary = ColorDef::Rgb( 76,  79, 105);  // Text
         c.text_muted   = ColorDef::Rgb( 92, 106, 134);  // Overlay2
         c.text_dim     = ColorDef::Rgb(156, 160, 176);  // Surface2
         // Borders
@@ -1201,6 +1202,39 @@ mod tests {
             dark_entries[0].description.as_deref(),
             Some("Custom override"),
             "on-disk theme must win over builtin listing"
+        );
+    }
+
+    #[test]
+    fn light_theme_text_colors_are_readable_on_white() {
+        // Regression guard for Phase 7: the GUI maps ColorDef::Reset to a
+        // pastel light color (205, 214, 244) which is invisible on the
+        // light theme's near-white background.  light() must use explicit
+        // dark RGB values for any text slot that will render on
+        // bg_base / bg_surface*.
+        let light = ThemeColors::light();
+
+        fn is_readably_dark(c: &ColorDef) -> bool {
+            match c {
+                ColorDef::Rgb(r, g, b) => {
+                    // YIQ perceived brightness; <128 ~= dark enough to read on white.
+                    let brightness =
+                        (*r as u32 * 299 + *g as u32 * 587 + *b as u32 * 114) / 1000;
+                    brightness < 180
+                }
+                ColorDef::Reset => false, // Reset = terminal default, not safe on GUI
+            }
+        }
+
+        assert!(
+            is_readably_dark(&light.text_primary),
+            "light.text_primary must be dark enough to read on white; got {:?}",
+            light.text_primary
+        );
+        assert!(
+            is_readably_dark(&light.md_code_block),
+            "light.md_code_block must be dark enough to read on white; got {:?}",
+            light.md_code_block
         );
     }
 

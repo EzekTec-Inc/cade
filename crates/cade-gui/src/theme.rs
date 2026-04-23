@@ -15,7 +15,13 @@ impl EguiColorExt for ColorDef {
     fn to_egui(self) -> Color32 {
         match self {
             ColorDef::Rgb(r, g, b) => Color32::from_rgb(r, g, b),
-            ColorDef::Reset => Color32::from_rgb(205, 214, 244),
+            // `ColorDef::Reset` means "inherit terminal default" in TUI land.
+            // In the GUI there is no terminal default, so we pick a neutral
+            // grey (RGB 130) that remains readable on both dark and light
+            // surfaces.  Themes that care about contrast on white should
+            // use explicit `ColorDef::Rgb(..)` instead — see the
+            // `light_theme_text_colors_are_readable_on_white` regression.
+            ColorDef::Reset => Color32::from_rgb(130, 130, 130),
         }
     }
 }
