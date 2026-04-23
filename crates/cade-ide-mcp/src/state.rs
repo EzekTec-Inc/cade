@@ -82,6 +82,29 @@ pub struct WorkspaceFolder {
     pub name: String,
 }
 
+/// A single text replacement inside a [`ApplyEditRequest`].
+///
+/// Follows the LSP `TextEdit` convention: replace everything in `range`
+/// with `new_text`. An empty `new_text` deletes the range; a zero-width
+/// range (start == end) inserts `new_text` at that position.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct TextEdit {
+    pub range: Range,
+    pub new_text: String,
+}
+
+/// Arguments for the `apply_edit` tool / `EditorChannel::apply_edit`
+/// callback. Edits a single file; a future phase may add a multi-file
+/// variant.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+pub struct ApplyEditRequest {
+    /// Absolute path of the file to edit. Must currently be open.
+    pub path: String,
+    /// Edits to apply, in order. Adapters are expected to apply them
+    /// atomically relative to each other.
+    pub text_edits: Vec<TextEdit>,
+}
+
 #[derive(Debug, Default)]
 struct Inner {
     open_files: Vec<OpenFile>,

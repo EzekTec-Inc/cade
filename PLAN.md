@@ -1,3 +1,38 @@
+## 2026-04-23T20:30:00Z — cade-ide-mcp M-IDE-1b.1: apply_edit callback on EditorChannel (TDD cycle 1 of M-IDE-1b)
+
+**Task:** Open M-IDE-1b (edit tools). First cycle extends the `EditorChannel` trait with an `apply_edit` mutating callback. Ships the callback shape + default "method not found" behavior; tool wiring in the next cycle.
+
+**User-approved dependency change this cycle:** `async-trait.workspace = true` added to `crates/cade-ide-mcp/Cargo.toml`. `async-trait` is already a workspace-level dep (used by cade-ai, cade-server). No net-new crate.
+
+**Design-shift honesty:** Earlier in cycle 8 I claimed we could use native `async fn` in traits (Rust 1.94 + edition 2024). That's correct for monomorphic impls, but **not** yet dyn-compatible without nightly features. Since the existing object-safety test asserts `Arc<dyn EditorChannel>`, mutating methods must go through `async-trait`. Adopting the project-standard `#[async_trait]` macro matches cade-ai / cade-server patterns.
+
+**Scope guardrail:** Only `channel.rs`, `state.rs`, and `Cargo.toml`. No tool wiring yet. Default trait-method impl returns a JSON-RPC -32601 `METHOD_NOT_FOUND` error, so `NullEditorChannel` and all future adapters that haven't overridden `apply_edit` refuse loudly by default.
+
+**Files modified:**
+- `crates/cade-ide-mcp/Cargo.toml` — added `async-trait.workspace = true`.
+- `crates/cade-ide-mcp/src/state.rs`:
+  - New `pub struct TextEdit { range: Range, new_text: String }` (LSP `TextEdit` shape).
+  - New `pub struct ApplyEditRequest { path: String, text_edits: Vec<TextEdit> }`.
+- `crates/cade-ide-mcp/src/channel.rs`:
+  - `EditorChannel` gets `#[async_trait]` and an `async fn apply_edit(&self, ApplyEditRequest) -> Result<(), ErrorData>` with a default method-not-found impl.
+  - `impl EditorChannel for NullEditorChannel` is now `#[async_trait]`-decorated; inherits the default `apply_edit`.
+  - New test `default_apply_edit_returns_method_not_supported` asserting `err.code.0 == ErrorCode::METHOD_NOT_FOUND.0`.
+  - Existing `editor_channel_is_object_safe_and_send_sync` kept — proves `async-trait` preserved dyn compatibility.
+
+**TDD record:**
+- RED: new test fails with E0422 (`ApplyEditRequest` missing), E0599 (method missing), E0282.
+- GREEN: added deps, types, trait method + default impl. `cargo test -p cade-ide-mcp` → 28 unit + 2 e2e = 30/30 pass. `cargo check --workspace` clean.
+- REFACTOR: none.
+
+**Previous behavior:** `EditorChannel` had lifecycle-only methods.
+
+**New behavior:** Adapters can override `apply_edit` to handle the forthcoming tool. The default rejects every call with a structured MCP error, so the trait is safe to expand without breaking `NullEditorChannel` or existing adapters.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T20:10:00Z — cade-ide-mcp M-IDE-1a.23: docs (cycle 23, closes M-IDE-1a)
 
 **Task:** Document the new IDE-MCP bridge so future contributors and users understand what shipped, how to run it, and what comes next. Closes M-IDE-1a.

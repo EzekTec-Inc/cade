@@ -2,16 +2,28 @@
 //!
 //! Editor adapters (the VS Code extension, the JetBrains plugin, tests)
 //! implement [`EditorChannel`]. Read-only tools only inspect
-//! [`crate::EditorState`] and do not touch the channel; edit / task /
-//! terminal / debug tools will (in later phases) route through the
-//! channel to call back into the editor.
+//! [`crate::EditorState`] and do not touch the channel; mutating tools
+//! (edit / task / terminal / debug) route through the channel to call
+//! back into the editor.
+
+use async_trait::async_trait;
+use rmcp::model::ErrorData;
+
+use crate::state::ApplyEditRequest;
 
 /// Callbacks the MCP tools can invoke against the connected editor.
 ///
-/// Phase M-IDE-1a exposes only lifecycle methods: a label for the
-/// adapter and a connection flag. Callback methods for editing, tasks,
-/// the terminal, and the debugger are added in subsequent phases so
-/// each lands with its own failing test.
+/// The trait is `async_trait`-shaped so adapters can be stored as
+/// `Arc<dyn EditorChannel>` (rmcp tools hold one) while still using
+/// async methods — native `async fn` in traits is not yet
+/// dyn-compatible without nightly features.
+///
+/// Every mutating method has a default implementation that returns
+/// JSON-RPC `method not found` / `-32601`. Concrete adapters override
+/// the callbacks they actually support; [`NullEditorChannel`] keeps
+/// every default, which makes the mutating-tool surface fail loudly
+/// until a real adapter attaches.
+#[async_trait]
 pub trait EditorChannel: Send + Sync + 'static {
     /// Human-readable label for the adapter
     /// (`"vscode-1.90.0"`, `"intellij-2025.1"`, `"null"`).
@@ -21,14 +33,30 @@ pub trait EditorChannel: Send + Sync + 'static {
     /// callbacks; `false` before the adapter attaches or after it
     /// disconnects. Read-only tools are unaffected.
     fn is_connected(&self) -> bool;
+
+    /// Apply a batch of [`crate::state::TextEdit`]s to a single open
+    /// file. Default implementation refuses with
+    /// `ErrorData::method_not_found`.
+    async fn apply_edit(&self, _req: ApplyEditRequest) -> Result<(), ErrorData> {
+        Err(ErrorData::new(
+            rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+            format!(
+                "editor adapter '{}' does not support apply_edit",
+                self.label()
+            ),
+            None,
+        ))
+    }
 }
 
 /// No-op channel used before a real adapter attaches and by tests that
-/// only exercise read-only behaviors. `label()` is `"null"` and
-/// `is_connected()` is always `false`.
+/// only exercise read-only behaviors. `label()` is `"null"`,
+/// `is_connected()` is always `false`, and every mutating callback
+/// inherits the trait default (method-not-found error).
 #[derive(Debug, Default, Clone, Copy)]
 pub struct NullEditorChannel;
 
+#[async_trait]
 impl EditorChannel for NullEditorChannel {
     fn label(&self) -> &str {
         "null"
@@ -62,7 +90,19 @@ mod tests {
         let boxed: std::sync::Arc<dyn EditorChannel> = std::sync::Arc::new(NullEditorChannel);
         assert_eq!(boxed.label(), "null");
     }
+
+    #[tokio::test]
+    async fn default_apply_edit_returns_method_not_supported() {
+        let c = NullEditorChannel;
+        let err = c
+            .apply_edit(ApplyEditRequest {
+                path: "/tmp/a.rs".into(),
+                text_edits: vec![],
+            })
+            .await
+            .expect_err("NullEditorChannel must refuse apply_edit");
+        assert_eq!(err.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
+    }
 }
 
 // endregion: --- Tests
-

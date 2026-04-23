@@ -875,6 +875,7 @@ dependencies = [
 name = "cade-ide-mcp"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "rmcp",
  "schemars",
  "serde",
