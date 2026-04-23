@@ -13,6 +13,6 @@ pub mod palette;
 pub use context_files::{ContextFile, ContextScope, build_context_block, discover_context_files};
 pub use packages::{PackageManifest, PackageScope, PackageSource, load_manifest, package_root};
 pub use prompts::{PromptTemplate, discover_prompts, expand_template};
-pub use themes::{Theme, ThemeColor, ThemeTokens, discover_themes, load_theme};
+pub use themes::{Theme, ThemeColor, ThemeTokens, discover_themes, discover_themes_with_builtins, load_theme};
 
 // endregion: --- Re-exports

@@ -195,13 +195,8 @@ impl TuiApp {
                         if !tp.filtered_indices.is_empty() {
                             let idx = tp.filtered_indices[tp.cursor];
                             let t = &tp.themes[idx];
-                            let colors = if t.name == "dark" {
-                                crate::colors::ThemeColors::dark()
-                            } else if t.name == "light" {
-                                crate::colors::ThemeColors::light()
-                            } else {
-                                crate::colors::ThemeColors::from_theme(t)
-                            };
+                            let colors = crate::colors::ThemeColors::builtin_by_name(&t.name)
+                                .unwrap_or_else(|| crate::colors::ThemeColors::from_theme(t));
                             self.apply_theme(colors);
                         }
                     }
@@ -216,13 +211,8 @@ impl TuiApp {
                         if !tp.filtered_indices.is_empty() {
                             let idx = tp.filtered_indices[tp.cursor];
                             let t = &tp.themes[idx];
-                            let colors = if t.name == "dark" {
-                                crate::colors::ThemeColors::dark()
-                            } else if t.name == "light" {
-                                crate::colors::ThemeColors::light()
-                            } else {
-                                crate::colors::ThemeColors::from_theme(t)
-                            };
+                            let colors = crate::colors::ThemeColors::builtin_by_name(&t.name)
+                                .unwrap_or_else(|| crate::colors::ThemeColors::from_theme(t));
                             self.apply_theme(colors);
                         }
                     }

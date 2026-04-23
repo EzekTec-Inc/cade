@@ -757,6 +757,36 @@ pub fn discover_themes(cwd: &Path, agent_dir: &Path) -> Vec<Theme> {
     themes
 }
 
+/// Discover all themes (built-ins merged with on-disk) in display order.
+///
+/// Built-ins from [`ThemeColors::builtin_listing`] are included at the top
+/// unless an on-disk file of the same name has already been discovered.
+/// The stubs carry `colors: Default::default()` and `source: "builtin"` —
+/// callers that want to resolve colors for a built-in must call
+/// [`ThemeColors::builtin_by_name`] first.
+pub fn discover_themes_with_builtins(cwd: &Path, agent_dir: &Path) -> Vec<Theme> {
+    let mut themes = discover_themes(cwd, agent_dir);
+
+    for (idx, (name, desc, variant)) in ThemeColors::builtin_listing().iter().enumerate() {
+        if !themes.iter().any(|t| t.name == *name) {
+            themes.insert(
+                idx.min(themes.len()),
+                Theme {
+                    name: name.to_string(),
+                    description: Some(desc.to_string()),
+                    author: Some("CADE".to_string()),
+                    variant: Some(variant.to_string()),
+                    vars: Default::default(),
+                    colors: ThemeTokens::default(),
+                    source: std::path::PathBuf::from("builtin"),
+                },
+            );
+        }
+    }
+
+    themes
+}
+
 /// Load a single theme from a JSON or tmTheme file.
 pub fn load_theme(path: &Path) -> crate::Result<Theme> {
     if path.extension().and_then(|e| e.to_str()) == Some("tmTheme") {
@@ -1118,6 +1148,60 @@ mod tests {
         assert_ne!(tc.thinking_high, dark.thinking_high, "thinking_high not mapped");
         assert_ne!(tc.thinking_xhigh, dark.thinking_xhigh, "thinking_xhigh not mapped");
         assert_ne!(tc.bash_mode, dark.bash_mode, "bash_mode not mapped");
+    }
+
+    #[test]
+    fn discover_themes_with_builtins_adds_all_builtins_on_empty_dirs() {
+        let cwd = make_dir();
+        let agent_dir = make_dir();
+
+        let themes = discover_themes_with_builtins(cwd.path(), agent_dir.path());
+        let names: Vec<&str> = themes.iter().map(|t| t.name.as_str()).collect();
+
+        for expected in ThemeColors::builtin_names() {
+            assert!(
+                names.contains(expected),
+                "builtin '{expected}' must appear in discover_themes_with_builtins; got {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn discover_themes_with_builtins_respects_ondisk_shadowing() {
+        let cwd = make_dir();
+        let agent_dir = make_dir();
+
+        // Write a custom on-disk "dark.json" that shadows the builtin
+        let themes_dir = cwd.path().join(".cade").join("themes");
+        fs::create_dir_all(&themes_dir).unwrap();
+        let custom_theme = Theme {
+            name: "dark".to_string(),
+            description: Some("Custom override".to_string()),
+            author: Some("user".to_string()),
+            variant: Some("dark".to_string()),
+            vars: Default::default(),
+            colors: ThemeTokens::default(),
+            source: PathBuf::new(),
+        };
+        fs::write(
+            themes_dir.join("dark.json"),
+            serde_json::to_string(&custom_theme).unwrap(),
+        )
+        .unwrap();
+
+        let themes = discover_themes_with_builtins(cwd.path(), agent_dir.path());
+        let dark_entries: Vec<&Theme> = themes.iter().filter(|t| t.name == "dark").collect();
+
+        assert_eq!(
+            dark_entries.len(),
+            1,
+            "on-disk 'dark' must shadow the builtin — only one entry expected"
+        );
+        assert_eq!(
+            dark_entries[0].description.as_deref(),
+            Some("Custom override"),
+            "on-disk theme must win over builtin listing"
+        );
     }
 
     #[test]

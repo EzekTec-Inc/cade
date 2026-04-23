@@ -396,13 +396,11 @@ impl TuiApp {
         {
             let idx = tp.filtered_indices[tp.cursor];
             let t = &tp.themes[idx];
-            let colors = if t.name == "dark" {
-                crate::colors::ThemeColors::dark()
-            } else if t.name == "light" {
-                crate::colors::ThemeColors::light()
-            } else {
-                crate::colors::ThemeColors::from_theme(t)
-            };
+            // Built-ins first (avoids corruption from phantom Theme
+            // structs that have colors: Default::default()).  Falls back
+            // to from_theme() for custom on-disk themes.
+            let colors = crate::colors::ThemeColors::builtin_by_name(&t.name)
+                .unwrap_or_else(|| crate::colors::ThemeColors::from_theme(t));
             self.apply_theme(colors);
         }
     }

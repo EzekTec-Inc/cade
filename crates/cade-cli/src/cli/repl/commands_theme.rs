@@ -28,30 +28,10 @@ impl Repl {
                 .unwrap()
                 .to_path_buf();
 
-            // Discovered on-disk themes
-            let mut discovered = cade_core::resources::discover_themes(&self.cwd, &agent_dir);
-
-            // Merge built-ins that aren't already on disk — using the
-            // canonical `builtin_listing()` registry from cade-core so the
-            // CLI picker cannot drift from other surfaces.
-            for (idx, (name, desc, variant)) in
-                ThemeColors::builtin_listing().iter().enumerate()
-            {
-                if !discovered.iter().any(|t| t.name == *name) {
-                    discovered.insert(
-                        idx,
-                        cade_core::resources::Theme {
-                            name: name.to_string(),
-                            description: Some(desc.to_string()),
-                            author: Some("CADE".to_string()),
-                            variant: Some(variant.to_string()),
-                            vars: Default::default(),
-                            colors: Default::default(),
-                            source: std::path::PathBuf::from("builtin"),
-                        },
-                    );
-                }
-            }
+            // Built-ins + on-disk themes, merged via the canonical helper
+            // so the picker list cannot drift from other surfaces.
+            let discovered =
+                cade_core::resources::discover_themes_with_builtins(&self.cwd, &agent_dir);
 
             let current_colors = self.app.lock().colors.clone();
             self.app
