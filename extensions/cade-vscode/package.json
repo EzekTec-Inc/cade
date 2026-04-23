@@ -8,6 +8,7 @@
   "categories": ["Other"],
   "activationEvents": ["onStartupFinished"],
   "main": "./dist/extension.js",
+  "repository": { "type": "git", "url": "https://github.com/cade-ai/cade" },
   "contributes": {
     "commands": [
       {
