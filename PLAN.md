@@ -1,3 +1,28 @@
+## 2026-04-23T16:04:00Z — cade-ide-mcp M-IDE-1a.3: active_file getter/setter (TDD cycle 3)
+
+**Task:** Let the adapter report which file the user is focused on. Third TDD cycle.
+
+**Scope guardrail:** Only `state.rs`. No new dependencies. Active file is a simple `Option<String>` path; cross-check against `open_files` is deferred until a test demands it.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/state.rs` — added `active_file: Option<String>` field and getter/setter pair: `active_file(&self) -> Option<&str>`, `set_active_file(&mut self, Option<String>)`.
+
+**TDD record:**
+- RED: added `active_file_round_trips_through_setter` exercising `active_file() == None`, set, read back, clear, read back. `cargo test -p cade-ide-mcp --lib` failed with E0599 on both missing methods.
+- GREEN: added field + both methods. `cargo test -p cade-ide-mcp --lib` → 3/3 pass.
+- REFACTOR: none.
+
+**Previous behavior:** `EditorState` could not expose which file was focused.
+
+**New behavior:** Adapters push the active file path; callers can read it back.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T15:55:00Z — cade-ide-mcp M-IDE-1a.2: OpenFile list (TDD cycle 2)
 
 **Task:** Extend `EditorState` so the adapter can push a list of open files and the tool layer can count them. Second TDD cycle of the IDE-integration milestone.

@@ -17,6 +17,7 @@ pub struct OpenFile {
 #[derive(Debug, Default, Clone)]
 pub struct EditorState {
     open_files: Vec<OpenFile>,
+    active_file: Option<String>,
 }
 
 impl EditorState {
@@ -33,6 +34,16 @@ impl EditorState {
     /// Replace the open-file list with a fresh snapshot from the adapter.
     pub fn replace_open_files(&mut self, files: Vec<OpenFile>) {
         self.open_files = files;
+    }
+
+    /// Path of the file the user is currently focused on, if any.
+    pub fn active_file(&self) -> Option<&str> {
+        self.active_file.as_deref()
+    }
+
+    /// Update the currently-focused file. Pass `None` to clear.
+    pub fn set_active_file(&mut self, path: Option<String>) {
+        self.active_file = path;
     }
 }
 
@@ -56,6 +67,16 @@ mod tests {
             OpenFile { path: Some("/tmp/b.rs".into()) },
         ]);
         assert_eq!(s.open_file_count(), 2);
+    }
+
+    #[test]
+    fn active_file_round_trips_through_setter() {
+        let mut s = EditorState::new();
+        assert_eq!(s.active_file(), None);
+        s.set_active_file(Some("/tmp/a.rs".into()));
+        assert_eq!(s.active_file(), Some("/tmp/a.rs"));
+        s.set_active_file(None);
+        assert_eq!(s.active_file(), None);
     }
 }
 
