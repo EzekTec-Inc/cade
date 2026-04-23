@@ -1,3 +1,18 @@
+## 2026-04-23T21:05:00Z — cade-ide-mcp M-IDE-1b.5: set_selection callback on EditorChannel
+
+Third mutating callback.
+
+TDD record:
+  RED   default_set_selection_returns_method_not_supported: E0599
+  GREEN added `async fn set_selection(&self, path: String, range: Range) -> Result<(), ErrorData>`
+        with default method_not_found impl.
+        34 unit + 2 e2e = 36/36 pass. workspace clean.
+  REFACTOR  none
+
+**Files modified:** `crates/cade-ide-mcp/src/channel.rs`
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T21:00:00Z — cade-ide-mcp M-IDE-1b.4: open_file MCP tool (TDD cycle 4 of M-IDE-1b)
 
 Wire the open_file tool on top of cycle-3's reveal_file callback. Same pattern as apply_edit.

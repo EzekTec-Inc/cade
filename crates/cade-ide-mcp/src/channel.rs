@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use rmcp::model::ErrorData;
 
-use crate::state::ApplyEditRequest;
+use crate::state::{ApplyEditRequest, Range};
 
 /// Callbacks the MCP tools can invoke against the connected editor.
 ///
@@ -56,6 +56,24 @@ pub trait EditorChannel: Send + Sync + 'static {
             rmcp::model::ErrorCode::METHOD_NOT_FOUND,
             format!(
                 "editor adapter '{}' does not support reveal_file",
+                self.label()
+            ),
+            None,
+        ))
+    }
+
+    /// Replace the active selection in `path` with `range`. The file
+    /// must be open; the adapter is free to also reveal it. Default
+    /// implementation refuses with `ErrorData::method_not_found`.
+    async fn set_selection(
+        &self,
+        _path: String,
+        _range: Range,
+    ) -> Result<(), ErrorData> {
+        Err(ErrorData::new(
+            rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+            format!(
+                "editor adapter '{}' does not support set_selection",
                 self.label()
             ),
             None,
@@ -125,6 +143,23 @@ mod tests {
             .reveal_file("/tmp/a.rs".into())
             .await
             .expect_err("NullEditorChannel must refuse reveal_file");
+        assert_eq!(err.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
+    }
+
+    #[tokio::test]
+    async fn default_set_selection_returns_method_not_supported() {
+        use crate::state::{Position, Range};
+        let c = NullEditorChannel;
+        let err = c
+            .set_selection(
+                "/tmp/a.rs".into(),
+                Range {
+                    start: Position { line: 0, character: 0 },
+                    end:   Position { line: 0, character: 0 },
+                },
+            )
+            .await
+            .expect_err("NullEditorChannel must refuse set_selection");
         assert_eq!(err.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
     }
 }
