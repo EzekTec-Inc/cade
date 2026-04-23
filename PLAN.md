@@ -1,3 +1,29 @@
+## 2026-04-23T19:58:00Z — cade-ide-mcp M-IDE-1a.22: stdio binary (TDD cycle 22)
+
+**Task:** Make `cade-ide-mcp` runnable as a subprocess. Editor adapters spawn the binary and speak MCP over stdin/stdout.
+
+**Scope guardrail:** One new source file + `[[bin]]` block in the crate manifest + one new crate dep (`tracing-subscriber.workspace`). No workspace-level dep changes (`tracing-subscriber` already a workspace dep). No new workspace crate.
+
+**Files modified:**
+- `crates/cade-ide-mcp/Cargo.toml` — added `[[bin]] name = "cade-ide-mcp" path = "src/bin/cade-ide-mcp.rs"` and `tracing-subscriber.workspace = true` to `[dependencies]`.
+- `crates/cade-ide-mcp/src/bin/cade-ide-mcp.rs` — **new**. `#[tokio::main]` stdio entrypoint. Builds an `IdeMcpServer::with_null_channel(EditorState::new())`, wires `rmcp::transport::io::stdio()` as the transport, and serves until stdin closes. Logging routed to stderr via `tracing_subscriber::fmt().with_writer(std::io::stderr)` with ANSI disabled and an `EnvFilter` defaulting to `info`. Error type is `Box<dyn Error + Send + Sync>` — no new dep like `anyhow` introduced.
+
+**TDD record:**
+- RED: added the `[[bin]]` block pointing at a non-existent file. `cargo build -p cade-ide-mcp --bin cade-ide-mcp` failed: `can't find bin 'cade-ide-mcp'`.
+- GREEN: created the file with the stdio main. `cargo build` succeeds. Smoke test: `echo '{"jsonrpc":"2.0","id":1,"method":"initialize",…}' | ./target/debug/cade-ide-mcp` returns a well-formed `initialize` response advertising `serverInfo.name = "cade-ide-mcp"`, `version = "0.1.0"`, `capabilities.tools = {}`. Stderr shows `cade-ide-mcp starting on stdio version="0.1.0"` and `rmcp::service: Service initialized as server`. All 29 existing tests still pass. `cargo check --workspace` clean.
+- REFACTOR: none.
+
+**Previous behavior:** `cade-ide-mcp` was library-only.
+
+**New behavior:** Editor adapters (or `.cade/settings.json` MCP server entries) can run `cade-ide-mcp` as a subprocess and consume its read tools over MCP stdio. The `NullEditorChannel` still gates mutating tools; cycle 23+ will add an adapter protocol layer that populates the shared `EditorState` from real editor events.
+
+**Dependency policy:** No new workspace deps. `tracing-subscriber` is already workspace-level.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T19:48:00Z — cade-ide-mcp M-IDE-1a.21: get_file_content tool (TDD cycle 21)
 
 **Task:** Seventh read tool — `get_file_content(path)` returns the full buffer text of a single open file. First tool with an argument and first tool that can fail (path not open → MCP error -32602 invalid_params).
