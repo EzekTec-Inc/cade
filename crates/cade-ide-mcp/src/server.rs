@@ -6,10 +6,10 @@
 use std::sync::Arc;
 
 use rmcp::handler::server::router::tool::ToolRouter;
-use rmcp::handler::server::wrapper::Json;
-use rmcp::model::{Implementation, ProtocolVersion, ServerCapabilities, ServerInfo};
+use rmcp::handler::server::wrapper::{Json, Parameters};
+use rmcp::model::{ErrorData, Implementation, ProtocolVersion, ServerCapabilities, ServerInfo};
 use rmcp::{ServerHandler, tool, tool_handler, tool_router};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 use crate::channel::{EditorChannel, NullEditorChannel};
 use crate::state::EditorState;
@@ -111,6 +111,24 @@ pub struct GetVisibleRangeOut {
     pub end_line: Option<u32>,
 }
 
+/// Input of the `get_file_content` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct GetFileContentIn {
+    /// Absolute filesystem path of an open file to read.
+    pub path: String,
+}
+
+/// Output of the `get_file_content` tool. Mirrors the LSP
+/// `TextDocumentItem` shape for the single file that was requested.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct GetFileContentOut {
+    pub path: String,
+    pub text: String,
+    pub language_id: String,
+    pub version: u64,
+    pub is_dirty: bool,
+}
+
 impl IdeMcpServer {
     /// Test-friendly accessor behind `get_active_file`. The `#[tool]`
     /// method delegates here so unit tests can drive the logic without
@@ -164,6 +182,34 @@ impl IdeMcpServer {
                 start_line: None,
                 end_line: None,
             },
+        }
+    }
+
+    /// Test-friendly accessor behind `get_file_content`.
+    ///
+    /// Returns `ErrorData::invalid_params` (JSON-RPC -32602) when the
+    /// path is not currently open — the agent should not trigger a
+    /// filesystem read fallback; the adapter owns buffer state.
+    async fn get_file_content_impl(
+        &self,
+        path: String,
+    ) -> Result<GetFileContentOut, ErrorData> {
+        let open = self.state.open_files_snapshot().await;
+        let hit = open
+            .into_iter()
+            .find(|f| f.path.as_deref() == Some(path.as_str()));
+        match hit {
+            Some(f) => Ok(GetFileContentOut {
+                path,
+                text: f.text,
+                language_id: f.language_id,
+                version: f.version,
+                is_dirty: f.is_dirty,
+            }),
+            None => Err(ErrorData::invalid_params(
+                format!("file not open in editor: {path}"),
+                None,
+            )),
         }
     }
 }
@@ -223,6 +269,18 @@ impl IdeMcpServer {
     )]
     async fn get_visible_range(&self) -> Json<GetVisibleRangeOut> {
         Json(self.get_visible_range_impl().await)
+    }
+
+    /// Return the full text of a single open file.
+    #[tool(
+        name = "get_file_content",
+        description = "Return the full buffer text of a single open file, identified by its absolute path. Errors if the path is not currently open in the editor — the agent should not trigger a filesystem read; the editor adapter owns buffer state."
+    )]
+    async fn get_file_content(
+        &self,
+        Parameters(GetFileContentIn { path }): Parameters<GetFileContentIn>,
+    ) -> Result<Json<GetFileContentOut>, ErrorData> {
+        self.get_file_content_impl(path).await.map(Json)
     }
 }
 
@@ -404,6 +462,50 @@ mod tests {
     #[test]
     fn tool_router_registers_get_visible_range() {
         assert!(IdeMcpServer::tool_router().has_route("get_visible_range"));
+    }
+
+    #[tokio::test]
+    async fn get_file_content_returns_text_for_matching_path() {
+        let state = EditorState::new();
+        let server = IdeMcpServer::with_null_channel(state.clone());
+
+        state
+            .replace_open_files(vec![crate::state::OpenFile {
+                path: Some("/tmp/a.rs".into()),
+                text: "fn main() {}\n".into(),
+                language_id: "rust".into(),
+                version: 3,
+                is_dirty: true,
+            }])
+            .await;
+
+        let out = server
+            .get_file_content_impl("/tmp/a.rs".to_string())
+            .await
+            .expect("expected file to be found");
+        assert_eq!(out.text, "fn main() {}\n");
+        assert_eq!(out.language_id, "rust");
+        assert_eq!(out.version, 3);
+        assert!(out.is_dirty);
+    }
+
+    #[tokio::test]
+    async fn get_file_content_errors_when_path_not_open() {
+        let server = IdeMcpServer::with_null_channel(EditorState::new());
+        let err = server
+            .get_file_content_impl("/nope.rs".to_string())
+            .await
+            .expect_err("expected not-found error");
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("/nope.rs"),
+            "expected path echoed in error, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn tool_router_registers_get_file_content() {
+        assert!(IdeMcpServer::tool_router().has_route("get_file_content"));
     }
 
     #[test]

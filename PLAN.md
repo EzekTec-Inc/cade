@@ -1,3 +1,33 @@
+## 2026-04-23T19:48:00Z — cade-ide-mcp M-IDE-1a.21: get_file_content tool (TDD cycle 21)
+
+**Task:** Seventh read tool — `get_file_content(path)` returns the full buffer text of a single open file. First tool with an argument and first tool that can fail (path not open → MCP error -32602 invalid_params).
+
+**Scope guardrail:** Only `server.rs`. No new deps.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/server.rs`:
+  - New `pub struct GetFileContentIn { path: String }` (Deserialize + JsonSchema) and `pub struct GetFileContentOut { path, text, language_id, version, is_dirty }` (Serialize + JsonSchema).
+  - New inherent `get_file_content_impl(&self, path: String) -> Result<GetFileContentOut, ErrorData>` — looks up `path` in `state.open_files_snapshot()`; returns `ErrorData::invalid_params` when not found (the agent should not silently filesystem-read; the adapter owns buffer state).
+  - New `#[tool] get_file_content(&self, Parameters(GetFileContentIn { path })) -> Result<Json<GetFileContentOut>, ErrorData>` wrapping it.
+  - Added `rmcp::handler::server::wrapper::Parameters` and `rmcp::model::ErrorData` to the import list; `serde::Deserialize` too.
+  - Three new tests: happy-path round-trip, error-path (file not open → path echoed in error), router registration.
+
+**TDD record:**
+- RED: all three tests fail (E0599 missing method, E0282 needs type hint because method doesn't exist).
+- GREEN: `cargo test -p cade-ide-mcp` → 27 unit + 2 e2e = 29/29 pass. `cargo check --workspace` clean.
+- REFACTOR: none.
+
+**Previous behavior:** Agents could only see the path list via `get_open_files`; reading the buffer text was impossible.
+
+**New behavior:** Agents can request the full text of any open file. Unknown paths return a structured MCP error rather than falling through to a filesystem read.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T19:35:00Z — cade-ide-mcp M-IDE-1a.20: OpenFile LSP shape (TDD cycle 20)
 
 **Task:** Extend `OpenFile` with the four LSP-standard fields the next tool (`get_file_content`, cycle 21) needs: `text`, `language_id`, `version`, `is_dirty`. Keeps the state type alone in this cycle; no new tool yet.
