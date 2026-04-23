@@ -37,6 +37,7 @@
     "moduleNameMapper": {
       "^vscode$": "<rootDir>/src/__mocks__/vscode.ts"
     },
-    "testMatch": ["**/*.test.ts"]
+    "testMatch": ["**/*.test.ts"],
+    "forceExit": true
   }
 }
