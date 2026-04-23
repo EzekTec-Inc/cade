@@ -79,7 +79,7 @@ impl IdeMcpServer {
     )]
     async fn get_active_file(&self) -> Json<GetActiveFileOut> {
         Json(GetActiveFileOut {
-            path: self.state.active_file().map(str::to_owned),
+            path: self.state.active_file().await,
         })
     }
 }
@@ -118,12 +118,12 @@ mod tests {
     use super::*;
     use crate::state::EditorState;
 
-    #[test]
-    fn server_with_null_channel_builds_and_exposes_state() {
+    #[tokio::test]
+    async fn server_with_null_channel_builds_and_exposes_state() {
         let state = EditorState::new();
         let server = IdeMcpServer::with_null_channel(state);
         assert_eq!(server.channel_label(), "null");
-        assert_eq!(server.state().open_file_count(), 0);
+        assert_eq!(server.state().open_file_count().await, 0);
     }
 
     #[test]

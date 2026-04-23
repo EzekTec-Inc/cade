@@ -1,3 +1,35 @@
+## 2026-04-23T18:15:00Z — cade-ide-mcp M-IDE-1a.13: shared-storage EditorState refactor (TDD cycle 13)
+
+**Task:** Back `EditorState` with `Arc<tokio::sync::RwLock<Inner>>` so adapter-side clones and server-side clones share storage. This is the prerequisite for the next tool-wiring cycles: a real editor adapter pushes updates into its clone after the server is already running, and the tool must see them.
+
+**Design choice (user-approved this cycle):** `Arc<tokio::sync::RwLock<Inner>>` over `Arc<std::sync::RwLock<Inner>>` or "immutable snapshots only". Matches the concurrency idiom used elsewhere in the project (cade-mcp, cade-server).
+
+**Scope guardrail:** Only `state.rs` + minimal caller patches in `server.rs`. No new dependencies (`tokio` already a workspace dep, used). No public API outside this crate — no external callers break.
+
+**Public API change (internal to cade-ide-mcp):**
+- All getters and setters on `EditorState` are now `async` and take `&self` (no `&mut self`). `Clone` clones the `Arc`; mutations go through the `RwLock`.
+- `EditorState` no longer exposes its fields through struct-literal construction; adapters build an empty state via `EditorState::new()` and populate it via the setter methods.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/state.rs` — extracted an internal `struct Inner { … }` holding the owned fields; `pub struct EditorState { inner: Arc<RwLock<Inner>> }`. All 13 getters and setters rewritten to `async fn (&self)`. All existing unit tests rewritten as `#[tokio::test]` with the new `.await` call shape.
+- `crates/cade-ide-mcp/src/server.rs` — `get_active_file` tool uses `self.state.active_file().await`; server unit test uses `open_file_count().await`.
+
+**TDD record:**
+- RED: added `clones_share_storage_after_mutation` — clones state `a` → `b`, sets active file on `b`, reads it on `a`. `cargo test -p cade-ide-mcp --lib state::tests::clones_share_storage_after_mutation` failed with E0277 (type mismatch: `()` is not a future; sync method signatures).
+- GREEN: refactored `EditorState` to `Arc<RwLock<Inner>>`, rewrote every getter/setter as `async fn (&self)`, migrated all unit tests to `#[tokio::test]`, patched the `get_active_file` tool and the server unit test. `cargo test -p cade-ide-mcp` → 13 unit + 1 integration = 14/14 pass. `cargo check --workspace` clean.
+- REFACTOR: removed a transient `open_file_count_async` helper added during the refactor; the final API is uniformly async with no sync "blocking_read" footgun.
+
+**Previous behavior:** `EditorState` was a plain owned struct; clones diverged; mutating setters required `&mut self`.
+
+**New behavior:** `EditorState::clone()` is an `Arc::clone`. Adapters and the MCP server hold independent clones that agree on current state.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T17:55:00Z — cade-ide-mcp M-IDE-1a.12: end-to-end tool_call characterization test (TDD cycle 12)
 
 **Task:** Prove that the `get_active_file` tool registered in cycle 10 and exposed through the `ServerHandler` impl of cycle 11 is actually reachable through a real rmcp client↔server roundtrip. The test spawns `IdeMcpServer` on one end of a `tokio::io::duplex` pair and an empty `()` client on the other, then issues a `tools/call` via `client.peer().call_tool(…)` and asserts the result JSON contains `"path":null` for an empty `EditorState`.
