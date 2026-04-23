@@ -1,3 +1,29 @@
+## 2026-04-23T16:55:00Z — cade-ide-mcp M-IDE-1a.9: IdeMcpServer wrapper (TDD cycle 9)
+
+**Task:** Introduce the top-level `IdeMcpServer` struct that wraps `EditorState` and `Arc<dyn EditorChannel>`. Ninth TDD cycle. Deliberately minimal: no rmcp transport yet, no `#[tool]` macros yet — that lands in a later cycle once the approval to extend rmcp features is exercised.
+
+**Scope guardrail:** Only `server.rs` (new) + a `pub use` line in `lib.rs`. No new workspace dependencies. Workspace `Cargo.toml` untouched.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/server.rs` — **new**. `pub struct IdeMcpServer { state: EditorState, channel: Arc<dyn EditorChannel> }` with `new`, `with_null_channel`, `state()`, `channel_label()`.
+- `crates/cade-ide-mcp/src/lib.rs` — added `mod server;` and `pub use server::IdeMcpServer;`.
+
+**TDD record:**
+- RED: `server::tests::server_with_null_channel_builds_and_exposes_state`. `cargo test -p cade-ide-mcp --lib` failed with E0432 / E0433 (`IdeMcpServer` undeclared).
+- GREEN: added struct + four methods. `cargo test -p cade-ide-mcp --lib` → 10/10 pass.
+- REFACTOR: none.
+
+**Previous behavior:** No wrapper existed to bind state and channel into a single handler.
+
+**New behavior:** Adapters construct one `IdeMcpServer` per editor attach and serve it as the MCP handler (once the rmcp wiring lands in a later cycle).
+
+**Dependency policy:** No new dependencies. Uses only `std::sync::Arc`.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T16:44:00Z — cade-ide-mcp M-IDE-1a.8: EditorChannel trait (TDD cycle 8)
 
 **Task:** Define the adapter-facing trait. Editor adapters (VS Code, JetBrains, tests) implement `EditorChannel`; phase M-IDE-1a only exposes lifecycle methods (`label()`, `is_connected()`) — mutating callbacks for edits, tasks, terminal, and debugger are deferred to later phases so each lands with its own failing test.

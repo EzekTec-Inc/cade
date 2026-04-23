@@ -10,9 +10,11 @@
 // region:    --- Modules
 
 mod channel;
+mod server;
 mod state;
 
 pub use channel::{EditorChannel, NullEditorChannel};
+pub use server::IdeMcpServer;
 pub use state::EditorState;
 
 // endregion: --- Modules
