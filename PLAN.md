@@ -1,3 +1,17 @@
+## 2026-04-23T21:36:00Z — cade-ide-mcp M-IDE-1b.9: run_task callback
+
+Fifth mutating callback.
+
+TDD record:
+  RED   default_run_task_returns_method_not_supported: E0599
+  GREEN added `async fn run_task(&self, name: String) -> Result<(), ErrorData>`
+        with default method_not_found impl. 40 unit + 2 e2e = 42/42 pass.
+  REFACTOR  none
+
+**Files modified:** `crates/cade-ide-mcp/src/channel.rs`
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T21:30:00Z — cade-ide-mcp M-IDE-1b.8: save_file + save_all MCP tools
 
 Two tools on the single save callback: save_file maps to save(Some(path)), save_all to save(None). Bundled into one cycle because they expose the same single behavior (forwarding through EditorChannel::save) at two callable names.
