@@ -1,3 +1,29 @@
+## 2026-04-23T18:28:00Z — cade-ide-mcp M-IDE-1a.14: adapter-push e2e test (TDD cycle 14)
+
+**Task:** Prove the new shared-storage `EditorState` (cycle 13) wired end-to-end: adapter clones the state, pushes `active_file = Some("/tmp/foo.rs")`, MCP client calls `get_active_file`, and the response contains the pushed path.
+
+**Scope guardrail:** Only the integration test file. No production code. No new deps.
+
+**Honest TDD note:** Another **characterization test** — the behavior already works after cycle 13's `Arc<RwLock<Inner>>` refactor. Value is regression-guarding the adapter-push pathway end-to-end and demonstrating the canonical wiring that future cycles reuse.
+
+**Files modified:**
+- `crates/cade-ide-mcp/tests/e2e_tool_call.rs` — added `get_active_file_returns_path_pushed_by_adapter`. Clones `EditorState`, pushes `set_active_file` **after** constructing the server (the realistic adapter lifecycle), spawns the server over a `tokio::io::duplex`, and asserts the tool result JSON contains `"/tmp/foo.rs"`.
+
+**Test record:**
+- `cargo test -p cade-ide-mcp` → 13 unit + 2 integration + 0 doc = **15/15** pass.
+- `cargo check --workspace` clean.
+
+**Previous behavior:** The adapter-push pathway was exercised only by an internal unit test (`clones_share_storage_after_mutation`).
+
+**New behavior:** The adapter-push pathway is regression-guarded end-to-end through the full rmcp wire protocol.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T18:15:00Z — cade-ide-mcp M-IDE-1a.13: shared-storage EditorState refactor (TDD cycle 13)
 
 **Task:** Back `EditorState` with `Arc<tokio::sync::RwLock<Inner>>` so adapter-side clones and server-side clones share storage. This is the prerequisite for the next tool-wiring cycles: a real editor adapter pushes updates into its clone after the server is already running, and the tool must see them.
