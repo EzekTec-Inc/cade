@@ -1,3 +1,28 @@
+## 2026-04-23T15:55:00Z — cade-ide-mcp M-IDE-1a.2: OpenFile list (TDD cycle 2)
+
+**Task:** Extend `EditorState` so the adapter can push a list of open files and the tool layer can count them. Second TDD cycle of the IDE-integration milestone.
+
+**Scope guardrail:** Only `state.rs`. No new dependencies. No tool layer. No async. `OpenFile` gets only the `path` field — buffer text, dirty flag, language id, version all deferred to later cycles where a test demands them.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/state.rs` — added `pub struct OpenFile { path: Option<String> }`, a private `open_files: Vec<OpenFile>` field on `EditorState`, and `replace_open_files(&mut self, Vec<OpenFile>)`. `open_file_count()` now returns `self.open_files.len()` instead of the hard-coded `0`.
+
+**TDD record:**
+- RED: added `replace_open_files_updates_count` expecting `open_file_count() == 2` after pushing two files. `cargo test -p cade-ide-mcp --lib` failed with E0422 (OpenFile), E0599 (replace_open_files missing).
+- GREEN: added the struct, field, and method. `cargo test -p cade-ide-mcp --lib` → 2/2 pass.
+- REFACTOR: none.
+
+**Previous behavior:** `EditorState` was an empty marker struct; `open_file_count()` always returned 0.
+
+**New behavior:** Adapters can call `replace_open_files(Vec<OpenFile>)`; `open_file_count()` reports the stored length.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T15:46:00Z — cade-ide-mcp M-IDE-1a.1: EditorState skeleton (TDD cycle 1)
 
 **Task:** First TDD cycle for the IDE-integration milestone. Replace the `Hello World` stub in `cade-ide-mcp` with a library crate that exposes a minimal `EditorState` type. Scope is deliberately tiny so every later read-tool can be added via its own red-green cycle.
