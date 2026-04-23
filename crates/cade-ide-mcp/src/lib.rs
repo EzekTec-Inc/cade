@@ -9,11 +9,13 @@
 
 // region:    --- Modules
 
+mod adapter_channel;
 mod channel;
 pub mod protocol;
 mod server;
 mod state;
 
+pub use adapter_channel::{MessageSink, ProtocolEditorChannel};
 pub use channel::{EditorChannel, NullEditorChannel};
 pub use server::IdeMcpServer;
 pub use state::EditorState;
