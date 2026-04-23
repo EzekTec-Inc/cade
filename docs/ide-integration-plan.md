@@ -4,10 +4,9 @@ The `cade-ide-mcp` crate is the long-term bridge between CADE agents and
 the user's editor. It speaks MCP over stdio so any MCP-capable agent
 (CADE, Claude Desktop, etc.) can introspect and drive the editor.
 
-Status: **M-IDE-1a + M-IDE-1b + M-IDE-1c complete** (state layer, channel
+Status: **M-IDE-1a + M-IDE-1b + M-IDE-1c + M-IDE-2 complete** (state layer, channel
 abstraction, 7 read tools, 9 write tools over 7 callbacks, stdio binary,
-TCP loopback adapter transport). Next up: **M-IDE-2** (VS Code extension).
-Later phases add the JetBrains plugin.
+TCP loopback adapter transport, VS Code extension). Next up: **M-IDE-3** (JetBrains plugin).
 
 ---
 
@@ -121,12 +120,32 @@ Complete as of commit `035648ef`.
 The VS Code extension reads this file to find which port to connect on.
 File is removed on clean binary exit.
 
-### M-IDE-2 — VS Code extension
+### M-IDE-2 — VS Code extension ✅
 
-TypeScript extension that spawns `cade-ide-mcp`, implements
-`EditorChannel` over the cycle-1c protocol, and registers with VS Code
-events (`onDidChangeActiveTextEditor`, `onDidChangeTextDocument`,
-`onDidChangeDiagnostics`, …).
+TypeScript extension (`extensions/cade-vscode/`) that connects VS Code to
+a running `cade-ide-mcp` process. Complete as of commit `7ec48e03`.
+
+**Structure:**
+
+| File                    | Role                                                                      |
+| ----------------------- | ------------------------------------------------------------------------- |
+| `src/protocol.ts`       | TypeScript mirror of `protocol.rs` — `AdapterMessage`, `ServerMessage`, `CallbackOp`, encode/decode helpers. |
+| `src/connection.ts`     | `CadeConnection` — reads discovery file, opens TCP socket, Hello/HelloAck, sends/receives frames. |
+| `src/statePublisher.ts` | `StatePublisher` — VS Code event listeners → debounced `StateUpdate` frames. |
+| `src/callbackHandler.ts`| `CallbackHandler` — dispatches `CallbackOp` to VS Code workspace/editor APIs. |
+| `src/extension.ts`      | `activate` / `deactivate` — wires all three together, registers `cade.reconnect` command. |
+
+**Build & install:**
+
+```sh
+cd extensions/cade-vscode
+npm install
+npm run build          # → dist/extension.js via esbuild
+npm run package        # → cade-vscode-0.1.0.vsix
+code --install-extension cade-vscode-0.1.0.vsix
+```
+
+**Test suite:** 50 Jest tests across 4 suites (`protocol`, `connection`, `statePublisher`, `callbackHandler`). Run with `npm test`.
 
 ### M-IDE-3 — JetBrains plugin
 
