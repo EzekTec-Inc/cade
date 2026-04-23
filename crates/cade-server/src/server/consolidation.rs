@@ -303,11 +303,21 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     );
 
     // Use the compaction model if configured, otherwise fall back to the main model.
+    // When the agent uses an OpenRouter model, always use the free GLM model for
+    // compaction to avoid burning paid tokens on summarisation.
+    const OPENROUTER_COMPACTION_MODEL: &str = "openrouter/z-ai/glm-4.5-air:free";
+
     let compaction_model = agent
         .compaction_model
         .as_deref()
         .filter(|m| !m.is_empty())
-        .unwrap_or(&agent.model);
+        .unwrap_or_else(|| {
+            if agent.model.starts_with("openrouter/") {
+                OPENROUTER_COMPACTION_MODEL
+            } else {
+                &agent.model
+            }
+        });
 
     let req = CompletionRequest {
         model: compaction_model.to_string(),
