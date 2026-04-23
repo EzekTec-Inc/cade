@@ -82,6 +82,13 @@ pub struct GetOpenFilesOut {
     pub files: Vec<OpenFileSummary>,
 }
 
+/// Output of the `get_selection` tool.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct GetSelectionOut {
+    /// `None` when the user has no active selection.
+    pub selection: Option<crate::state::Selection>,
+}
+
 impl IdeMcpServer {
     /// Test-friendly accessor behind `get_active_file`. The `#[tool]`
     /// method delegates here so unit tests can drive the logic without
@@ -100,6 +107,13 @@ impl IdeMcpServer {
                 .into_iter()
                 .map(|f| OpenFileSummary { path: f.path })
                 .collect(),
+        }
+    }
+
+    /// Test-friendly accessor behind `get_selection`.
+    async fn get_selection_impl(&self) -> GetSelectionOut {
+        GetSelectionOut {
+            selection: self.state.selection().await,
         }
     }
 }
@@ -123,6 +137,15 @@ impl IdeMcpServer {
     )]
     async fn get_open_files(&self) -> Json<GetOpenFilesOut> {
         Json(self.get_open_files_impl().await)
+    }
+
+    /// Return the user's current text selection in the active editor.
+    #[tool(
+        name = "get_selection",
+        description = "Return the user's current text selection in the active editor, or null if no selection exists."
+    )]
+    async fn get_selection(&self) -> Json<GetSelectionOut> {
+        Json(self.get_selection_impl().await)
     }
 }
 
@@ -199,6 +222,32 @@ mod tests {
     #[test]
     fn tool_router_registers_get_open_files() {
         assert!(IdeMcpServer::tool_router().has_route("get_open_files"));
+    }
+
+    #[tokio::test]
+    async fn get_selection_returns_adapter_pushed_selection() {
+        use crate::state::{Position, Range, Selection};
+
+        let state = EditorState::new();
+        let server = IdeMcpServer::with_null_channel(state.clone());
+
+        let sel = Selection {
+            path: "/tmp/a.rs".into(),
+            range: Range {
+                start: Position { line: 1, character: 0 },
+                end:   Position { line: 1, character: 5 },
+            },
+            text: "hello".into(),
+        };
+        state.set_selection(Some(sel.clone())).await;
+
+        let out = server.get_selection_impl().await;
+        assert_eq!(out.selection, Some(sel));
+    }
+
+    #[test]
+    fn tool_router_registers_get_selection() {
+        assert!(IdeMcpServer::tool_router().has_route("get_selection"));
     }
 
     #[test]

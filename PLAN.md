@@ -1,3 +1,33 @@
+## 2026-04-23T18:55:00Z — cade-ide-mcp M-IDE-1a.16: get_selection tool (TDD cycle 16)
+
+**Task:** Third read tool — `get_selection` returns the user's current selection (path + range + text) or `null`. Also promote the state-layer value types to serde+schemars so they can appear directly in tool output schemas.
+
+**Scope guardrail:** Only `state.rs` derives + `server.rs`. No new dependencies.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/state.rs` — added `Serialize, Deserialize, schemars::JsonSchema` to every public value type (`OpenFile`, `Position`, `Range`, `Selection`, `DiagnosticSeverity` (with `#[serde(rename_all = "lowercase")]`), `Diagnostic`, `WorkspaceFolder`). Pure-additive — existing derives preserved.
+- `crates/cade-ide-mcp/src/server.rs`:
+  - New `pub struct GetSelectionOut { selection: Option<crate::state::Selection> }`.
+  - New inherent `get_selection_impl()` method returning the above.
+  - New `#[tool(name = "get_selection", …)]` wrapping it in `Json<_>`.
+  - Two new tests: `get_selection_returns_adapter_pushed_selection` (round-trip via shared state) and `tool_router_registers_get_selection` (router registration).
+
+**TDD record:**
+- RED: both new tests fail with E0599.
+- GREEN: added derives on state types, output struct, `_impl` method, `#[tool]` method. `cargo test -p cade-ide-mcp` → 17 unit + 2 integration = 19/19 pass. `cargo check --workspace` clean.
+- REFACTOR: none.
+
+**Previous behavior:** The agent could not read the user's active text selection.
+
+**New behavior:** Calling `get_selection` returns `{ selection: { path, range: { start, end }, text } | null }`.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T18:45:00Z — cade-ide-mcp M-IDE-1a.15: get_open_files tool (TDD cycle 15)
 
 **Task:** Second read tool. Expose the adapter-pushed open-file list via an MCP `get_open_files` tool that returns `{ files: [{ path }] }`.

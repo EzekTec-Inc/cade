@@ -7,31 +7,32 @@
 
 use std::sync::Arc;
 
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
 /// A single file currently open in an editor tab.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct OpenFile {
     /// Absolute filesystem path. `None` for unsaved scratch buffers.
     pub path: Option<String>,
 }
 
 /// 0-indexed line + UTF-16 code-unit offset (LSP convention).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Position {
     pub line: u32,
     pub character: u32,
 }
 
 /// An inclusive-start / exclusive-end range in a text document.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Range {
     pub start: Position,
     pub end: Position,
 }
 
 /// The user's current text selection in the active editor.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Selection {
     pub path: String,
     pub range: Range,
@@ -39,7 +40,10 @@ pub struct Selection {
 }
 
 /// Severity of a diagnostic reported by the editor's language services.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema,
+)]
+#[serde(rename_all = "lowercase")]
 pub enum DiagnosticSeverity {
     Error,
     Warning,
@@ -48,7 +52,7 @@ pub enum DiagnosticSeverity {
 }
 
 /// A single diagnostic (compile error, lint warning, etc.).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Diagnostic {
     pub path: String,
     pub range: Range,
@@ -59,7 +63,7 @@ pub struct Diagnostic {
 }
 
 /// A workspace root opened in the editor (e.g. a repo checkout).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct WorkspaceFolder {
     pub path: String,
     pub name: String,
