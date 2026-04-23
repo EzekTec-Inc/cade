@@ -85,6 +85,9 @@ pub struct EditorState {
     selection: Option<Selection>,
     diagnostics: Vec<Diagnostic>,
     workspace_folders: Vec<WorkspaceFolder>,
+    /// `(start_line, end_line)` of the active editor viewport, 0-indexed
+    /// inclusive on both ends. `None` when no editor is focused.
+    visible_range: Option<(u32, u32)>,
 }
 
 impl EditorState {
@@ -141,6 +144,17 @@ impl EditorState {
     /// Replace the workspace-folder list with a fresh snapshot.
     pub fn replace_workspace_folders(&mut self, folders: Vec<WorkspaceFolder>) {
         self.workspace_folders = folders;
+    }
+
+    /// `(start_line, end_line)` of the active editor viewport, 0-indexed
+    /// inclusive on both ends. `None` when no editor is focused.
+    pub fn visible_range(&self) -> Option<(u32, u32)> {
+        self.visible_range
+    }
+
+    /// Update the visible viewport range. Pass `None` to clear.
+    pub fn set_visible_range(&mut self, range: Option<(u32, u32)>) {
+        self.visible_range = range;
     }
 }
 
@@ -227,6 +241,16 @@ mod tests {
         };
         s.replace_workspace_folders(vec![f.clone()]);
         assert_eq!(s.workspace_folders(), &[f]);
+    }
+
+    #[test]
+    fn visible_range_round_trips_through_setter() {
+        let mut s = EditorState::new();
+        assert_eq!(s.visible_range(), None);
+        s.set_visible_range(Some((5, 42)));
+        assert_eq!(s.visible_range(), Some((5, 42)));
+        s.set_visible_range(None);
+        assert_eq!(s.visible_range(), None);
     }
 }
 

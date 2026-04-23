@@ -1,3 +1,30 @@
+## 2026-04-23T16:35:00Z — cade-ide-mcp M-IDE-1a.7: visible_range getter/setter (TDD cycle 7)
+
+**Task:** Let the adapter report the active editor's visible viewport. Seventh TDD cycle; final state-layer behavior before the channel trait (cycle 8).
+
+**Scope guardrail:** Only `state.rs`. No new dependencies. Visible range is represented as a compact `Option<(u32, u32)>` tuple — a dedicated struct is deferred until a test demands named fields.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/state.rs`
+  - Added `visible_range: Option<(u32, u32)>` field on `EditorState`.
+  - Added `visible_range(&self) -> Option<(u32, u32)>` and `set_visible_range(&mut self, Option<(u32, u32)>)`.
+
+**TDD record:**
+- RED: added `visible_range_round_trips_through_setter`. `cargo test -p cade-ide-mcp --lib` failed with 5× E0599 on the missing methods.
+- GREEN: added field + getter + setter. `cargo test -p cade-ide-mcp --lib` → 7/7 pass.
+- REFACTOR: none.
+
+**Previous behavior:** `EditorState` could not expose the visible-range viewport.
+
+**New behavior:** Adapters push `Some((start_line, end_line))` via `set_visible_range()`; tools read it via `visible_range()`.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T16:28:00Z — cade-ide-mcp M-IDE-1a.6: Workspace folders (TDD cycle 6)
 
 **Task:** Let the adapter push the list of workspace roots the editor has open. Sixth TDD cycle.
