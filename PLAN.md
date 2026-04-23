@@ -1,3 +1,29 @@
+## 2026-04-23T16:44:00Z — cade-ide-mcp M-IDE-1a.8: EditorChannel trait (TDD cycle 8)
+
+**Task:** Define the adapter-facing trait. Editor adapters (VS Code, JetBrains, tests) implement `EditorChannel`; phase M-IDE-1a only exposes lifecycle methods (`label()`, `is_connected()`) — mutating callbacks for edits, tasks, terminal, and debugger are deferred to later phases so each lands with its own failing test.
+
+**Scope guardrail:** Only `channel.rs` + a `pub use` line in `lib.rs`. No new dependencies. Trait uses plain sync methods for now (native `async fn` in traits is stable on Rust 1.94 / edition 2024 and will be used when a callback method actually needs it).
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/channel.rs` — **new**. Defines `pub trait EditorChannel: Send + Sync + 'static` with `label()` and `is_connected()`, plus `pub struct NullEditorChannel` as a no-op impl for tests and warm-up.
+- `crates/cade-ide-mcp/src/lib.rs` — added `mod channel;` declaration and `pub use channel::{EditorChannel, NullEditorChannel};`.
+
+**TDD record:**
+- RED: added two tests in `channel.rs` — `null_channel_reports_disconnected_with_label_null` and `editor_channel_is_object_safe_and_send_sync`. `cargo test -p cade-ide-mcp --lib` failed with E0432/E0425/E0405 (trait + struct missing).
+- GREEN: added the trait and `NullEditorChannel` impl. `cargo test -p cade-ide-mcp --lib` → 9/9 pass.
+- REFACTOR: none.
+
+**Previous behavior:** No adapter-facing abstraction existed.
+
+**New behavior:** Adapters implement `EditorChannel`; consumers can hold `Arc<dyn EditorChannel>`. `NullEditorChannel` provides a tests-friendly no-op.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T16:35:00Z — cade-ide-mcp M-IDE-1a.7: visible_range getter/setter (TDD cycle 7)
 
 **Task:** Let the adapter report the active editor's visible viewport. Seventh TDD cycle; final state-layer behavior before the channel trait (cycle 8).

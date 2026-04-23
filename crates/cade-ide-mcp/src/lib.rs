@@ -9,8 +9,10 @@
 
 // region:    --- Modules
 
+mod channel;
 mod state;
 
+pub use channel::{EditorChannel, NullEditorChannel};
 pub use state::EditorState;
 
 // endregion: --- Modules
