@@ -9,7 +9,7 @@
 use async_trait::async_trait;
 use rmcp::model::ErrorData;
 
-use crate::state::{ApplyEditRequest, Range};
+use crate::state::{ApplyEditRequest, DebugAction, Range};
 
 /// Callbacks the MCP tools can invoke against the connected editor.
 ///
@@ -119,6 +119,21 @@ pub trait EditorChannel: Send + Sync + 'static {
             rmcp::model::ErrorCode::METHOD_NOT_FOUND,
             format!(
                 "editor adapter '{}' does not support run_terminal",
+                self.label()
+            ),
+            None,
+        ))
+    }
+
+    /// Start or stop a debug session. One callback covers both actions
+    /// via the [`DebugAction`] enum so adapters only override one
+    /// method. Default implementation refuses with
+    /// `ErrorData::method_not_found`.
+    async fn debug_control(&self, _action: DebugAction) -> Result<(), ErrorData> {
+        Err(ErrorData::new(
+            rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+            format!(
+                "editor adapter '{}' does not support debug_control",
                 self.label()
             ),
             None,
@@ -242,6 +257,23 @@ mod tests {
             .await
             .expect_err("NullEditorChannel must refuse run_terminal");
         assert_eq!(err.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
+    }
+
+    #[tokio::test]
+    async fn default_debug_control_returns_method_not_supported() {
+        use crate::state::DebugAction;
+        let c = NullEditorChannel;
+        let err = c
+            .debug_control(DebugAction::Start { config: "unit-tests".into() })
+            .await
+            .expect_err("NullEditorChannel must refuse debug_control(Start)");
+        assert_eq!(err.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
+
+        let err_stop = c
+            .debug_control(DebugAction::Stop)
+            .await
+            .expect_err("NullEditorChannel must refuse debug_control(Stop)");
+        assert_eq!(err_stop.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
     }
 }
 

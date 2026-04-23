@@ -1,3 +1,20 @@
+## 2026-04-23T22:05:00Z — cade-ide-mcp M-IDE-1b.13: debug_control callback on EditorChannel
+
+Seventh (and last M-IDE-1b) mutating callback. Single method covers start + stop via a tagged enum argument — analogous to the save(Option<String>) pattern.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/state.rs` — added `pub enum DebugAction { Start { config: String }, Stop }` with `#[serde(tag = "action", rename_all = "lowercase")]`.
+- `crates/cade-ide-mcp/src/channel.rs` — `async fn debug_control(&self, action: DebugAction) -> Result<(), ErrorData>` with default method_not_found impl.
+
+TDD record:
+  RED   default_debug_control_returns_method_not_supported: E0599 (two call sites)
+  GREEN added DebugAction enum + debug_control default impl.
+        46 unit + 2 e2e = 48/48 pass. workspace clean.
+  REFACTOR  none
+
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T21:55:00Z — cade-ide-mcp M-IDE-1b.12: run_terminal MCP tool
 
 TDD record:

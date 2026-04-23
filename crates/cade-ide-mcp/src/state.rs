@@ -44,6 +44,28 @@ pub struct Range {
     pub end: Position,
 }
 
+/// A debugger control action issued through `EditorChannel::debug_control`.
+///
+/// The enum serializes as a tagged JSON object so both variants share
+/// one MCP argument shape:
+///
+/// ```json
+/// { "action": "start", "config": "debug-unit-tests" }
+/// { "action": "stop" }
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
+#[serde(tag = "action", rename_all = "lowercase")]
+pub enum DebugAction {
+    /// Launch the named debug configuration (a VS Code `launch.json`
+    /// entry, an IntelliJ run-config with the debugger attached, …).
+    Start {
+        /// Name of the debug configuration to launch.
+        config: String,
+    },
+    /// Stop the currently-running debug session, if any.
+    Stop,
+}
+
 /// The user's current text selection in the active editor.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]
 pub struct Selection {
