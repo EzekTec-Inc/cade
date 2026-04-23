@@ -1,3 +1,15 @@
+## 2026-04-23T21:42:00Z — cade-ide-mcp M-IDE-1b.10: run_task MCP tool
+
+TDD record:
+  RED   run_task_forwards_name_to_channel + tool_router_registers_run_task: E0599
+  GREEN added RunTaskIn/Out + run_task_impl + #[tool] run_task.
+        42 unit + 2 e2e = 44/44 pass. workspace clean.
+  REFACTOR  none
+
+**Files modified:** `crates/cade-ide-mcp/src/server.rs`
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T21:36:00Z — cade-ide-mcp M-IDE-1b.9: run_task callback
 
 Fifth mutating callback.

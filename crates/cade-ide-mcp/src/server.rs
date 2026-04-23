@@ -171,6 +171,19 @@ pub struct SaveFileIn {
 #[derive(Debug, Serialize, schemars::JsonSchema)]
 pub struct SaveOut {}
 
+/// Input of the `run_task` tool.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct RunTaskIn {
+    /// Name of the editor task to run (a `tasks.json` entry, an
+    /// IntelliJ run configuration, etc.).
+    pub name: String,
+}
+
+/// Output of the `run_task` tool. Empty on success — the task has
+/// been started; output and exit status stay inside the editor.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct RunTaskOut {}
+
 impl IdeMcpServer {
     /// Test-friendly accessor behind `get_active_file`. The `#[tool]`
     /// method delegates here so unit tests can drive the logic without
@@ -298,6 +311,13 @@ impl IdeMcpServer {
         self.channel.save(None).await?;
         Ok(SaveOut {})
     }
+
+    /// Test-friendly accessor behind `run_task`. Forwards `name` to
+    /// `EditorChannel::run_task`; errors bubble up unchanged.
+    async fn run_task_impl(&self, name: String) -> Result<RunTaskOut, ErrorData> {
+        self.channel.run_task(name).await?;
+        Ok(RunTaskOut {})
+    }
 }
 
 #[tool_router]
@@ -424,6 +444,18 @@ impl IdeMcpServer {
     )]
     async fn save_all(&self) -> Result<Json<SaveOut>, ErrorData> {
         self.save_all_impl().await.map(Json)
+    }
+
+    /// Run a named editor task.
+    #[tool(
+        name = "run_task",
+        description = "Run a named editor task (e.g. a VS Code tasks.json entry or a JetBrains run configuration). Returns once the task has been started; stdout/stderr and exit status remain inside the editor's task UI. Errors with method_not_found if no editor adapter is attached."
+    )]
+    async fn run_task(
+        &self,
+        Parameters(RunTaskIn { name }): Parameters<RunTaskIn>,
+    ) -> Result<Json<RunTaskOut>, ErrorData> {
+        self.run_task_impl(name).await.map(Json)
     }
 }
 
@@ -860,6 +892,46 @@ mod tests {
         let r = IdeMcpServer::tool_router();
         assert!(r.has_route("save_file"));
         assert!(r.has_route("save_all"));
+    }
+
+    #[tokio::test]
+    async fn run_task_forwards_name_to_channel() {
+        use crate::channel::EditorChannel;
+        use async_trait::async_trait;
+        use std::sync::{Arc, Mutex};
+
+        struct RecordingChannel {
+            calls: Mutex<Vec<String>>,
+        }
+
+        #[async_trait]
+        impl EditorChannel for RecordingChannel {
+            fn label(&self) -> &str {
+                "recording"
+            }
+            fn is_connected(&self) -> bool {
+                true
+            }
+            async fn run_task(&self, name: String) -> Result<(), rmcp::model::ErrorData> {
+                self.calls.lock().unwrap().push(name);
+                Ok(())
+            }
+        }
+
+        let channel = Arc::new(RecordingChannel {
+            calls: Mutex::new(Vec::new()),
+        });
+        let server = IdeMcpServer::new(EditorState::new(), channel.clone());
+        server
+            .run_task_impl("build".to_string())
+            .await
+            .expect("run_task should succeed");
+        assert_eq!(channel.calls.lock().unwrap().as_slice(), &["build".to_string()]);
+    }
+
+    #[test]
+    fn tool_router_registers_run_task() {
+        assert!(IdeMcpServer::tool_router().has_route("run_task"));
     }
 
     #[test]
