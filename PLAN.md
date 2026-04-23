@@ -1,3 +1,24 @@
+## 2026-04-23T19:05:00Z — cade-ide-mcp M-IDE-1a.17: get_diagnostics tool (TDD cycle 17)
+
+**Task:** Fourth read tool — `get_diagnostics` returns the full diagnostic list from the editor's language services.
+
+**Scope guardrail:** Only `server.rs`. No new deps. Follows the drop-in pattern from cycle 15/16.
+
+**Files modified:**
+- `crates/cade-ide-mcp/src/server.rs` — added `GetDiagnosticsOut`, `get_diagnostics_impl`, `#[tool] get_diagnostics`, plus two tests.
+
+**TDD record:**
+- RED: `get_diagnostics_returns_adapter_pushed_list` + `tool_router_registers_get_diagnostics` — E0599.
+- GREEN: 19 unit + 2 e2e = 21/21 pass. workspace clean.
+- REFACTOR: none.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T18:55:00Z — cade-ide-mcp M-IDE-1a.16: get_selection tool (TDD cycle 16)
 
 **Task:** Third read tool — `get_selection` returns the user's current selection (path + range + text) or `null`. Also promote the state-layer value types to serde+schemars so they can appear directly in tool output schemas.
