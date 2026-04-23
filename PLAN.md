@@ -1,3 +1,34 @@
+## 2026-04-23T15:46:00Z — cade-ide-mcp M-IDE-1a.1: EditorState skeleton (TDD cycle 1)
+
+**Task:** First TDD cycle for the IDE-integration milestone. Replace the `Hello World` stub in `cade-ide-mcp` with a library crate that exposes a minimal `EditorState` type. Scope is deliberately tiny so every later read-tool can be added via its own red-green cycle.
+
+**Scope guardrail:** No new dependencies. No MCP transport. No tools. No editor adapter. Only the library skeleton + one struct + one test.
+
+**Files modified:**
+- `crates/cade-ide-mcp/Cargo.toml` — replaced 6-line stub with `[lib]` section (`path = "src/lib.rs"`). No new dependencies added. Added `[lints.rust] unsafe_code = "forbid"` to match other crates in the workspace.
+- `crates/cade-ide-mcp/src/main.rs` — **deleted** (Hello-World stub).
+- `crates/cade-ide-mcp/src/lib.rs` — **new**. Module declaration + `pub use state::EditorState;`.
+- `crates/cade-ide-mcp/src/state.rs` — **new**. Empty marker struct `EditorState` with `new()` and `open_file_count() -> usize` (returning `0` for now).
+
+**TDD record:**
+- RED: `cargo test -p cade-ide-mcp --lib` failed with E0432/E0433 (EditorState not declared).
+- GREEN: added `pub struct EditorState;` + two methods. `cargo test -p cade-ide-mcp --lib` → 1/1 pass.
+- REFACTOR: none.
+
+**Previous behavior:** `cade-ide-mcp` was a `Hello, world!` binary stub with zero dependencies and zero functionality; listed in `ARCHITECTURE.md` as the IDE bridge but unimplemented.
+
+**New behavior:** `cade-ide-mcp` is now a library crate with an `EditorState` type that reports zero open files. Still unimplemented as an MCP server — later cycles add that behavior.
+
+**Dependency policy:** No new dependencies. Workspace `Cargo.toml` unchanged.
+
+**Rollback steps:**
+```sh
+git restore crates/cade-ide-mcp/Cargo.toml
+git restore --source=HEAD --staged --worktree crates/cade-ide-mcp/src/main.rs
+rm crates/cade-ide-mcp/src/lib.rs crates/cade-ide-mcp/src/state.rs
+```
+(or simply `git reset --hard HEAD~1` if the cycle has been committed.)
+
 ## 2026-04-18T01:11:17Z — cade-gui M16.5: palette recognizes all TUI slash commands
 
 **Task:** Close the gap between TUI and GUI slash-command coverage at the palette layer. Previously, typing a TUI-only command (e.g. `/providers`, `/plan`, `/hooks`, `/reflect`) in the GUI palette hit `PaletteCmd::Unknown` and showed "Unknown command". Now those commands are recognized, canonicalized, and surface a user-facing message that tells the user the feature is available in the CLI/TUI today with a GUI panel coming soon.

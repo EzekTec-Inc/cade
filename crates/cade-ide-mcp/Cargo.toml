@@ -1,6 +1,15 @@
 [package]
-name = "cade-ide-mcp"
-version = "0.1.0"
-edition = "2024"
+name        = "cade-ide-mcp"
+version     = "0.1.0"
+edition     = "2024"
+description = "CADE IDE MCP bridge — editor integration over Model Context Protocol"
+license     = "MIT OR Apache-2.0"
+
+[lib]
+name = "cade_ide_mcp"
+path = "src/lib.rs"
 
 [dependencies]
+
+[lints.rust]
+unsafe_code = "forbid"
