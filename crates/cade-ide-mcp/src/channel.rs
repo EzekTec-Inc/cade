@@ -79,6 +79,20 @@ pub trait EditorChannel: Send + Sync + 'static {
             None,
         ))
     }
+
+    /// Save the open buffer at `path`, or — when `path` is `None` —
+    /// save every dirty buffer. Default implementation refuses with
+    /// `ErrorData::method_not_found`.
+    async fn save(&self, _path: Option<String>) -> Result<(), ErrorData> {
+        Err(ErrorData::new(
+            rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+            format!(
+                "editor adapter '{}' does not support save",
+                self.label()
+            ),
+            None,
+        ))
+    }
 }
 
 /// No-op channel used before a real adapter attaches and by tests that
@@ -161,6 +175,22 @@ mod tests {
             .await
             .expect_err("NullEditorChannel must refuse set_selection");
         assert_eq!(err.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
+    }
+
+    #[tokio::test]
+    async fn default_save_returns_method_not_supported() {
+        let c = NullEditorChannel;
+        let err = c
+            .save(Some("/tmp/a.rs".into()))
+            .await
+            .expect_err("NullEditorChannel must refuse save");
+        assert_eq!(err.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
+
+        let err_all = c
+            .save(None)
+            .await
+            .expect_err("NullEditorChannel must refuse save(None)");
+        assert_eq!(err_all.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
     }
 }
 

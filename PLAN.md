@@ -1,3 +1,18 @@
+## 2026-04-23T21:20:00Z — cade-ide-mcp M-IDE-1b.7: save callback on EditorChannel
+
+Fourth mutating callback. Single method handles both single-file save and save-all via `path: Option<String>` (None = save every dirty buffer). Avoids a redundant save_all callback.
+
+TDD record:
+  RED   default_save_returns_method_not_supported: E0599 (two call sites)
+  GREEN added `async fn save(&self, path: Option<String>) -> Result<(), ErrorData>`
+        with default method_not_found impl.
+        37 unit + 2 e2e = 39/39 pass. workspace clean.
+  REFACTOR  none
+
+**Files modified:** `crates/cade-ide-mcp/src/channel.rs`
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T21:12:00Z — cade-ide-mcp M-IDE-1b.6: set_selection MCP tool
 
 Wire set_selection tool on top of cycle-5's callback.
