@@ -39,6 +39,16 @@ pub trait EguiThemeExt {
     fn text_dim(&self) -> Color32;
     fn teal(&self) -> Color32;
     fn purple(&self) -> Color32;
+
+    // -- Diff-specific colors (use theme's diff_* slots instead of success/error)
+    fn diff_added(&self) -> Color32;
+    fn diff_removed(&self) -> Color32;
+
+    /// Return a low-alpha (10-20 range) version of a base color, useful
+    /// for highlight backgrounds (diff rows, subagent cards, etc.).
+    fn tinted_bg(&self, base: Color32, alpha: u8) -> Color32 {
+        Color32::from_rgba_unmultiplied(base.r(), base.g(), base.b(), alpha)
+    }
 }
 
 impl EguiThemeExt for CoreThemeColors {
@@ -60,6 +70,8 @@ impl EguiThemeExt for CoreThemeColors {
     fn text_dim(&self) -> Color32 { self.text_dim.to_egui() }
     fn teal(&self) -> Color32 { self.syntax_type.to_egui() }
     fn purple(&self) -> Color32 { self.syntax_keyword.to_egui() }
+    fn diff_added(&self) -> Color32 { self.diff_added.to_egui() }
+    fn diff_removed(&self) -> Color32 { self.diff_removed.to_egui() }
 }
 
 /// Fraction of the context window consumed by `total_tokens`, clamped 0.0-1.0.

@@ -749,8 +749,8 @@ fn render_inline_diff(
     let del_color = theme.error();
     let add_color = theme.success();
     let ctx_color = theme.text_dim();
-    let bg_del = egui::Color32::from_rgba_unmultiplied(255, 80, 80, 15);
-    let bg_add = egui::Color32::from_rgba_unmultiplied(80, 255, 80, 15);
+    let bg_del = theme.tinted_bg(theme.diff_removed(), 15);
+    let bg_add = theme.tinted_bg(theme.diff_added(), 15);
 
     // Show removed lines
     if !old.is_empty() {
@@ -868,8 +868,8 @@ fn render_patch(
     let hunk_color = theme.purple();
     let file_color = theme.primary();
     let ctx_color = theme.text_dim();
-    let bg_del = egui::Color32::from_rgba_unmultiplied(255, 80, 80, 15);
-    let bg_add = egui::Color32::from_rgba_unmultiplied(80, 255, 80, 15);
+    let bg_del = theme.tinted_bg(theme.diff_removed(), 15);
+    let bg_add = theme.tinted_bg(theme.diff_added(), 15);
 
     egui::ScrollArea::vertical()
         .id_salt(ui.next_auto_id())
@@ -917,6 +917,7 @@ pub struct SubagentCard {
     pub tool_calls: u32,
     pub output_lines: u32,
     pub result_preview: String,
+    #[allow(dead_code)]
     pub is_error: bool,
 }
 
@@ -941,12 +942,7 @@ pub fn render_subagent_card(
         SubagentStatus::Error => ("✗", theme.error(), theme.error()),
     };
 
-    let bg = egui::Color32::from_rgba_unmultiplied(
-        border_color.r(),
-        border_color.g(),
-        border_color.b(),
-        10,
-    );
+    let bg = theme.tinted_bg(border_color, 10);
 
     let frame = egui::Frame::new()
         .fill(bg)

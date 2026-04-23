@@ -103,7 +103,7 @@ pub fn render_palette_overlay(
             } else {
                 // Group entries by category for display
                 let grouped = group_by_category(&filtered);
-                let total_visible = filtered.len().min(max_rows);
+                let _ = max_rows; // height calc only; scroll handles overflow
 
                 // Track flat index for selection highlight
                 let mut flat_idx = 0usize;

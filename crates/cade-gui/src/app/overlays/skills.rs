@@ -133,7 +133,7 @@ pub fn render_skills_overlay(
                         for skill in &filtered {
                             let is_loaded = loaded_ids.contains(&skill.id);
                             let bg = if is_loaded {
-                                egui::Color32::from_rgba_unmultiplied(80, 200, 80, 12)
+                                theme.tinted_bg(theme.success(), 12)
                             } else {
                                 egui::Color32::TRANSPARENT
                             };
