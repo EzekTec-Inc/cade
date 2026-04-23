@@ -109,6 +109,21 @@ pub trait EditorChannel: Send + Sync + 'static {
             None,
         ))
     }
+
+    /// Send `command` to a fresh terminal pane inside the editor.
+    /// Output stays in that pane; the agent does not see it. Returns
+    /// once the command has been *submitted*, not when it exits.
+    /// Default implementation refuses with `ErrorData::method_not_found`.
+    async fn run_terminal(&self, _command: String) -> Result<(), ErrorData> {
+        Err(ErrorData::new(
+            rmcp::model::ErrorCode::METHOD_NOT_FOUND,
+            format!(
+                "editor adapter '{}' does not support run_terminal",
+                self.label()
+            ),
+            None,
+        ))
+    }
 }
 
 /// No-op channel used before a real adapter attaches and by tests that
@@ -216,6 +231,16 @@ mod tests {
             .run_task("build".into())
             .await
             .expect_err("NullEditorChannel must refuse run_task");
+        assert_eq!(err.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
+    }
+
+    #[tokio::test]
+    async fn default_run_terminal_returns_method_not_supported() {
+        let c = NullEditorChannel;
+        let err = c
+            .run_terminal("echo hi".into())
+            .await
+            .expect_err("NullEditorChannel must refuse run_terminal");
         assert_eq!(err.code.0, rmcp::model::ErrorCode::METHOD_NOT_FOUND.0);
     }
 }

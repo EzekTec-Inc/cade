@@ -1,3 +1,17 @@
+## 2026-04-23T21:48:00Z — cade-ide-mcp M-IDE-1b.11: run_terminal callback
+
+Sixth mutating callback.
+
+TDD record:
+  RED   default_run_terminal_returns_method_not_supported: E0599
+  GREEN added `async fn run_terminal(&self, command: String) -> Result<(), ErrorData>`
+        with default method_not_found impl. 43 unit + 2 e2e = 45/45 pass.
+  REFACTOR  none
+
+**Files modified:** `crates/cade-ide-mcp/src/channel.rs`
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T21:42:00Z — cade-ide-mcp M-IDE-1b.10: run_task MCP tool
 
 TDD record:
