@@ -1,0 +1,31 @@
+<idea-plugin>
+    <id>ai.cade.ide</id>
+    <name>CADE IDE Bridge</name>
+    <vendor email="support@cade.ai" url="https://cade.ai">CADE</vendor>
+    <description><![CDATA[
+        Connects IntelliJ-based IDEs to the CADE agent via the
+        <code>cade-ide-mcp</code> adapter transport protocol.
+        Exposes the editor's open files, selection, diagnostics, and
+        workspace to CADE, and lets CADE apply edits, open files,
+        run tasks, control the terminal, and drive the debugger.
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <postStartupActivity
+            implementation="ai.cade.ide.CadePostStartupActivity"/>
+        <applicationService
+            serviceInterface="ai.cade.ide.CadeConnectionService"
+            serviceImplementation="ai.cade.ide.CadeConnectionService"/>
+    </extensions>
+
+    <actions>
+        <action id="cade.reconnect"
+                class="ai.cade.ide.ReconnectAction"
+                text="CADE: Reconnect to cade-ide-mcp"
+                description="Manually reconnect the CADE IDE bridge.">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+</idea-plugin>
