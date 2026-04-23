@@ -30,6 +30,7 @@ export const workspace = {
 
 export const languages = {
   getDiagnostics: jest.fn(() => []),
+  onDidChangeDiagnostics: jest.fn(() => ({ dispose: jest.fn() })),
 };
 
 export const commands = {
