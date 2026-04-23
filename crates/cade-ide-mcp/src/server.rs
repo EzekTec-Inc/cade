@@ -13,11 +13,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::channel::{EditorChannel, NullEditorChannel};
 use crate::state::EditorState;
+use crate::transport::ChannelSlot;
 
 /// Top-level MCP server handler — the only type editor adapters
 /// instantiate. Holds a shared [`EditorState`] that the adapter pushes
-/// snapshots into, and an `Arc<dyn EditorChannel>` through which later
-/// phases will issue callbacks into the editor.
+/// snapshots into, and either a fixed `Arc<dyn EditorChannel>` or a
+/// [`ChannelSlot`] through which later phases issue callbacks into the
+/// editor.
 ///
 /// The `tool_router` field is populated from the `#[tool_router]` macro
 /// below; rmcp's `ServerHandler` implementation (added in a later cycle
@@ -26,7 +28,11 @@ use crate::state::EditorState;
 #[derive(Clone)]
 pub struct IdeMcpServer {
     state: EditorState,
+    /// Fixed channel (used in tests and the null-channel warm-up period).
     channel: Arc<dyn EditorChannel>,
+    /// Swappable slot; when `Some`, `get_channel()` reads from here
+    /// instead of `channel` so live adapter reconnects are visible.
+    slot: Option<ChannelSlot>,
     // Read by rmcp's `#[tool_handler]` expansion through `Self::tool_router()`;
     // the compiler can't see that indirection and warns the field is unused.
     #[allow(dead_code)]
@@ -39,6 +45,7 @@ impl IdeMcpServer {
         Self {
             state,
             channel,
+            slot: None,
             tool_router: Self::tool_router(),
         }
     }
@@ -49,6 +56,18 @@ impl IdeMcpServer {
         Self::new(state, Arc::new(NullEditorChannel))
     }
 
+    /// Build a server backed by a [`ChannelSlot`] that the accept loop
+    /// will swap whenever a new adapter connects. The server reads the
+    /// current live channel on every tool call.
+    pub fn with_channel_slot(state: EditorState, slot: ChannelSlot) -> Self {
+        Self {
+            state,
+            channel: Arc::new(NullEditorChannel),
+            slot: Some(slot),
+            tool_router: Self::tool_router(),
+        }
+    }
+
     /// The shared editor-state handle. Adapters clone this to push
     /// snapshots; tools clone it to read them.
     pub fn state(&self) -> &EditorState {
@@ -56,8 +75,18 @@ impl IdeMcpServer {
     }
 
     /// Label of the attached adapter (`"null"` before an editor connects).
-    pub fn channel_label(&self) -> &str {
-        self.channel.label()
+    pub async fn channel_label(&self) -> String {
+        self.get_channel().await.label().to_owned()
+    }
+
+    /// Return the current live channel. Reads through the slot when one
+    /// is installed; otherwise returns the fixed channel.
+    async fn get_channel(&self) -> Arc<dyn EditorChannel> {
+        if let Some(slot) = &self.slot {
+            slot.get().await
+        } else {
+            self.channel.clone()
+        }
     }
 }
 
@@ -301,14 +330,14 @@ impl IdeMcpServer {
         &self,
         req: crate::state::ApplyEditRequest,
     ) -> Result<ApplyEditOut, ErrorData> {
-        self.channel.apply_edit(req).await?;
+        self.get_channel().await.apply_edit(req).await?;
         Ok(ApplyEditOut {})
     }
 
     /// Test-friendly accessor behind `open_file`. Forwards `path` to
     /// `EditorChannel::reveal_file`; errors bubble up unchanged.
     async fn open_file_impl(&self, path: String) -> Result<OpenFileOut, ErrorData> {
-        self.channel.reveal_file(path).await?;
+        self.get_channel().await.reveal_file(path).await?;
         Ok(OpenFileOut {})
     }
 
@@ -320,41 +349,42 @@ impl IdeMcpServer {
         path: String,
         range: crate::state::Range,
     ) -> Result<SetSelectionOut, ErrorData> {
-        self.channel.set_selection(path, range).await?;
+        self.get_channel().await.set_selection(path, range).await?;
         Ok(SetSelectionOut {})
     }
 
     /// Test-friendly accessor behind `save_file`. Forwards `Some(path)`
     /// to `EditorChannel::save`.
     async fn save_file_impl(&self, path: String) -> Result<SaveOut, ErrorData> {
-        self.channel.save(Some(path)).await?;
+        self.get_channel().await.save(Some(path)).await?;
         Ok(SaveOut {})
     }
 
     /// Test-friendly accessor behind `save_all`. Forwards `None` to
     /// `EditorChannel::save` to signal save-every-dirty-buffer.
     async fn save_all_impl(&self) -> Result<SaveOut, ErrorData> {
-        self.channel.save(None).await?;
+        self.get_channel().await.save(None).await?;
         Ok(SaveOut {})
     }
 
     /// Test-friendly accessor behind `run_task`. Forwards `name` to
     /// `EditorChannel::run_task`; errors bubble up unchanged.
     async fn run_task_impl(&self, name: String) -> Result<RunTaskOut, ErrorData> {
-        self.channel.run_task(name).await?;
+        self.get_channel().await.run_task(name).await?;
         Ok(RunTaskOut {})
     }
 
     /// Test-friendly accessor behind `run_terminal`. Forwards `command`
     /// to `EditorChannel::run_terminal`.
     async fn run_terminal_impl(&self, command: String) -> Result<RunTerminalOut, ErrorData> {
-        self.channel.run_terminal(command).await?;
+        self.get_channel().await.run_terminal(command).await?;
         Ok(RunTerminalOut {})
     }
 
     /// Test-friendly accessor behind `start_debug`.
     async fn start_debug_impl(&self, config: String) -> Result<DebugOut, ErrorData> {
-        self.channel
+        self.get_channel()
+            .await
             .debug_control(crate::state::DebugAction::Start { config })
             .await?;
         Ok(DebugOut {})
@@ -362,7 +392,8 @@ impl IdeMcpServer {
 
     /// Test-friendly accessor behind `stop_debug`.
     async fn stop_debug_impl(&self) -> Result<DebugOut, ErrorData> {
-        self.channel
+        self.get_channel()
+            .await
             .debug_control(crate::state::DebugAction::Stop)
             .await?;
         Ok(DebugOut {})
@@ -579,7 +610,7 @@ mod tests {
     async fn server_with_null_channel_builds_and_exposes_state() {
         let state = EditorState::new();
         let server = IdeMcpServer::with_null_channel(state);
-        assert_eq!(server.channel_label(), "null");
+        assert_eq!(server.channel_label().await, "null");
         assert_eq!(server.state().open_file_count().await, 0);
     }
 
