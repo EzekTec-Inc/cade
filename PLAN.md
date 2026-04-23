@@ -1,3 +1,18 @@
+## 2026-04-23T19:12:00Z — cade-ide-mcp M-IDE-1a.18: get_workspace_folders tool (TDD cycle 18)
+
+Fifth read tool. Drop-in applying the established pattern.
+
+TDD record:
+  RED   get_workspace_folders_returns_adapter_pushed_list +
+        tool_router_registers_get_workspace_folders: E0599
+  GREEN added GetWorkspaceFoldersOut + _impl + #[tool].
+        21 unit + 2 e2e = 23/23 pass. workspace clean.
+  REFACTOR  none
+
+**Files modified:** `crates/cade-ide-mcp/src/server.rs`
+**Dependency policy:** No new dependencies.
+**Rollback steps:** `git reset --hard HEAD~1`
+
 ## 2026-04-23T19:05:00Z — cade-ide-mcp M-IDE-1a.17: get_diagnostics tool (TDD cycle 17)
 
 **Task:** Fourth read tool — `get_diagnostics` returns the full diagnostic list from the editor's language services.

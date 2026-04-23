@@ -95,6 +95,12 @@ pub struct GetDiagnosticsOut {
     pub diagnostics: Vec<crate::state::Diagnostic>,
 }
 
+/// Output of the `get_workspace_folders` tool.
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+pub struct GetWorkspaceFoldersOut {
+    pub folders: Vec<crate::state::WorkspaceFolder>,
+}
+
 impl IdeMcpServer {
     /// Test-friendly accessor behind `get_active_file`. The `#[tool]`
     /// method delegates here so unit tests can drive the logic without
@@ -127,6 +133,13 @@ impl IdeMcpServer {
     async fn get_diagnostics_impl(&self) -> GetDiagnosticsOut {
         GetDiagnosticsOut {
             diagnostics: self.state.diagnostics().await,
+        }
+    }
+
+    /// Test-friendly accessor behind `get_workspace_folders`.
+    async fn get_workspace_folders_impl(&self) -> GetWorkspaceFoldersOut {
+        GetWorkspaceFoldersOut {
+            folders: self.state.workspace_folders().await,
         }
     }
 }
@@ -168,6 +181,15 @@ impl IdeMcpServer {
     )]
     async fn get_diagnostics(&self) -> Json<GetDiagnosticsOut> {
         Json(self.get_diagnostics_impl().await)
+    }
+
+    /// Return the list of workspace roots the editor currently has open.
+    #[tool(
+        name = "get_workspace_folders",
+        description = "Return the list of workspace roots (repo checkouts, project folders) currently open in the editor."
+    )]
+    async fn get_workspace_folders(&self) -> Json<GetWorkspaceFoldersOut> {
+        Json(self.get_workspace_folders_impl().await)
     }
 }
 
@@ -299,6 +321,28 @@ mod tests {
     #[test]
     fn tool_router_registers_get_diagnostics() {
         assert!(IdeMcpServer::tool_router().has_route("get_diagnostics"));
+    }
+
+    #[tokio::test]
+    async fn get_workspace_folders_returns_adapter_pushed_list() {
+        use crate::state::WorkspaceFolder;
+
+        let state = EditorState::new();
+        let server = IdeMcpServer::with_null_channel(state.clone());
+
+        let f = WorkspaceFolder {
+            path: "/home/eng/proj".into(),
+            name: "proj".into(),
+        };
+        state.replace_workspace_folders(vec![f.clone()]).await;
+
+        let out = server.get_workspace_folders_impl().await;
+        assert_eq!(out.folders, vec![f]);
+    }
+
+    #[test]
+    fn tool_router_registers_get_workspace_folders() {
+        assert!(IdeMcpServer::tool_router().has_route("get_workspace_folders"));
     }
 
     #[test]
