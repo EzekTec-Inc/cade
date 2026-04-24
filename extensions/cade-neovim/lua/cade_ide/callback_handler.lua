@@ -44,14 +44,31 @@ function M._apply_edit(op)
   end)
   for _, edit in ipairs(edits) do
     local r = edit.range
-    -- nvim_buf_set_text: rows 0-based, cols 0-based, end_row/end_col exclusive
-    local lines = vim.split(edit.new_text, "\n", { plain = true })
-    vim.api.nvim_buf_set_text(
-      buf,
-      r.start.line, r.start.character,
-      r["end"].line, r["end"].character,
-      lines
-    )
+    local line_count = vim.api.nvim_buf_line_count(buf)
+    local new_lines = vim.split(edit.new_text, "\n", { plain = true })
+
+    -- If the edit covers whole lines (start at col 0, end at col 0 of some later line),
+    -- use nvim_buf_set_lines which handles end >= line_count gracefully (appending).
+    -- Otherwise use nvim_buf_set_text with strictly-clamped bounds.
+    local sr = math.max(0, math.min(r.start.line, line_count))
+    local er = math.max(sr, r["end"].line)
+
+    if r.start.character == 0 and r["end"].character == 0 then
+      -- Whole-line range. set_lines accepts end > line_count by clamping internally
+      -- only if we clamp ourselves; pass line_count as upper bound.
+      local er_clamped = math.min(er, line_count)
+      -- new_text ends with "\n" → last element of new_lines is "" (empty trailer);
+      -- preserve that as a real newline by keeping it. If user didn't end with \n,
+      -- don't add one.
+      vim.api.nvim_buf_set_lines(buf, sr, er_clamped, false, new_lines)
+    else
+      -- Partial-line edit. Clamp end_row to line_count - 1 and end_col to line length.
+      local er_safe = math.max(sr, math.min(er, line_count - 1))
+      local line_text = vim.api.nvim_buf_get_lines(buf, er_safe, er_safe + 1, false)[1] or ""
+      local ec = math.max(0, math.min(r["end"].character, #line_text))
+      local sc = math.max(0, r.start.character)
+      vim.api.nvim_buf_set_text(buf, sr, sc, er_safe, ec, new_lines)
+    end
   end
 end
 
