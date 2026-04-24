@@ -5,6 +5,19 @@ use crate::app::layout::command_palette::render_command_palette;
 use crate::app::layout::breadcrumb::render_breadcrumb;
 use crate::app::layout::summary::render_summary;
 use crate::app::layout::helpers::{mode_sep_color, mode_footer_left, truncate_str, format_token_count};
+
+/// Pick the animated spinner color for the current elapsed ms.
+/// Cycles through the theme's 4-step spinner gradient.
+fn spinner_color(ms: u128, colors: &ThemeColors) -> RC {
+    let palette = [
+        colors.spinner_0.to_ratatui(),
+        colors.spinner_1.to_ratatui(),
+        colors.spinner_2.to_ratatui(),
+        colors.spinner_3.to_ratatui(),
+    ];
+    palette[(ms / 400) as usize % palette.len()]
+}
+
 // Rendering helpers for the TuiApp full-screen layout.
 //
 // Contains `render_frame` and all supporting free functions for drawing
@@ -342,16 +355,9 @@ pub(crate) fn render_frame(
             } else {
                 DOTS[(ms / 100) as usize % DOTS.len()]
             };
-            let palette: &[(u8, u8, u8)] = &[
-                (80, 190, 255),
-                (120, 215, 255),
-                (160, 235, 255),
-                (100, 200, 255),
-            ];
-            let (r, g, b) = palette[(ms / 400) as usize % palette.len()];
             (
                 format!("{} {}", spinner, t),
-                ratatui::style::Color::Rgb(r, g, b),
+                spinner_color(ms, colors),
             )
         } else {
             (t.to_string(), colors.primary.to_ratatui())
@@ -412,14 +418,7 @@ pub(crate) fn render_frame(
     let top_sep_color = if let Some(elapsed) = thinking_elapsed {
         // Thinking / tool-calling: animated cyan pulse matching the spinner.
         let ms = elapsed.as_millis();
-        let palette: &[(u8, u8, u8)] = &[
-            (80, 190, 255),
-            (120, 215, 255),
-            (160, 235, 255),
-            (100, 200, 255),
-        ];
-        let (r, g, b) = palette[(ms / 400) as usize % palette.len()];
-        RC::Rgb(r, g, b)
+        spinner_color(ms, colors)
     } else if streaming.is_some() {
         // Pure text streaming (thinking animation already stopped): fixed bright cyan.
         colors.primary.to_ratatui()

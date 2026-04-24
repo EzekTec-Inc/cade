@@ -1,3 +1,27 @@
+## 2026-04-24T20:30:00Z — tui+core: theme context-bar + spinner tokens
+
+**Task:** Move 8 hardcoded context-bar data-viz colors and 4 hardcoded spinner gradient colors into themeable tokens in `ThemeColors`, with palette-specific values for all 5 built-in themes.
+
+**Files modified:**
+- `crates/cade-core/src/resources/themes.rs` — added `ColorDef::default_reset()` helper; added 12 new fields (`ctx_bar_system..ctx_bar_buffer`, `spinner_0..spinner_3`) with `#[serde(default)]` for backward compat; set palette-appropriate values in `dark()`, `light()`, `catppuccin_mocha()`, `catppuccin_latte()`, `tokyo_night()`.
+- `crates/cade-tui/src/app/timeline/render_item.rs` — replaced `const CATS` array with runtime `CAT_META` + `cat_colors` from theme tokens; updated 2 usage sites; added 2 new tests (`ctx_bar_tokens_are_all_distinct_and_non_reset`, `spinner_tokens_are_non_reset`).
+- `crates/cade-tui/src/app/render.rs` — extracted `spinner_color(ms, colors)` helper; replaced 2 duplicated inline palettes with single call.
+
+**Previous behavior:** Context-bar segments and animated spinner used hardcoded `RC::Rgb(...)` values, ignoring the active theme.
+**New behavior:** All 12 colors are theme-token-driven. Each built-in theme has palette-aligned values (e.g., catppuccin uses Sapphire/Sky/Peach/Mauve, tokyo-night uses cyan/teal/orange/magenta).
+
+**TDD record:**
+- RED: 2 new tests compile-failed (fields don't exist), then pass after token addition.
+- GREEN: 55/55 cade-tui, 212/212 cade-core, wasm32 check clean, clippy clean.
+- REFACTOR: deduped spinner palette (2 copies → 1 helper fn).
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-24T20:00:00Z — tui: fix 5 hardcoded colors bypassing theme system
 
 **Task:** Replace 5 hardcoded ratatui color literals in cade-tui with themed token references so all built-in and custom themes render correctly.

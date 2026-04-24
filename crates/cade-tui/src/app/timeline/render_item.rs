@@ -31,16 +31,27 @@ pub(crate) fn render_context_bar_item(
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
-    // Per-category metadata: (glyph, color, label)
-    const CATS: &[(char, RC, &str)] = &[
-        ('█', RC::Rgb(120, 120, 120), "System prompt"),
-        ('▓', RC::Rgb(8, 145, 178), "Native tools"),
-        ('▒', RC::Rgb(0, 188, 212), "MCP tools"),
-        ('░', RC::Rgb(215, 119, 87), "Memory"),
-        ('▪', RC::Rgb(255, 193, 7), "Skills"),
-        ('■', RC::Rgb(147, 51, 234), "Messages"),
-        ('·', RC::Rgb(50, 50, 50), "Free"),
-        ('⎹', RC::Rgb(80, 80, 80), "Buffer (autocompact)"),
+    // Per-category metadata: (glyph, label)
+    const CAT_META: &[(char, &str)] = &[
+        ('█', "System prompt"),
+        ('▓', "Native tools"),
+        ('▒', "MCP tools"),
+        ('░', "Memory"),
+        ('▪', "Skills"),
+        ('■', "Messages"),
+        ('·', "Free"),
+        ('⎹', "Buffer (autocompact)"),
+    ];
+
+    let cat_colors: [RC; 8] = [
+        colors.ctx_bar_system.to_ratatui(),
+        colors.ctx_bar_native_tools.to_ratatui(),
+        colors.ctx_bar_mcp_tools.to_ratatui(),
+        colors.ctx_bar_memory.to_ratatui(),
+        colors.ctx_bar_skills.to_ratatui(),
+        colors.ctx_bar_messages.to_ratatui(),
+        colors.ctx_bar_free.to_ratatui(),
+        colors.ctx_bar_buffer.to_ratatui(),
     ];
 
     let fmt_tok = |n: u64| -> String {
@@ -109,7 +120,8 @@ pub(crate) fn render_context_bar_item(
             if cells == 0 {
                 continue;
             }
-            let (glyph, color, _) = CATS.get(i).copied().unwrap_or(('?', RC::DarkGray, ""));
+            let (glyph, _) = CAT_META.get(i).copied().unwrap_or(('?', ""));
+            let color = cat_colors.get(i).copied().unwrap_or(colors.text_dim.to_ratatui());
             let s: String = std::iter::repeat_n(glyph, cells).collect();
             bar_spans.push(Span::styled(s, Style::default().fg(color)));
             filled += cells;
@@ -128,7 +140,8 @@ pub(crate) fn render_context_bar_item(
         if i == 7 && tok == 0 {
             continue; // skip empty buffer row
         }
-        let (glyph, color, label) = CATS.get(i).copied().unwrap_or(('?', RC::DarkGray, "?"));
+        let (glyph, label) = CAT_META.get(i).copied().unwrap_or(('?', "?"));
+        let color = cat_colors.get(i).copied().unwrap_or(colors.text_dim.to_ratatui());
         let pct_cat = if window > 0 {
             format!("{:.1}%", 100.0 * tok as f64 / window as f64)
         } else {
@@ -712,5 +725,45 @@ mod tests {
         let tp = theme.text_primary.to_ratatui();
         assert_ne!(tp, RC::White,
             "text_primary must be an explicit RGB, not RC::White");
+    }
+
+    /// All 8 context-bar category tokens must be distinct non-Reset colors.
+    #[test]
+    fn ctx_bar_tokens_are_all_distinct_and_non_reset() {
+        let theme = ThemeColors::dark();
+        let tokens = [
+            theme.ctx_bar_system.to_ratatui(),
+            theme.ctx_bar_native_tools.to_ratatui(),
+            theme.ctx_bar_mcp_tools.to_ratatui(),
+            theme.ctx_bar_memory.to_ratatui(),
+            theme.ctx_bar_skills.to_ratatui(),
+            theme.ctx_bar_messages.to_ratatui(),
+            theme.ctx_bar_free.to_ratatui(),
+            theme.ctx_bar_buffer.to_ratatui(),
+        ];
+        for (i, c) in tokens.iter().enumerate() {
+            assert_ne!(*c, RC::Reset, "ctx_bar token {i} must not be Reset");
+        }
+        // All 8 should be distinct
+        let mut unique = tokens.to_vec();
+        unique.sort_by_key(|c| format!("{c:?}"));
+        unique.dedup();
+        assert_eq!(unique.len(), tokens.len(),
+            "all 8 ctx_bar tokens must be distinct");
+    }
+
+    /// All 4 spinner gradient tokens must be non-Reset.
+    #[test]
+    fn spinner_tokens_are_non_reset() {
+        let theme = ThemeColors::dark();
+        let tokens = [
+            theme.spinner_0.to_ratatui(),
+            theme.spinner_1.to_ratatui(),
+            theme.spinner_2.to_ratatui(),
+            theme.spinner_3.to_ratatui(),
+        ];
+        for (i, c) in tokens.iter().enumerate() {
+            assert_ne!(*c, RC::Reset, "spinner_{i} must not be Reset");
+        }
     }
 }

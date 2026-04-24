@@ -171,6 +171,13 @@ pub enum ColorDef {
     Reset,
 }
 
+impl ColorDef {
+    /// Serde default helper — used by `#[serde(default = "ColorDef::default_reset")]`.
+    pub fn default_reset() -> Self {
+        Self::Reset
+    }
+}
+
 /// Which ratatui `BorderType` the theme prefers for all overlay blocks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum BorderStyle {
@@ -268,6 +275,42 @@ pub struct ThemeColors {
     pub bg_input: ColorDef,
     /// Desaturated accent for secondary emphasis (badges, counts).
     pub accent_dim: ColorDef,
+
+    // -- Context-bar category colors (data-viz)
+    /// System prompt segment in the context usage bar.
+    #[serde(default = "ColorDef::default_reset")]
+    pub ctx_bar_system: ColorDef,
+    /// Native tools segment.
+    #[serde(default = "ColorDef::default_reset")]
+    pub ctx_bar_native_tools: ColorDef,
+    /// MCP tools segment.
+    #[serde(default = "ColorDef::default_reset")]
+    pub ctx_bar_mcp_tools: ColorDef,
+    /// Memory segment.
+    #[serde(default = "ColorDef::default_reset")]
+    pub ctx_bar_memory: ColorDef,
+    /// Skills segment.
+    #[serde(default = "ColorDef::default_reset")]
+    pub ctx_bar_skills: ColorDef,
+    /// Messages segment.
+    #[serde(default = "ColorDef::default_reset")]
+    pub ctx_bar_messages: ColorDef,
+    /// Free/unused segment.
+    #[serde(default = "ColorDef::default_reset")]
+    pub ctx_bar_free: ColorDef,
+    /// Buffer (autocompact) segment.
+    #[serde(default = "ColorDef::default_reset")]
+    pub ctx_bar_buffer: ColorDef,
+
+    // -- Animated spinner gradient (4 steps)
+    #[serde(default = "ColorDef::default_reset")]
+    pub spinner_0: ColorDef,
+    #[serde(default = "ColorDef::default_reset")]
+    pub spinner_1: ColorDef,
+    #[serde(default = "ColorDef::default_reset")]
+    pub spinner_2: ColorDef,
+    #[serde(default = "ColorDef::default_reset")]
+    pub spinner_3: ColorDef,
 
 }
 
@@ -384,6 +427,22 @@ impl ThemeColors {
             bg_card:      ColorDef::Rgb(20,  22,  34),
             bg_input:     ColorDef::Rgb(22,  24,  36),
             accent_dim:   ColorDef::Rgb(64, 102, 168),
+
+            // Context-bar data-viz
+            ctx_bar_system:       ColorDef::Rgb(120, 120, 120),
+            ctx_bar_native_tools: ColorDef::Rgb(  8, 145, 178),
+            ctx_bar_mcp_tools:    ColorDef::Rgb(  0, 188, 212),
+            ctx_bar_memory:       ColorDef::Rgb(215, 119,  87),
+            ctx_bar_skills:       ColorDef::Rgb(255, 193,   7),
+            ctx_bar_messages:     ColorDef::Rgb(147,  51, 234),
+            ctx_bar_free:         ColorDef::Rgb( 50,  50,  50),
+            ctx_bar_buffer:       ColorDef::Rgb( 80,  80,  80),
+
+            // Animated spinner gradient
+            spinner_0: ColorDef::Rgb( 80, 190, 255),
+            spinner_1: ColorDef::Rgb(120, 215, 255),
+            spinner_2: ColorDef::Rgb(160, 235, 255),
+            spinner_3: ColorDef::Rgb(100, 200, 255),
         }
     }
 
@@ -557,6 +616,22 @@ impl ThemeColors {
             bg_card:      ColorDef::Rgb(242, 245, 255),
             bg_input:     ColorDef::Rgb(236, 240, 255),
             accent_dim:   ColorDef::Rgb( 76, 136, 210),
+
+            // Context-bar data-viz (lighter variants for readability on white)
+            ctx_bar_system:       ColorDef::Rgb(140, 140, 140),
+            ctx_bar_native_tools: ColorDef::Rgb(  0, 130, 165),
+            ctx_bar_mcp_tools:    ColorDef::Rgb(  0, 160, 190),
+            ctx_bar_memory:       ColorDef::Rgb(195, 100,  70),
+            ctx_bar_skills:       ColorDef::Rgb(200, 155,   0),
+            ctx_bar_messages:     ColorDef::Rgb(130,  40, 210),
+            ctx_bar_free:         ColorDef::Rgb(210, 210, 210),
+            ctx_bar_buffer:       ColorDef::Rgb(180, 180, 180),
+
+            // Animated spinner gradient (darker for light bg)
+            spinner_0: ColorDef::Rgb( 20, 130, 210),
+            spinner_1: ColorDef::Rgb( 40, 150, 220),
+            spinner_2: ColorDef::Rgb( 60, 170, 230),
+            spinner_3: ColorDef::Rgb( 30, 140, 215),
         }
     }
 
@@ -619,10 +694,25 @@ impl ThemeColors {
         c.syntax_variable_other_member = c.syntax_variable;
         c.syntax_support_function = c.syntax_function;
         c.syntax_support_macro = c.syntax_function;
+
+        // Context-bar (catppuccin mocha palette-aligned)
+        c.ctx_bar_system       = ColorDef::Rgb(108, 112, 134); // Surface2
+        c.ctx_bar_native_tools = ColorDef::Rgb(116, 199, 236); // Sapphire
+        c.ctx_bar_mcp_tools    = ColorDef::Rgb(137, 220, 235); // Sky
+        c.ctx_bar_memory       = ColorDef::Rgb(250, 179, 135); // Peach
+        c.ctx_bar_skills       = ColorDef::Rgb(249, 226, 175); // Yellow
+        c.ctx_bar_messages     = ColorDef::Rgb(203, 166, 247); // Mauve
+        c.ctx_bar_free         = ColorDef::Rgb( 49,  50,  68); // Surface0
+        c.ctx_bar_buffer       = ColorDef::Rgb( 69,  71,  90); // Surface1
+
+        // Spinner gradient (blue tints from catppuccin)
+        c.spinner_0 = ColorDef::Rgb(116, 199, 236); // Sapphire
+        c.spinner_1 = ColorDef::Rgb(137, 220, 235); // Sky
+        c.spinner_2 = ColorDef::Rgb(148, 226, 213); // Teal
+        c.spinner_3 = ColorDef::Rgb(137, 180, 250); // Blue
+
         c
     }
-
-    /// Catppuccin Latte — warm beige light.
     /// Palette source: <https://github.com/catppuccin/catppuccin>
     pub fn catppuccin_latte() -> Self {
         let mut c = Self::light();
@@ -672,6 +762,23 @@ impl ThemeColors {
         c.syntax_variable_other_member = c.syntax_variable;
         c.syntax_support_function = c.syntax_function;
         c.syntax_support_macro = c.syntax_function;
+
+        // Context-bar (catppuccin latte palette-aligned)
+        c.ctx_bar_system       = ColorDef::Rgb(156, 160, 176); // Surface2
+        c.ctx_bar_native_tools = ColorDef::Rgb(  4, 165, 229); // Sapphire
+        c.ctx_bar_mcp_tools    = ColorDef::Rgb(  2, 169, 165); // Sky  (latte sky ≈ teal)
+        c.ctx_bar_memory       = ColorDef::Rgb(254, 100,  11); // Peach
+        c.ctx_bar_skills       = ColorDef::Rgb(223, 142,  29); // Yellow
+        c.ctx_bar_messages     = ColorDef::Rgb(136,  57, 239); // Mauve
+        c.ctx_bar_free         = ColorDef::Rgb(220, 224, 232); // Crust
+        c.ctx_bar_buffer       = ColorDef::Rgb(204, 208, 218); // Surface0
+
+        // Spinner gradient (blue tints from latte)
+        c.spinner_0 = ColorDef::Rgb( 30, 102, 245); // Blue
+        c.spinner_1 = ColorDef::Rgb(  4, 165, 229); // Sapphire
+        c.spinner_2 = ColorDef::Rgb( 23, 146, 153); // Teal
+        c.spinner_3 = ColorDef::Rgb(  2, 169, 165); // Sky
+
         c
     }
 
@@ -732,6 +839,23 @@ impl ThemeColors {
         c.syntax_variable_other_member = c.syntax_variable;
         c.syntax_support_function = c.syntax_function;
         c.syntax_support_macro = c.syntax_function;
+
+        // Context-bar (tokyo-night palette-aligned)
+        c.ctx_bar_system       = ColorDef::Rgb( 86,  95, 137); // comment
+        c.ctx_bar_native_tools = ColorDef::Rgb( 42, 195, 222); // cyan
+        c.ctx_bar_mcp_tools    = ColorDef::Rgb(115, 218, 202); // teal
+        c.ctx_bar_memory       = ColorDef::Rgb(255, 158, 100); // orange
+        c.ctx_bar_skills       = ColorDef::Rgb(224, 175, 104); // yellow
+        c.ctx_bar_messages     = ColorDef::Rgb(187, 154, 247); // magenta
+        c.ctx_bar_free         = ColorDef::Rgb( 32,  34,  51); // bg_highlight
+        c.ctx_bar_buffer       = ColorDef::Rgb( 41,  44,  66); // terminal_black
+
+        // Spinner gradient (blue→cyan from tokyo-night)
+        c.spinner_0 = ColorDef::Rgb(122, 162, 247); // blue
+        c.spinner_1 = ColorDef::Rgb(125, 207, 255); // blue5
+        c.spinner_2 = ColorDef::Rgb( 42, 195, 222); // cyan
+        c.spinner_3 = ColorDef::Rgb(115, 218, 202); // teal
+
         c
     }
 
