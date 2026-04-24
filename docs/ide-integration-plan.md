@@ -4,9 +4,9 @@ The `cade-ide-mcp` crate is the long-term bridge between CADE agents and
 the user's editor. It speaks MCP over stdio so any MCP-capable agent
 (CADE, Claude Desktop, etc.) can introspect and drive the editor.
 
-Status: **M-IDE-1a + M-IDE-1b + M-IDE-1c + M-IDE-2 + M-IDE-3 complete** (state layer,
+Status: **M-IDE-1a + M-IDE-1b + M-IDE-1c + M-IDE-2 + M-IDE-3 + Neovim adapter complete** (state layer,
 channel abstraction, 7 read tools, 9 write tools over 7 callbacks, stdio binary,
-TCP loopback adapter transport, VS Code extension, JetBrains plugin).
+TCP loopback adapter transport, VS Code extension, JetBrains plugin, Neovim plugin).
 
 ---
 
@@ -225,3 +225,35 @@ Launch CADE. `/mcp` will show `cade-ide` connected; `/tools` will list
 the seven read tools prefixed with `cade-ide__`. They return empty or
 `null` responses until a real editor adapter attaches and populates the
 state.
+
+### Neovim adapter ✅
+
+Pure Lua plugin (`extensions/cade-neovim/`) connecting Neovim ≥ 0.10 to
+`cade-ide-mcp` via the TCP loopback transport. Complete as of commit `4d560412`.
+
+**Structure:**
+
+| File | Role |
+|------|------|
+| `lua/cade_ide/protocol.lua` | JSON frame encode/decode — mirrors `CadeProtocol.kt` |
+| `lua/cade_ide/connection.lua` | `vim.loop` TCP client, discovery file, Hello/HelloAck, reconnect |
+| `lua/cade_ide/state_publisher.lua` | Autocmd listeners → debounced StateUpdate (BufEnter, TextChanged, DiagnosticChanged, …) |
+| `lua/cade_ide/callback_handler.lua` | CallbackOp dispatch → Neovim APIs (nvim_buf_set_text, :edit, :terminal, nvim-dap, overseer) |
+| `lua/cade_ide/init.lua` | `setup()`, `reconnect()`, `:CadeReconnect` command, VimLeavePre teardown |
+| `plugin/cade_ide.lua` | Auto-loaded entry point |
+
+**Install (lazy.nvim):**
+
+```lua
+{
+  dir = "/path/to/CADE/extensions/cade-neovim",
+  config = function() require("cade_ide").setup() end,
+}
+```
+
+**Tests (no IDEA SDK, no network):**
+
+```sh
+cd extensions/cade-neovim
+make test     # 45 headless Neovim tests — protocol, connection, state, callbacks
+```
