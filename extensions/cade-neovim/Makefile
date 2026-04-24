@@ -7,7 +7,7 @@ PLUGIN_DIR = $(HOME)/.local/share/nvim/site/pack/cade/start/cade-neovim
 .PHONY: test install
 
 test:
-	@$(NVIM) --headless --noplugin -u test/runner.lua 2>&1; \
+	@$(NVIM) --headless -u NONE -u test/runner.lua 2>&1; \
 	  echo "exit $$?"
 
 install:

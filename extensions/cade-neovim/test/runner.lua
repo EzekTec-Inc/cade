@@ -41,4 +41,4 @@ for _, f in ipairs(files) do run_file(f) end
 io.write(("\n%d passed, %d failed\n"):format(passed, failed))
 for _, e in ipairs(errors) do io.write(e .. "\n") end
 
-vim.cmd("qa!" .. (failed > 0 and "1" or ""))
+vim.cmd(failed > 0 and "cquit 1" or "qa!")
