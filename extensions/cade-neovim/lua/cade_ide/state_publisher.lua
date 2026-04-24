@@ -37,6 +37,7 @@ function M.new(conn, opts)
       "TextChanged", "TextChangedI",
       "CursorMoved", "CursorMovedI",
       "DiagnosticChanged",
+      "ModeChanged",
       "VimResized",
     }
     vim.api.nvim_create_autocmd(events, {
@@ -121,18 +122,40 @@ function M.new(conn, opts)
 
   function self:_selection()
     local mode = vim.fn.mode()
-    if mode ~= "v" and mode ~= "V" and mode ~= "\22" then return vim.NIL end
+    local in_visual = mode == "v" or mode == "V" or mode == "\22"
     local buf  = vim.api.nvim_get_current_buf()
     local name = vim.api.nvim_buf_get_name(buf)
     if name == "" then return vim.NIL end
 
-    -- getpos returns {bufnum, line (1-based), col (1-based), offset}
-    local s = vim.fn.getpos("'<")
-    local e = vim.fn.getpos("'>")
+    -- getpos returns {bufnum, line (1-based), col (1-based), offset}.
+    -- When currently in visual mode, '< and '> hold the PREVIOUS selection
+    -- (or zeros), so use 'v' (visual anchor) and '.' (cursor) instead.
+    -- When not in visual mode, fall back to '<'/'>' for the last selection —
+    -- but only if they're non-zero.
+    local s_mark, e_mark
+    if in_visual then
+      s_mark, e_mark = "v", "."
+    else
+      s_mark, e_mark = "'<", "'>"
+    end
+    local s = vim.fn.getpos(s_mark)
+    local e = vim.fn.getpos(e_mark)
+    if s[2] == 0 or e[2] == 0 then return vim.NIL end
+
+    -- Normalize so start <= end regardless of selection direction.
+    if s[2] > e[2] or (s[2] == e[2] and s[3] > e[3]) then
+      s, e = e, s
+    end
+
     local sr, sc = s[2] - 1, s[3] - 1
-    local er, ec = e[2] - 1, e[3]
-    local lines  = vim.api.nvim_buf_get_lines(buf, sr, er + 1, false)
-    local text   = table.concat(lines, "\n")
+    local er, ec = e[2] - 1, e[3]         -- end_col exclusive
+    if mode == "V" then
+      -- Line-wise: extend to full lines.
+      sc = 0
+      ec = #(vim.api.nvim_buf_get_lines(buf, er, er + 1, false)[1] or "")
+    end
+    local lines = vim.api.nvim_buf_get_lines(buf, sr, er + 1, false)
+    local text  = table.concat(lines, "\n")
 
     return {
       path  = name,
