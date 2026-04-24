@@ -143,6 +143,21 @@ pub(crate) const PER_MESSAGE_CHAR_CAP: usize = 30_000;
 pub(crate) const TRUNCATION_MARKER: &str =
     "\n\n[…truncated for context fit. Re-run the original tool or use archival_memory_search to retrieve the full output…]";
 
+/// Total character budget for the "# Loaded Skills" section injected into the
+/// dynamic system prompt.  Skill bodies vary wildly (5 K–50 K each); without a
+/// cap, loading 3-4 large skills could swallow the entire memory section
+/// before any history fits.
+///
+/// Skills are emitted in order: full body for the first skills that fit, then
+/// summary-only entries (`## Skill: name (id) [summary-only — call load_skill
+/// to inject full body]`) for the rest.  Agents can promote a summary to full
+/// fidelity at any time via the `load_skill` tool.
+pub(crate) const SKILLS_INJECTION_BUDGET: usize = 30_000;
+/// Cap on a single skill body before it counts as "summary-only".  Bodies
+/// larger than this are always rendered as summary entries even when budget is
+/// available — keeps any one oversized skill from dominating the section.
+pub(crate) const SKILL_BODY_INDIVIDUAL_CAP: usize = 12_000;
+
 // -- Auto-compaction constants
 
 /// Context usage ratio at which auto-compaction (summarization) triggers.

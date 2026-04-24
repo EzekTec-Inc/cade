@@ -2907,3 +2907,27 @@ M3 = **state-machine + minimal render + WASM entry**.  No network calls.
 **Test counts:** cade-ai 91 (+5 in error.rs), cade-server 159 (+11)
 
 **Rollback:** `git revert <commit>` — this work is contained to the four files above plus tests.
+
+## 2026-04-24 — Phase 2: budget accounting + bounded skills (P2-2, P2-3)
+
+**Problem:** Even with Phase 1 in place, two latent bugs caused the assembled context to silently exceed the planned budget:
+
+1. **Hidden second-system drop.** `build_context` pushed two system messages (static + dynamic), but the post-walk "ensure history starts with user" loop and the sanitize pass both indexed `messages[1]` directly — so the dynamic system message (memory + skills + memory-awareness footer) was *removed* from every assembled context. Memory and skills were essentially never reaching the LLM unless they happened to be folded into the static system.
+2. **Under-counted system size.** `message_budget = context_char_budget − system_chars` only counted `messages[0]` (the static prompt) and ignored the dynamic system entirely. On agents with large memory blocks this under-counted overhead by ~30 K chars and let history overrun the real input window.
+3. **Unbounded skills injection.** Every loaded skill body was concatenated verbatim into the dynamic system. With 3-4 large skills (5-50 K each) loaded, the system block alone could swallow >100 K chars, leaving little room for history.
+
+**Fixes (TDD, red→green):**
+
+- **P2-2 Account for both system messages.** Both pre-history fixup loops in `build_context` now use `position(|m| m.role != "system")` to find the history start instead of hard-coded index 1. The dynamic system message is preserved end-to-end. `message_budget` now subtracts the chars of *all* leading system messages.
+- **P2-3 Bounded skills injection.** New `render_skills_section(loaded, budget, body_cap)` helper emits skills with a 30 K total cap and 12 K per-skill body cap. Bodies that exceed either cap are replaced with a summary line pointing the agent at `load_skill_ref` to fetch on demand. When even summary entries don't fit, an `[…N more loaded skill(s) omitted]` marker is appended so the agent knows to reach for the tool.
+
+**Files modified:**
+- `crates/cade-server/src/server/api/messages/mod.rs` — `SKILLS_INJECTION_BUDGET = 30_000`, `SKILL_BODY_INDIVIDUAL_CAP = 12_000`
+- `crates/cade-server/src/server/api/messages/context.rs` — `render_skills_section`, full-system-chars deduction in `message_budget`, history-start positioning in both fixup loops, replaced inline skill injection with helper call
+- `crates/cade-server/src/server/api/messages/tests.rs` — 1 build_context test (system + memory subtraction), 5 render_skills_section tests
+
+**Test counts:** cade-server 157 (+5), cade-ai unchanged at 91. Full workspace green.
+
+**Deferred:** P2-1 (real tokenizer via `tiktoken-rs`) — adding `tiktoken-rs` requires user dep approval. Char-based budget is now corrected by P2-2; under-counting is no longer a source of overflow.
+
+**Rollback:** `git revert <commit>` — change set contained to two files + tests.

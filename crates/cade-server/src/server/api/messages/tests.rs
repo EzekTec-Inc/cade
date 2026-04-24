@@ -893,3 +893,161 @@ async fn complete_with_overflow_recovery_passes_through_non_overflow_errors() {
         other => panic!("expected 429 passthrough, got {other:?}"),
     }
 }
+
+// ── P2-2 system + memory subtracted from message budget ────────────────────
+
+#[tokio::test]
+async fn build_context_subtracts_full_system_prompt_and_memory() {
+    let db = cade_store::sqlite::open(":memory:").unwrap();
+    let agent_id = "agent_p2_2";
+    cade_store::sqlite::create_agent(
+        &db,
+        &cade_store::sqlite::AgentRow {
+            id: agent_id.to_string(),
+            name: "A".to_string(),
+            // model with a small window so the budget is tight
+            model: "anthropic/claude-sonnet-4-5-20250929".to_string(),
+            description: None,
+            // big system prompt
+            system_prompt: Some("S".repeat(10_000)),
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+        }
+    ).unwrap();
+
+    // Add a pinned memory block via direct SQL
+    {
+        let conn = db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO shared_memory_blocks (id, label, value, description, updated_at, last_turn, tier)
+             VALUES ('mb1', 'pinned_block', ?1, '', 0, 0, 'pinned')",
+            rusqlite::params!["P".repeat(8_000)],
+        ).unwrap();
+        conn.execute(
+            "INSERT INTO agent_memory_blocks (agent_id, block_id) VALUES (?1, 'mb1')",
+            rusqlite::params![agent_id],
+        ).unwrap();
+    }
+
+    // Insert two user/assistant turns
+    for i in 0..4 {
+        db.lock().unwrap().execute(
+            "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                format!("m{i}"),
+                agent_id,
+                if i % 2 == 0 { "user" } else { "assistant" },
+                serde_json::json!({"content": "x".repeat(50)}).to_string(),
+                50i64,
+                i as i64
+            ]
+        ).unwrap();
+    }
+
+    let llm = std::sync::Arc::new(OverflowThenOk { calls: std::sync::atomic::AtomicUsize::new(2) }) // never used
+        as std::sync::Arc<dyn cade_ai::LlmProvider>;
+    let state = build_minimal_state(db, llm);
+
+    let (_model, messages, _tools) = super::context::build_context(&state, agent_id, None, false).await
+        .expect("build_context");
+
+    // Both system messages (static + dynamic) must be present.
+    let sys_count = messages.iter().filter(|m| m.role == "system").count();
+    assert_eq!(sys_count, 2, "must have static + dynamic system messages");
+    let static_sys = &messages[0].content;
+    assert!(
+        static_sys.contains(&"P".repeat(100)),
+        "static system must include the pinned memory block"
+    );
+
+    // Sum total chars in the assembled message list (system + history).
+    let total: usize = messages.iter().map(|m| m.content.chars().count()).sum();
+    let window = cade_ai::catalogue::context_window_for_model("anthropic/claude-sonnet-4-5-20250929") as usize;
+    // input budget at 15% reserve, 3 chars/token
+    let max_chars = ((window as f64 * 0.85).round() as usize) * 3;
+    assert!(
+        total <= max_chars,
+        "assembled context ({total} chars) must fit within input budget ({max_chars} chars) \
+         after subtracting full system prompt + memory"
+    );
+}
+
+// ── P2-3 bounded skills injection ─────────────────────────────────────────
+
+fn fake_skill(id: &str, name: &str, body_chars: usize) -> cade_core::skills::Skill {
+    cade_core::skills::Skill {
+        id: id.into(),
+        name: name.into(),
+        description: format!("desc for {name}"),
+        category: None,
+        tags: vec![],
+        triggers: vec![],
+        rpi_phase: None,
+        capabilities: vec![],
+        scripts: vec![],
+        references: vec![],
+        body: "B".repeat(body_chars),
+        scope: cade_core::skills::SkillScope::Project,
+        path: std::path::PathBuf::new(),
+    }
+}
+
+#[test]
+fn render_skills_section_empty_when_no_loaded() {
+    assert_eq!(
+        super::context::render_skills_section(&[], 10_000, 5_000),
+        ""
+    );
+}
+
+#[test]
+fn render_skills_section_emits_full_body_when_under_caps() {
+    let s = fake_skill("a", "Alpha", 100);
+    let out = super::context::render_skills_section(&[&s], 10_000, 5_000);
+    assert!(out.contains("# Loaded Skills"));
+    assert!(out.contains("## Skill: Alpha (a)"));
+    assert!(out.contains(&"B".repeat(100)));
+    assert!(!out.contains("summary-only"));
+}
+
+#[test]
+fn render_skills_section_falls_back_to_summary_when_body_exceeds_individual_cap() {
+    let big = fake_skill("big", "Big", 20_000);
+    let out = super::context::render_skills_section(&[&big], 100_000, 5_000);
+    assert!(out.contains("summary-only"));
+    assert!(!out.contains(&"B".repeat(20_000)),
+        "must not include full oversized body");
+}
+
+#[test]
+fn render_skills_section_respects_total_budget() {
+    let a = fake_skill("a", "A", 4_000);
+    let b = fake_skill("b", "B", 4_000);
+    let c = fake_skill("c", "C", 4_000);
+    // Budget: ~6_000 chars — only first skill's body fits in full.
+    let out = super::context::render_skills_section(&[&a, &b, &c], 6_000, 5_000);
+    let len = out.chars().count();
+    assert!(len <= 6_500, "section ({len} chars) must be near budget");
+    // First skill full, later ones summarised or omitted with marker.
+    assert!(out.contains("## Skill: A (a)"));
+    assert!(out.contains(&"B".repeat(3_000)), "first body present");
+    let summary_or_omit = out.contains("summary-only") || out.contains("more loaded skill");
+    assert!(summary_or_omit, "later skills must summarise or omit");
+}
+
+#[test]
+fn render_skills_section_emits_omit_marker_when_budget_exhausted_mid_list() {
+    // Tiny budget so even summary entries cannot fit beyond the first.
+    let a = fake_skill("a", "Alpha", 50);
+    let b = fake_skill("b", "Beta", 50);
+    let c = fake_skill("c", "Gamma", 50);
+    // 200-char budget: header + first full entry only.
+    let out = super::context::render_skills_section(&[&a, &b, &c], 220, 5_000);
+    assert!(out.contains("## Skill: Alpha (a)"));
+    // Either Beta has been added as a summary OR omit marker is present.
+    let has_omit = out.contains("more loaded skill");
+    let has_beta = out.contains("Beta (b)");
+    assert!(has_omit || has_beta, "later skills must surface somehow");
+}

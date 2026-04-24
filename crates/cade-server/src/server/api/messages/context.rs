@@ -105,6 +105,72 @@ pub(crate) fn truncate_oversize_message(mut msg: LlmMessage, cap: usize) -> LlmM
     msg
 }
 
+/// Render the "# Loaded Skills" section with a character budget.
+///
+/// For each skill, in input order:
+/// * If the body length is ≤ `body_cap` AND the full entry fits within the
+///   remaining `budget`, emit the full body.
+/// * Otherwise, emit a one-line summary entry pointing the agent at the
+///   `load_skill_ref` tool to fetch the body on demand.
+///
+/// Returns an empty string when `loaded` is empty so the caller can avoid
+/// pushing a useless heading.
+pub(crate) fn render_skills_section(
+    loaded: &[&cade_core::skills::Skill],
+    budget: usize,
+    body_cap: usize,
+) -> String {
+    if loaded.is_empty() {
+        return String::new();
+    }
+    let header = "\n\n# Loaded Skills\n";
+    let mut section = String::from(header);
+    let mut remaining = budget;
+
+    for skill in loaded {
+        let summary_line = format!(
+            "\n## Skill: {} ({}) [summary-only — call load_skill_ref to fetch full body]\n{}\n",
+            skill.name,
+            skill.id,
+            skill.description.lines().next().unwrap_or("").trim()
+        );
+        let body_chars = skill.body.chars().count();
+        let full_entry = format!(
+            "\n## Skill: {} ({})\n{}\n",
+            skill.name, skill.id, skill.body
+        );
+        let full_chars = full_entry.chars().count();
+
+        // Use full body only when it is below the per-skill cap AND fits
+        // within the remaining section budget.
+        let fits_full = body_chars <= body_cap && full_chars <= remaining;
+        let chosen = if fits_full { full_entry } else { summary_line };
+        let chosen_chars = chosen.chars().count();
+
+        // If even the summary doesn't fit, stop adding skills altogether.
+        if chosen_chars > remaining {
+            section.push_str(&format!(
+                "\n[…{} more loaded skill(s) omitted — section budget exhausted; \
+                 use load_skill_ref to access content]\n",
+                loaded
+                    .iter()
+                    .skip_while(|s| s.id != skill.id)
+                    .count()
+            ));
+            break;
+        }
+
+        section.push_str(&chosen);
+        remaining = remaining.saturating_sub(chosen_chars);
+    }
+
+    if section == header {
+        String::new()
+    } else {
+        section
+    }
+}
+
 /// Call the LLM router, retrying once with an aggressively shrunk context if
 /// the provider rejects the request as too long.
 ///
@@ -246,18 +312,20 @@ pub(crate) async fn build_context(
     // Inject loaded skills into the dynamic system prompt section.
     {
         let agent_skills = state.agent_skills.read().await;
-        if let Some(loaded_ids) = agent_skills.get(agent_id) {
-            if !loaded_ids.is_empty() {
-                let all_skills = state.all_skills.read().await;
-                let mut skills_section = String::from("\n\n# Loaded Skills\n");
-                for id in loaded_ids {
-                    if let Some(skill) = all_skills.iter().find(|s| s.id == *id) {
-                        skills_section.push_str(&format!(
-                            "\n## Skill: {} ({})\n{}\n",
-                            skill.name, skill.id, skill.body
-                        ));
-                    }
-                }
+        if let Some(loaded_ids) = agent_skills.get(agent_id)
+            && !loaded_ids.is_empty()
+        {
+            let all_skills = state.all_skills.read().await;
+            let loaded: Vec<&cade_core::skills::Skill> = loaded_ids
+                .iter()
+                .filter_map(|id| all_skills.iter().find(|s| s.id == *id))
+                .collect();
+            let skills_section = render_skills_section(
+                &loaded,
+                SKILLS_INJECTION_BUDGET,
+                SKILL_BODY_INDIVIDUAL_CAP,
+            );
+            if !skills_section.is_empty() {
                 system_dynamic.push_str(&skills_section);
             }
         }
@@ -359,11 +427,16 @@ pub(crate) async fn build_context(
         turns.remove(0);
     }
 
-    // Deduct the already-assembled system-prompt size from the message budget.
-    let system_chars = messages
-        .first()
+    // Deduct ALL leading system-prompt size from the message budget.
+    // Previously this only counted messages[0] (the static prompt) and
+    // ignored the dynamic system message that carries memory + skills +
+    // footer.  On agents with a large memory section that under-counted by
+    // ~30 K chars and let history overrun the real input window.
+    let system_chars: usize = messages
+        .iter()
+        .take_while(|m| m.role == "system")
         .map(|m| m.content.chars().count())
-        .unwrap_or(0);
+        .sum();
     let message_budget = context_char_budget.saturating_sub(system_chars);
 
     let mut selected: Vec<Vec<LlmMessage>> = Vec::new();
@@ -629,10 +702,15 @@ pub(crate) async fn build_context(
 
     // Sanitize history: fix orphaned tool_calls, dedup tool_results, drop
     // stray tool_results so Anthropic never sees an invalid sequence.
-    if messages.len() > 1 {
-        let system_msg = messages.remove(0);
+    // Preserve all leading system messages (static + dynamic).
+    let history_start1 = messages
+        .iter()
+        .position(|m| m.role != "system")
+        .unwrap_or(messages.len());
+    if messages.len() > history_start1 {
+        let system_msgs: Vec<LlmMessage> = messages.drain(..history_start1).collect();
         let sanitized = sanitize_messages(messages);
-        messages = std::iter::once(system_msg).chain(sanitized).collect();
+        messages = system_msgs.into_iter().chain(sanitized).collect();
     }
 
     // Strip trailing empty assistant messages left by prior empty LLM responses.
@@ -649,27 +727,38 @@ pub(crate) async fn build_context(
     }
 
     // Ensure the conversation begins with a user turn (all providers require this).
-    while messages.len() > 2 && messages[1].role != "user" {
-        let has_tool_calls = messages[1].role == "assistant"
-            && messages[1]
+    // The first 1-2 messages are always system messages (static + optional dynamic);
+    // skip past them before enforcing the user-turn rule, otherwise we silently
+    // drop the dynamic system message that carries memory + skills + footer.
+    let history_start = messages
+        .iter()
+        .position(|m| m.role != "system")
+        .unwrap_or(messages.len());
+    while messages.len() > history_start + 1 && messages[history_start].role != "user" {
+        let has_tool_calls = messages[history_start].role == "assistant"
+            && messages[history_start]
                 .tool_calls
                 .as_ref()
                 .is_some_and(|tc| !tc.is_empty());
         if has_tool_calls {
-            messages.remove(1);
-            while messages.len() > 1 && messages[1].role == "tool" {
-                messages.remove(1);
+            messages.remove(history_start);
+            while messages.len() > history_start && messages[history_start].role == "tool" {
+                messages.remove(history_start);
             }
         } else {
-            messages.remove(1);
+            messages.remove(history_start);
         }
     }
 
-    // Re-sanitize after trimming
-    if messages.len() > 1 {
-        let system_msg = messages.remove(0);
+    // Re-sanitize after trimming. Preserve all leading system messages.
+    let history_start2 = messages
+        .iter()
+        .position(|m| m.role != "system")
+        .unwrap_or(messages.len());
+    if messages.len() > history_start2 {
+        let system_msgs: Vec<LlmMessage> = messages.drain(..history_start2).collect();
         let sanitized = sanitize_messages(messages);
-        messages = std::iter::once(system_msg).chain(sanitized).collect();
+        messages = system_msgs.into_iter().chain(sanitized).collect();
     }
 
     // Tool schemas — use agent-specific tools if wired, else all tools
