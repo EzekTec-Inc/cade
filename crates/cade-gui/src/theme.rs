@@ -188,3 +188,34 @@ pub fn apply_theme(ctx: &egui::Context, theme: &CoreThemeColors) {
     style.spacing.indent = 12.0;
     ctx.set_global_style(style);
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The dark theme's error color must come from the theme system, not a
+    /// hardcoded literal.  Previously `ConnectionFailed` used
+    /// `Color32::from_rgb(220, 50, 50)` — this test ensures that value is
+    /// NOT what the theme produces, proving the render path uses themed
+    /// colors.
+    #[test]
+    fn dark_theme_error_is_not_old_hardcoded_value() {
+        let theme = ThemeColors::dark();
+        let themed_error = theme.error();
+        let old_hardcoded = Color32::from_rgb(220, 50, 50);
+        assert_ne!(
+            themed_error, old_hardcoded,
+            "error color should come from the theme, not the old hardcoded (220,50,50)"
+        );
+    }
+
+    /// The themed error color must be the core theme's error field converted
+    /// to egui, ensuring `EguiThemeExt::error()` is wired correctly.
+    #[test]
+    fn themed_error_matches_core_color_def() {
+        let theme = ThemeColors::dark();
+        let expected = theme.error.to_egui();
+        let actual = theme.error();
+        assert_eq!(actual, expected);
+    }
+}

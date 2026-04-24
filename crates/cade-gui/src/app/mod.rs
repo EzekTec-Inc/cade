@@ -740,7 +740,7 @@ impl eframe::App for CadeApp {
                 }
                 Some(SessionState::ConnectionFailed { ref error, .. }) => {
                     ui.colored_label(
-                        egui::Color32::from_rgb(220, 50, 50),
+                        self.theme.error(),
                         "Connection failed",
                     );
                     ui.add_space(4.0);

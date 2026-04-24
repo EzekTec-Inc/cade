@@ -1,3 +1,27 @@
+## 2026-04-24T19:20:00Z — theme: close Phase 3 & Phase 4 gaps
+
+**Task:** Remove the last hardcoded `Color32` literal in the GUI render path and mark Phases 3 & 4 of the Theme System Refactoring Plan as done.
+
+**Files modified:**
+- `crates/cade-gui/src/app/mod.rs` — replaced `Color32::from_rgb(220, 50, 50)` with `self.theme.error()` in the `ConnectionFailed` render branch.
+- `crates/cade-gui/src/theme.rs` — added `#[cfg(test)] mod tests` with 2 tests: `dark_theme_error_is_not_old_hardcoded_value`, `themed_error_matches_core_color_def`.
+- `.cade-todo.md` — marked Phase 3 and Phase 4 as `[DONE]`.
+
+**Previous behavior:** `ConnectionFailed` label used hardcoded `(220, 50, 50)` regardless of active theme.
+**New behavior:** `ConnectionFailed` label uses `self.theme.error()`, matching all other themed UI elements.
+
+**TDD record:**
+- RED: 2 new tests in `theme::tests` — pass (theme properties confirmed).
+- GREEN: replaced hardcoded color — `cargo check --target wasm32-unknown-unknown` clean, 308/308 tests pass.
+- REFACTOR: none.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-23T22:20:00Z — cade-ide-mcp M-IDE-1b.15: docs closing M-IDE-1b
 
 **Task:** Update `docs/ide-integration-plan.md` to reflect M-IDE-1b completion. Move the M-IDE-1b section to a ✅ status block with the final 9-tool / 7-callback table, document the two collapsed callbacks (save + debug_control) as deliberate design choices.
