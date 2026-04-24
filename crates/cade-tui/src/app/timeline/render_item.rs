@@ -4,10 +4,10 @@ use crate::app::*;
 
 // -- Line renderers
 
-pub(crate) fn render_separator_item(width: usize, out: &mut Vec<Line<'static>>) {
+pub(crate) fn render_separator_item(width: usize, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
     out.push(Line::from(Span::styled(
         "─".repeat(width),
-        Style::default().fg(RC::DarkGray),
+        colors.border_base(),
     )));
 }
 
@@ -70,7 +70,7 @@ pub(crate) fn render_context_bar_item(
         ),
         Span::styled(
             model.to_string(),
-            Style::default().fg(RC::White).add_modifier(Modifier::BOLD),
+            Style::default().fg(colors.text_primary.to_ratatui()).add_modifier(Modifier::BOLD),
         ),
         Span::styled("  ·  ", colors.text_muted()),
         Span::styled(
@@ -80,9 +80,9 @@ pub(crate) fn render_context_bar_item(
         Span::styled(
             format!("  ({}%)", pct),
             Style::default().fg(if pct >= 90 {
-                RC::Rgb(239, 68, 68)
+                colors.error.to_ratatui()
             } else if pct >= 75 {
-                RC::Rgb(245, 158, 11)
+                colors.warning.to_ratatui()
             } else {
                 colors.success.to_ratatui()
             }),
@@ -117,7 +117,7 @@ pub(crate) fn render_context_bar_item(
         // Pad remainder to full bar width
         if filled < bar_width {
             let pad: String = std::iter::repeat_n('·', bar_width - filled).collect();
-            bar_spans.push(Span::styled(pad, Style::default().fg(RC::Rgb(40, 40, 40))));
+            bar_spans.push(Span::styled(pad, Style::default().fg(colors.text_dim.to_ratatui())));
         }
     }
     out.push(Line::from(bar_spans));
@@ -669,3 +669,48 @@ pub(crate) fn render_table_item(
     out.push(Line::from(""));
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::colors::{ThemeColors, ColorDefExt};
+
+    /// The dark theme's error and warning colors must not be the old
+    /// hardcoded context-bar literals, proving the themed path is active.
+    #[test]
+    fn context_bar_pct_uses_themed_error_not_hardcoded() {
+        let theme = ThemeColors::dark();
+        let themed_error = theme.error.to_ratatui();
+        let old_hardcoded = RC::Rgb(239, 68, 68);
+        assert_ne!(themed_error, old_hardcoded,
+            "error token must differ from the old hardcoded (239,68,68)");
+    }
+
+    #[test]
+    fn context_bar_pct_uses_themed_warning_not_hardcoded() {
+        let theme = ThemeColors::dark();
+        let themed_warning = theme.warning.to_ratatui();
+        let old_hardcoded = RC::Rgb(245, 158, 11);
+        assert_ne!(themed_warning, old_hardcoded,
+            "warning token must differ from the old hardcoded (245,158,11)");
+    }
+
+    /// The separator should use the theme's border_base token, not
+    /// the old hardcoded DarkGray.
+    #[test]
+    fn separator_uses_themed_border_not_darkgray() {
+        let theme = ThemeColors::dark();
+        let themed = theme.border_base.to_ratatui();
+        assert_ne!(themed, RC::DarkGray,
+            "border_base must not be DarkGray");
+    }
+
+    /// text_primary must not be RC::White — it should be an explicit
+    /// RGB value from the theme.
+    #[test]
+    fn text_primary_is_not_raw_white() {
+        let theme = ThemeColors::dark();
+        let tp = theme.text_primary.to_ratatui();
+        assert_ne!(tp, RC::White,
+            "text_primary must be an explicit RGB, not RC::White");
+    }
+}

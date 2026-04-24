@@ -196,7 +196,7 @@ impl<'a> TimelineItem<'a> {
         nerd: bool,
     ) {
         match self {
-            Self::Separator => render_separator_item(width, out),
+            Self::Separator => render_separator_item(width, out, colors),
             Self::Blank => render_blank_item(out),
             Self::ContextBar {
                 model,

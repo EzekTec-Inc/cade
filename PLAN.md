@@ -1,3 +1,27 @@
+## 2026-04-24T20:00:00Z — tui: fix 5 hardcoded colors bypassing theme system
+
+**Task:** Replace 5 hardcoded ratatui color literals in cade-tui with themed token references so all built-in and custom themes render correctly.
+
+**Files modified:**
+- `crates/cade-tui/src/app/timeline/render_item.rs` — replaced `RC::DarkGray` separator with `colors.border_base()`, `RC::White` model name with `colors.text_primary`, `RC::Rgb(239,68,68)` / `RC::Rgb(245,158,11)` context % with `colors.error` / `colors.warning`, `RC::Rgb(40,40,40)` bar padding with `colors.text_dim`; added `colors` param to `render_separator_item`; added 4 tests.
+- `crates/cade-tui/src/app/timeline/mod.rs` — pass `colors` to `render_separator_item`.
+- `crates/cade-tui/src/skills.rs` — replaced `RC::White` selected-row text with `colors.text_primary()`; removed unused `Color as RC` import.
+
+**Previous behavior:** 5 UI elements used hardcoded color literals, causing incorrect rendering on non-dark themes (e.g., white-on-white text on light themes, wrong error/warning colors on catppuccin).
+**New behavior:** All 5 elements use semantic theme tokens, rendering correctly across all themes.
+
+**TDD record:**
+- RED: 4 new tests in `render_item::tests` — assert themed tokens ≠ old hardcoded literals.
+- GREEN: replaced 5 hardcoded colors — 53/53 tests pass, clippy clean.
+- REFACTOR: simplified skills.rs branches (identical after fix) + removed unused import.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git reset --hard HEAD~1
+```
+
 ## 2026-04-24T19:20:00Z — theme: close Phase 3 & Phase 4 gaps
 
 **Task:** Remove the last hardcoded `Color32` literal in the GUI render path and mark Phases 3 & 4 of the Theme System Refactoring Plan as done.

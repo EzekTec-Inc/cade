@@ -9,7 +9,7 @@ use crossterm::{
 use ratatui::{
     DefaultTerminal,
     layout::{Constraint, Direction, Layout, Rect},
-    style::{Color as RC, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Cell, Paragraph, Row, Table, TableState, Wrap},
 };
@@ -70,19 +70,11 @@ pub fn show_skills_manager(
                     Row::new(vec![
                         Cell::from(Span::styled(
                             scope_str,
-                            Style::default().fg(if is_sel {
-                                RC::White
-                            } else {
-                                colors.text_primary.to_ratatui()
-                            }),
+                            colors.text_primary(),
                         )),
                         Cell::from(Span::styled(
                             s.name.clone(),
-                            Style::default().fg(if is_sel {
-                                RC::White
-                            } else {
-                                colors.text_primary.to_ratatui()
-                            }),
+                            colors.text_primary(),
                         )),
                         Cell::from(Span::styled(
                             s.category.clone().unwrap_or_default(),
