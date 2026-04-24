@@ -2886,3 +2886,24 @@ M3 = **state-machine + minimal render + WASM entry**.  No network calls.
 **WASM hash:** `7b7ce15b690d483c`
 
 **Rollback:** `git revert b05df2d7`
+
+## 2026-04-24 — Context-overflow recovery (P1-1, P1-2, P1-3)
+
+**Problem:** When the LLM context window filled up, CADE could no longer process responses — sessions wedged because (a) a single oversized tool/assistant message slipped past the budget walk via the "most-recent-turn-always-included" rule, and (b) on a 4xx `context_length_exceeded` from the provider, we had no recovery loop, so every retry rebuilt the same oversized context.
+
+**Fixes (TDD, red→green):**
+
+- **P1-1 Per-message truncation.** New `truncate_oversize_message(msg, cap) -> LlmMessage` in `messages/context.rs`. Applied to every DB-loaded message before turn-walk. Cap = `PER_MESSAGE_CHAR_CAP = 30_000` chars; truncated body keeps 20 % head + 80 % tail joined by `TRUNCATION_MARKER`. Role / tool_call_id / images preserved. **Effect:** no single message can wedge a request, regardless of size.
+- **P1-2 Pre-flight overflow guard.** After turn-walk, if cumulative chars still exceed `message_budget`, drop oldest selected turns (keeping the most recent) until it fits. Logs `pre-flight overflow guard dropped N additional turn(s)`.
+- **P1-3 Provider-error recovery.** New `Error::is_context_overflow()` in `cade-ai`: heuristic match for OpenAI `context_length_exceeded`, Anthropic `prompt is too long`, generic 413, `too many tokens`, etc. New `complete_with_overflow_recovery()` wraps `state.llm.complete()`: on overflow → run synchronous `consolidate_agent` → drop context cache → rebuild context → trim older half of trailing messages → retry once. Wired into `messages::send_message`, `handle_tool_return_blocking`, and the streaming agentic loop in `run.rs` (which retries `state.llm.stream()` once on first-call overflow).
+
+**Files modified:**
+- `crates/cade-ai/src/error.rs` — `is_context_overflow()` + 5 unit tests
+- `crates/cade-server/src/server/api/messages/mod.rs` — `PER_MESSAGE_CHAR_CAP`, `TRUNCATION_MARKER` constants; both `complete()` call sites switched to `complete_with_overflow_recovery`
+- `crates/cade-server/src/server/api/messages/context.rs` — `truncate_oversize_message`, `complete_with_overflow_recovery`, pre-flight overflow guard inside `build_context`, oversize messages truncated on load
+- `crates/cade-server/src/server/api/run.rs` — streaming overflow recovery (one-shot retry) in agentic loop
+- `crates/cade-server/src/server/api/messages/tests.rs` — 4 truncation tests, 3 preflight tests, 3 recovery tests, 1 build_context integration test (= 11 new)
+
+**Test counts:** cade-ai 91 (+5 in error.rs), cade-server 159 (+11)
+
+**Rollback:** `git revert <commit>` — this work is contained to the four files above plus tests.

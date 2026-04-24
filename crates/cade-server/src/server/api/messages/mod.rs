@@ -127,6 +127,22 @@ pub(crate) const OUTPUT_RESERVE_FRACTION: f64 = 0.15;
 /// A typical tool schema is ~400–800 chars; 600 is a reasonable average.
 pub(crate) const TOOL_SCHEMA_CHARS_ESTIMATE: usize = 600;
 
+/// Per-message hard cap applied to non-current messages before they enter the
+/// turn-selection budget walk.  A single oversized tool result (e.g. a large
+/// file dump or log paste) used to be injected verbatim because the
+/// "most-recent turn always included" rule has no escape hatch — provider then
+/// rejected the request with a context-length error.  Capping per-message
+/// guarantees no individual message can wedge the session.
+///
+/// Set to ~30 000 chars (~10 k tokens at 3 chars/token).  Truncated messages
+/// keep the head + tail and append a marker the agent can detect and recover
+/// from via `archival_memory_search` / re-running the original tool call.
+pub(crate) const PER_MESSAGE_CHAR_CAP: usize = 30_000;
+/// Marker string appended when a message is truncated for context fit.
+/// Stable text — agents and tests both grep for it.
+pub(crate) const TRUNCATION_MARKER: &str =
+    "\n\n[…truncated for context fit. Re-run the original tool or use archival_memory_search to retrieve the full output…]";
+
 // -- Auto-compaction constants
 
 /// Context usage ratio at which auto-compaction (summarization) triggers.
@@ -246,7 +262,7 @@ pub async fn send_message(
         max_tokens,
         reasoning_effort,
     };
-    match state.llm.complete(&req).await {
+    match complete_with_overflow_recovery(&state, &agent_id, conv_id_ref, false, req).await {
         Ok(resp) => {
             let tool_calls_json: Vec<Value> = resp
                 .tool_calls
@@ -338,7 +354,7 @@ async fn handle_tool_return_blocking(
         max_tokens,
         reasoning_effort,
     };
-    match state.llm.complete(&req).await {
+    match complete_with_overflow_recovery(state, agent_id, conv_id, true, req).await {
         Ok(resp) => {
             let tool_calls_json: Vec<Value> = resp
                 .tool_calls

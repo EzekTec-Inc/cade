@@ -486,3 +486,410 @@ async fn send_message_blocking_triggers_needs_consolidation() {
     let entry = activity.get(agent_id).unwrap();
     assert!(entry.needs_consolidation, "blocking endpoint must trigger needs_consolidation when turns_len >= 20");
 }
+
+// ── P1-1 per-message truncation ────────────────────────────────────────────
+
+#[test]
+fn truncate_oversize_message_passthrough_when_under_cap() {
+    let msg = LlmMessage {
+        role: "tool".to_string(),
+        content: "x".repeat(100),
+        tool_call_id: Some("t".to_string()),
+        tool_calls: None,
+        images: None,
+    };
+    let out = super::context::truncate_oversize_message(msg.clone(), PER_MESSAGE_CHAR_CAP);
+    assert_eq!(out.content.chars().count(), 100, "under-cap message must pass through untouched");
+}
+
+#[test]
+fn truncate_oversize_message_caps_huge_tool_result() {
+    let huge = "x".repeat(PER_MESSAGE_CHAR_CAP * 4);
+    let msg = LlmMessage {
+        role: "tool".to_string(),
+        content: huge,
+        tool_call_id: Some("t".to_string()),
+        tool_calls: None,
+        images: None,
+    };
+    let out = super::context::truncate_oversize_message(msg, PER_MESSAGE_CHAR_CAP);
+    let len = out.content.chars().count();
+    assert!(
+        len <= PER_MESSAGE_CHAR_CAP + TRUNCATION_MARKER.chars().count() + 8,
+        "truncated content must fit within cap + marker, got {len}"
+    );
+    assert!(out.content.contains(TRUNCATION_MARKER), "must include truncation marker");
+}
+
+#[test]
+fn truncate_oversize_message_keeps_head_and_tail() {
+    let mut content = String::new();
+    content.push_str("HEADSTART");
+    content.push_str(&"m".repeat(PER_MESSAGE_CHAR_CAP * 3));
+    content.push_str("TAILEND");
+    let msg = LlmMessage {
+        role: "tool".to_string(),
+        content,
+        tool_call_id: Some("t".to_string()),
+        tool_calls: None,
+        images: None,
+    };
+    let out = super::context::truncate_oversize_message(msg, PER_MESSAGE_CHAR_CAP);
+    assert!(out.content.starts_with("HEADSTART"), "must preserve head");
+    assert!(out.content.contains("TAILEND"), "must preserve tail");
+}
+
+#[test]
+fn truncate_oversize_message_preserves_role_and_tool_call_id() {
+    let msg = LlmMessage {
+        role: "tool".to_string(),
+        content: "x".repeat(PER_MESSAGE_CHAR_CAP * 2),
+        tool_call_id: Some("call_abc".to_string()),
+        tool_calls: None,
+        images: None,
+    };
+    let out = super::context::truncate_oversize_message(msg, PER_MESSAGE_CHAR_CAP);
+    assert_eq!(out.role, "tool");
+    assert_eq!(out.tool_call_id.as_deref(), Some("call_abc"));
+}
+
+#[tokio::test]
+async fn build_context_caps_oversize_tool_result_messages() {
+    let db = cade_store::sqlite::open(":memory:").unwrap();
+    let agent_id = "agent_p1_1";
+    cade_store::sqlite::create_agent(
+        &db,
+        &cade_store::sqlite::AgentRow {
+            id: agent_id.to_string(),
+            name: "A".to_string(),
+            model: "anthropic/claude-sonnet-4-5-20250929".to_string(),
+            description: None,
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+        }
+    ).unwrap();
+
+    // Insert: user, assistant(huge text), assistant(text)
+    let huge = "Z".repeat(PER_MESSAGE_CHAR_CAP * 10);
+    let rows: Vec<(&str, &str, serde_json::Value)> = vec![
+        ("u1", "user", serde_json::json!({"content": "do it"})),
+        ("a1", "assistant", serde_json::json!({"content": huge})),
+        ("u2", "user", serde_json::json!({"content": "and now this"})),
+    ];
+    for (id, role, content) in rows {
+        db.lock().unwrap().execute(
+            "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![id, agent_id, role, content.to_string(), content.to_string().len() as i64, 0i64]
+        ).unwrap();
+    }
+
+    let config = std::sync::Arc::new(crate::server::config::ServerConfig {
+        addr: "127.0.0.1:0".parse().unwrap(),
+        db_path: ":memory:".into(),
+        llm_provider: crate::server::config::LlmProviderKind::Anthropic,
+        default_model: "test".into(),
+        anthropic_api_key: None,
+        openai_api_key: None,
+        google_api_key: None,
+        ollama_base_url: String::new(),
+        api_key: None,
+        allowed_origin: None,
+        max_context_budget: None,
+    });
+    let state = AppState {
+        db: db.clone(),
+        llm: std::sync::Arc::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
+            anthropic_api_key: None, openai_api_key: None, google_api_key: None,
+            ollama_base_url: String::new(), llm_provider: String::new(),
+        })),
+        llm_router: std::sync::Arc::new(tokio::sync::RwLock::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
+            anthropic_api_key: None, openai_api_key: None, google_api_key: None,
+            ollama_base_url: String::new(), llm_provider: String::new(),
+        }))),
+        config,
+        mcp: std::sync::Arc::new(crate::server::state::McpManager::empty()),
+        rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
+        memory_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
+        all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
+        agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        pending_subagent_results: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
+    };
+
+    let (_model, messages, _tools) = super::context::build_context(&state, agent_id, None, false)
+        .await
+        .expect("build_context");
+
+    // Find the giant assistant message in the assembled context
+    let big_msg = messages.iter().find(|m| m.role == "assistant" && m.content.len() > 100)
+        .expect("oversized assistant message must be present");
+    let len = big_msg.content.chars().count();
+    assert!(
+        len <= PER_MESSAGE_CHAR_CAP + TRUNCATION_MARKER.chars().count() + 8,
+        "oversized message must be truncated by build_context, got {len} chars"
+    );
+    assert!(big_msg.content.contains(TRUNCATION_MARKER),
+        "must include truncation marker for agent recovery");
+}
+
+// ── P1-2 pre-flight overflow guard ─────────────────────────────────────────
+
+/// The pre-flight guard must drop oldest turns when, after PER_MESSAGE_CHAR_CAP
+/// truncation, the cumulative size still exceeds the budget.  In practice this
+/// happens when the most-recent turn alone is near the cap (so cannot be
+/// reduced further) and earlier turns push the total over.
+fn select_with_preflight(turns: Vec<Vec<LlmMessage>>, budget: usize) -> (usize, usize) {
+    // Mirror the build_context preflight: walk newest→oldest greedily, then
+    // drop oldest selected until total fits (preserving most-recent).
+    let mut selected: Vec<Vec<LlmMessage>> = Vec::new();
+    let mut used = 0usize;
+    let mut omitted = 0usize;
+    for turn in turns.into_iter().rev() {
+        let chars: usize = turn.iter().map(|m| m.content.chars().count()).sum();
+        if selected.is_empty() || used + chars <= budget {
+            used += chars;
+            selected.push(turn);
+        } else {
+            omitted += 1;
+        }
+    }
+    while selected.len() > 1 && used > budget {
+        if let Some(dropped) = selected.pop() {
+            let chars: usize = dropped.iter().map(|m| m.content.chars().count()).sum();
+            used = used.saturating_sub(chars);
+            omitted += 1;
+        }
+    }
+    (selected.len(), omitted)
+}
+
+#[test]
+fn preflight_guard_drops_oldest_when_total_exceeds_budget() {
+    // Three 400-char turns; budget 500.  Newest fits alone (400 ≤ 500); the
+    // greedy walker then can't add more.  But if budget were e.g. exceeded by
+    // an oversized newest turn we still need preflight: simulate by
+    // constructing turns that each *individually* fit but cumulatively don't,
+    // and an over-cap newest turn that would push the total over.
+    let huge_recent = make_turn_of_size(800); // > budget alone — always-included
+    let medium = make_turn_of_size(300);
+    let turns = vec![medium.clone(), medium.clone(), huge_recent];
+    let budget = 500;
+    let (included, omitted) = select_with_preflight(turns, budget);
+    assert_eq!(included, 1, "only most-recent turn must remain after preflight");
+    assert_eq!(omitted, 2);
+}
+
+#[test]
+fn preflight_guard_keeps_most_recent_even_if_oversized() {
+    let huge_recent = make_turn_of_size(10_000);
+    let turns = vec![huge_recent];
+    let (included, _omitted) = select_with_preflight(turns, 1_000);
+    assert_eq!(included, 1, "most-recent turn must never be dropped");
+}
+
+#[test]
+fn preflight_guard_no_op_when_under_budget() {
+    let turns: Vec<Vec<LlmMessage>> = (0..3).map(|_| make_turn_of_size(100)).collect();
+    let (included, omitted) = select_with_preflight(turns, 10_000);
+    assert_eq!(included, 3);
+    assert_eq!(omitted, 0);
+}
+
+// ── P1-3 provider-error recovery ──────────────────────────────────────────
+
+/// Fake provider that returns `Provider{400, "context_length_exceeded"}` on the
+/// first call and a successful response on the second.  Used to verify that
+/// `complete_with_overflow_recovery` retries exactly once on overflow.
+struct OverflowThenOk {
+    calls: std::sync::atomic::AtomicUsize,
+}
+
+#[async_trait::async_trait]
+impl cade_ai::LlmProvider for OverflowThenOk {
+    async fn complete(
+        &self,
+        _req: &cade_ai::CompletionRequest,
+    ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+        let n = self.calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if n == 0 {
+            Err(cade_ai::Error::Provider {
+                status: 400,
+                msg: "context_length_exceeded".into(),
+            })
+        } else {
+            Ok(cade_ai::CompletionResponse {
+                content: Some("recovered".into()),
+                tool_calls: vec![],
+                finish_reason: "stop".into(),
+            })
+        }
+    }
+
+    async fn stream(
+        &self,
+        _req: &cade_ai::CompletionRequest,
+    ) -> cade_ai::Result<std::pin::Pin<Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>>>
+    {
+        unimplemented!()
+    }
+}
+
+struct AlwaysOverflow;
+
+#[async_trait::async_trait]
+impl cade_ai::LlmProvider for AlwaysOverflow {
+    async fn complete(
+        &self,
+        _req: &cade_ai::CompletionRequest,
+    ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+        Err(cade_ai::Error::Provider {
+            status: 400,
+            msg: "prompt is too long".into(),
+        })
+    }
+
+    async fn stream(
+        &self,
+        _req: &cade_ai::CompletionRequest,
+    ) -> cade_ai::Result<std::pin::Pin<Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>>>
+    {
+        unimplemented!()
+    }
+}
+
+fn build_minimal_state(db: cade_store::sqlite::Db, llm: std::sync::Arc<dyn cade_ai::LlmProvider>) -> AppState {
+    let config = std::sync::Arc::new(crate::server::config::ServerConfig {
+        addr: "127.0.0.1:0".parse().unwrap(),
+        db_path: ":memory:".into(),
+        llm_provider: crate::server::config::LlmProviderKind::Anthropic,
+        default_model: "test".into(),
+        anthropic_api_key: None,
+        openai_api_key: None,
+        google_api_key: None,
+        ollama_base_url: String::new(),
+        api_key: None,
+        allowed_origin: None,
+        max_context_budget: None,
+    });
+    AppState {
+        db,
+        llm,
+        llm_router: std::sync::Arc::new(tokio::sync::RwLock::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
+            anthropic_api_key: None, openai_api_key: None, google_api_key: None,
+            ollama_base_url: String::new(), llm_provider: String::new(),
+        }))),
+        config,
+        mcp: std::sync::Arc::new(crate::server::state::McpManager::empty()),
+        rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
+        memory_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
+        all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
+        agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        pending_subagent_results: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
+    }
+}
+
+fn seed_basic_agent(db: &cade_store::sqlite::Db, agent_id: &str) {
+    cade_store::sqlite::create_agent(
+        db,
+        &cade_store::sqlite::AgentRow {
+            id: agent_id.to_string(),
+            name: "A".to_string(),
+            model: "anthropic/claude-sonnet-4-5-20250929".to_string(),
+            description: None,
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+        },
+    )
+    .unwrap();
+    db.lock().unwrap().execute(
+        "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
+         VALUES ('u', ?1, 'user', ?2, 5, 0)",
+        rusqlite::params![agent_id, serde_json::json!({"content": "hi"}).to_string()],
+    ).unwrap();
+}
+
+#[tokio::test]
+async fn complete_with_overflow_recovery_retries_once_and_succeeds() {
+    let db = cade_store::sqlite::open(":memory:").unwrap();
+    let agent_id = "agent_p1_3a";
+    seed_basic_agent(&db, agent_id);
+    let llm = std::sync::Arc::new(OverflowThenOk { calls: std::sync::atomic::AtomicUsize::new(0) });
+    let state = build_minimal_state(db, llm.clone());
+    let req = cade_ai::CompletionRequest {
+        model: "anthropic/claude-sonnet-4-5-20250929".into(),
+        messages: vec![],
+        tools: vec![],
+        max_tokens: 100,
+        reasoning_effort: None,
+    };
+    let res = super::context::complete_with_overflow_recovery(&state, agent_id, None, false, req).await;
+    let resp = res.expect("recovery must succeed");
+    assert_eq!(resp.content.as_deref(), Some("recovered"));
+    assert_eq!(llm.calls.load(std::sync::atomic::Ordering::SeqCst), 2,
+        "must retry exactly once");
+}
+
+#[tokio::test]
+async fn complete_with_overflow_recovery_surfaces_persistent_overflow() {
+    let db = cade_store::sqlite::open(":memory:").unwrap();
+    let agent_id = "agent_p1_3b";
+    seed_basic_agent(&db, agent_id);
+    let llm = std::sync::Arc::new(AlwaysOverflow);
+    let state = build_minimal_state(db, llm);
+    let req = cade_ai::CompletionRequest {
+        model: "anthropic/claude-sonnet-4-5-20250929".into(),
+        messages: vec![],
+        tools: vec![],
+        max_tokens: 100,
+        reasoning_effort: None,
+    };
+    let res = super::context::complete_with_overflow_recovery(&state, agent_id, None, false, req).await;
+    match res {
+        Err(cade_ai::Error::Provider { status, msg }) => {
+            assert_eq!(status, 400);
+            assert!(msg.contains("prompt is too long"));
+        }
+        other => panic!("expected persistent overflow to surface, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn complete_with_overflow_recovery_passes_through_non_overflow_errors() {
+    struct Always429;
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for Always429 {
+        async fn complete(&self, _r: &cade_ai::CompletionRequest) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            Err(cade_ai::Error::Provider { status: 429, msg: "rate_limited".into() })
+        }
+        async fn stream(&self, _r: &cade_ai::CompletionRequest) -> cade_ai::Result<std::pin::Pin<Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>>> { unimplemented!() }
+    }
+    let db = cade_store::sqlite::open(":memory:").unwrap();
+    let agent_id = "agent_p1_3c";
+    seed_basic_agent(&db, agent_id);
+    let llm = std::sync::Arc::new(Always429);
+    let state = build_minimal_state(db, llm);
+    let req = cade_ai::CompletionRequest {
+        model: "anthropic/claude-sonnet-4-5-20250929".into(),
+        messages: vec![],
+        tools: vec![],
+        max_tokens: 100,
+        reasoning_effort: None,
+    };
+    let res = super::context::complete_with_overflow_recovery(&state, agent_id, None, false, req).await;
+    match res {
+        Err(cade_ai::Error::Provider { status, .. }) => assert_eq!(status, 429),
+        other => panic!("expected 429 passthrough, got {other:?}"),
+    }
+}

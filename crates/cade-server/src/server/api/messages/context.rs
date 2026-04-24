@@ -73,6 +73,131 @@ pub(crate) fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
     result
 }
 
+/// Hard cap a single message's content to `cap` chars.
+///
+/// If `content` is already within the cap, the message is returned unchanged.
+/// Otherwise the body is split into a head (first 20 % of `cap`) and a tail
+/// (the remaining 80 %), joined by [`TRUNCATION_MARKER`].  Role,
+/// `tool_call_id`, `tool_calls`, and `images` are preserved so message
+/// validity (e.g. tool_use ↔ tool_result pairing) is not broken.
+///
+/// This is the per-message escape hatch for the "most-recent turn always
+/// included" rule in [`build_context`]: a single oversized tool result can no
+/// longer wedge the session by overflowing the provider's context window.
+pub(crate) fn truncate_oversize_message(mut msg: LlmMessage, cap: usize) -> LlmMessage {
+    let len = msg.content.chars().count();
+    if len <= cap {
+        return msg;
+    }
+    let head_chars = (cap as f64 * 0.20).round() as usize;
+    let tail_chars = cap.saturating_sub(head_chars);
+    let head: String = msg.content.chars().take(head_chars).collect();
+    let tail: String = msg
+        .content
+        .chars()
+        .skip(len.saturating_sub(tail_chars))
+        .collect();
+    let mut new_content = String::with_capacity(head.len() + TRUNCATION_MARKER.len() + tail.len());
+    new_content.push_str(&head);
+    new_content.push_str(TRUNCATION_MARKER);
+    new_content.push_str(&tail);
+    msg.content = new_content;
+    msg
+}
+
+/// Call the LLM router, retrying once with an aggressively shrunk context if
+/// the provider rejects the request as too long.
+///
+/// Recovery sequence on `Error::is_context_overflow()`:
+///   1. Trigger synchronous [`crate::server::consolidation::consolidate_agent`]
+///      so dropped turns are summarised into the `session_summary` block
+///      *before* we rebuild context.
+///   2. Halve the agent's per-call message budget by setting a one-shot
+///      override on `AppState::config.max_context_budget` (NOT mutated here —
+///      we just rebuild with a manually shrunk message vector).
+///   3. Rebuild via [`build_context`] so the fresh `session_summary` block
+///      replaces the dropped turns; force-trim the older half of the message
+///      list as a safety net.
+///   4. Retry exactly once.  A second overflow returns the original error so
+///      the caller can surface a clear message to the user.
+///
+/// Non-overflow errors (4xx auth, 5xx provider, network) are returned
+/// untouched on the first call so callers retain their existing semantics.
+pub(crate) async fn complete_with_overflow_recovery(
+    state: &AppState,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+    is_tool_return: bool,
+    mut req: cade_ai::CompletionRequest,
+) -> cade_ai::Result<cade_ai::CompletionResponse> {
+    match state.llm.complete(&req).await {
+        Ok(resp) => Ok(resp),
+        Err(e) if e.is_context_overflow() => {
+            tracing::warn!(
+                "complete [{}]: context overflow detected ({}); running consolidation + retry",
+                agent_id,
+                e
+            );
+
+            // 1. Synchronous consolidation — drops summarised into session_summary.
+            crate::server::consolidation::consolidate_agent(state, agent_id, conversation_id).await;
+
+            // 2. Drop the context cache entry so build_context recomputes.
+            {
+                let mut cache = state
+                    .context_cache
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner());
+                let key = format!("{agent_id}:{conversation_id:?}");
+                cache.pop(&key);
+            }
+
+            // 3. Rebuild context fresh.
+            let (model, mut new_messages, new_tools) =
+                match build_context(state, agent_id, conversation_id, is_tool_return).await {
+                    Ok(ctx) => ctx,
+                    Err(build_err) => {
+                        tracing::error!(
+                            "complete [{}]: rebuild after overflow failed: {}",
+                            agent_id,
+                            build_err
+                        );
+                        return Err(e);
+                    }
+                };
+
+            // 4. Aggressive safety trim: keep the system prompts (always at
+            //    the front) and only the most-recent half of the remaining
+            //    messages.  This is a belt-and-suspenders measure on top of
+            //    the budget logic: if a single turn alone is still over the
+            //    provider's window, we will fail again with the original
+            //    error and surface it to the user.
+            let split_idx = new_messages
+                .iter()
+                .position(|m| m.role != "system")
+                .unwrap_or(new_messages.len());
+            let trail_len = new_messages.len().saturating_sub(split_idx);
+            if trail_len > 2 {
+                let drop_n = trail_len / 2;
+                new_messages.drain(split_idx..split_idx + drop_n);
+            }
+
+            req.model = model;
+            req.messages = new_messages;
+            req.tools = new_tools;
+
+            tracing::info!(
+                "complete [{}]: retrying with shrunk context ({} messages)",
+                agent_id,
+                req.messages.len()
+            );
+
+            state.llm.complete(&req).await
+        }
+        Err(e) => Err(e),
+    }
+}
+
 // -- Context builder
 //
 // Key design rule:
@@ -217,7 +342,11 @@ pub(crate) async fn build_context(
     .unwrap_or_default();
 
     // Convert DB rows to LlmMessages (oldest-first).
-    let all_llm_msgs: Vec<LlmMessage> = all_rows.iter().flat_map(db_row_to_llm).collect();
+    let all_llm_msgs: Vec<LlmMessage> = all_rows
+        .iter()
+        .flat_map(db_row_to_llm)
+        .map(|m| truncate_oversize_message(m, PER_MESSAGE_CHAR_CAP))
+        .collect();
 
     // Group into logical turns.
     let mut turns = group_into_turns(&all_llm_msgs);
@@ -318,6 +447,51 @@ pub(crate) async fn build_context(
         }
     }
 
+    // ── P1-2: Pre-flight overflow guard ───────────────────────────────────
+    // The turn-walk above guarantees the most-recent turn is included even
+    // when oversized.  PER_MESSAGE_CHAR_CAP shrinks individual messages, but
+    // their *combined* size may still exceed `message_budget` (e.g. a single
+    // huge turn plus several earlier ones still under cap).  If so, drop
+    // oldest selected turns (everything except the most recent — which is at
+    // index 0 because `selected` was built newest-first) until it fits.
+    //
+    // After this block, `selected` is guaranteed to satisfy:
+    //     sum(turn_chars) + system_chars  ≤  context_char_budget
+    // unless even the lone most-recent turn cannot fit, in which case the
+    // provider call is unavoidable but PER_MESSAGE_CHAR_CAP has bounded its
+    // size, and P1-3 (recovery loop) will handle the 4xx response.
+    let mut preflight_dropped = 0usize;
+    while selected.len() > 1 && budget_used > message_budget {
+        // selected[0] is the most-recent turn (pushed first in the rev-walk).
+        // Pop the oldest, which is the last element.
+        if let Some(dropped) = selected.pop() {
+            let chars: usize = dropped
+                .iter()
+                .map(|m| {
+                    m.content.chars().count()
+                        + m.tool_calls
+                            .as_deref()
+                            .unwrap_or_default()
+                            .iter()
+                            .map(|tc| tc.arguments.to_string().len())
+                            .sum::<usize>()
+                })
+                .sum();
+            budget_used = budget_used.saturating_sub(chars);
+            preflight_dropped += 1;
+        }
+    }
+    if preflight_dropped > 0 {
+        omitted_turns += preflight_dropped;
+        tracing::warn!(
+            "build_context [{}]: pre-flight overflow guard dropped {} additional turn(s) \
+             to fit budget ({} chars used / {} budget)",
+            agent_id,
+            preflight_dropped,
+            budget_used,
+            message_budget,
+        );
+    }
     // ── Proactive overflow signal ──────────────────────────────────────────
     // Trigger consolidation early when context usage ≥ 80%, even if no turns
     // were dropped yet.  This gives the Sleeptime task time to produce a

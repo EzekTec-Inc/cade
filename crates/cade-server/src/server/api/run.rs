@@ -217,8 +217,73 @@ pub async fn run_agent(
             };
 
             // ── Stream LLM response ───────────────────────────────────────
-            let mut llm_stream = match state2.llm.stream(&req).await {
+            // First attempt; if the provider rejects with a context-overflow
+            // error before any chunks arrive, run synchronous consolidation
+            // and rebuild the context once, then retry exactly once.
+            let stream_result = state2.llm.stream(&req).await;
+            let mut llm_stream = match stream_result {
                 Ok(s) => s,
+                Err(e) if e.is_context_overflow() => {
+                    tracing::warn!(
+                        "stream [{}]: context overflow ({}); consolidating and retrying once",
+                        agent_id2,
+                        e
+                    );
+                    crate::server::consolidation::consolidate_agent(
+                        &state2,
+                        &agent_id2,
+                        conv_id2.as_deref(),
+                    )
+                    .await;
+                    // Drop cached context entry so build_context recomputes.
+                    {
+                        let mut cache = state2
+                            .context_cache
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        let key = format!("{}:{:?}", agent_id2, conv_id2.as_deref());
+                        cache.pop(&key);
+                    }
+                    let (model2, mut messages2, tools2) =
+                        match build_context(&state2, &agent_id2, conv_id2.as_deref(), false).await
+                        {
+                            Ok(ctx) => ctx,
+                            Err(build_err) => {
+                                send(json!({ "message_type": "error", "error": build_err }))
+                                    .await;
+                                break;
+                            }
+                        };
+                    // Belt-and-suspenders: drop the older half of trailing
+                    // (non-system) messages on retry.
+                    let split_idx = messages2
+                        .iter()
+                        .position(|m| m.role != "system")
+                        .unwrap_or(messages2.len());
+                    let trail_len = messages2.len().saturating_sub(split_idx);
+                    if trail_len > 2 {
+                        let drop_n = trail_len / 2;
+                        messages2.drain(split_idx..split_idx + drop_n);
+                    }
+                    let retry_req = CompletionRequest {
+                        model: model2,
+                        messages: messages2,
+                        tools: tools2,
+                        max_tokens,
+                        reasoning_effort: None,
+                    };
+                    match state2.llm.stream(&retry_req).await {
+                        Ok(s) => s,
+                        Err(e2) => {
+                            send(json!({
+                                "message_type": "error",
+                                "error": format!("Context overflow persisted after consolidation: {e2}"),
+                            }))
+                            .await;
+                            break;
+                        }
+                    }
+                }
                 Err(e) => {
                     send(json!({ "message_type": "error", "error": e.to_string() })).await;
                     break;
