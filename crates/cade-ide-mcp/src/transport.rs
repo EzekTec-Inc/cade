@@ -209,7 +209,7 @@ async fn handle_connection(
         let msg: AdapterMessage = match serde_json::from_str(&line) {
             Ok(m) => m,
             Err(e) => {
-                tracing::warn!("malformed frame from adapter: {e}");
+                tracing::warn!(line = %line, "malformed frame from adapter: {e}");
                 continue;
             }
         };
