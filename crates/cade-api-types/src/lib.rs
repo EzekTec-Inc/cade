@@ -88,6 +88,7 @@ mod tests {
             name: "Test Agent".to_string(),
             model: Some("gpt-4o".to_string()),
             provider: None,
+            theme: None,
         };
 
         // -- Exec

@@ -303,7 +303,7 @@ mod tests {
     use super::*;
     use crate::{
         protocol::{AdapterMessage, CallbackOp, CallbackResult, ServerMessage},
-        state::{ApplyEditRequest, OpenFile},
+        state::OpenFile,
     };
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpStream;

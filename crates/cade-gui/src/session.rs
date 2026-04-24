@@ -2675,12 +2675,14 @@ mod tests {
                 name: "Test Agent".to_string(),
                 model: Some("gpt-4o".to_string()),
                 provider: None,
+                            theme: None,
             },
             AgentInfo {
                 id: "agent-2".to_string(),
                 name: "Second Agent".to_string(),
                 model: None,
                 provider: None,
+                            theme: None,
             },
         ]
     }
@@ -2911,6 +2913,7 @@ mod tests {
                 name: "Second".to_string(),
                 model: None,
                 provider: None,
+                            theme: None,
             });
         }
         s.on_select_agent(0);
@@ -3197,6 +3200,7 @@ mod tests {
                 name: "Second Agent".to_string(),
                 model: None,
                 provider: None,
+                            theme: None,
             });
         }
         s.on_conversation_id("conv-old");
@@ -4175,6 +4179,7 @@ mod tests {
             name: "New Agent".into(),
             model: None,
             provider: None,
+                    theme: None,
         });
         s.refresh_agents(new_agents);
         // Selection should follow the id, so it's still the same agent.
@@ -4190,6 +4195,7 @@ mod tests {
             name: "Different".into(),
             model: None,
             provider: None,
+                    theme: None,
         }];
         s.refresh_agents(new_agents);
         assert!(s.selected_agent_id().is_none());

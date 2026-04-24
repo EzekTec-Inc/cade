@@ -1159,6 +1159,7 @@ mod tests {
                 system_prompt: None,
                 created_at: None,
                 compaction_model: None,
+                theme: None,
             },
         )
         .unwrap();

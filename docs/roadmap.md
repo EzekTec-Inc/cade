@@ -64,11 +64,11 @@
 ### Medium Term
 - [x] **Plugin system**: Dynamic tool loading via shared libraries or WASM
 - [x] **Multi-agent collaboration**: Named agents with message passing
-- [ ] **Web UI**: Browser-based interface alongside the terminal
+- [x] **Web UI**: Browser-based interface alongside the terminal
 - [x] **Windows/macOS support**: Cross-platform desktop extensions
 - [x] **Session replay**: Re-watch recorded coding sessions
 
 ### Long Term
 - [x] **Self-improvement loop**: Agent learns from past sessions automatically
 - [ ] **Team features**: Shared agents, memory, and skills across a team
-- [ ] **IDE integration**: VS Code / JetBrains extensions
+- [x] **IDE integration**: VS Code / JetBrains extensions

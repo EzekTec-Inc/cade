@@ -402,6 +402,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
             system_prompt: None,
             created_at: None,
             compaction_model: None,
+            theme: None,
         }
     ).unwrap();
     
