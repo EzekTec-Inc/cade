@@ -43,6 +43,11 @@ function M.setup(opts)
     conn.send_response(id, result)
   end)
 
+  -- Push a fresh state snapshot every time the adapter (re)connects.
+  conn.on_hello_ack(function()
+    if _pub then _pub._schedule() end
+  end)
+
   pub.start()
   conn.connect()
 
@@ -58,6 +63,31 @@ end
 --- Manually reconnect (useful after restarting cade-ide-mcp).
 function M.reconnect()
   if _conn then _conn.connect() end
+end
+
+--- Print current connection state + latest snapshot the publisher would send.
+function M.check_connection()
+  local msgs = {}
+  table.insert(msgs, "== cade-ide connection diagnostic ==")
+  if _conn then
+    table.insert(msgs, "connection: initialized")
+  else
+    table.insert(msgs, "connection: nil (setup not called?)")
+  end
+  if _pub then
+    local snap = _pub:_snapshot()
+    table.insert(msgs, string.format("active_file: %s", tostring(snap.active_file)))
+    table.insert(msgs, string.format("open_files:  %d", #snap.open_files))
+    for _, f in ipairs(snap.open_files) do
+      table.insert(msgs, string.format("  - %s  (lang=%s, dirty=%s)",
+        f.path, f.language_id, tostring(f.is_dirty)))
+    end
+    table.insert(msgs, string.format("diagnostics: %d", #snap.diagnostics))
+    table.insert(msgs, string.format("workspace_folders: %d", #snap.workspace_folders))
+  else
+    table.insert(msgs, "publisher: nil")
+  end
+  for _, m in ipairs(msgs) do vim.notify(m, vim.log.levels.INFO) end
 end
 
 --- Teardown — called on VimLeave or before re-setup.

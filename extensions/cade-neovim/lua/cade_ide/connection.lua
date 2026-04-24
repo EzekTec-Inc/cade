@@ -46,6 +46,7 @@ function M.new(opts)
   -- ── public API ────────────────────────────────────────────────────────────
 
   function self.on_callback(handler) self._handler = handler end
+  function self.on_hello_ack(handler) self._ack_handler = handler end
 
   function self.connect()
     if self._disposed then return end
@@ -166,6 +167,7 @@ function M.new(opts)
     if msg.type == "hello_ack" then
       self.log(("HelloAck received (protocol v%d). Adapter ready."):format(
         msg.protocol_version or 0))
+      if self._ack_handler then self._ack_handler() end
     elseif msg.type == "callback_request" then
       if self._handler then self._handler(msg.id, msg) end
     end
@@ -179,7 +181,7 @@ function M.new(opts)
     local files = vim.fn.glob(dir .. "/*.json", false, true)
     if #files == 0 then return nil end
 
-    -- Parse all valid, live entries.
+    -- Parse all entries, filter to live processes, sort by mtime (newest first).
     local entries = {}
     for _, path in ipairs(files) do
       local f = io.open(path, "r"); if not f then goto continue end
@@ -188,36 +190,29 @@ function M.new(opts)
       if not ok or type(obj) ~= "table" or not obj.addr or not obj.pid then
         goto continue
       end
-      -- Skip dead processes.
-      if vim.loop.kill(obj.pid, 0) ~= 0 and
-         not pcall(function() assert(vim.loop.kill(obj.pid, 0) == 0) end) then
-        -- use os-level check instead
+
+      -- Liveness: kill -0 equivalent via libuv.
+      local alive = pcall(function()
+        -- signal 0 → no-op "does this pid exist?"
+        assert(vim.loop.kill(obj.pid, 0) == 0)
+      end)
+      if not alive then
+        -- Stale file; remove it so it doesn't confuse future reconnects.
+        pcall(os.remove, path)
+        goto continue
       end
+
       local host, port = obj.addr:match("^(.+):(%d+)$")
       if not host then goto continue end
       local mtime = (vim.loop.fs_stat(path) or {mtime={sec=0}}).mtime.sec
-      -- Determine if parent is cade-server (preferred) or cade TUI (avoid).
-      local ppid_out = vim.fn.system("ps -o ppid= -p " .. obj.pid .. " 2>/dev/null")
-      local ppid = tonumber(ppid_out:match("%d+"))
-      local parent_cmd = ppid and vim.fn.system(
-        "ps -o comm= -p " .. ppid .. " 2>/dev/null"):gsub("%s","") or ""
-      local is_server = parent_cmd:find("cade%-server") ~= nil
-        or parent_cmd:find("cade_server") ~= nil
       table.insert(entries, {
-        addr = host, port = tonumber(port), mtime = mtime,
-        is_server = is_server, path = path,
+        addr = host, port = tonumber(port), mtime = mtime, path = path,
       })
       ::continue::
     end
 
     if #entries == 0 then return nil end
-
-    -- Prefer server-session entries; fall back to newest by mtime.
-    table.sort(entries, function(a, b)
-      if a.is_server ~= b.is_server then return a.is_server end
-      return a.mtime > b.mtime
-    end)
-
+    table.sort(entries, function(a, b) return a.mtime > b.mtime end)
     local e = entries[1]
     return { addr = e.addr, port = e.port }
   end
