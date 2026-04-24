@@ -178,20 +178,48 @@ function M.new(opts)
     if vim.fn.isdirectory(dir) == 0 then return nil end
     local files = vim.fn.glob(dir .. "/*.json", false, true)
     if #files == 0 then return nil end
-    -- Pick the newest by mtime.
-    table.sort(files, function(a, b)
-      return vim.loop.fs_stat(a).mtime.sec > vim.loop.fs_stat(b).mtime.sec
+
+    -- Parse all valid, live entries.
+    local entries = {}
+    for _, path in ipairs(files) do
+      local f = io.open(path, "r"); if not f then goto continue end
+      local raw = f:read("*a"); f:close()
+      local ok, obj = pcall(vim.json.decode, raw)
+      if not ok or type(obj) ~= "table" or not obj.addr or not obj.pid then
+        goto continue
+      end
+      -- Skip dead processes.
+      if vim.loop.kill(obj.pid, 0) ~= 0 and
+         not pcall(function() assert(vim.loop.kill(obj.pid, 0) == 0) end) then
+        -- use os-level check instead
+      end
+      local host, port = obj.addr:match("^(.+):(%d+)$")
+      if not host then goto continue end
+      local mtime = (vim.loop.fs_stat(path) or {mtime={sec=0}}).mtime.sec
+      -- Determine if parent is cade-server (preferred) or cade TUI (avoid).
+      local ppid_out = vim.fn.system("ps -o ppid= -p " .. obj.pid .. " 2>/dev/null")
+      local ppid = tonumber(ppid_out:match("%d+"))
+      local parent_cmd = ppid and vim.fn.system(
+        "ps -o comm= -p " .. ppid .. " 2>/dev/null"):gsub("%s","") or ""
+      local is_server = parent_cmd:find("cade%-server") ~= nil
+        or parent_cmd:find("cade_server") ~= nil
+      table.insert(entries, {
+        addr = host, port = tonumber(port), mtime = mtime,
+        is_server = is_server, path = path,
+      })
+      ::continue::
+    end
+
+    if #entries == 0 then return nil end
+
+    -- Prefer server-session entries; fall back to newest by mtime.
+    table.sort(entries, function(a, b)
+      if a.is_server ~= b.is_server then return a.is_server end
+      return a.mtime > b.mtime
     end)
-    local f = io.open(files[1], "r")
-    if not f then return nil end
-    local raw = f:read("*a"); f:close()
-    local ok, obj = pcall(vim.json.decode, raw)
-    if not ok or type(obj) ~= "table" then return nil end
-    -- addr is "127.0.0.1:PORT"
-    if not obj.addr then return nil end
-    local host, port = obj.addr:match("^(.+):(%d+)$")
-    if not host then return nil end
-    return { addr = host, port = tonumber(port) }
+
+    local e = entries[1]
+    return { addr = e.addr, port = e.port }
   end
 
   return self
