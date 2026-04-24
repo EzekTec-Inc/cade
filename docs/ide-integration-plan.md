@@ -4,9 +4,9 @@ The `cade-ide-mcp` crate is the long-term bridge between CADE agents and
 the user's editor. It speaks MCP over stdio so any MCP-capable agent
 (CADE, Claude Desktop, etc.) can introspect and drive the editor.
 
-Status: **M-IDE-1a + M-IDE-1b + M-IDE-1c + M-IDE-2 complete** (state layer, channel
-abstraction, 7 read tools, 9 write tools over 7 callbacks, stdio binary,
-TCP loopback adapter transport, VS Code extension). Next up: **M-IDE-3** (JetBrains plugin).
+Status: **M-IDE-1a + M-IDE-1b + M-IDE-1c + M-IDE-2 + M-IDE-3 complete** (state layer,
+channel abstraction, 7 read tools, 9 write tools over 7 callbacks, stdio binary,
+TCP loopback adapter transport, VS Code extension, JetBrains plugin).
 
 ---
 
@@ -147,10 +147,37 @@ code --install-extension cade-vscode-0.1.0.vsix
 
 **Test suite:** 50 Jest tests across 4 suites (`protocol`, `connection`, `statePublisher`, `callbackHandler`). Run with `npm test`.
 
-### M-IDE-3 — JetBrains plugin
+### M-IDE-3 — JetBrains plugin ✅
 
-Kotlin plugin mirroring the VS Code extension's feature set against the
-IntelliJ Platform APIs.
+Kotlin plugin (`extensions/cade-intellij/`) that connects IntelliJ-based
+IDEs to a running `cade-ide-mcp` process. Complete as of commit `d863fda0`.
+
+**Structure:**
+
+| File | Role |
+|------|------|
+| `src/main/kotlin/…/CadeProtocol.kt` | Kotlin mirror of wire types — `AdapterMessage`, `ServerMessage`, `CallbackOp`, `CallbackResult`; kotlinx.serialization encode/decode. |
+| `src/main/kotlin/…/CadeConnection.kt` | `CadeConnection` — reads discovery file, opens TCP socket, Hello/HelloAck, coroutine read loop. `CadeLogger` interface for testability. |
+| `src/main/kotlin/…/StatePublisher.kt` | `StatePublisher` — IntelliJ message-bus listeners (file open/close, document change, selection) → debounced `StateUpdate`. |
+| `src/main/kotlin/…/CallbackHandler.kt` | `CallbackHandler` — dispatches `CallbackOp` to IntelliJ APIs (`WriteCommandAction`, `FileEditorManager`, `RunManager`, Terminal, `XDebuggerManager`). |
+| `src/main/kotlin/…/CadeIdePlugin.kt` | `CadeConnectionService` (app service) + `CadePostStartupActivity` + `ReconnectAction`. |
+| `src/main/resources/META-INF/plugin.xml` | Plugin descriptor — extension points, startup activity, Tools menu action. |
+| `protocol-tests/` | Standalone Gradle project (no IDEA SDK) with 39 JUnit5 tests: 17 protocol round-trips, 6 TCP connection tests, 16 pure-logic tests. |
+
+**Build & install:**
+
+```sh
+cd extensions/cade-intellij
+./gradlew buildPlugin          # → build/distributions/cade-intellij-0.1.0.zip
+# Install via IDE: Settings → Plugins → ⚙ → Install Plugin from Disk…
+```
+
+**Protocol tests (no IDEA SDK required):**
+
+```sh
+cd extensions/cade-intellij/protocol-tests
+./gradlew test                 # 39 tests, ~10s
+```
 
 ---
 
