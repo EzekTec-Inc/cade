@@ -938,6 +938,18 @@ impl SessionState {
         }
     }
 
+    /// Show an informational toast — same channel as `push_error`, used
+    /// by Phase-3 `/compact` and overflow-warning surfacing.  We
+    /// intentionally reuse the `error_toast` slot because the GUI today
+    /// only has one toast channel; the toast renderer treats any
+    /// non-empty `error_toast` as a notice and does not hard-disable
+    /// streaming when the message starts with "✓" or "Compacting".
+    pub fn push_info(&mut self, msg: &str) {
+        if let Self::Connected { error_toast, .. } = self {
+            *error_toast = Some(msg.to_string());
+        }
+    }
+
     /// The current error message, if any.
     pub fn error_toast(&self) -> Option<&str> {
         if let Self::Connected { error_toast, .. } = self {

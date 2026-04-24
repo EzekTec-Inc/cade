@@ -240,6 +240,26 @@ impl Repl {
                         );
                         app.footer_extra = Some(metrics);
                     }
+                    "system_notice" => {
+                        // Phase 3: server-side overflow recovery (and
+                        // similar) surface a user-visible message via
+                        // SSE.  Show as a toast and mirror to the timeline
+                        // so it appears in session export/copy.
+                        let level = msg.data["level"].as_str().unwrap_or("info");
+                        let text =
+                            msg.data["message"].as_str().unwrap_or("").to_string();
+                        if !text.is_empty() {
+                            let toast_level = match level {
+                                "error" => crate::ui::ToastLevel::Error,
+                                "warning" => crate::ui::ToastLevel::Warning,
+                                "success" => crate::ui::ToastLevel::Success,
+                                _ => crate::ui::ToastLevel::Info,
+                            };
+                            let mut app = app_arc.lock();
+                            app.show_toast(text.clone(), toast_level);
+                            let _ = app.push(cade_tui::RenderLine::SystemMsg(text));
+                        }
+                    }
                     _ => {}
                 }
             }

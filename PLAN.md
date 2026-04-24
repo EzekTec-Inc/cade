@@ -2959,3 +2959,43 @@ M3 = **state-machine + minimal render + WASM entry**.  No network calls.
 - `calculate_context_budget` itself still uses `tokens × CHARS_PER_TOKEN(=3)` to derive `context_char_budget`.  That number is now correct *as a char budget* because `chars_for_tokens` uses the same 3:1 ratio — the math is consistent end-to-end.  Switching the entire pipeline to native tokens is a larger refactor for Phase 4.
 
 **Rollback:** `git revert <commit>` — change set is contained to the four files above plus tests.
+
+## 2026-04-24 — Phase 3: GUI/TUI overflow toast + `/compact` slash command
+
+**Goal:** make the context-recovery machinery from Phase 1 visible to the user, and let users proactively trigger consolidation before issuing a large request.
+
+**Changes:**
+
+1. **New slash command `/compact`** (alias `/consolidate`) wired end-to-end:
+   - `cade_core::resources::palette::PaletteCmd::Compact` + `CmdDef` listing.
+   - `cade-cli` `SlashCmd::Compact` + parser arm + `commands.rs` handler that calls `client.compact()` and shows a Success toast with the resulting `session_summary` size.
+   - `cade-agent` SDK: new `Client::compact(agent_id, conv_id)` — `POST /v1/agents/:id/compact` returning `session_summary_chars`.
+   - `cade-server` `POST /v1/agents/:id/compact` (`compact::compact_handler`) — synchronously calls `consolidate_agent` + reports the resulting summary size.
+   - `cade-gui` `PaletteCmd::Compact` arm dispatches `spawn_compact()` which calls `http_wasm::compact()` + shows the result via `session.push_info()`.
+
+2. **Overflow recovery toast:** `run.rs` now emits two SSE events:
+   - `system_notice level=warning code=context_overflow_recovering message="Context window full — compacting older turns and retrying…"` *before* `consolidate_agent` runs.
+   - `system_notice level=info code=context_overflow_recovered message="Context recovered — older turns are now in session_summary."` after the retry succeeds.
+   Both clients (CLI/TUI via `turn_loop/stream.rs`, GUI via `tasks.rs`) handle the new event by surfacing it as a toast and (TUI) appending it to the timeline so it survives in `/export` / `/copy`.
+
+3. **`StreamEvent::SystemNotice { level, code, message }`** added to the GUI's typed SSE wire enum + `parse_stream_event`, with parse tests.
+
+4. **`Session::push_info()`** added to GUI session — non-disruptive variant of `push_error()` that doesn't unset the streaming flag.
+
+**Files modified:**
+- `crates/cade-core/src/resources/palette.rs` — `PaletteCmd::Compact`, `CmdDef`, parse tests
+- `crates/cade-server/src/server/api/compact.rs` — new file (compact_handler + test)
+- `crates/cade-server/src/server/api/mod.rs` — module + route registration
+- `crates/cade-server/src/server/api/run.rs` — two SSE system_notice emits
+- `crates/cade-agent/src/agent/client/extensions.rs` — `Client::compact()`
+- `crates/cade-cli/src/cli/repl/slash.rs` — `SlashCmd::Compact` + parser arm
+- `crates/cade-cli/src/cli/repl/commands.rs` — `/compact` handler
+- `crates/cade-cli/src/cli/repl/turn_loop/stream.rs` — `system_notice` arm in UI consumer
+- `crates/cade-gui/src/api.rs` — `StreamEvent::SystemNotice`, `compact_url`
+- `crates/cade-gui/src/http_wasm.rs` — `compact()` client
+- `crates/cade-gui/src/session.rs` — `push_info()`
+- `crates/cade-gui/src/app/tasks.rs` — `spawn_compact()`, `PaletteCmd::Compact` dispatch, `StreamEvent::SystemNotice` arm
+
+**Test counts:** cade-core 215 (+3 palette), cade-server 161 (+1 compact handler), cade-gui 310 (+2 system_notice parse).  Full workspace `cargo test` and wasm `cargo build --target wasm32-unknown-unknown` both green.
+
+**Rollback:** `git revert <commit>`.

@@ -76,6 +76,8 @@ pub(crate) enum SlashCmd {
     /// Show or change the execution backend.
     Backend(Option<String>),
     CompactionModel(String),
+    /// Manually trigger session_summary consolidation.
+    Compact,
 }
 
 pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Option<SlashCmd> {
@@ -151,6 +153,7 @@ pub(crate) fn parse_slash_with_skills(input: &str, skill_ids: &[String]) -> Opti
         "reflect" => Some(SlashCmd::Reflect(arg)),
         "backend" => Some(SlashCmd::Backend(arg)),
         "compaction-model" => Some(SlashCmd::CompactionModel(arg.unwrap_or_default())),
+        "compact" | "consolidate" => Some(SlashCmd::Compact),
         // Skill slash commands: /commit, /review, etc.
         other if skill_ids.iter().any(|id| id == other) => {
             Some(SlashCmd::RunSkill(other.to_string()))

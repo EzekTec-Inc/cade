@@ -229,6 +229,16 @@ pub async fn run_agent(
                         agent_id2,
                         e
                     );
+                    // Phase 3: surface a user-visible toast so the user
+                    // knows their session was *automatically* recovered
+                    // rather than failing silently or with a cryptic
+                    // provider error.
+                    send(json!({
+                        "message_type": "system_notice",
+                        "level":        "warning",
+                        "code":         "context_overflow_recovering",
+                        "message":      "Context window full — compacting older turns and retrying…"
+                    })).await;
                     crate::server::consolidation::consolidate_agent(
                         &state2,
                         &agent_id2,
@@ -273,7 +283,17 @@ pub async fn run_agent(
                         reasoning_effort: None,
                     };
                     match state2.llm.stream(&retry_req).await {
-                        Ok(s) => s,
+                        Ok(s) => {
+                            // Phase 3: tell the user that the recovery
+                            // worked and the conversation continues.
+                            send(json!({
+                                "message_type": "system_notice",
+                                "level":        "info",
+                                "code":         "context_overflow_recovered",
+                                "message":      "Context recovered — older turns are now in session_summary."
+                            })).await;
+                            s
+                        }
                         Err(e2) => {
                             send(json!({
                                 "message_type": "error",

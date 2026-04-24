@@ -507,6 +507,36 @@ impl HttpTransport {
 
     // -- Reflection
 
+    /// Trigger a manual `/compact` consolidation pass.  Synchronously
+    /// invokes the same `consolidate_agent` flow used by the Sleeptime
+    /// background task and the P1-3 recovery loop.
+    ///
+    /// Returns the size (chars) of the resulting `session_summary` block,
+    /// suitable for surfacing in a toast to the user.
+    pub async fn compact(
+        &self,
+        agent_id: &str,
+        conversation_id: Option<&str>,
+    ) -> Result<usize> {
+        let mut url = self.url(&format!("/agents/{agent_id}/compact"));
+        if let Some(c) = conversation_id {
+            url.push_str(&format!("?conversation_id={c}"));
+        }
+        let resp = self
+            .client
+            .post(url)
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&serde_json::json!({}))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let txt = resp.text().await.unwrap_or_default();
+            return Err(crate::Error::custom(format!("compact failed: {txt}")));
+        }
+        let v: serde_json::Value = resp.json().await?;
+        Ok(v["session_summary_chars"].as_u64().unwrap_or(0) as usize)
+    }
+
     /// Trigger a reflection pass over recent conversation history.
     pub async fn trigger_reflect(&self, agent_id: &str, focus: Option<&str>) -> Result<String> {
         let mut body = serde_json::json!({ "trigger": "manual" });

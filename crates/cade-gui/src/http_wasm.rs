@@ -753,3 +753,31 @@ pub async fn patch_agent_reasoning(
         .map_err(|e| ApiError::Transport { message: e.to_string() })?;
     api::classify_upsert(resp.status())
 }
+
+/// `POST /v1/agents/:id/compact` — synchronously trigger session-summary
+/// consolidation. Returns the size (chars) of the resulting
+/// session_summary block, or 0 if there was nothing to consolidate.
+pub async fn compact(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+) -> Result<usize, ApiError> {
+    let url = api::compact_url(base_url, agent_id);
+    let resp = Request::post(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .header("Content-Type", "application/json")
+        .body("{}")
+        .map_err(|e| ApiError::Transport { message: format!("{e:?}") })?
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport { message: e.to_string() })?;
+    if resp.status() < 200 || resp.status() >= 300 {
+        return Err(ApiError::Server {
+            status: resp.status(),
+        });
+    }
+    let txt = resp.text().await.map_err(|e| ApiError::Transport { message: e.to_string() })?;
+    let v: serde_json::Value = serde_json::from_str(&txt)
+        .map_err(|e| ApiError::Decode { message: e.to_string() })?;
+    Ok(v["session_summary_chars"].as_u64().unwrap_or(0) as usize)
+}

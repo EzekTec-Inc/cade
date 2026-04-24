@@ -28,6 +28,11 @@ pub enum PaletteCmd {
     Toolset(String),
     Backend(String),
     Reasoning(String),
+    /// Manually trigger session_summary consolidation. Rolls dropped turns
+    /// into the pinned `session_summary` block so older context survives a
+    /// rotation. Useful when the user wants to free space proactively
+    /// before a large request.
+    Compact,
     Unsupported(String),
     Unknown(String),
 }
@@ -194,6 +199,12 @@ pub const CMD_DEFS: &[CmdDef] = &[
         arg_hint: None,
         category: CmdCategory::Session,
     },
+    CmdDef {
+        trigger: "compact",
+        description: "Consolidate dropped turns into session_summary now",
+        arg_hint: None,
+        category: CmdCategory::Memory,
+    },
 ];
 
 pub fn parse_palette_input(raw: &str) -> PaletteCmd {
@@ -219,6 +230,7 @@ pub fn parse_palette_input(raw: &str) -> PaletteCmd {
         "skills" | "skill" => PaletteCmd::Skills,
         "mcp" => PaletteCmd::Mcp,
         "logout" | "exit" | "quit" => PaletteCmd::Logout,
+        "compact" | "consolidate" => PaletteCmd::Compact,
         "resume" => PaletteCmd::Unsupported("resume".into()),
         "rename" => PaletteCmd::Unsupported("rename".into()),
         "delete" | "del" | "rm-agent" => PaletteCmd::Unsupported("delete".into()),
@@ -346,4 +358,26 @@ fn word_boundary_bonus(query: &str, label: &str) -> i32 {
             }
     }
     bonus
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_compact_command() {
+        assert_eq!(parse_palette_input("/compact"), PaletteCmd::Compact);
+        assert_eq!(parse_palette_input("compact"), PaletteCmd::Compact);
+    }
+
+    #[test]
+    fn parses_consolidate_alias_for_compact() {
+        assert_eq!(parse_palette_input("/consolidate"), PaletteCmd::Compact);
+    }
+
+    #[test]
+    fn compact_is_advertised_in_cmd_defs() {
+        let trigger_present = CMD_DEFS.iter().any(|d| d.trigger == "compact");
+        assert!(trigger_present, "/compact must appear in command palette listing");
+    }
 }

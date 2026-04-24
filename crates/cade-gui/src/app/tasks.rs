@@ -741,6 +741,51 @@ impl CadeApp {
 
     // ── Metrics + context spawn helpers (M19) ──────────────────────
 
+    /// Phase-3 `/compact` slash command: synchronously trigger
+    /// session_summary consolidation and surface the result via toast.
+    pub(super) fn spawn_compact(&mut self) {
+        let (server_url, token, agent_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id)
+        };
+
+        // Pre-toast so the user sees immediate feedback while the
+        // request is in flight.
+        if let Some(s) = self.session.borrow_mut().as_mut() {
+            s.push_info("Compacting context — consolidating dropped turns…");
+        }
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            let result = crate::http_wasm::compact(&server_url, &token, &agent_id).await;
+            if let Some(s) = session.borrow_mut().as_mut() {
+                match result {
+                    Ok(chars) if chars > 0 => {
+                        s.push_info(&format!(
+                            "✓ Context compacted (session_summary: {chars} chars)"
+                        ));
+                    }
+                    Ok(_) => {
+                        s.push_info("✓ Compact triggered (nothing to consolidate yet)");
+                    }
+                    Err(e) => {
+                        s.push_error(&format!("Compact failed: {e}"));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     pub(super) fn spawn_fetch_metrics(&mut self) {
         let (server_url, token, agent_id) = {
             let session = self.session.borrow();
@@ -970,6 +1015,13 @@ impl CadeApp {
                             StreamEvent::SubagentComplete { subagent_id, status, result_preview, elapsed_secs, is_error } => {
                                 s.on_subagent_complete(&subagent_id, &status, &result_preview, elapsed_secs, is_error);
                             }
+                            StreamEvent::SystemNotice { level: _, code: _, message } => {
+                                if !message.is_empty() {
+                                    // Phase 3: surface the server-side
+                                    // notice as a toast in the GUI.
+                                    s.push_info(&message);
+                                }
+                            }
                         }
                     }
                     ctx_clone.request_repaint();
@@ -1177,6 +1229,9 @@ impl CadeApp {
                         *reasoning_open = true;
                     }
                 }
+            }
+            PaletteCmd::Compact => {
+                self.spawn_compact();
             }
             PaletteCmd::Unsupported(name) => {
                 // TUI recognizes this command but the GUI has no UI or

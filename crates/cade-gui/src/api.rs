@@ -101,6 +101,13 @@ pub enum StreamEvent {
         elapsed_secs: u32,
         is_error: bool,
     },
+    /// Server-side notice surfaced to the user as a toast.  Used by
+    /// Phase-3 overflow recovery and `/compact` results.
+    SystemNotice {
+        level: String,
+        code: String,
+        message: String,
+    },
 }
 
 /// Build the absolute URL for an API path.
@@ -215,6 +222,11 @@ pub fn decode_conversations_single(
 /// Build the URL for listing or creating conversations.
 pub fn conversations_url(server: &str, agent_id: &str) -> String {
     build_url(server, &format!("/v1/agents/{agent_id}/conversations"))
+}
+
+/// `POST /v1/agents/:id/compact` URL.
+pub fn compact_url(server: &str, agent_id: &str) -> String {
+    build_url(server, &format!("/v1/agents/{agent_id}/compact"))
 }
 
 /// Build the URL for a single conversation (DELETE).
@@ -367,6 +379,11 @@ pub fn parse_stream_event(v: &serde_json::Value) -> Option<StreamEvent> {
             result_preview: v.get("result_preview").and_then(|r| r.as_str()).unwrap_or("").to_string(),
             elapsed_secs: v.get("elapsed_secs").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
             is_error: v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false),
+        }),
+        "system_notice" => Some(StreamEvent::SystemNotice {
+            level: v.get("level").and_then(|s| s.as_str()).unwrap_or("info").to_string(),
+            code: v.get("code").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+            message: v.get("message").and_then(|s| s.as_str()).unwrap_or("").to_string(),
         }),
         _ => None,
     }
@@ -1037,6 +1054,38 @@ mod tests {
     fn parse_unknown_event_returns_none() {
         let v = serde_json::json!({"message_type":"unknown_event"});
         assert_eq!(parse_stream_event(&v), None);
+    }
+
+    #[test]
+    fn parse_system_notice_returns_payload() {
+        let v = serde_json::json!({
+            "message_type": "system_notice",
+            "level": "warning",
+            "code": "context_overflow_recovering",
+            "message": "Context window full — compacting older turns…"
+        });
+        assert_eq!(
+            parse_stream_event(&v),
+            Some(StreamEvent::SystemNotice {
+                level: "warning".to_string(),
+                code: "context_overflow_recovering".to_string(),
+                message: "Context window full — compacting older turns…".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn parse_system_notice_defaults_when_fields_missing() {
+        // Only a message_type — defaults must populate.
+        let v = serde_json::json!({"message_type": "system_notice"});
+        assert_eq!(
+            parse_stream_event(&v),
+            Some(StreamEvent::SystemNotice {
+                level: "info".to_string(),
+                code: String::new(),
+                message: String::new(),
+            })
+        );
     }
 
     // -- conversations

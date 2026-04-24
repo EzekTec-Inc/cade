@@ -243,6 +243,30 @@ impl Repl {
                 }
                 return Ok(false);
             }
+            SlashCmd::Compact => {
+                self.app
+                    .lock()
+                    .show_toast("Compacting context — consolidating dropped turns…", ToastLevel::Info);
+                let _ = self.app.lock().draw();
+                let agent_id = self.agent_id();
+                match self.client.compact(&agent_id, None).await {
+                    Ok(chars) => {
+                        let msg = if chars > 0 {
+                            format!("✓ Context compacted (session_summary: {chars} chars)")
+                        } else {
+                            "✓ Compact triggered (nothing to consolidate yet)".to_string()
+                        };
+                        self.app.lock().show_toast(&msg, ToastLevel::Success);
+                        self.tui_ok(msg);
+                    }
+                    Err(e) => {
+                        let msg = format!("Compact failed: {e}");
+                        self.app.lock().show_toast(&msg, ToastLevel::Error);
+                        self.tui_err(msg);
+                    }
+                }
+                return Ok(false);
+            }
             SlashCmd::Reasoning(r) => {
                 let r = if r.is_empty() {
                     match self

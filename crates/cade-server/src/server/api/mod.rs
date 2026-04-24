@@ -4,6 +4,7 @@ pub mod agents;
 pub mod artifacts;
 pub mod auth;
 pub mod checkpoints;
+pub mod compact;
 pub mod complete;
 pub mod csrf;
 pub mod dashboard;
@@ -155,6 +156,10 @@ pub fn router(state: AppState) -> Router {
         .route(
             "/v1/agents/:id/reflect",
             post(memory_evidence::trigger_reflect),
+        )
+        .route(
+            "/v1/agents/:id/compact",
+            post(compact::compact_handler),
         )
         .route(
             "/v1/agents/:id/reflection",
