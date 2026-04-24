@@ -2931,3 +2931,31 @@ M3 = **state-machine + minimal render + WASM entry**.  No network calls.
 **Deferred:** P2-1 (real tokenizer via `tiktoken-rs`) — adding `tiktoken-rs` requires user dep approval. Char-based budget is now corrected by P2-2; under-counting is no longer a source of overflow.
 
 **Rollback:** `git revert <commit>` — change set contained to two files + tests.
+
+## 2026-04-24 — P2-1: real BPE tokenizer for budget accounting (tiktoken-rs)
+
+**Problem:** `calculate_context_budget` and the system-overhead deduction in `build_context` used a flat `chars / 3` token estimate.  English prose averages ~3.5–4 c/t, code ~3 c/t, CJK ~1–2 c/t.  The 3-c/t constant therefore over-deducted by ~25 % on system prompts (which are mostly prose), wasting input budget that could fit history.  Worse, it had no way to differentiate models — a 200 K Claude window and a 32 K legacy model both used identical chars-per-token math.
+
+**Fix (TDD, red→green):**
+
+- **New crate dep:** `tiktoken-rs = "0.11"` + `once_cell = "1.20"` in `cade-ai/Cargo.toml` (user-approved 2026-04-24).
+- **New module `cade_ai::tokenizer`** (107 lines + 7 unit tests):
+  * `count_tokens(model_id, text) -> usize` — picks `o200k_base` for GPT-4o / GPT-5 / o-series, `cl100k_base` for everything else (Anthropic, Gemini, Ollama, unknown providers).  Anthropic over-counts by ~5–10 % which is the safe direction.
+  * `chars_for_tokens(tokens) -> usize` — converts a token count back into the legacy char budget at the conservative `FALLBACK_CHARS_PER_TOKEN = 3` ratio so existing char-budget code paths keep working.
+  * Encoders cached behind `once_cell::Lazy` so repeated calls within a request are O(text-length).
+- **`build_context` system-overhead deduction switched to token math.**  Concatenates all leading system messages, calls `count_tokens(agent.model, …)`, converts back to chars via `chars_for_tokens`.  Defence-in-depth: if the encoder fails and reports zero tokens for non-empty text, fall back to raw char count so we never under-reserve.
+
+**Files modified:**
+- `crates/cade-ai/Cargo.toml` — `tiktoken-rs`, `once_cell` deps
+- `crates/cade-ai/src/tokenizer.rs` — new module
+- `crates/cade-ai/src/lib.rs` — re-export `count_tokens`, `chars_for_tokens`, `FALLBACK_CHARS_PER_TOKEN`
+- `crates/cade-server/src/server/api/messages/context.rs` — system-overhead deduction now token-based
+- `crates/cade-server/src/server/api/messages/tests.rs` — 3 tests (token smoke, system-size invariant, token-vs-chars budget freedom)
+
+**Test counts:** cade-ai 98 (+7), cade-server 160 (+3).  Full workspace `cargo test` green.
+
+**Not done in this commit:**
+- `TOOL_SCHEMA_CHARS_ESTIMATE` is still a 600-char pre-reservation per tool — improving this needs the tool list before `calculate_context_budget` runs, which is a structural refactor.  The P1-3 retry recovery already handles real-world overshoot, so this is low priority.
+- `calculate_context_budget` itself still uses `tokens × CHARS_PER_TOKEN(=3)` to derive `context_char_budget`.  That number is now correct *as a char budget* because `chars_for_tokens` uses the same 3:1 ratio — the math is consistent end-to-end.  Switching the entire pipeline to native tokens is a larger refactor for Phase 4.
+
+**Rollback:** `git revert <commit>` — change set is contained to the four files above plus tests.

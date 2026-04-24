@@ -1051,3 +1051,124 @@ fn render_skills_section_emits_omit_marker_when_budget_exhausted_mid_list() {
     let has_beta = out.contains("Beta (b)");
     assert!(has_omit || has_beta, "later skills must surface somehow");
 }
+
+// ── P2-1 token-based budget accounting ─────────────────────────────────────
+
+#[test]
+fn token_count_used_for_system_overhead_smoke() {
+    // The cade_ai::count_tokens function must produce a smaller-or-equal
+    // result than the legacy chars/3 estimate for typical English text.
+    // (chars/3 over-counts by ~30% vs real tokenizer.)
+    let text = "The quick brown fox jumps over the lazy dog. ".repeat(50);
+    let real_tokens = cade_ai::count_tokens("openai/gpt-4o", &text);
+    let chars = text.chars().count();
+    let estimated_tokens = chars / 3;
+    assert!(real_tokens > 0);
+    // Real tokenizer should report fewer tokens than the conservative chars/3 ratio.
+    assert!(
+        real_tokens < estimated_tokens,
+        "real tokenizer ({real_tokens}) should be more efficient than chars/3 estimate ({estimated_tokens})"
+    );
+}
+
+#[tokio::test]
+async fn build_context_message_budget_reflects_real_token_overhead() {
+    // Two agents with identical history but different system prompt sizes.
+    // The agent with the larger system prompt must end up with a strictly
+    // smaller message budget after the token-based deduction.
+    use cade_store::sqlite as ssq;
+    let db = ssq::open(":memory:").unwrap();
+
+    let small_id = "agent_p2_1_small";
+    let big_id = "agent_p2_1_big";
+    for (id, sys_size) in &[(small_id, 200usize), (big_id, 50_000usize)] {
+        ssq::create_agent(&db, &ssq::AgentRow {
+            id: (*id).to_string(),
+            name: "A".to_string(),
+            model: "anthropic/claude-sonnet-4-5-20250929".to_string(),
+            description: None,
+            system_prompt: Some("S".repeat(*sys_size)),
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+        }).unwrap();
+        // One short user message so build_context returns
+        db.lock().unwrap().execute(
+            "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
+             VALUES (?1, ?2, 'user', ?3, 5, 0)",
+            rusqlite::params![format!("u_{id}"), id, serde_json::json!({"content": "hi"}).to_string()],
+        ).unwrap();
+    }
+
+    let llm = std::sync::Arc::new(AlwaysOverflow) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+    let state = build_minimal_state(db, llm);
+
+    let (_m1, msgs_small, _) = super::context::build_context(&state, small_id, None, false).await.unwrap();
+    let (_m2, msgs_big, _) = super::context::build_context(&state, big_id, None, false).await.unwrap();
+
+    let sum_chars = |v: &Vec<cade_ai::LlmMessage>| -> usize { v.iter().map(|m| m.content.chars().count()).sum() };
+    let small_total = sum_chars(&msgs_small);
+    let big_total = sum_chars(&msgs_big);
+    assert!(big_total > small_total,
+        "agent with larger system prompt ({big_total}) must have a larger total assembled");
+    // And the per-call accounting must not allow the assembled output to
+    // exceed (window × 0.85 × 3) chars regardless of system size.
+    let window = cade_ai::catalogue::context_window_for_model("anthropic/claude-sonnet-4-5-20250929") as usize;
+    let max_chars = ((window as f64 * 0.85).round() as usize) * 3;
+    assert!(big_total <= max_chars, "big agent total {big_total} must fit in {max_chars}");
+}
+
+#[tokio::test]
+async fn build_context_token_overhead_frees_more_budget_than_chars() {
+    // English-prose system prompt: real token count is ~chars/3.7, so the
+    // token-based deduction must reserve fewer chars (=more available for
+    // history) than the legacy raw-char deduction would have.
+    use cade_store::sqlite as ssq;
+    let db = ssq::open(":memory:").unwrap();
+    let agent_id = "agent_p2_1_tokens";
+    let prose = "The quick brown fox jumps over the lazy dog. ".repeat(300);
+    let prose_chars = prose.chars().count();
+    let prose_tokens = cade_ai::count_tokens("openai/gpt-4o", &prose);
+    // Sanity: real tokenizer is more efficient than chars/3 for English.
+    assert!(prose_tokens > 0);
+    assert!(cade_ai::chars_for_tokens(prose_tokens) < prose_chars,
+        "token-based deduction must reserve fewer chars than raw chars");
+
+    ssq::create_agent(&db, &ssq::AgentRow {
+        id: agent_id.to_string(),
+        name: "A".to_string(),
+        model: "openai/gpt-4o".to_string(),
+        description: None,
+        system_prompt: Some(prose),
+        created_at: None,
+        compaction_model: None,
+        theme: None,
+    }).unwrap();
+
+    // Insert many short messages so the budget actually packs them.
+    for i in 0..40 {
+        db.lock().unwrap().execute(
+            "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            rusqlite::params![
+                format!("m{i}"),
+                agent_id,
+                if i % 2 == 0 { "user" } else { "assistant" },
+                serde_json::json!({"content": "x".repeat(30)}).to_string(),
+                30i64,
+                i as i64
+            ]
+        ).unwrap();
+    }
+
+    let llm = std::sync::Arc::new(AlwaysOverflow) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+    let state = build_minimal_state(db, llm);
+
+    let (_m, messages, _t) = super::context::build_context(&state, agent_id, None, false).await.unwrap();
+    let history_msgs = messages.iter().filter(|m| m.role != "system").count();
+    // With token-based accounting the system prompt costs ~prose_tokens × 3
+    // chars instead of prose_chars; this should leave room for *all* 40
+    // short messages on a 128k window.
+    assert_eq!(history_msgs, 40,
+        "all 40 short history messages must fit (token-based accounting freed budget)");
+}

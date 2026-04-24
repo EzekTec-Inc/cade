@@ -14,9 +14,11 @@ pub mod provider_registry;
 pub mod router;
 pub mod utils;
 pub mod types;
+pub mod tokenizer;
 
 pub use catalogue::{CATALOGUE, ModelEntry};
 pub use registry::{ModelPricing, ModelRegistry, PricingRule};
+pub use tokenizer::{count_tokens, chars_for_tokens, FALLBACK_CHARS_PER_TOKEN};
 pub use types::*;
 pub use router::*;
 pub use utils::*;

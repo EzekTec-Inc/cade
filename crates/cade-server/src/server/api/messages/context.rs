@@ -427,17 +427,33 @@ pub(crate) async fn build_context(
         turns.remove(0);
     }
 
-    // Deduct ALL leading system-prompt size from the message budget.
-    // Previously this only counted messages[0] (the static prompt) and
-    // ignored the dynamic system message that carries memory + skills +
-    // footer.  On agents with a large memory section that under-counted by
-    // ~30 K chars and let history overrun the real input window.
-    let system_chars: usize = messages
+    // ── P2-1: token-based system overhead deduction ─────────────────────────
+    // Previously this counted raw chars of all leading system messages,
+    // which over-deducted for verbose system text (English is ~3.5–4 c/t,
+    // not 3 c/t).  Now we count tokens with `cade_ai::count_tokens`
+    // (cl100k_base / o200k_base depending on model) and convert that token
+    // count back into a char budget via `chars_for_tokens`.  This keeps the
+    // legacy char-budget contract used by the turn walker while producing a
+    // reservation anchored to real provider tokens rather than a flat 3:1
+    // char/token estimate.
+    let system_text: String = messages
         .iter()
         .take_while(|m| m.role == "system")
-        .map(|m| m.content.chars().count())
-        .sum();
-    let message_budget = context_char_budget.saturating_sub(system_chars);
+        .map(|m| m.content.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let system_tokens = cade_ai::count_tokens(&agent.model, &system_text);
+    // Defence in depth: if the tokenizer reports zero tokens on non-empty
+    // text (encoder load failed and char fallback rounded to zero), fall
+    // back to the legacy raw-char deduction so we never *under*-reserve.
+    let system_overhead_chars = if system_text.is_empty() {
+        0
+    } else if system_tokens == 0 {
+        system_text.chars().count()
+    } else {
+        cade_ai::chars_for_tokens(system_tokens)
+    };
+    let message_budget = context_char_budget.saturating_sub(system_overhead_chars);
 
     let mut selected: Vec<Vec<LlmMessage>> = Vec::new();
     let mut budget_used: usize = 0;

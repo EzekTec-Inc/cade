@@ -27,6 +27,14 @@ reqwest-eventsource.workspace = true
 # -- Misc utilities
 uuid.workspace         = true
 parking_lot.workspace  = true
+# -- Token counting (P2-1).  BPE tokenizer matching OpenAI cl100k_base /
+# o200k_base.  Used by `cade_ai::token_count` to size context windows
+# accurately instead of the legacy ~3-chars/token estimate.  For Anthropic
+# and other providers without a public Rust tokenizer we fall back to the
+# closest cl100k_base/o200k_base encoder, which over-counts by ~5–10 % for
+# Claude — safe direction (the budget is conservative, not aggressive).
+tiktoken-rs            = "0.11"
+once_cell              = "1.20"
 
 [dev-dependencies]
 tempfile.workspace = true
