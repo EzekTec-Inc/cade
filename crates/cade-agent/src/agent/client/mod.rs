@@ -577,6 +577,43 @@ impl HttpTransport {
         }
         Ok(())
     }
+
+    /// Disable a skill server-side for an agent (add to blacklist).
+    /// The skill remains installed but is excluded from context injection.
+    pub async fn disable_skill_on_server(&self, agent_id: &str, skill_id: &str) -> Result<()> {
+        let resp = self
+            .client
+            .post(self.url(&format!("/agents/{agent_id}/skills/disable")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&serde_json::json!({ "id": skill_id }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "disable_skill_on_server failed: {}",
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
+
+    /// Enable a skill server-side for an agent (remove from blacklist).
+    pub async fn enable_skill_on_server(&self, agent_id: &str, skill_id: &str) -> Result<()> {
+        let resp = self
+            .client
+            .post(self.url(&format!("/agents/{agent_id}/skills/enable")))
+            .header("Authorization", format!("Bearer {}", self.api_key))
+            .json(&serde_json::json!({ "id": skill_id }))
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Err(crate::Error::custom(format!(
+                "enable_skill_on_server failed: {}",
+                resp.status()
+            )));
+        }
+        Ok(())
+    }
 }
 
 pub mod extensions;

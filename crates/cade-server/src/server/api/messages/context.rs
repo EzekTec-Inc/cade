@@ -120,14 +120,31 @@ pub(crate) fn render_skills_section(
     budget: usize,
     body_cap: usize,
 ) -> String {
-    if loaded.is_empty() {
+    render_skills_section_filtered(loaded, &Default::default(), budget, body_cap)
+}
+
+/// Like [`render_skills_section`] but skips any skill whose ID is in
+/// `disabled_ids`.  Called from `build_context` after loading the per-agent
+/// blacklist from the DB so disabled skills are transparent to the LLM.
+pub(crate) fn render_skills_section_filtered(
+    loaded: &[&cade_core::skills::Skill],
+    disabled_ids: &std::collections::HashSet<String>,
+    budget: usize,
+    body_cap: usize,
+) -> String {
+    let visible: Vec<&&cade_core::skills::Skill> = loaded
+        .iter()
+        .filter(|s| !disabled_ids.contains(&s.id))
+        .collect();
+
+    if visible.is_empty() {
         return String::new();
     }
     let header = "\n\n# Loaded Skills\n";
     let mut section = String::from(header);
     let mut remaining = budget;
 
-    for skill in loaded {
+    for skill in &visible {
         let summary_line = format!(
             "\n## Skill: {} ({}) [summary-only — call load_skill_ref to fetch full body]\n{}\n",
             skill.name,
@@ -152,7 +169,7 @@ pub(crate) fn render_skills_section(
             section.push_str(&format!(
                 "\n[…{} more loaded skill(s) omitted — section budget exhausted; \
                  use load_skill_ref to access content]\n",
-                loaded
+                visible
                     .iter()
                     .skip_while(|s| s.id != skill.id)
                     .count()
@@ -326,8 +343,17 @@ pub(crate) async fn build_context(
                 .iter()
                 .filter_map(|id| all_skills.iter().find(|s| s.id == *id))
                 .collect();
-            let skills_section = render_skills_section(
+
+            // Phase B: load per-agent disabled-skill blacklist from DB.
+            let disabled: std::collections::HashSet<String> =
+                cade_store::sqlite::skills::get_disabled_skills(&state.db, agent_id)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .collect();
+
+            let skills_section = render_skills_section_filtered(
                 &loaded,
+                &disabled,
                 SKILLS_INJECTION_BUDGET,
                 SKILL_BODY_INDIVIDUAL_CAP,
             );
@@ -1501,5 +1527,55 @@ mod head_tail_tests {
         let tail_part: String = original_text.chars().skip(80 + 600).take(320).collect();
         assert!(content.starts_with(&head_part));
         assert!(content.ends_with(&tail_part));
+    }
+}
+
+#[cfg(test)]
+mod blacklist_tests {
+    use super::*;
+
+    /// Phase B4 RED: `render_skills_section` must not include a skill whose
+    /// ID appears in `disabled_ids`.  Before the filter is added this test
+    /// fails because all loaded skills are rendered unconditionally.
+    #[test]
+    fn disabled_skill_is_excluded_from_rendered_section() {
+        let make_skill = |id: &str| cade_core::skills::Skill {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: "desc".to_string(),
+            category: None,
+            tags: vec![],
+            triggers: vec![],
+            rpi_phase: None,
+            capabilities: vec![],
+            scripts: vec![],
+            references: vec![],
+            body: format!("body of {id}"),
+            scope: cade_core::skills::SkillScope::Project,
+            path: std::path::PathBuf::from(format!("/tmp/{id}/SKILL.MD")),
+        };
+
+        let skill_a = make_skill("skill-a");
+        let skill_b = make_skill("skill-b"); // will be disabled
+
+        let loaded = vec![&skill_a, &skill_b];
+        let disabled: std::collections::HashSet<String> =
+            ["skill-b".to_string()].into_iter().collect();
+
+        let section = render_skills_section_filtered(
+            &loaded,
+            &disabled,
+            usize::MAX, // no budget limit
+            usize::MAX,
+        );
+
+        assert!(
+            section.contains("skill-a"),
+            "enabled skill must appear, got: {section}"
+        );
+        assert!(
+            !section.contains("skill-b"),
+            "disabled skill must NOT appear, got: {section}"
+        );
     }
 }

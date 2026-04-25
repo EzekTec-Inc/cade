@@ -270,6 +270,41 @@ impl Repl {
                         }
                     }
 
+                    "disable" => {
+                        let id = sub_arg.trim();
+                        if id.is_empty() {
+                            self.tui_err("  Usage: /skills disable <id>");
+                        } else {
+                            let agent_id = self.agent_id();
+                            match self.client.disable_skill_on_server(&agent_id, id).await {
+                                Ok(()) => {
+                                    self.tui_ok(format!(
+                                        "  ✓ Skill '{id}' disabled — will be excluded from context on next turn."
+                                    ));
+                                    self.tui_dim("  /skills enable <id>  to re-enable");
+                                }
+                                Err(e) => self.tui_err(format!("  Failed to disable skill: {e}")),
+                            }
+                        }
+                    }
+
+                    "enable" => {
+                        let id = sub_arg.trim();
+                        if id.is_empty() {
+                            self.tui_err("  Usage: /skills enable <id>");
+                        } else {
+                            let agent_id = self.agent_id();
+                            match self.client.enable_skill_on_server(&agent_id, id).await {
+                                Ok(()) => {
+                                    self.tui_ok(format!(
+                                        "  ✓ Skill '{id}' re-enabled — will be included in context on next turn."
+                                    ));
+                                }
+                                Err(e) => self.tui_err(format!("  Failed to enable skill: {e}")),
+                            }
+                        }
+                    }
+
                     other => {
                         self.tui_err(format!("  Unknown /skills subcommand: '{other}'"));
                         self.tui_blank();
@@ -277,6 +312,12 @@ impl Repl {
                         self.tui_dim("  /skills new <name>         — scaffold a new skill");
                         self.tui_dim(
                             "  /skills delete <id>        — remove a skill directory",
+                        );
+                        self.tui_dim(
+                            "  /skills disable <id>       — exclude skill from context (keeps files)",
+                        );
+                        self.tui_dim(
+                            "  /skills enable <id>        — re-include a disabled skill",
                         );
                         self.tui_dim(
                             "  /skills reload             — rescan all skill directories",

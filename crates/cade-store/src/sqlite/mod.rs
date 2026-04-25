@@ -269,6 +269,12 @@ fn apply_schema(conn: &Connection) -> Result<()> {
         );
         CREATE INDEX IF NOT EXISTS idx_event_log_agent ON event_log(agent_id, created_at DESC);
         CREATE INDEX IF NOT EXISTS idx_event_log_type ON event_log(event_type);
+
+        CREATE TABLE IF NOT EXISTS agent_skill_blacklist (
+            agent_id    TEXT NOT NULL,
+            skill_id    TEXT NOT NULL,
+            PRIMARY KEY (agent_id, skill_id)
+        );
     "#)?;
 
     // FTS5 Tables
@@ -452,6 +458,19 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 4", [])?;
     }
 
+    if current_version < 5 {
+        // Migration 5: agent_skill_blacklist — per-agent skill disable feature (Phase B).
+        // `IF NOT EXISTS` is safe for new DBs (apply_schema already created it).
+        conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS agent_skill_blacklist (
+                agent_id    TEXT NOT NULL,
+                skill_id    TEXT NOT NULL,
+                PRIMARY KEY (agent_id, skill_id)
+            );",
+        )?;
+        conn.execute("PRAGMA user_version = 5", [])?;
+    }
+
     Ok(())
 }
 
@@ -492,6 +511,7 @@ pub mod memory;
 pub mod messages;
 pub mod providers;
 pub mod runs;
+pub mod skills;
 pub mod tools;
 pub mod event_log;
 

@@ -3182,3 +3182,44 @@ All handlers operate **directly on `state.db`** — no HTTP self-call to the sam
 **Test counts:** cade-server **186 (+16)**. Full workspace green.
 
 **Rollback:** `git revert <commit>` — removes all 9 dispatch arms and handler bodies.
+
+## 2026-04-25 — Phase B: skill disable feature (DB blacklist + API + context filter + CLI)
+
+**Goal:** allow users to disable individual skills without uninstalling them. A disabled skill stays on disk and is discovered at startup, but is excluded from the LLM context for the specified agent.
+
+**Design:**
+- `agent_skill_blacklist (agent_id, skill_id, PRIMARY KEY)` — join table in SQLite. No FK to agents to allow cross-agent disabling without requiring an agent row.
+- `GET /v1/agents/:id/skills` — unchanged; disabled flag visible in blacklist only.
+- `POST /v1/agents/:id/skills/disable` + `/enable` — add/remove from blacklist.
+- `render_skills_section_filtered()` in `context.rs` — new function that takes a `HashSet<String>` of disabled IDs and filters before rendering. `render_skills_section` delegates to it with an empty set (backward compatible).
+- `build_context` loads the blacklist via `cade_store::sqlite::skills::get_disabled_skills` and passes it to the filtered renderer.
+- `cade-agent` client: `disable_skill_on_server` + `enable_skill_on_server` methods.
+- CLI: `/skills disable <id>` + `/skills enable <id>` subcommands in `commands_skills.rs`.
+
+**TDD cycles (10 total):**
+
+| Phase | Test | Outcome |
+|-------|------|---------|
+| B1/B2 | `blacklist_table_exists_after_open` | RED→GREEN: table added to apply_schema + migration 5 |
+| B2 | `disable_adds_row_enable_removes_it` | GREEN |
+| B2 | `disable_is_idempotent` | GREEN |
+| B2 | `enable_on_non_disabled_skill_is_safe` | GREEN |
+| B2 | `get_disabled_skills_returns_all_for_agent` | GREEN |
+| B2 | `blacklist_is_per_agent_not_global` | GREEN |
+| B3 | `disable_skill_returns_200_and_persists` | RED→GREEN: routes added to mod.rs |
+| B3 | `enable_skill_returns_200_and_removes_blacklist` | GREEN |
+| B3 | `disable_skill_missing_id_returns_400` | GREEN |
+| B4 | `disabled_skill_is_excluded_from_rendered_section` | RED→GREEN: `render_skills_section_filtered` added |
+
+**Files modified:**
+- `crates/cade-store/src/sqlite/mod.rs` — `agent_skill_blacklist` in `apply_schema`, migration 5, `pub mod skills`
+- `crates/cade-store/src/sqlite/skills.rs` — NEW: `disable_skill`, `enable_skill`, `get_disabled_skills`, `is_skill_disabled` + 6 tests
+- `crates/cade-server/src/server/api/skills.rs` — `disable_skill` + `enable_skill` handlers + 3 tests
+- `crates/cade-server/src/server/api/mod.rs` — 2 new routes
+- `crates/cade-server/src/server/api/messages/context.rs` — `render_skills_section_filtered` + blacklist load in `build_context` + 1 test
+- `crates/cade-agent/src/agent/client/mod.rs` — `disable_skill_on_server` + `enable_skill_on_server`
+- `crates/cade-cli/src/cli/repl/commands_skills.rs` — `disable` + `enable` subcommands + updated help
+
+**Test counts:** cade-store 106 (+6), cade-server 190 (+4). Full workspace green.
+
+**Rollback:** `git revert <commit>` — removes all B phase changes.
