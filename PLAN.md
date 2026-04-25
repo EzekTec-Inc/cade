@@ -3143,3 +3143,42 @@ All handlers operate **directly on `state.db`** — no HTTP self-call to the sam
 **Backward compat:** all 5 tools already had schemas exposed via `meta.rs::all_tools`, so the LLM was already advertising them — only the failure mode is fixed.  No public API changes.
 
 **Rollback:** `git revert <commit>` — drops the 5 handlers and the dispatch helper; chain reverts to the previous inline `if/else if`.
+
+## 2026-04-25 — Phase A2+A3+A4: server-side meta-tool intercepts (skills, checkpoints, artifacts, agents)
+
+**Goal:** close the remaining 9 "Unknown tool" gaps in the server-side agentic loop for `install_skill`, `run_skill_script`, `load_skill_ref`, `create_checkpoint`, `list_checkpoints`, `restore_checkpoint`, `store_artifact`, `list_agents`, `message_agent`.
+
+**Approach:** same seam as Phase A1 — add dispatch arms to `intercept_meta_tool` in `run.rs` and implement standalone handler functions that talk directly to `state.db` or `state.llm` (no HTTP self-calls).
+
+**TDD cycles (15 total):**
+
+| Phase | Tool | Test | Outcome |
+|-------|------|------|---------|
+| A2 | `load_skill_ref` | unknown-skill error intercepted | RED→GREEN |
+| A2 | `run_skill_script` | missing-args error intercepted | RED→GREEN |
+| A2 | `install_skill` | missing-url error intercepted | RED→GREEN |
+| A3 | `create_checkpoint` | row persisted in DB | RED→GREEN |
+| A3 | `list_checkpoints` | returns intercepted response | RED→GREEN |
+| A3 | `restore_checkpoint` | not-found error intercepted | RED→GREEN |
+| A4 | `store_artifact` | row persisted, ID in output | RED→GREEN |
+| A4 | `store_artifact` (missing content) | error intercepted | RED→GREEN |
+| A4 | `list_agents` | empty-list success intercepted | RED→GREEN |
+| A4 | `message_agent` (missing target) | error intercepted | RED→GREEN |
+| A4 | `message_agent` (unknown target) | error intercepted | RED→GREEN |
+
+**Handlers summary:**
+- `handle_install_skill_meta` — delegates to `cade_core::skills::install_skill_from_url`
+- `handle_run_skill_script_meta` — discovers skills via `cade_core::skills::discover_all_skills`, runs script via `tokio::process::Command`
+- `handle_load_skill_ref_meta` — discovers skills, reads reference file from disk
+- `handle_create_checkpoint_meta` — inserts row in `checkpoints` table (no git stash server-side)
+- `handle_list_checkpoints_meta` — queries `checkpoints` by `agent_id`
+- `handle_restore_checkpoint_meta` — looks up row, returns note that git stash requires CLI for full restore
+- `handle_store_artifact_meta` — inserts row in `artifacts` table
+- `handle_list_agents_meta` — calls `cade_store::sqlite::list_agents`
+- `handle_message_agent_meta` — resolves target via DB, runs single `state.llm.complete()` call with target's system prompt
+
+**Also:** added `pub fn unix_ts_pub()` to `crates/cade-server/src/server/api/checkpoints.rs` for reuse by run.rs handlers.
+
+**Test counts:** cade-server **186 (+16)**. Full workspace green.
+
+**Rollback:** `git revert <commit>` — removes all 9 dispatch arms and handler bodies.

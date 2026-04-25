@@ -207,6 +207,12 @@ fn unix_ts() -> i64 {
         .as_secs() as i64
 }
 
+/// Public re-export of `unix_ts` for use by server-side meta-tool handlers
+/// that need to insert timestamps without going through the HTTP layer.
+pub fn unix_ts_pub() -> i64 {
+    unix_ts()
+}
+
 fn db_err(e: rusqlite::Error) -> (StatusCode, Json<Value>) {
     (
         StatusCode::INTERNAL_SERVER_ERROR,

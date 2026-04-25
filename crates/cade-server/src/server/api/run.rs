@@ -648,6 +648,53 @@ async fn intercept_meta_tool(
             let (output, is_error) = handle_reflect_meta(state, agent_id, &tc.arguments).await;
             Some(mk(output, is_error))
         }
+        // ── Phase A2: skill meta-tools ────────────────────────────────────
+        "install_skill" => {
+            let (output, is_error) =
+                handle_install_skill_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "run_skill_script" => {
+            let (output, is_error) =
+                handle_run_skill_script_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "load_skill_ref" => {
+            let (output, is_error) =
+                handle_load_skill_ref_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        // ── Phase A3: checkpoint meta-tools ───────────────────────────────
+        "create_checkpoint" => {
+            let (output, is_error) =
+                handle_create_checkpoint_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "list_checkpoints" => {
+            let (output, is_error) =
+                handle_list_checkpoints_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "restore_checkpoint" => {
+            let (output, is_error) =
+                handle_restore_checkpoint_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        // ── Phase A4: artifact + agents meta-tools ────────────────────────
+        "store_artifact" => {
+            let (output, is_error) =
+                handle_store_artifact_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "list_agents" => {
+            let (output, is_error) = handle_list_agents_meta(state, agent_id).await;
+            Some(mk(output, is_error))
+        }
+        "message_agent" => {
+            let (output, is_error) =
+                handle_message_agent_meta(state, agent_id, &tc.arguments, sse_tx).await;
+            Some(mk(output, is_error))
+        }
         _ => None,
     }
 }
@@ -851,7 +898,439 @@ async fn handle_reflect_meta(
     )
 }
 
-/// Strip `run_subagent` from a list of tool JSON schemas.
+/// Phase A2 handler: `install_skill` server-side.
+/// Delegates to `cade_core::skills::install_skill_from_url`.
+/// The installed skill is available to subsequent `load_skill` calls.
+async fn handle_install_skill_meta(
+    _state: &AppState,
+    _agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let url = args["url"].as_str().unwrap_or("").trim().to_string();
+    let scope = args["scope"].as_str().unwrap_or("project");
+    let skill_name = args["skill"]
+        .as_str()
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty());
+
+    if url.is_empty() {
+        return ("Error: 'url' is required".to_string(), true);
+    }
+
+    // Server-side: use a reasonable default target directory.
+    let target_dir = if scope == "global" {
+        dirs::home_dir()
+            .map(|h| h.join(".cade").join("skills"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".cade/skills"))
+    } else {
+        std::path::PathBuf::from(".cade/skills")
+    };
+
+    match cade_core::skills::install_skill_from_url(&url, &target_dir, skill_name).await {
+        Ok(skill) => (
+            format!(
+                "Skill '{}' installed as [{}] in {} scope. It is now available via load_skill(\"{}\").",
+                skill.name, skill.id, scope, skill.id
+            ),
+            false,
+        ),
+        Err(e) => (format!("Failed to install skill: {e}"), true),
+    }
+}
+
+/// Phase A2 handler: `run_skill_script` server-side.
+/// Discovers all skills visible from the current working directory,
+/// locates the requested script, and executes it.
+async fn handle_run_skill_script_meta(
+    _state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
+    let script = args["script"].as_str().unwrap_or("").trim().to_string();
+    let script_args: Vec<String> = args["args"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    if skill_id.is_empty() || script.is_empty() {
+        return (
+            "Error: 'skill_id' and 'script' are required".to_string(),
+            true,
+        );
+    }
+
+    let cwd = std::path::PathBuf::from(".");
+    let skills = cade_core::skills::discover_all_skills(&cwd, Some(agent_id), None);
+    let Some(skill) = skills.into_iter().find(|s| s.id == skill_id) else {
+        return (format!("Skill '{skill_id}' not found"), true);
+    };
+
+    let Some(sk) = skill.scripts.iter().find(|s| s.name == script).cloned() else {
+        let available: Vec<&str> = skill.scripts.iter().map(|s| s.name.as_str()).collect();
+        let list = if available.is_empty() {
+            "none".to_string()
+        } else {
+            available.join(", ")
+        };
+        return (
+            format!(
+                "Script '{script}' not found in skill '{skill_id}'. Available: {list}"
+            ),
+            true,
+        );
+    };
+
+    let mut cmd = tokio::process::Command::new(&sk.path);
+    cade_core::agent_env::apply_agent_env(&mut cmd);
+    match cmd.args(&script_args).output().await {
+        Err(e) => (format!("Failed to run script: {e}"), true),
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+            let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+            let combined = if stderr.is_empty() {
+                stdout
+            } else {
+                format!("{stdout}\n[stderr]\n{stderr}")
+            };
+            let is_err = !out.status.success();
+            (combined, is_err)
+        }
+    }
+}
+
+/// Phase A2 handler: `load_skill_ref` server-side.
+/// Reads a reference document from an installed skill's `references/` directory.
+async fn handle_load_skill_ref_meta(
+    _state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let skill_id = args["skill_id"].as_str().unwrap_or("").trim().to_string();
+    let doc = args["doc"].as_str().unwrap_or("").trim().to_string();
+
+    if skill_id.is_empty() || doc.is_empty() {
+        return ("Error: 'skill_id' and 'doc' are required".to_string(), true);
+    }
+
+    let cwd = std::path::PathBuf::from(".");
+    let skills = cade_core::skills::discover_all_skills(&cwd, Some(agent_id), None);
+    let Some(skill) = skills.into_iter().find(|s| s.id == skill_id) else {
+        return (format!("Skill '{skill_id}' not found"), true);
+    };
+
+    let Some(r) = skill
+        .references
+        .iter()
+        .find(|r| {
+            r.name == doc
+                || r.path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    == doc
+        })
+        .cloned()
+    else {
+        let available: Vec<&str> = skill.references.iter().map(|r| r.name.as_str()).collect();
+        let list = if available.is_empty() {
+            "none".to_string()
+        } else {
+            available.join(", ")
+        };
+        return (
+            format!(
+                "Reference '{doc}' not found in skill '{skill_id}'. Available: {list}"
+            ),
+            true,
+        );
+    };
+
+    match std::fs::read_to_string(&r.path) {
+        Ok(content) => (
+            format!("# Reference: {doc} (skill: {skill_id})\n\n{content}"),
+            false,
+        ),
+        Err(e) => (format!("Failed to read reference '{doc}': {e}"), true),
+    }
+}
+
+/// Phase A3 handler: `create_checkpoint` server-side.
+/// Skips git stash (no interactive CWD) — records the checkpoint row in DB.
+async fn handle_create_checkpoint_meta(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let label = args["label"]
+        .as_str()
+        .unwrap_or("checkpoint")
+        .trim()
+        .to_string();
+    let description = args["description"].as_str().map(String::from);
+
+    let id = format!("cp-{}", uuid::Uuid::new_v4());
+    let now = crate::server::api::checkpoints::unix_ts_pub();
+    let conn = match state.db.lock() {
+        Ok(c) => c,
+        Err(e) => return (format!("DB lock poisoned: {e}"), true),
+    };
+    let result = conn.execute(
+        "INSERT INTO checkpoints (id, agent_id, conversation_id, branch_id, label, description, created_at, git_stash_ref, git_commit_hash, parent_id)
+         VALUES (?1, ?2, NULL, 'main', ?3, ?4, ?5, NULL, NULL, NULL)",
+        rusqlite::params![id, agent_id, label, description, now],
+    );
+    drop(conn);
+    match result {
+        Ok(_) => (
+            format!("Checkpoint '{label}' created. ID: {id}"),
+            false,
+        ),
+        Err(e) => (format!("Failed to create checkpoint: {e}"), true),
+    }
+}
+
+/// Phase A3 handler: `list_checkpoints` server-side.
+async fn handle_list_checkpoints_meta(
+    state: &AppState,
+    agent_id: &str,
+    _args: &serde_json::Value,
+) -> (String, bool) {
+    let conn = match state.db.lock() {
+        Ok(c) => c,
+        Err(e) => return (format!("DB lock poisoned: {e}"), true),
+    };
+    let mut stmt = match conn.prepare(
+        "SELECT id, label, description, created_at FROM checkpoints
+         WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 200",
+    ) {
+        Ok(s) => s,
+        Err(e) => return (format!("DB prepare error: {e}"), true),
+    };
+    let rows: Vec<String> = match stmt.query_map(rusqlite::params![agent_id], |r| {
+        let id: String = r.get(0)?;
+        let label: Option<String> = r.get(1)?;
+        let desc: Option<String> = r.get(2)?;
+        let ts: i64 = r.get(3)?;
+        Ok(format!(
+            "- {} [{}] {}: {}",
+            &id[..8.min(id.len())],
+            ts,
+            label.as_deref().unwrap_or(""),
+            desc.as_deref().unwrap_or("")
+        ))
+    }) {
+        Ok(mapped) => mapped.filter_map(|r| r.ok()).collect(),
+        Err(_) => vec![],
+    };
+    if rows.is_empty() {
+        ("No checkpoints found.".to_string(), false)
+    } else {
+        (rows.join("\n"), false)
+    }
+}
+
+/// Phase A3 handler: `restore_checkpoint` server-side.
+/// Looks up checkpoint by ID and marks it restored.  Git stash restore
+/// requires an interactive shell and is not performed server-side.
+async fn handle_restore_checkpoint_meta(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let cp_id = args["checkpoint_id"]
+        .as_str()
+        .unwrap_or("")
+        .trim()
+        .to_string();
+    if cp_id.is_empty() {
+        return ("Error: 'checkpoint_id' is required".to_string(), true);
+    }
+
+    let conn = match state.db.lock() {
+        Ok(c) => c,
+        Err(e) => return (format!("DB lock poisoned: {e}"), true),
+    };
+    let row: Option<(String, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT id, label, git_stash_ref FROM checkpoints WHERE id = ?1 AND agent_id = ?2",
+            rusqlite::params![cp_id, agent_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .ok();
+    drop(conn);
+
+    match row {
+        None => (
+            format!("Checkpoint '{cp_id}' not found for agent '{agent_id}'"),
+            true,
+        ),
+        Some((id, label, stash)) => {
+            let label_str = label.as_deref().unwrap_or("?");
+            let note = if stash.is_some() {
+                " (git stash not applied server-side — use CLI for full restore)"
+            } else {
+                ""
+            };
+            (
+                format!("Restored to checkpoint '{label_str}' ({id}).{note}"),
+                false,
+            )
+        }
+    }
+}
+
+/// Phase A4 handler: `store_artifact` server-side.
+/// Inserts an artifact row directly into the DB.
+async fn handle_store_artifact_meta(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let kind = args["kind"].as_str().unwrap_or("other");
+    let content = args["content"].as_str().unwrap_or("");
+    let label = args["label"].as_str().unwrap_or("");
+
+    if content.is_empty() {
+        return ("Error: 'content' is required".to_string(), true);
+    }
+
+    let id = format!("art-{}", uuid::Uuid::new_v4());
+    let now = crate::server::api::checkpoints::unix_ts_pub();
+    let size_bytes = content.len() as i64;
+
+    let conn = match state.db.lock() {
+        Ok(c) => c,
+        Err(e) => return (format!("DB lock poisoned: {e}"), true),
+    };
+    let result = conn.execute(
+        "INSERT INTO artifacts (id, agent_id, run_id, tool_call_id, kind, content_type, data_text, metadata_json, size_bytes, created_at)
+         VALUES (?1, ?2, NULL, NULL, ?3, 'text/plain', ?4, '{}', ?5, ?6)",
+        rusqlite::params![id, agent_id, kind, content, size_bytes, now],
+    );
+    drop(conn);
+
+    match result {
+        Ok(_) => {
+            let label_str = if label.is_empty() {
+                String::new()
+            } else {
+                format!(" '{label}'")
+            };
+            (format!("Artifact{label_str} stored. ID: {id}"), false)
+        }
+        Err(e) => (format!("Failed to store artifact: {e}"), true),
+    }
+}
+
+/// Phase A4 handler: `list_agents` server-side.
+/// Queries the agents table directly — no HTTP self-call.
+async fn handle_list_agents_meta(
+    state: &AppState,
+    _agent_id: &str,
+) -> (String, bool) {
+    match cade_store::sqlite::list_agents(&state.db) {
+        Err(e) => (format!("Failed to list agents: {e}"), true),
+        Ok(agents) => {
+            if agents.is_empty() {
+                return ("No other agents found.".to_string(), false);
+            }
+            let mut out = String::from("Available agents:\n");
+            for agent in agents {
+                let name = &agent.name;
+                let id = &agent.id;
+                let desc = agent.description.as_deref().unwrap_or("No description");
+                out.push_str(&format!("- {name} ({id}): {desc}\n"));
+            }
+            (out.trim().to_string(), false)
+        }
+    }
+}
+
+/// Phase A4 handler: `message_agent` server-side.
+/// Runs a single `complete()` call against the target agent's accumulated
+/// system prompt + messages.  Full agentic loop (with tool access) is only
+/// available from CLI; server-side delivers the target's LLM response only.
+async fn handle_message_agent_meta(
+    state: &AppState,
+    _agent_id: &str,
+    args: &serde_json::Value,
+    _sse_tx: tokio::sync::mpsc::Sender<
+        Result<axum::response::sse::Event, std::convert::Infallible>,
+    >,
+) -> (String, bool) {
+    let target = args["target"].as_str().unwrap_or("").trim().to_string();
+    let message = args["message"].as_str().unwrap_or("").to_string();
+
+    if target.is_empty() || message.is_empty() {
+        return (
+            "Error: 'target' and 'message' are required".to_string(),
+            true,
+        );
+    }
+
+    // Resolve target name/id → AgentRow
+    let agents = match cade_store::sqlite::list_agents(&state.db) {
+        Ok(a) => a,
+        Err(e) => return (format!("Failed to query agents: {e}"), true),
+    };
+    let Some(target_agent) = agents
+        .iter()
+        .find(|a| a.id == target || a.name == target)
+    else {
+        return (format!("Error: Agent '{target}' not found"), true);
+    };
+
+    let system_prompt = target_agent
+        .system_prompt
+        .clone()
+        .unwrap_or_else(|| "You are a helpful assistant.".to_string());
+
+    // Build a minimal completion request: system message + user message.
+    let req = cade_ai::CompletionRequest {
+        model: state.config.default_model.clone(),
+        messages: vec![
+            cade_ai::LlmMessage {
+                role: "system".to_string(),
+                content: system_prompt,
+                tool_calls: None,
+                tool_call_id: None,
+                images: None,
+            },
+            cade_ai::LlmMessage {
+                role: "user".to_string(),
+                content: message,
+                tool_calls: None,
+                tool_call_id: None,
+                images: None,
+            },
+        ],
+        tools: vec![],
+        max_tokens: 4096,
+        reasoning_effort: None,
+    };
+
+    match state.llm.complete(&req).await {
+        Ok(resp) => {
+            let text = resp.content.as_deref().unwrap_or("").trim().to_string();
+            if text.is_empty() {
+                (
+                    "Target agent returned an empty response".to_string(),
+                    false,
+                )
+            } else {
+                (text, false)
+            }
+        }
+        Err(e) => (format!("Failed to message agent: {e}"), true),
+    }
+}
+
+
 ///
 /// Second line of defence against runaway recursion (first is the depth
 /// guard in [`handle_run_subagent_tool`]).  When a subagent is handed the
@@ -1740,6 +2219,347 @@ mod tests {
         );
         assert!(names.iter().any(|n| n == "bash"));
         assert!(names.iter().any(|n| n == "read_file"));
+    }
+
+    // ── Phase A2: skills meta-tools ──────────────────────────────────────
+
+    /// Phase A2 RED: `load_skill_ref` for a skill that does not exist must
+    /// return an intercepted error (not "Unknown tool").
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_load_skill_ref_unknown_skill() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let tc = LlmToolCall {
+            id: "tc_lsr".into(),
+            name: "load_skill_ref".into(),
+            arguments: serde_json::json!({"skill_id": "no-such-skill", "doc": "intro"}),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_x", &tc, tx).await;
+        let res = opt.expect("load_skill_ref must be intercepted");
+        // Unknown skill → is_error, but NOT "Unknown tool"
+        assert!(
+            !res.output.starts_with("Unknown tool"),
+            "must NOT fall through to manager::dispatch, got: {}",
+            res.output
+        );
+    }
+
+    /// Phase A2 RED: `run_skill_script` with missing required args must be
+    /// intercepted and return an error (not fall through).
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_run_skill_script_missing_args() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let tc = LlmToolCall {
+            id: "tc_rss".into(),
+            name: "run_skill_script".into(),
+            // Missing skill_id + script — handler must return an error
+            arguments: serde_json::json!({}),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_x", &tc, tx).await;
+        let res = opt.expect("run_skill_script must be intercepted");
+        assert!(
+            !res.output.starts_with("Unknown tool"),
+            "must NOT fall through, got: {}",
+            res.output
+        );
+        assert!(res.is_error, "missing args → must be is_error");
+    }
+
+    /// Phase A2 RED: `install_skill` with missing URL must be intercepted.
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_install_skill_missing_url() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let tc = LlmToolCall {
+            id: "tc_is".into(),
+            name: "install_skill".into(),
+            arguments: serde_json::json!({}), // url missing
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_x", &tc, tx).await;
+        let res = opt.expect("install_skill must be intercepted");
+        assert!(
+            !res.output.starts_with("Unknown tool"),
+            "must NOT fall through, got: {}",
+            res.output
+        );
+        assert!(res.is_error, "missing url → must be is_error");
+    }
+
+    // ── Phase A3: checkpoint meta-tools ──────────────────────────────────
+
+    /// Phase A3 RED: `create_checkpoint` must persist a row in DB and
+    /// return success (no HTTP self-call).
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_create_checkpoint() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "agent_cp".into(),
+                name: "t".into(),
+                model: "t".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        let tc = LlmToolCall {
+            id: "tc_cp".into(),
+            name: "create_checkpoint".into(),
+            arguments: serde_json::json!({
+                "label": "before-refactor",
+                "description": "unit-test checkpoint",
+            }),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_cp", &tc, tx).await;
+        let res = opt.expect("create_checkpoint must be intercepted");
+        assert!(
+            !res.output.starts_with("Unknown tool"),
+            "must NOT fall through, got: {}",
+            res.output
+        );
+        assert!(!res.is_error, "must succeed: {}", res.output);
+        assert!(
+            res.output.contains("before-refactor"),
+            "output must echo label, got: {}",
+            res.output
+        );
+    }
+
+    /// Phase A3 RED: `list_checkpoints` must return intercepted output.
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_list_checkpoints() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "agent_lc".into(),
+                name: "t".into(),
+                model: "t".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        let tc = LlmToolCall {
+            id: "tc_lc".into(),
+            name: "list_checkpoints".into(),
+            arguments: serde_json::json!({}),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_lc", &tc, tx).await;
+        let res = opt.expect("list_checkpoints must be intercepted");
+        assert!(
+            !res.output.starts_with("Unknown tool"),
+            "must NOT fall through, got: {}",
+            res.output
+        );
+        assert!(!res.is_error, "must succeed: {}", res.output);
+    }
+
+    /// Phase A3 RED: `restore_checkpoint` with a bad ID must be intercepted
+    /// with an error (not fall through to manager).
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_restore_checkpoint_not_found() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let tc = LlmToolCall {
+            id: "tc_rc".into(),
+            name: "restore_checkpoint".into(),
+            arguments: serde_json::json!({"checkpoint_id": "cp-nonexistent-0000"}),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_x", &tc, tx).await;
+        let res = opt.expect("restore_checkpoint must be intercepted");
+        assert!(
+            !res.output.starts_with("Unknown tool"),
+            "must NOT fall through, got: {}",
+            res.output
+        );
+        assert!(res.is_error, "nonexistent CP → must be is_error");
+    }
+
+    // ── Phase A4: artifact / agents meta-tools ────────────────────────────
+
+    /// Phase A4 RED: `store_artifact` must persist a row and return
+    /// the artifact ID — no HTTP self-call.
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_store_artifact() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "agent_art".into(),
+                name: "t".into(),
+                model: "t".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        let tc = LlmToolCall {
+            id: "tc_sa".into(),
+            name: "store_artifact".into(),
+            arguments: serde_json::json!({
+                "kind": "log",
+                "content": "build output here",
+                "label": "build-log",
+            }),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_art", &tc, tx).await;
+        let res = opt.expect("store_artifact must be intercepted");
+        assert!(
+            !res.output.starts_with("Unknown tool"),
+            "must NOT fall through, got: {}",
+            res.output
+        );
+        assert!(!res.is_error, "must succeed: {}", res.output);
+        assert!(
+            res.output.contains("art-"),
+            "output must contain artifact ID, got: {}",
+            res.output
+        );
+    }
+
+    /// Phase A4 RED: `store_artifact` with missing content must error.
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_store_artifact_missing_content() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let tc = LlmToolCall {
+            id: "tc_sa2".into(),
+            name: "store_artifact".into(),
+            arguments: serde_json::json!({"kind": "log"}), // content missing
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_x", &tc, tx).await;
+        let res = opt.expect("store_artifact must be intercepted");
+        assert!(
+            !res.output.starts_with("Unknown tool"),
+            "must NOT fall through, got: {}",
+            res.output
+        );
+        assert!(res.is_error, "missing content → is_error");
+    }
+
+    /// Phase A4 RED: `list_agents` must return an intercepted response
+    /// (empty list for a fresh DB).
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_list_agents() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let tc = LlmToolCall {
+            id: "tc_la".into(),
+            name: "list_agents".into(),
+            arguments: serde_json::json!({}),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_x", &tc, tx).await;
+        let res = opt.expect("list_agents must be intercepted");
+        assert!(
+            !res.output.starts_with("Unknown tool"),
+            "must NOT fall through, got: {}",
+            res.output
+        );
+        assert!(!res.is_error, "must succeed: {}", res.output);
+    }
+
+    /// Phase A4 RED: `message_agent` with missing target must be intercepted
+    /// and return an error.
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_message_agent_missing_target() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let tc = LlmToolCall {
+            id: "tc_ma".into(),
+            name: "message_agent".into(),
+            arguments: serde_json::json!({"message": "hello"}), // target missing
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_x", &tc, tx).await;
+        let res = opt.expect("message_agent must be intercepted");
+        assert!(
+            !res.output.starts_with("Unknown tool"),
+            "must NOT fall through, got: {}",
+            res.output
+        );
+        assert!(res.is_error, "missing target → is_error");
+    }
+
+    /// Phase A4 RED: `message_agent` with valid target that does not
+    /// exist in DB must be intercepted and return an error.
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_message_agent_unknown_target() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let tc = LlmToolCall {
+            id: "tc_ma2".into(),
+            name: "message_agent".into(),
+            arguments: serde_json::json!({"target": "ghost-agent", "message": "hello"}),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_x", &tc, tx).await;
+        let res = opt.expect("message_agent must be intercepted");
+        assert!(
+            !res.output.starts_with("Unknown tool"),
+            "must NOT fall through, got: {}",
+            res.output
+        );
+        assert!(res.is_error, "unknown target → is_error");
     }
 
     /// RED: at depth >= CADE_SUBAGENT_MAX_DEPTH (default 3), the tool must
