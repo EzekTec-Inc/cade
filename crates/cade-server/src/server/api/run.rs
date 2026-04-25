@@ -589,6 +589,20 @@ async fn handle_unload_skill_tool(
 ///
 /// Runs a single-turn LLM call as a child subagent and streams lifecycle
 /// events (started/complete) to the parent's SSE connection so the GUI
+/// Strip `run_subagent` from a list of tool JSON schemas.
+///
+/// Second line of defence against runaway recursion (first is the depth
+/// guard in [`handle_run_subagent_tool`]).  When a subagent is handed the
+/// parent's full tool list (Approach C), we remove `run_subagent` here so
+/// the subagent's LLM never even sees the tool advertised — defence in
+/// depth alongside the runtime depth check.
+fn filter_subagent_tools(schemas: Vec<serde_json::Value>) -> Vec<serde_json::Value> {
+    schemas
+        .into_iter()
+        .filter(|s| s["name"].as_str() != Some("run_subagent"))
+        .collect()
+}
+
 /// can render progress cards.
 async fn handle_run_subagent_tool(
     state: &AppState,
@@ -605,6 +619,34 @@ async fn handle_run_subagent_tool(
     let background = args["background"].as_bool().unwrap_or(false);
     let model_override = args["model"].as_str().map(|s| s.to_string());
     let _description = args["description"].as_str().unwrap_or("subagent task").to_string();
+
+    // Recursion-depth guard.  When a subagent spawns another subagent, the
+    // dispatching code injects `_subagent_depth = parent_depth + 1` into the
+    // arguments before re-entering this function (see Approach C).  The
+    // global semaphore (default 4 permits) only bounds *concurrent*
+    // subagents, not *nested* ones — without this guard a subagent tree
+    // could grow unboundedly deep until permits run out.  Default cap is
+    // intentionally small (3) because deep nesting is almost always a
+    // prompt-engineering bug, not legitimate use.
+    let max_depth: usize = std::env::var("CADE_SUBAGENT_MAX_DEPTH")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(3);
+    let depth: usize = args["_subagent_depth"]
+        .as_u64()
+        .map(|n| n as usize)
+        .unwrap_or(0);
+    if depth >= max_depth {
+        return ToolResult {
+            tool_call_id: tool_call_id.to_string(),
+            tool_name: "run_subagent".to_string(),
+            output: format!(
+                "error: subagent recursion depth {depth} exceeds CADE_SUBAGENT_MAX_DEPTH ({max_depth}). \
+                 Refusing to spawn deeper. Restructure the task or raise the limit if intentional."
+            ),
+            is_error: true,
+        };
+    }
 
     if prompt.is_empty() {
         return ToolResult {
@@ -664,7 +706,7 @@ async fn handle_run_subagent_tool(
         )
     };
 
-    let messages = vec![
+    let messages_init = vec![
         LlmMessage {
             role: "system".to_string(),
             content: system_prompt,
@@ -681,21 +723,138 @@ async fn handle_run_subagent_tool(
         },
     ];
 
-    let llm_req = cade_ai::CompletionRequest {
-        model: model.clone(),
-        messages,
-        tools: Vec::new(),
-        max_tokens: 4096,
-        reasoning_effort: None,
+    // ── Subagent agentic loop (Approach C) ──────────────────────────────
+    //
+    // Iterates LLM → tool dispatch → LLM with tool result, up to
+    // `max_iters` rounds.  Tools are loaded from the parent agent's tool
+    // list (with `run_subagent` stripped — see `filter_subagent_tools`)
+    // and dispatched through the same `cade_agent::tools::manager::dispatch`
+    // helper the parent loop uses.  No SSE streaming inside the loop and
+    // no per-iteration DB persistence — subagents are ephemeral and only
+    // their final result flows back to the parent.
+    //
+    // The loop terminates when either:
+    //   (a) the LLM returns no tool_calls (assistant produced a final answer),
+    //   (b) `max_iters` is reached (safety cap),
+    //   (c) an LLM or dispatch error surfaces.
+    let max_iters: usize = std::env::var("CADE_SUBAGENT_MAX_ITERS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10);
+
+    // Snapshot the parent agent's tool schemas, stripped of `run_subagent`
+    // for defence-in-depth alongside the depth counter.  If the parent is
+    // not yet wired (no rows), `agent_tool_ids` is empty meaning "all
+    // registered tools".
+    let parent_tool_schemas: Vec<serde_json::Value> = {
+        let parent_tool_ids =
+            cade_store::sqlite::get_agent_tool_ids(&state.db, parent_agent_id).unwrap_or_default();
+        let all = cade_store::sqlite::list_tools(&state.db).unwrap_or_default();
+        let raw: Vec<serde_json::Value> = if parent_tool_ids.is_empty() {
+            all.into_iter().filter_map(|t| t.json_schema).collect()
+        } else {
+            all.into_iter()
+                .filter(|t| parent_tool_ids.contains(&t.id))
+                .filter_map(|t| t.json_schema)
+                .collect()
+        };
+        filter_subagent_tools(raw)
     };
 
-    let llm_result = state.llm.complete(&llm_req).await;
+    let mut messages = messages_init;
+    let mut last_text = String::new();
+    let mut llm_err: Option<String> = None;
+    let next_depth = depth + 1;
+
+    for _iter in 0..max_iters {
+        let llm_req = cade_ai::CompletionRequest {
+            model: model.clone(),
+            messages: messages.clone(),
+            tools: parent_tool_schemas.clone(),
+            max_tokens: 4096,
+            reasoning_effort: None,
+        };
+
+        let resp = match state.llm.complete(&llm_req).await {
+            Ok(r) => r,
+            Err(e) => {
+                llm_err = Some(e.to_string());
+                break;
+            }
+        };
+
+        // Persist any text the assistant produced this iteration.
+        if let Some(t) = &resp.content
+            && !t.is_empty()
+        {
+            last_text = t.clone();
+        }
+
+        if resp.tool_calls.is_empty() {
+            // Final answer reached.
+            break;
+        }
+
+        // Append the assistant message (with tool_calls) so the next iter
+        // sees it in conversational context.
+        messages.push(LlmMessage {
+            role: "assistant".to_string(),
+            content: resp.content.clone().unwrap_or_default(),
+            tool_calls: Some(resp.tool_calls.clone()),
+            tool_call_id: None,
+            images: None,
+        });
+
+        // Dispatch each tool call and append the result back into messages.
+        for tc in &resp.tool_calls {
+            // Hard re-entry guard: even if `run_subagent` somehow leaked
+            // into the schema list, refuse to recurse without a depth
+            // bump.  We forward the same dispatch path the parent uses,
+            // but inject `_subagent_depth: next_depth` so the recursive
+            // call sees the updated counter.
+            let tool_result = if tc.name == "run_subagent" {
+                let mut nested_args = tc.arguments.clone();
+                if let Some(obj) = nested_args.as_object_mut() {
+                    obj.insert(
+                        "_subagent_depth".to_string(),
+                        serde_json::Value::from(next_depth as u64),
+                    );
+                }
+                // Re-enter via a Box::pin to satisfy async recursion.
+                Box::pin(handle_run_subagent_tool(
+                    state,
+                    parent_agent_id,
+                    &tc.id,
+                    &nested_args,
+                    sse_tx.clone(),
+                ))
+                .await
+            } else {
+                cade_agent::tools::manager::dispatch(
+                    tc.id.clone(),
+                    &tc.name,
+                    &tc.arguments,
+                    &state.mcp,
+                )
+                .await
+            };
+
+            messages.push(LlmMessage {
+                role: "tool".to_string(),
+                content: tool_result.output.clone(),
+                tool_calls: None,
+                tool_call_id: Some(tool_result.tool_call_id.clone()),
+                images: None,
+            });
+        }
+    }
+
     let elapsed = start_time.elapsed().as_secs() as u32;
     drop(permit);
 
-    let (output, is_error) = match llm_result {
-        Ok(resp) => (resp.content.unwrap_or_default(), false),
-        Err(e) => (format!("Subagent error: {e}"), true),
+    let (output, is_error) = match llm_err {
+        Some(e) => (format!("Subagent error: {e}"), true),
+        None => (last_text, false),
     };
 
     // Stream subagent_complete event
@@ -738,5 +897,370 @@ async fn handle_run_subagent_tool(
         tool_name: "run_subagent".to_string(),
         output: output_final,
         is_error,
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Tests
+// ─────────────────────────────────────────────────────────────────────────────
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A mock LlmProvider that panics if called.  Used to assert that an early
+    /// return path (e.g. depth-limit guard) never reaches the LLM at all.
+    struct PanicOnCallLlm;
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for PanicOnCallLlm {
+        async fn complete(
+            &self,
+            _r: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            panic!("LLM should not be called when depth limit is hit");
+        }
+        async fn stream(
+            &self,
+            _r: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            panic!("LLM stream should not be called");
+        }
+    }
+
+    fn build_state_with_llm(llm: std::sync::Arc<dyn cade_ai::LlmProvider>) -> AppState {
+        let db = cade_store::sqlite::open(":memory:").unwrap();
+        let config = std::sync::Arc::new(crate::server::config::ServerConfig {
+            addr: "127.0.0.1:0".parse().unwrap(),
+            db_path: ":memory:".into(),
+            llm_provider: crate::server::config::LlmProviderKind::Anthropic,
+            default_model: "test".into(),
+            anthropic_api_key: None,
+            openai_api_key: None,
+            google_api_key: None,
+            ollama_base_url: String::new(),
+            api_key: None,
+            allowed_origin: None,
+            max_context_budget: None,
+        });
+        AppState {
+            db,
+            llm,
+            llm_router: std::sync::Arc::new(tokio::sync::RwLock::new(cade_ai::LlmRouter::build(
+                &cade_ai::AiConfig {
+                    anthropic_api_key: None,
+                    openai_api_key: None,
+                    google_api_key: None,
+                    ollama_base_url: String::new(),
+                    llm_provider: String::new(),
+                },
+            ))),
+            config,
+            mcp: std::sync::Arc::new(crate::server::state::McpManager::empty()),
+            rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
+            memory_cache: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+                std::num::NonZeroUsize::new(20).unwrap(),
+            ))),
+            all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
+            agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            pending_subagent_results: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
+        }
+    }
+
+    /// Stateful mock: returns `run_subagent` exactly once per loop level
+    /// (when the message list has just system+user) and a final text on
+    /// the next iter (after a tool result has been appended).  This keeps
+    /// the test fast while still exercising depth recursion.
+    struct OneRecurseLlm {
+        call_count: std::sync::atomic::AtomicUsize,
+    }
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for OneRecurseLlm {
+        async fn complete(
+            &self,
+            r: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            self.call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            // Initial state for a fresh subagent loop is exactly 2 msgs
+            // (system + user).  Anything more means we are post-tool-result.
+            let is_initial = r.messages.len() == 2;
+            if is_initial {
+                Ok(cade_ai::CompletionResponse {
+                    content: Some("recursing".into()),
+                    tool_calls: vec![cade_ai::LlmToolCall {
+                        id: "tc_rec".into(),
+                        name: "run_subagent".into(),
+                        arguments: serde_json::json!({"prompt": "deeper"}),
+                        thought_signature: None,
+                    }],
+                    finish_reason: "tool_use".into(),
+                })
+            } else {
+                Ok(cade_ai::CompletionResponse {
+                    content: Some("done".into()),
+                    tool_calls: vec![],
+                    finish_reason: "stop".into(),
+                })
+            }
+        }
+        async fn stream(
+            &self,
+            _r: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            unimplemented!()
+        }
+    }
+
+    /// Recursion bound: a subagent that recurses once per level must hit
+    /// the depth cap (default 3) and return without deadlock.  At depth 3
+    /// the call is refused before acquiring a permit, so the chain
+    /// terminates.  Asserts (a) outer call succeeds, (b) LLM call count
+    /// is small (linear in depth, not exponential).
+    #[tokio::test]
+    async fn recursive_subagent_calls_are_bounded_by_depth() {
+        let llm = std::sync::Arc::new(OneRecurseLlm {
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+        });
+        let llm_dyn = llm.clone() as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm_dyn);
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+
+        // depth 0 → 1 → 2 → 3 (refused).  Each level: 2 LLM calls
+        // (initial recurse + final).  Depth-2's recurse to depth 3 is
+        // refused (tool result = error), then depth-2's next iter sees
+        // post-tool-result state and returns final text.
+        let args = serde_json::json!({ "prompt": "start", "_subagent_depth": 0 });
+        let result = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            handle_run_subagent_tool(&state, "parent_x", "tc_outer", &args, tx),
+        )
+        .await
+        .expect("must not deadlock — chain must terminate via depth guard");
+
+        assert!(!result.is_error, "outer subagent should complete: {}", result.output);
+        let calls = llm.call_count.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(
+            calls > 0 && calls < 20,
+            "LLM call count must be small (linear in depth), got: {calls}"
+        );
+    }
+
+    /// Approach C deliberately runs the subagent loop in-memory without
+    /// creating ephemeral `agent`/`message` rows.  That keeps the parent
+    /// agent's conversation history clean and avoids cross-contamination.
+    /// This test is a watchdog: if a future change accidentally persists
+    /// subagent traffic it will fail loudly.
+    #[tokio::test]
+    async fn subagent_run_does_not_pollute_parent_db() {
+        let llm = std::sync::Arc::new(ScriptedLlm {
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+            captured_iter2_messages: std::sync::Mutex::new(Vec::new()),
+        });
+        let llm_dyn = llm.clone() as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm_dyn);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let agents_before: i64 = state
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
+            .unwrap();
+        let messages_before: i64 = state
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+
+        let args = serde_json::json!({ "prompt": "do thing" });
+        let _ = handle_run_subagent_tool(&state, "parent_x", "tc_outer", &args, tx).await;
+
+        let agents_after: i64 = state
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
+            .unwrap();
+        let messages_after: i64 = state
+            .db
+            .lock()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
+            .unwrap();
+
+        assert_eq!(
+            agents_before, agents_after,
+            "subagent must not create agent rows"
+        );
+        assert_eq!(
+            messages_before, messages_after,
+            "subagent must not persist messages to parent DB"
+        );
+    }
+
+    /// A stateful mock that on the FIRST call returns a tool_call (forcing a
+    /// loop iteration), and on the SECOND call returns plain text.  The
+    /// LLM messages it receives are recorded so tests can verify that the
+    /// subagent loop fed back the tool result.
+    struct ScriptedLlm {
+        call_count: std::sync::atomic::AtomicUsize,
+        captured_iter2_messages: std::sync::Mutex<Vec<cade_ai::LlmMessage>>,
+    }
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for ScriptedLlm {
+        async fn complete(
+            &self,
+            r: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            let n = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                Ok(cade_ai::CompletionResponse {
+                    content: None,
+                    tool_calls: vec![cade_ai::LlmToolCall {
+                        id: "tc_inner_1".into(),
+                        name: "fake_tool".into(),
+                        arguments: serde_json::json!({}),
+                        thought_signature: None,
+                    }],
+                    finish_reason: "tool_use".into(),
+                })
+            } else {
+                let mut g = self.captured_iter2_messages.lock().unwrap();
+                *g = r.messages.clone();
+                Ok(cade_ai::CompletionResponse {
+                    content: Some("subagent done".into()),
+                    tool_calls: vec![],
+                    finish_reason: "stop".into(),
+                })
+            }
+        }
+        async fn stream(
+            &self,
+            _r: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            unimplemented!()
+        }
+    }
+
+    /// RED: subagent currently does a single `complete()` and returns the
+    /// text.  When the LLM returns a tool_call instead, the subagent loop
+    /// must dispatch it and feed the result back in a second LLM call.
+    /// Asserts (a) the LLM was called exactly twice, (b) the second call
+    /// saw a "tool" role message containing the dispatch result.
+    #[tokio::test]
+    async fn subagent_dispatches_tool_calls_and_loops() {
+        let llm = std::sync::Arc::new(ScriptedLlm {
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+            captured_iter2_messages: std::sync::Mutex::new(Vec::new()),
+        });
+        let llm_dyn = llm.clone() as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm_dyn);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let args = serde_json::json!({ "prompt": "do thing" });
+        let result =
+            handle_run_subagent_tool(&state, "parent_x", "tc_outer", &args, tx).await;
+
+        assert!(!result.is_error, "loop must succeed, got: {}", result.output);
+        assert_eq!(
+            llm.call_count.load(std::sync::atomic::Ordering::SeqCst),
+            2,
+            "LLM must be called twice (first tool_call, then completion)"
+        );
+        let iter2 = llm.captured_iter2_messages.lock().unwrap().clone();
+        let has_tool_msg = iter2
+            .iter()
+            .any(|m| m.role == "tool" && m.content.contains("fake_tool"));
+        assert!(
+            has_tool_msg,
+            "iteration-2 messages must include a tool-role message echoing dispatch result, got roles: {:?}",
+            iter2.iter().map(|m| &m.role).collect::<Vec<_>>()
+        );
+        assert!(
+            result.output.contains("subagent done"),
+            "final output must be from second LLM call, got: {}",
+            result.output
+        );
+    }
+
+    /// Subagents must NOT receive `run_subagent` in their tool list — this
+    /// is the second line of defence against runaway recursion (the first
+    /// being the depth guard in `handle_run_subagent_tool`).  Removing the
+    /// schema means the subagent's LLM never sees the tool advertised.
+    #[test]
+    fn filter_subagent_tools_strips_run_subagent_schema() {
+        let schemas = vec![
+            serde_json::json!({"name": "bash"}),
+            serde_json::json!({"name": "run_subagent"}),
+            serde_json::json!({"name": "read_file"}),
+        ];
+        let filtered = filter_subagent_tools(schemas);
+        let names: Vec<String> = filtered
+            .iter()
+            .filter_map(|s| s["name"].as_str().map(String::from))
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "run_subagent"),
+            "run_subagent must be stripped, got: {names:?}"
+        );
+        assert!(names.iter().any(|n| n == "bash"));
+        assert!(names.iter().any(|n| n == "read_file"));
+    }
+
+    /// RED: at depth >= CADE_SUBAGENT_MAX_DEPTH (default 3), the tool must
+    /// short-circuit with an error and never call the LLM.  Currently fails
+    /// because no depth guard exists.
+    #[tokio::test]
+    async fn depth_limit_blocks_recursion_before_llm_call() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let args = serde_json::json!({
+            "prompt": "do thing",
+            "_subagent_depth": 3,
+        });
+
+        // Should NOT panic — i.e. LLM is never called.
+        let result =
+            handle_run_subagent_tool(&state, "parent_agent_x", "tc_1", &args, tx).await;
+
+        assert!(result.is_error, "depth-limit must produce an error result");
+        assert!(
+            result.output.to_lowercase().contains("depth"),
+            "error message must mention depth, got: {}",
+            result.output
+        );
     }
 }

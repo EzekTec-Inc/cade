@@ -3067,3 +3067,40 @@ M3 = **state-machine + minimal render + WASM entry**.  No network calls.
 **Rollback:** `git revert <commit>`.
 
 **Campaign close:** all eight defence layers are now in place AND backed by a consistent native-token budget end-to-end.  The context-overflow remediation campaign is **complete**.
+
+## 2026-04-24 20:55 UTC — Approach C: server-side subagents get full tool access
+
+**Goal:** close the gap identified during the subagent-system audit — server-side `handle_run_subagent_tool` previously did a single `state.llm.complete()` call with `tools: Vec::new()` and returned the raw response.  Subagents had no bash, no read/write, no MCP — strictly a one-shot LLM completion.  CLI subagents (via `tool_intercepts.rs` + `run_headless`) had full tool access.  This commit gives server subagents the same capability while keeping the existing public API/contract unchanged.
+
+**Approach (per validated analysis):** in-place agentic loop inside `handle_run_subagent_tool` rather than extracting the parent's 255-line streaming loop.  Subagents do not need SSE per-iteration streaming or message persistence, so the smaller loop is the smallest viable change.  No ephemeral `agent` rows in DB — the subagent loop is self-contained in memory.
+
+**Five TDD cycles:**
+
+1. **Depth limit guard** — `_subagent_depth` arg (default 0) + `CADE_SUBAGENT_MAX_DEPTH` env (default 3).  Hits short-circuit before LLM call.  Test uses a panic-on-call mock LLM to prove early return.
+2. **Filter `run_subagent` from subagent's tool list** — `filter_subagent_tools(schemas)` helper, defence-in-depth alongside the depth counter.
+3. **Agentic loop with tool dispatch** — replaced single `complete()` call with iter-loop using `cade_agent::tools::manager::dispatch()`.  Per-iter cap via `CADE_SUBAGENT_MAX_ITERS` (default 10).  Tools loaded from parent's tool list (filtered).  When subagent calls `run_subagent` recursively, depth is bumped via injected `_subagent_depth` arg before re-entry (`Box::pin` for async recursion).  Test verifies LLM is called twice when first call returns a tool_call.
+4. **Recursion bound** — at depth 3 the call is refused before semaphore acquisition; chain terminates linearly.  Test uses `OneRecurseLlm` (recurses once per level) and asserts no deadlock + LLM calls < 20.
+5. **DB-pollution watchdog** — assert agent + message row counts unchanged after subagent run.  Locks down the in-memory-only design against future regressions.
+
+**Files modified:**
+- `crates/cade-server/src/server/api/run.rs` — depth guard (~30 lines), `filter_subagent_tools` helper (~14 lines), agentic loop body replacement (~110 lines), test module (~270 lines).  One pre-existing clippy hint in my code fixed (collapsible `if let`).
+
+**Test counts:** cade-server **170 (+5)**.  Full workspace + wasm green.
+
+**Previous behavior:** server subagent = single LLM completion, no tools, no loop.
+
+**New behavior:** server subagent runs an in-memory agentic loop (max 10 iters by default) with the parent's tool list (minus `run_subagent`), dispatching through the same `manager::dispatch()` path the parent uses.  MCP tools accessible via shared `state.mcp`.  Recursion guarded by env-configurable depth cap.
+
+**Defence layers:**
+| # | Layer |
+|---|---|
+| 1 | `CADE_SUBAGENT_MAX_DEPTH` (default 3) blocks deep recursion before permit acquisition |
+| 2 | `filter_subagent_tools` strips `run_subagent` from the schema list |
+| 3 | Hard re-entry guard injects `_subagent_depth = parent + 1` even if a recursive call slips through |
+| 4 | Existing global semaphore (`CADE_MAX_SUBAGENTS`, default 4) bounds concurrency |
+| 5 | `CADE_SUBAGENT_MAX_ITERS` (default 10) per-level iteration cap |
+| 6 | DB-pollution watchdog test |
+
+**Rollback:** `git revert <commit>` — restores the original single-`complete()` handler and removes test module.
+
+**Backward compatibility:** the `run_subagent` tool's outward arg shape and return shape are unchanged.  The new `_subagent_depth` arg is internal (underscore-prefixed convention) and ignored when absent.  Existing CLI subagent path (`tool_intercepts.rs`) is untouched.
