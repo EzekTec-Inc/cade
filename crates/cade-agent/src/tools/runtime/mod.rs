@@ -407,7 +407,12 @@ pub fn parse_limit_from_error(error: &str) -> Option<usize> {
 
 /// Apply a unified diff patch to `original` text.
 /// This is a best-effort implementation suitable for memory block editing.
-fn apply_unified_diff(original: &str, patch: &str) -> crate::Result<String> {
+/// Apply a unified-diff patch to a string.
+///
+/// Public for re-use by cade-server's server-side meta-tool intercepts
+/// (Phase A1: `memory_apply_patch`).  Internal implementation detail —
+/// not part of the stable cade-agent API.
+pub fn apply_unified_diff(original: &str, patch: &str) -> crate::Result<String> {
     // Simple line-based patch application.
     // For memory blocks (small text), this is sufficient.
     let orig_lines: Vec<&str> = original.lines().collect();

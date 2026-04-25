@@ -3104,3 +3104,42 @@ M3 = **state-machine + minimal render + WASM entry**.  No network calls.
 **Rollback:** `git revert <commit>` — restores the original single-`complete()` handler and removes test module.
 
 **Backward compatibility:** the `run_subagent` tool's outward arg shape and return shape are unchanged.  The new `_subagent_depth` arg is internal (underscore-prefixed convention) and ignored when absent.  Existing CLI subagent path (`tool_intercepts.rs`) is untouched.
+
+## 2026-04-24 22:30 UTC — Phase A0+A1: server-side meta-tool dispatch + memory tools
+
+**Goal:** close the GUI-side ToolRuntime parity gap surfaced during the skills-system audit.  Server's `/v1/agents/:id/run` agentic loop previously intercepted only 3 tools (`load_skill`, `unload_skill`, `run_subagent`); ~13 other meta-tools fell through to `cade_agent::tools::manager::dispatch` → `"Unknown tool"`.  Phase A1 closes the 5 memory tools.
+
+**A0 (refactor):**
+- Extracted the inline `if/else if` chain at run.rs:386 into a single `intercept_meta_tool(state, agent_id, tc, sse_tx) -> Option<ToolResult>` helper.
+- Test pins the seam (`intercept_meta_tool_exists_and_handles_unload_skill`) so behaviour change in subsequent batches is detectable.
+
+**A1 (5 memory handlers):**
+
+| Tool | Handler | DB call |
+|---|---|---|
+| `update_memory` | `handle_update_memory` | `upsert_memory_block` / `delete_memory_block` |
+| `update_memory_typed` | `handle_update_memory_typed` | `upsert_memory_block_typed` |
+| `memory_apply_patch` | `handle_memory_apply_patch` | reads via `get_memory_blocks`, applies diff, writes via `upsert_memory_block` |
+| `link_memory_evidence` | `handle_link_memory_evidence` | `insert_memory_evidence` |
+| `reflect` | `handle_reflect_meta` | delegates to existing `crate::server::reflection::reflect_agent` |
+
+All handlers operate **directly on `state.db`** — no HTTP self-call to the same server, no loopback, no auth-token round-trip, no deadlock risk.
+
+**Cross-crate change:**
+- `crates/cade-agent/src/tools/runtime/mod.rs`: changed `apply_unified_diff` from `fn` to `pub fn` so cade-server can re-use it.  Internal-helper visibility only — not part of the stable cade-agent API surface.
+
+**Files modified:**
+- `crates/cade-server/src/server/api/run.rs` — +5 handlers, +5 dispatch arms in `intercept_meta_tool`, +5 tests
+- `crates/cade-agent/src/tools/runtime/mod.rs` — visibility change on `apply_unified_diff`
+
+**TDD cycles:** 5 (A0 + 4 memory tools = 5 red-green pairs; reflect added without separate red because it shares the test scaffolding pattern and would have duplicated coverage of intercept-table dispatch.  Manually verified via regression run.)
+
+**Test counts:** cade-server 175 (+5 vs `f86ab664`).  Workspace + wasm green.
+
+**Previous behavior:** GUI agents calling any of these 5 memory tools got `"Unknown tool: '<name>'"`.
+
+**New behavior:** all 5 tools succeed against `state.db` directly.  CLI flow (which dispatches via `ToolRuntime` over HTTP) is unchanged.
+
+**Backward compat:** all 5 tools already had schemas exposed via `meta.rs::all_tools`, so the LLM was already advertising them — only the failure mode is fixed.  No public API changes.
+
+**Rollback:** `git revert <commit>` — drops the 5 handlers and the dispatch helper; chain reverts to the previous inline `if/else if`.

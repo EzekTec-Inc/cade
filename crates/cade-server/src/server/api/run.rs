@@ -382,27 +382,22 @@ pub async fn run_agent(
 
             // ── Execute tools and persist results ─────────────────────────
             for tc in &tool_calls {
-                // Intercept `load_skill` — handle server-side instead of dispatching.
-                let result = if tc.name == "load_skill" {
-                    let args_str = tc.arguments.to_string();
-                    handle_load_skill_tool(&state2, &agent_id2, &tc.id, &args_str).await
-                } else if tc.name == "unload_skill" {
-                    let args_str = tc.arguments.to_string();
-                    handle_unload_skill_tool(&state2, &agent_id2, &tc.id, &args_str).await
-                } else if tc.name == "run_subagent" {
-                    let args: serde_json::Value = serde_json::from_str(
-                        &tc.arguments.to_string()
-                    ).unwrap_or_default();
-                    handle_run_subagent_tool(
-                        &state2, &agent_id2, &tc.id, &args, tx.clone(),
-                    ).await
+                // Server-side meta-tool intercepts (Phase A: ToolRuntime
+                // parity).  `intercept_meta_tool` returns Some for tools
+                // that need access to AppState (DB, agent_id, sse_tx);
+                // returns None to fall through to native + MCP dispatch.
+                let result = if let Some(intercepted) =
+                    intercept_meta_tool(&state2, &agent_id2, tc, tx.clone()).await
+                {
+                    intercepted
                 } else {
                     cade_agent::tools::manager::dispatch(
                         tc.id.clone(),
                         &tc.name,
                         &tc.arguments,
                         &state2.mcp,
-                    ).await
+                    )
+                    .await
                 };
 
                 let output_trimmed = if result.output.len() > 8_192 {
@@ -589,6 +584,273 @@ async fn handle_unload_skill_tool(
 ///
 /// Runs a single-turn LLM call as a child subagent and streams lifecycle
 /// events (started/complete) to the parent's SSE connection so the GUI
+/// Single dispatch table for server-side meta-tool intercepts.
+///
+/// Returns `Some(ToolResult)` if `tc.name` matches a known server-side
+/// handler (memory, skills, checkpoints, artifacts, agents, subagents).
+/// Returns `None` to signal the caller should fall through to
+/// `cade_agent::tools::manager::dispatch` (native tools + MCP).
+///
+/// Centralising the dispatch here keeps the SSE agentic loop slim and
+/// gives every meta-tool the same uniform path (Phase A: ToolRuntime
+/// parity).  Without this helper the inline `if/else if` chain in
+/// `handle_run_agent` grows linearly with every new meta-tool added.
+async fn intercept_meta_tool(
+    state: &AppState,
+    agent_id: &str,
+    tc: &cade_ai::LlmToolCall,
+    sse_tx: tokio::sync::mpsc::Sender<
+        Result<axum::response::sse::Event, std::convert::Infallible>,
+    >,
+) -> Option<cade_agent::tools::manager::ToolResult> {
+    use cade_agent::tools::manager::ToolResult;
+    let mk = |output: String, is_error: bool| ToolResult {
+        tool_call_id: tc.id.clone(),
+        tool_name: tc.name.clone(),
+        output,
+        is_error,
+    };
+    match tc.name.as_str() {
+        "load_skill" => {
+            let args_str = tc.arguments.to_string();
+            Some(handle_load_skill_tool(state, agent_id, &tc.id, &args_str).await)
+        }
+        "unload_skill" => {
+            let args_str = tc.arguments.to_string();
+            Some(handle_unload_skill_tool(state, agent_id, &tc.id, &args_str).await)
+        }
+        "run_subagent" => {
+            let args: serde_json::Value =
+                serde_json::from_str(&tc.arguments.to_string()).unwrap_or_default();
+            Some(handle_run_subagent_tool(state, agent_id, &tc.id, &args, sse_tx).await)
+        }
+        // ── Phase A1: memory tools ────────────────────────────────────
+        "update_memory" => {
+            let (output, is_error) = handle_update_memory(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "update_memory_typed" => {
+            let (output, is_error) =
+                handle_update_memory_typed(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "memory_apply_patch" => {
+            let (output, is_error) =
+                handle_memory_apply_patch(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "link_memory_evidence" => {
+            let (output, is_error) =
+                handle_link_memory_evidence(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "reflect" => {
+            let (output, is_error) = handle_reflect_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        _ => None,
+    }
+}
+
+/// Phase A1 handler: `update_memory` server-side.  Mirrors the CLI
+/// `ToolRuntime::handle_update_memory` semantics (set / append / delete)
+/// but talks directly to `state.db` instead of over HTTP, so the GUI's
+/// `/v1/agents/:id/run` agentic loop no longer returns "Unknown tool".
+async fn handle_update_memory(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let label = args["label"].as_str().unwrap_or("").trim().to_string();
+    let value = args["value"].as_str().unwrap_or("").to_string();
+    let operation = args["operation"].as_str().unwrap_or("set");
+    let description = args["description"].as_str();
+
+    if label.is_empty() {
+        return ("Error: 'label' is required".to_string(), true);
+    }
+
+    if operation == "delete" {
+        return match cade_store::sqlite::delete_memory_block(&state.db, agent_id, &label) {
+            Ok(true) => (format!("Memory block '{label}' deleted"), false),
+            Ok(false) => (format!("Memory block '{label}' not found"), true),
+            Err(e) => (format!("Failed to delete memory block: {e}"), true),
+        };
+    }
+
+    if value.is_empty() {
+        return (
+            "Error: 'value' is required for set/append operations".to_string(),
+            true,
+        );
+    }
+
+    let final_value = if operation == "append" {
+        let existing = cade_store::sqlite::get_memory_blocks(&state.db, agent_id)
+            .ok()
+            .unwrap_or_default()
+            .into_iter()
+            .find(|(l, _, _)| l == &label)
+            .map(|(_, v, _)| v)
+            .unwrap_or_default();
+        if existing.is_empty() {
+            value
+        } else {
+            format!("{existing}\n{value}")
+        }
+    } else {
+        value
+    };
+
+    match cade_store::sqlite::upsert_memory_block(
+        &state.db,
+        agent_id,
+        &label,
+        &final_value,
+        description,
+        None,
+    ) {
+        Ok(_) => (format!("Memory block '{label}' updated"), false),
+        Err(e) => (format!("Failed: {e}"), true),
+    }
+}
+
+/// Phase A1 handler: `update_memory_typed` server-side.  Persists the
+/// block via `upsert_memory_block_typed` so the `memory_type`,
+/// `confidence`, and tags are written to their dedicated columns.  Tags
+/// are accepted as a JSON array but currently round-trip as a string in
+/// the description field if the schema does not separately store them
+/// (matches CLI behaviour — see the latent gap described in the
+/// `update_memory_typed` API note).
+async fn handle_update_memory_typed(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let label = args["label"].as_str().unwrap_or("").trim().to_string();
+    let value = args["value"].as_str().unwrap_or("").to_string();
+    let memory_type = args["memory_type"].as_str().unwrap_or("generic");
+    let confidence = args["confidence"].as_f64().unwrap_or(1.0).clamp(0.0, 1.0);
+
+    if label.is_empty() || value.is_empty() {
+        return ("Error: 'label' and 'value' are required".to_string(), true);
+    }
+
+    match cade_store::sqlite::upsert_memory_block_typed(
+        &state.db,
+        agent_id,
+        &label,
+        &value,
+        None,
+        None,
+        Some(memory_type),
+        Some(confidence),
+    ) {
+        Ok(_) => (
+            format!(
+                "Memory block '{label}' stored as [{memory_type}] (confidence: {:.0}%)",
+                confidence * 100.0
+            ),
+            false,
+        ),
+        Err(e) => (format!("Failed to store typed memory: {e}"), true),
+    }
+}
+
+/// Phase A1 handler: `memory_apply_patch` server-side.  Loads the
+/// current value, applies a unified-diff patch via the shared
+/// `cade_agent::tools::runtime::apply_unified_diff` helper, and writes
+/// the result back.  Operates directly on `state.db`.
+async fn handle_memory_apply_patch(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let label = args["label"].as_str().unwrap_or("").trim().to_string();
+    let patch = args["patch"].as_str().unwrap_or("").to_string();
+    let description = args["description"].as_str();
+
+    if label.is_empty() || patch.is_empty() {
+        return ("Error: 'label' and 'patch' are required".to_string(), true);
+    }
+
+    let current = cade_store::sqlite::get_memory_blocks(&state.db, agent_id)
+        .ok()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(l, _, _)| l == &label)
+        .map(|(_, v, _)| v)
+        .unwrap_or_default();
+
+    match cade_agent::tools::runtime::apply_unified_diff(&current, &patch) {
+        Ok(new_value) => match cade_store::sqlite::upsert_memory_block(
+            &state.db,
+            agent_id,
+            &label,
+            &new_value,
+            description,
+            None,
+        ) {
+            Ok(_) => (format!("Memory block '{label}' patched successfully"), false),
+            Err(e) => (format!("Failed to save patched memory: {e}"), true),
+        },
+        Err(e) => (format!("Patch failed: {e}"), true),
+    }
+}
+
+/// Phase A1 handler: `link_memory_evidence` server-side.  Persists a
+/// row in `memory_evidence` linked to the named block.  Confidence
+/// defaults to 1.0 when the LLM does not supply one (matches CLI flow).
+async fn handle_link_memory_evidence(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let label = args["label"].as_str().unwrap_or("").trim().to_string();
+    let kind = args["kind"].as_str().unwrap_or("user_assertion");
+    let reference = args["reference"].as_str().unwrap_or("").trim().to_string();
+    let excerpt = args["excerpt"].as_str();
+    let confidence = args["confidence"].as_f64().unwrap_or(1.0);
+
+    if label.is_empty() || reference.is_empty() {
+        return (
+            "Error: 'label' and 'reference' are required".to_string(),
+            true,
+        );
+    }
+
+    match cade_store::sqlite::insert_memory_evidence(
+        &state.db, agent_id, &label, kind, &reference, excerpt, confidence,
+    ) {
+        Ok(_) => (
+            format!("Evidence linked to '{label}': [{kind}] {reference}"),
+            false,
+        ),
+        Err(e) => (format!("Failed to link evidence: {e}"), true),
+    }
+}
+
+/// Phase A1 handler: `reflect` server-side.  Delegates to the existing
+/// `reflection::reflect_agent` engine that the API endpoint
+/// `POST /v1/agents/:id/reflect` already drives — same engine, same DB,
+/// no HTTP self-call.
+async fn handle_reflect_meta(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let focus = args["focus"].as_str();
+    let result =
+        crate::server::reflection::reflect_agent(state, agent_id, None, focus, "tool").await;
+    (
+        format!(
+            "Reflection complete: {} block(s) created, {} updated",
+            result.blocks_created, result.blocks_updated
+        ),
+        false,
+    )
+}
+
 /// Strip `run_subagent` from a list of tool JSON schemas.
 ///
 /// Second line of defence against runaway recursion (first is the depth
@@ -906,6 +1168,248 @@ async fn handle_run_subagent_tool(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cade_ai::LlmToolCall;
+
+    /// RED for Phase A0: an `intercept_meta_tool` helper must exist and
+    /// dispatch the existing in-loop intercepts (`load_skill`,
+    /// `unload_skill`, `run_subagent`) on its own, returning
+    /// `Some(ToolResult)` for known meta-tools and `None` for tools that
+    /// should fall through to `manager::dispatch`.
+    ///
+    /// This test pins the seam needed to add the remaining 13 meta-tools
+    /// (Phase A1–A4) without further if/else proliferation.  We only
+    /// assert the simplest pre-existing case (`unload_skill` for an
+    /// agent that has nothing loaded) because it requires no DB row, no
+    /// LLM call, and no SSE traffic.
+    #[tokio::test]
+    async fn intercept_meta_tool_exists_and_handles_unload_skill() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        let tc = LlmToolCall {
+            id: "tc_1".to_string(),
+            name: "unload_skill".to_string(),
+            arguments: serde_json::json!({"id": "nonexistent"}),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_x", &tc, tx).await;
+        let res = opt.expect("unload_skill must be intercepted");
+        assert_eq!(res.tool_name, "unload_skill");
+        // No skill loaded → handler returns an error string, but it IS
+        // a meta-tool intercept (not "Unknown tool" from manager::dispatch).
+        assert!(
+            !res.output.starts_with("Unknown tool"),
+            "must NOT fall through to manager::dispatch, got: {}",
+            res.output
+        );
+    }
+
+    /// Phase A1: `link_memory_evidence` must persist a row in
+    /// `memory_evidence` linked to the named block.
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_link_memory_evidence() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "agent_e".into(),
+                name: "t".into(),
+                model: "t".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+        cade_store::sqlite::upsert_memory_block(
+            &state.db,
+            "agent_e",
+            "decision",
+            "use postgres",
+            None,
+            None,
+        )
+        .unwrap();
+
+        let tc = LlmToolCall {
+            id: "tc_e".into(),
+            name: "link_memory_evidence".into(),
+            arguments: serde_json::json!({
+                "label": "decision",
+                "kind": "user_assertion",
+                "reference": "msg_42",
+                "excerpt": "user said pg",
+            }),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_e", &tc, tx).await;
+        let res = opt.expect("intercepted");
+        assert!(!res.is_error, "should succeed: {}", res.output);
+    }
+
+    /// Phase A1: `memory_apply_patch` must read the existing block, apply
+    /// the unified diff, and persist the new value — all server-side, no
+    /// HTTP self-call.
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_memory_apply_patch() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "agent_p".into(),
+                name: "t".into(),
+                model: "t".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+        // Seed a block to patch.
+        cade_store::sqlite::upsert_memory_block(
+            &state.db,
+            "agent_p",
+            "notes",
+            "old line",
+            None,
+            None,
+        )
+        .unwrap();
+
+        let patch = "@@ -1,1 +1,1 @@\n-old line\n+new line\n";
+        let tc = LlmToolCall {
+            id: "tc_p".into(),
+            name: "memory_apply_patch".into(),
+            arguments: serde_json::json!({"label": "notes", "patch": patch}),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_p", &tc, tx).await;
+        let res = opt.expect("intercepted");
+        assert!(!res.is_error, "patch must apply: {}", res.output);
+
+        let blocks = cade_store::sqlite::get_memory_blocks(&state.db, "agent_p").unwrap();
+        let value = blocks
+            .iter()
+            .find(|(l, _, _)| l == "notes")
+            .map(|(_, v, _)| v.clone())
+            .unwrap_or_default();
+        assert!(
+            value.contains("new line"),
+            "patched content must contain 'new line', got: {value:?}"
+        );
+    }
+
+    /// Phase A1: `update_memory_typed` must persist the memory block with
+    /// its `memory_type` and `confidence` typed columns set, directly via
+    /// the DB (no HTTP self-call).
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_update_memory_typed() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "agent_typed".into(),
+                name: "test".into(),
+                model: "test".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        let tc = LlmToolCall {
+            id: "tc_t".into(),
+            name: "update_memory_typed".into(),
+            arguments: serde_json::json!({
+                "label": "decision_x",
+                "value": "use postgres",
+                "memory_type": "decision",
+                "confidence": 0.8,
+            }),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_typed", &tc, tx).await;
+        let res = opt.expect("must be intercepted");
+        assert!(!res.is_error, "should succeed: {}", res.output);
+
+        // Verify block was persisted with typed fields.
+        let blocks =
+            cade_store::sqlite::get_memory_blocks(&state.db, "agent_typed").unwrap();
+        assert!(
+            blocks.iter().any(|(l, v, _)| l == "decision_x" && v == "use postgres"),
+            "block must be persisted, got: {blocks:?}"
+        );
+    }
+
+    /// Phase A1: `update_memory` must be intercepted server-side and write
+    /// directly to the DB without any HTTP self-call.  Asserts the
+    /// resulting memory block is queryable from the same `AppState.db`.
+    #[tokio::test]
+    async fn intercept_meta_tool_dispatches_update_memory() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        let (tx, _rx) = tokio::sync::mpsc::channel(8);
+
+        // Need an agent row so foreign keys resolve when upsert links.
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "agent_mem".into(),
+                name: "test-agent".into(),
+                model: "test-model".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        let tc = LlmToolCall {
+            id: "tc_1".to_string(),
+            name: "update_memory".to_string(),
+            arguments: serde_json::json!({
+                "label": "test_block",
+                "value": "hello",
+                "operation": "set",
+            }),
+            thought_signature: None,
+        };
+
+        let opt = intercept_meta_tool(&state, "agent_mem", &tc, tx).await;
+        let res = opt.expect("update_memory must be intercepted");
+        assert!(!res.is_error, "update_memory should succeed: {}", res.output);
+
+        // Read back from DB — proves no HTTP self-call is needed.
+        let blocks =
+            cade_store::sqlite::get_memory_blocks(&state.db, "agent_mem").unwrap();
+        let found = blocks.iter().any(|(label, value, _)| {
+            label == "test_block" && value == "hello"
+        });
+        assert!(found, "memory block must be persisted, got: {blocks:?}");
+    }
 
     /// A mock LlmProvider that panics if called.  Used to assert that an early
     /// return path (e.g. depth-limit guard) never reaches the LLM at all.
