@@ -478,12 +478,31 @@ pub(crate) async fn build_context(
     let mut budget_used: usize = 0;
     let mut omitted_turns: usize = 0;
 
-    let turns_len = turns.len();
-
-    for mut turn in turns.into_iter().rev() {
-        // Approximate turn cost: sum of content chars + serialised tool-call
-        // argument strings (arguments are JSON text and can be large).
-        let raw_chars: usize = turn
+    // Phase 4 Part 2: per-message + per-turn cost is now anchored to real
+    // BPE tokens via `count_tokens` and converted back to a char budget
+    // through `chars_for_tokens`.  This matches the system-overhead path
+    // (P2-1) so the entire walker now uses one consistent token model.
+    // For tool_calls we count the JSON-serialised arguments string the
+    // same way the provider serialises them on the wire.
+    fn turn_cost_chars(model: &str, turn: &[LlmMessage]) -> usize {
+        let mut total_tokens = 0usize;
+        for m in turn {
+            if !m.content.is_empty() {
+                total_tokens += cade_ai::count_tokens(model, &m.content);
+            }
+            if let Some(tcs) = m.tool_calls.as_deref() {
+                for tc in tcs {
+                    let json = tc.arguments.to_string();
+                    if !json.is_empty() {
+                        total_tokens += cade_ai::count_tokens(model, &json);
+                    }
+                }
+            }
+        }
+        // Defence-in-depth: if the encoder load failed and returned 0
+        // tokens for non-empty text, fall back to raw chars so we never
+        // *under*-cost the turn.
+        let fallback_chars: usize = turn
             .iter()
             .map(|m| {
                 m.content.chars().count()
@@ -495,6 +514,17 @@ pub(crate) async fn build_context(
                         .sum::<usize>()
             })
             .sum();
+        if total_tokens == 0 && fallback_chars > 0 {
+            fallback_chars
+        } else {
+            cade_ai::chars_for_tokens(total_tokens)
+        }
+    }
+
+    let turns_len = turns.len();
+
+    for mut turn in turns.into_iter().rev() {
+        let raw_chars: usize = turn_cost_chars(&agent.model, &turn);
 
         let mut turn_chars = raw_chars;
 
@@ -573,18 +603,7 @@ pub(crate) async fn build_context(
         // selected[0] is the most-recent turn (pushed first in the rev-walk).
         // Pop the oldest, which is the last element.
         if let Some(dropped) = selected.pop() {
-            let chars: usize = dropped
-                .iter()
-                .map(|m| {
-                    m.content.chars().count()
-                        + m.tool_calls
-                            .as_deref()
-                            .unwrap_or_default()
-                            .iter()
-                            .map(|tc| tc.arguments.to_string().len())
-                            .sum::<usize>()
-                })
-                .sum();
+            let chars: usize = turn_cost_chars(&agent.model, &dropped);
             budget_used = budget_used.saturating_sub(chars);
             preflight_dropped += 1;
         }
@@ -862,11 +881,41 @@ pub(crate) async fn build_context(
         .iter()
         .map(|m| m.content.chars().count())
         .sum();
+    // Phase 4 Pt 2: native-token counts for history + total assembled.
+    // Done in one pass over the assembled message list so we count
+    // exactly what the provider will see on the wire (post-truncation,
+    // post-sanitize, post-pre-flight-drop).
+    let history_tokens: usize = messages
+        .iter()
+        .skip_while(|m| m.role == "system")
+        .map(|m| {
+            let mut t = if m.content.is_empty() {
+                0
+            } else {
+                cade_ai::count_tokens(&agent.model, &m.content)
+            };
+            if let Some(tcs) = m.tool_calls.as_deref() {
+                for tc in tcs {
+                    let json = tc.arguments.to_string();
+                    if !json.is_empty() {
+                        t += cade_ai::count_tokens(&agent.model, &json);
+                    }
+                }
+            }
+            t
+        })
+        .sum();
+    let total_tokens: usize = system_tokens.saturating_add(history_tokens);
     let window_tokens = catalogue::context_window_for_model(&agent.model) as usize;
     let input_budget_tokens =
         window_tokens.saturating_sub(((window_tokens as f64) * OUTPUT_RESERVE_FRACTION).round() as usize);
     let input_budget_chars = input_budget_tokens.saturating_mul(CHARS_PER_TOKEN);
-    let fits_budget = total_assembled_chars <= input_budget_chars;
+    // Phase 4 Pt 2: use the native-token budget for the canonical
+    // fits_budget signal — it matches what the provider counts and is
+    // not skewed by the legacy 3:1 char fallback.  Char-budget remains
+    // as a backward-compatible sanity check.
+    let fits_budget =
+        total_tokens <= input_budget_tokens && total_assembled_chars <= input_budget_chars;
     let system_msg_count = messages
         .iter()
         .take_while(|m| m.role == "system")
@@ -880,6 +929,8 @@ pub(crate) async fn build_context(
         system_tokens,
         message_budget_chars: message_budget,
         history_chars,
+        history_tokens,
+        total_tokens,
         turns_selected,
         turns_omitted: omitted_turns,
         system_msg_count,
@@ -902,6 +953,8 @@ pub(crate) async fn build_context(
         system_tokens = telemetry.system_tokens,
         message_budget_chars = telemetry.message_budget_chars,
         history_chars = telemetry.history_chars,
+        history_tokens = telemetry.history_tokens,
+        total_tokens = telemetry.total_tokens,
         turns_selected = telemetry.turns_selected,
         turns_omitted = telemetry.turns_omitted,
         system_msg_count = telemetry.system_msg_count,

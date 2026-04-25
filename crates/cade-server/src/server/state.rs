@@ -55,6 +55,14 @@ pub struct ContextTelemetry {
     pub message_budget_chars: usize,
     /// Total chars actually packed into the assembled history (sum across messages).
     pub history_chars: usize,
+    /// Native BPE tokens packed into the assembled history (P4 Pt 2).
+    /// `chars_for_tokens(history_tokens)` ≈ `history_chars` modulo
+    /// per-model encoder differences.
+    pub history_tokens: usize,
+    /// Native BPE tokens for the entire assembled context (system + history).
+    /// This is the closest single number to what the provider will charge
+    /// for the request's input.
+    pub total_tokens: usize,
     /// Number of complete turns selected.
     pub turns_selected: usize,
     /// Number of complete turns omitted because the budget exhausted.

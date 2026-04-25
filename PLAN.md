@@ -3036,3 +3036,34 @@ M3 = **state-machine + minimal render + WASM entry**.  No network calls.
 **Deferred (Part 2):** native-token pipeline refactor — replace the `chars × 3` translation that runs end-to-end with raw tokens at every budget boundary. This is a structural refactor of the entire turn walker and several call sites; the telemetry now in place will make any regression immediately visible, so we can do this as a follow-up without losing safety.
 
 **Rollback:** `git revert <commit>`.
+
+## 2026-04-24 — Phase 4 (Part 2): native-token pipeline for the turn walker
+
+**Goal:** finish the work P2-1 started — every char-count point that drives a budget decision now goes through `cade_ai::count_tokens` first.  The walker no longer over-charges English prose by ~25 % (chars/3) and no longer under-charges dense-token text like JSON/CJK.
+
+**Changes:**
+
+- **New `turn_cost_chars(model, turn)` helper** in `build_context`.  Sums real BPE tokens (including tool-call argument JSON) and converts back via `cade_ai::chars_for_tokens`.  Defence-in-depth: if the encoder fails and returns 0 tokens for non-empty text, falls back to raw chars so we never *under*-cost a turn.
+- **Walker uses native-token costs** for both the forward pass (turn selection) and the pre-flight overflow guard's drop accounting, keeping the two paths consistent.
+- **`ContextTelemetry`** gained two new fields:
+  - `history_tokens` — native BPE tokens packed into history
+  - `total_tokens` — `system_tokens + history_tokens`, the closest single number to what the provider counts on the wire
+- **`fits_budget`** is now anchored to `total_tokens ≤ input_budget_tokens` AND legacy char check, so the canonical success signal is now provider-accurate.
+- **Structured tracing** emits the new fields on `target = "cade::context::telemetry"`.
+
+**Files modified:**
+- `crates/cade-server/src/server/state.rs` — `history_tokens`, `total_tokens` fields
+- `crates/cade-server/src/server/api/messages/context.rs` — `turn_cost_chars()`, walker switched, telemetry capture extended
+- `crates/cade-server/src/server/api/context_stats.rs` — test updated for new fields
+- `crates/cade-server/src/server/api/messages/tests.rs` — `build_context_records_native_token_counts` test
+
+**Test counts:** cade-server 165 (+1).  Full workspace + wasm green.
+
+**Effect:** the "8 defence layers" from Phase-4 Part 1 are now backed by an end-to-end native-token budget instead of a 3:1 char proxy.  Budget math matches what the provider counts, so:
+- English prose no longer wastes ~25 % of the input window (over-charging fixed in P2-1 for system, now extended to history).
+- Dense-token text (JSON tool args, CJK, code) is correctly billed instead of being under-charged (was the silent-overflow failure mode).
+- The `fits_budget` telemetry is now provider-accurate, so a `false` reading is a real signal worth alerting on.
+
+**Rollback:** `git revert <commit>`.
+
+**Campaign close:** all eight defence layers are now in place AND backed by a consistent native-token budget end-to-end.  The context-overflow remediation campaign is **complete**.

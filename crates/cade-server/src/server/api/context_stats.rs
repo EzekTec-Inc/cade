@@ -140,6 +140,8 @@ mod tests {
             system_tokens: 4_115,
             message_budget_chars: 497_655,
             history_chars: 12_000,
+            history_tokens: 4_100,
+            total_tokens: 8_215,
             turns_selected: 3,
             turns_omitted: 0,
             system_msg_count: 2,

@@ -1214,3 +1214,41 @@ async fn build_context_records_telemetry_with_fits_budget_true() {
     assert_eq!(t.skills_full, 0);
     assert_eq!(t.skills_summary, 0);
 }
+
+#[tokio::test]
+async fn build_context_records_native_token_counts() {
+    use cade_store::sqlite as ssq;
+    let db = ssq::open(":memory:").unwrap();
+    let agent_id = "agent_native_tokens";
+    ssq::create_agent(&db, &ssq::AgentRow {
+        id: agent_id.to_string(),
+        name: "A".to_string(),
+        model: "openai/gpt-4o".to_string(),
+        description: None,
+        system_prompt: Some("You are helpful.".to_string()),
+        created_at: None,
+        compaction_model: None,
+        theme: None,
+    }).unwrap();
+    let user_msg = serde_json::json!({"content": "The quick brown fox jumps over the lazy dog. ".repeat(20)}).to_string();
+    db.lock().unwrap().execute(
+        "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
+         VALUES ('u1', ?1, 'user', ?2, 1000, 0)",
+        rusqlite::params![agent_id, user_msg],
+    ).unwrap();
+
+    let llm = std::sync::Arc::new(AlwaysOverflow) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+    let state = build_minimal_state(db, llm);
+
+    let _ = super::context::build_context(&state, agent_id, None, false).await.unwrap();
+
+    let telem = state.agent_context_telemetry.read().await;
+    let t = telem.get(agent_id).expect("telemetry recorded");
+    assert!(t.history_tokens > 0, "history must produce non-zero tokens");
+    assert!(t.total_tokens >= t.system_tokens, "total >= system");
+    assert!(t.total_tokens >= t.history_tokens, "total >= history");
+    assert!(t.history_tokens < t.history_chars,
+        "tokens ({}) must be less than chars ({}) for English text",
+        t.history_tokens, t.history_chars);
+    assert!(t.fits_budget, "small request must fit");
+}
