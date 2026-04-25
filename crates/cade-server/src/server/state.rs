@@ -33,6 +33,45 @@ pub struct AgentMetrics {
     pub inflation_guard_hits: usize,
 }
 
+/// Phase 4: per-request telemetry recorded at the end of every
+/// `build_context` call.  Captures every input that controls how the
+/// context fits into the model window so we can prove (a) which defence
+/// layer fired, (b) how close to the budget we ended up, and (c)
+/// regressions.  Exposed via `GET /v1/agents/:id/context_stats` for live
+/// inspection by the GUI / TUI.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub struct ContextTelemetry {
+    /// Model id used for this build (resolved post-routing).
+    pub model: String,
+    /// Total context window in tokens for the chosen model.
+    pub window_tokens: usize,
+    /// Input budget (window − output reserve) in chars at the legacy 3:1 ratio.
+    pub input_budget_chars: usize,
+    /// System overhead deduction in chars (system prompt + memory + skills).
+    pub system_overhead_chars: usize,
+    /// System overhead in real BPE tokens (P2-1 anchor).
+    pub system_tokens: usize,
+    /// Final char budget reserved for history (input_budget − system_overhead − tool_reserve).
+    pub message_budget_chars: usize,
+    /// Total chars actually packed into the assembled history (sum across messages).
+    pub history_chars: usize,
+    /// Number of complete turns selected.
+    pub turns_selected: usize,
+    /// Number of complete turns omitted because the budget exhausted.
+    pub turns_omitted: usize,
+    /// Number of leading system messages preserved (static + dynamic).
+    pub system_msg_count: usize,
+    /// Number of skill bodies injected at full fidelity (P2-3).
+    pub skills_full: usize,
+    /// Number of skill bodies downgraded to summary entries (P2-3).
+    pub skills_summary: usize,
+    /// True iff the assembled context fits inside the input budget — this
+    /// is the canonical "did our defences work" signal.
+    pub fits_budget: bool,
+    /// Wall-clock time spent in build_context, in microseconds.
+    pub build_micros: u64,
+}
+
 /// Result of a completed background subagent, waiting for injection
 /// into the parent agent's next agentic loop iteration.
 #[derive(Debug, Clone)]
@@ -70,6 +109,12 @@ pub struct AppState {
     pub agent_activity: Arc<RwLock<std::collections::HashMap<String, AgentActivity>>>,
     /// Tracks lifetime context efficiency metrics per agent.
     pub agent_metrics: Arc<RwLock<std::collections::HashMap<String, AgentMetrics>>>,
+    /// Phase 4: most-recent `ContextTelemetry` per agent, captured at the
+    /// end of every successful `build_context` call.  Read-only by
+    /// outside callers; the `/v1/agents/:id/context_stats` endpoint
+    /// projects this map.
+    pub agent_context_telemetry:
+        Arc<RwLock<std::collections::HashMap<String, ContextTelemetry>>>,
     /// LRU cache for `build_context` outputs to avoid recomputing history loops.
     /// Key: `format!("{agent_id}:{conversation_id}")`
     /// Value: `(max_rowid, cached_context_tuple)`

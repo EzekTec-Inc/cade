@@ -6,6 +6,7 @@ pub mod auth;
 pub mod checkpoints;
 pub mod compact;
 pub mod complete;
+pub mod context_stats;
 pub mod csrf;
 pub mod dashboard;
 pub mod dashboard_assets;
@@ -107,6 +108,10 @@ pub fn router(state: AppState) -> Router {
             post(agents::insert_event_handler).get(agents::query_events_handler),
         )
         .route("/v1/agents/:id/metrics", get(agents::get_agent_metrics))
+        .route(
+            "/v1/agents/:id/context_stats",
+            get(context_stats::get_context_stats),
+        )
         // Agent tools
         .route(
             "/v1/agents/:id/tools",

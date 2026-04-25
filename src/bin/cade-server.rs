@@ -143,6 +143,7 @@ async fn main() -> Result<()> {
         memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
         context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
         all_skills: Arc::new(RwLock::new(all_skills)),
         agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),

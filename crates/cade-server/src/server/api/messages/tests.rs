@@ -459,6 +459,7 @@ async fn send_message_blocking_triggers_needs_consolidation() {
         memory_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
         all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
         agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -615,6 +616,7 @@ async fn build_context_caps_oversize_tool_result_messages() {
         memory_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
         all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
         agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -790,6 +792,7 @@ fn build_minimal_state(db: cade_store::sqlite::Db, llm: std::sync::Arc<dyn cade_
         memory_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
         agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+        agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
         context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
         all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
         agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
@@ -1171,4 +1174,43 @@ async fn build_context_token_overhead_frees_more_budget_than_chars() {
     // short messages on a 128k window.
     assert_eq!(history_msgs, 40,
         "all 40 short history messages must fit (token-based accounting freed budget)");
+}
+
+// ── Phase 4: build_context telemetry capture ─────────────────────────────
+
+#[tokio::test]
+async fn build_context_records_telemetry_with_fits_budget_true() {
+    use cade_store::sqlite as ssq;
+    let db = ssq::open(":memory:").unwrap();
+    let agent_id = "agent_telemetry_ok";
+    ssq::create_agent(&db, &ssq::AgentRow {
+        id: agent_id.to_string(),
+        name: "A".to_string(),
+        model: "anthropic/claude-sonnet-4-5-20250929".to_string(),
+        description: None,
+        system_prompt: Some("short prompt".to_string()),
+        created_at: None,
+        compaction_model: None,
+        theme: None,
+    }).unwrap();
+    db.lock().unwrap().execute(
+        "INSERT INTO messages (id, agent_id, role, content, char_count, created_at)
+         VALUES ('u1', ?1, 'user', ?2, 5, 0)",
+        rusqlite::params![agent_id, serde_json::json!({"content": "hi"}).to_string()],
+    ).unwrap();
+
+    let llm = std::sync::Arc::new(AlwaysOverflow) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+    let state = build_minimal_state(db, llm);
+
+    let _ = super::context::build_context(&state, agent_id, None, false).await.unwrap();
+
+    let telem = state.agent_context_telemetry.read().await;
+    let t = telem.get(agent_id).expect("telemetry must be recorded");
+    assert!(t.fits_budget, "small agent must fit");
+    assert!(t.window_tokens > 0);
+    assert!(t.input_budget_chars > 0);
+    assert!(t.system_msg_count >= 1, "static system message at minimum");
+    assert!(t.build_micros > 0, "build_micros must be measured");
+    assert_eq!(t.skills_full, 0);
+    assert_eq!(t.skills_summary, 0);
 }

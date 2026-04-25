@@ -303,11 +303,17 @@ pub(crate) async fn build_context(
     conversation_id: Option<&str>,
     is_tool_return: bool,
 ) -> core::result::Result<(String, Vec<LlmMessage>, Vec<Value>), String> {
+    let build_started = std::time::Instant::now();
     let agent = sqlite::get_agent(&state.db, agent_id)
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
 
     let (system_static, mut system_dynamic) = assemble_system_prompt_memory(state, &agent, agent_id, is_tool_return);
+
+    // Skill-counters for Phase-4 telemetry; updated when we render the
+    // skills section below.
+    let mut skills_full_count: usize = 0;
+    let mut skills_summary_count: usize = 0;
 
     // Inject loaded skills into the dynamic system prompt section.
     {
@@ -326,6 +332,19 @@ pub(crate) async fn build_context(
                 SKILL_BODY_INDIVIDUAL_CAP,
             );
             if !skills_section.is_empty() {
+                // Count full-body vs summary-only entries by looking at
+                // the marker text the renderer emits.  Any line beginning
+                // with "## Skill:" is one entry; the "summary-only" tag
+                // distinguishes the downgraded ones.
+                for line in skills_section.lines() {
+                    if line.starts_with("## Skill:") {
+                        if line.contains("summary-only") {
+                            skills_summary_count += 1;
+                        } else {
+                            skills_full_count += 1;
+                        }
+                    }
+                }
                 system_dynamic.push_str(&skills_section);
             }
         }
@@ -714,6 +733,8 @@ pub(crate) async fn build_context(
 
     // Reverse (was newest-first) back to oldest-first, then flatten.
     selected.reverse();
+    // Phase 4: capture turn count before we move `selected` into `messages`.
+    let turns_selected_count = selected.len();
     messages.extend(selected.into_iter().flatten());
 
     // Sanitize history: fix orphaned tool_calls, dedup tool_results, drop
@@ -829,6 +850,67 @@ pub(crate) async fn build_context(
     };
 
     // ── Intelligent tool selection ────────────────────────────────────────────
+
+    // Phase 4: capture per-request telemetry so we can prove which
+    // defence layers fired and how close to the budget we ended up.
+    let history_chars: usize = messages
+        .iter()
+        .skip_while(|m| m.role == "system")
+        .map(|m| m.content.chars().count())
+        .sum();
+    let total_assembled_chars: usize = messages
+        .iter()
+        .map(|m| m.content.chars().count())
+        .sum();
+    let window_tokens = catalogue::context_window_for_model(&agent.model) as usize;
+    let input_budget_tokens =
+        window_tokens.saturating_sub(((window_tokens as f64) * OUTPUT_RESERVE_FRACTION).round() as usize);
+    let input_budget_chars = input_budget_tokens.saturating_mul(CHARS_PER_TOKEN);
+    let fits_budget = total_assembled_chars <= input_budget_chars;
+    let system_msg_count = messages
+        .iter()
+        .take_while(|m| m.role == "system")
+        .count();
+    let turns_selected = turns_selected_count;
+    let telemetry = crate::server::state::ContextTelemetry {
+        model: agent.model.clone(),
+        window_tokens,
+        input_budget_chars,
+        system_overhead_chars,
+        system_tokens,
+        message_budget_chars: message_budget,
+        history_chars,
+        turns_selected,
+        turns_omitted: omitted_turns,
+        system_msg_count,
+        skills_full: skills_full_count,
+        skills_summary: skills_summary_count,
+        fits_budget,
+        build_micros: build_started.elapsed().as_micros() as u64,
+    };
+    {
+        let mut t = state.agent_context_telemetry.write().await;
+        t.insert(agent_id.to_string(), telemetry.clone());
+    }
+    tracing::info!(
+        target: "cade::context::telemetry",
+        agent_id,
+        model = %telemetry.model,
+        window_tokens = telemetry.window_tokens,
+        input_budget_chars = telemetry.input_budget_chars,
+        system_overhead_chars = telemetry.system_overhead_chars,
+        system_tokens = telemetry.system_tokens,
+        message_budget_chars = telemetry.message_budget_chars,
+        history_chars = telemetry.history_chars,
+        turns_selected = telemetry.turns_selected,
+        turns_omitted = telemetry.turns_omitted,
+        system_msg_count = telemetry.system_msg_count,
+        skills_full = telemetry.skills_full,
+        skills_summary = telemetry.skills_summary,
+        fits_budget = telemetry.fits_budget,
+        build_micros = telemetry.build_micros,
+        "build_context telemetry"
+    );
 
     let result_tuple = (agent.model, messages, tool_schemas);
     {

@@ -2999,3 +2999,40 @@ M3 = **state-machine + minimal render + WASM entry**.  No network calls.
 **Test counts:** cade-core 215 (+3 palette), cade-server 161 (+1 compact handler), cade-gui 310 (+2 system_notice parse).  Full workspace `cargo test` and wasm `cargo build --target wasm32-unknown-unknown` both green.
 
 **Rollback:** `git revert <commit>`.
+
+## 2026-04-24 — Phase 4 (Part 1): per-request context telemetry
+
+**Goal:** prove every defence layer fires on every request, expose the metrics for live inspection, and make context-budget regressions immediately visible.
+
+**Changes:**
+
+1. **`ContextTelemetry` struct** (`crates/cade-server/src/server/state.rs`) capturing every input that controls how the context fits into the model window:
+   - `model`, `window_tokens`, `input_budget_chars`
+   - `system_overhead_chars`, `system_tokens` (P2-1 anchor)
+   - `message_budget_chars` (post-deduction history budget)
+   - `history_chars` (actual chars packed)
+   - `turns_selected`, `turns_omitted`
+   - `system_msg_count` (must be ≥2 if memory is present — proves P2-2 fix is alive)
+   - `skills_full`, `skills_summary` (proves P2-3 budget capping)
+   - `fits_budget` (the canonical "did our defences work" signal)
+   - `build_micros` (perf regressions visible)
+
+2. **`AppState::agent_context_telemetry`**: per-agent map, written at the end of every successful `build_context` call.
+
+3. **Structured `tracing::info!`** emitted on `target = "cade::context::telemetry"` with all fields, so external observability tools (Loki, Honeycomb, etc.) can dashboard context-fit rates.
+
+4. **`GET /v1/agents/:id/context_stats`** endpoint (`crates/cade-server/src/server/api/context_stats.rs`): returns the most-recent `ContextTelemetry` for the agent, 404 if none recorded yet.
+
+**Files modified / created:**
+- `crates/cade-server/src/server/state.rs` — `ContextTelemetry` + `agent_context_telemetry` field
+- `crates/cade-server/src/server/api/context_stats.rs` — new (handler + 2 tests)
+- `crates/cade-server/src/server/api/mod.rs` — module + route
+- `crates/cade-server/src/server/api/messages/context.rs` — telemetry capture at end of `build_context` + skills counters
+- 8 call sites of `AppState { … }` updated (production + tests + consolidation + complete + auth_test/router_test/etc.) — mechanical add-field via `python3 patch_state.py` + manual touches
+- `src/bin/cade-server.rs` — production state init updated
+
+**Test counts:** cade-server 164 (+3) — `returns_404_when_no_telemetry_recorded_yet`, `returns_recorded_telemetry_when_present`, `build_context_records_telemetry_with_fits_budget_true`. Full workspace + wasm green.
+
+**Deferred (Part 2):** native-token pipeline refactor — replace the `chars × 3` translation that runs end-to-end with raw tokens at every budget boundary. This is a structural refactor of the entire turn walker and several call sites; the telemetry now in place will make any regression immediately visible, so we can do this as a follow-up without losing safety.
+
+**Rollback:** `git revert <commit>`.

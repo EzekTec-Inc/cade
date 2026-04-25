@@ -1375,6 +1375,7 @@ mod tests {
             memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
             agent_activity: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
             agent_metrics: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
+            agent_context_telemetry: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
             context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
             all_skills: Arc::new(AsyncRwLock::new(Vec::new())),
             agent_skills: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
