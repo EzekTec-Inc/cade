@@ -325,14 +325,22 @@ pub(crate) async fn build_context(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
 
-    let (system_static, mut system_dynamic) = assemble_system_prompt_memory(state, &agent, agent_id, is_tool_return);
+    let (mut system_static, mut system_dynamic) = assemble_system_prompt_memory(state, &agent, agent_id, is_tool_return);
 
     // Skill-counters for Phase-4 telemetry; updated when we render the
     // skills section below.
     let mut skills_full_count: usize = 0;
     let mut skills_summary_count: usize = 0;
 
-    // Inject loaded skills into the dynamic system prompt section.
+    // Inject loaded skills into the STATIC system prompt section.
+    //
+    // Skill bodies change rarely (only on /skills load|unload, which
+    // explicitly invalidates `context_cache`), so they belong in the
+    // cache-anchored static block where Anthropic's `cache_control:
+    // ephemeral` breakpoint pins them.  This unlocks the ~90% cache-read
+    // discount on what is typically the largest stable section of the
+    // prompt (10–30 KB of skill bodies).  Memory tiers (volatile per turn)
+    // remain in `system_dynamic` and are correctly billed at full rate.
     {
         let agent_skills = state.agent_skills.read().await;
         if let Some(loaded_ids) = agent_skills.get(agent_id)
@@ -371,7 +379,10 @@ pub(crate) async fn build_context(
                         }
                     }
                 }
-                system_dynamic.push_str(&skills_section);
+                if !system_static.is_empty() {
+                    system_static.push_str("\n\n");
+                }
+                system_static.push_str(&skills_section);
             }
         }
     }

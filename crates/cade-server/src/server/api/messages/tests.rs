@@ -1252,3 +1252,64 @@ async fn build_context_records_native_token_counts() {
         t.history_tokens, t.history_chars);
     assert!(t.fits_budget, "small request must fit");
 }
+
+// ── P1: skills section must live in system_static (cache-anchored) ─────────
+//
+// Anthropic's prompt cache only marks the *first* system block with
+// `cache_control: ephemeral`.  Skills bodies are stable across many turns
+// (they only change on /skills load|unload), so they MUST live in the
+// cache-anchored block (system_static, messages[0]) and NOT in the volatile
+// dynamic block (system_dynamic, messages[1]).  This unlocks ~90% input-cost
+// reduction on the skills payload across a session.
+#[tokio::test]
+async fn skills_section_lives_in_static_system_block() {
+    let db = cade_store::sqlite::open(":memory:").unwrap();
+    let agent_id = "agent_p1_skills";
+    cade_store::sqlite::create_agent(
+        &db,
+        &cade_store::sqlite::AgentRow {
+            id: agent_id.to_string(),
+            name: "A".to_string(),
+            model: "anthropic/claude-sonnet-4-5-20250929".to_string(),
+            description: None,
+            system_prompt: Some("base prompt".to_string()),
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+        }
+    ).unwrap();
+
+    let llm = std::sync::Arc::new(OverflowThenOk { calls: std::sync::atomic::AtomicUsize::new(2) })
+        as std::sync::Arc<dyn cade_ai::LlmProvider>;
+    let state = build_minimal_state(db, llm);
+
+    // Register a skill in the global pool and load it for the agent.
+    let s = fake_skill("kpx-marker", "KpxMarkerSkill", 200);
+    {
+        let mut all = state.all_skills.write().await;
+        all.push(s);
+        let mut loaded = state.agent_skills.write().await;
+        loaded.insert(agent_id.to_string(), vec!["kpx-marker".to_string()]);
+    }
+
+    let (_model, messages, _tools) = super::context::build_context(&state, agent_id, None, false)
+        .await
+        .expect("build_context");
+
+    assert!(messages.len() >= 2, "must have 2 system messages");
+    let static_sys = &messages[0].content;
+    let dynamic_sys = &messages[1].content;
+
+    let marker = "## Skill: KpxMarkerSkill (kpx-marker)";
+    assert!(
+        static_sys.contains(marker),
+        "skills section MUST appear in system_static (messages[0]) for cache anchoring;\n\
+         static_sys (first 400 chars):\n{}\n",
+        &static_sys.chars().take(400).collect::<String>()
+    );
+    assert!(
+        !dynamic_sys.contains(marker),
+        "skills section MUST NOT appear in system_dynamic (messages[1]); \
+         that block is volatile and gets re-tokenised every turn"
+    );
+}

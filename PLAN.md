@@ -3223,3 +3223,42 @@ All handlers operate **directly on `state.db`** — no HTTP self-call to the sam
 **Test counts:** cade-store 106 (+6), cade-server 190 (+4). Full workspace green.
 
 **Rollback:** `git revert <commit>` — removes all B phase changes.
+
+## 2026-04-25 — Phase P1: cache-anchor skills section into system_static
+
+**Goal:** unlock Anthropic prompt-cache discount (~90%) on the skills payload,
+which can be 10–30 KB of stable text per turn.
+
+**Problem:** `build_context` placed the rendered skills section into
+`system_dynamic` (the second system message).  Anthropic's prompt cache only
+attaches `cache_control: ephemeral` to the *first* system block (`anthropic.rs`
+line 110).  So skills bodies were re-tokenised at the full input rate on every
+turn even though they only change on `/skills load|unload` (which already
+invalidates `context_cache`).
+
+**Change:** moved the `skills_section.push_str` from `system_dynamic` into
+`system_static`.  `system_static` now contains: base prompt + memory tiers +
+skills section, all stable across turns.  `system_dynamic` keeps the volatile
+working-state blocks (`active_goal`, `recent_edits`, `session_summary`) +
+`MEMORY_AWARENESS_FOOTER`.  No API or schema changes.
+
+**Test:** new `skills_section_lives_in_static_system_block` asserts the skill
+marker `## Skill: KpxMarkerSkill (kpx-marker)` is present in `messages[0]`
+(static) and absent from `messages[1]` (dynamic).  191 cade-server tests pass
+(190 prior + 1 new).  Workspace and `wasm32-unknown-unknown` both build clean.
+
+**Cache invariants preserved:**
+- `memory_cache` keyed on `hash(system_static)` — auto-flushes on skill
+  load/unload because the static text now embeds the skill body.
+- `context_cache` LRU explicitly popped by `handle_load_skill_tool` and
+  `unload_skill` API (already in place).
+- Anthropic `cache_control` on `system_blocks.first_mut()` now covers the
+  enlarged stable block.
+
+**Reason it's safe:** `assemble_system_prompt_memory` already returned the
+memory tiers as part of `system_static`.  Skills are conceptually the same
+class of content (stable across turns, invalidated on explicit user action),
+so they belong in the same cache anchor.
+
+**Rollback:** `git revert <commit>` or restore checkpoint
+`cp-1aa90c31-b305-43c8-8135-6415e487df1f` (label `before-p1-skills-static`).
