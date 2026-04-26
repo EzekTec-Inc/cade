@@ -55,6 +55,21 @@ impl AgentMetrics {
             .cache_write_tokens_total
             .saturating_add(u.cache_write_tokens as u64);
     }
+
+    /// P4: compute cumulative session cost in USD using the provided pricing
+    /// table.  Mirrors the formula in `cade-cli/src/cli/repl/stats.rs:91-95`
+    /// so server-side numbers match the CLI's `/cost` view exactly.
+    ///
+    /// Pricing is per 1M tokens.  Returns 0.0 when pricing is unknown
+    /// (`pricing.input == 0.0`) so callers can safely treat "unknown
+    /// model" as "no guardrail".
+    pub fn compute_cost_usd(&self, pricing: &cade_ai::ModelPricing) -> f64 {
+        const PER_M: f64 = 1_000_000.0;
+        (self.input_tokens_total as f64) * pricing.input / PER_M
+            + (self.output_tokens_total as f64) * pricing.output / PER_M
+            + (self.cache_read_tokens_total as f64) * pricing.cache_read / PER_M
+            + (self.cache_write_tokens_total as f64) * pricing.cache_write / PER_M
+    }
 }
 
 /// Phase 4: per-request telemetry recorded at the end of every
@@ -223,5 +238,53 @@ mod tests {
         assert_eq!(m.output_tokens_total, 0);
         assert_eq!(m.cache_read_tokens_total, 0);
         assert_eq!(m.cache_write_tokens_total, 0);
+    }
+
+    // ── P4: compute_cost_usd ───────────────────────────────────────────────
+
+    #[test]
+    fn compute_cost_usd_matches_cli_formula() {
+        // Sonnet 4 pricing (per 1M tokens): in=3, out=15, cr=0.3, cw=3.75
+        let pricing = cade_ai::ModelPricing {
+            input: 3.0,
+            output: 15.0,
+            cache_read: 0.3,
+            cache_write: 3.75,
+        };
+        let m = AgentMetrics {
+            input_tokens_total: 1_000_000,
+            output_tokens_total: 200_000,
+            cache_read_tokens_total: 5_000_000,
+            cache_write_tokens_total: 100_000,
+            ..Default::default()
+        };
+        // 3 + 3 + 1.5 + 0.375 = 7.875
+        let cost = m.compute_cost_usd(&pricing);
+        assert!((cost - 7.875).abs() < 1e-9, "got {cost}");
+    }
+
+    #[test]
+    fn compute_cost_usd_zero_pricing_returns_zero() {
+        // Unknown model → Default pricing (all zeros) → no guardrail trigger.
+        let m = AgentMetrics {
+            input_tokens_total: 999_999_999,
+            output_tokens_total: 999_999_999,
+            cache_read_tokens_total: 999_999_999,
+            cache_write_tokens_total: 999_999_999,
+            ..Default::default()
+        };
+        let cost = m.compute_cost_usd(&cade_ai::ModelPricing::default());
+        assert_eq!(cost, 0.0);
+    }
+
+    #[test]
+    fn compute_cost_usd_empty_metrics_zero() {
+        let pricing = cade_ai::ModelPricing {
+            input: 100.0,
+            output: 100.0,
+            cache_read: 100.0,
+            cache_write: 100.0,
+        };
+        assert_eq!(AgentMetrics::default().compute_cost_usd(&pricing), 0.0);
     }
 }

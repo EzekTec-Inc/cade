@@ -49,6 +49,47 @@ use super::messages::{
 /// Maximum agentic turns per request (prevents infinite loops).
 const MAX_TURNS: usize = 20;
 
+/// P4: parse a `CADE_MAX_SESSION_COST_USD`-style env value into an optional
+/// cap.  Pure function for testing; the production wrapper [`max_session_cost_usd`]
+/// reads the live env var and delegates to this.
+fn parse_max_session_cost(raw: Option<&str>) -> Option<f64> {
+    raw.and_then(|s| s.trim().parse::<f64>().ok())
+        .filter(|v| *v > 0.0)
+}
+
+/// P4: read `CADE_MAX_SESSION_COST_USD` env var.
+///
+/// When set to a positive number, the agentic loop aborts as soon as the
+/// agent's cumulative cost (across the server's lifetime, computed via
+/// `AgentMetrics::compute_cost_usd`) exceeds this value.  Unset, empty, or
+/// non-positive values disable the guardrail entirely.
+fn max_session_cost_usd() -> Option<f64> {
+    parse_max_session_cost(std::env::var("CADE_MAX_SESSION_COST_USD").ok().as_deref())
+}
+
+/// P4: shared `ModelRegistry` used to price token totals against the
+/// bundled / user-customised pricing rules.  Loaded once at first call;
+/// subsequent calls reuse the same instance.
+fn pricing_registry() -> &'static cade_ai::ModelRegistry {
+    use std::sync::OnceLock;
+    static REG: OnceLock<cade_ai::ModelRegistry> = OnceLock::new();
+    REG.get_or_init(|| {
+        let path = dirs::home_dir().map(|h| h.join(".cade").join("pricing.json"));
+        cade_ai::ModelRegistry::load_or_default(path.as_deref())
+    })
+}
+
+/// P4: lookup the agent's current model id for pricing.  Returns empty
+/// string on lookup failure so `pricing_for_model` falls back to the
+/// zero default (= no guardrail trigger, fail-open).
+async fn model_for_pricing(db: &cade_store::sqlite::Db, agent_id: &str) -> String {
+    cade_store::sqlite::agents::get_agent(db, agent_id)
+        .ok()
+        .flatten()
+        .map(|r| r.model)
+        .unwrap_or_default()
+}
+
 /// `POST /v1/agents/:id/run`
 pub async fn run_agent(
     State(state): State<AppState>,
@@ -195,6 +236,29 @@ pub async fn run_agent(
                     "error": format!("Agentic loop exceeded {MAX_TURNS} turns — stopping"),
                 })).await;
                 break;
+            }
+
+            // ── P4: cost guardrail ────────────────────────────────────────
+            // Abort when cumulative session cost (across the server's lifetime
+            // for this agent) exceeds the configured cap.  Disabled by default
+            // (unset env var → no cap).  Pricing comes from ~/.cade/pricing.json
+            // or the bundled fallback table.
+            if let Some(cap) = max_session_cost_usd() {
+                let map = state2.agent_metrics.read().await;
+                if let Some(m) = map.get(&agent_id2) {
+                    let pricing = pricing_registry().pricing_for_model(&model_for_pricing(&state2.db, &agent_id2).await);
+                    let cost = m.compute_cost_usd(&pricing);
+                    if cost >= cap {
+                        send(json!({
+                            "message_type": "error",
+                            "error": format!(
+                                "Session cost cap reached (${:.4} ≥ ${:.4}); set CADE_MAX_SESSION_COST_USD to a higher value to continue.",
+                                cost, cap
+                            ),
+                        })).await;
+                        break;
+                    }
+                }
             }
 
             // ── Build context ─────────────────────────────────────────────
@@ -2594,5 +2658,48 @@ mod tests {
             "error message must mention depth, got: {}",
             result.output
         );
+    }
+}
+
+#[cfg(test)]
+mod p4_guardrail_tests {
+    use super::*;
+
+    #[test]
+    fn parse_max_session_cost_unset_disables_guardrail() {
+        assert_eq!(parse_max_session_cost(None), None);
+    }
+
+    #[test]
+    fn parse_max_session_cost_empty_disables_guardrail() {
+        assert_eq!(parse_max_session_cost(Some("")), None);
+        assert_eq!(parse_max_session_cost(Some("   ")), None);
+    }
+
+    #[test]
+    fn parse_max_session_cost_nonpositive_disables_guardrail() {
+        assert_eq!(parse_max_session_cost(Some("0")), None);
+        assert_eq!(parse_max_session_cost(Some("0.0")), None);
+        assert_eq!(parse_max_session_cost(Some("-5")), None);
+    }
+
+    #[test]
+    fn parse_max_session_cost_positive_returns_cap() {
+        assert_eq!(parse_max_session_cost(Some("2.50")), Some(2.50));
+        assert_eq!(parse_max_session_cost(Some(" 10 ")), Some(10.0));
+    }
+
+    #[test]
+    fn parse_max_session_cost_garbage_disables_guardrail() {
+        assert_eq!(parse_max_session_cost(Some("not-a-number")), None);
+        assert_eq!(parse_max_session_cost(Some("$5")), None);
+    }
+
+    /// `pricing_registry` returns a stable instance (`OnceLock`).
+    #[test]
+    fn pricing_registry_is_stable() {
+        let p1 = pricing_registry() as *const _;
+        let p2 = pricing_registry() as *const _;
+        assert!(std::ptr::eq(p1, p2));
     }
 }

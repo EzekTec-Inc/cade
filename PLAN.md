@@ -3335,3 +3335,50 @@ tests prevents regression.
 
 **Rollback:** revert this commit.  Schema unchanged (in-memory metrics only,
 no migration).
+
+## 2026-04-25 — Phase P4: server-side max_session_cost_usd guardrail
+
+**Goal:** prevent runaway cost from a misbehaving agentic loop (e.g. recursive
+subagent fan-out, frontier-model burn) by adding a hard USD cap that the
+server enforces independently of `MAX_TURNS`.
+
+**Problem:** `run.rs` only had `MAX_TURNS = 20` as a loop bound.  Each turn
+on a frontier model can spend ~$0.50 of input + reasoning + output tokens, so
+the iteration cap maps to ~$10/run worst-case — but that doesn't account for
+the recurring `/run` requests in a long session.  Industry-standard agentic
+runtimes (Claude Code, Cursor, Aider) all cap by USD too.
+
+**Change:**
+1. Helper `AgentMetrics::compute_cost_usd(&ModelPricing)` mirrors the CLI
+   formula (per-1M tokens × 4 fields) so server and client cost numbers match.
+2. `parse_max_session_cost(Option<&str>) -> Option<f64>` pure function
+   accepts: `None` (unset), empty/whitespace, zero, negative, or non-numeric
+   → `None` (fail-open, disabled).  Positive values → `Some(cap)`.
+3. `max_session_cost_usd()` thin wrapper reads `CADE_MAX_SESSION_COST_USD`.
+4. `pricing_registry()` `OnceLock`-cached `ModelRegistry` loaded from
+   `~/.cade/pricing.json` (or bundled fallback).
+5. `model_for_pricing(db, agent_id)` looks up the agent's current model;
+   empty on failure (= zero pricing = guardrail disabled, fail-open).
+6. Agentic loop in `run.rs` checks the cap at the *start* of each iteration
+   (between `MAX_TURNS` check and `build_context`).  When cost ≥ cap, emits
+   a structured error message and breaks the loop.
+
+**Behaviour:**
+* Unset env var → no guardrail, zero overhead per turn (one `OnceLock` load
+  + one `Option::None` early-out).
+* Set to `2.50` → loop aborts when cumulative agent cost ≥ $2.50.
+* Cost is computed against `state.agent_metrics` totals, which P2 ensured
+  include cache_read/cache_write — so cap is accurate, not inflated.
+
+**Tests (6 new):** unset / empty / non-positive / positive / garbage env
+parsing; `pricing_registry` `OnceLock` stability.  Plus 3 `compute_cost_usd`
+tests on `state.rs` from the P4 prologue (Sonnet formula, zero pricing,
+empty metrics).  cade-server: **212 pass** (203 prior + 9 new).  Workspace +
+wasm32 clean.
+
+**Why pure parse fn instead of env-coupled tests:** the workspace forbids
+`unsafe_code`, and `std::env::set_var` is now `unsafe` on edition 2024.
+Splitting `parse_max_session_cost(Option<&str>)` from the env-reading wrapper
+keeps the parsing logic 100% testable without touching process state.
+
+**Rollback:** revert this commit.  No schema/migration; env var is opt-in.
