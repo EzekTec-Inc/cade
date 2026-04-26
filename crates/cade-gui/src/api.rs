@@ -308,6 +308,14 @@ pub fn patch_agent_model_body(model: &str) -> String {
     serde_json::json!({ "model": model }).to_string()
 }
 
+/// Build the request body for `PATCH /v1/agents/:id` when only the compaction
+/// (summarisation) model is being updated.  Empty `model` clears the override
+/// — the server maps `""` back to `NULL` and falls through to the
+/// auto-cheapest resolver in `default_compaction_model`.
+pub fn patch_agent_compaction_model_body(model: &str) -> String {
+    serde_json::json!({ "compaction_model": model }).to_string()
+}
+
 // ── SSE event parsing (continued) ───────────────────────────────────────
 
 /// Try to convert raw SSE JSON into a typed [`StreamEvent`].
@@ -1236,6 +1244,23 @@ mod tests {
         let s = patch_agent_model_body("gpt-4");
         let v: serde_json::Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["model"], "gpt-4");
+    }
+
+    #[test]
+    fn patch_agent_compaction_model_body_serializes_model() {
+        let s = patch_agent_compaction_model_body("anthropic/claude-3-5-haiku-latest");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["compaction_model"], "anthropic/claude-3-5-haiku-latest");
+    }
+
+    #[test]
+    fn patch_agent_compaction_model_body_serializes_empty_clear() {
+        // Empty string is the documented "clear override" sentinel — server
+        // maps it back to NULL.  Builder must round-trip the empty string
+        // verbatim, not omit the field.
+        let s = patch_agent_compaction_model_body("");
+        let v: serde_json::Value = serde_json::from_str(&s).unwrap();
+        assert_eq!(v["compaction_model"], "");
     }
 
     // -- checkpoints

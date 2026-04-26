@@ -462,6 +462,50 @@ impl CadeApp {
         });
     }
 
+    /// Update the agent's compaction (summarisation) model and refresh the
+    /// agents list so the new value is visible in the sidebar.  Empty
+    /// `model` clears the override on the server.
+    pub(super) fn spawn_set_agent_compaction_model(&mut self, model: String) {
+        let (server_url, token, agent_id) = {
+            let session = self.session.borrow();
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
+            let agent_id = match s.selected_agent_id() {
+                Some(id) => id.to_string(),
+                None => return,
+            };
+            (s.server_url().to_string(), s.token().to_string(), agent_id)
+        };
+
+        let session = Rc::clone(&self.session);
+        let ctx = self.ctx.clone();
+
+        wasm_bindgen_futures::spawn_local(async move {
+            match crate::http_wasm::patch_agent_compaction_model(
+                &server_url, &token, &agent_id, &model,
+            )
+            .await
+            {
+                Ok(()) => {
+                    if let Ok(agents) =
+                        crate::http_wasm::get_agents(&server_url, &token).await
+                        && let Some(s) = session.borrow_mut().as_mut()
+                    {
+                        s.refresh_agents(agents);
+                    }
+                }
+                Err(e) => {
+                    if let Some(s) = session.borrow_mut().as_mut() {
+                        s.push_error(&format!("Compaction model update failed: {e}"));
+                    }
+                }
+            }
+            ctx.request_repaint();
+        });
+    }
+
     // ── Checkpoints spawn helpers (M17) ─────────────────────────────
 
     /// Fetch checkpoints for the selected agent.  Assumes the overlay
@@ -1232,6 +1276,34 @@ impl CadeApp {
             }
             PaletteCmd::Compact => {
                 self.spawn_compact();
+            }
+            PaletteCmd::CompactionModel(model) => {
+                let has_agent = self
+                    .session
+                    .borrow()
+                    .as_ref()
+                    .and_then(|s| s.selected_agent_id().map(|_| ()))
+                    .is_some();
+                if !has_agent {
+                    if let Some(s) = self.session.borrow_mut().as_mut() {
+                        s.push_error("Select an agent before changing compaction model");
+                    }
+                    return;
+                }
+                let model = model.trim().to_string();
+                if model.is_empty() {
+                    // Mirror CLI ergonomics: empty arg in palette is treated as
+                    // a usage prompt rather than an implicit clear, because the
+                    // palette has no confirmation step. Explicit clear is still
+                    // available via the CLI `/compaction-model` (no arg).
+                    if let Some(s) = self.session.borrow_mut().as_mut() {
+                        s.push_error(
+                            "Usage: /compaction-model <model-id>  (use the CLI to clear)",
+                        );
+                    }
+                } else {
+                    self.spawn_set_agent_compaction_model(model);
+                }
             }
             PaletteCmd::Unsupported(name) => {
                 // TUI recognizes this command but the GUI has no UI or

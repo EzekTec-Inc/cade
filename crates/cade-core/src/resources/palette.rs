@@ -28,6 +28,10 @@ pub enum PaletteCmd {
     Toolset(String),
     Backend(String),
     Reasoning(String),
+    /// Set or clear the per-agent compaction (summarisation) model.
+    /// Empty string clears the override and falls back to the auto-cheapest
+    /// resolver in `cade-server::server::consolidation::default_compaction_model`.
+    CompactionModel(String),
     /// Manually trigger session_summary consolidation. Rolls dropped turns
     /// into the pinned `session_summary` block so older context survives a
     /// rotation. Useful when the user wants to free space proactively
@@ -82,6 +86,12 @@ pub const CMD_DEFS: &[CmdDef] = &[
     CmdDef {
         trigger: "model",
         description: "Set the agent model",
+        arg_hint: Some("<model-id>"),
+        category: CmdCategory::Session,
+    },
+    CmdDef {
+        trigger: "compaction-model",
+        description: "Set the per-agent summarisation model (empty arg clears override)",
         arg_hint: Some("<model-id>"),
         category: CmdCategory::Session,
     },
@@ -267,7 +277,7 @@ pub fn parse_palette_input(raw: &str) -> PaletteCmd {
         "remember" => PaletteCmd::Unsupported("remember".into()),
         "pricing" => PaletteCmd::Pricing,
         "backend" => PaletteCmd::Backend(arg),
-        "compaction-model" => PaletteCmd::Unsupported("compaction-model".into()),
+        "compaction-model" => PaletteCmd::CompactionModel(arg),
         "debug-last" | "debug_last" => PaletteCmd::Unsupported("debug-last".into()),
         "fork" => PaletteCmd::Unsupported("fork".into()),
         other => PaletteCmd::Unknown(other.to_string()),
@@ -379,5 +389,30 @@ mod tests {
     fn compact_is_advertised_in_cmd_defs() {
         let trigger_present = CMD_DEFS.iter().any(|d| d.trigger == "compact");
         assert!(trigger_present, "/compact must appear in command palette listing");
+    }
+
+    #[test]
+    fn parses_compaction_model_command_with_arg() {
+        assert_eq!(
+            parse_palette_input("/compaction-model anthropic/claude-3-5-haiku-latest"),
+            PaletteCmd::CompactionModel("anthropic/claude-3-5-haiku-latest".to_string())
+        );
+    }
+
+    #[test]
+    fn parses_compaction_model_command_without_arg() {
+        assert_eq!(
+            parse_palette_input("/compaction-model"),
+            PaletteCmd::CompactionModel(String::new())
+        );
+    }
+
+    #[test]
+    fn compaction_model_is_advertised_in_cmd_defs() {
+        let trigger_present = CMD_DEFS.iter().any(|d| d.trigger == "compaction-model");
+        assert!(
+            trigger_present,
+            "/compaction-model must appear in command palette listing"
+        );
     }
 }

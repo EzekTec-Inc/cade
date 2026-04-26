@@ -444,6 +444,32 @@ pub async fn patch_agent_model(
     api::classify_upsert(resp.status())
 }
 
+/// `PATCH /v1/agents/:id` — update the agent's compaction (summarisation)
+/// model.  Pass an empty string to clear the override and fall back to the
+/// auto-cheapest resolver server-side.  Returns `Ok(())` on 2xx.
+pub async fn patch_agent_compaction_model(
+    base_url: &str,
+    token: &str,
+    agent_id: &str,
+    model: &str,
+) -> Result<(), ApiError> {
+    let url = api::agent_url(base_url, agent_id);
+    let body = api::patch_agent_compaction_model_body(model);
+    let resp = Request::patch(&url)
+        .header("Authorization", &api::bearer_header(token))
+        .header("Content-Type", "application/json")
+        .body(body)
+        .map_err(|e| ApiError::Transport {
+            message: format!("{e:?}"),
+        })?
+        .send()
+        .await
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
+    api::classify_upsert(resp.status())
+}
+
 // ── Checkpoints ────────────────────────────────────────────────────────
 
 /// `GET /v1/agents/:id/checkpoints` — list checkpoints for an agent.
