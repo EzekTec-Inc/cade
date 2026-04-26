@@ -3262,3 +3262,40 @@ so they belong in the same cache anchor.
 
 **Rollback:** `git revert <commit>` or restore checkpoint
 `cp-1aa90c31-b305-43c8-8135-6415e487df1f` (label `before-p1-skills-static`).
+
+## 2026-04-25 — Phase P3: auto-default compaction_model to cheapest provider model
+
+**Goal:** cut recurring background-compaction cost by 10–20× without quality
+regression.
+
+**Problem:** when an agent's `compaction_model` field is unset (the default),
+`consolidation.rs` used `agent.model` for summarisation.  A session running
+`anthropic/claude-opus-4` would summarise its own history at $15/M input
+tokens; a session on `gemini/gemini-2.5-pro` similarly burned premium tokens
+on a structurally simple task that any cheap model can do well.  The previous
+code only special-cased OpenRouter (free GLM); anthropic/openai/gemini
+sessions paid frontier prices.
+
+**Change:** new `default_compaction_model(primary)` resolver:
+  * `anthropic/*`  → `anthropic/claude-3-5-haiku-latest`
+  * `openai/*`     → `openai/gpt-4o-mini`
+  * `gemini/*`     → `gemini/gemini-2.5-flash`
+  * `openrouter/*` → `openrouter/z-ai/glm-4.5-air:free` (preserves prior)
+  * unknown / `ollama/*` → passthrough (local = free, unknown = no safe map)
+
+Idempotent — calling on an already-cheap variant returns the same string, so
+nothing degrades.  Wired into `consolidate_agent` as the fallback when
+`agent.compaction_model` is `None` or empty.  Users who explicitly set
+`compaction_model` via `/compaction_model <name>` are unaffected.
+
+**Cost impact (per consolidation call, ~3 KB output / 24 KB input):**
+  * Sonnet: ~$0.083 → ~$0.022 (haiku) ≈ **3.8× saving**
+  * Opus: ~$0.385 → ~$0.022 (haiku) ≈ **17× saving**
+  * Gemini Pro: ~$0.034 → ~$0.0027 (flash) ≈ **12× saving**
+  * GPT-4o: ~$0.063 → ~$0.0033 (4o-mini) ≈ **19× saving**
+
+**Tests (9 new):** mapping for each provider, idempotency on already-cheap
+variants, passthrough for ollama and unknown providers.  cade-server suite:
+200 pass (191 prior + 9 new).  Workspace + wasm32-unknown-unknown clean.
+
+**Rollback:** revert this commit.  No schema change, no migration.

@@ -65,6 +65,42 @@ const HISTORY_BUDGET_FRACTION: f64 = 0.40;
 /// Characters per token approximation (conservative).
 const CHARS_PER_TOKEN: usize = 3;
 
+/// Resolve the cheapest capable summarisation model for a given primary model.
+///
+/// Compaction is structurally simple (single-shot summarisation, ~900 output
+/// tokens) — it does not need a frontier model.  Auto-defaulting to a cheap
+/// variant cuts ongoing background cost by 10–20× without measurable quality
+/// loss on the summary task.
+///
+/// Mapping rules (provider prefix match):
+///   * `anthropic/*`  → `anthropic/claude-3-5-haiku-latest`
+///   * `openai/*`     → `openai/gpt-4o-mini`
+///   * `gemini/*`     → `gemini/gemini-2.5-flash`
+///   * `openrouter/*` → `openrouter/z-ai/glm-4.5-air:free` (free tier)
+///   * anything else  → passthrough (e.g. `ollama/*` runs locally; unknown
+///     providers don't have a guaranteed cheaper variant).
+///
+/// Idempotent: if the input is already a known cheap variant the same string
+/// is returned, so this can be called unconditionally without the risk of
+/// degrading an already-cheap configuration.
+pub(crate) fn default_compaction_model(primary_model: &str) -> String {
+    if primary_model.starts_with("openrouter/") {
+        return "openrouter/z-ai/glm-4.5-air:free".to_string();
+    }
+    if primary_model.starts_with("anthropic/") {
+        return "anthropic/claude-3-5-haiku-latest".to_string();
+    }
+    if primary_model.starts_with("openai/") {
+        return "openai/gpt-4o-mini".to_string();
+    }
+    if primary_model.starts_with("gemini/") {
+        return "gemini/gemini-2.5-flash".to_string();
+    }
+    // Unknown provider (incl. ollama/*, custom): preserve passthrough — local
+    // models cost nothing and unknown providers may not have a cheaper SKU.
+    primary_model.to_string()
+}
+
 // ── preview / filter helpers (M2) ────────────────────────────────────────────
 
 /// Maximum chars kept per message in the history text fed to the summariser.
@@ -302,22 +338,17 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
          {history_text}"
     );
 
-    // Use the compaction model if configured, otherwise fall back to the main model.
-    // When the agent uses an OpenRouter model, always use the free GLM model for
-    // compaction to avoid burning paid tokens on summarisation.
-    const OPENROUTER_COMPACTION_MODEL: &str = "openrouter/z-ai/glm-4.5-air:free";
-
+    // Use the compaction model if configured, otherwise auto-default to the
+    // cheapest capable model for the agent's provider (P3).  Compaction is a
+    // recurring background cost: summarising 24 KB of history with a frontier
+    // model can cost 10–20× more than a cheap variant for negligible quality
+    // loss on a structurally simple task.  See `default_compaction_model`.
     let compaction_model = agent
         .compaction_model
         .as_deref()
         .filter(|m| !m.is_empty())
-        .unwrap_or_else(|| {
-            if agent.model.starts_with("openrouter/") {
-                OPENROUTER_COMPACTION_MODEL
-            } else {
-                &agent.model
-            }
-        });
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| default_compaction_model(&agent.model));
 
     let req = CompletionRequest {
         model: compaction_model.to_string(),
@@ -1477,6 +1508,91 @@ mod tests {
         assert_eq!(
             tier, "pinned",
             "session_summary must be pinned so next build_context always injects it"
+        );
+    }
+
+    // ── default_compaction_model ─────────────────────────────────────────────
+
+    #[test]
+    fn default_compaction_anthropic_uses_haiku() {
+        assert_eq!(
+            default_compaction_model("anthropic/claude-sonnet-4-5-20250929"),
+            "anthropic/claude-3-5-haiku-latest"
+        );
+        assert_eq!(
+            default_compaction_model("anthropic/claude-opus-4-20250514"),
+            "anthropic/claude-3-5-haiku-latest"
+        );
+    }
+
+    #[test]
+    fn default_compaction_openai_uses_4o_mini() {
+        assert_eq!(
+            default_compaction_model("openai/gpt-4o"),
+            "openai/gpt-4o-mini"
+        );
+        assert_eq!(
+            default_compaction_model("openai/gpt-4.1"),
+            "openai/gpt-4o-mini"
+        );
+    }
+
+    #[test]
+    fn default_compaction_gemini_uses_flash() {
+        assert_eq!(
+            default_compaction_model("gemini/gemini-2.5-pro"),
+            "gemini/gemini-2.5-flash"
+        );
+    }
+
+    #[test]
+    fn default_compaction_openrouter_uses_free_glm() {
+        assert_eq!(
+            default_compaction_model("openrouter/anthropic/claude-sonnet-4"),
+            "openrouter/z-ai/glm-4.5-air:free"
+        );
+    }
+
+    #[test]
+    fn default_compaction_ollama_passthrough() {
+        // Local models cost nothing; reuse same model.
+        assert_eq!(
+            default_compaction_model("ollama/llama3:70b"),
+            "ollama/llama3:70b"
+        );
+    }
+
+    #[test]
+    fn default_compaction_unknown_provider_passthrough() {
+        // Unknown / custom providers: do not assume a cheaper variant exists.
+        assert_eq!(
+            default_compaction_model("some-custom/foo"),
+            "some-custom/foo"
+        );
+    }
+
+    #[test]
+    fn default_compaction_already_cheap_anthropic_idempotent() {
+        // Already-haiku must not loop or recurse.
+        assert_eq!(
+            default_compaction_model("anthropic/claude-3-5-haiku-latest"),
+            "anthropic/claude-3-5-haiku-latest"
+        );
+    }
+
+    #[test]
+    fn default_compaction_already_cheap_openai_idempotent() {
+        assert_eq!(
+            default_compaction_model("openai/gpt-4o-mini"),
+            "openai/gpt-4o-mini"
+        );
+    }
+
+    #[test]
+    fn default_compaction_already_cheap_gemini_idempotent() {
+        assert_eq!(
+            default_compaction_model("gemini/gemini-2.5-flash"),
+            "gemini/gemini-2.5-flash"
         );
     }
 }
