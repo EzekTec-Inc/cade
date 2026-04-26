@@ -79,7 +79,7 @@ fn pricing_registry() -> &'static cade_ai::ModelRegistry {
     })
 }
 
-/// P4: lookup the agent's current model id for pricing.  Returns empty
+/// P7: lookup the agent's current model id for pricing.  Returns empty
 /// string on lookup failure so `pricing_for_model` falls back to the
 /// zero default (= no guardrail trigger, fail-open).
 async fn model_for_pricing(db: &cade_store::sqlite::Db, agent_id: &str) -> String {
@@ -88,6 +88,30 @@ async fn model_for_pricing(db: &cade_store::sqlite::Db, agent_id: &str) -> Strin
         .flatten()
         .map(|r| r.model)
         .unwrap_or_default()
+}
+
+/// P6: parse a `CADE_TOOL_TURN_MAX_TOKENS`-style env value into an optional
+/// cap.  Pure function for testability.
+///
+/// `None`, empty, zero, or non-numeric input → `None` (= no cap, use the
+/// model's full max_tokens).  Positive values are returned as-is so callers
+/// can `.min()` against the model's hard cap.
+fn parse_tool_turn_max_tokens(raw: Option<&str>) -> Option<u32> {
+    raw.and_then(|s| s.trim().parse::<u32>().ok())
+        .filter(|v| *v > 0)
+}
+
+/// P6: read `CADE_TOOL_TURN_MAX_TOKENS` env var.
+///
+/// When set, all agentic-loop iterations *except the first* (= tool-dispatch
+/// turns following a `tool_result`) cap their output at this many tokens.
+/// First turns and final-answer turns receive the model's full
+/// `max_tokens_for_model` budget.  Verbose models can spend 2-4× more output
+/// tokens explaining tool selection than they need to; capping the
+/// tool-dispatch-only turns saves output cost without losing quality on the
+/// answer turns.
+fn tool_turn_max_tokens() -> Option<u32> {
+    parse_tool_turn_max_tokens(std::env::var("CADE_TOOL_TURN_MAX_TOKENS").ok().as_deref())
 }
 
 /// `POST /v1/agents/:id/run`
@@ -271,7 +295,18 @@ pub async fn run_agent(
                     }
                 };
 
-            let max_tokens = catalogue::max_tokens_for_model(&model);
+            let max_tokens_cap = catalogue::max_tokens_for_model(&model);
+            // P6: on iterations after the first (= tool-dispatch turns
+            // continuing the loop after a tool_result), apply the optional
+            // CADE_TOOL_TURN_MAX_TOKENS cap.  First turn and turns where the
+            // model returns no further tool_calls (final answer) get full budget.
+            let max_tokens = if turns > 1
+                && let Some(tool_cap) = tool_turn_max_tokens()
+            {
+                tool_cap.min(max_tokens_cap)
+            } else {
+                max_tokens_cap
+            };
             let req = CompletionRequest {
                 model: model.clone(),
                 messages,
@@ -2701,5 +2736,36 @@ mod p4_guardrail_tests {
         let p1 = pricing_registry() as *const _;
         let p2 = pricing_registry() as *const _;
         assert!(std::ptr::eq(p1, p2));
+    }
+
+    // ── P6: tool-turn output cap ─────────────────────────────────────────
+
+    #[test]
+    fn parse_tool_turn_unset_disables_cap() {
+        assert_eq!(parse_tool_turn_max_tokens(None), None);
+    }
+
+    #[test]
+    fn parse_tool_turn_empty_disables_cap() {
+        assert_eq!(parse_tool_turn_max_tokens(Some("")), None);
+        assert_eq!(parse_tool_turn_max_tokens(Some("   ")), None);
+    }
+
+    #[test]
+    fn parse_tool_turn_zero_disables_cap() {
+        assert_eq!(parse_tool_turn_max_tokens(Some("0")), None);
+    }
+
+    #[test]
+    fn parse_tool_turn_garbage_disables_cap() {
+        assert_eq!(parse_tool_turn_max_tokens(Some("abc")), None);
+        assert_eq!(parse_tool_turn_max_tokens(Some("1024k")), None);
+    }
+
+    #[test]
+    fn parse_tool_turn_positive_returns_cap() {
+        assert_eq!(parse_tool_turn_max_tokens(Some("1024")), Some(1024));
+        assert_eq!(parse_tool_turn_max_tokens(Some("4096")), Some(4096));
+        assert_eq!(parse_tool_turn_max_tokens(Some(" 512 ")), Some(512));
     }
 }

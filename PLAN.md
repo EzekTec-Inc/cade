@@ -3477,3 +3477,39 @@ to keep tests `unsafe`-free under edition-2024 forbid(unsafe).
 
 **Rollback:** revert this commit.  Default behaviour identical to pre-P7
 for any session that doesn't set the env var.
+
+## 2026-04-25 — Phase P6: per-turn output cap for tool-dispatch turns
+
+**Goal:** save output-token cost on verbose models that over-explain tool
+selection across many agentic-loop iterations.
+
+**Problem:** every iteration of the agentic loop in `run.rs` used
+`max_tokens_for_model(&model)` regardless of whether the turn was the
+final answer (model writes the actual response to the user) or a
+tool-dispatch turn (model emits some text + tool_calls, which trigger
+further iterations).  Verbose models (some Claude variants, R1, V3) can
+spend 2–4× more output tokens explaining their tool-selection reasoning
+than they need to.  Final-answer turns need full budget, but in-flight
+tool-dispatch turns rarely benefit from > 1–4 K tokens.
+
+**Change:**
+1. `parse_tool_turn_max_tokens(Option<&str>) -> Option<u32>` pure parser.
+2. `tool_turn_max_tokens()` env wrapper for `CADE_TOOL_TURN_MAX_TOKENS`.
+3. In `run.rs` agentic loop, on iteration `turns > 1` (= continuing after a
+   `tool_result`), apply the env cap as `tool_cap.min(max_tokens_cap)`.
+   First turn always gets full budget so user-facing answers aren't
+   truncated.
+
+**Behaviour:**
+* Unset env → no cap, identical to pre-P6.
+* `CADE_TOOL_TURN_MAX_TOKENS=2048` → tool-dispatch turns capped at 2 K
+  output tokens; first/answer turns unaffected.
+
+**Caveat:** capping too aggressively can cause the model to produce a
+truncated `tool_use` block (provider errors).  Recommend ≥ 1 024 tokens
+for Anthropic / Gemini, ≥ 512 for OpenAI; users tune to their model.
+
+**Tests (5 new):** unset / empty / zero / garbage / positive.  cade-server:
+**223 pass** (218 prior + 5 new).  Workspace + wasm32 clean.
+
+**Rollback:** revert this commit.  Default behaviour identical when env unset.
