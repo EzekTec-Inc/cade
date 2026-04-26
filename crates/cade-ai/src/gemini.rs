@@ -77,6 +77,38 @@ struct GeminiCacheEntry {
     expires_at: std::time::Instant,
 }
 
+/// Server-side TTL bounds (Gemini API limits).
+/// Below 60s the API rejects with 400; above ~604_800s (7 days) it caps.
+const GEMINI_TTL_MIN_SECS: u64 = 60;
+const GEMINI_TTL_MAX_SECS: u64 = 86_400; // 1 day — anything longer is wasted
+                                         // because skill/memory edits invalidate the hash anyway.
+/// Default TTL used when the env override is absent/invalid.
+/// 1 hour matches the previous hardcoded value; it's a reasonable middle
+/// ground for typical coding sessions.
+const GEMINI_TTL_DEFAULT_SECS: u64 = 3_600;
+
+/// P7: parse a `CADE_GEMINI_CACHE_TTL_SECS`-style value into a clamped TTL.
+///
+/// Pure helper for testability.  The production wrapper [`gemini_cache_ttl_secs`]
+/// reads the env var and delegates here.
+///
+/// Returns `GEMINI_TTL_DEFAULT_SECS` when the input is `None`, empty, non-numeric,
+/// or zero.  Otherwise clamps to `[GEMINI_TTL_MIN_SECS, GEMINI_TTL_MAX_SECS]`.
+fn parse_gemini_ttl(raw: Option<&str>) -> u64 {
+    let parsed = raw
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .filter(|v| *v > 0);
+    match parsed {
+        Some(v) => v.clamp(GEMINI_TTL_MIN_SECS, GEMINI_TTL_MAX_SECS),
+        None => GEMINI_TTL_DEFAULT_SECS,
+    }
+}
+
+/// P7: read `CADE_GEMINI_CACHE_TTL_SECS` env var, applying defaults + clamping.
+fn gemini_cache_ttl_secs() -> u64 {
+    parse_gemini_ttl(std::env::var("CADE_GEMINI_CACHE_TTL_SECS").ok().as_deref())
+}
+
 pub struct GeminiProvider {
     client: Client,
     api_key: String,
@@ -142,7 +174,7 @@ impl GeminiProvider {
         );
         let mut body = json!({
             "model": format!("models/{model}"),
-            "ttl": "3600s"
+            "ttl": format!("{}s", gemini_cache_ttl_secs())
         });
         if let Some(sys) = system_text
             && !sys.is_empty()
@@ -198,8 +230,14 @@ impl GeminiProvider {
         let name = self.create_cache(model, system_text, tools).await?;
         tracing::debug!("Gemini cache created: {name}");
 
-        // Store with 55-min TTL (5-min buffer before the 1-hour server TTL)
-        let expires_at = std::time::Instant::now() + std::time::Duration::from_secs(3300);
+        // P7: in-memory expiry tracks the server-side TTL with a 5-min
+        // safety buffer (or 10% of the TTL, whichever is smaller, but
+        // never below 30 s) so we don't reuse a stale handle right at the
+        // edge of expiry.
+        let server_ttl = gemini_cache_ttl_secs();
+        let buffer = (server_ttl / 10).clamp(30, 300);
+        let local_ttl = server_ttl.saturating_sub(buffer).max(30);
+        let expires_at = std::time::Instant::now() + std::time::Duration::from_secs(local_ttl);
         let mut cache = self.content_cache.lock();
         cache.insert(
             hash,
@@ -812,5 +850,56 @@ impl LlmProvider for GeminiProvider {
             yield Ok(StreamChunk::Done);
         };
         Ok(Box::pin(s))
+    }
+}
+
+#[cfg(test)]
+mod p7_ttl_tests {
+    use super::*;
+
+    #[test]
+    fn parse_gemini_ttl_unset_returns_default() {
+        assert_eq!(parse_gemini_ttl(None), GEMINI_TTL_DEFAULT_SECS);
+    }
+
+    #[test]
+    fn parse_gemini_ttl_empty_returns_default() {
+        assert_eq!(parse_gemini_ttl(Some("")), GEMINI_TTL_DEFAULT_SECS);
+        assert_eq!(parse_gemini_ttl(Some("   ")), GEMINI_TTL_DEFAULT_SECS);
+    }
+
+    #[test]
+    fn parse_gemini_ttl_garbage_returns_default() {
+        assert_eq!(parse_gemini_ttl(Some("abc")), GEMINI_TTL_DEFAULT_SECS);
+        assert_eq!(parse_gemini_ttl(Some("3600s")), GEMINI_TTL_DEFAULT_SECS);
+    }
+
+    #[test]
+    fn parse_gemini_ttl_zero_returns_default() {
+        assert_eq!(parse_gemini_ttl(Some("0")), GEMINI_TTL_DEFAULT_SECS);
+    }
+
+    #[test]
+    fn parse_gemini_ttl_below_min_clamps_up() {
+        assert_eq!(parse_gemini_ttl(Some("10")), GEMINI_TTL_MIN_SECS);
+        assert_eq!(parse_gemini_ttl(Some("59")), GEMINI_TTL_MIN_SECS);
+    }
+
+    #[test]
+    fn parse_gemini_ttl_above_max_clamps_down() {
+        assert_eq!(parse_gemini_ttl(Some("999999")), GEMINI_TTL_MAX_SECS);
+    }
+
+    #[test]
+    fn parse_gemini_ttl_in_range_returns_value() {
+        assert_eq!(parse_gemini_ttl(Some("60")), 60);
+        assert_eq!(parse_gemini_ttl(Some("300")), 300);
+        assert_eq!(parse_gemini_ttl(Some("7200")), 7200);
+        assert_eq!(parse_gemini_ttl(Some("86400")), 86_400);
+    }
+
+    #[test]
+    fn parse_gemini_ttl_strips_whitespace() {
+        assert_eq!(parse_gemini_ttl(Some(" 600 ")), 600);
     }
 }

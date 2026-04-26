@@ -3432,3 +3432,48 @@ cade-server: **218 pass** (212 prior + 6 new).  Workspace + wasm32 clean.
 
 **Rollback:** revert this commit.  No schema/migration; pure transformation
 of in-flight tool schemas.
+
+## 2026-04-25 — Phase P7: Gemini cache TTL via env CADE_GEMINI_CACHE_TTL_SECS
+
+**Goal:** let users tune the Gemini `cachedContents` TTL to their session
+shape.  Short bursty sessions waste cache-write cost on a 1 h TTL; long
+multi-hour coding sessions cache-miss at the boundary.
+
+**Problem:** TTL was hardcoded `"3600s"` in `create_cache` and the in-memory
+expiry was a static `3300s`.  Sessions shorter than 5 min always paid the
+full cache-write cost; sessions running 90+ min always re-cached at least
+once.  No knob to tune.
+
+**Change:**
+1. New constants `GEMINI_TTL_MIN_SECS = 60`, `GEMINI_TTL_MAX_SECS = 86_400`
+   (1 day — past which skill/memory invalidation makes longer caches
+   moot), `GEMINI_TTL_DEFAULT_SECS = 3_600`.
+2. Pure helper `parse_gemini_ttl(Option<&str>) -> u64`:
+   * `None`, empty/whitespace, `0`, non-numeric → default (3600).
+   * Below `MIN` → clamped up to `MIN` (Gemini API rejects < 60 s).
+   * Above `MAX` → clamped down to `MAX`.
+   * In-range numeric → passthrough.
+3. `gemini_cache_ttl_secs()` env wrapper reads `CADE_GEMINI_CACHE_TTL_SECS`.
+4. `create_cache` sends `format!("{}s", gemini_cache_ttl_secs())` instead
+   of the hardcoded literal.
+5. In-memory expiry uses `(server_ttl / 10).clamp(30, 300)` as safety
+   buffer, never below 30 s — replaces the static 300 s buffer that
+   misbehaved on short TTLs.
+
+**Tests (8 new):** unset, empty, garbage, zero, below-min, above-max,
+in-range, whitespace stripping.  cade-ai: **106 pass** (98 prior + 8).
+cade-server: 218 unchanged.  Workspace + wasm32 clean.
+
+**Cost impact:**
+* Short sessions (~5 min): set `CADE_GEMINI_CACHE_TTL_SECS=300` →
+  cache lives 5 min, cache-write paid once per skill/memory edit boundary
+  not once per launch.
+* Long sessions (>1 h): set `CADE_GEMINI_CACHE_TTL_SECS=14400` (4 h) →
+  fewer cache-write hits.  Each cache write costs ~25% of an inline
+  send so this is real money on Pro pricing.
+
+**Pure-fn parser pattern:** same approach as P4 (`parse_max_session_cost`)
+to keep tests `unsafe`-free under edition-2024 forbid(unsafe).
+
+**Rollback:** revert this commit.  Default behaviour identical to pre-P7
+for any session that doesn't set the env var.
