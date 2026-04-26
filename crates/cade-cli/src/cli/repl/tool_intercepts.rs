@@ -1,6 +1,8 @@
 use super::{BackgroundResult, Repl};
 use crate::Result;
-use cade_agent::subagents::{discover_all_subagents, find_subagent, should_emit_completion_bell};
+use cade_agent::subagents::{
+    discover_all_subagents, resolve_subagent_def, should_emit_completion_bell,
+};
 use std::sync::Arc;
 
 impl Repl {
@@ -42,9 +44,13 @@ impl Repl {
             ));
         }
 
-        // Resolve subagent definition - we now always use the unified worker
+        // Resolve subagent definition.  Tries an exact name match against
+        // `mode` first (e.g. `mode="rust-dev-worker"` selects the global
+        // `~/.cade/subagents/rust-dev-worker.md` definition), then falls
+        // back to the built-in `worker` so existing callers passing
+        // `mode="build"` / `mode="plan"` keep working unchanged.
         let all_defs = discover_all_subagents(&self.cwd);
-        let def_opt = find_subagent("worker", &all_defs).cloned();
+        let def_opt = resolve_subagent_def(&subagent_mode, &all_defs).cloned();
 
         // Determine if using existing stateful agent or ephemeral
         let _use_existing_agent = agent_id_arg.is_some();

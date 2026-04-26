@@ -232,6 +232,26 @@ pub fn find_subagent<'a>(name: &str, all: &'a [SubagentDef]) -> Option<&'a Subag
     all.iter().find(|d| d.name == name)
 }
 
+/// Resolve which subagent definition should run for a given `mode` argument.
+///
+/// Selection order:
+/// 1. Exact name match against `all` (lets users put a custom `bug-hunter.md`
+///    into `~/.cade/subagents/` and call `run_subagent(mode="bug-hunter")`).
+/// 2. Fallback to the built-in `worker` definition, so existing prompts that
+///    pass `mode="build"`, `mode="plan"`, etc. keep working unchanged.
+/// 3. `None` only if neither the named def nor `worker` are present —
+///    callers must handle this with a default system prompt.
+///
+/// Pure: no I/O, no clones except the trivial `Option<&_>` slot — the caller
+/// decides whether to clone the returned definition.
+#[must_use]
+pub fn resolve_subagent_def<'a>(
+    mode: &str,
+    all: &'a [SubagentDef],
+) -> Option<&'a SubagentDef> {
+    find_subagent(mode, all).or_else(|| find_subagent("worker", all))
+}
+
 // -- Parsing
 
 fn parse_subagent_md(
@@ -374,5 +394,59 @@ mod tests {
             pending_bg_toast(3).as_deref(),
             Some("✓ 3 subagents finished — press Enter to receive"),
         );
+    }
+
+    // -- resolve_subagent_def
+
+    fn def(name: &str) -> SubagentDef {
+        SubagentDef {
+            name: name.to_string(),
+            description: format!("test-{name}"),
+            model: None,
+            tools: SubagentTools::All,
+            system_prompt: format!("prompt-{name}"),
+            skills: vec![],
+            scope: SubagentScope::Builtin,
+            path: None,
+        }
+    }
+
+    #[test]
+    fn resolve_exact_name_match_wins() {
+        let defs = vec![def("worker"), def("rust-dev-worker")];
+        let got = resolve_subagent_def("rust-dev-worker", &defs);
+        assert_eq!(got.map(|d| d.name.as_str()), Some("rust-dev-worker"));
+    }
+
+    #[test]
+    fn resolve_falls_back_to_worker_when_mode_unknown() {
+        let defs = vec![def("worker"), def("recall")];
+        let got = resolve_subagent_def("build", &defs);
+        // "build" is not a defined name; must fall back to worker.
+        assert_eq!(got.map(|d| d.name.as_str()), Some("worker"));
+    }
+
+    #[test]
+    fn resolve_returns_none_when_neither_mode_nor_worker_present() {
+        let defs = vec![def("recall")];
+        let got = resolve_subagent_def("bug-hunter", &defs);
+        assert!(got.is_none());
+    }
+
+    #[test]
+    fn resolve_empty_mode_string_falls_back_to_worker() {
+        let defs = vec![def("worker")];
+        let got = resolve_subagent_def("", &defs);
+        // An empty mode never matches any name, so fallback applies.
+        assert_eq!(got.map(|d| d.name.as_str()), Some("worker"));
+    }
+
+    #[test]
+    fn resolve_does_not_match_worker_when_mode_says_worker_explicitly() {
+        // Sanity: if mode == "worker" the exact match is just worker; same
+        // result either way.  Locks in the no-double-match behaviour.
+        let defs = vec![def("worker")];
+        let got = resolve_subagent_def("worker", &defs);
+        assert_eq!(got.map(|d| d.name.as_str()), Some("worker"));
     }
 }

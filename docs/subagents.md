@@ -18,17 +18,35 @@ answer back — keeping the main agent's context window clean.
 
 ```
 run_subagent(
-  agent_id="worker",          # which subagent definition to use
+  mode="worker",              # which subagent definition to use; matches by name
   prompt="<task>",
   description="<short label shown in TUI>",
   model="anthropic/claude-haiku-4-5",   # optional override
-  background=false,            # detach into a /v1/runs run
+  background=false,            # spawn detached; result delivered next turn
   test_command="cargo test"    # optional verification command
 )
 ```
 
 Returns the subagent's final assistant message. Intermediate text and
 tool calls are **not** streamed back to the parent — only the result.
+
+### Selection by `mode`
+
+The `mode` argument is matched against the discovered subagent
+definitions (built-in + global `~/.cade/subagents/` + project
+`.cade/subagents/`).  Resolution order:
+
+1. **Exact name match** — `mode="rust-dev-worker"` selects
+   `~/.cade/subagents/rust-dev-worker.md` if it exists.
+2. **Fallback to `worker`** — when `mode` doesn't match any definition
+   (e.g. legacy callers passing `mode="build"` or `mode="plan"`), the
+   built-in `worker` is used.
+3. **Default prompt** — only if neither the named def nor `worker` are
+   present, an inline default system prompt runs.
+
+The optional `agent_id` argument is independent: it deploys an existing
+**stateful agent** (a server-stored agent row) as the subagent, bypassing
+the definition lookup entirely.
 
 ## Built-in subagents
 

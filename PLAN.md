@@ -3739,3 +3739,27 @@ archaeology):
 1. `git revert <this commit>` — pure additive changes, no schema/API impact.
 2. Or restore checkpoint `pre-bg-subagent-wakeup-fix` (cp-70ad5003).
 3. Both paths leave existing background-subagent flow intact.
+
+## 2026-04-26T01:15:00Z — agent+cli+docs: mode-based subagent definition lookup with worker fallback
+
+**Task:** `tool_intercepts.rs::handle_run_subagent` hardcoded `find_subagent("worker", &all_defs)`, so `mode="rust-dev-worker"` (or any custom subagent name) was unreachable from the LLM. Custom defs in `~/.cade/subagents/` and project `.cade/subagents/` were loaded into memory but never selectable. Documentation also incorrectly suggested `agent_id="worker"` was the selector.
+
+**Files modified:**
+- `crates/cade-agent/src/subagents/mod.rs` — added `resolve_subagent_def(mode, defs) -> Option<&SubagentDef>` helper.  Tries exact name match, falls back to `worker`, returns `None` only when neither present.  +5 unit tests covering exact match, unknown-mode fallback, no-worker absence, empty-mode, and explicit `worker` mode.
+- `crates/cade-cli/src/cli/repl/tool_intercepts.rs` — replaced `find_subagent("worker", &all_defs)` with `resolve_subagent_def(&subagent_mode, &all_defs)`.  Mode is matched against names; legacy callers still get `worker` automatically.
+- `docs/subagents.md` — corrected the `run_subagent(...)` example (`mode="worker"` not `agent_id="worker"`) and added a "Selection by `mode`" section documenting the 3-step resolution order plus the independent `agent_id` parameter.
+
+**Previous behavior:** `mode="rust-dev-worker"` → silently ignored, ran built-in `worker` system prompt.
+
+**New behavior:** `mode="rust-dev-worker"` → `~/.cade/subagents/rust-dev-worker.md` is loaded as the subagent. Backward-compatible: any name CADE doesn't recognise still falls back to `worker` exactly as before.
+
+**TDD record:**
+- RED: 5 tests written first against missing `resolve_subagent_def` symbol → compile-failed → impl added → 5/5 GREEN.
+- GREEN: cade-agent 107 (was 102), cade-cli 6, cade-tui 60.  Workspace 1100+ all pass.  wasm32 clean.  cade-agent clippy clean.  Pre-existing cade-cli/agent.rs lints unrelated.
+- REFACTOR: none.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback:**
+1. `git revert <commit>` — pure additive helper + 1-line dispatch swap.
+2. Or restore checkpoint `pre-mode-based-subagent-lookup` (cp-34113d87).
