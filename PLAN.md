@@ -3382,3 +3382,53 @@ Splitting `parse_max_session_cost(Option<&str>)` from the env-reading wrapper
 keeps the parsing logic 100% testable without touching process state.
 
 **Rollback:** revert this commit.  No schema/migration; env var is opt-in.
+
+## 2026-04-25 — Phase P5: compress unused tool schemas on long sessions
+
+**Goal:** cut tool-schema overhead on long sessions by ~70% for tools the
+model isn't currently using.
+
+**Problem:** `build_context` already prunes `desktop_*` schemas when unused
+(EXTENDED_TOOL_PREFIXES) but every other registered tool ships with full
+description + per-parameter descriptions every turn.  With 50+ wired tools
+× ~600 chars/schema (TOOL_SCHEMA_CHARS_ESTIMATE) ≈ 30 KB of mostly-static
+prose retransmitted on every turn at full input rate (cache_control on the
+tools array helps for Anthropic but not OpenAI/Gemini in the same way).
+
+**Change:**
+1. New `compress_tool_schema(Value) -> Value` helper:
+   * Truncates top-level `description` to first newline, capped at
+     `COMPRESSED_DESCRIPTION_CHAR_CAP = 80` chars.
+   * Strips `description` and `examples` from each property in
+     `parameters.properties` and `input_schema.properties` (covers OpenAI/
+     Gemini and Anthropic shapes).
+   * Preserves `name`, JSON-schema shape, types, required, enums.
+   * Idempotent.
+2. Refactored prune step in `build_context` to compute `recently_used` once
+   and reuse for both pruning and compression.
+3. After pruning, map: schemas in `ALWAYS_INCLUDE_TOOL_NAMES` or recently
+   used → untouched; otherwise → `compress_tool_schema`.
+
+**Tests (6 new):** name+shape preservation, first-newline truncation,
+input_schema variant handling, idempotency, no-description safety,
+≥4× byte-size reduction on a realistic schema.
+
+**Activation:** only when `messages.len() > 1 + RECENT_WINDOW` (= long
+session).  Short sessions and tools the model just used keep full schemas
+so the agent always has fidelity for active workflows.
+
+**Why not strip more:** removing parameter `type` / `required` would break
+client-side validation in some providers.  Top-level + property descriptions
+are the only safely-removable parts of a JSON-schema.
+
+**Cost impact:** for a 50-tool wired session with no recent desktop or
+extended use, ~25 KB of tool-schema text becomes ~6 KB on the wire,
+~75% reduction.  Combined with P1 (skills cache anchor), Anthropic
+sessions see the largest win because `system_static` AND tools array are
+both cache-anchored — the compression helps the cache-write cost on first
+turn after compression boundary changes.
+
+cade-server: **218 pass** (212 prior + 6 new).  Workspace + wasm32 clean.
+
+**Rollback:** revert this commit.  No schema/migration; pure transformation
+of in-flight tool schemas.

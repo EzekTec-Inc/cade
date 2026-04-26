@@ -1313,3 +1313,112 @@ async fn skills_section_lives_in_static_system_block() {
          that block is volatile and gets re-tokenised every turn"
     );
 }
+
+// ── P5: compress_tool_schema ─────────────────────────────────────────────────
+
+#[test]
+fn compress_tool_schema_preserves_name_and_parameters_shape() {
+    use serde_json::json;
+    let s = json!({
+        "name": "my_tool",
+        "description": "A long detailed description of what my_tool does. ".repeat(10),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "filesystem path" },
+                "limit": { "type": "integer", "description": "max items", "examples": [10, 50] }
+            },
+            "required": ["path"]
+        }
+    });
+    let c = super::context::compress_tool_schema(s);
+    assert_eq!(c["name"].as_str(), Some("my_tool"));
+    let desc_len = c["description"].as_str().unwrap().chars().count();
+    assert!(
+        desc_len <= super::context::COMPRESSED_DESCRIPTION_CHAR_CAP,
+        "compressed top-level description too long: {desc_len}"
+    );
+    // Shape preserved
+    assert_eq!(c["parameters"]["type"].as_str(), Some("object"));
+    assert_eq!(c["parameters"]["required"][0].as_str(), Some("path"));
+    assert_eq!(c["parameters"]["properties"]["path"]["type"].as_str(), Some("string"));
+    assert_eq!(c["parameters"]["properties"]["limit"]["type"].as_str(), Some("integer"));
+    // Per-property descriptions stripped
+    assert!(c["parameters"]["properties"]["path"].get("description").is_none());
+    assert!(c["parameters"]["properties"]["limit"].get("description").is_none());
+    // Examples stripped
+    assert!(c["parameters"]["properties"]["limit"].get("examples").is_none());
+}
+
+#[test]
+fn compress_tool_schema_truncates_at_first_newline() {
+    use serde_json::json;
+    let s = json!({
+        "name": "t",
+        "description": "First line summary.\nSecond paragraph with extra detail.\n\nMore."
+    });
+    let c = super::context::compress_tool_schema(s);
+    assert_eq!(c["description"].as_str(), Some("First line summary."));
+}
+
+#[test]
+fn compress_tool_schema_handles_input_schema_variant() {
+    use serde_json::json;
+    let s = json!({
+        "name": "anth_tool",
+        "description": "x",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "q": { "type": "string", "description": "query" }
+            }
+        }
+    });
+    let c = super::context::compress_tool_schema(s);
+    assert!(c["input_schema"]["properties"]["q"].get("description").is_none());
+    assert_eq!(c["input_schema"]["properties"]["q"]["type"].as_str(), Some("string"));
+}
+
+#[test]
+fn compress_tool_schema_idempotent() {
+    use serde_json::json;
+    let s = json!({
+        "name": "t",
+        "description": "short",
+        "parameters": { "type": "object", "properties": {} }
+    });
+    let once = super::context::compress_tool_schema(s.clone());
+    let twice = super::context::compress_tool_schema(once.clone());
+    assert_eq!(once, twice);
+}
+
+#[test]
+fn compress_tool_schema_no_description_is_safe() {
+    use serde_json::json;
+    let s = json!({ "name": "bare", "parameters": { "type": "object", "properties": {} } });
+    let c = super::context::compress_tool_schema(s);
+    assert!(c.get("description").is_none());
+    assert_eq!(c["name"].as_str(), Some("bare"));
+}
+
+#[test]
+fn compress_tool_schema_reduces_byte_size_substantially() {
+    use serde_json::json;
+    let big_desc = "Long detailed description. ".repeat(50); // ~1.4 KB
+    let s = json!({
+        "name": "t",
+        "description": big_desc,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "p": { "type": "string", "description": "very long property description ".repeat(30) }
+            }
+        }
+    });
+    let before = serde_json::to_string(&s).unwrap().len();
+    let after = serde_json::to_string(&super::context::compress_tool_schema(s)).unwrap().len();
+    assert!(
+        after < before / 4,
+        "compression must reduce schema by ≥ 4x; before={before} after={after}"
+    );
+}

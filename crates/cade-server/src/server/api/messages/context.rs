@@ -123,6 +123,57 @@ pub(crate) fn render_skills_section(
     render_skills_section_filtered(loaded, &Default::default(), budget, body_cap)
 }
 
+/// P5: maximum chars retained in a top-level tool `description` after
+/// compression.  The model sees enough to remember the tool's purpose
+/// (≈ first sentence) without paying for the full reference docs every turn.
+pub(crate) const COMPRESSED_DESCRIPTION_CHAR_CAP: usize = 80;
+
+/// P5: compress a tool schema for a long-session, unused, non-pinned tool.
+///
+/// Strips:
+///   * Top-level `description` truncated to [`COMPRESSED_DESCRIPTION_CHAR_CAP`]
+///     (or first newline, whichever comes first).
+///   * Each property's `description` field inside `parameters.properties` /
+///     `input_schema.properties`.
+///   * Each property's `examples` field (rarely needed for inactive tools).
+///
+/// Preserves:
+///   * `name` (required for the model to call the tool).
+///   * `parameters` / `input_schema` shape, types, required, and enums
+///     (all needed for valid JSON-schema validation on the provider side).
+///
+/// Idempotent: compressing an already-compressed schema is a no-op.
+pub(crate) fn compress_tool_schema(mut schema: Value) -> Value {
+    // Truncate top-level description.
+    if let Some(desc) = schema.get("description").and_then(|v| v.as_str()) {
+        let trimmed: String = desc
+            .splitn(2, '\n')
+            .next()
+            .unwrap_or(desc)
+            .chars()
+            .take(COMPRESSED_DESCRIPTION_CHAR_CAP)
+            .collect();
+        schema["description"] = Value::String(trimmed);
+    }
+
+    // Strip per-property descriptions and examples in parameters / input_schema.
+    for params_key in ["parameters", "input_schema"] {
+        if let Some(params) = schema.get_mut(params_key)
+            && let Some(props) = params.get_mut("properties")
+            && let Some(obj) = props.as_object_mut()
+        {
+            for (_, prop_val) in obj.iter_mut() {
+                if let Some(prop_obj) = prop_val.as_object_mut() {
+                    prop_obj.remove("description");
+                    prop_obj.remove("examples");
+                }
+            }
+        }
+    }
+
+    schema
+}
+
 /// Like [`render_skills_section`] but skips any skill whose ID is in
 /// `disabled_ids`.  Called from `build_context` after loading the per-agent
 /// blacklist from the DB so disabled skills are transparent to the LLM.
@@ -878,17 +929,23 @@ pub(crate) async fn build_context(
     // ALWAYS_INCLUDE_TOOL_NAMES are never pruned — they are the agent's primary
     // mechanism for recovering archived/dropped context and must always be present.
     const EXTENDED_TOOL_PREFIXES: &[&str] = &["desktop_"];
-    let tool_schemas: Vec<Value> = if messages.len() > 1 + RECENT_WINDOW {
-        // Collect tool names called in the recent window.
+    let is_long_session = messages.len() > 1 + RECENT_WINDOW;
+
+    // Collect tool names called in the recent window.  Used for both the
+    // prune step (drop entire desktop_* schema if unused) and the P5
+    // compression step (strip descriptions on unused non-desktop schemas).
+    let recently_used: std::collections::HashSet<String> = if is_long_session {
         let recent_start = messages.len().saturating_sub(RECENT_WINDOW);
-        let mut recently_used: std::collections::HashSet<&str> = std::collections::HashSet::new();
-        for msg in &messages[recent_start..] {
-            if let Some(calls) = &msg.tool_calls {
-                for tc in calls {
-                    recently_used.insert(tc.name.as_str());
-                }
-            }
-        }
+        messages[recent_start..]
+            .iter()
+            .filter_map(|m| m.tool_calls.as_ref())
+            .flat_map(|calls| calls.iter().map(|tc| tc.name.clone()))
+            .collect()
+    } else {
+        std::collections::HashSet::new()
+    };
+
+    let tool_schemas: Vec<Value> = if is_long_session {
         tool_schemas
             .into_iter()
             .filter(|schema| {
@@ -899,6 +956,21 @@ pub(crate) async fn build_context(
                 }
                 let is_extended = EXTENDED_TOOL_PREFIXES.iter().any(|p| name.starts_with(p));
                 !is_extended || recently_used.contains(name)
+            })
+            // P5: compress unused (non-recent, non-always-included) schemas.
+            // Anthropic, OpenAI, and Gemini all include the full `description`
+            // and per-parameter descriptions in the wire format.  For tools
+            // the model hasn't called recently, names + params shape carry
+            // enough signal — verbose descriptions are ~70% of schema bytes.
+            .map(|schema| {
+                let name = schema["name"].as_str().unwrap_or("").to_string();
+                let recent = recently_used.contains(&name);
+                let always = ALWAYS_INCLUDE_TOOL_NAMES.contains(&name.as_str());
+                if recent || always {
+                    schema
+                } else {
+                    compress_tool_schema(schema)
+                }
             })
             .collect()
     } else {
