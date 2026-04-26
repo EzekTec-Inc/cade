@@ -7,14 +7,53 @@
 use std::io;
 use std::sync::Arc;
 
+use super::slash::SlashCmd;
+use super::{Repl, SubagentPickerResult};
 use crate::Result;
 use crate::ui::{RenderLine, ToastLevel};
-use super::{
-    SubagentPickerResult, Repl,
-};
-use super::slash::SlashCmd;
 use cade_agent::subagents::discover_all_subagents;
 use cade_core::permissions::PermissionMode;
+
+// ── /new helpers (pure) ───────────────────────────────────────────────────────
+//
+// `/new` clears the agent's `active_goal` memory block so the agent forgets
+// the previous task and starts fresh.  Without an archive step the previous
+// plan is silently lost — across an accidental `/new` press the agent has no
+// way to recover it.  These helpers package the "what to archive" decision
+// so it is unit-testable and shared between the slash-command path and the
+// `--new` bootstrap path.
+
+/// Build the archival-memory snapshot text for a non-empty `active_goal`
+/// block being cleared by `/new`.  Returns `None` when the value is empty
+/// or whitespace-only — there is nothing worth archiving in that case.
+///
+/// The snapshot is plain text with a small header so a future
+/// `archival_memory_search("active_goal")` query immediately surfaces it.
+pub(crate) fn build_active_goal_archive_snapshot(
+    active_goal_value: &str,
+    conversation_id: Option<&str>,
+) -> Option<String> {
+    let trimmed = active_goal_value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let conv_part = conversation_id
+        .map(|c| format!(" (conversation {})", &c[..c.len().min(20)]))
+        .unwrap_or_default();
+    Some(format!(
+        "[active_goal snapshot — archived on /new{conv_part}]\n\n{trimmed}"
+    ))
+}
+
+/// Tags applied to the archival entry created when `/new` clears a non-empty
+/// `active_goal`.  Stable strings so users / tests can locate snapshots.
+pub(crate) fn active_goal_archive_tags() -> Vec<String> {
+    vec![
+        "active_goal".to_string(),
+        "snapshot".to_string(),
+        "slash_new".to_string(),
+    ]
+}
 
 impl Repl {
     /// Dispatch a parsed slash command.
@@ -34,12 +73,10 @@ impl Repl {
                 let in_tok = self.session_input_tokens.load(Ordering::SeqCst);
                 let out_tok = self.session_output_tokens.load(Ordering::SeqCst);
                 if in_tok > 0 || out_tok > 0 {
-                    let _ = self.app.lock().push(
-                        RenderLine::SystemMsg(format!(
-                            "  Session tokens — in: {in_tok}  out: {out_tok}  total: {}",
-                            in_tok + out_tok
-                        )),
-                    );
+                    let _ = self.app.lock().push(RenderLine::SystemMsg(format!(
+                        "  Session tokens — in: {in_tok}  out: {out_tok}  total: {}",
+                        in_tok + out_tok
+                    )));
                 }
                 let _ = self
                     .app
@@ -58,9 +95,8 @@ impl Repl {
                     .find(|s| s.id == skill_id)
                     .map(|s| s.to_context_block());
                 if let Some(body) = skill_body {
-                    let prompt = format!(
-                        "[Skill invoked: /{skill_id}]\n\nFollow this skill:\n\n{body}"
-                    );
+                    let prompt =
+                        format!("[Skill invoked: /{skill_id}]\n\nFollow this skill:\n\n{body}");
                     self.tui_sys(format!("  Running skill: /{skill_id}"));
                     self.agent_turn(stdout, &prompt).await?;
                 } else {
@@ -89,10 +125,8 @@ impl Repl {
 
                 match summary {
                     Some(text) if !text.is_empty() => {
-                        self.app.lock().summary_overlay = Some(crate::ui::app::SummaryState {
-                            text,
-                            scroll_y: 0,
-                        });
+                        self.app.lock().summary_overlay =
+                            Some(crate::ui::app::SummaryState { text, scroll_y: 0 });
                         let _ = self.app.lock().draw();
                     }
                     _ => {
@@ -107,10 +141,7 @@ impl Repl {
             }
             SlashCmd::Agent => {
                 let msg = format!("  Agent: {} ({})", self.agent_name(), self.agent_id());
-                let _ = self
-                    .app
-                    .lock()
-                    .push(RenderLine::SystemMsg(msg));
+                let _ = self.app.lock().push(RenderLine::SystemMsg(msg));
             }
             SlashCmd::Info => {
                 return self.cmd_info().await;
@@ -164,7 +195,8 @@ impl Repl {
                 return self.cmd_stats(arg).await;
             }
             SlashCmd::Logout => {
-                { let mut s = self.settings.lock();
+                {
+                    let mut s = self.settings.lock();
                     s.clear_api_key();
                 }
                 self.tui_ok("  ✓ API key cleared. Restart CADE to re-authenticate.");
@@ -179,32 +211,30 @@ impl Repl {
                 self.sync_plan_tools(true).await;
             }
             SlashCmd::Todos => {
-                { let mut app = self.app.lock();
-                    let mut has_plan = false;
-                    let mut now_visible = false;
-                    if let Some(plan) = &mut app.active_plan {
-                        plan.is_visible = !plan.is_visible;
-                        now_visible = plan.is_visible;
-                        has_plan = true;
-                    }
-                    if !has_plan {
-                        let _ = app.push(crate::ui::RenderLine::SystemMsg(
-                            "No active plan. Ask the agent to use the set_plan tool."
-                                .to_string(),
-                        ));
-                    } else {
-                        app.show_toast(
-                            if now_visible {
-                                "Plan panel shown"
-                            } else {
-                                "Plan panel hidden"
-                            },
-                            ToastLevel::Info,
-                        );
-                    }
-                    app.draw_dirty = true;
-                    let _ = app.draw();
+                let mut app = self.app.lock();
+                let mut has_plan = false;
+                let mut now_visible = false;
+                if let Some(plan) = &mut app.active_plan {
+                    plan.is_visible = !plan.is_visible;
+                    now_visible = plan.is_visible;
+                    has_plan = true;
                 }
+                if !has_plan {
+                    let _ = app.push(crate::ui::RenderLine::SystemMsg(
+                        "No active plan. Ask the agent to use the set_plan tool.".to_string(),
+                    ));
+                } else {
+                    app.show_toast(
+                        if now_visible {
+                            "Plan panel shown"
+                        } else {
+                            "Plan panel hidden"
+                        },
+                        ToastLevel::Info,
+                    );
+                }
+                app.draw_dirty = true;
+                let _ = app.draw();
             }
             SlashCmd::Todo => {
                 let content = crate::ui::TuiApp::read_todo_file();
@@ -228,8 +258,16 @@ impl Repl {
                 return self.cmd_model(m, stdout).await;
             }
             SlashCmd::CompactionModel(m) => {
-                let m_opt = if m.trim().is_empty() { None } else { Some(m.trim()) };
-                match self.client.patch_agent_compaction_model(&self.agent_id(), m_opt).await {
+                let m_opt = if m.trim().is_empty() {
+                    None
+                } else {
+                    Some(m.trim())
+                };
+                match self
+                    .client
+                    .patch_agent_compaction_model(&self.agent_id(), m_opt)
+                    .await
+                {
                     Ok(_) => {
                         let msg = if let Some(model) = m_opt {
                             format!("✅ Compaction model set to {model}")
@@ -244,9 +282,10 @@ impl Repl {
                 return Ok(false);
             }
             SlashCmd::Compact => {
-                self.app
-                    .lock()
-                    .show_toast("Compacting context — consolidating dropped turns…", ToastLevel::Info);
+                self.app.lock().show_toast(
+                    "Compacting context — consolidating dropped turns…",
+                    ToastLevel::Info,
+                );
                 let _ = self.app.lock().draw();
                 let agent_id = self.agent_id();
                 match self.client.compact(&agent_id, None).await {
@@ -284,7 +323,9 @@ impl Repl {
                 };
                 let valid = ["none", "low", "medium", "high", "xhigh"];
                 if !valid.contains(&r.as_str()) {
-                    self.tui_err(format!("Invalid reasoning tier '{r}'. Valid: none, low, medium, high, xhigh"));
+                    self.tui_err(format!(
+                        "Invalid reasoning tier '{r}'. Valid: none, low, medium, high, xhigh"
+                    ));
                 } else {
                     let effort = if r == "none" { None } else { Some(r.clone()) };
                     *self.reasoning_effort.lock() = effort.clone();
@@ -342,11 +383,42 @@ impl Repl {
                 match self.client.create_conversation(&agent_id, "").await {
                     Ok(conv) => {
                         let cid = conv["id"].as_str().unwrap_or("").to_string();
+                        // Archive the existing active_goal value to archival memory before
+                        // the destructive delete below. This way an accidental /new still
+                        // leaves a trail recoverable via archival_memory_search.
+                        let prev = self
+                            .client
+                            .get_memory(&agent_id)
+                            .await
+                            .unwrap_or_default()
+                            .into_iter()
+                            .find(|b| b.label == "active_goal")
+                            .map(|b| b.value);
+                        if let Some(value) = prev
+                            && let Some(snapshot) =
+                                build_active_goal_archive_snapshot(&value, Some(&cid))
+                        {
+                            let _ = self
+                                .client
+                                .insert_archival_memory(
+                                    &agent_id,
+                                    &snapshot,
+                                    &active_goal_archive_tags(),
+                                )
+                                .await;
+                        }
                         // Clear the active_goal memory block so the agent forgets the previous task
                         let _ = self.client.delete_memory(&agent_id, "active_goal").await;
-                        *self.conversation_id.lock() =
-                            Some(cid.clone());
-                        { let mut s = self.session.lock();
+                        // Reset the C3 staleness counter so the next session starts clean
+                        // and the recurring `update_memory(active_goal)` reminder fires
+                        // on schedule.
+                        self.write_tool_calls
+                            .store(0, std::sync::atomic::Ordering::SeqCst);
+                        self.writes_at_last_active_goal_update
+                            .store(0, std::sync::atomic::Ordering::SeqCst);
+                        *self.conversation_id.lock() = Some(cid.clone());
+                        {
+                            let mut s = self.session.lock();
                             let _ = s.set_conversation(Some(cid.clone()));
                         }
                         self.first_turn
@@ -391,10 +463,9 @@ impl Repl {
                 return self.cmd_skills(arg, stdout, pending_input).await;
             }
             SlashCmd::Subagents => {
-                if self.require_capability(
-                    cade_core::capabilities::Capability::Agentic,
-                    "/subagents",
-                ) {
+                if self
+                    .require_capability(cade_core::capabilities::Capability::Agentic, "/subagents")
+                {
                     return Ok(false);
                 }
                 let all = discover_all_subagents(&self.cwd);
@@ -409,13 +480,8 @@ impl Repl {
                     }
                     Some(SubagentPickerResult::Edit(path)) => {
                         // Drop the TUI temporarily, open $EDITOR, then return
-                        let editor =
-                            std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
-                        self.tui_sys(format!(
-                            "  Opening {} in {}...",
-                            path.display(),
-                            editor
-                        ));
+                        let editor = std::env::var("EDITOR").unwrap_or_else(|_| "vi".to_string());
+                        self.tui_sys(format!("  Opening {} in {}...", path.display(), editor));
 
                         let _ = self.app.lock().suspend_for(|| {
                             let mut cmd = std::process::Command::new(&editor);
@@ -487,5 +553,70 @@ impl Repl {
             }
         }
         Ok(false)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── build_active_goal_archive_snapshot ──────────────────────────────────
+
+    #[test]
+    fn snapshot_none_when_value_is_empty() {
+        assert!(build_active_goal_archive_snapshot("", None).is_none());
+    }
+
+    #[test]
+    fn snapshot_none_when_value_is_whitespace() {
+        assert!(build_active_goal_archive_snapshot("   \n\t  ", None).is_none());
+    }
+
+    #[test]
+    fn snapshot_includes_value_and_header_no_conv() {
+        let s = build_active_goal_archive_snapshot("Working on M1.", None)
+            .expect("non-empty value must produce a snapshot");
+        assert!(s.contains("active_goal snapshot"));
+        assert!(s.contains("/new"));
+        assert!(s.contains("Working on M1."));
+        // No conversation suffix when conversation_id is None.
+        assert!(!s.contains("conversation "));
+    }
+
+    #[test]
+    fn snapshot_includes_conversation_id_when_provided() {
+        let s = build_active_goal_archive_snapshot("Some plan", Some("conv-abc-123"))
+            .expect("non-empty value must produce a snapshot");
+        assert!(s.contains("conversation conv-abc-123"));
+        assert!(s.contains("Some plan"));
+    }
+
+    #[test]
+    fn snapshot_truncates_long_conversation_id_in_header() {
+        // Defensive: header should not embed multi-hundred-char conv ids.
+        let long_id = "a".repeat(100);
+        let s =
+            build_active_goal_archive_snapshot("plan", Some(&long_id)).expect("snapshot present");
+        // Header takes only first 20 chars of the id.
+        assert!(s.contains(&"a".repeat(20)));
+        assert!(!s.contains(&"a".repeat(21)));
+    }
+
+    #[test]
+    fn snapshot_trims_value_whitespace() {
+        let s = build_active_goal_archive_snapshot("  spaced plan  \n", None)
+            .expect("snapshot present");
+        // Trimmed plan should appear; leading/trailing whitespace gone.
+        assert!(s.ends_with("spaced plan"));
+    }
+
+    // ── active_goal_archive_tags ────────────────────────────────────────────
+
+    #[test]
+    fn archive_tags_are_stable() {
+        let tags = active_goal_archive_tags();
+        assert!(tags.contains(&"active_goal".to_string()));
+        assert!(tags.contains(&"snapshot".to_string()));
+        assert!(tags.contains(&"slash_new".to_string()));
     }
 }

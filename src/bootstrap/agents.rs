@@ -8,6 +8,47 @@ use cade::skills::{discover_all_skills, skills_listing};
 use cade::toolsets::Toolset;
 use cade::{Error, Result};
 use cade_agent::agent;
+
+/// Snapshot the agent's current `active_goal` value into archival memory and
+/// then clear it.  Used on `--new` / picker "n" paths so accidentally
+/// starting a fresh conversation does not silently lose the previous plan.
+///
+/// All errors are best-effort logged: the original /new behaviour (delete and
+/// proceed) is preserved on any failure so the user is never blocked from
+/// starting a new conversation.
+async fn archive_and_clear_active_goal(
+    client: &agent::HttpTransport,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+) {
+    let prev = client
+        .get_memory(agent_id)
+        .await
+        .unwrap_or_default()
+        .into_iter()
+        .find(|b| b.label == "active_goal")
+        .map(|b| b.value);
+    if let Some(value) = prev {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            let conv_part = conversation_id
+                .map(|c| format!(" (conversation {})", &c[..c.len().min(20)]))
+                .unwrap_or_default();
+            let snapshot = format!(
+                "[active_goal snapshot — archived on bootstrap --new{conv_part}]\n\n{trimmed}"
+            );
+            let tags = vec![
+                "active_goal".to_string(),
+                "snapshot".to_string(),
+                "bootstrap_new".to_string(),
+            ];
+            let _ = client
+                .insert_archival_memory(agent_id, &snapshot, &tags)
+                .await;
+        }
+    }
+    let _ = client.delete_memory(agent_id, "active_goal").await;
+}
 use cade_agent::agent::HttpTransport;
 use cade_agent::agent::client::{CreateAgentRequest, MemoryBlock};
 use cade_agent::agent::session::SessionStore;
@@ -167,9 +208,14 @@ pub async fn resolve_agent_and_conversation(
                     match client.get_agent(&last_id).await {
                         Ok(a) => a,
                         Err(_) => {
-                            eprintln!("Previous global agent {last_id} not found — creating new agent");
+                            eprintln!(
+                                "Previous global agent {last_id} not found — creating new agent"
+                            );
                             let a = client
-                                .create_agent(make_req(default_model.to_string(), "CADE coding agent"))
+                                .create_agent(make_req(
+                                    default_model.to_string(),
+                                    "CADE coding agent",
+                                ))
                                 .await
                                 .map_err(|e| Error::custom(format!("create agent: {e}")))?;
                             register_and_attach_with_caps_filtered(
@@ -282,8 +328,9 @@ pub async fn resolve_agent_and_conversation(
         match client.create_conversation(&agent.id, "").await {
             Ok(conv) => {
                 let cid = conv["id"].as_str().unwrap_or("").to_string();
-                // Clear the active_goal memory block so the agent forgets the previous task
-                let _ = client.delete_memory(&agent.id, "active_goal").await;
+                // Archive the previous active_goal then clear it so the agent forgets
+                // the previous task without losing the trail.
+                archive_and_clear_active_goal(client, &agent.id, Some(&cid)).await;
                 session
                     .set_conversation(Some(cid.clone()))
                     .map_err(|e| Error::custom(format!("save conversation: {e}")))?;
@@ -318,8 +365,9 @@ pub async fn resolve_agent_and_conversation(
                         .await
                         .map_err(|e| Error::custom(format!("create conversation: {e}")))?;
                     let cid = conv["id"].as_str().unwrap_or("").to_string();
-                    // Clear the active_goal memory block so the agent forgets the previous task
-                    let _ = client.delete_memory(&agent.id, "active_goal").await;
+                    // Archive the previous active_goal then clear it so the agent forgets
+                    // the previous task without losing the trail.
+                    archive_and_clear_active_goal(client, &agent.id, Some(&cid)).await;
                     session
                         .set_conversation(Some(cid.clone()))
                         .map_err(|e| Error::custom(format!("save conversation: {e}")))?;

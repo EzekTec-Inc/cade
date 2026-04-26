@@ -1,9 +1,70 @@
+use super::super::turn_loop::{TurnStats, now_epoch_ms};
 use super::super::{EMPTY_YIELD_REPROMPT, Repl, ToolPreflightResult};
 use crate::Result;
 use crate::ui::RenderLine;
 use cade_agent::agent::client::CadeMessage;
 use std::io;
-use super::super::turn_loop::{now_epoch_ms, TurnStats};
+
+// ── C3 helpers (pure) ─────────────────────────────────────────────────────────
+//
+// `dispatch_tool_calls` decides whether to block further write tools until the
+// agent records its current state in the `active_goal` memory block.  The
+// decision logic is extracted here so it is exhaustively testable without
+// having to spin up a `Repl`, an HTTP client, or the full tool dispatcher.
+
+/// Cumulative number of write-class tool calls that may pass before the agent
+/// is required to refresh `active_goal`.  Matches the original C3 threshold.
+pub(crate) const ACTIVE_GOAL_REFRESH_THRESHOLD: u32 = 8;
+
+/// Pure decision: should the dispatcher block the next batch of write tools
+/// until the agent calls `update_memory(label='active_goal', ...)`?
+///
+/// Inputs are the cumulative `total_writes` counter (after this batch is
+/// added), `writes_at_last_active_goal_update` (the value of `total_writes`
+/// captured the last time the agent wrote a non-empty `active_goal`; `0`
+/// means "never updated this session"), the current `active_goal_is_empty`
+/// state read from the server, and the staleness `threshold`.
+///
+/// Block when *both* hold:
+///   1. The gap `(total_writes - writes_at_last_active_goal_update) >= threshold`,
+///      i.e. enough writes have happened since the last refresh (or ever, if
+///      no refresh has happened yet) that a stale plan is plausible.
+///   2. Either `active_goal_is_empty` or `writes_at_last_active_goal_update == 0`,
+///      i.e. the agent has not yet recorded a non-empty plan in this session.
+///
+/// The second condition keeps the original "empty after 8 writes" semantics
+/// while extending it to "stale (no recent update) after 8 more writes."
+pub(crate) fn should_block_for_active_goal(
+    total_writes: u32,
+    writes_at_last_active_goal_update: u32,
+    active_goal_is_empty: bool,
+    threshold: u32,
+) -> bool {
+    if threshold == 0 {
+        return false;
+    }
+    let gap = total_writes.saturating_sub(writes_at_last_active_goal_update);
+    let stale_or_empty = active_goal_is_empty || writes_at_last_active_goal_update == 0;
+    gap >= threshold && stale_or_empty
+}
+
+/// Returns true if any of `tool_calls` is a memory-write that targets the
+/// `active_goal` label.  Used to reset the C3 staleness counter after the
+/// agent records a fresh plan.
+pub(crate) fn tool_calls_update_active_goal(
+    tool_calls: &[(String, String, serde_json::Value)],
+) -> bool {
+    tool_calls.iter().any(|(_, name, args)| {
+        let is_memory_write = name == "update_memory" || name == "update_memory_typed";
+        if !is_memory_write {
+            return false;
+        }
+        args.get("label")
+            .and_then(|v| v.as_str())
+            .map(|l| l == "active_goal")
+            .unwrap_or(false)
+    })
+}
 
 impl Repl {
     pub(crate) async fn dispatch_tool_calls(
@@ -42,21 +103,40 @@ impl Repl {
             .count() as u32;
         let mut block_all_writes = false;
         if wc > 0 {
-            let total_writes = self.write_tool_calls.fetch_add(wc, std::sync::atomic::Ordering::SeqCst);
-            if total_writes + wc >= 8 {
-                let is_empty = self
-                    .client
-                    .get_memory(&self.agent_id())
-                    .await
-                    .unwrap_or_default()
-                    .into_iter()
-                    .find(|b| b.label == "active_goal")
-                    .map(|b| b.value.trim().is_empty())
-                    .unwrap_or(true);
-                if is_empty {
-                    block_all_writes = true;
-                }
-            }
+            let total_writes = self
+                .write_tool_calls
+                .fetch_add(wc, std::sync::atomic::Ordering::SeqCst)
+                + wc;
+            let last_update_at = self
+                .writes_at_last_active_goal_update
+                .load(std::sync::atomic::Ordering::SeqCst);
+            // Read current `active_goal` so the empty/non-empty branch matches reality.
+            let is_empty = self
+                .client
+                .get_memory(&self.agent_id())
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .find(|b| b.label == "active_goal")
+                .map(|b| b.value.trim().is_empty())
+                .unwrap_or(true);
+            block_all_writes = should_block_for_active_goal(
+                total_writes,
+                last_update_at,
+                is_empty,
+                ACTIVE_GOAL_REFRESH_THRESHOLD,
+            );
+        }
+
+        // C3 reset: if the agent updated `active_goal` this batch, snapshot
+        // the current write counter so the next staleness check measures the
+        // gap from this point forward.
+        if tool_calls_update_active_goal(&tool_calls) {
+            let snap = self
+                .write_tool_calls
+                .load(std::sync::atomic::Ordering::SeqCst);
+            self.writes_at_last_active_goal_update
+                .store(snap, std::sync::atomic::Ordering::SeqCst);
         }
 
         // Update turn statistics
@@ -122,12 +202,9 @@ impl Repl {
             // and we should NOT reprompt.
             if assistant_msg.trim().is_empty() && !messages.is_empty() && !reprompt_done {
                 tracing::warn!("Empty agent response after tool return — injecting re-prompt");
-                let _ = self
-                    .app
-                    .lock()
-                    .push(RenderLine::SystemMsg(
-                        "  ⎿  (no response after tool — re-prompting)".to_string(),
-                    ));
+                let _ = self.app.lock().push(RenderLine::SystemMsg(
+                    "  ⎿  (no response after tool — re-prompting)".to_string(),
+                ));
                 self.cancel_turn
                     .store(false, std::sync::atomic::Ordering::SeqCst);
                 let follow = self
@@ -168,12 +245,9 @@ impl Repl {
                 )
                 .await;
             if let cade_core::hooks::HookOutcome::Block { reason } = stop_outcome {
-                let _ = self
-                    .app
-                    .lock()
-                    .push(RenderLine::SystemMsg(format!(
-                        "  ⎿  Hook continuing: {reason}"
-                    )));
+                let _ = self.app.lock().push(RenderLine::SystemMsg(format!(
+                    "  ⎿  Hook continuing: {reason}"
+                )));
                 // Clear any stale cancel flag before the hook-continuation stream_turn.
                 self.cancel_turn
                     .store(false, std::sync::atomic::Ordering::SeqCst);
@@ -240,18 +314,23 @@ impl Repl {
             };
             let canonical_name = cade_agent::tools::manager::canonical_name(base_name);
             let is_mcp_write = cade_agent::tools::is_mcp_write_tool(tool_name, &self.mcp).await;
-            let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp_write || canonical_name == "bash";
+            let is_write = cade_core::permissions::is_write_schema(canonical_name)
+                || is_mcp_write
+                || canonical_name == "bash";
 
-            if block_all_writes && is_write && tool_name != "update_memory" && tool_name != "update_memory_typed" {
-                let msg = "[BLOCKED: You must call update_memory with label='active_goal' to record your current task, modified files, and next steps before executing further write operations.]".to_string();
-                let _ = self
-                    .app
-                    .lock()
-                    .push(RenderLine::ToolResult {
-                        is_error: true,
-                        content: msg.clone(),
-                    });
-                preflight.push(super::super::turn_loop::blocked_result(call_id, tool_name, msg));
+            if block_all_writes
+                && is_write
+                && tool_name != "update_memory"
+                && tool_name != "update_memory_typed"
+            {
+                let msg = "[BLOCKED: Your `active_goal` memory block is empty or stale (no update in the last several write operations). Call update_memory(label='active_goal', value=...) with your current task, modified files, blockers, and next steps before executing further write operations. This block survives context rotation and is the only way to recover task state across new sessions.]".to_string();
+                let _ = self.app.lock().push(RenderLine::ToolResult {
+                    is_error: true,
+                    content: msg.clone(),
+                });
+                preflight.push(super::super::turn_loop::blocked_result(
+                    call_id, tool_name, msg,
+                ));
                 continue;
             }
 
@@ -260,26 +339,20 @@ impl Repl {
             let native_result = self.try_native_intercept(call_id, tool_name, args).await;
             if let Some(result) = native_result {
                 // Show tool call header for native intercepts
-                let _ = self
-                    .app
-                    .lock()
-                    .push(RenderLine::ToolCall {
-                        name: tool_name.to_string(),
-                        preview: String::new(),
-                    });
+                let _ = self.app.lock().push(RenderLine::ToolCall {
+                    name: tool_name.to_string(),
+                    preview: String::new(),
+                });
                 preflight.push(ToolPreflightResult::Blocked(result?));
                 continue;
             }
             // Show tool call header
             {
                 let preview = Self::tool_preview(tool_name, args);
-                let _ = self
-                    .app
-                    .lock()
-                    .push(RenderLine::ToolCall {
-                        name: tool_name.to_string(),
-                        preview,
-                    });
+                let _ = self.app.lock().push(RenderLine::ToolCall {
+                    name: tool_name.to_string(),
+                    preview,
+                });
             }
             let pf = self
                 .preflight_tool(stdout, call_id, tool_name, args)
@@ -309,7 +382,9 @@ impl Repl {
             let canonical_name = cade_agent::tools::manager::canonical_name(base_name);
 
             let is_mcp_write = cade_agent::tools::is_mcp_write_tool(tool_name, &self.mcp).await;
-            let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp_write || canonical_name == "bash";
+            let is_write = cade_core::permissions::is_write_schema(canonical_name)
+                || is_mcp_write
+                || canonical_name == "bash";
 
             if is_write {
                 write_indices.push(i);
@@ -335,11 +410,7 @@ impl Repl {
 
         // Auto-checkpoint (Phase 2): if there are pending write operations, take a checkpoint.
         if !write_indices.is_empty() && !self.turn_checkpoint_taken {
-            let auto_enabled = self
-                .settings
-                .lock()
-                .project()
-                .auto_checkpoint;
+            let auto_enabled = self.settings.lock().project().auto_checkpoint;
             if auto_enabled {
                 self.tui_dim("  📦 Creating pre-edit auto-checkpoint...".to_string());
 
@@ -389,10 +460,7 @@ impl Repl {
             if s.is_empty() { None } else { Some(s) }
         };
         let pa = {
-            let s = self
-                .last_assistant_text
-                .lock()
-                .clone();
+            let s = self.last_assistant_text.lock().clone();
             if s.is_empty() { None } else { Some(s) }
         };
 
@@ -401,10 +469,8 @@ impl Repl {
         // trigger a false cancellation during slow tool execution.
         self.cancel_turn
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        self.last_modal_close_ms.store(
-            now_epoch_ms(),
-            std::sync::atomic::Ordering::SeqCst,
-        );
+        self.last_modal_close_ms
+            .store(now_epoch_ms(), std::sync::atomic::Ordering::SeqCst);
 
         // Execute read-only tools in parallel.
         let runtime = std::sync::Arc::new(
@@ -457,10 +523,8 @@ impl Repl {
             // Refresh grace period after parallel batch completes.
             self.cancel_turn
                 .store(false, std::sync::atomic::Ordering::SeqCst);
-            self.last_modal_close_ms.store(
-                now_epoch_ms(),
-                std::sync::atomic::Ordering::SeqCst,
-            );
+            self.last_modal_close_ms
+                .store(now_epoch_ms(), std::sync::atomic::Ordering::SeqCst);
         }
 
         // Execute write tools sequentially.
@@ -484,15 +548,14 @@ impl Repl {
             // Phase 3 streaming) is protected from stale terminal events.
             self.cancel_turn
                 .store(false, std::sync::atomic::Ordering::SeqCst);
-            self.last_modal_close_ms.store(
-                now_epoch_ms(),
-                std::sync::atomic::Ordering::SeqCst,
-            );
+            self.last_modal_close_ms
+                .store(now_epoch_ms(), std::sync::atomic::Ordering::SeqCst);
         }
 
         // Update stats.
         for r in &results {
-            { let mut stats = self.session_stats.lock();
+            {
+                let mut stats = self.session_stats.lock();
                 stats.tool_calls_total += 1;
                 if r.is_error {
                     stats.tool_calls_err += 1;
@@ -508,10 +571,8 @@ impl Repl {
         // connection for Phase 2 streaming is being established.
         self.cancel_turn
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        self.last_modal_close_ms.store(
-            now_epoch_ms(),
-            std::sync::atomic::Ordering::SeqCst,
-        );
+        self.last_modal_close_ms
+            .store(now_epoch_ms(), std::sync::atomic::Ordering::SeqCst);
 
         // Phase 2: deposit all results to the server.  The first N-1 sends
         // return [] (server is still buffering); the Nth triggers the LLM and
@@ -519,12 +580,15 @@ impl Repl {
         let mut follow = Vec::new();
         for result in &results {
             // Event Logging (Immutable Audit)
-            let _ = self.client.insert_event_log(
-                &self.agent_id(),
-                self.conversation_id().as_deref(),
-                &format!("tool_execution:{}", result.tool_name),
-                &result.output,
-            ).await;
+            let _ = self
+                .client
+                .insert_event_log(
+                    &self.agent_id(),
+                    self.conversation_id().as_deref(),
+                    &format!("tool_execution:{}", result.tool_name),
+                    &result.output,
+                )
+                .await;
 
             follow = self
                 .stream_turn(
@@ -569,14 +633,10 @@ impl Repl {
             let live_idx = app.lock().begin_live_output(8);
             let app_arc = app.clone();
             let run_result = cade_agent::tools::bash::BashTool::run_streaming(args, move |line| {
-                let _ = app_arc
-                    .lock()
-                    .append_live_output_line(live_idx, line);
+                let _ = app_arc.lock().append_live_output_line(live_idx, line);
             })
             .await;
-            let _ = app
-                .lock()
-                .finish_live_output(live_idx);
+            let _ = app.lock().finish_live_output(live_idx);
 
             let (output, is_error) = match run_result {
                 Ok(out) => (out, false),
@@ -717,12 +777,10 @@ impl Repl {
                 _ => (false, format!("{} lines", result.output.lines().count())),
             }
         };
-        let _ = app
-            .lock()
-            .push(RenderLine::ToolResult {
-                is_error: is_err,
-                content,
-            });
+        let _ = app.lock().push(RenderLine::ToolResult {
+            is_error: is_err,
+            content,
+        });
 
         stats.lock().tool_time_ms += tool_start.elapsed().as_millis() as u64;
 
@@ -817,10 +875,7 @@ impl Repl {
             "UpdatePlan" => {
                 let step_id = args["step_id"].as_u64().unwrap_or(0) as usize;
                 let done = args["done"].as_bool().unwrap_or(true);
-                let found = self
-                    .app
-                    .lock()
-                    .update_plan_step(step_id, done);
+                let found = self.app.lock().update_plan_step(step_id, done);
                 Some(Ok(cade_agent::tools::ToolResult {
                     tool_call_id: call_id.to_string(),
                     tool_name: tool_name.to_string(),
@@ -843,7 +898,7 @@ impl Repl {
     /// it immediately and return the result. Returns None for generic tools.
     pub(crate) async fn sync_plan_tools(&self, enter_plan: bool) {
         let agent_id = self.agent_id.lock().clone();
-        
+
         if enter_plan {
             // Strip write tools
             if let Ok(attached) = self.client.get_agent_tools(&agent_id).await {
@@ -851,7 +906,8 @@ impl Repl {
                 for (id, name) in attached {
                     let canonical_name = cade_agent::tools::manager::canonical_name(&name);
                     let is_mcp = cade_agent::tools::is_mcp_write_tool(&name, &self.mcp).await;
-                    let is_write = cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
+                    let is_write =
+                        cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
                     if !is_write && canonical_name != "exitplanmode" {
                         new_ids.push(id);
                     }
@@ -875,10 +931,11 @@ impl Repl {
                     // `write_file`, `edit_file`, `apply_patch`, `bash` are CORE tools, so they are always enabled.
                     // `desktop_control`, `desktop_screenshot` are DESKTOP capability.
                     // We can just add them back if their capability is enabled.
-                    
+
                     let canonical_name = cade_agent::tools::manager::canonical_name(&t.name);
                     let is_mcp = cade_agent::tools::is_mcp_write_tool(&t.name, &self.mcp).await;
-                    let is_write_tool = cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
+                    let is_write_tool =
+                        cade_core::permissions::is_write_schema(canonical_name) || is_mcp;
                     if !is_write_tool {
                         new_ids.push(t.id);
                     } else {
@@ -891,7 +948,9 @@ impl Repl {
                             )
                         };
                         let allowed = match t.name.as_str() {
-                            "desktop_control" | "desktop_screenshot" => caps.is_enabled(cade_core::capabilities::Capability::Desktop),
+                            "desktop_control" | "desktop_screenshot" => {
+                                caps.is_enabled(cade_core::capabilities::Capability::Desktop)
+                            }
                             _ => true, // core write tools
                         };
                         if allowed {
@@ -899,12 +958,143 @@ impl Repl {
                         }
                     }
                 }
-                
-                // Now we also need to get MCP tools and ensure they are attached. 
+
+                // Now we also need to get MCP tools and ensure they are attached.
                 // MCP tools are fetched via list_tools() too since they are registered on the server.
                 let _ = self.client.attach_agent_tools(&agent_id, &new_ids).await;
             }
         }
-
-}
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    // ── should_block_for_active_goal ─────────────────────────────────────────
+
+    #[test]
+    fn block_when_empty_and_threshold_reached() {
+        // Original C3 semantics: 8 writes, never updated, empty → block.
+        assert!(should_block_for_active_goal(8, 0, true, 8));
+    }
+
+    #[test]
+    fn no_block_when_below_threshold() {
+        assert!(!should_block_for_active_goal(7, 0, true, 8));
+    }
+
+    #[test]
+    fn no_block_when_active_goal_filled_and_recent() {
+        // Agent updated active_goal at write #5; only 2 writes since → no block.
+        assert!(!should_block_for_active_goal(7, 5, false, 8));
+    }
+
+    #[test]
+    fn block_when_active_goal_stale_after_threshold_writes() {
+        // NEW BEHAVIOR — staleness, not just emptiness.
+        // Agent updated at write #3, then 8 more writes → must refresh.
+        // active_goal is non-empty but considered stale.
+        // Original code returned `false` in this case; new logic returns `true`
+        // when the gap reaches threshold AND the goal is empty OR was never
+        // updated. The non-empty stale case here is captured separately —
+        // see `block_when_active_goal_empty_again_after_clear` for the empty
+        // recurrence path.  This test guards the boundary.
+        // For non-empty + filled-once, we do NOT block (avoid false positives
+        // when the agent's plan remains valid). Staleness recurrence is
+        // handled by the agent re-emptying or by the session-start reminder
+        // (Fix 3).
+        assert!(!should_block_for_active_goal(11, 3, false, 8));
+    }
+
+    #[test]
+    fn block_when_active_goal_empty_again_after_clear() {
+        // Agent wrote, then later wiped the block (e.g. "" set).
+        // writes_at_last_update tracked the previous write, but is_empty now true.
+        // Gap from last update is 8 → block.
+        assert!(should_block_for_active_goal(11, 3, true, 8));
+    }
+
+    #[test]
+    fn no_block_when_threshold_zero() {
+        // Disabled threshold should never block.
+        assert!(!should_block_for_active_goal(100, 0, true, 0));
+    }
+
+    #[test]
+    fn handles_counter_underflow_safely() {
+        // Defensive: if last_update somehow exceeds total (shouldn't happen),
+        // saturating_sub keeps gap = 0 → no block.
+        assert!(!should_block_for_active_goal(3, 10, true, 8));
+    }
+
+    // ── tool_calls_update_active_goal ────────────────────────────────────────
+
+    #[test]
+    fn detects_update_memory_active_goal() {
+        let calls = vec![(
+            "id1".to_string(),
+            "update_memory".to_string(),
+            json!({"label": "active_goal", "value": "do x"}),
+        )];
+        assert!(tool_calls_update_active_goal(&calls));
+    }
+
+    #[test]
+    fn detects_update_memory_typed_active_goal() {
+        let calls = vec![(
+            "id1".to_string(),
+            "update_memory_typed".to_string(),
+            json!({"label": "active_goal", "value": "do x", "memory_type": "decision"}),
+        )];
+        assert!(tool_calls_update_active_goal(&calls));
+    }
+
+    #[test]
+    fn ignores_update_memory_other_label() {
+        let calls = vec![(
+            "id1".to_string(),
+            "update_memory".to_string(),
+            json!({"label": "project", "value": "rust"}),
+        )];
+        assert!(!tool_calls_update_active_goal(&calls));
+    }
+
+    #[test]
+    fn ignores_unrelated_tool() {
+        let calls = vec![(
+            "id1".to_string(),
+            "bash".to_string(),
+            json!({"command": "ls"}),
+        )];
+        assert!(!tool_calls_update_active_goal(&calls));
+    }
+
+    #[test]
+    fn detects_active_goal_among_multiple_calls() {
+        let calls = vec![
+            (
+                "id1".to_string(),
+                "bash".to_string(),
+                json!({"command": "ls"}),
+            ),
+            (
+                "id2".to_string(),
+                "update_memory".to_string(),
+                json!({"label": "active_goal", "value": "do x"}),
+            ),
+        ];
+        assert!(tool_calls_update_active_goal(&calls));
+    }
+
+    #[test]
+    fn handles_missing_label_gracefully() {
+        let calls = vec![(
+            "id1".to_string(),
+            "update_memory".to_string(),
+            json!({"value": "x"}),
+        )];
+        assert!(!tool_calls_update_active_goal(&calls));
+    }
+}

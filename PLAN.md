@@ -3763,3 +3763,102 @@ archaeology):
 **Rollback:**
 1. `git revert <commit>` — pure additive helper + 1-line dispatch swap.
 2. Or restore checkpoint `pre-mode-based-subagent-lookup` (cp-34113d87).
+
+## 2026-04-26T16:05:34Z — cli+bootstrap: active_goal staleness + archive-on-/new + first-turn reminder
+
+**Task:** Three correlated fixes for "CADE forgets what it's working on" — closes
+the gaps identified in the validated multi-layer analysis where `active_goal`
+either silently goes stale, gets wiped without an audit trail, or starts a new
+session without prompting the agent to verify.
+
+**Files modified:**
+- `crates/cade-cli/src/cli/repl/turn_tools/runner.rs` — extracted two pure
+  helpers (`should_block_for_active_goal`, `tool_calls_update_active_goal`)
+  and rewired the C3 hard-block to use a *staleness* counter rather than the
+  one-shot "empty after 8 writes" rule. Added 13 unit tests covering the
+  decision truth table, threshold edge cases, saturating-sub safety, and
+  detection of `update_memory(active_goal)` across `update_memory` /
+  `update_memory_typed` and missing-label payloads.
+- `crates/cade-cli/src/cli/repl/mod.rs` — added
+  `writes_at_last_active_goal_update: Arc<AtomicU32>` field to `Repl` so the
+  staleness counter survives across `dispatch_tool_calls` invocations.
+  Initialised to 0 in `Repl::new` ("never written this session").
+- `crates/cade-cli/src/cli/repl/commands.rs` — added two pure helpers
+  (`build_active_goal_archive_snapshot`, `active_goal_archive_tags`) plus
+  7 unit tests, and rewired `SlashCmd::New` to (1) read the existing
+  `active_goal`, (2) snapshot it into archival memory with stable tags, and
+  (3) reset the C3 staleness counters before deleting the block. Empty /
+  whitespace-only values are skipped — nothing useful to archive.
+- `src/bootstrap/agents.rs` — added a local
+  `archive_and_clear_active_goal` helper (no cross-crate cade-cli internal
+  exposure) and applied it to both bootstrap paths that previously did a
+  bare `delete_memory`: the `--new` flag and the picker "n" choice.
+- `crates/cade-cli/src/cli/repl/turn_loop/agent.rs` — added
+  `build_active_goal_first_turn_reminder` pure helper plus 4 unit tests,
+  and wired the first-turn input prefix to look up `active_goal` and
+  prepend a `<system>...</system>` staleness verification reminder when
+  the block is non-empty. Empty / whitespace blocks are silent (no
+  cluttering the prompt with no-op text).
+
+**Previous behavior:**
+1. `dispatch_tool_calls` blocked write tools only when `active_goal` was
+   *empty* after 8 cumulative writes. Once filled (even with stale info),
+   the check never triggered again — the agent could run hundreds of writes
+   against a long-obsolete plan with no nudge.
+2. `/new` and `--new` deleted `active_goal` without any archival snapshot.
+   An accidental `/new` press silently lost the previous task plan with
+   no recoverability path beyond reading the raw DB.
+3. Starting a fresh REPL session with a saved (potentially weeks-old)
+   `active_goal` injected the stored plan into the system prompt with no
+   instruction to verify it against the user's actual current ask.
+
+**New behavior:**
+1. C3 now blocks writes when *either* the gap since the last
+   `update_memory(active_goal)` reaches the 8-write threshold *or* the
+   block is empty/never-written. The counter resets the moment the agent
+   writes to `active_goal` (any value), making the check recurring rather
+   than one-shot. The blocked-message text was rewritten to mention
+   staleness explicitly so the agent knows what is being asked for.
+2. `/new` and bootstrap `--new` paths now archive the existing
+   `active_goal` value into `archival_memory` (tagged `active_goal`,
+   `snapshot`, `slash_new` / `bootstrap_new`) before the destructive
+   delete. The agent can recover with
+   `archival_memory_search(query='active_goal')`. Errors are swallowed
+   silently — the original delete-and-proceed semantics are preserved
+   on any failure path so users are never blocked from `/new`.
+3. The first turn of every REPL session now appends a generic
+   `<system>` reminder when `active_goal` is non-empty: "verify it is
+   still the user's current task; if their first message implies a
+   different task, call update_memory(active_goal, ...) before any
+   write tools." The reminder text intentionally does not embed the
+   stored plan verbatim — that is a separate test invariant.
+
+**Architectural notes:**
+- All decision logic was pulled into pure helpers and unit-tested
+  *before* wiring into the impure dispatch / command / agent_turn paths.
+  Net new tests: 13 (runner) + 7 (commands) + 4 (agent_turn) = 24.
+- No new dependencies. No public-API changes. No changes to memory
+  block tier rules, `STALE_THRESHOLD`, `EAGER_CONSOLIDATION_TURN_THRESHOLD`,
+  or any server-side memory machinery.
+- `cargo fmt` was run scoped to the touched files only — workspace-wide
+  fmt was reverted because it would have rewritten 47 unrelated files
+  (violation of the strict-project-execution minimal-change policy).
+- Pre-existing clippy errors in `cade-cli` (`commands_pricing.rs`
+  collapsible-if, `turn_loop/agent.rs:115` redundant-redefinition) and
+  `cade-server` are unrelated and untouched.
+
+**TDD record:**
+- RED 1: 13 helper tests for `should_block_for_active_goal` +
+  `tool_calls_update_active_goal` written first against missing symbols
+  → compile-failed → impl added → 13/13 GREEN.
+- RED 2: 7 helper tests for `build_active_goal_archive_snapshot` +
+  `active_goal_archive_tags` written → compile-failed → impl added →
+  7/7 GREEN.
+- RED 3: 4 helper tests for `build_active_goal_first_turn_reminder`
+  written → compile-failed → impl added → 4/4 GREEN.
+- GREEN total: 30 cade-cli lib tests pass (24 new + 6 pre-existing).
+  Workspace lib + bin tests all pass (1100+). Integration test
+  `context_memory_regression` (15 tests) green.
+
+**Rollback:** restore checkpoint `pre-amnesia-fixes` (cp-0dd1d21c), or
+`git revert` the resulting commit.

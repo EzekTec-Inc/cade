@@ -35,8 +35,8 @@ use crate::Result;
 use serde_json::json;
 use std::io;
 
-use std::sync::Arc;
 use parking_lot::Mutex;
+use std::sync::Arc;
 
 use crate::ui::{RenderLine, TuiApp, cycle_mode, cycle_mode_back};
 use cade_agent::agent::session::SessionStore;
@@ -219,8 +219,13 @@ pub struct Repl {
     /// Consumed (and cleared) by the first `send_message*` call inside `agent_turn`.
     pub(crate) pending_turn_images: Vec<serde_json::Value>,
     /// Cumulative count of file-write / edit / bash tool calls this session.
-    /// Used to trigger the one-time `active_goal` reminder (C3).
+    /// Used to trigger the recurring `active_goal` reminder (C3).
     pub(crate) write_tool_calls: std::sync::Arc<std::sync::atomic::AtomicU32>,
+    /// Snapshot of `write_tool_calls` taken the last time the agent called
+    /// `update_memory(label='active_goal', ...)`.  `0` means the agent has
+    /// not yet recorded a non-empty plan in this session.  Used by the
+    /// recurring C3 staleness check in `should_block_for_active_goal`.
+    pub(crate) writes_at_last_active_goal_update: std::sync::Arc<std::sync::atomic::AtomicU32>,
     /// `true` if an auto-checkpoint has been taken for the current turn.
     pub(crate) turn_checkpoint_taken: bool,
 }
@@ -262,8 +267,7 @@ impl Repl {
         // wire a `bg_pending_count` getter on the app pointing at the same
         // shared queue.  The getter lets the input-loop's 50ms tick surface
         // a toast when subagents finish while the user is idle (Option 2).
-        let background_results: Arc<Mutex<Vec<BackgroundResult>>> =
-            Arc::new(Mutex::new(vec![]));
+        let background_results: Arc<Mutex<Vec<BackgroundResult>>> = Arc::new(Mutex::new(vec![]));
         let mut tui_app = TuiApp::new_with_theme(
             perm_mode,
             agent_name_clone.clone(),
@@ -273,8 +277,7 @@ impl Repl {
         );
         {
             let bg_for_getter = Arc::clone(&background_results);
-            tui_app.bg_pending_count =
-                Some(Box::new(move || bg_for_getter.lock().len()));
+            tui_app.bg_pending_count = Some(Box::new(move || bg_for_getter.lock().len()));
         }
 
         Self {
@@ -319,6 +322,9 @@ impl Repl {
             last_modal_close_ms: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             pending_turn_images: Vec::new(),
             write_tool_calls: std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0)),
+            writes_at_last_active_goal_update: std::sync::Arc::new(
+                std::sync::atomic::AtomicU32::new(0),
+            ),
             turn_checkpoint_taken: false,
             capabilities,
         }
@@ -496,9 +502,10 @@ impl Repl {
                 let summary = ws.value.lines().take(3).collect::<Vec<_>>().join("\n");
                 if !summary.trim().is_empty() {
                     let mut app = self.app.lock();
-                    app.push_silent(RenderLine::SystemMsg(
-                        format!("  Context: {}", summary.trim()),
-                    ));
+                    app.push_silent(RenderLine::SystemMsg(format!(
+                        "  Context: {}",
+                        summary.trim()
+                    )));
                     app.draw()?;
                 }
             }
@@ -517,10 +524,7 @@ impl Repl {
                 let mut results = self.background_results.lock();
                 for r in results.drain(..) {
                     let msg = format!("  ✓ Subagent '{}' finished:\n{}", r.subagent, r.result);
-                    let _ = self
-                        .app
-                        .lock()
-                        .push(RenderLine::SystemMsg(msg));
+                    let _ = self.app.lock().push(RenderLine::SystemMsg(msg));
                     let notify = format!(
                         "[Background subagent '{}' completed (task ID: {})]:\n{}",
                         r.subagent, r.task_id, r.result
@@ -573,8 +577,10 @@ impl Repl {
                 app.update_model(self.current_model.lock().clone());
                 app.update_agent_name(self.agent_name());
                 app.session_tokens = (
-                    self.session_input_tokens.load(std::sync::atomic::Ordering::SeqCst),
-                    self.session_output_tokens.load(std::sync::atomic::Ordering::SeqCst),
+                    self.session_input_tokens
+                        .load(std::sync::atomic::Ordering::SeqCst),
+                    self.session_output_tokens
+                        .load(std::sync::atomic::Ordering::SeqCst),
                 );
             }
 
@@ -582,11 +588,7 @@ impl Repl {
             let input = if let Some(cmd) = pending_input.take() {
                 cmd
             } else {
-                match self
-                    .app
-                    .lock()
-                    .read_input(&mut history, &mut hist_idx)?
-                {
+                match self.app.lock().read_input(&mut history, &mut hist_idx)? {
                     Some(s) => s,
                     None => break,
                 }
@@ -649,10 +651,7 @@ impl Repl {
                     )
                 }
             };
-            let _ = self
-                .app
-                .lock()
-                .push(RenderLine::UserMessage(echo_text));
+            let _ = self.app.lock().push(RenderLine::UserMessage(echo_text));
 
             // Direct bash:
             //   !!cmd  — run silently: show output locally, do NOT send to agent.
@@ -674,10 +673,7 @@ impl Repl {
                             } else {
                                 String::from_utf8_lossy(&out.stdout).to_string()
                             };
-                            let _ = self
-                                .app
-                                .lock()
-                                .push(RenderLine::SystemMsg(text.clone()));
+                            let _ = self.app.lock().push(RenderLine::SystemMsg(text.clone()));
                             if !silent {
                                 // Send command + output to agent
                                 let agent_msg =
@@ -718,14 +714,12 @@ impl Repl {
             };
 
             // Slash commands (include loaded skill ids so /commit etc. work)
-            let skill_ids: Vec<String> = self
-                .skills
-                .lock()
-                .iter()
-                .map(|s| s.id.clone())
-                .collect();
+            let skill_ids: Vec<String> = self.skills.lock().iter().map(|s| s.id.clone()).collect();
             if let Some(cmd) = parse_slash_with_skills(&input, &skill_ids) {
-                if self.handle_slash_command(cmd, &input, &mut stdout, &mut pending_input).await? {
+                if self
+                    .handle_slash_command(cmd, &input, &mut stdout, &mut pending_input)
+                    .await?
+                {
                     break;
                 }
                 continue;

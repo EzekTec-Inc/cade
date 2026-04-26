@@ -1,9 +1,37 @@
-use super::*;
 use super::Repl;
+use super::*;
 use crate::Result;
 use crate::ui::RenderLine;
 use cade_agent::agent::client::CadeMessage;
 use std::io;
+
+// ── First-turn `active_goal` reminder (pure) ─────────────────────────────────
+//
+// On the first user turn of every REPL session, if the agent's `active_goal`
+// memory block is non-empty we prepend a short system-style reminder to the
+// effective input.  This nudges the agent to *verify* the stored plan is
+// still current before resuming work — a long-idle session can leave a
+// `active_goal` from a task the user has long since moved on from.
+
+/// Build the staleness-check reminder appended to the first turn's effective
+/// input.  Returns `None` when the value is empty/whitespace — no plan to
+/// verify, so no reminder is emitted.
+///
+/// Returns a `<system>...</system>` snippet for embedding inside the larger
+/// `effective_input` string built by `agent_turn`.
+pub(crate) fn build_active_goal_first_turn_reminder(active_goal_value: &str) -> Option<String> {
+    if active_goal_value.trim().is_empty() {
+        return None;
+    }
+    Some(
+        "<system>You have an `active_goal` memory block from a previous session. \
+Before acting on it, briefly verify it is still the user's current task. \
+If the user's first message implies a different task, call \
+update_memory(label='active_goal', value=...) with the new plan before \
+running any write tools.</system>"
+            .to_string(),
+    )
+}
 
 impl Repl {
     pub(crate) async fn agent_turn(&mut self, stdout: &mut io::Stdout, input: &str) -> Result<()> {
@@ -29,8 +57,23 @@ impl Repl {
             .is_ok()
         {
             let env = self.build_env_context();
+            // Look up active_goal once; if it is non-empty, prepend a staleness
+            // verification reminder so the agent does not silently resume a
+            // long-idle plan from a previous session.
+            let active_goal_val = self
+                .client
+                .get_memory(&self.agent_id())
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .find(|b| b.label == "active_goal")
+                .map(|b| b.value)
+                .unwrap_or_default();
+            let staleness = build_active_goal_first_turn_reminder(&active_goal_val)
+                .map(|s| format!("\n\n{s}"))
+                .unwrap_or_default();
             format!(
-                "{env}\n\n<system>Do not introduce yourself. Answer the user's message directly.</system>\n\n{input}"
+                "{env}\n\n<system>Do not introduce yourself. Answer the user's message directly.</system>{staleness}\n\n{input}"
             )
         } else {
             input.to_string()
@@ -367,17 +410,15 @@ impl Repl {
         // (The ephemeral active_goal reminder was removed in favor of a hard block in dispatch_tool_calls)
 
         // Blank line after every agent turn for visual block separation.
-        let _ = self
-            .app
-            .lock()
-            .push(RenderLine::Blank);
+        let _ = self.app.lock().push(RenderLine::Blank);
 
         // -- Stop thinking animation
         tick_handle.abort();
         let _ = tick_handle.await;
         let secs = self.app.lock().stop_thinking();
         // Accumulate agent-active time in session stats
-        { let mut stats = self.session_stats.lock();
+        {
+            let mut stats = self.session_stats.lock();
             stats.agent_active_ms += turn_start.elapsed().as_millis() as u64;
         }
         let time_str = if secs >= 60 {
@@ -413,9 +454,7 @@ impl Repl {
             }
             parts.join("  ·  ")
         };
-        self.app
-            .lock()
-            .set_last_status(Some(summary));
+        self.app.lock().set_last_status(Some(summary));
         let _ = self.app.lock().draw();
 
         self.turn_active.store(false, Ordering::SeqCst);
@@ -444,5 +483,37 @@ impl Repl {
         let _ = app.push(RenderLine::ErrorMsg(msg.into()));
         vec![]
     }
+}
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_reminder_when_active_goal_empty() {
+        assert!(build_active_goal_first_turn_reminder("").is_none());
+    }
+
+    #[test]
+    fn no_reminder_when_active_goal_whitespace() {
+        assert!(build_active_goal_first_turn_reminder("   \n\t  ").is_none());
+    }
+
+    #[test]
+    fn reminder_present_when_active_goal_has_content() {
+        let s = build_active_goal_first_turn_reminder("Working on M1.")
+            .expect("non-empty active_goal must produce a reminder");
+        assert!(s.contains("<system>"));
+        assert!(s.contains("</system>"));
+        assert!(s.contains("active_goal"));
+        assert!(s.contains("verify"));
+    }
+
+    #[test]
+    fn reminder_does_not_leak_active_goal_value_into_string() {
+        // The reminder is generic instructions; it must not embed the stored
+        // plan verbatim (the agent already sees it via the memory block).
+        let s = build_active_goal_first_turn_reminder("super-secret-plan-xyz").expect("present");
+        assert!(!s.contains("super-secret-plan-xyz"));
+    }
 }
