@@ -204,6 +204,7 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             tool_name       TEXT NOT NULL,
             arguments_json  TEXT NOT NULL,
             output          TEXT,
+            output_chars    INTEGER NOT NULL DEFAULT 0,
             is_error        INTEGER NOT NULL DEFAULT 0,
             duration_ms     INTEGER,
             created_at      INTEGER NOT NULL,
@@ -469,6 +470,22 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             );",
         )?;
         conn.execute("PRAGMA user_version = 5", [])?;
+    }
+
+    if current_version < 6 {
+        // Migration 6 (P8): tool_executions.output_chars for per-call cost
+        // observability without scanning the output blob.  Idempotent — pre-existing
+        // databases get the column added; new DBs already have it from apply_schema.
+        let _ = conn.execute(
+            "ALTER TABLE tool_executions ADD COLUMN output_chars INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        // Backfill output_chars for rows persisted before the migration.
+        let _ = conn.execute(
+            "UPDATE tool_executions SET output_chars = LENGTH(output) WHERE output_chars = 0 AND output IS NOT NULL",
+            [],
+        );
+        conn.execute("PRAGMA user_version = 6", [])?;
     }
 
     Ok(())

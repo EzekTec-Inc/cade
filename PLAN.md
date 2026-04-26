@@ -3513,3 +3513,45 @@ for Anthropic / Gemini, ≥ 512 for OpenAI; users tune to their model.
 **223 pass** (218 prior + 5 new).  Workspace + wasm32 clean.
 
 **Rollback:** revert this commit.  Default behaviour identical when env unset.
+
+## 2026-04-25 — Phase P8: per-tool-call output_chars observability
+
+**Goal:** make per-tool-call output cost observable without scanning the
+entire `output` blob for every analytics query.
+
+**Problem:** `tool_executions` stored `output` (TEXT) but no precomputed
+size column.  Cost dashboards that wanted to attribute output-token spend
+per tool had to `SELECT LENGTH(output)` over the full blob, which is
+expensive on long sessions and incorrect for multibyte UTF-8 (returns
+bytes, not chars).
+
+**Change:**
+1. New column `tool_executions.output_chars INTEGER NOT NULL DEFAULT 0`.
+2. `apply_schema` includes the column on fresh DBs.
+3. Migration 6 (`PRAGMA user_version 5 → 6`):
+   * `ALTER TABLE tool_executions ADD COLUMN output_chars …` (idempotent).
+   * Backfill `output_chars = LENGTH(output)` for legacy rows.  Note: SQL
+     `LENGTH()` returns bytes, not Unicode chars — accepted as a cheap
+     approximation for the historical rows.  All new rows use Rust
+     `output.chars().count()` for true Unicode-correct counts.
+4. `POST /v1/agents/:id/tool_executions` handler computes
+   `output.chars().count()` at insert time, stores it, and returns it
+   in the response payload (`{ "id": …, "output_chars": N }`).
+
+**Tests (3 new):**
+* `fresh_db_has_output_chars_column` — verifies `apply_schema` adds it.
+* `insert_persists_output_chars_matching_chars_count` — multibyte input
+  (`"héllo"`, 5 chars / 11 bytes) round-trips as 5.
+* `migration_backfills_output_chars_for_legacy_rows` — verifies
+  `user_version` advances to ≥ 6 after `open()`.
+
+cade-server: **226 pass** (223 prior + 3 new).  cade-store: 106 unchanged.
+Workspace + wasm32 clean.
+
+**Why chars not bytes for new rows:** the cost dashboards convert chars to
+tokens at ~3:1 — bytes would over-count multibyte characters by 2-4×.
+Legacy rows are accepted as-is because backfilling chars in pure SQL would
+require a custom function and the historical inaccuracy is bounded.
+
+**Rollback:** revert this commit + manually `PRAGMA user_version = 5` if
+ever needed (no DROP COLUMN — column simply becomes unused).
