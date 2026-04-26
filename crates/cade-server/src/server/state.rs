@@ -31,6 +31,30 @@ pub struct AgentMetrics {
     pub chars_summarised: usize,
     pub chars_produced: usize,
     pub inflation_guard_hits: usize,
+    /// P2: cumulative token totals for this agent across the server's
+    /// lifetime.  Includes cache_read / cache_write so cost dashboards and
+    /// future server-side cost guardrails see the full Anthropic / Gemini
+    /// caching picture (previously dropped).
+    pub input_tokens_total: u64,
+    pub output_tokens_total: u64,
+    pub cache_read_tokens_total: u64,
+    pub cache_write_tokens_total: u64,
+}
+
+impl AgentMetrics {
+    /// Add a single `TokenUsage` chunk into the cumulative totals.
+    /// All four fields are accumulated atomically; cache fields are no
+    /// longer dropped on the floor as in the pre-P2 implementation.
+    pub fn accumulate_usage(&mut self, u: &cade_ai::TokenUsage) {
+        self.input_tokens_total = self.input_tokens_total.saturating_add(u.input_tokens as u64);
+        self.output_tokens_total = self.output_tokens_total.saturating_add(u.output_tokens as u64);
+        self.cache_read_tokens_total = self
+            .cache_read_tokens_total
+            .saturating_add(u.cache_read_tokens as u64);
+        self.cache_write_tokens_total = self
+            .cache_write_tokens_total
+            .saturating_add(u.cache_write_tokens as u64);
+    }
 }
 
 /// Phase 4: per-request telemetry recorded at the end of every
@@ -145,4 +169,59 @@ pub struct AppState {
     pub pending_subagent_results: Arc<RwLock<std::collections::HashMap<String, Vec<SubagentResult>>>>,
     /// Semaphore limiting concurrent subagent LLM calls server-side.
     pub subagent_semaphore: Arc<tokio::sync::Semaphore>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cade_ai::TokenUsage;
+
+    #[test]
+    fn accumulate_usage_sums_all_four_token_fields() {
+        let mut m = AgentMetrics::default();
+        m.accumulate_usage(&TokenUsage {
+            input_tokens: 100,
+            output_tokens: 50,
+            cache_read_tokens: 1_000,
+            cache_write_tokens: 200,
+            model: "anthropic/claude-sonnet-4".into(),
+        });
+        m.accumulate_usage(&TokenUsage {
+            input_tokens: 25,
+            output_tokens: 10,
+            cache_read_tokens: 500,
+            cache_write_tokens: 0,
+            model: "anthropic/claude-sonnet-4".into(),
+        });
+
+        assert_eq!(m.input_tokens_total, 125);
+        assert_eq!(m.output_tokens_total, 60);
+        // P2 fix: cache fields must accumulate, not be silently dropped.
+        assert_eq!(m.cache_read_tokens_total, 1_500);
+        assert_eq!(m.cache_write_tokens_total, 200);
+    }
+
+    #[test]
+    fn accumulate_usage_saturates_on_overflow() {
+        let mut m = AgentMetrics::default();
+        m.input_tokens_total = u64::MAX - 5;
+        m.accumulate_usage(&TokenUsage {
+            input_tokens: 100,
+            output_tokens: 0,
+            cache_read_tokens: 0,
+            cache_write_tokens: 0,
+            model: String::new(),
+        });
+        assert_eq!(m.input_tokens_total, u64::MAX);
+    }
+
+    #[test]
+    fn accumulate_usage_zero_is_noop() {
+        let mut m = AgentMetrics::default();
+        m.accumulate_usage(&TokenUsage::default());
+        assert_eq!(m.input_tokens_total, 0);
+        assert_eq!(m.output_tokens_total, 0);
+        assert_eq!(m.cache_read_tokens_total, 0);
+        assert_eq!(m.cache_write_tokens_total, 0);
+    }
 }

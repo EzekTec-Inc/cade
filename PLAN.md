@@ -3299,3 +3299,39 @@ variants, passthrough for ollama and unknown providers.  cade-server suite:
 200 pass (191 prior + 9 new).  Workspace + wasm32-unknown-unknown clean.
 
 **Rollback:** revert this commit.  No schema change, no migration.
+
+## 2026-04-25 — Phase P2: accumulate cache_read/cache_write tokens server-side
+
+**Goal:** make server-side token accounting see the full Anthropic / Gemini
+caching picture so cost dashboards and future cost guardrails (P4) cannot
+drift.
+
+**Problem:** `messages/mod.rs:625` and `run.rs:336` accumulated only
+`input_tokens + output_tokens` from `StreamChunk::Usage`.  `cache_read_tokens`
+and `cache_write_tokens` were emitted to the SSE stream (so the CLI's
+`SessionStats` saw them) but silently dropped on the server side.  After
+P1 (skills cache anchoring) cache reads carry ~10–30 KB of skills payload —
+the server was blind to the saving.
+
+**Change:**
+1. `AgentMetrics` extended with 4 new `u64` fields:
+   `input_tokens_total`, `output_tokens_total`, `cache_read_tokens_total`,
+   `cache_write_tokens_total`.
+2. New `AgentMetrics::accumulate_usage(&TokenUsage)` helper (saturating).
+3. `messages/mod.rs` SSE Done handler spawns a tokio task that flushes the
+   per-stream `usage_acc` snapshot into `state.agent_metrics`.  Local accumulator
+   itself now adds all 4 fields.
+4. `run.rs` agentic-loop Usage handler writes through to `state.agent_metrics`
+   on each Usage chunk (the run loop is already async so no extra task needed).
+
+**Tests (3 new):** `accumulate_usage_sums_all_four_token_fields`,
+`accumulate_usage_saturates_on_overflow`, `accumulate_usage_zero_is_noop`.
+cade-server suite: **203 pass** (200 prior + 3 new).  Workspace + wasm32 clean.
+
+**Why a helper instead of inline arithmetic:** the same accumulation runs at
+two sites (mod.rs SSE and run.rs agentic loop).  An untested inline pattern
+silently drifted between sites once already (P2 itself).  Helper + 3 unit
+tests prevents regression.
+
+**Rollback:** revert this commit.  Schema unchanged (in-memory metrics only,
+no migration).

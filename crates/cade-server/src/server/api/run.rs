@@ -334,6 +334,14 @@ pub async fn run_agent(
                         tool_calls.push(tc);
                     }
                     Ok(StreamChunk::Usage(u)) => {
+                        // P2: accumulate into AgentMetrics so cache tokens
+                        // are not silently dropped server-side.
+                        {
+                            let mut map = state2.agent_metrics.write().await;
+                            map.entry(agent_id2.clone())
+                                .or_default()
+                                .accumulate_usage(&u);
+                        }
                         send(json!({
                             "message_type": "usage_statistics",
                             "input_tokens":  u.input_tokens,

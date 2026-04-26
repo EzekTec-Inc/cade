@@ -566,6 +566,7 @@ pub async fn stream_message(
     // Accumulate token usage across chunks
     let usage_acc = std::sync::Arc::new(std::sync::Mutex::new(TokenUsage::default()));
     let usage_acc2 = usage_acc.clone();
+    let usage_acc3 = usage_acc.clone();
 
     // First SSE event: metadata (conversation_id + run_id)
     let meta_event = {
@@ -622,8 +623,12 @@ pub async fn stream_message(
                 }
                 Ok(StreamChunk::Usage(u)) => {
                     if let Ok(mut acc) = usage_acc2.lock() {
+                        // P2: accumulate all 4 token fields (was input/output only —
+                        // cache_read/cache_write were silently dropped).
                         acc.input_tokens += u.input_tokens;
                         acc.output_tokens += u.output_tokens;
+                        acc.cache_read_tokens += u.cache_read_tokens;
+                        acc.cache_write_tokens += u.cache_write_tokens;
                     }
                     // Emit usage_statistics event for client-side display
                     emit(json!({
@@ -663,6 +668,20 @@ pub async fn stream_message(
                     }
                     if let Some(rid) = &run_id_clone {
                         let _ = sqlite::finish_run(&db_clone, rid, "completed");
+                    }
+                    // P2: flush accumulated token usage into AgentMetrics so
+                    // server-side cost dashboards / future cost guardrails see
+                    // cache_read + cache_write tokens (previously dropped).
+                    if let Ok(u) = usage_acc3.lock() {
+                        let snap = u.clone();
+                        let agent_metrics = state_clone.agent_metrics.clone();
+                        let agent_id_for_metrics = agent_id_clone.clone();
+                        tokio::spawn(async move {
+                            let mut map = agent_metrics.write().await;
+                            map.entry(agent_id_for_metrics)
+                                .or_default()
+                                .accumulate_usage(&snap);
+                        });
                     }
                     Event::default().data("[DONE]")
                 }

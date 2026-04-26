@@ -325,7 +325,7 @@ pub(crate) async fn build_context(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
 
-    let (mut system_static, mut system_dynamic) = assemble_system_prompt_memory(state, &agent, agent_id, is_tool_return);
+    let (mut system_static, system_dynamic) = assemble_system_prompt_memory(state, &agent, agent_id, is_tool_return);
 
     // Skill-counters for Phase-4 telemetry; updated when we render the
     // skills section below.
