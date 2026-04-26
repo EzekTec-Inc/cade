@@ -3697,3 +3697,45 @@ archaeology):
 * No code changes — pure documentation work.
 
 **Final `docs/` state:** 20 .md files at root + 4 in `docs/history/`.
+
+## 2026-04-25T00:00:00Z — cli+tui+agent: background subagent completion notifications (Option 1 + 2)
+
+**Task:** Background subagents finish silently — the parent agent only learns of completion when the user submits new input. Closes the perception gap with two minimal mechanisms: terminal BEL + idle-tick toast.
+
+**Files modified:**
+- `crates/cade-agent/src/subagents/mod.rs` — added two pure helpers + `#[cfg(test)] mod tests`:
+  - `should_emit_completion_bell(silent, is_tty) -> bool` — gate the BEL byte (4 truth-table tests).
+  - `pending_bg_toast(pending) -> Option<String>` — singular/plural toast text (3 tests).
+- `crates/cade-cli/src/cli/repl/tool_intercepts.rs` — after `bg.lock().push(...)`, emit one BEL byte (`0x07`) to stdout when `should_emit_completion_bell(silent, is_tty)` is true. Uses `std::io::IsTerminal` (stable since 1.70).
+- `crates/cade-tui/src/app/mod.rs` — added two `TuiApp` fields:
+  - `bg_pending_count: Option<Box<dyn Fn() -> usize + Send + Sync>>` — getter injected by REPL pointing at `Arc<Mutex<Vec<BackgroundResult>>>`. Avoids cross-crate type leakage (cade-tui has no dep on cade-agent).
+  - `bg_last_announced: usize` — debounce counter so the toast doesn't re-fire every 50ms.
+  - Plus pure `tick_bg_pending_toast(pending, &mut last, &mut Option<Toast>) -> bool` (5 tests covering no-change, singular, plural, drain reset, re-announce after drain).
+- `crates/cade-tui/src/app/input.rs` — `read_input`'s 50ms idle branch now invokes the tick helper before `continue`. Surfaces a Success toast ("✓ N subagents finished — press Enter to receive") with 8s TTL.
+- `crates/cade-cli/src/cli/repl/mod.rs` — restructured Repl constructor to build `background_results` and `TuiApp` separately, then plug `tui_app.bg_pending_count = Some(Box::new(move || bg.lock().len()))` before storing in `Repl.app`.
+
+**Previous behavior:** Background subagent completes → result pushed to `Arc<Mutex<Vec>>` → user has no signal until they manually submit any input → REPL drain finally surfaces the result as a system message.
+
+**New behavior:**
+1. Spawned task writes BEL byte to stdout on completion (only when stdout is a TTY and `silent_subagents` is off). User hears/sees a terminal bell.
+2. While `read_input` is idle, every 50ms it polls the pending count via the injected getter. When count changes from N → M (M>0), a Success toast appears: "✓ M subagent(s) finished — press Enter to receive". When REPL drains the queue (M→0), `bg_last_announced` resets, so future completions re-trigger the toast.
+
+**Architectural notes:**
+- No new dependencies. `IsTerminal` is std-stable.
+- No async/channel changes — both options are passive polling via existing 50ms tick.
+- The fundamental "agent doesn't react until user types" is unchanged on purpose. CADE's model is user-driven turns; forcing autonomous mid-idle reaction would conflict with that.
+- `cade-tui` cannot depend on `cade-agent` (would create cycle). The `Box<dyn Fn() -> usize>` getter sidesteps the cycle while keeping the queue itself opaque to the TUI.
+
+**TDD record:**
+- RED 1: 4 bell-decision tests written first against missing `should_emit_completion_bell` symbol → compile-failed → impl added → 4/4 GREEN.
+- RED 2: 3 `pending_bg_toast` tests written → compile-failed → impl added → 7/7 GREEN cumulative.
+- RED 3: 5 `tick_bg_pending_toast` tests written → compile-failed → impl added → 5/5 GREEN.
+- GREEN total: 168 tests across cade-tui (60) + cade-agent (102) + cade-cli (6). Workspace 1100+ tests all pass. wasm32 clean. Clippy clean for cade-tui and cade-agent (pre-existing cade-cli lints in `agent.rs` are unrelated).
+- REFACTOR: none.
+
+**Dependency policy:** No new dependencies added.
+
+**Rollback steps:**
+1. `git revert <this commit>` — pure additive changes, no schema/API impact.
+2. Or restore checkpoint `pre-bg-subagent-wakeup-fix` (cp-70ad5003).
+3. Both paths leave existing background-subagent flow intact.

@@ -219,6 +219,43 @@ impl Toast {
     }
 }
 
+/// Pure tick logic for surfacing background-subagent completion toasts.
+///
+/// Called from the input loop's 50ms idle tick.  Mutates `toast` in place
+/// only when `pending` has changed since the last announcement, so the
+/// toast doesn't re-trigger on every tick.  Setting `pending = 0`
+/// (REPL drained the queue) resets the announcement counter so a future
+/// completion will re-toast.
+///
+/// Returns `true` if `toast` was written (caller should set `draw_dirty`).
+///
+/// Pure & non-async: takes `&mut Option<Toast>` and `&mut usize` so it
+/// is testable without constructing a `TuiApp` (which requires a TTY).
+pub fn tick_bg_pending_toast(
+    pending: usize,
+    last_announced: &mut usize,
+    toast: &mut Option<Toast>,
+) -> bool {
+    if pending == *last_announced {
+        return false;
+    }
+    *last_announced = pending;
+    if pending == 0 {
+        return false;
+    }
+    let msg = match pending {
+        1 => "✓ Subagent finished — press Enter to receive".to_string(),
+        n => format!("✓ {n} subagents finished — press Enter to receive"),
+    };
+    *toast = Some(Toast {
+        message: msg,
+        level: ToastLevel::Success,
+        created_at: Instant::now(),
+        ttl: std::time::Duration::from_secs(8),
+    });
+    true
+}
+
 // -- ActiveQuestionState
 #[derive(Debug, Clone)]
 pub struct ActiveQuestionDrawState {
@@ -388,6 +425,22 @@ pub struct TuiApp {
     /// When true, render Nerd Font glyphs for tool icons and status badges.
     /// When false, fall back to plain ASCII/Unicode symbols.
     pub use_nerd_fonts: bool,
+
+    /// Optional getter that, when set, returns the count of background
+    /// subagents that have completed and are waiting in the parent REPL's
+    /// pending-results queue.  Polled during the input-loop's 50ms tick so
+    /// the TUI can flash a toast ("✓ N subagents finished — press Enter")
+    /// while the user is idle at the prompt.
+    ///
+    /// Stored as a boxed callback because `cade-tui` cannot depend on
+    /// `cade-agent` (which owns the result type).  The CLI injects a
+    /// closure over its `Arc<Mutex<Vec<BackgroundResult>>>` at startup.
+    pub bg_pending_count: Option<Box<dyn Fn() -> usize + Send + Sync>>,
+
+    /// Track how many pending background results the toast tick has
+    /// already announced — so we don't spam the toast while the count
+    /// stays the same between ticks.  Reset to 0 once the REPL drains.
+    pub bg_last_announced: usize,
 }
 
 impl TuiApp {
@@ -479,6 +532,8 @@ impl TuiApp {
             last_draw_at: Instant::now(),
             colors,
             use_nerd_fonts: true,
+            bg_pending_count: None,
+            bg_last_announced: 0,
         }
     }
 
@@ -964,6 +1019,64 @@ mod tests {
             ttl: std::time::Duration::from_secs(3),
         };
         assert!(!fresh.is_expired(), "fresh toast should not be expired");
+    }
+
+    // -- tick_bg_pending_toast
+
+    #[test]
+    fn tick_bg_no_change_returns_false_and_leaves_toast_alone() {
+        let mut last = 2usize;
+        let mut toast: Option<Toast> = None;
+        let wrote = tick_bg_pending_toast(2, &mut last, &mut toast);
+        assert!(!wrote, "no change must not write toast");
+        assert!(toast.is_none());
+        assert_eq!(last, 2);
+    }
+
+    #[test]
+    fn tick_bg_singular_toast_for_one_pending() {
+        let mut last = 0usize;
+        let mut toast: Option<Toast> = None;
+        let wrote = tick_bg_pending_toast(1, &mut last, &mut toast);
+        assert!(wrote);
+        let t = toast.expect("toast set");
+        assert!(t.message.contains("Subagent finished"));
+        assert!(matches!(t.level, ToastLevel::Success));
+        assert_eq!(last, 1);
+    }
+
+    #[test]
+    fn tick_bg_plural_toast_for_many() {
+        let mut last = 0usize;
+        let mut toast: Option<Toast> = None;
+        let wrote = tick_bg_pending_toast(4, &mut last, &mut toast);
+        assert!(wrote);
+        assert!(
+            toast.as_ref().unwrap().message.contains("4 subagents finished"),
+            "got: {}",
+            toast.unwrap().message
+        );
+        assert_eq!(last, 4);
+    }
+
+    #[test]
+    fn tick_bg_drain_to_zero_resets_counter_without_toast() {
+        let mut last = 3usize;
+        let mut toast: Option<Toast> = None;
+        let wrote = tick_bg_pending_toast(0, &mut last, &mut toast);
+        assert!(!wrote, "draining to zero must not toast");
+        assert!(toast.is_none());
+        assert_eq!(last, 0, "counter must reset so future completions re-toast");
+    }
+
+    #[test]
+    fn tick_bg_after_drain_re_announces_new_completion() {
+        let mut last = 0usize;
+        let mut toast: Option<Toast> = None;
+        // Simulates: REPL just drained (last=0), then a new completion arrives.
+        let wrote = tick_bg_pending_toast(1, &mut last, &mut toast);
+        assert!(wrote);
+        assert_eq!(last, 1);
     }
 }
 

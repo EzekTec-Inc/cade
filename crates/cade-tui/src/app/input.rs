@@ -32,6 +32,23 @@ impl TuiApp {
 
             // 50 ms poll: allows animation ticks without burning CPU.
             if !event::poll(std::time::Duration::from_millis(50))? {
+                // Background-subagent completion toast (Option 2).
+                // Surface a single toast when pending count changes so the
+                // user knows there are results waiting; the actual drain
+                // still happens in the outer REPL loop after submit.
+                if let Some(getter) = self.bg_pending_count.as_ref() {
+                    let pending = getter();
+                    let mut taken_toast = self.toast.take();
+                    let wrote = super::tick_bg_pending_toast(
+                        pending,
+                        &mut self.bg_last_announced,
+                        &mut taken_toast,
+                    );
+                    self.toast = taken_toast;
+                    if wrote {
+                        self.draw_dirty = true;
+                    }
+                }
                 continue;
             }
             match event::read()? {

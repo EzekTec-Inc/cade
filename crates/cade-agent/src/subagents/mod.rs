@@ -294,3 +294,85 @@ pub struct BackgroundResult {
     pub result: String,
     pub is_error: bool,
 }
+
+// -- Background completion notification (Option 1: terminal BEL)
+
+/// Decide whether a background subagent completion should emit a terminal
+/// BEL byte (`0x07`) to alert the user.
+///
+/// Pure decision function — kept separate from `std::io::stdout()` so it
+/// can be unit-tested without touching the real terminal.  The CLI calls
+/// this from the spawned background task and, if it returns `true`,
+/// writes a single BEL byte to stdout.
+///
+/// Rules:
+/// - `silent`: user opted out (e.g. `silent_subagents` setting).  Never bell.
+/// - `is_tty`: only bell when stdout is an interactive terminal.  CI logs,
+///   piped output, and redirected files must not receive control bytes.
+/// - Errors and successes both bell — the user wants to know either way.
+#[must_use]
+pub fn should_emit_completion_bell(silent: bool, is_tty: bool) -> bool {
+    !silent && is_tty
+}
+
+/// Build the toast message shown by the TUI when one or more background
+/// subagents have completed and are waiting in the pending-results queue.
+///
+/// Pure formatter — returns `None` when there is nothing to surface, so
+/// the caller can early-return without touching `self.toast`.  Singular vs
+/// plural is handled here so the TUI tick loop stays a one-liner.
+#[must_use]
+pub fn pending_bg_toast(pending: usize) -> Option<String> {
+    match pending {
+        0 => None,
+        1 => Some("✓ Subagent finished — press Enter to receive".to_string()),
+        n => Some(format!("✓ {n} subagents finished — press Enter to receive")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bell_fires_on_normal_completion_in_tty() {
+        assert!(should_emit_completion_bell(false, true));
+    }
+
+    #[test]
+    fn bell_suppressed_when_silent_subagents_set() {
+        assert!(!should_emit_completion_bell(true, true));
+    }
+
+    #[test]
+    fn bell_suppressed_when_stdout_not_tty() {
+        // Avoid corrupting CI logs / piped output with control bytes.
+        assert!(!should_emit_completion_bell(false, false));
+    }
+
+    #[test]
+    fn silent_dominates_tty() {
+        assert!(!should_emit_completion_bell(true, false));
+    }
+
+    #[test]
+    fn pending_toast_none_when_empty() {
+        assert_eq!(pending_bg_toast(0), None);
+    }
+
+    #[test]
+    fn pending_toast_singular_for_one() {
+        assert_eq!(
+            pending_bg_toast(1).as_deref(),
+            Some("✓ Subagent finished — press Enter to receive"),
+        );
+    }
+
+    #[test]
+    fn pending_toast_plural_for_many() {
+        assert_eq!(
+            pending_bg_toast(3).as_deref(),
+            Some("✓ 3 subagents finished — press Enter to receive"),
+        );
+    }
+}

@@ -1,6 +1,6 @@
 use super::{BackgroundResult, Repl};
 use crate::Result;
-use cade_agent::subagents::{discover_all_subagents, find_subagent};
+use cade_agent::subagents::{discover_all_subagents, find_subagent, should_emit_completion_bell};
 use std::sync::Arc;
 
 impl Repl {
@@ -248,6 +248,7 @@ impl Repl {
             let bg_parent_id = parent_agent_id.clone();
             let bg_st_label = subagent_mode.clone();
             let bg_task_id = task_id.clone();
+            let bg_silent = silent_stream;
             tokio::spawn(async move {
                 // Permit held for the lifetime of the spawned task
                 let _permit = sem.acquire_owned().await;
@@ -292,6 +293,18 @@ impl Repl {
                     result,
                     is_error,
                 });
+
+                // Option 1: terminal BEL on completion.  Only when stdout is
+                // a TTY and the user has not opted into silent subagents.
+                // The REPL outer loop still owns the actual notification
+                // drain — this byte just nudges the user to press Enter so
+                // the drain can fire.
+                if should_emit_completion_bell(bg_silent, std::io::IsTerminal::is_terminal(&std::io::stdout())) {
+                    use std::io::Write;
+                    let mut out = std::io::stdout().lock();
+                    let _ = out.write_all(b"\x07");
+                    let _ = out.flush();
+                }
             });
 
             Ok(cade_agent::tools::ToolResult {

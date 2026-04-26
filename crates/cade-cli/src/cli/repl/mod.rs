@@ -257,6 +257,26 @@ impl Repl {
         tracing::info!("Subagent concurrency cap: {cap} (set CADE_MAX_SUBAGENTS to override)");
         let skill_reload_rx = cade_core::skills::spawn_skill_watcher(&cwd);
         let mcp_reload_rx = cade_agent::mcp::watcher::spawn_mcp_watcher(&cwd);
+
+        // Pre-construct the background-results queue + the TuiApp so we can
+        // wire a `bg_pending_count` getter on the app pointing at the same
+        // shared queue.  The getter lets the input-loop's 50ms tick surface
+        // a toast when subagents finish while the user is idle (Option 2).
+        let background_results: Arc<Mutex<Vec<BackgroundResult>>> =
+            Arc::new(Mutex::new(vec![]));
+        let mut tui_app = TuiApp::new_with_theme(
+            perm_mode,
+            agent_name_clone.clone(),
+            current_model_clone.clone(),
+            reasoning_effort.clone(),
+            theme,
+        );
+        {
+            let bg_for_getter = Arc::clone(&background_results);
+            tui_app.bg_pending_count =
+                Some(Box::new(move || bg_for_getter.lock().len()));
+        }
+
         Self {
             client,
             agent_id: Arc::new(Mutex::new(agent_id)),
@@ -276,7 +296,7 @@ impl Repl {
             cwd,
             skills: Arc::new(Mutex::new(skills)),
             skills_dir,
-            background_results: Arc::new(Mutex::new(vec![])),
+            background_results,
             current_toolset: Arc::new(Mutex::new(toolset)),
             hooks,
             first_turn: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
@@ -291,13 +311,7 @@ impl Repl {
             session_input_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_output_tokens: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             session_stats: std::sync::Arc::new(parking_lot::Mutex::new(SessionStats::new())),
-            app: Arc::new(Mutex::new(TuiApp::new_with_theme(
-                perm_mode,
-                agent_name_clone.clone(),
-                current_model_clone.clone(),
-                reasoning_effort.clone(),
-                theme,
-            ))),
+            app: Arc::new(Mutex::new(tui_app)),
             queued_steering: Arc::new(Mutex::new(None)),
             queued_followup: Arc::new(Mutex::new(std::collections::VecDeque::new())),
             last_reasoning: Arc::new(Mutex::new(String::new())),
