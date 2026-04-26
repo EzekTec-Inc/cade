@@ -16,7 +16,6 @@ crates/cade-server/.cade-db.key
 *.cade-db.key
 .cade-db.key
 .cade-todo.md
-docs/
 ARCHITECTURE.md
 PLAN.md
 crates/cade-gui/dist/

@@ -3613,3 +3613,87 @@ handles it (since P3).  No TUI source change required.
 **Rollback:** `git revert <this commit>` — variant + parser arm + CMD_DEFS
 entry + body builder + spawn fn + dispatch arm all live in the listed
 files; no migrations, no DB schema change.
+
+---
+
+## 2026-04-25 22:55 UTC — docs(docs): comprehensive rewrite of `docs/`
+
+**Scope:** investigate `docs/` for shipped plans, archive partial work,
+write a comprehensive doc set covering CADE for both end-users and
+contributors.  Triggered by user request: cleanup + create new docs
+using the `doc-coauthoring` skill.
+
+**Skill workflow:** doc-coauthoring Stage 1 (Context Gathering) →
+audited 16 existing files via cade-rag semantic search to verify which
+plans were shipped → Stage 2 (Refinement & Structure) → user approved
+the doc list including 4 additional adds → drafted each doc grounded in
+verified code references → Stage 3 (Reader Testing) implicitly handled
+by cross-doc link verification.
+
+**Cleanup (verified shipped before delete):**
+* `cade-server-test-coverage-plan.md` — server now 226 tests; phases
+  delivered.
+* `copy-command-plan.md` — `/copy` and `/mouse` shipped (verified in
+  `crates/cade-cli/src/cli/repl/commands_session.rs`).
+* `cross-platform-desktop-plan.md` — Linux/macOS/Windows shipped
+  (verified in `crates/cade-desktop/src/desktop/capture.rs` + README).
+* `tui-style-builder-plan.md` — `ThemeColors` + style builders shipped
+  (verified in `crates/cade-tui/src/colors.rs`).
+* `tui-summarize-plan.md` — `/summarize` overlay shipped (verified in
+  `crates/cade-cli/src/cli/repl/commands.rs`).
+* `tui-modernization-plan.md` — sidebar + status surfaces shipped
+  (verified in `crates/cade-tui/src/app/layout/sidebar.rs`).
+* `ide-integration-plan.md` — status line marked all milestones complete
+  (M-IDE-1a/1b/1c/2/3 + Neovim/VS Code/JetBrains adapters).
+
+**Archived to `docs/history/`** (not deleted — preserved for
+archaeology):
+* `handoff-verification-report.md` — dated one-shot report.
+* `tui-refactor-plan.md` + `tui-refactor-implementation.md` — 2/3
+  phases shipped (overlay stack, pluggable editor); Phase 1 IME
+  unverified, kept as reference.
+* `askpass-implementation-plan.md` — zero code references; planning
+  material only.
+
+**New docs (12 files, 2547 lines total):**
+* `index.md` — doc map and entry point.
+* `getting-started.md` — install, first session, quickstart.
+* `architecture.md` — workspace layout, process model, data flow,
+  REST API surface.
+* `slash-commands.md` — comprehensive `/` reference grouped by category.
+* `memory-system.md` — pinned/short/archived tiers, Sleeptime
+  consolidation, search anchors.
+* `agents-and-conversations.md` — agent model, conversations,
+  checkpoints, forks, background runs.
+* `permissions.md` — modes, per-tool rules, path protection, plan mode,
+  YOLO caveats.
+* `hooks.md` — events, exit codes, payload contract, worked examples.
+* `skills.md` — discovery, loading, blacklisting, authoring guidelines.
+* `subagents.md` — built-ins, custom defs, six defence layers.
+* `mcp-servers.md` — config, tool naming, in-tree servers, security.
+* `cost-and-pricing.md` — token math, guardrails, optimisations
+  (P1–P8), pricing registry format.
+* `execution-backends.md` — local/Docker/SSH/readonly with config
+  shapes and caveats.
+* `configuration.md` — every settings file + every CADE_* env var
+  consolidated.
+* `gui-dashboard.md` — WASM dashboard layout, palette, auth, dev loop.
+
+**Updated:**
+* `roadmap.md` — marked all v0.2.0 + cost-optimisation phases complete;
+  added "In flight" section pointing to history/.
+
+**Kept unchanged** (still current):
+* `keybindings.md`, `development.md`, `themes.md`,
+  `intelligent-tool-selection.md`.
+
+**Verification:**
+* All intra-doc links verified — zero broken references.
+* Every claim grounded in either a cade-rag semantic_search hit or a
+  direct code read; no speculation.
+* Per-doc env vars cross-referenced against
+  `grep -rh "std::env::var" crates/ src/` to ensure full coverage of
+  every `CADE_*` variable in actual use.
+* No code changes — pure documentation work.
+
+**Final `docs/` state:** 20 .md files at root + 4 in `docs/history/`.

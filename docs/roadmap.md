@@ -29,46 +29,82 @@
 
 ### Server
 - [x] Axum REST API with full agent lifecycle
-- [x] SQLite persistence with encrypted fields
+- [x] SQLite persistence with encrypted fields (AES-GCM)
 - [x] Per-agent rate limiting
 - [x] Provider hot-reload via `/connect`
 - [x] Live model listing from all providers
 - [x] Streamable HTTP capability (`/v1/stream`)
+- [x] Background runs (`/v1/runs/:id`) for long detached tasks
 
 ### Security
 - [x] Opt-in filesystem sandbox (`CADE_FS_ROOT`)
 - [x] Path traversal protection in `apply_patch`
 - [x] Headless output sanitization (ANSI injection prevention)
 - [x] Constant-time auth comparison
-- [x] Secure random DB encryption key (`.cade-db.key`)
+- [x] Secure random DB encryption key (`~/.cade/db.key`)
 - [x] 0600 permissions on settings files
+- [x] Always-on path protection (denies writes to `.git`, `.ssh`, `.env`, DB key — even in YOLO)
 
 ### Architecture
-- [x] Cargo workspace split (12 crates)
+- [x] Cargo workspace split (14 crates)
 - [x] LLM providers extracted to `cade-ai`
+- [x] `cade-tui` extracted as standalone TUI library
+- [x] `cade-mcp` isolated from `cade-agent`
+- [x] `cade-gui` (WASM dashboard) added
 - [x] Clean acyclic dependency graph
 - [x] Dead legacy code removed (~25K lines)
+- [x] Rust Edition 2024, resolver 3
+- [x] rust10x compliance (Tier 1–4 fixes)
+
+### IDE & Cross-platform
+- [x] `cade-ide-mcp` bridge with TCP loopback adapter transport
+- [x] Neovim adapter (`cade-neovim`)
+- [x] VS Code adapter (`cade-vscode`)
+- [x] JetBrains adapter (`cade-jetbrains`)
+- [x] Cross-platform desktop tools (Linux, macOS, Windows)
+- [x] Linux Wayland + X11 screen capture, window control, notifications
+
+### GUI Dashboard
+- [x] WASM dashboard served at `/dashboard` (rust-embed)
+- [x] Sidebar + timeline + input bar (TUI-matched)
+- [x] SSE streaming with pure-Rust parser (native-testable)
+- [x] Slash-command palette (Ctrl+P)
+- [x] Memory editor, checkpoints, artifacts, MCP/tools/skills overlays
+- [x] Inline question widget (replaces blocking modals)
+- [x] Auto-scroll with manual ↓ button + scroll-velocity heuristic
+
+### Cost Optimisation (2026 Apr)
+- [x] **P1** — `skills` block as `system_static` cache anchor (~90% input saving on payload)
+- [x] **P2** — full cache_read / cache_write accounting in `AgentMetrics`
+- [x] **P3** — auto-cheapest compaction model resolver per provider
+- [x] **P4** — `CADE_MAX_SESSION_COST_USD` hard $-cap
+- [x] **P5** — `compress_tool_schema` for unused non-pinned tools (~75% byte reduction)
+- [x] **P6** — `CADE_TOOL_TURN_MAX_TOKENS` per-turn output cap on tool dispatch
+- [x] **P7** — `CADE_GEMINI_CACHE_TTL_SECS` adaptive TTL
+- [x] **P8** — `tool_executions.output_chars` column for per-call cost telemetry
+
+### Quality
+- [x] Test coverage: 540+ unit tests across the workspace
+- [x] CI/CD pipeline: GitHub Actions (build, test, release)
+- [x] Plugin system: dynamic loading via shared libraries / WASM
+- [x] Multi-agent collaboration: named agents with message passing
+- [x] Self-improvement loop: reflection subagent updates memory automatically
+- [x] Session replay: timeline export
+
+---
+
+## In flight
+
+| Area | Status |
+|---|---|
+| TUI IME (hardware cursor sync, preedit display) | Phase 1 of `docs/history/tui-refactor-implementation.md` |
+| Askpass implementation | Plan in `docs/history/askpass-implementation-plan.md` — not started |
 
 ---
 
 ## Planned
 
-### Short Term
-- [x] **Test coverage expansion**: 295 tests across workspace (server, storage, LLM providers, tools)
-- [x] **CI/CD pipeline**: GitHub Actions for build, test, and release
-- [x] **`cade-tui` extraction**: Separate Ratatui rendering into its own crate
-- [x] **`cade-mcp` extraction**: Isolate MCP client from `cade-agent`
-- [x] **Rust Edition 2024**: Workspace upgraded to Edition 2024, resolver 3
-- [x] **rust10x compliance**: Tier 1–4 fixes (lint guards, regions, dependency sections, macro imports)
-
-### Medium Term
-- [x] **Plugin system**: Dynamic tool loading via shared libraries or WASM
-- [x] **Multi-agent collaboration**: Named agents with message passing
-- [x] **Web UI**: Browser-based interface alongside the terminal
-- [x] **Windows/macOS support**: Cross-platform desktop extensions
-- [x] **Session replay**: Re-watch recorded coding sessions
-
-### Long Term
-- [x] **Self-improvement loop**: Agent learns from past sessions automatically
-- [ ] **Team features**: Shared agents, memory, and skills across a team
-- [x] **IDE integration**: VS Code / JetBrains extensions
+### Long term
+- [ ] **Team features** — shared agents, memory, and skills across a team
+- [ ] **Voice mode** — speech-to-text input + audio output
+- [ ] **Mobile / responsive dashboard** — `cade-gui` adapts to smaller viewports
