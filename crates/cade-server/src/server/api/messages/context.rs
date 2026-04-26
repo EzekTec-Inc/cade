@@ -115,6 +115,11 @@ pub(crate) fn truncate_oversize_message(mut msg: LlmMessage, cap: usize) -> LlmM
 ///
 /// Returns an empty string when `loaded` is empty so the caller can avoid
 /// pushing a useless heading.
+/// Test-only thin wrapper that calls [`render_skills_section_filtered`]
+/// with an empty disabled-set.  Production callers go through the filtered
+/// variant directly so the per-agent blacklist is always honoured; this
+/// shim keeps the older P2-3 test fixtures concise.
+#[cfg(test)]
 pub(crate) fn render_skills_section(
     loaded: &[&cade_core::skills::Skill],
     budget: usize,
