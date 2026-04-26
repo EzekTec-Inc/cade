@@ -3555,3 +3555,61 @@ require a custom function and the historical inaccuracy is bounded.
 
 **Rollback:** revert this commit + manually `PRAGMA user_version = 5` if
 ever needed (no DROP COLUMN — column simply becomes unused).
+
+---
+
+## 2026-04-26 04:08 UTC — feat(gui): wire /compaction-model into GUI palette
+
+**Files modified:**
+* `crates/cade-core/src/resources/palette.rs`
+* `crates/cade-gui/src/api.rs`
+* `crates/cade-gui/src/http_wasm.rs`
+* `crates/cade-gui/src/app/tasks.rs`
+
+**Reason:** the GUI palette previously routed `/compaction-model` to
+`PaletteCmd::Unsupported`, which produced a "GUI panel coming soon" error
+for a command that requires no UI panel — only a one-shot PATCH against
+`/v1/agents/:id`.  The CLI has had this wired since P3 of the cost
+optimisation backlog (commit `4271a3bc`).
+
+**Previous behavior:** typing `/compaction-model <model>` in the GUI
+palette displayed an error and made no API call.  The trigger was not
+discoverable via fuzzy search because it was absent from `CMD_DEFS`.
+
+**New behavior:**
+1. `PaletteCmd::CompactionModel(String)` variant carries the requested
+   model.
+2. `parse_palette_input` returns the new variant; previously
+   `PaletteCmd::Unsupported`.
+3. `CMD_DEFS` advertises `compaction-model` so it appears in fuzzy search.
+4. `dispatch_palette_cmd` calls `spawn_set_agent_compaction_model`, which
+   calls `http_wasm::patch_agent_compaction_model` →
+   `PATCH /v1/agents/:id` with body `{"compaction_model": "<model>"}`.
+5. Empty arg surfaces a usage error.  Explicit clear (empty string →
+   server NULL) remains CLI-only — palette has no confirmation UI to
+   safely make the empty-string-to-clear semantics obvious.
+6. After successful PATCH, agents list refetched so sidebar reflects the
+   new value.
+
+**Tests (5 new):**
+* `parses_compaction_model_command_with_arg` — `/compaction-model X` →
+  `CompactionModel("X")`.
+* `parses_compaction_model_command_without_arg` — `/compaction-model` →
+  `CompactionModel("")`.
+* `compaction_model_is_advertised_in_cmd_defs` — fuzzy search visibility.
+* `patch_agent_compaction_model_body_serializes_model` — round-trips
+  model id.
+* `patch_agent_compaction_model_body_serializes_empty_clear` — empty
+  string preserved verbatim (server maps `""` → `NULL`).
+
+cade-core: 218 pass (215 prior + 3).  cade-gui: 312 pass (310 prior + 2).
+cade-server: 226 unchanged.  Workspace + wasm32 clean.
+
+**TUI unaffected:** `cade-tui` never matches `PaletteCmd` exhaustively — it
+uses the `CMD_DEFS` trigger string and re-injects `/<trigger>` into the
+input loop, where `cade-cli`'s `SlashCmd::CompactionModel` parser already
+handles it (since P3).  No TUI source change required.
+
+**Rollback:** `git revert <this commit>` — variant + parser arm + CMD_DEFS
+entry + body builder + spawn fn + dispatch arm all live in the listed
+files; no migrations, no DB schema change.
