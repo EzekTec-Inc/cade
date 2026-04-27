@@ -4084,3 +4084,55 @@ crates own the resulting design (matches `ARCHITECTURE.md` § Theme System).
 Partition the five `impl SessionState` blocks in `session/mod.rs` by domain
 (memory overlay / checkpoints / artifacts / conversations / streaming /
 planning). Phase B is NOT included in this batch.
+
+---
+
+## 2026-04-27T01:45:00Z — Code review batch 2 Phase B: partition session/mod.rs by domain
+
+**Summary**: Full 17-file domain split of `crates/cade-gui/src/session/mod.rs`
+(previously 2,672 LOC after Phase A). Each `impl SessionState` block's
+methods are classified into a focused sibling file; `mod.rs` retains only the
+struct/enum definitions, 7 core lifecycle methods, the `filter_models` helper,
+and the module declarations. Pure mechanical extraction — zero behaviour
+change, zero new dependencies, no public API rename.
+
+**Files added** (16 domain files):
+- `session/agents.rs`          — 8 methods, 249 LOC
+- `session/artifacts.rs`       — 11 methods, 174 LOC
+- `session/checkpoints.rs`     — 9 methods, 139 LOC
+- `session/context_breakdown.rs` — 5 methods, 46 LOC
+- `session/conversations.rs`   — 6 methods, 119 LOC
+- `session/live_output.rs`     — 4 methods, 46 LOC
+- `session/memory_overlay.rs`  — 12 methods, 219 LOC
+- `session/messages.rs`        — 8 methods, 132 LOC
+- `session/overlays.rs`        — 44 methods, 586 LOC
+- `session/plan.rs`            — 3 methods, 48 LOC
+- `session/skills.rs`          — 4 methods, 45 LOC
+- `session/streaming.rs`       — 15 methods, 287 LOC
+- `session/subagents.rs`       — 3 methods, 47 LOC
+- `session/theme_update.rs`    — 1 method, 12 LOC
+- `session/toasts.rs`          — 4 methods, 50 LOC
+- `session/tools_overlay.rs`   — 6 methods, 76 LOC
+
+**Files modified**:
+- `session/mod.rs` — shrunk from 2,672 LOC → 460 LOC; added 16 `mod` decls
+  and restored the `filter_models` free function needed by `overlays.rs`
+- `PLAN.md` — this entry
+
+**Previous behaviour**: single `session/mod.rs` at 2,672 LOC with 5 scattered
+`impl SessionState` blocks across the file.
+
+**New behaviour**: `mod.rs` is a 460-LOC table-of-contents; each domain has
+its own file with one `impl SessionState { … }` block. All 150 methods and
+their signatures are identical. `tests.rs` (unchanged, 2,412 LOC) still uses
+`use super::*` and exercises every method across all domain files.
+
+**Verification**:
+- `cargo build -p cade-gui` → green
+- `cargo test -p cade-gui --lib` → **312/312 pass**
+- Pre-existing cade-core clippy warnings (unused imports in watcher.rs) and
+  fmt drift in cade-gui/src/api.rs and theme.rs are NOT introduced here.
+
+**Rollback**:
+1. Restore checkpoint `pre-session-phase-b` (cp-7c4802a7), or
+2. `git revert HEAD` once committed.
