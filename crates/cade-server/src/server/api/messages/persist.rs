@@ -116,10 +116,22 @@ pub(crate) fn persist(
         .sum();
     row.char_count = char_count;
 
-    let _ = sqlite::insert_message(&state.db, &row);
+    if let Err(e) = sqlite::insert_message(&state.db, &row) {
+        tracing::error!(
+            target: "cade::persist",
+            "{}",
+            fmt_persist_error("insert_message", role, agent_id, conversation_id, &e)
+        );
+    }
     // Touch the conversation's updated_at so list order stays current
-    if let Some(conv_id) = conversation_id {
-        let _ = sqlite::touch_conversation(&state.db, conv_id);
+    if let Some(conv_id) = conversation_id
+        && let Err(e) = sqlite::touch_conversation(&state.db, conv_id)
+    {
+        tracing::error!(
+            target: "cade::persist",
+            "{}",
+            fmt_persist_error("touch_conversation", role, agent_id, Some(conv_id), &e)
+        );
     }
 }
 
@@ -149,3 +161,72 @@ pub(crate) fn resolve_conversation(
 }
 
 // -- POST /v1/agents/:id/messages  (blocking)
+
+/// Format the error message emitted via `tracing::error!` when a
+/// message-persistence call fails.  Pure helper, kept side-effect free
+/// so the formatting is unit-testable without a tracing subscriber.
+///
+/// Output is intentionally bounded: the error is rendered with
+/// `Display` (no debug dump) and PII-sensitive fields like `content`
+/// are not embedded.  Only the role, agent id, and conversation id
+/// (if present) appear, alongside the underlying error.
+pub(crate) fn fmt_persist_error(
+    op: &str,
+    role: &str,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+    err: &dyn std::fmt::Display,
+) -> String {
+    match conversation_id {
+        Some(cid) => {
+            format!("persist {op} failed for role='{role}' agent='{agent_id}' conv='{cid}': {err}")
+        }
+        None => {
+            format!("persist {op} failed for role='{role}' agent='{agent_id}' conv=<none>: {err}")
+        }
+    }
+}
+
+#[cfg(test)]
+mod fmt_persist_error_tests {
+    use super::fmt_persist_error;
+
+    #[test]
+    fn includes_op_role_and_agent() {
+        let s = fmt_persist_error("insert_message", "user", "agent-1", None, &"db locked");
+        assert!(s.contains("insert_message"), "missing op: {s}");
+        assert!(s.contains("role='user'"), "missing role: {s}");
+        assert!(s.contains("agent='agent-1'"), "missing agent: {s}");
+        assert!(s.contains("db locked"), "missing underlying err: {s}");
+    }
+
+    #[test]
+    fn renders_conversation_id_when_present() {
+        let s = fmt_persist_error(
+            "touch_conversation",
+            "user",
+            "agent-1",
+            Some("conv-42"),
+            &"io error",
+        );
+        assert!(s.contains("conv='conv-42'"), "expected conv id: {s}");
+    }
+
+    #[test]
+    fn renders_none_marker_when_conversation_id_absent() {
+        let s = fmt_persist_error("insert_message", "assistant", "a1", None, &"x");
+        assert!(s.contains("conv=<none>"), "expected <none> marker: {s}");
+    }
+
+    #[test]
+    fn does_not_leak_payload_or_content_keys() {
+        // The message content / payload is never passed to this helper,
+        // so it cannot accidentally end up in logs.  Defence-in-depth.
+        let s = fmt_persist_error("insert_message", "user", "agent-1", None, &"oops");
+        assert!(!s.contains("payload"), "payload must not appear: {s}");
+        assert!(
+            !s.to_lowercase().contains("body"),
+            "body must not appear: {s}"
+        );
+    }
+}

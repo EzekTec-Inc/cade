@@ -3862,3 +3862,157 @@ session without prompting the agent to verify.
 
 **Rollback:** restore checkpoint `pre-amnesia-fixes` (cp-0dd1d21c), or
 `git revert` the resulting commit.
+
+---
+
+## 2026-04-26T18:30:00Z — Code review resolution (P1+P2+P3 partial batch)
+
+**Summary**: Six tasks from the validated CADE code-review resolution plan
+implemented under TDD with strict-project-execution + tdd-guide skills loaded.
+No new dependencies. No public-API changes. No behaviour changes outside the
+explicit additions listed below. Pre-existing clippy errors and unrelated tests
+were not touched.
+
+**Tasks completed (6 of 10)**:
+
+1. **Task 1.1 — Surface persistence errors via tracing** (P1, was silent data
+   loss). `persist()` now emits `tracing::error!(target = "cade::persist", ...)`
+   on `insert_message` and `touch_conversation` failures via the new pure helper
+   `fmt_persist_error`. **+4 helper tests**, all green.
+2. **Task 1.2 — Observable mutex poison recovery** (was P0, downgraded to P1).
+   New module `crate::server::poison` exposing `lock_or_recover(&Mutex, label)`
+   which logs to `cade::poison` on poison and returns the inner guard. Migrated
+   6 production call sites (`rate_limit.rs:105`, `messages/context.rs:289/452/479/1087`,
+   `api/run.rs:352`). **+4 helper tests** including a real cross-thread poison
+   recovery scenario.
+3. **Task 2.3 — SSE protocol regression coverage** (P2, was missing). Added
+   `sse_protocol_tests` module exercising `pub async fn run_agent` end-to-end
+   via the axum extractors with no LLM call. Covers empty input → 400, missing
+   conversation → 404, and an information-leak guard (no host paths or
+   backtrace strings in error bodies). **+4 integration-style tests**. Required
+   widening visibility of two pre-existing test helpers (`PanicOnCallLlm` and
+   `build_state_with_llm`) from `private` to `pub(super)`.
+4. **Task 2.5 — Bundled JSON validation tests** (P2). Added named tests in
+   `cade-ai::registry::tests` and `cade-ai::provider_registry::tests` that
+   force-evaluate the `LazyLock` initialisers and assert the bundled
+   `default_pricing.json` / `default_providers.json` parse into the correct
+   Rust shape with non-empty content. Surfaces malformed-JSON regressions with
+   an obvious test name instead of as a downstream failure. **+3 tests**.
+5. **Task 3.1 — `CONTEXT_CACHE_CAPACITY` const** (was P0, downgraded to P3).
+   Defined `pub const CONTEXT_CACHE_CAPACITY: NonZeroUsize` in
+   `cade-server::server::state` with 2 sentinel tests. Migrated 14 duplicate
+   `NonZeroUsize::new(20).unwrap()` literals (1 production binary, 6 production
+   library sites, 7 test helpers) to reference the const.
+6. **Task 3.2 — `unimplemented!()` → `unreachable!()` in test mocks** (P3,
+   cosmetic). Replaced 7 occurrences across `run.rs`, `compact.rs`,
+   `context_stats.rs`, `messages/tests.rs`. Behaviour identical (both panic on
+   call); intent now documented via the panic message
+   `"stream() is not exercised by this mock"`.
+7. **Task 3.3 — `cade-mcp` HashMap pattern** (P3, cosmetic). Kept the original
+   structure (smallest viable change) but replaced bare `.unwrap()` with
+   `.expect("key proven present by preceding if-let-Some gate")` to document
+   the invariant. No semantic change.
+
+**Files modified (20 + 1 new)**:
+- `crates/cade-ai/src/provider_registry.rs` (Task 2.5)
+- `crates/cade-ai/src/registry.rs` (Task 2.5)
+- `crates/cade-mcp/src/lib.rs` (Task 3.3)
+- `crates/cade-server/src/server/api/auth_test.rs` (Task 3.1)
+- `crates/cade-server/src/server/api/compact.rs` (Tasks 3.1, 3.2)
+- `crates/cade-server/src/server/api/complete.rs` (Task 3.1)
+- `crates/cade-server/src/server/api/context_stats.rs` (Tasks 3.1, 3.2)
+- `crates/cade-server/src/server/api/dashboard_test.rs` (Task 3.1)
+- `crates/cade-server/src/server/api/evals_test.rs` (Task 3.1)
+- `crates/cade-server/src/server/api/messages/context.rs` (Task 1.2)
+- `crates/cade-server/src/server/api/messages/persist.rs` (Task 1.1)
+- `crates/cade-server/src/server/api/messages/tests.rs` (Tasks 3.1, 3.2)
+- `crates/cade-server/src/server/api/router_test.rs` (Task 3.1)
+- `crates/cade-server/src/server/api/run.rs` (Tasks 1.2, 2.3, 3.1, 3.2)
+- `crates/cade-server/src/server/api/skills.rs` (Task 3.1)
+- `crates/cade-server/src/server/consolidation.rs` (Task 3.1)
+- `crates/cade-server/src/server/mod.rs` (Task 1.2 — register poison module)
+- `crates/cade-server/src/server/poison.rs` (NEW, Task 1.2)
+- `crates/cade-server/src/server/rate_limit.rs` (Task 1.2)
+- `crates/cade-server/src/server/state.rs` (Tasks 1.2, 3.1)
+- `src/bin/cade-server.rs` (Task 3.1)
+
+**TDD record (red-green-refactor)**:
+- RED 1: 4 `fmt_persist_error` tests added → compile-failed (helper missing)
+  → impl added → 4/4 GREEN.
+- RED 2: 4 `poison::lock_or_recover` tests added (incl. cross-thread poison
+  recovery) → compile-failed (module missing) → module created + registered
+  → 4/4 GREEN. 6 production call sites then migrated; 234 cade-server lib
+  tests still GREEN after migration.
+- RED 3: 2 `CONTEXT_CACHE_CAPACITY` sentinel tests → const missing → const
+  added → 2/2 GREEN. Then 14 call-site sweep → 236 cade-server lib tests
+  GREEN after sweep.
+- RED 4: 4 SSE protocol tests added → compile-failed (private items) →
+  visibility widened to `pub(super)` for `PanicOnCallLlm` and
+  `build_state_with_llm` → 4/4 GREEN.
+- RED 5: 3 bundled-JSON validation tests added in cade-ai → no impl change
+  needed, GREEN immediately (proves existing JSON is valid).
+- Tasks 3.2, 3.3 were pure renames / cosmetic and did not require red-green.
+
+**Total new tests: 17**:
+- 4 fmt_persist_error
+- 4 poison
+- 2 context_cache_capacity sentinels
+- 4 sse_protocol_tests
+- 1 bundled_pricing
+- 2 bundled_providers
+
+**Verification**:
+- `cargo test --workspace --lib`: all GREEN. Crate breakdown: cade-server
+  240 (was 230, +10), cade-ai 109 (+3), cade-mcp 0 (no test mod existed),
+  others unchanged. Workspace lib total: 1100+, 0 failed.
+- `cargo test --workspace --test '*'`: 25/25 integration tests GREEN
+  (10 approval_tests + 15 context_memory_regression).
+- `cargo build --workspace`: GREEN.
+- `cargo fmt`: applied scoped to the 20 intentionally-edited files.
+  Initial run reformatted 35 files (rustfmt picked up unrelated whitespace);
+  the 15 unintended files were reverted via `git checkout HEAD --` per the
+  strict-project-execution minimal-change policy.
+
+**Pre-existing clippy errors (NOT introduced, NOT fixed; user approval needed
+to fix)**:
+1. `cade-core/src/resources/themes.rs:1128` — `iter().copied().collect()`
+   (commit `d2ecf6e9`, weeks ago)
+2. `cade-server/src/server/api/messages/context.rs:154` — `splitn(2, '\n')`
+3. `cade-server/src/server/api/messages/context.rs:483` — collapsible `if`
+   (line shifted from HEAD's 477 by my poison-recovery edit; defect identical)
+4. `cade-server/src/server/api/run.rs:239` — `iter().copied().collect()`
+5. `cade-server/src/server/config.rs:155, 158, 159` — collapsible `if` chains
+6. `cade-gui/src/api.rs:51` — `large_enum_variant` on `StreamEvent`
+7. `cade-cli/src/cli/repl/commands_pricing.rs:80,82` — duplicate `if` blocks
+8. `cade-cli/src/cli/repl/turn_loop/agent.rs:113` — redundant binding
+
+CI runs `cargo clippy --workspace --all-targets -- -D warnings`; these would
+fail on HEAD too, so this batch is not a regression.
+
+**Architectural notes**:
+- Visibility widening on `PanicOnCallLlm` / `build_state_with_llm` from
+  `private` to `pub(super)` is the smallest change that lets the new
+  `sse_protocol_tests` module reuse the test scaffold. Public API is
+  unchanged.
+- `pub(crate) fn fmt_persist_error` and `pub mod poison` are new internal
+  surface area in `cade-server`. Neither leaks beyond the crate; both are
+  minimal helpers extracted *only* to enable their own pre-existing TDD
+  cycles.
+- `CONTEXT_CACHE_CAPACITY` lives in `cade-server::server::state`. Production
+  binaries reference it via `cade_server::server::state::CONTEXT_CACHE_CAPACITY`;
+  test helpers via `crate::server::state::CONTEXT_CACHE_CAPACITY`.
+
+**Tasks deferred (user did not approve in this batch)**:
+- Task 1.3 — SQLite connection pooling. Requires new dep
+  (`tokio-rusqlite` or `r2d2_sqlite`); STOP-AND-ASK per
+  strict-project-execution dependency policy.
+- Task 2.1 — Extract `run_agent` (444-line function). Approved in
+  principle; deferred to a follow-up batch since each extraction is its
+  own incremental PR (~200 lines).
+- Task 2.2 — Split `cade-gui::session.rs` (5,084 lines). Mechanical
+  module split; deferred.
+- Task 2.4 — Switch caches to `parking_lot::Mutex`. Deferred.
+
+**Rollback**: restore checkpoint `pre-resolution-plan` (cp-de20e6fb), or
+`git revert` the eventual commit. The workspace tree was clean at that
+checkpoint.

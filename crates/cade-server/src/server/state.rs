@@ -1,10 +1,19 @@
 use crate::server::{config::ServerConfig, rate_limit::RateLimiter};
-use cade_store::sqlite::Db;
-use cade_ai::{LlmProvider, LlmRouter, LlmMessage};
+use cade_ai::{LlmMessage, LlmProvider, LlmRouter};
 use cade_core::skills::Skill;
+use cade_store::sqlite::Db;
 use serde_json::Value;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use tokio::sync::RwLock;
+
+/// Capacity of the per-agent context-build LRU cache.  Defined once
+/// here so production binaries, the consolidation worker, and every
+/// test helper share a single source of truth instead of duplicating
+/// the literal `NonZeroUsize::new(20).unwrap()` 14 times across the
+/// crate (see `state::tests::context_cache_capacity_is_nonzero`).
+pub const CONTEXT_CACHE_CAPACITY: NonZeroUsize =
+    NonZeroUsize::new(20).expect("CONTEXT_CACHE_CAPACITY must be > 0; literal is non-zero");
 
 /// Re-export so call-sites in api/ can do `use crate::server::state::McpManager`.
 pub use cade_agent::mcp::McpManager;
@@ -46,8 +55,12 @@ impl AgentMetrics {
     /// All four fields are accumulated atomically; cache fields are no
     /// longer dropped on the floor as in the pre-P2 implementation.
     pub fn accumulate_usage(&mut self, u: &cade_ai::TokenUsage) {
-        self.input_tokens_total = self.input_tokens_total.saturating_add(u.input_tokens as u64);
-        self.output_tokens_total = self.output_tokens_total.saturating_add(u.output_tokens as u64);
+        self.input_tokens_total = self
+            .input_tokens_total
+            .saturating_add(u.input_tokens as u64);
+        self.output_tokens_total = self
+            .output_tokens_total
+            .saturating_add(u.output_tokens as u64);
         self.cache_read_tokens_total = self
             .cache_read_tokens_total
             .saturating_add(u.cache_read_tokens as u64);
@@ -160,12 +173,12 @@ pub struct AppState {
     /// end of every successful `build_context` call.  Read-only by
     /// outside callers; the `/v1/agents/:id/context_stats` endpoint
     /// projects this map.
-    pub agent_context_telemetry:
-        Arc<RwLock<std::collections::HashMap<String, ContextTelemetry>>>,
+    pub agent_context_telemetry: Arc<RwLock<std::collections::HashMap<String, ContextTelemetry>>>,
     /// LRU cache for `build_context` outputs to avoid recomputing history loops.
     /// Key: `format!("{agent_id}:{conversation_id}")`
     /// Value: `(max_rowid, cached_context_tuple)`
-    pub context_cache: Arc<std::sync::Mutex<lru::LruCache<String, (u64, (String, Vec<LlmMessage>, Vec<Value>))>>>,
+    pub context_cache:
+        Arc<std::sync::Mutex<lru::LruCache<String, (u64, (String, Vec<LlmMessage>, Vec<Value>))>>>,
 
     // ── Skills ──────────────────────────────────────────────────────────────
     /// All discovered skills (global + project). Populated at boot from
@@ -181,7 +194,8 @@ pub struct AppState {
     /// Completed background subagent results waiting to be injected into the
     /// parent agent's next agentic loop iteration.
     /// Key: parent agent_id, Value: vec of completed results.
-    pub pending_subagent_results: Arc<RwLock<std::collections::HashMap<String, Vec<SubagentResult>>>>,
+    pub pending_subagent_results:
+        Arc<RwLock<std::collections::HashMap<String, Vec<SubagentResult>>>>,
     /// Semaphore limiting concurrent subagent LLM calls server-side.
     pub subagent_semaphore: Arc<tokio::sync::Semaphore>,
 }
@@ -190,6 +204,22 @@ pub struct AppState {
 mod tests {
     use super::*;
     use cade_ai::TokenUsage;
+
+    #[test]
+    fn context_cache_capacity_is_twenty() {
+        // Locks the documented capacity.  Bumping the value is a
+        // deliberate decision; this test exists to prevent it from
+        // drifting silently (e.g. via a typo'd literal at one of the
+        // 14 prior duplication sites).
+        assert_eq!(CONTEXT_CACHE_CAPACITY.get(), 20);
+    }
+
+    #[test]
+    fn context_cache_capacity_is_nonzero() {
+        // Const-evaluated at compile time; runtime check is belt-and-
+        // suspenders against accidental change to a zero literal.
+        assert!(CONTEXT_CACHE_CAPACITY.get() > 0);
+    }
 
     #[test]
     fn accumulate_usage_sums_all_four_token_fields() {

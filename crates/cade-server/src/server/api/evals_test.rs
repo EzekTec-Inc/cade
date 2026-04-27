@@ -64,11 +64,13 @@ async fn test_db_lock_poisoning_yields_500() {
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
+        context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+            crate::server::state::CONTEXT_CACHE_CAPACITY,
+        ))),
         all_skills: Arc::new(RwLock::new(Vec::new())),
         agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),
-            pending_subagent_results: Arc::new(RwLock::new(std::collections::HashMap::new())),
-            subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+        pending_subagent_results: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
     };
 
     // 3. Call the handler directly

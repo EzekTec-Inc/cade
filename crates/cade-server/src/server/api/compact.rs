@@ -77,7 +77,7 @@ mod tests {
                     >,
                 >,
             > {
-                unimplemented!()
+                unreachable!("stream() is not exercised by this mock")
             }
         }
 
@@ -97,21 +97,40 @@ mod tests {
         AppState {
             db,
             llm: std::sync::Arc::new(NoopLlm),
-            llm_router: std::sync::Arc::new(tokio::sync::RwLock::new(cade_ai::LlmRouter::build(&cade_ai::AiConfig {
-                anthropic_api_key: None, openai_api_key: None, google_api_key: None,
-                ollama_base_url: String::new(), llm_provider: String::new(),
-            }))),
+            llm_router: std::sync::Arc::new(tokio::sync::RwLock::new(cade_ai::LlmRouter::build(
+                &cade_ai::AiConfig {
+                    anthropic_api_key: None,
+                    openai_api_key: None,
+                    google_api_key: None,
+                    ollama_base_url: String::new(),
+                    llm_provider: String::new(),
+                },
+            ))),
             config,
             mcp: std::sync::Arc::new(crate::server::state::McpManager::empty()),
             rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
-            memory_cache: std::sync::Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
+            memory_cache: std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
+            agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            agent_metrics: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+                crate::server::state::CONTEXT_CACHE_CAPACITY,
+            ))),
             all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
-            agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            pending_subagent_results: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            pending_subagent_results: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }

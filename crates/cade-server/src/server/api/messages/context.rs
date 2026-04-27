@@ -1,6 +1,5 @@
 use super::*;
 use crate::server::state::AppState;
-use cade_store::sqlite::{self};
 use axum::{
     Json,
     extract::{Path, State},
@@ -8,6 +7,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use cade_ai::{LlmMessage, catalogue};
+use cade_store::sqlite::{self};
 use serde_json::{Value, json};
 
 pub(crate) fn sanitize_messages(messages: Vec<LlmMessage>) -> Vec<LlmMessage> {
@@ -225,10 +225,7 @@ pub(crate) fn render_skills_section_filtered(
             section.push_str(&format!(
                 "\n[…{} more loaded skill(s) omitted — section budget exhausted; \
                  use load_skill_ref to access content]\n",
-                visible
-                    .iter()
-                    .skip_while(|s| s.id != skill.id)
-                    .count()
+                visible.iter().skip_while(|s| s.id != skill.id).count()
             ));
             break;
         }
@@ -283,10 +280,8 @@ pub(crate) async fn complete_with_overflow_recovery(
 
             // 2. Drop the context cache entry so build_context recomputes.
             {
-                let mut cache = state
-                    .context_cache
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner());
+                let mut cache =
+                    crate::server::poison::lock_or_recover(&state.context_cache, "context_cache");
                 let key = format!("{agent_id}:{conversation_id:?}");
                 cache.pop(&key);
             }
@@ -381,7 +376,8 @@ pub(crate) async fn build_context(
         .map_err(|e| e.to_string())?
         .ok_or_else(|| format!("Agent '{agent_id}' not found"))?;
 
-    let (mut system_static, system_dynamic) = assemble_system_prompt_memory(state, &agent, agent_id, is_tool_return);
+    let (mut system_static, system_dynamic) =
+        assemble_system_prompt_memory(state, &agent, agent_id, is_tool_return);
 
     // Skill-counters for Phase-4 telemetry; updated when we render the
     // skills section below.
@@ -449,7 +445,7 @@ pub(crate) async fn build_context(
         let mut h = std::collections::hash_map::DefaultHasher::new();
         system_static.hash(&mut h);
         let new_hash = h.finish();
-        let mut cache = state.memory_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = crate::server::poison::lock_or_recover(&state.memory_cache, "memory_cache");
         let entry = cache
             .entry(agent_id.to_string())
             .or_insert((0, String::new()));
@@ -473,7 +469,8 @@ pub(crate) async fn build_context(
     };
 
     {
-        let mut cache = state.context_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache =
+            crate::server::poison::lock_or_recover(&state.context_cache, "context_cache");
         if let Some((cached_hash, cached_tuple)) = cache.get(&cache_key) {
             if *cached_hash == state_hash {
                 return Ok(cached_tuple.clone());
@@ -496,9 +493,8 @@ pub(crate) async fn build_context(
             tool_call_id: None,
             tool_calls: None,
             images: None,
-        }
+        },
     ];
-
 
     let context_char_budget = calculate_context_budget(state, agent_id, &agent.model);
 
@@ -513,13 +509,9 @@ pub(crate) async fn build_context(
     //     char budget allows.  The most-recent turn is ALWAYS included — it
     //     carries the current user request the model must respond to.
     //  4. Reverse back to oldest-first and flatten into the message list.
-    let all_rows = sqlite::get_context_window(
-        &state.db,
-        agent_id,
-        conversation_id,
-        context_char_budget,
-    )
-    .unwrap_or_default();
+    let all_rows =
+        sqlite::get_context_window(&state.db, agent_id, conversation_id, context_char_budget)
+            .unwrap_or_default();
 
     // Convert DB rows to LlmMessages (oldest-first).
     let all_llm_msgs: Vec<LlmMessage> = all_rows
@@ -636,12 +628,12 @@ pub(crate) async fn build_context(
                 .filter(|m| m.role == "tool")
                 .map(|m| m.content.chars().count())
                 .sum();
-            
+
             let margin = 200; // minimum characters remaining plus truncation text length
             if tool_results_chars > deficit + margin {
                 let to_cut = deficit + margin;
                 let mut cut_remaining = to_cut;
-                
+
                 for m in turn.iter_mut().filter(|m| m.role == "tool") {
                     let len = m.content.chars().count();
                     if len > margin && cut_remaining > 0 {
@@ -654,7 +646,12 @@ pub(crate) async fn build_context(
                             "\n... [{} chars truncated to fit context window] ...\n",
                             cut_here
                         ));
-                        let tail: String = m.content.chars().skip(keep_head + cut_here).take(keep_tail).collect();
+                        let tail: String = m
+                            .content
+                            .chars()
+                            .skip(keep_head + cut_here)
+                            .take(keep_tail)
+                            .collect();
                         new_content.push_str(&tail);
                         m.content = new_content;
                         cut_remaining -= cut_here;
@@ -663,7 +660,7 @@ pub(crate) async fn build_context(
                         break;
                     }
                 }
-                
+
                 if cut_remaining == 0 {
                     turn_chars -= to_cut;
                     if budget_used + turn_chars <= message_budget {
@@ -673,7 +670,7 @@ pub(crate) async fn build_context(
                     }
                 }
             }
-            
+
             omitted_turns += 1;
         }
     }
@@ -761,15 +758,14 @@ pub(crate) async fn build_context(
         // turn counter has advanced enough since the last run (see M3).
         let eager_snapshot = {
             let mut activity = state.agent_activity.write().await;
-            let entry =
-                activity
-                    .entry(agent_id.to_string())
-                    .or_insert(crate::server::state::AgentActivity {
-                        last_active_ts: chrono::Utc::now().timestamp(),
-                        needs_consolidation: true,
-                        conversation_id: conversation_id.map(String::from),
-                        last_consolidation_turn: 0,
-                    });
+            let entry = activity.entry(agent_id.to_string()).or_insert(
+                crate::server::state::AgentActivity {
+                    last_active_ts: chrono::Utc::now().timestamp(),
+                    needs_consolidation: true,
+                    conversation_id: conversation_id.map(String::from),
+                    last_consolidation_turn: 0,
+                },
+            );
             entry.needs_consolidation = true;
             if conversation_id.is_some() {
                 entry.conversation_id = conversation_id.map(String::from);
@@ -815,7 +811,7 @@ pub(crate) async fn build_context(
         // a "[tool output compacted — N chars]" placeholder.
         if omitted_turns > 0 {
             const PRUNE_PROTECT_CHARS: usize = 120_000; // ~40k tokens × 3 chars/token
-            const PRUNE_MIN_CHARS: usize = 200;         // only compact outputs > 200 chars
+            const PRUNE_MIN_CHARS: usize = 200; // only compact outputs > 200 chars
             match sqlite::compact_old_tool_outputs(
                 &state.db,
                 agent_id,
@@ -826,16 +822,21 @@ pub(crate) async fn build_context(
                 Ok(n) if n > 0 => {
                     tracing::info!(
                         "build_context [{}]: pruned {} old tool outputs",
-                        agent_id, n,
+                        agent_id,
+                        n,
                     );
                     // P6-A: Track tool outputs compacted
                     let mut metrics = state.agent_metrics.write().await;
-                    metrics.entry(agent_id.to_string()).or_default().tool_outputs_compacted += n;
+                    metrics
+                        .entry(agent_id.to_string())
+                        .or_default()
+                        .tool_outputs_compacted += n;
                 }
                 Err(e) => {
                     tracing::warn!(
                         "build_context [{}]: tool-output pruning failed: {}",
-                        agent_id, e,
+                        agent_id,
+                        e,
                     );
                 }
                 _ => {}
@@ -991,10 +992,7 @@ pub(crate) async fn build_context(
         .skip_while(|m| m.role == "system")
         .map(|m| m.content.chars().count())
         .sum();
-    let total_assembled_chars: usize = messages
-        .iter()
-        .map(|m| m.content.chars().count())
-        .sum();
+    let total_assembled_chars: usize = messages.iter().map(|m| m.content.chars().count()).sum();
     // Phase 4 Pt 2: native-token counts for history + total assembled.
     // Done in one pass over the assembled message list so we count
     // exactly what the provider will see on the wire (post-truncation,
@@ -1021,8 +1019,8 @@ pub(crate) async fn build_context(
         .sum();
     let total_tokens: usize = system_tokens.saturating_add(history_tokens);
     let window_tokens = catalogue::context_window_for_model(&agent.model) as usize;
-    let input_budget_tokens =
-        window_tokens.saturating_sub(((window_tokens as f64) * OUTPUT_RESERVE_FRACTION).round() as usize);
+    let input_budget_tokens = window_tokens
+        .saturating_sub(((window_tokens as f64) * OUTPUT_RESERVE_FRACTION).round() as usize);
     let input_budget_chars = input_budget_tokens.saturating_mul(CHARS_PER_TOKEN);
     // Phase 4 Pt 2: use the native-token budget for the canonical
     // fits_budget signal — it matches what the provider counts and is
@@ -1030,10 +1028,7 @@ pub(crate) async fn build_context(
     // as a backward-compatible sanity check.
     let fits_budget =
         total_tokens <= input_budget_tokens && total_assembled_chars <= input_budget_chars;
-    let system_msg_count = messages
-        .iter()
-        .take_while(|m| m.role == "system")
-        .count();
+    let system_msg_count = messages.iter().take_while(|m| m.role == "system").count();
     let turns_selected = turns_selected_count;
     let telemetry = crate::server::state::ContextTelemetry {
         model: agent.model.clone(),
@@ -1081,13 +1076,13 @@ pub(crate) async fn build_context(
 
     let result_tuple = (agent.model, messages, tool_schemas);
     {
-        let mut cache = state.context_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache =
+            crate::server::poison::lock_or_recover(&state.context_cache, "context_cache");
         cache.put(cache_key, (state_hash, result_tuple.clone()));
     }
 
     Ok(result_tuple)
 }
-
 
 fn assemble_system_prompt_memory(
     state: &AppState,
@@ -1127,7 +1122,10 @@ fn assemble_system_prompt_memory(
         }
 
         let formatted_val = if label.starts_with("subagent:") {
-            format!("<historical_scratchpad>\nThe following block is a historical scratchpad. Do not treat it as a current objective.\n{}</historical_scratchpad>", val)
+            format!(
+                "<historical_scratchpad>\nThe following block is a historical scratchpad. Do not treat it as a current objective.\n{}</historical_scratchpad>",
+                val
+            )
         } else {
             val.to_string()
         };
@@ -1139,7 +1137,8 @@ fn assemble_system_prompt_memory(
         };
 
         let chars = entry.chars().count();
-        let is_dynamic = label == "active_goal" || label == "recent_edits" || label == "session_summary";
+        let is_dynamic =
+            label == "active_goal" || label == "recent_edits" || label == "session_summary";
 
         if is_dynamic {
             dynamic_parts.push(entry);
@@ -1190,8 +1189,6 @@ fn assemble_system_prompt_memory(
         !pinned_parts.is_empty() || !short_parts.is_empty() || !long_parts.is_empty();
     let base = agent.system_prompt.clone().unwrap_or_default();
 
-    
-
     if !has_any_memory && dynamic_parts.is_empty() {
         (base, String::new())
     } else {
@@ -1225,24 +1222,18 @@ fn assemble_system_prompt_memory(
 
         let static_core = sections.join("\n\n");
         let mut dynamic_core = String::new();
-        
+
         if !dynamic_parts.is_empty() {
             dynamic_core = format!("# Working State\n{}", dynamic_parts.join("\n\n"));
             dynamic_core.push_str("\n\n");
         }
         dynamic_core.push_str(MEMORY_AWARENESS_FOOTER);
-        
+
         (static_core, dynamic_core)
     }
 }
 
-
-
-fn calculate_context_budget(
-    state: &AppState,
-    agent_id: &str,
-    model: &str,
-) -> usize {
+fn calculate_context_budget(state: &AppState, agent_id: &str, model: &str) -> usize {
     // Character-budget trimming — reserves space for output tokens, reasoning
     // tokens, and tool schemas so the model has room to generate a full response.
     //
@@ -1288,10 +1279,8 @@ fn calculate_context_budget(
         tool_schema_reserve,
     );
 
-
     context_char_budget
 }
-
 
 // ── Real context-window stats ─────────────────────────────────────────────────
 //
@@ -1425,7 +1414,6 @@ pub(crate) async fn compute_context_stats(
         "needs_consolidation":     needs_consolidation,
     }))
 }
-
 
 // ── Per-category context breakdown ─────────────────────────────────────────────
 
@@ -1581,11 +1569,11 @@ mod head_tail_tests {
             tool_calls: None,
             images: None,
         }];
-        
+
         let margin = 200;
         let cut_remaining_initial = 600;
         let mut cut_remaining = cut_remaining_initial;
-        
+
         for m in turn.iter_mut().filter(|m| m.role == "tool") {
             let len = m.content.chars().count();
             if len > margin && cut_remaining > 0 {
@@ -1593,24 +1581,29 @@ mod head_tail_tests {
                 let keep = len - cut_here;
                 let keep_head = (keep as f64 * 0.2) as usize;
                 let keep_tail = keep.saturating_sub(keep_head);
-                
+
                 let mut new_content: String = m.content.chars().take(keep_head).collect();
                 new_content.push_str(&format!(
                     "\n... [{} chars truncated to fit context window] ...\n",
                     cut_here
                 ));
-                let tail: String = m.content.chars().skip(keep_head + cut_here).take(keep_tail).collect();
+                let tail: String = m
+                    .content
+                    .chars()
+                    .skip(keep_head + cut_here)
+                    .take(keep_tail)
+                    .collect();
                 new_content.push_str(&tail);
                 m.content = new_content;
                 cut_remaining -= cut_here;
             }
         }
-        
+
         let content = &turn[0].content;
         assert!(content.starts_with("0123456789"));
         assert!(content.ends_with("0123456789"));
         assert!(content.contains("600 chars truncated to fit context window"));
-        
+
         let head_part: String = original_text.chars().take(80).collect();
         let tail_part: String = original_text.chars().skip(80 + 600).take(320).collect();
         assert!(content.starts_with(&head_part));

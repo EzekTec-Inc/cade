@@ -61,7 +61,7 @@ mod tests {
                     >,
                 >,
             > {
-                unimplemented!()
+                unreachable!("stream() is not exercised by this mock")
             }
         }
         let config = std::sync::Arc::new(crate::server::config::ServerConfig {
@@ -105,7 +105,7 @@ mod tests {
                 std::collections::HashMap::new(),
             )),
             context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(20).unwrap(),
+                crate::server::state::CONTEXT_CACHE_CAPACITY,
             ))),
             all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
             agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(

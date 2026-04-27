@@ -5,10 +5,10 @@
 //! - `POST /v1/agents/:id/skills/load`     — load (activate) a skill for an agent
 
 use axum::{
+    Json,
     extract::{Path, State},
     http::StatusCode,
     response::{IntoResponse, Response},
-    Json,
 };
 use serde_json::json;
 
@@ -90,7 +90,12 @@ pub async fn load_skill(
     let all = state.all_skills.read().await;
     let skill = match all.iter().find(|s| s.id == skill_id) {
         Some(s) => s.clone(),
-        None => return err(StatusCode::NOT_FOUND, &format!("Skill '{skill_id}' not found")),
+        None => {
+            return err(
+                StatusCode::NOT_FOUND,
+                &format!("Skill '{skill_id}' not found"),
+            );
+        }
     };
 
     // Add to agent's loaded skills (deduplicate)
@@ -161,7 +166,10 @@ pub async fn unload_skill(
         }))
         .into_response()
     } else {
-        err(StatusCode::NOT_FOUND, &format!("Skill '{skill_id}' is not loaded for agent '{agent_id}'"))
+        err(
+            StatusCode::NOT_FOUND,
+            &format!("Skill '{skill_id}' is not loaded for agent '{agent_id}'"),
+        )
     }
 }
 
@@ -265,7 +273,7 @@ mod tests {
             agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
             agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
             context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(20).unwrap(),
+                crate::server::state::CONTEXT_CACHE_CAPACITY,
             ))),
             all_skills: Arc::new(RwLock::new(Vec::new())),
             agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),

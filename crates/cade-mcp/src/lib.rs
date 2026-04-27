@@ -221,7 +221,12 @@ impl McpManager {
                 && identity_unchanged
                 && !existing.disabled
             {
-                let existing = old_by_key.remove(*key).unwrap();
+                // SAFETY: the `if let Some(...)` immediately above
+                // proved `*key` is in the map.  No mutation occurs in
+                // the gate, so `.remove()` cannot return `None` here.
+                let existing = old_by_key
+                    .remove(*key)
+                    .expect("key proven present by preceding if-let-Some gate");
                 summary.kept.push(key.to_string());
                 new_servers.push(existing);
                 continue;
@@ -334,9 +339,10 @@ impl McpManager {
         }
 
         let call_result = peer
-            .call_tool(CallToolRequestParams::new(original_name).with_arguments(
-                args.as_object().cloned().unwrap_or_default(),
-            ))
+            .call_tool(
+                CallToolRequestParams::new(original_name)
+                    .with_arguments(args.as_object().cloned().unwrap_or_default()),
+            )
             .await;
 
         let call_err = match call_result {
@@ -397,9 +403,10 @@ impl McpManager {
                     let call_result = if let Some(orig) = original_name {
                         new_server
                             .peer
-                            .call_tool(CallToolRequestParams::new(orig).with_arguments(
-                                args.as_object().cloned().unwrap_or_default(),
-                            ))
+                            .call_tool(
+                                CallToolRequestParams::new(orig)
+                                    .with_arguments(args.as_object().cloned().unwrap_or_default()),
+                            )
                             .await
                     } else {
                         // Tool disappeared after reconnect — server API changed

@@ -118,6 +118,24 @@ impl ModelRegistry {
 mod tests {
     use super::*;
 
+    /// Bundled JSON validation: this test fires the `LazyLock` directly
+    /// and asserts the embedded `default_pricing.json` parses into the
+    /// expected Rust shape.  If a future commit malforms that JSON the
+    /// `LazyLock` initialiser will panic the first time *any* code calls
+    /// `pricing_for_model`; this dedicated test surfaces the failure
+    /// with an obvious name instead of an unrelated downstream test.
+    #[test]
+    fn bundled_pricing_json_parses_into_vec_of_rules() {
+        // Force-evaluate the LazyLock and copy out the length so a
+        // panic in the `expect` inside the lazy initialiser would
+        // surface here.
+        let count = BUNDLED_RULES.len();
+        assert!(
+            count > 0,
+            "default_pricing.json must contain at least one pricing rule"
+        );
+    }
+
     #[test]
     fn pricing_claude_sonnet() {
         let registry = ModelRegistry::new();

@@ -13,10 +13,10 @@ use cade::server::{
     rate_limit::RateLimiter,
     state::{AppState, McpManager},
 };
-use cade_store::sqlite::{open as open_db, self};
+use cade_store::sqlite::{self, open as open_db};
 
-use cade_ai::{CompletionRequest, LlmProvider, LlmRouter};
 use cade::settings::SettingsManager;
+use cade_ai::{CompletionRequest, LlmProvider, LlmRouter};
 
 // endregion: --- Modules
 
@@ -58,8 +58,8 @@ async fn main() -> Result<()> {
         config.db_path
     );
 
-    let db = open_db(&config.db_path).map_err(|e: cade_store::error::Error| Error::custom(e.to_string()))?;
-
+    let db = open_db(&config.db_path)
+        .map_err(|e: cade_store::error::Error| Error::custom(e.to_string()))?;
 
     // Build router from env vars first
     let ai_config = config.to_ai_config();
@@ -115,7 +115,9 @@ async fn main() -> Result<()> {
         Ok(settings) => {
             let mcp_configs = settings.merged_mcp_servers();
             if mcp_configs.is_empty() {
-                tracing::info!("No MCP servers configured — agentic loop will use native tools only");
+                tracing::info!(
+                    "No MCP servers configured — agentic loop will use native tools only"
+                );
                 Arc::new(McpManager::empty())
             } else {
                 tracing::info!("Starting {} MCP server(s)…", mcp_configs.len());
@@ -144,7 +146,9 @@ async fn main() -> Result<()> {
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
+        context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+            cade_server::server::state::CONTEXT_CACHE_CAPACITY,
+        ))),
         all_skills: Arc::new(RwLock::new(all_skills)),
         agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),
         pending_subagent_results: Arc::new(RwLock::new(std::collections::HashMap::new())),
@@ -207,16 +211,25 @@ async fn main() -> Result<()> {
         );
 
     let mut allowed_origins = vec![
-        "http://localhost".parse::<HeaderValue>().expect("valid header"),
-        format!("http://localhost:{}", config.addr.port()).parse::<HeaderValue>().expect("valid header"),
-        "http://127.0.0.1".parse::<HeaderValue>().expect("valid header"),
-        format!("http://127.0.0.1:{}", config.addr.port()).parse::<HeaderValue>().expect("valid header"),
+        "http://localhost"
+            .parse::<HeaderValue>()
+            .expect("valid header"),
+        format!("http://localhost:{}", config.addr.port())
+            .parse::<HeaderValue>()
+            .expect("valid header"),
+        "http://127.0.0.1"
+            .parse::<HeaderValue>()
+            .expect("valid header"),
+        format!("http://127.0.0.1:{}", config.addr.port())
+            .parse::<HeaderValue>()
+            .expect("valid header"),
     ];
 
     if let Some(origin) = &config.allowed_origin
-        && let Ok(parsed) = origin.parse::<HeaderValue>() {
-            allowed_origins.push(parsed);
-        }
+        && let Ok(parsed) = origin.parse::<HeaderValue>()
+    {
+        allowed_origins.push(parsed);
+    }
 
     let app = router(state)
         .layer(axum::middleware::map_response(add_version_header))

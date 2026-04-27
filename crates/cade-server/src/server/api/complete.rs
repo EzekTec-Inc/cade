@@ -7,15 +7,15 @@
 //! Designed as the shared backend for both Neovim and VS Code inline
 //! completion clients.
 
-use axum::{
-    extract::{Path, State},
-    response::{sse::Event, IntoResponse, Response, Sse},
-    Json,
-};
-use cade_ai::{catalogue, CompletionRequest, LlmMessage, StreamChunk};
-use cade_store::sqlite;
 use axum::http::StatusCode;
-use serde_json::{json, Value};
+use axum::{
+    Json,
+    extract::{Path, State},
+    response::{IntoResponse, Response, Sse, sse::Event},
+};
+use cade_ai::{CompletionRequest, LlmMessage, StreamChunk, catalogue};
+use cade_store::sqlite;
+use serde_json::{Value, json};
 
 use super::messages::err;
 use crate::server::state::AppState;
@@ -63,7 +63,10 @@ pub async fn complete(
     let language = body["language"].as_str().unwrap_or("text");
 
     if prefix.is_empty() && suffix.is_empty() {
-        return err(StatusCode::BAD_REQUEST, "at least one of 'prefix' or 'suffix' must be non-empty");
+        return err(
+            StatusCode::BAD_REQUEST,
+            "at least one of 'prefix' or 'suffix' must be non-empty",
+        );
     }
 
     // ── Resolve model ────────────────────────────────────────────────────
@@ -78,7 +81,12 @@ pub async fn complete(
                 .filter(|m| !m.is_empty())
                 .unwrap_or(&agent.model)
                 .to_string(),
-            Ok(None) => return err(StatusCode::NOT_FOUND, &format!("agent '{agent_id}' not found")),
+            Ok(None) => {
+                return err(
+                    StatusCode::NOT_FOUND,
+                    &format!("agent '{agent_id}' not found"),
+                );
+            }
             Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
         }
     };
@@ -138,46 +146,37 @@ pub async fn complete(
         }
     };
 
-    let sse_stream =
-        futures::StreamExt::map(llm_stream, |chunk: cade_ai::Result<StreamChunk>| {
-            let event = match chunk {
-                Ok(StreamChunk::Text(text)) => {
-                    Event::default()
-                        .data(json!({"message_type": "stream_delta", "content": text}).to_string())
-                }
-                Ok(StreamChunk::Done) => {
-                    Event::default()
-                        .data(json!({"message_type": "stream_end"}).to_string())
-                }
-                // Completions don't use tool calls or reasoning — ignore gracefully.
-                Ok(StreamChunk::Reasoning(_)) | Ok(StreamChunk::ToolCall(_)) => {
-                    Event::default().comment("")
-                }
-                Ok(StreamChunk::Usage(u)) => {
-                    Event::default().data(
-                        json!({
-                            "message_type": "usage_statistics",
-                            "input_tokens": u.input_tokens,
-                            "output_tokens": u.output_tokens,
-                            "model": u.model,
-                        })
-                        .to_string(),
-                    )
-                }
-                Ok(StreamChunk::FinishReason(_)) => Event::default().comment(""),
-                Err(e) => {
-                    Event::default().data(json!({"error": e.to_string()}).to_string())
-                }
-            };
-            Ok::<Event, std::convert::Infallible>(event)
-        });
+    let sse_stream = futures::StreamExt::map(llm_stream, |chunk: cade_ai::Result<StreamChunk>| {
+        let event = match chunk {
+            Ok(StreamChunk::Text(text)) => Event::default()
+                .data(json!({"message_type": "stream_delta", "content": text}).to_string()),
+            Ok(StreamChunk::Done) => {
+                Event::default().data(json!({"message_type": "stream_end"}).to_string())
+            }
+            // Completions don't use tool calls or reasoning — ignore gracefully.
+            Ok(StreamChunk::Reasoning(_)) | Ok(StreamChunk::ToolCall(_)) => {
+                Event::default().comment("")
+            }
+            Ok(StreamChunk::Usage(u)) => Event::default().data(
+                json!({
+                    "message_type": "usage_statistics",
+                    "input_tokens": u.input_tokens,
+                    "output_tokens": u.output_tokens,
+                    "model": u.model,
+                })
+                .to_string(),
+            ),
+            Ok(StreamChunk::FinishReason(_)) => Event::default().comment(""),
+            Err(e) => Event::default().data(json!({"error": e.to_string()}).to_string()),
+        };
+        Ok::<Event, std::convert::Infallible>(event)
+    });
 
     // Prepend a start event with the resolved model so clients can display it.
     let meta = futures::stream::once(async move {
         Ok::<Event, std::convert::Infallible>(
-            Event::default().data(
-                json!({"message_type": "stream_start", "model": model}).to_string(),
-            ),
+            Event::default()
+                .data(json!({"message_type": "stream_start", "model": model}).to_string()),
         )
     });
 
@@ -214,9 +213,8 @@ mod tests {
         let language = "rust";
         let prefix = "fn main() {\n    ";
         let suffix = "\n}\n";
-        let prompt = format!(
-            "# language: {language}\n<prefix>\n{prefix}<suffix>\n{suffix}</suffix>"
-        );
+        let prompt =
+            format!("# language: {language}\n<prefix>\n{prefix}<suffix>\n{suffix}</suffix>");
         assert!(prompt.contains("# language: rust"));
         assert!(prompt.contains("<prefix>"));
         assert!(prompt.contains("fn main()"));
@@ -236,8 +234,8 @@ mod tests {
             ollama_base_url: String::new(),
             api_key: None,
 
-        allowed_origin: None,
-        max_context_budget: None,
+            allowed_origin: None,
+            max_context_budget: None,
         });
         AppState {
             db,
@@ -248,15 +246,15 @@ mod tests {
                 ollama_base_url: String::new(),
                 llm_provider: String::new(),
             })),
-            llm_router: std::sync::Arc::new(tokio::sync::RwLock::new(
-                cade_ai::LlmRouter::build(&cade_ai::AiConfig {
+            llm_router: std::sync::Arc::new(tokio::sync::RwLock::new(cade_ai::LlmRouter::build(
+                &cade_ai::AiConfig {
                     anthropic_api_key: None,
                     openai_api_key: None,
                     google_api_key: None,
                     ollama_base_url: String::new(),
                     llm_provider: String::new(),
-                }),
-            )),
+                },
+            ))),
             config,
             mcp: std::sync::Arc::new(crate::server::state::McpManager::empty()),
             rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
@@ -272,10 +270,16 @@ mod tests {
             agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
-            context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
+            context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+                crate::server::state::CONTEXT_CACHE_CAPACITY,
+            ))),
             all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
-            agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
-            pending_subagent_results: std::sync::Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
+            agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
+            pending_subagent_results: std::sync::Arc::new(tokio::sync::RwLock::new(
+                std::collections::HashMap::new(),
+            )),
             subagent_semaphore: std::sync::Arc::new(tokio::sync::Semaphore::new(4)),
         }
     }
@@ -283,17 +287,15 @@ mod tests {
     #[tokio::test]
     async fn rejects_empty_prefix_and_suffix() {
         let state = make_test_state();
-        let res = complete(
-            State(state),
-            Path("agent1".into()),
-            Json(json!({})),
-        )
-        .await;
+        let res = complete(State(state), Path("agent1".into()), Json(json!({}))).await;
         let (parts, body) = res.into_parts();
         let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
         assert_eq!(parts.status, StatusCode::BAD_REQUEST);
         let text = String::from_utf8_lossy(&bytes);
-        assert!(text.contains("prefix"), "error should mention prefix: {text}");
+        assert!(
+            text.contains("prefix"),
+            "error should mention prefix: {text}"
+        );
     }
 
     #[tokio::test]
@@ -309,7 +311,10 @@ mod tests {
         let bytes = axum::body::to_bytes(body, usize::MAX).await.unwrap();
         assert_eq!(parts.status, StatusCode::NOT_FOUND);
         let text = String::from_utf8_lossy(&bytes);
-        assert!(text.contains("nonexistent"), "error should name the agent: {text}");
+        assert!(
+            text.contains("nonexistent"),
+            "error should name the agent: {text}"
+        );
     }
 
     #[tokio::test]
@@ -331,7 +336,11 @@ mod tests {
         let (parts, _body) = res.into_parts();
         // Should return 200 (SSE) — the LLM call will fail but that's an SSE error event,
         // not a 404.
-        assert_eq!(parts.status, StatusCode::OK, "model override should skip agent lookup");
+        assert_eq!(
+            parts.status,
+            StatusCode::OK,
+            "model override should skip agent lookup"
+        );
     }
 
     #[tokio::test]
@@ -369,7 +378,10 @@ mod tests {
             .unwrap()
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(count, 0, "completion endpoint must not persist any messages");
+        assert_eq!(
+            count, 0,
+            "completion endpoint must not persist any messages"
+        );
     }
 
     #[tokio::test]

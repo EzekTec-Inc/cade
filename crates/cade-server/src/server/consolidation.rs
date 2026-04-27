@@ -22,7 +22,11 @@ fn resolve_rag_export_dir(agent_id: &str) -> Option<std::path::PathBuf> {
     if let Ok(custom) = std::env::var("CADE_RAG_EXPORT_DIR")
         && !custom.trim().is_empty()
     {
-        return Some(std::path::PathBuf::from(custom).join(agent_id).join("memory"));
+        return Some(
+            std::path::PathBuf::from(custom)
+                .join(agent_id)
+                .join("memory"),
+        );
     }
     dirs::home_dir().map(|h| h.join(".cade").join("rag").join(agent_id).join("memory"))
 }
@@ -188,13 +192,9 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     // `list_messages_page` returned ALL rows (ignoring markers), causing the
     // consolidation LLM to re-summarise already-compacted history on every
     // invocation — producing duplicate session_summary entries.
-    let all_rows = sqlite::list_messages_since_last_compaction(
-        &state.db,
-        agent_id,
-        conversation_id,
-        500,
-    )
-    .unwrap_or_default();
+    let all_rows =
+        sqlite::list_messages_since_last_compaction(&state.db, agent_id, conversation_id, 500)
+            .unwrap_or_default();
 
     if all_rows.len() < MIN_ROWS_FOR_CONSOLIDATION {
         tracing::debug!(
@@ -388,7 +388,10 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
             dropped_chars,
         );
         let mut metrics = state.agent_metrics.write().await;
-        metrics.entry(agent_id.to_string()).or_default().inflation_guard_hits += 1;
+        metrics
+            .entry(agent_id.to_string())
+            .or_default()
+            .inflation_guard_hits += 1;
         return;
     }
 
@@ -467,11 +470,7 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
                 report.archival_written,
                 report.out_dir,
             ),
-            Err(e) => tracing::debug!(
-                "consolidate [{}]: rag export skipped: {}",
-                agent_id,
-                e
-            ),
+            Err(e) => tracing::debug!("consolidate [{}]: rag export skipped: {}", agent_id, e),
         }
     }
 
@@ -482,10 +481,7 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     // Use the newest dropped message's ID to anchor the marker's timestamp.
     // The dropped turns are all_rows[0..dropped_msg_count] (oldest-first).
     // We want the marker's created_at to be equal to the newest dropped message.
-    let dropped_msg_count: usize = turns[..dropped]
-        .iter()
-        .map(|t| t.len())
-        .sum();
+    let dropped_msg_count: usize = turns[..dropped].iter().map(|t| t.len()).sum();
 
     // Look up the created_at of the boundary message from the DB.
     // all_rows is oldest-first; the boundary is at index dropped_msg_count - 1.
@@ -740,10 +736,7 @@ fn first_nonempty_line(s: &str) -> String {
 /// Sanitize a line for inclusion in `session_index`: strip newlines,
 /// collapse internal whitespace, cap at 200 chars.
 fn sanitize_index_line(s: &str) -> String {
-    let collapsed: String = s
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
+    let collapsed: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
     collapsed.chars().take(200).collect()
 }
 
@@ -782,7 +775,8 @@ fn extract_artifacts(text: &str) -> Vec<String> {
             break;
         }
 
-        let cleaned = word.trim_matches(|c: char| c == ',' || c == ';' || c == '`' || c == '\'' || c == '"');
+        let cleaned =
+            word.trim_matches(|c: char| c == ',' || c == ';' || c == '`' || c == '\'' || c == '"');
 
         // File paths: contains '/' and ends with a known extension
         if cleaned.contains('/')
@@ -813,7 +807,9 @@ fn extract_artifacts(text: &str) -> Vec<String> {
         // Error identifiers: RUSTSEC-*, E0xxx, error[Exxxx]
         if cleaned.starts_with("RUSTSEC-")
             || cleaned.starts_with("error[")
-            || (cleaned.starts_with("E0") && cleaned.len() <= 6 && cleaned[2..].chars().all(|c| c.is_ascii_digit()))
+            || (cleaned.starts_with("E0")
+                && cleaned.len() <= 6
+                && cleaned[2..].chars().all(|c| c.is_ascii_digit()))
         {
             let artifact: String = cleaned.chars().take(80).collect();
             if seen.insert(artifact.clone()) {
@@ -825,7 +821,10 @@ fn extract_artifacts(text: &str) -> Vec<String> {
         // Function/method names: word ending with '(' or '()'
         if (cleaned.ends_with('(') || cleaned.ends_with("()"))
             && cleaned.len() > 2
-            && cleaned.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_')
+            && cleaned
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_alphabetic() || c == '_')
         {
             let artifact: String = cleaned.chars().take(80).collect();
             if seen.insert(artifact.clone()) {
@@ -840,7 +839,9 @@ fn extract_artifacts(text: &str) -> Vec<String> {
             break;
         }
         let trimmed = line.trim();
-        if (trimmed.starts_with("error:") || trimmed.starts_with("Error:") || trimmed.starts_with("ERROR:"))
+        if (trimmed.starts_with("error:")
+            || trimmed.starts_with("Error:")
+            || trimmed.starts_with("ERROR:"))
             && trimmed.len() > 7
         {
             let artifact: String = trimmed.chars().take(80).collect();
@@ -1229,9 +1230,18 @@ mod tests {
         rotate_and_archive_session_summary_db(&db, "a1", "ONE");
         rotate_and_archive_session_summary_db(&db, "a1", "TWO");
         rotate_and_archive_session_summary_db(&db, "a1", "THREE");
-        assert_eq!(block_value(&db, "session_summary_1").as_deref(), Some("THREE"));
-        assert_eq!(block_value(&db, "session_summary_2").as_deref(), Some("TWO"));
-        assert_eq!(block_value(&db, "session_summary_3").as_deref(), Some("ONE"));
+        assert_eq!(
+            block_value(&db, "session_summary_1").as_deref(),
+            Some("THREE")
+        );
+        assert_eq!(
+            block_value(&db, "session_summary_2").as_deref(),
+            Some("TWO")
+        );
+        assert_eq!(
+            block_value(&db, "session_summary_3").as_deref(),
+            Some("ONE")
+        );
         assert!(block_value(&db, "session_summary_4").is_none());
     }
 
@@ -1317,15 +1327,14 @@ mod tests {
     // actually writes a usable `session_summary` block — only rotation, turn
     // grouping, and inflation-guard pieces were covered in isolation.
 
-    use async_trait::async_trait;
-    use cade_ai::{
-        AiConfig, CompletionRequest, CompletionResponse, LlmProvider, LlmRouter,
-        StreamChunk,
-    };
-    use cade_ai::Result as AiResult;
     use crate::server::config::{LlmProviderKind, ServerConfig};
     use crate::server::rate_limit::RateLimiter;
     use crate::server::state::AppState;
+    use async_trait::async_trait;
+    use cade_ai::Result as AiResult;
+    use cade_ai::{
+        AiConfig, CompletionRequest, CompletionResponse, LlmProvider, LlmRouter, StreamChunk,
+    };
     use futures::Stream;
     use std::net::SocketAddr;
     use std::pin::Pin;
@@ -1392,8 +1401,8 @@ mod tests {
             ollama_base_url: "http://localhost:11434".into(),
             api_key: None,
 
-        allowed_origin: None,
-        max_context_budget: None,
+            allowed_origin: None,
+            max_context_budget: None,
         };
 
         AppState {
@@ -1407,7 +1416,9 @@ mod tests {
             agent_activity: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
             agent_metrics: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
             agent_context_telemetry: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
-            context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
+            context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+                crate::server::state::CONTEXT_CACHE_CAPACITY,
+            ))),
             all_skills: Arc::new(AsyncRwLock::new(Vec::new())),
             agent_skills: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
             pending_subagent_results: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),

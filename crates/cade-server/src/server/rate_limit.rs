@@ -102,7 +102,7 @@ impl RateLimiter {
 
     /// Try to consume one token for `agent_id`.
     pub fn check(&self, agent_id: &str) -> Result<(), u64> {
-        let mut map = self.buckets.lock().unwrap_or_else(|e| e.into_inner());
+        let mut map = crate::server::poison::lock_or_recover(&self.buckets, "rate_limit::buckets");
 
         if map.len() > 10_000 && !map.contains_key(agent_id) {
             let now = Instant::now();

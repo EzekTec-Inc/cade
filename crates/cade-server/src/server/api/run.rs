@@ -32,19 +32,17 @@
 //! ```
 
 use axum::{
+    Json,
     extract::{Path, State},
     response::{IntoResponse, Response, Sse, sse::Event},
-    Json,
 };
 use cade_ai::{CompletionRequest, LlmToolCall, StreamChunk, catalogue};
 use cade_store::sqlite;
 use futures::StreamExt;
 use serde_json::{Value, json};
 
+use super::messages::{build_context, err, maybe_set_conv_title, persist, resolve_conversation};
 use crate::server::state::AppState;
-use super::messages::{
-    build_context, err, persist, maybe_set_conv_title, resolve_conversation,
-};
 
 /// Maximum agentic turns per request (prevents infinite loops).
 const MAX_TURNS: usize = 20;
@@ -130,14 +128,15 @@ pub async fn run_agent(
     // ── Update activity ───────────────────────────────────────────────────
     {
         let mut activity = state.agent_activity.write().await;
-        let entry = activity
-            .entry(agent_id.clone())
-            .or_insert(crate::server::state::AgentActivity {
-                last_active_ts: 0,
-                needs_consolidation: false,
-                conversation_id: conv_id.clone(),
-                last_consolidation_turn: 0,
-            });
+        let entry =
+            activity
+                .entry(agent_id.clone())
+                .or_insert(crate::server::state::AgentActivity {
+                    last_active_ts: 0,
+                    needs_consolidation: false,
+                    conversation_id: conv_id.clone(),
+                    last_consolidation_turn: 0,
+                });
         entry.last_active_ts = chrono::Utc::now().timestamp();
         entry.conversation_id = conv_id.clone();
     }
@@ -155,13 +154,20 @@ pub async fn run_agent(
         if let Some(cid) = conv_str.as_deref() {
             maybe_set_conv_title(&state, cid, &input);
         }
-        persist(&state, &agent_id, conv_str.as_deref(), "user", json!({ "content": input }));
+        persist(
+            &state,
+            &agent_id,
+            conv_str.as_deref(),
+            "user",
+            json!({ "content": input }),
+        );
     }
-
 
     // ── Create run record ─────────────────────────────────────────────────
     let run_row = sqlite::create_run(&state.db, &agent_id, conv_str.as_deref());
-    let run_id = run_row.map(|r| r.id).unwrap_or_else(|_| format!("run-local-{}", chrono::Utc::now().timestamp()));
+    let run_id = run_row
+        .map(|r| r.id)
+        .unwrap_or_else(|_| format!("run-local-{}", chrono::Utc::now().timestamp()));
 
     // Snapshot for the async stream task
     let state2 = state.clone();
@@ -177,7 +183,9 @@ pub async fn run_agent(
         let send = |data: Value| {
             let tx = tx.clone();
             let ev = Event::default().data(data.to_string());
-            async move { let _ = tx.send(Ok(ev)).await; }
+            async move {
+                let _ = tx.send(Ok(ev)).await;
+            }
         };
 
         // ── stream_start ──────────────────────────────────────────────────
@@ -185,11 +193,14 @@ pub async fn run_agent(
             "message_type": "stream_start",
             "conversation_id": conv_id2,
             "run_id": run_id2,
-        })).await;
+        }))
+        .await;
 
         if let Some(t_name) = theme_cmd {
             let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let agent_dir = dirs::home_dir().map(|h| h.join(".cade")).unwrap_or_else(|| std::path::PathBuf::from(".cade"));
+            let agent_dir = dirs::home_dir()
+                .map(|h| h.join(".cade"))
+                .unwrap_or_else(|| std::path::PathBuf::from(".cade"));
 
             // `/theme reload` — re-resolve the agent's persisted theme from
             // disk.  Useful after editing a JSON/tmTheme file: the user
@@ -207,13 +218,14 @@ pub async fn run_agent(
             };
 
             // Resolution order: built-in registry first, then on-disk themes.
-            let colors_opt = cade_core::resources::themes::ThemeColors::builtin_by_name(&effective_name)
-                .or_else(|| {
-                    let all = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
-                    all.iter()
-                        .find(|t| t.name == effective_name)
-                        .map(cade_core::resources::themes::ThemeColors::from_theme)
-                });
+            let colors_opt =
+                cade_core::resources::themes::ThemeColors::builtin_by_name(&effective_name)
+                    .or_else(|| {
+                        let all = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
+                        all.iter()
+                            .find(|t| t.name == effective_name)
+                            .map(cade_core::resources::themes::ThemeColors::from_theme)
+                    });
 
             if let Some(colors) = colors_opt {
                 // Persist the chosen theme on the agent row so GUI reloads
@@ -233,22 +245,26 @@ pub async fn run_agent(
                     "message_type": "theme_update",
                     "theme": colors,
                     "theme_name": effective_name,
-                })).await;
+                }))
+                .await;
             } else {
                 let all_themes = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
-                let mut available: Vec<&str> = cade_core::resources::themes::ThemeColors::builtin_names().iter().copied().collect();
+                let mut available: Vec<&str> =
+                    cade_core::resources::themes::ThemeColors::builtin_names()
+                        .iter()
+                        .copied()
+                        .collect();
                 available.extend(all_themes.iter().map(|t| t.name.as_str()));
                 send(json!({
                     "message_type": "assistant_message",
                     "content": format!("Theme '{}' not found. Available themes: {}", t_name, available.join(", ")),
                 })).await;
             }
-            
+
             let _ = sqlite::finish_run(&state2.db, &run_id2, "done");
             let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
             return;
         }
-
 
         let mut turns = 0usize;
 
@@ -258,7 +274,8 @@ pub async fn run_agent(
                 send(json!({
                     "message_type": "error",
                     "error": format!("Agentic loop exceeded {MAX_TURNS} turns — stopping"),
-                })).await;
+                }))
+                .await;
                 break;
             }
 
@@ -270,7 +287,8 @@ pub async fn run_agent(
             if let Some(cap) = max_session_cost_usd() {
                 let map = state2.agent_metrics.read().await;
                 if let Some(m) = map.get(&agent_id2) {
-                    let pricing = pricing_registry().pricing_for_model(&model_for_pricing(&state2.db, &agent_id2).await);
+                    let pricing = pricing_registry()
+                        .pricing_for_model(&model_for_pricing(&state2.db, &agent_id2).await);
                     let cost = m.compute_cost_usd(&pricing);
                     if cost >= cap {
                         send(json!({
@@ -337,7 +355,8 @@ pub async fn run_agent(
                         "level":        "warning",
                         "code":         "context_overflow_recovering",
                         "message":      "Context window full — compacting older turns and retrying…"
-                    })).await;
+                    }))
+                    .await;
                     crate::server::consolidation::consolidate_agent(
                         &state2,
                         &agent_id2,
@@ -346,23 +365,27 @@ pub async fn run_agent(
                     .await;
                     // Drop cached context entry so build_context recomputes.
                     {
-                        let mut cache = state2
-                            .context_cache
-                            .lock()
-                            .unwrap_or_else(|e| e.into_inner());
+                        let mut cache = crate::server::poison::lock_or_recover(
+                            &state2.context_cache,
+                            "context_cache",
+                        );
                         let key = format!("{}:{:?}", agent_id2, conv_id2.as_deref());
                         cache.pop(&key);
                     }
-                    let (model2, mut messages2, tools2) =
-                        match build_context(&state2, &agent_id2, conv_id2.as_deref(), false).await
-                        {
-                            Ok(ctx) => ctx,
-                            Err(build_err) => {
-                                send(json!({ "message_type": "error", "error": build_err }))
-                                    .await;
-                                break;
-                            }
-                        };
+                    let (model2, mut messages2, tools2) = match build_context(
+                        &state2,
+                        &agent_id2,
+                        conv_id2.as_deref(),
+                        false,
+                    )
+                    .await
+                    {
+                        Ok(ctx) => ctx,
+                        Err(build_err) => {
+                            send(json!({ "message_type": "error", "error": build_err })).await;
+                            break;
+                        }
+                    };
                     // Belt-and-suspenders: drop the older half of trailing
                     // (non-system) messages on retry.
                     let split_idx = messages2
@@ -429,7 +452,8 @@ pub async fn run_agent(
                                 "name": tc.name,
                                 "arguments": tc.arguments,
                             }
-                        })).await;
+                        }))
+                        .await;
                         tool_calls.push(tc);
                     }
                     Ok(StreamChunk::Usage(u)) => {
@@ -448,7 +472,8 @@ pub async fn run_agent(
                             "cache_read_tokens":  u.cache_read_tokens,
                             "cache_write_tokens": u.cache_write_tokens,
                             "model": u.model,
-                        })).await;
+                        }))
+                        .await;
                     }
                     Ok(StreamChunk::FinishReason(r)) => {
                         send(json!({ "message_type": "finish_reason", "reason": r })).await;
@@ -526,7 +551,8 @@ pub async fn run_agent(
                         "output":   output_trimmed,
                         "is_error": result.is_error,
                     }
-                })).await;
+                }))
+                .await;
 
                 // Persist into DB so next build_context sees it
                 persist(
@@ -706,9 +732,7 @@ async fn intercept_meta_tool(
     state: &AppState,
     agent_id: &str,
     tc: &cade_ai::LlmToolCall,
-    sse_tx: tokio::sync::mpsc::Sender<
-        Result<axum::response::sse::Event, std::convert::Infallible>,
-    >,
+    sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
 ) -> Option<cade_agent::tools::manager::ToolResult> {
     use cade_agent::tools::manager::ToolResult;
     let mk = |output: String, is_error: bool| ToolResult {
@@ -945,7 +969,10 @@ async fn handle_memory_apply_patch(
             description,
             None,
         ) {
-            Ok(_) => (format!("Memory block '{label}' patched successfully"), false),
+            Ok(_) => (
+                format!("Memory block '{label}' patched successfully"),
+                false,
+            ),
             Err(e) => (format!("Failed to save patched memory: {e}"), true),
         },
         Err(e) => (format!("Patch failed: {e}"), true),
@@ -1085,9 +1112,7 @@ async fn handle_run_skill_script_meta(
             available.join(", ")
         };
         return (
-            format!(
-                "Script '{script}' not found in skill '{skill_id}'. Available: {list}"
-            ),
+            format!("Script '{script}' not found in skill '{skill_id}'. Available: {list}"),
             true,
         );
     };
@@ -1133,14 +1158,7 @@ async fn handle_load_skill_ref_meta(
     let Some(r) = skill
         .references
         .iter()
-        .find(|r| {
-            r.name == doc
-                || r.path
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("")
-                    == doc
-        })
+        .find(|r| r.name == doc || r.path.file_name().and_then(|n| n.to_str()).unwrap_or("") == doc)
         .cloned()
     else {
         let available: Vec<&str> = skill.references.iter().map(|r| r.name.as_str()).collect();
@@ -1150,9 +1168,7 @@ async fn handle_load_skill_ref_meta(
             available.join(", ")
         };
         return (
-            format!(
-                "Reference '{doc}' not found in skill '{skill_id}'. Available: {list}"
-            ),
+            format!("Reference '{doc}' not found in skill '{skill_id}'. Available: {list}"),
             true,
         );
     };
@@ -1193,10 +1209,7 @@ async fn handle_create_checkpoint_meta(
     );
     drop(conn);
     match result {
-        Ok(_) => (
-            format!("Checkpoint '{label}' created. ID: {id}"),
-            false,
-        ),
+        Ok(_) => (format!("Checkpoint '{label}' created. ID: {id}"), false),
         Err(e) => (format!("Failed to create checkpoint: {e}"), true),
     }
 }
@@ -1336,10 +1349,7 @@ async fn handle_store_artifact_meta(
 
 /// Phase A4 handler: `list_agents` server-side.
 /// Queries the agents table directly — no HTTP self-call.
-async fn handle_list_agents_meta(
-    state: &AppState,
-    _agent_id: &str,
-) -> (String, bool) {
+async fn handle_list_agents_meta(state: &AppState, _agent_id: &str) -> (String, bool) {
     match cade_store::sqlite::list_agents(&state.db) {
         Err(e) => (format!("Failed to list agents: {e}"), true),
         Ok(agents) => {
@@ -1385,10 +1395,7 @@ async fn handle_message_agent_meta(
         Ok(a) => a,
         Err(e) => return (format!("Failed to query agents: {e}"), true),
     };
-    let Some(target_agent) = agents
-        .iter()
-        .find(|a| a.id == target || a.name == target)
-    else {
+    let Some(target_agent) = agents.iter().find(|a| a.id == target || a.name == target) else {
         return (format!("Error: Agent '{target}' not found"), true);
     };
 
@@ -1425,10 +1432,7 @@ async fn handle_message_agent_meta(
         Ok(resp) => {
             let text = resp.content.as_deref().unwrap_or("").trim().to_string();
             if text.is_empty() {
-                (
-                    "Target agent returned an empty response".to_string(),
-                    false,
-                )
+                ("Target agent returned an empty response".to_string(), false)
             } else {
                 (text, false)
             }
@@ -1436,7 +1440,6 @@ async fn handle_message_agent_meta(
         Err(e) => (format!("Failed to message agent: {e}"), true),
     }
 }
-
 
 ///
 /// Second line of defence against runaway recursion (first is the depth
@@ -1466,7 +1469,10 @@ async fn handle_run_subagent_tool(
     let mode = args["mode"].as_str().unwrap_or("build").to_string();
     let background = args["background"].as_bool().unwrap_or(false);
     let model_override = args["model"].as_str().map(|s| s.to_string());
-    let _description = args["description"].as_str().unwrap_or("subagent task").to_string();
+    let _description = args["description"]
+        .as_str()
+        .unwrap_or("subagent task")
+        .to_string();
 
     // Recursion-depth guard.  When a subagent spawns another subagent, the
     // dispatching code injects `_subagent_depth = parent_depth + 1` into the
@@ -1735,7 +1741,11 @@ async fn handle_run_subagent_tool(
     }
 
     let output_final = if output.len() > 8_192 {
-        format!("{}…\n[truncated: {} chars total]", &output[..8_192], output.len())
+        format!(
+            "{}…\n[truncated: {} chars total]",
+            &output[..8_192],
+            output.len()
+        )
     } else {
         output
     };
@@ -1866,12 +1876,7 @@ mod tests {
         .unwrap();
         // Seed a block to patch.
         cade_store::sqlite::upsert_memory_block(
-            &state.db,
-            "agent_p",
-            "notes",
-            "old line",
-            None,
-            None,
+            &state.db, "agent_p", "notes", "old line", None, None,
         )
         .unwrap();
 
@@ -1940,10 +1945,11 @@ mod tests {
         assert!(!res.is_error, "should succeed: {}", res.output);
 
         // Verify block was persisted with typed fields.
-        let blocks =
-            cade_store::sqlite::get_memory_blocks(&state.db, "agent_typed").unwrap();
+        let blocks = cade_store::sqlite::get_memory_blocks(&state.db, "agent_typed").unwrap();
         assert!(
-            blocks.iter().any(|(l, v, _)| l == "decision_x" && v == "use postgres"),
+            blocks
+                .iter()
+                .any(|(l, v, _)| l == "decision_x" && v == "use postgres"),
             "block must be persisted, got: {blocks:?}"
         );
     }
@@ -1986,20 +1992,23 @@ mod tests {
 
         let opt = intercept_meta_tool(&state, "agent_mem", &tc, tx).await;
         let res = opt.expect("update_memory must be intercepted");
-        assert!(!res.is_error, "update_memory should succeed: {}", res.output);
+        assert!(
+            !res.is_error,
+            "update_memory should succeed: {}",
+            res.output
+        );
 
         // Read back from DB — proves no HTTP self-call is needed.
-        let blocks =
-            cade_store::sqlite::get_memory_blocks(&state.db, "agent_mem").unwrap();
-        let found = blocks.iter().any(|(label, value, _)| {
-            label == "test_block" && value == "hello"
-        });
+        let blocks = cade_store::sqlite::get_memory_blocks(&state.db, "agent_mem").unwrap();
+        let found = blocks
+            .iter()
+            .any(|(label, value, _)| label == "test_block" && value == "hello");
         assert!(found, "memory block must be persisted, got: {blocks:?}");
     }
 
     /// A mock LlmProvider that panics if called.  Used to assert that an early
     /// return path (e.g. depth-limit guard) never reaches the LLM at all.
-    struct PanicOnCallLlm;
+    pub(super) struct PanicOnCallLlm;
     #[async_trait::async_trait]
     impl cade_ai::LlmProvider for PanicOnCallLlm {
         async fn complete(
@@ -2020,7 +2029,7 @@ mod tests {
         }
     }
 
-    fn build_state_with_llm(llm: std::sync::Arc<dyn cade_ai::LlmProvider>) -> AppState {
+    pub(super) fn build_state_with_llm(llm: std::sync::Arc<dyn cade_ai::LlmProvider>) -> AppState {
         let db = cade_store::sqlite::open(":memory:").unwrap();
         let config = std::sync::Arc::new(crate::server::config::ServerConfig {
             addr: "127.0.0.1:0".parse().unwrap(),
@@ -2063,7 +2072,7 @@ mod tests {
                 std::collections::HashMap::new(),
             )),
             context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(
-                std::num::NonZeroUsize::new(20).unwrap(),
+                crate::server::state::CONTEXT_CACHE_CAPACITY,
             ))),
             all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),
             agent_skills: std::sync::Arc::new(tokio::sync::RwLock::new(
@@ -2121,7 +2130,7 @@ mod tests {
                 Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
             >,
         > {
-            unimplemented!()
+            unreachable!("stream() is not exercised by this mock")
         }
     }
 
@@ -2151,7 +2160,11 @@ mod tests {
         .await
         .expect("must not deadlock — chain must terminate via depth guard");
 
-        assert!(!result.is_error, "outer subagent should complete: {}", result.output);
+        assert!(
+            !result.is_error,
+            "outer subagent should complete: {}",
+            result.output
+        );
         let calls = llm.call_count.load(std::sync::atomic::Ordering::SeqCst);
         assert!(
             calls > 0 && calls < 20,
@@ -2259,7 +2272,7 @@ mod tests {
                 Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
             >,
         > {
-            unimplemented!()
+            unreachable!("stream() is not exercised by this mock")
         }
     }
 
@@ -2279,10 +2292,13 @@ mod tests {
         let (tx, _rx) = tokio::sync::mpsc::channel(8);
 
         let args = serde_json::json!({ "prompt": "do thing" });
-        let result =
-            handle_run_subagent_tool(&state, "parent_x", "tc_outer", &args, tx).await;
+        let result = handle_run_subagent_tool(&state, "parent_x", "tc_outer", &args, tx).await;
 
-        assert!(!result.is_error, "loop must succeed, got: {}", result.output);
+        assert!(
+            !result.is_error,
+            "loop must succeed, got: {}",
+            result.output
+        );
         assert_eq!(
             llm.call_count.load(std::sync::atomic::Ordering::SeqCst),
             2,
@@ -2684,8 +2700,7 @@ mod tests {
         });
 
         // Should NOT panic — i.e. LLM is never called.
-        let result =
-            handle_run_subagent_tool(&state, "parent_agent_x", "tc_1", &args, tx).await;
+        let result = handle_run_subagent_tool(&state, "parent_agent_x", "tc_1", &args, tx).await;
 
         assert!(result.is_error, "depth-limit must produce an error result");
         assert!(
@@ -2767,5 +2782,120 @@ mod p4_guardrail_tests {
         assert_eq!(parse_tool_turn_max_tokens(Some("1024")), Some(1024));
         assert_eq!(parse_tool_turn_max_tokens(Some("4096")), Some(4096));
         assert_eq!(parse_tool_turn_max_tokens(Some(" 512 ")), Some(512));
+    }
+}
+
+#[cfg(test)]
+mod sse_protocol_tests {
+    //! Integration coverage for the `POST /v1/agents/:id/run` SSE
+    //! response.  These tests drive `run_agent` end-to-end through the
+    //! axum extractors and assert the protocol surface seen by the
+    //! CLI / TUI / GUI clients.  Started as Task 2.3 of the code-review
+    //! resolution plan.
+    //!
+    //! The current matrix covers the two error paths that do **not**
+    //! require an LLM call (empty input, missing conversation).  A
+    //! follow-up commit will add scripted-LLM happy-path and
+    //! tool-dispatch coverage.
+
+    use super::tests::{PanicOnCallLlm, build_state_with_llm};
+    use super::*;
+    use axum::{
+        Json,
+        body::to_bytes,
+        extract::{Path, State},
+        http::StatusCode,
+    };
+
+    /// Build a state whose LLM panics if called — proves no LLM
+    /// request happens on the error paths under test.
+    fn state_no_llm() -> AppState {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        build_state_with_llm(llm)
+    }
+
+    #[tokio::test]
+    async fn empty_input_returns_400_bad_request_with_missing_input_message() {
+        let state = state_no_llm();
+        let resp = run_agent(
+            State(state),
+            Path("agent-x".to_string()),
+            Json(serde_json::json!({ "input": "" })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+
+        let body_bytes = to_bytes(resp.into_body(), 8 * 1024)
+            .await
+            .expect("read body");
+        let body_str = std::str::from_utf8(&body_bytes).expect("utf8");
+        assert!(
+            body_str.contains("missing 'input'"),
+            "body must explain the missing-input error; got: {body_str}"
+        );
+    }
+
+    #[tokio::test]
+    async fn missing_input_field_returns_400_bad_request() {
+        let state = state_no_llm();
+        let resp = run_agent(
+            State(state),
+            Path("agent-x".to_string()),
+            Json(serde_json::json!({})),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn nonexistent_conversation_id_returns_404_not_found() {
+        // Body declares conversation_id that does not exist in the DB.
+        // `resolve_conversation` must short-circuit with 404 before any
+        // SSE stream is opened.
+        let state = state_no_llm();
+        let resp = run_agent(
+            State(state),
+            Path("agent-x".to_string()),
+            Json(serde_json::json!({
+                "input": "hello",
+                "conversation_id": "conv-does-not-exist",
+            })),
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+
+        let body_bytes = to_bytes(resp.into_body(), 8 * 1024)
+            .await
+            .expect("read body");
+        let body_str = std::str::from_utf8(&body_bytes).expect("utf8");
+        assert!(
+            body_str.contains("conv-does-not-exist") || body_str.contains("not found"),
+            "body must reference the missing conversation; got: {body_str}"
+        );
+    }
+
+    #[tokio::test]
+    async fn empty_input_response_does_not_leak_internal_paths() {
+        // §3.3 of tdd-guide: error responses must not expose stack
+        // traces, internal file paths, or framework version strings.
+        let state = state_no_llm();
+        let resp = run_agent(
+            State(state),
+            Path("agent-x".to_string()),
+            Json(serde_json::json!({ "input": "" })),
+        )
+        .await;
+        let body_bytes = to_bytes(resp.into_body(), 8 * 1024)
+            .await
+            .expect("read body");
+        let body_str = std::str::from_utf8(&body_bytes).expect("utf8");
+        let lc = body_str.to_lowercase();
+        assert!(
+            !lc.contains("/home/")
+                && !lc.contains("c:\\")
+                && !lc.contains("backtrace")
+                && !lc.contains("rust_panic"),
+            "error body must not leak host paths or stack traces: {body_str}"
+        );
     }
 }

@@ -34,7 +34,7 @@ impl ProviderRegistry {
 
     pub fn load_or_default(path: Option<&std::path::Path>) -> Self {
         let mut registry = Self::new();
-        
+
         let Some(p) = path else {
             return registry;
         };
@@ -60,11 +60,41 @@ impl ProviderRegistry {
             }
             registry.providers = new_providers;
         }
-        
+
         registry
     }
 
     pub fn get_all_providers(&self) -> &[ProviderDef] {
         &self.providers
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Bundled JSON validation: forces evaluation of the LazyLock and
+    /// asserts `default_providers.json` parses into `Vec<ProviderDef>`.
+    /// Surfaces a malformed-JSON regression with a clearly named test
+    /// instead of as a downstream provider-resolution failure.
+    #[test]
+    fn bundled_providers_json_parses_into_vec_of_provider_defs() {
+        let count = BUNDLED_PROVIDERS.len();
+        assert!(
+            count > 0,
+            "default_providers.json must contain at least one provider"
+        );
+    }
+
+    #[test]
+    fn bundled_providers_have_non_empty_required_fields() {
+        for (i, p) in BUNDLED_PROVIDERS.iter().enumerate() {
+            assert!(!p.name.is_empty(), "provider[{i}].name is empty");
+            assert!(
+                !p.chat_url.is_empty(),
+                "provider[{i}].chat_url is empty (name={})",
+                p.name
+            );
+        }
     }
 }

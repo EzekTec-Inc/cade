@@ -50,18 +50,22 @@ fn make_state(api_key: Option<String>) -> AppState {
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(std::num::NonZeroUsize::new(20).unwrap()))),
+        context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+            crate::server::state::CONTEXT_CACHE_CAPACITY,
+        ))),
         all_skills: Arc::new(RwLock::new(Vec::new())),
         agent_skills: Arc::new(RwLock::new(std::collections::HashMap::new())),
-            pending_subagent_results: Arc::new(RwLock::new(std::collections::HashMap::new())),
-            subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+        pending_subagent_results: Arc::new(RwLock::new(std::collections::HashMap::new())),
+        subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
     }
 }
 
 /// Build a Router that wraps `auth_middleware` around trivial handlers so we
 /// can exercise the middleware end-to-end with `oneshot`.
 fn make_app(state: AppState) -> Router {
-    async fn ok() -> &'static str { "passthrough" }
+    async fn ok() -> &'static str {
+        "passthrough"
+    }
     Router::new()
         .route("/v1/health", get(ok))
         .route("/v1/agents", get(ok))
