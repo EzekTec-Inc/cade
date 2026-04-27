@@ -536,7 +536,10 @@ impl TuiApp {
             }
 
             // -- Toggle Plan Panel (Ctrl+T)
-            (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
+            // Match both the Kitty-protocol form (Char('t') + CONTROL) and
+            // the legacy VT form (raw control character \x14).
+            (KeyCode::Char('t'), KeyModifiers::CONTROL)
+            | (KeyCode::Char('\x14'), _) => {
                 if let Some(plan) = &mut self.active_plan {
                     plan.is_visible = !plan.is_visible;
                     let msg = if plan.is_visible {
