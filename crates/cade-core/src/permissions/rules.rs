@@ -111,9 +111,8 @@ pub fn tool_first_arg(tool_name: &str, args: &serde_json::Value) -> Option<Strin
 
     // Known arg key names per tool type
     let keys = match base_name.to_lowercase().as_str() {
-        "bash" | "shell" | "run_command" | "execute_command" | "start_process" | "RunShellCommand" => {
-            &["command", "cmd"][..]
-        }
+        "bash" | "shell" | "run_command" | "execute_command" | "start_process"
+        | "RunShellCommand" => &["command", "cmd"][..],
         "read_file" | "write_file" | "edit_file" | "create_file" | "delete_file" | "move_file"
         | "rename_file" | "apply_patch" | "edit_block" => &["path", "file_path", "filename"][..],
         _ => &["path", "command", "query"][..],
@@ -198,4 +197,3 @@ impl Verdict {
         }
     }
 }
-

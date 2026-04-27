@@ -22,7 +22,14 @@ impl SessionState {
     }
 
     /// A running subagent sent a progress update.
-    pub fn on_subagent_progress(&mut self, id: &str, _status: &str, tool_calls: u32, output_lines: u32, elapsed: u32) {
+    pub fn on_subagent_progress(
+        &mut self,
+        id: &str,
+        _status: &str,
+        tool_calls: u32,
+        output_lines: u32,
+        elapsed: u32,
+    ) {
         if let Self::Connected { subagent_cards, .. } = self {
             if let Some(card) = subagent_cards.iter_mut().find(|c| c.subagent_id == id) {
                 card.tool_calls = tool_calls;
@@ -33,7 +40,14 @@ impl SessionState {
     }
 
     /// A subagent finished (success or error).
-    pub fn on_subagent_complete(&mut self, id: &str, _status: &str, result_preview: &str, elapsed: u32, is_error: bool) {
+    pub fn on_subagent_complete(
+        &mut self,
+        id: &str,
+        _status: &str,
+        result_preview: &str,
+        elapsed: u32,
+        is_error: bool,
+    ) {
         if let Self::Connected { subagent_cards, .. } = self {
             if let Some(card) = subagent_cards.iter_mut().find(|c| c.subagent_id == id) {
                 card.status = if is_error { "error" } else { "complete" }.to_string();
@@ -43,5 +57,4 @@ impl SessionState {
             }
         }
     }
-
 }

@@ -28,7 +28,10 @@ impl SessionState {
 
     /// Called after POST /v1/agents/:id/skills/load succeeds.
     pub fn on_skill_loaded(&mut self, id: &str) {
-        if let Self::Connected { loaded_skill_ids, .. } = self {
+        if let Self::Connected {
+            loaded_skill_ids, ..
+        } = self
+        {
             if !loaded_skill_ids.contains(&id.to_string()) {
                 loaded_skill_ids.push(id.to_string());
             }
@@ -37,9 +40,11 @@ impl SessionState {
 
     /// Called after POST /v1/agents/:id/skills/unload succeeds.
     pub fn on_skill_unloaded(&mut self, id: &str) {
-        if let Self::Connected { loaded_skill_ids, .. } = self {
+        if let Self::Connected {
+            loaded_skill_ids, ..
+        } = self
+        {
             loaded_skill_ids.retain(|x| x != id);
         }
     }
-
 }

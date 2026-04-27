@@ -8,5 +8,4 @@ impl SessionState {
             *theme_update = Some(theme);
         }
     }
-
 }

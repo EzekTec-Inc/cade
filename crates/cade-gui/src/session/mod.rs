@@ -95,10 +95,7 @@ pub struct SubagentCardState {
 #[allow(clippy::large_enum_variant)] // Connected is intentionally rich; boxing adds no value
 pub enum SessionState {
     /// Token submitted, waiting for health + agent-list responses.
-    Connecting {
-        server_url: String,
-        token: String,
-    },
+    Connecting { server_url: String, token: String },
     /// Health check succeeded; waiting for agent list.
     HealthOk {
         server_url: String,
@@ -413,9 +410,7 @@ impl SessionState {
     pub fn is_connected(&self) -> bool {
         matches!(self, Self::Connected { .. })
     }
-
 }
-
 
 // ── Model filtering helper ────────────────────────────────────────────
 

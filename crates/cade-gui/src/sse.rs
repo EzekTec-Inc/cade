@@ -282,10 +282,7 @@ mod tests {
         // JSON allows whitespace between tokens, so `{"multi":\n"line"}`
         // is actually valid JSON — serde_json parses the \n as whitespace.
         p.feed(b"data: {\"multi\":\ndata: \"line\"}\n\n");
-        assert_eq!(
-            p.pop(),
-            Some(SseFrame::Json(json!({"multi": "line"}))),
-        );
+        assert_eq!(p.pop(), Some(SseFrame::Json(json!({"multi": "line"}))),);
         assert!(p.pop().is_none());
     }
 

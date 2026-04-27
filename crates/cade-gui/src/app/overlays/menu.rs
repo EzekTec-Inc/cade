@@ -17,10 +17,7 @@ pub fn render_menu_overlay(
     let screen = ctx.content_rect();
     let w = 800.0_f32.min(screen.width() - 40.0);
     let h = 600.0_f32.min(screen.height() - 80.0);
-    let pos = egui::pos2(
-        screen.center().x - w / 2.0,
-        screen.center().y - h / 2.0,
-    );
+    let pos = egui::pos2(screen.center().x - w / 2.0, screen.center().y - h / 2.0);
 
     // Dim backdrop
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -47,11 +44,7 @@ pub fn render_menu_overlay(
 
             // Header + query input
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("🔍")
-                        .color(theme.primary())
-                        .size(16.0),
-                );
+                ui.label(egui::RichText::new("🔍").color(theme.primary()).size(16.0));
                 let mut q = menu_input.to_string();
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut q)
@@ -81,13 +74,13 @@ pub fn render_menu_overlay(
                     .auto_shrink([false, false])
                     .max_height(h - 90.0)
                     .show(ui, |ui| {
-                        
                         // Group by category to replicate TUI layout
-                        use std::collections::BTreeMap;
                         use cade_core::resources::palette::CmdCategory;
-                        
-                        let mut grouped: BTreeMap<u8, Vec<(usize, &crate::palette::FilteredCmd)>> = BTreeMap::new();
-                        
+                        use std::collections::BTreeMap;
+
+                        let mut grouped: BTreeMap<u8, Vec<(usize, &crate::palette::FilteredCmd)>> =
+                            BTreeMap::new();
+
                         // We iterate the filtered flat list, but preserve original sorting per category.
                         for (idx, cmd) in filtered.iter().enumerate() {
                             let order = match cmd.def.category {
@@ -109,14 +102,14 @@ pub fn render_menu_overlay(
                                 4 => "Navigation & Misc",
                                 _ => "Misc",
                             };
-                            
+
                             // Only show section header if there are matching items inside
                             if !group_items.is_empty() {
                                 ui.add_space(8.0);
                                 ui.heading(
                                     egui::RichText::new(category_name)
                                         .color(theme.primary())
-                                        .strong()
+                                        .strong(),
                                 );
                                 ui.add_space(4.0);
 
@@ -139,33 +132,40 @@ pub fn render_menu_overlay(
                                     );
 
                                     if resp.hovered() {
-                                        ui.painter()
-                                            .rect_filled(resp.rect, 4.0, theme.bg_surface2());
+                                        ui.painter().rect_filled(
+                                            resp.rect,
+                                            4.0,
+                                            theme.bg_surface2(),
+                                        );
                                     } else if is_sel {
                                         ui.painter().rect_filled(resp.rect, 4.0, bg);
                                     }
 
                                     let trigger_text = format!("/{}", entry.def.trigger);
-                                    
-                                    ui.allocate_ui_with_layout(resp.rect.size(), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                        ui.horizontal(|ui| {
-                                            ui.add_space(8.0);
-                                            let label_resp = ui.label(
-                                                egui::RichText::new(&trigger_text)
-                                                    .color(theme.primary())
-                                                    .strong(),
-                                            );
-                                            // Make trigger label fixed width so descriptions align nicely
-                                            ui.allocate_space(egui::vec2(
-                                                (180.0 - label_resp.rect.width()).max(0.0),
-                                                0.0,
-                                            ));
-                                            ui.label(
-                                                egui::RichText::new(entry.def.description)
-                                                    .color(text_col),
-                                            );
-                                        });
-                                    });
+
+                                    ui.allocate_ui_with_layout(
+                                        resp.rect.size(),
+                                        egui::Layout::left_to_right(egui::Align::Center),
+                                        |ui| {
+                                            ui.horizontal(|ui| {
+                                                ui.add_space(8.0);
+                                                let label_resp = ui.label(
+                                                    egui::RichText::new(&trigger_text)
+                                                        .color(theme.primary())
+                                                        .strong(),
+                                                );
+                                                // Make trigger label fixed width so descriptions align nicely
+                                                ui.allocate_space(egui::vec2(
+                                                    (180.0 - label_resp.rect.width()).max(0.0),
+                                                    0.0,
+                                                ));
+                                                ui.label(
+                                                    egui::RichText::new(entry.def.description)
+                                                        .color(text_col),
+                                                );
+                                            });
+                                        },
+                                    );
 
                                     if resp.clicked() {
                                         result = Some(AppAction::ExecuteMenuCmd);

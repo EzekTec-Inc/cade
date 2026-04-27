@@ -476,7 +476,12 @@ fn bash_delete_in_compound_command() {
 
 #[test]
 fn delete_action_native_tool() {
-    assert!(is_delete_action("delete_file", "delete_file", &json!({"path": "f"}), false));
+    assert!(is_delete_action(
+        "delete_file",
+        "delete_file",
+        &json!({"path": "f"}),
+        false
+    ));
 }
 
 #[test]
@@ -531,10 +536,22 @@ fn delete_action_bash_non_delete() {
 #[test]
 fn resolve_plan_mode_denies_write_tools() {
     let mgr = PermissionManager::new(PermissionMode::Plan);
-    assert!(mgr.resolve("write_file", &json!({"path": "f.rs"}), false).is_deny());
-    assert!(mgr.resolve("edit_file", &json!({"path": "f.rs"}), false).is_deny());
-    assert!(mgr.resolve("delete_file", &json!({"path": "f.rs"}), false).is_deny());
-    assert!(mgr.resolve("apply_patch", &json!({"path": "f.rs"}), false).is_deny());
+    assert!(
+        mgr.resolve("write_file", &json!({"path": "f.rs"}), false)
+            .is_deny()
+    );
+    assert!(
+        mgr.resolve("edit_file", &json!({"path": "f.rs"}), false)
+            .is_deny()
+    );
+    assert!(
+        mgr.resolve("delete_file", &json!({"path": "f.rs"}), false)
+            .is_deny()
+    );
+    assert!(
+        mgr.resolve("apply_patch", &json!({"path": "f.rs"}), false)
+            .is_deny()
+    );
 }
 
 #[test]
@@ -542,133 +559,229 @@ fn resolve_plan_mode_overrides_allow_rule_for_mutations() {
     let mgr = PermissionManager::new(PermissionMode::Plan);
     mgr.add_allow_rule(PermissionRule::parse("write_file").unwrap());
     // Even though write_file is explicitly allowed, Plan mode must deny it.
-    assert!(mgr.resolve("write_file", &json!({"path": "f.rs"}), false).is_deny());
+    assert!(
+        mgr.resolve("write_file", &json!({"path": "f.rs"}), false)
+            .is_deny()
+    );
 }
 
 #[test]
 fn resolve_plan_mode_allows_reads() {
     let mgr = PermissionManager::new(PermissionMode::Plan);
-    assert!(mgr.resolve("read_file", &json!({"path": "f.rs"}), false).is_allow());
-    assert!(mgr.resolve("grep", &json!({"pattern": "foo"}), false).is_allow());
-    assert!(mgr.resolve("glob", &json!({"pattern": "*.rs"}), false).is_allow());
+    assert!(
+        mgr.resolve("read_file", &json!({"path": "f.rs"}), false)
+            .is_allow()
+    );
+    assert!(
+        mgr.resolve("grep", &json!({"pattern": "foo"}), false)
+            .is_allow()
+    );
+    assert!(
+        mgr.resolve("glob", &json!({"pattern": "*.rs"}), false)
+            .is_allow()
+    );
 }
 
 #[test]
 fn resolve_plan_mode_allows_readonly_bash() {
     let mgr = PermissionManager::new(PermissionMode::Plan);
-    assert!(mgr.resolve("bash", &json!({"command": "ls -la"}), false).is_allow());
-    assert!(mgr.resolve("bash", &json!({"command": "cargo test"}), false).is_allow());
+    assert!(
+        mgr.resolve("bash", &json!({"command": "ls -la"}), false)
+            .is_allow()
+    );
+    assert!(
+        mgr.resolve("bash", &json!({"command": "cargo test"}), false)
+            .is_allow()
+    );
 }
 
 #[test]
 fn resolve_plan_mode_denies_write_bash() {
     let mgr = PermissionManager::new(PermissionMode::Plan);
-    assert!(mgr.resolve("bash", &json!({"command": "rm -rf target"}), false).is_deny());
-    assert!(mgr.resolve("bash", &json!({"command": "mkdir out"}), false).is_deny());
+    assert!(
+        mgr.resolve("bash", &json!({"command": "rm -rf target"}), false)
+            .is_deny()
+    );
+    assert!(
+        mgr.resolve("bash", &json!({"command": "mkdir out"}), false)
+            .is_deny()
+    );
 }
 
 #[test]
 fn resolve_accept_edits_allows_write_tools() {
     let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
-    assert!(mgr.resolve("write_file", &json!({"path": "f.rs"}), false).is_allow());
-    assert!(mgr.resolve("edit_file", &json!({"path": "f.rs"}), false).is_allow());
-    assert!(mgr.resolve("apply_patch", &json!({"path": "f.rs"}), false).is_allow());
-    assert!(mgr.resolve("edit_block", &json!({"path": "f.rs"}), false).is_allow());
+    assert!(
+        mgr.resolve("write_file", &json!({"path": "f.rs"}), false)
+            .is_allow()
+    );
+    assert!(
+        mgr.resolve("edit_file", &json!({"path": "f.rs"}), false)
+            .is_allow()
+    );
+    assert!(
+        mgr.resolve("apply_patch", &json!({"path": "f.rs"}), false)
+            .is_allow()
+    );
+    assert!(
+        mgr.resolve("edit_block", &json!({"path": "f.rs"}), false)
+            .is_allow()
+    );
 }
 
 #[test]
 fn resolve_accept_edits_asks_for_delete() {
     let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
-    assert!(mgr.resolve("delete_file", &json!({"path": "f.rs"}), false).is_ask());
+    assert!(
+        mgr.resolve("delete_file", &json!({"path": "f.rs"}), false)
+            .is_ask()
+    );
 }
 
 #[test]
 fn resolve_accept_edits_asks_for_mcp_delete() {
     let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
-    assert!(mgr.resolve(
-        "desktop-commander__delete_file",
-        &json!({"path": "f"}),
-        true,
-    ).is_ask());
+    assert!(
+        mgr.resolve(
+            "desktop-commander__delete_file",
+            &json!({"path": "f"}),
+            true,
+        )
+        .is_ask()
+    );
 }
 
 #[test]
 fn resolve_accept_edits_asks_for_bash_rm() {
     let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
-    assert!(mgr.resolve("bash", &json!({"command": "rm -rf target"}), false).is_ask());
+    assert!(
+        mgr.resolve("bash", &json!({"command": "rm -rf target"}), false)
+            .is_ask()
+    );
 }
 
 #[test]
 fn resolve_accept_edits_allows_bash_write_non_delete() {
     let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
     // cp, mv, mkdir are writes but not deletes — auto-approved
-    assert!(mgr.resolve("bash", &json!({"command": "cp foo bar"}), false).is_allow());
+    assert!(
+        mgr.resolve("bash", &json!({"command": "cp foo bar"}), false)
+            .is_allow()
+    );
 }
 
 #[test]
 fn resolve_accept_edits_allows_mcp_write_non_delete() {
     let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
-    assert!(mgr.resolve(
-        "desktop-commander__write_file",
-        &json!({"path": "f"}),
-        true,
-    ).is_allow());
+    assert!(
+        mgr.resolve("desktop-commander__write_file", &json!({"path": "f"}), true,)
+            .is_allow()
+    );
 }
 
 #[test]
 fn resolve_default_mode_asks_for_writes() {
     let mgr = PermissionManager::new(PermissionMode::Default);
-    assert!(mgr.resolve("write_file", &json!({"path": "f.rs"}), false).is_ask());
-    assert!(mgr.resolve("bash", &json!({"command": "rm foo"}), false).is_ask());
+    assert!(
+        mgr.resolve("write_file", &json!({"path": "f.rs"}), false)
+            .is_ask()
+    );
+    assert!(
+        mgr.resolve("bash", &json!({"command": "rm foo"}), false)
+            .is_ask()
+    );
 }
 
 #[test]
 fn resolve_default_mode_allows_reads() {
     let mgr = PermissionManager::new(PermissionMode::Default);
-    assert!(mgr.resolve("read_file", &json!({"path": "f.rs"}), false).is_allow());
-    assert!(mgr.resolve("bash", &json!({"command": "ls"}), false).is_allow());
+    assert!(
+        mgr.resolve("read_file", &json!({"path": "f.rs"}), false)
+            .is_allow()
+    );
+    assert!(
+        mgr.resolve("bash", &json!({"command": "ls"}), false)
+            .is_allow()
+    );
 }
 
 #[test]
 fn resolve_bypass_allows_everything() {
     let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
-    assert!(mgr.resolve("bash", &json!({"command": "rm -rf /"}), false).is_allow());
-    assert!(mgr.resolve("write_file", &json!({"path": "f"}), false).is_allow());
-    assert!(mgr.resolve("delete_file", &json!({"path": "f"}), false).is_allow());
+    assert!(
+        mgr.resolve("bash", &json!({"command": "rm -rf /"}), false)
+            .is_allow()
+    );
+    assert!(
+        mgr.resolve("write_file", &json!({"path": "f"}), false)
+            .is_allow()
+    );
+    assert!(
+        mgr.resolve("delete_file", &json!({"path": "f"}), false)
+            .is_allow()
+    );
 }
 
 #[test]
 fn resolve_protected_path_denies_write() {
     let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
-    assert!(mgr.resolve("write_file", &json!({"path": ".env"}), false).is_deny());
-    assert!(mgr.resolve("edit_file", &json!({"path": ".git/config"}), false).is_deny());
+    assert!(
+        mgr.resolve("write_file", &json!({"path": ".env"}), false)
+            .is_deny()
+    );
+    assert!(
+        mgr.resolve("edit_file", &json!({"path": ".git/config"}), false)
+            .is_deny()
+    );
 }
 
 #[test]
 fn resolve_deny_rule_overrides() {
     let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
     mgr.add_deny_rule(PermissionRule::parse("Bash(rm -rf:*)").unwrap());
-    assert!(mgr.resolve("bash", &json!({"command": "rm -rf /tmp"}), false).is_deny());
+    assert!(
+        mgr.resolve("bash", &json!({"command": "rm -rf /tmp"}), false)
+            .is_deny()
+    );
 }
 
 #[test]
 fn resolve_allow_rule_approves() {
     let mgr = PermissionManager::new(PermissionMode::Default);
     mgr.add_allow_rule(PermissionRule::parse("Bash(cargo test)").unwrap());
-    assert!(mgr.resolve("bash", &json!({"command": "cargo test"}), false).is_allow());
+    assert!(
+        mgr.resolve("bash", &json!({"command": "cargo test"}), false)
+            .is_allow()
+    );
 }
 
 #[test]
 fn resolve_strict_bash_overrides_allow_rule() {
     let mgr = PermissionManager::new_with_strict_bash(PermissionMode::Default, true);
     mgr.add_allow_rule(PermissionRule::parse("bash").unwrap());
-    assert!(mgr.resolve("bash", &json!({"command": "ls"}), false).is_ask());
+    assert!(
+        mgr.resolve("bash", &json!({"command": "ls"}), false)
+            .is_ask()
+    );
 }
 
 #[test]
 fn resolve_config_edit_protection() {
     let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
-    assert!(mgr.resolve("write_file", &json!({"path": ".cade/settings.json"}), false).is_ask());
-    assert!(mgr.resolve("edit_file", &json!({"path": "settings.local.json"}), false).is_ask());
-    assert!(mgr.resolve("write_file", &json!({"path": ".cade/skills/hack/SKILL.MD"}), false).is_ask());
+    assert!(
+        mgr.resolve("write_file", &json!({"path": ".cade/settings.json"}), false)
+            .is_ask()
+    );
+    assert!(
+        mgr.resolve("edit_file", &json!({"path": "settings.local.json"}), false)
+            .is_ask()
+    );
+    assert!(
+        mgr.resolve(
+            "write_file",
+            &json!({"path": ".cade/skills/hack/SKILL.MD"}),
+            false
+        )
+        .is_ask()
+    );
 }

@@ -29,7 +29,7 @@ pub fn render_model_picker(
     selection: usize,
     loading: bool,
     error: Option<&str>,
-    theme: &crate::theme::ThemeColors, 
+    theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
@@ -75,20 +75,14 @@ pub fn render_model_picker(
                                 .strong()
                                 .size(16.0),
                         );
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if ui
-                                    .button(
-                                        egui::RichText::new("✕")
-                                            .color(theme.text_dim()),
-                                    )
-                                    .clicked()
-                                {
-                                    result = Some(AppAction::CloseModelPicker);
-                                }
-                            },
-                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button(egui::RichText::new("✕").color(theme.text_dim()))
+                                .clicked()
+                            {
+                                result = Some(AppAction::CloseModelPicker);
+                            }
+                        });
                     });
 
                     ui.add_space(8.0);
@@ -97,8 +91,7 @@ pub fn render_model_picker(
                     let search_resp = ui.add(
                         egui::TextEdit::singleline(&mut query_buf)
                             .hint_text(
-                                egui::RichText::new("Search models…")
-                                    .color(theme.text_dim()),
+                                egui::RichText::new("Search models…").color(theme.text_dim()),
                             )
                             .desired_width(ui.available_width()),
                     );
@@ -127,22 +120,17 @@ pub fn render_model_picker(
                         ui.horizontal(|ui| {
                             ui.spinner();
                             ui.label(
-                                egui::RichText::new("Loading models…")
-                                    .color(theme.text_muted()),
+                                egui::RichText::new("Loading models…").color(theme.text_muted()),
                             );
                         });
                         return;
                     }
 
                     // Filter models
-                    let filtered =
-                        crate::session::filter_models(models, &query_buf);
+                    let filtered = crate::session::filter_models(models, &query_buf);
 
                     if filtered.is_empty() && custom_providers.is_empty() {
-                        ui.label(
-                            egui::RichText::new("No models found")
-                                .color(theme.text_muted()),
-                        );
+                        ui.label(egui::RichText::new("No models found").color(theme.text_muted()));
                         return;
                     }
 
@@ -155,18 +143,15 @@ pub fn render_model_picker(
                         )
                     });
                     if up && selection > 0 {
-                        result =
-                            Some(AppAction::SetModelPickerSelection(selection - 1));
+                        result = Some(AppAction::SetModelPickerSelection(selection - 1));
                     }
                     if down && selection < max_idx {
-                        result =
-                            Some(AppAction::SetModelPickerSelection(selection + 1));
+                        result = Some(AppAction::SetModelPickerSelection(selection + 1));
                     }
                     // Enter selects
                     if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                         if let Some(m) = filtered.get(selection) {
-                            result =
-                                Some(AppAction::SelectModel(m.id.clone()));
+                            result = Some(AppAction::SelectModel(m.id.clone()));
                         }
                     }
 
@@ -197,12 +182,10 @@ pub fn render_model_picker(
                                         ui.add_space(8.0);
                                     }
                                     ui.label(
-                                        egui::RichText::new(
-                                            m.provider.to_uppercase(),
-                                        )
-                                        .color(theme.text_dim())
-                                        .strong()
-                                        .size(10.0),
+                                        egui::RichText::new(m.provider.to_uppercase())
+                                            .color(theme.text_dim())
+                                            .strong()
+                                            .size(10.0),
                                     );
                                     ui.add_space(2.0);
                                 }
@@ -243,9 +226,7 @@ pub fn render_model_picker(
                                                 {
                                                     ui.label(
                                                         egui::RichText::new(&m.id)
-                                                            .color(
-                                                                theme.text_dim(),
-                                                            )
+                                                            .color(theme.text_dim())
                                                             .size(11.0),
                                                     );
                                                 }
@@ -257,30 +238,23 @@ pub fn render_model_picker(
                                                             egui::Align::Center,
                                                         ),
                                                         |ui| {
-                                                            let ctx_label =
-                                                                if m.context_window
-                                                                    >= 1_000_000
-                                                                {
-                                                                    format!(
-                                                                        "{}M ctx",
-                                                                        m.context_window
-                                                                            / 1_000_000
-                                                                    )
-                                                                } else {
-                                                                    format!(
-                                                                        "{}K ctx",
-                                                                        m.context_window
-                                                                            / 1_000
-                                                                    )
-                                                                };
+                                                            let ctx_label = if m.context_window
+                                                                >= 1_000_000
+                                                            {
+                                                                format!(
+                                                                    "{}M ctx",
+                                                                    m.context_window / 1_000_000
+                                                                )
+                                                            } else {
+                                                                format!(
+                                                                    "{}K ctx",
+                                                                    m.context_window / 1_000
+                                                                )
+                                                            };
                                                             ui.label(
-                                                                egui::RichText::new(
-                                                                    ctx_label,
-                                                                )
-                                                                .color(
-                                                                    theme.text_dim(),
-                                                                )
-                                                                .size(10.0),
+                                                                egui::RichText::new(ctx_label)
+                                                                    .color(theme.text_dim())
+                                                                    .size(10.0),
                                                             );
                                                         },
                                                     );
@@ -288,20 +262,15 @@ pub fn render_model_picker(
                                             })
                                             .response;
 
-                                        if resp.interact(egui::Sense::click()).clicked()
-                                        {
-                                            result = Some(AppAction::SelectModel(
-                                                m.id.clone(),
-                                            ));
+                                        if resp.interact(egui::Sense::click()).clicked() {
+                                            result = Some(AppAction::SelectModel(m.id.clone()));
                                         }
 
                                         // Hover changes selection
                                         if resp.interact(egui::Sense::hover()).hovered()
                                             && !is_selected
                                         {
-                                            result = Some(
-                                                AppAction::SetModelPickerSelection(i),
-                                            );
+                                            result = Some(AppAction::SetModelPickerSelection(i));
                                         }
                                     });
                             }
@@ -310,10 +279,12 @@ pub fn render_model_picker(
                             if !custom_providers.is_empty() {
                                 ui.add_space(12.0);
                                 ui.label(
-                                    egui::RichText::new("CUSTOM PROVIDERS (type model ID manually)")
-                                        .color(theme.text_dim())
-                                        .strong()
-                                        .size(10.0),
+                                    egui::RichText::new(
+                                        "CUSTOM PROVIDERS (type model ID manually)",
+                                    )
+                                    .color(theme.text_dim())
+                                    .strong()
+                                    .size(10.0),
                                 );
                                 ui.add_space(2.0);
                                 for p in custom_providers {

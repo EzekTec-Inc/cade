@@ -33,7 +33,13 @@ impl SessionState {
 
     /// Whether the tools overlay is currently visible.
     pub fn is_tools_open(&self) -> bool {
-        matches!(self, Self::Connected { tools_open: true, .. })
+        matches!(
+            self,
+            Self::Connected {
+                tools_open: true,
+                ..
+            }
+        )
     }
 
     /// Feed the result of a successful tools fetch.
@@ -72,5 +78,4 @@ impl SessionState {
             &[]
         }
     }
-
 }

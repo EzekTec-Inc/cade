@@ -19,10 +19,7 @@ pub fn render_artifacts_overlay(
     let screen = ctx.content_rect();
     let w = 800.0_f32.min(screen.width() - 40.0);
     let h = 520.0_f32.min(screen.height() - 80.0);
-    let pos = egui::pos2(
-        screen.center().x - w / 2.0,
-        screen.center().y - h / 2.0,
-    );
+    let pos = egui::pos2(screen.center().x - w / 2.0, screen.center().y - h / 2.0);
 
     let mut open = true;
     egui::Window::new("Artifacts")
@@ -201,8 +198,7 @@ pub fn render_artifacts_overlay(
                                             .on_hover_text("Permanently remove this artifact")
                                             .clicked()
                                         {
-                                            result =
-                                                Some(AppAction::DeleteSelectedArtifact);
+                                            result = Some(AppAction::DeleteSelectedArtifact);
                                         }
                                     },
                                 );
@@ -238,8 +234,7 @@ pub fn render_artifacts_overlay(
                             match &d.data_text {
                                 Some(text) if !text.is_empty() => {
                                     // Truncate to avoid rendering megabytes
-                                    let preview: String =
-                                        text.chars().take(4096).collect();
+                                    let preview: String = text.chars().take(4096).collect();
                                     let suffix = if text.len() > 4096 {
                                         "\n…(truncated)"
                                     } else {
@@ -252,11 +247,9 @@ pub fn render_artifacts_overlay(
                                         .max_height(body_h - 120.0)
                                         .show(ui, |ui| {
                                             ui.add(
-                                                egui::TextEdit::multiline(
-                                                    &mut full.as_str(),
-                                                )
-                                                .desired_width(ui.available_width())
-                                                .font(egui::TextStyle::Monospace),
+                                                egui::TextEdit::multiline(&mut full.as_str())
+                                                    .desired_width(ui.available_width())
+                                                    .font(egui::TextStyle::Monospace),
                                             );
                                         });
                                 }

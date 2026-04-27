@@ -9,7 +9,7 @@ pub fn render_stats_overlay(
     total_in: u64,
     total_out: u64,
     last_usage: Option<&(u64, u64, Option<String>)>,
-    theme: &crate::theme::ThemeColors, 
+    theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
     let screen = ctx.content_rect();
@@ -52,35 +52,112 @@ pub fn render_stats_overlay(
             ui.add_space(6.0);
 
             // Session totals
-            ui.label(egui::RichText::new("Session totals").color(theme.text_muted()).strong().size(12.0));
-            egui::Grid::new("stats_totals").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
-                ui.label(egui::RichText::new("input tokens").color(theme.text_muted()).monospace().size(11.0));
-                ui.label(egui::RichText::new(total_in.to_string()).color(theme.text_primary()).monospace().size(11.0));
-                ui.end_row();
-                ui.label(egui::RichText::new("output tokens").color(theme.text_muted()).monospace().size(11.0));
-                ui.label(egui::RichText::new(total_out.to_string()).color(theme.text_primary()).monospace().size(11.0));
-                ui.end_row();
-                ui.label(egui::RichText::new("total tokens").color(theme.text_muted()).monospace().size(11.0));
-                ui.label(egui::RichText::new((total_in + total_out).to_string()).color(theme.success()).monospace().strong().size(11.0));
-                ui.end_row();
-            });
+            ui.label(
+                egui::RichText::new("Session totals")
+                    .color(theme.text_muted())
+                    .strong()
+                    .size(12.0),
+            );
+            egui::Grid::new("stats_totals")
+                .num_columns(2)
+                .spacing([16.0, 4.0])
+                .show(ui, |ui| {
+                    ui.label(
+                        egui::RichText::new("input tokens")
+                            .color(theme.text_muted())
+                            .monospace()
+                            .size(11.0),
+                    );
+                    ui.label(
+                        egui::RichText::new(total_in.to_string())
+                            .color(theme.text_primary())
+                            .monospace()
+                            .size(11.0),
+                    );
+                    ui.end_row();
+                    ui.label(
+                        egui::RichText::new("output tokens")
+                            .color(theme.text_muted())
+                            .monospace()
+                            .size(11.0),
+                    );
+                    ui.label(
+                        egui::RichText::new(total_out.to_string())
+                            .color(theme.text_primary())
+                            .monospace()
+                            .size(11.0),
+                    );
+                    ui.end_row();
+                    ui.label(
+                        egui::RichText::new("total tokens")
+                            .color(theme.text_muted())
+                            .monospace()
+                            .size(11.0),
+                    );
+                    ui.label(
+                        egui::RichText::new((total_in + total_out).to_string())
+                            .color(theme.success())
+                            .monospace()
+                            .strong()
+                            .size(11.0),
+                    );
+                    ui.end_row();
+                });
 
             if let Some((lin, lout, model)) = last_usage {
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new("Last turn").color(theme.text_muted()).strong().size(12.0));
-                egui::Grid::new("stats_last").num_columns(2).spacing([16.0, 4.0]).show(ui, |ui| {
-                    ui.label(egui::RichText::new("input").color(theme.text_muted()).monospace().size(11.0));
-                    ui.label(egui::RichText::new(lin.to_string()).color(theme.text_primary()).monospace().size(11.0));
-                    ui.end_row();
-                    ui.label(egui::RichText::new("output").color(theme.text_muted()).monospace().size(11.0));
-                    ui.label(egui::RichText::new(lout.to_string()).color(theme.text_primary()).monospace().size(11.0));
-                    ui.end_row();
-                    if let Some(m) = model {
-                        ui.label(egui::RichText::new("model").color(theme.text_muted()).monospace().size(11.0));
-                        ui.label(egui::RichText::new(m).color(theme.text_muted()).monospace().size(11.0));
+                ui.label(
+                    egui::RichText::new("Last turn")
+                        .color(theme.text_muted())
+                        .strong()
+                        .size(12.0),
+                );
+                egui::Grid::new("stats_last")
+                    .num_columns(2)
+                    .spacing([16.0, 4.0])
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new("input")
+                                .color(theme.text_muted())
+                                .monospace()
+                                .size(11.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(lin.to_string())
+                                .color(theme.text_primary())
+                                .monospace()
+                                .size(11.0),
+                        );
                         ui.end_row();
-                    }
-                });
+                        ui.label(
+                            egui::RichText::new("output")
+                                .color(theme.text_muted())
+                                .monospace()
+                                .size(11.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(lout.to_string())
+                                .color(theme.text_primary())
+                                .monospace()
+                                .size(11.0),
+                        );
+                        ui.end_row();
+                        if let Some(m) = model {
+                            ui.label(
+                                egui::RichText::new("model")
+                                    .color(theme.text_muted())
+                                    .monospace()
+                                    .size(11.0),
+                            );
+                            ui.label(
+                                egui::RichText::new(m)
+                                    .color(theme.text_muted())
+                                    .monospace()
+                                    .size(11.0),
+                            );
+                            ui.end_row();
+                        }
+                    });
             }
         });
 

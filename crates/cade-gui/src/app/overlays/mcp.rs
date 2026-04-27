@@ -14,7 +14,7 @@ pub fn render_mcp_overlay(
     servers: &[crate::api::McpServerInfo],
     loading: bool,
     error: Option<&str>,
-    theme: &crate::theme::ThemeColors, 
+    theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
@@ -57,20 +57,14 @@ pub fn render_mcp_overlay(
                                 .strong()
                                 .size(16.0),
                         );
-                        ui.with_layout(
-                            egui::Layout::right_to_left(egui::Align::Center),
-                            |ui| {
-                                if ui
-                                    .button(
-                                        egui::RichText::new("✕")
-                                            .color(theme.text_dim()),
-                                    )
-                                    .clicked()
-                                {
-                                    result = Some(AppAction::CloseMcpOverlay);
-                                }
-                            },
-                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .button(egui::RichText::new("✕").color(theme.text_dim()))
+                                .clicked()
+                            {
+                                result = Some(AppAction::CloseMcpOverlay);
+                            }
+                        });
                     });
 
                     ui.add_space(4.0);
@@ -154,10 +148,7 @@ pub fn render_mcp_overlay(
                                 // Server card
                                 egui::Frame::new()
                                     .fill(theme.bg_surface1())
-                                    .stroke(egui::Stroke::new(
-                                        1.0,
-                                        theme.border_base(),
-                                    ))
+                                    .stroke(egui::Stroke::new(1.0, theme.border_base()))
                                     .corner_radius(egui::CornerRadius::same(6))
                                     .inner_margin(egui::Margin::same(10))
                                     .show(ui, |ui| {
@@ -170,9 +161,7 @@ pub fn render_mcp_overlay(
                                                     .size(13.0),
                                             );
                                             ui.with_layout(
-                                                egui::Layout::right_to_left(
-                                                    egui::Align::Center,
-                                                ),
+                                                egui::Layout::right_to_left(egui::Align::Center),
                                                 |ui| {
                                                     ui.label(
                                                         egui::RichText::new(status_label)
@@ -213,38 +202,34 @@ pub fn render_mcp_overlay(
                                                     .color(theme.text_dim())
                                                     .size(11.0),
                                             )
-                                            .id_salt(format!(
-                                                "mcp_tools_{}",
-                                                server.key
-                                            ))
+                                            .id_salt(format!("mcp_tools_{}", server.key))
                                             .default_open(server.tools.len() <= 8)
-                                            .show(ui, |ui| {
-                                                for tool in &server.tools {
-                                                    // Strip the "server__" prefix for display
-                                                    let display = tool
-                                                        .split_once("__")
-                                                        .map(|(_, t)| t)
-                                                        .unwrap_or(tool);
-                                                    ui.horizontal(|ui| {
-                                                        ui.label(
-                                                            egui::RichText::new("·  ")
-                                                                .color(
-                                                                    theme.border_base(),
-                                                                )
-                                                                .monospace()
-                                                                .size(11.0),
-                                                        );
-                                                        ui.label(
-                                                            egui::RichText::new(display)
-                                                                .color(
-                                                                    theme.text_dim(),
-                                                                )
-                                                                .monospace()
-                                                                .size(11.0),
-                                                        );
-                                                    });
-                                                }
-                                            });
+                                            .show(
+                                                ui,
+                                                |ui| {
+                                                    for tool in &server.tools {
+                                                        // Strip the "server__" prefix for display
+                                                        let display = tool
+                                                            .split_once("__")
+                                                            .map(|(_, t)| t)
+                                                            .unwrap_or(tool);
+                                                        ui.horizontal(|ui| {
+                                                            ui.label(
+                                                                egui::RichText::new("·  ")
+                                                                    .color(theme.border_base())
+                                                                    .monospace()
+                                                                    .size(11.0),
+                                                            );
+                                                            ui.label(
+                                                                egui::RichText::new(display)
+                                                                    .color(theme.text_dim())
+                                                                    .monospace()
+                                                                    .size(11.0),
+                                                            );
+                                                        });
+                                                    }
+                                                },
+                                            );
                                         }
                                     });
 

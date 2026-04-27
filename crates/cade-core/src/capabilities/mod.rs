@@ -144,15 +144,11 @@ impl Default for CapabilitySet {
 
 // endregion: --- CapabilitySet
 
-
 // region:    --- Resolve
 
 /// Resolve the effective capability set from a profile + optional user
 /// overrides (enable/disable lists).
-pub fn resolve_capabilities(
-    enable: &[String],
-    disable: &[String],
-) -> CapabilitySet {
+pub fn resolve_capabilities(enable: &[String], disable: &[String]) -> CapabilitySet {
     let mut caps = CapabilitySet::full();
     for name in enable {
         if let Some(cap) = Capability::from_name(name) {
@@ -177,20 +173,14 @@ mod tests {
 
     #[test]
     fn resolve_with_overrides() {
-        let caps = resolve_capabilities(
-            &["web".to_string(), "desktop".to_string()],
-            &[],
-        );
+        let caps = resolve_capabilities(&["web".to_string(), "desktop".to_string()], &[]);
         assert!(caps.is_enabled(Capability::Web));
         assert!(caps.is_enabled(Capability::Desktop));
     }
 
     #[test]
     fn resolve_disable_overrides_profile() {
-        let caps = resolve_capabilities(
-            &[],
-            &["desktop".to_string(), "tray".to_string()],
-        );
+        let caps = resolve_capabilities(&[], &["desktop".to_string(), "tray".to_string()]);
         assert!(!caps.is_enabled(Capability::Desktop));
         assert!(!caps.is_enabled(Capability::Tray));
     }

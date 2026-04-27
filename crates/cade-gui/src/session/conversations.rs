@@ -5,20 +5,14 @@ use super::*;
 impl SessionState {
     /// Store conversations fetched from the server.
     pub fn on_conversations(&mut self, convs: Vec<crate::api::ConversationInfo>) {
-        if let Self::Connected {
-            conversations, ..
-        } = self
-        {
+        if let Self::Connected { conversations, .. } = self {
             *conversations = convs;
         }
     }
 
     /// The current list of conversations.
     pub fn conversations(&self) -> &[crate::api::ConversationInfo] {
-        if let Self::Connected {
-            conversations, ..
-        } = self
-        {
+        if let Self::Connected { conversations, .. } = self {
             conversations
         } else {
             &[]
@@ -115,5 +109,4 @@ impl SessionState {
             }
         }
     }
-
 }

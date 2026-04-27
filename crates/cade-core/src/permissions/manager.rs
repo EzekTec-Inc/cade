@@ -1,7 +1,7 @@
-use std::sync::Arc;
-use parking_lot::Mutex;
-use crate::permissions::rules::*;
 use crate::permissions::checks::*;
+use crate::permissions::rules::*;
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 // -- PermissionManager
 
@@ -159,9 +159,7 @@ impl PermissionManager {
         // 2.5. Plan mode strict block — overrides any allow rules for mutations
         if self.mode() == PermissionMode::Plan {
             if is_write {
-                return Verdict::Deny(format!(
-                    "plan mode: '{tool_name}' is a write/mutating tool"
-                ));
+                return Verdict::Deny(format!("plan mode: '{tool_name}' is a write/mutating tool"));
             }
             if is_bash && bash_is_write {
                 let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
@@ -217,9 +215,7 @@ impl PermissionManager {
                 Verdict::Allow
             }
 
-            PermissionMode::Plan => {
-                Verdict::Allow
-            }
+            PermissionMode::Plan => Verdict::Allow,
 
             PermissionMode::AcceptEdits => {
                 // Delete actions always require user approval

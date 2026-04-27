@@ -10,9 +10,9 @@
 //! when the user types `/` at the start of a blank input, and dispatches
 //! the resolved command.
 
-use cade_core::resources::palette::{CmdDef, CMD_DEFS};
 pub use cade_core::resources::palette::PaletteCmd;
 pub use cade_core::resources::palette::parse_palette_input;
+use cade_core::resources::palette::{CMD_DEFS, CmdDef};
 
 // ── Fuzzy filter ──────────────────────────────────────────────────────────
 
@@ -44,8 +44,12 @@ pub fn fuzzy_filter<'a>(query: &str) -> Vec<FilteredCmd<'a>> {
     let mut results: Vec<FilteredCmd<'_>> = CMD_DEFS
         .iter()
         .filter_map(|def| {
-            cade_core::resources::palette::fuzzy_score(&q, def.trigger, def.description, "")
-                .map(|score| FilteredCmd { def, score: score as usize })
+            cade_core::resources::palette::fuzzy_score(&q, def.trigger, def.description, "").map(
+                |score| FilteredCmd {
+                    def,
+                    score: score as usize,
+                },
+            )
         })
         .collect();
 

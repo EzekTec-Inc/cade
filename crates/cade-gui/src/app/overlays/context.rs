@@ -11,7 +11,7 @@ pub fn render_context_overlay(
     error: Option<&str>,
     context_breakdown: Option<&crate::api::ContextBreakdown>,
     context_breakdown_loading: bool,
-    theme: &crate::theme::ThemeColors, 
+    theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
     let screen = ctx.content_rect();
@@ -43,7 +43,9 @@ pub fn render_context_overlay(
                         .strong()
                         .size(16.0),
                 );
-                if loading { ui.spinner(); }
+                if loading {
+                    ui.spinner();
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui.small_button("✕").clicked() {
                         result = Some(AppAction::CloseContextOverlay);
@@ -55,25 +57,42 @@ pub fn render_context_overlay(
             ui.add_space(6.0);
 
             if let Some(err) = error {
-                ui.label(egui::RichText::new(format!("⚠ {err}")).color(theme.error()).small());
+                ui.label(
+                    egui::RichText::new(format!("⚠ {err}"))
+                        .color(theme.error())
+                        .small(),
+                );
                 return;
             }
 
             let Some(s) = stats else {
-                ui.label(egui::RichText::new("Loading…").color(theme.text_muted()).italics());
+                ui.label(
+                    egui::RichText::new("Loading…")
+                        .color(theme.text_muted())
+                        .italics(),
+                );
                 return;
             };
 
             let rows: &[(&str, String)] = &[
-                ("model",            s.model.as_deref().unwrap_or("—").to_string()),
-                ("window_tokens",    s.window_tokens.to_string()),
-                ("turns_included",   format!("{} / {}", s.turns_included, s.turns_total)),
-                ("turns_omitted",    s.turns_omitted.to_string()),
-                ("chars_used",       format!("{} / {} budget", s.chars_used, s.message_budget_chars)),
-                ("memory_chars",     s.memory_chars.to_string()),
-                ("system_prompt",    format!("{} chars", s.system_prompt_chars)),
-                ("tool_count",       s.tool_count.to_string()),
-                ("tool_schema_rsv",  format!("{} chars", s.tool_schema_reserve_chars)),
+                ("model", s.model.as_deref().unwrap_or("—").to_string()),
+                ("window_tokens", s.window_tokens.to_string()),
+                (
+                    "turns_included",
+                    format!("{} / {}", s.turns_included, s.turns_total),
+                ),
+                ("turns_omitted", s.turns_omitted.to_string()),
+                (
+                    "chars_used",
+                    format!("{} / {} budget", s.chars_used, s.message_budget_chars),
+                ),
+                ("memory_chars", s.memory_chars.to_string()),
+                ("system_prompt", format!("{} chars", s.system_prompt_chars)),
+                ("tool_count", s.tool_count.to_string()),
+                (
+                    "tool_schema_rsv",
+                    format!("{} chars", s.tool_schema_reserve_chars),
+                ),
                 ("needs_consolidation", s.needs_consolidation.to_string()),
             ];
 
@@ -82,8 +101,18 @@ pub fn render_context_overlay(
                 .spacing([16.0, 4.0])
                 .show(ui, |ui| {
                     for (k, v) in rows {
-                        ui.label(egui::RichText::new(*k).color(theme.text_muted()).monospace().size(11.0));
-                        ui.label(egui::RichText::new(v).color(theme.text_primary()).monospace().size(11.0));
+                        ui.label(
+                            egui::RichText::new(*k)
+                                .color(theme.text_muted())
+                                .monospace()
+                                .size(11.0),
+                        );
+                        ui.label(
+                            egui::RichText::new(v)
+                                .color(theme.text_primary())
+                                .monospace()
+                                .size(11.0),
+                        );
                         ui.end_row();
                     }
                 });
@@ -93,15 +122,24 @@ pub fn render_context_overlay(
                 ui.add_space(8.0);
                 let pct = (s.chars_used as f32 / s.message_budget_chars as f32).min(1.0);
                 let bar_w = ui.available_width();
-                let (resp, painter) = ui.allocate_painter(egui::vec2(bar_w, 10.0), egui::Sense::hover());
+                let (resp, painter) =
+                    ui.allocate_painter(egui::vec2(bar_w, 10.0), egui::Sense::hover());
                 let r = resp.rect;
                 painter.rect_filled(r, 0.0, theme.bg_surface0());
                 painter.rect_filled(
                     egui::Rect::from_min_size(r.min, egui::vec2(r.width() * pct, r.height())),
                     0.0,
-                    if pct > 0.85 { theme.warning() } else { theme.primary() },
+                    if pct > 0.85 {
+                        theme.warning()
+                    } else {
+                        theme.primary()
+                    },
                 );
-                ui.label(egui::RichText::new(format!("{:.0}% context used", pct * 100.0)).color(theme.text_dim()).size(10.0));
+                ui.label(
+                    egui::RichText::new(format!("{:.0}% context used", pct * 100.0))
+                        .color(theme.text_dim())
+                        .size(10.0),
+                );
             }
 
             // ── Per-category breakdown (ContextBar) ──────────────
@@ -134,4 +172,3 @@ pub fn render_context_overlay(
 }
 
 // ── Stats overlay (M19) ───────────────────────────────────────────────
-

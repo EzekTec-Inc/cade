@@ -37,8 +37,8 @@ use crate::shortcuts::{ShortcutAction, poll_shortcut};
 // Bring overlay render functions into scope so `ui()` can call them unqualified.
 use overlays::{
     render_agents_overlay, render_artifacts_overlay, render_checkpoints_overlay,
-    render_context_overlay, render_mcp_overlay, render_memory_overlay, render_menu_overlay, render_model_picker,
-    render_palette_overlay, render_question_widget, render_stats_overlay,
+    render_context_overlay, render_mcp_overlay, render_memory_overlay, render_menu_overlay,
+    render_model_picker, render_palette_overlay, render_question_widget, render_stats_overlay,
     render_tools_overlay,
 };
 // Bring view helpers into scope.
@@ -101,7 +101,6 @@ impl CadeApp {
             theme: crate::theme::ThemeColors::dark(),
         }
     }
-
 }
 
 impl eframe::App for CadeApp {
@@ -126,7 +125,6 @@ impl eframe::App for CadeApp {
         components::footer::render(ui, &session_snapshot_for_toolbar, &self.theme);
 
         egui::CentralPanel::default().show_inside(ui, |ui| {
-
             // ── M5: context-window progress bar ──────────────────────────
             if let Some(crate::session::SessionState::Connected {
                 total_input_tokens,
@@ -139,10 +137,8 @@ impl eframe::App for CadeApp {
                 let frac = crate::theme::context_fill_fraction(total, DEFAULT_WINDOW);
                 if total > 0 {
                     let bar_color = crate::theme::context_fill_color(frac, &self.theme);
-                    let hover_text = format!(
-                        "{total} / {DEFAULT_WINDOW} tokens ({:.0}%)",
-                        frac * 100.0
-                    );
+                    let hover_text =
+                        format!("{total} / {DEFAULT_WINDOW} tokens ({:.0}%)", frac * 100.0);
                     ui.add(
                         egui::ProgressBar::new(frac)
                             .desired_height(4.0)
@@ -233,7 +229,7 @@ impl eframe::App for CadeApp {
                     ref mcp_servers,
                     mcp_loading,
                     ref mcp_error,
-                ref mut theme_update,
+                    ref mut theme_update,
 
                     model_picker_open,
                     ref model_picker_models,
@@ -277,13 +273,13 @@ impl eframe::App for CadeApp {
                 }) => {
                     // ── Connected: 3-panel layout ───────────────────
                     let _version = health.version.as_deref().unwrap_or("unknown");
-                    
-                if let Some(new_theme) = theme_update.take() {
-                    self.theme = new_theme;
-                    crate::theme::apply_theme(ui.ctx(), &self.theme);
-                }
 
-                let has_agent = selected_agent.is_some();
+                    if let Some(new_theme) = theme_update.take() {
+                        self.theme = new_theme;
+                        crate::theme::apply_theme(ui.ctx(), &self.theme);
+                    }
+
+                    let has_agent = selected_agent.is_some();
                     let is_streaming = streaming;
 
                     // Clone input buffer for the editable text field.
@@ -358,9 +354,7 @@ impl eframe::App for CadeApp {
                     } else if memory_open {
                         // Sample Ctrl+S directly — it isn't in the global
                         // SHORTCUTS table because it is overlay-scoped.
-                        let ctrl_s = ui.input(|i| {
-                            i.key_pressed(egui::Key::S) && i.modifiers.ctrl
-                        });
+                        let ctrl_s = ui.input(|i| i.key_pressed(egui::Key::S) && i.modifiers.ctrl);
                         let dirty_buf = memory_blocks
                             .get(memory_selection)
                             .is_some_and(|b| b.value != *memory_edit_buffer);
@@ -529,12 +523,9 @@ impl eframe::App for CadeApp {
 
                     // ── Full-Screen Command Menu ─────────────
                     if menu_open {
-                        if let Some(new_action) = render_menu_overlay(
-                            ui.ctx(),
-                            menu_input,
-                            menu_selection,
-                            &self.theme,
-                        ) {
+                        if let Some(new_action) =
+                            render_menu_overlay(ui.ctx(), menu_input, menu_selection, &self.theme)
+                        {
                             action = new_action;
                         }
                     }
@@ -610,12 +601,9 @@ impl eframe::App for CadeApp {
 
                     // ── Agents overlay (M19) ──────────────────────
                     if agents_open {
-                        if let Some(new_action) = render_agents_overlay(
-                            ui.ctx(),
-                            agents,
-                            *selected_agent,
-                            &self.theme,
-                        ) {
+                        if let Some(new_action) =
+                            render_agents_overlay(ui.ctx(), agents, *selected_agent, &self.theme)
+                        {
                             action = new_action;
                         }
                     }
@@ -680,49 +668,90 @@ impl eframe::App for CadeApp {
                     // ── Settings overlays ─────────────────────────
                     if providers_open {
                         if let Some(a) = overlays::settings::render_providers_overlay(
-                            ui.ctx(), providers, providers_loading, &self.theme,
-                        ) { action = a; }
+                            ui.ctx(),
+                            providers,
+                            providers_loading,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
                     }
                     if permissions_open {
                         if let Some(a) = overlays::settings::render_permissions_overlay(
-                            ui.ctx(), current_permission_mode, &self.theme,
-                        ) { action = a; }
+                            ui.ctx(),
+                            current_permission_mode,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
                     }
                     if theme_picker_open {
                         if let Some(a) = overlays::settings::render_theme_overlay(
-                            ui.ctx(), available_themes, current_theme_name, &self.theme,
-                        ) { action = a; }
+                            ui.ctx(),
+                            available_themes,
+                            current_theme_name,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
                     }
                     if hooks_open {
                         if let Some(a) = overlays::settings::render_hooks_overlay(
-                            ui.ctx(), hooks, hooks_loading, &self.theme,
-                        ) { action = a; }
+                            ui.ctx(),
+                            hooks,
+                            hooks_loading,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
                     }
                     if toolset_open {
                         if let Some(a) = overlays::settings::render_toolset_overlay(
-                            ui.ctx(), current_toolset, &self.theme,
-                        ) { action = a; }
+                            ui.ctx(),
+                            current_toolset,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
                     }
                     if pricing_open {
                         if let Some(a) = overlays::settings::render_pricing_overlay(
-                            ui.ctx(), pricing_info, &self.theme,
-                        ) { action = a; }
+                            ui.ctx(),
+                            pricing_info,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
                     }
                     if backend_open {
                         if let Some(a) = overlays::settings::render_backend_overlay(
-                            ui.ctx(), current_backend, &self.theme,
-                        ) { action = a; }
+                            ui.ctx(),
+                            current_backend,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
                     }
                     if reasoning_open {
                         if let Some(a) = overlays::settings::render_reasoning_overlay(
-                            ui.ctx(), current_reasoning_effort, &self.theme,
-                        ) { action = a; }
+                            ui.ctx(),
+                            current_reasoning_effort,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
                     }
                     if skills_overlay_open {
                         if let Some(a) = overlays::skills::render_skills_overlay(
-                            ui.ctx(), all_skills_list, loaded_skill_ids,
-                            skills_loading, skills_filter, &self.theme,
-                        ) { action = a; }
+                            ui.ctx(),
+                            all_skills_list,
+                            loaded_skill_ids,
+                            skills_loading,
+                            skills_filter,
+                            &self.theme,
+                        ) {
+                            action = a;
+                        }
                     }
 
                     // ── Inline question widget (M18) ─────────────
@@ -739,10 +768,7 @@ impl eframe::App for CadeApp {
                     }
                 }
                 Some(SessionState::ConnectionFailed { ref error, .. }) => {
-                    ui.colored_label(
-                        self.theme.error(),
-                        "Connection failed",
-                    );
+                    ui.colored_label(self.theme.error(), "Connection failed");
                     ui.add_space(4.0);
                     ui.label(error.as_str());
                     ui.add_space(8.0);
@@ -767,8 +793,8 @@ impl eframe::App for CadeApp {
                             }
                             ui.add_space(8.0);
                             let submit_btn = ui.button("Connect");
-                            let enter = resp.lost_focus()
-                                && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                            let enter =
+                                resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                             if submit_btn.clicked() || enter {
                                 self.login.on_submit();
                             }
@@ -957,15 +983,11 @@ impl eframe::App for CadeApp {
             }
             AppAction::AnswerQuestion => {
                 // Build the answer string then send it as a user message.
-                let answer = self
-                    .session
-                    .borrow_mut()
-                    .as_mut()
-                    .and_then(|s| {
-                        let a = s.commit_question_answer();
-                        s.clear_active_question();
-                        a
-                    });
+                let answer = self.session.borrow_mut().as_mut().and_then(|s| {
+                    let a = s.commit_question_answer();
+                    s.clear_active_question();
+                    a
+                });
                 if let Some(text) = answer {
                     // Inject as next user message via the existing send path.
                     if let Some(SessionState::Connected { input_buffer, .. }) =
@@ -1048,14 +1070,22 @@ impl eframe::App for CadeApp {
             }
             AppAction::ClosePermissionsOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { permissions_open, .. } = s {
+                    if let SessionState::Connected {
+                        permissions_open, ..
+                    } = s
+                    {
                         *permissions_open = false;
                     }
                 }
             }
             AppAction::SetPermissionMode(mode) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { current_permission_mode, permissions_open, .. } = s {
+                    if let SessionState::Connected {
+                        current_permission_mode,
+                        permissions_open,
+                        ..
+                    } = s
+                    {
                         *current_permission_mode = mode;
                         *permissions_open = false;
                     }
@@ -1063,14 +1093,22 @@ impl eframe::App for CadeApp {
             }
             AppAction::CloseThemeOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { theme_picker_open, .. } = s {
+                    if let SessionState::Connected {
+                        theme_picker_open, ..
+                    } = s
+                    {
                         *theme_picker_open = false;
                     }
                 }
             }
             AppAction::SetTheme(name) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { current_theme_name, theme_picker_open, .. } = s {
+                    if let SessionState::Connected {
+                        current_theme_name,
+                        theme_picker_open,
+                        ..
+                    } = s
+                    {
                         *current_theme_name = name.clone();
                         *theme_picker_open = false;
                     }
@@ -1096,7 +1134,12 @@ impl eframe::App for CadeApp {
             }
             AppAction::SetToolset(ts) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { current_toolset, toolset_open, .. } = s {
+                    if let SessionState::Connected {
+                        current_toolset,
+                        toolset_open,
+                        ..
+                    } = s
+                    {
                         *current_toolset = ts;
                         *toolset_open = false;
                     }
@@ -1118,7 +1161,12 @@ impl eframe::App for CadeApp {
             }
             AppAction::SetBackend(be) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { current_backend, backend_open, .. } = s {
+                    if let SessionState::Connected {
+                        current_backend,
+                        backend_open,
+                        ..
+                    } = s
+                    {
                         *current_backend = be;
                         *backend_open = false;
                     }
@@ -1134,7 +1182,12 @@ impl eframe::App for CadeApp {
             AppAction::SetReasoning(level) => {
                 let effort_str = level.clone();
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { current_reasoning_effort, reasoning_open, .. } = s {
+                    if let SessionState::Connected {
+                        current_reasoning_effort,
+                        reasoning_open,
+                        ..
+                    } = s
+                    {
                         *current_reasoning_effort = level;
                         *reasoning_open = false;
                     }
@@ -1143,7 +1196,12 @@ impl eframe::App for CadeApp {
             }
             AppAction::CloseSkillsOverlay => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { skills_overlay_open, skills_filter, .. } = s {
+                    if let SessionState::Connected {
+                        skills_overlay_open,
+                        skills_filter,
+                        ..
+                    } = s
+                    {
                         *skills_overlay_open = false;
                         *skills_filter = String::new();
                     }
@@ -1303,7 +1361,10 @@ pub enum AppAction {
 
 /// Returns the colour for the live-status dot in the top toolbar.
 /// `true` (streaming) → WARNING amber; `false` (idle) → SUCCESS green.
-pub(crate) fn status_dot_color(streaming: bool, theme: &crate::theme::ThemeColors) -> egui::Color32 {
+pub(crate) fn status_dot_color(
+    streaming: bool,
+    theme: &crate::theme::ThemeColors,
+) -> egui::Color32 {
     if streaming {
         theme.warning()
     } else {

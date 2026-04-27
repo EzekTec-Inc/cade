@@ -80,9 +80,7 @@ pub async fn get_messages_for_conversation(
     agent_id: &str,
     conversation_id: &str,
 ) -> Result<Vec<ChatMessage>, ApiError> {
-    let path = format!(
-        "/v1/agents/{agent_id}/messages?conversation_id={conversation_id}"
-    );
+    let path = format!("/v1/agents/{agent_id}/messages?conversation_id={conversation_id}");
     let url = api::build_url(base_url, &path);
     let (status, body) = send_text(&url, token).await?;
     api::parse_messages(status, &body)
@@ -125,8 +123,7 @@ pub async fn create_conversation(
     let text = resp.text().await.map_err(|e| ApiError::Transport {
         message: e.to_string(),
     })?;
-    let info: api::ConversationInfo =
-        crate::api::decode_conversations_single(status, &text)?;
+    let info: api::ConversationInfo = crate::api::decode_conversations_single(status, &text)?;
     Ok(info)
 }
 
@@ -306,11 +303,10 @@ pub async fn stream_sse(
         message: "response has no body".to_string(),
     })?;
 
-    let reader = web_sys::ReadableStreamDefaultReader::new(&body).map_err(|e| {
-        ApiError::Transport {
+    let reader =
+        web_sys::ReadableStreamDefaultReader::new(&body).map_err(|e| ApiError::Transport {
             message: format!("failed to get reader: {e:?}"),
-        }
-    })?;
+        })?;
 
     let mut parser = SseParser::new();
 
@@ -671,25 +667,24 @@ pub async fn get_providers(
     if status != 200 {
         return Err(ApiError::Server { status });
     }
-    let v: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| ApiError::Decode { message: e.to_string() })?;
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| ApiError::Decode {
+        message: e.to_string(),
+    })?;
     Ok(v["providers"].as_array().cloned().unwrap_or_default())
 }
 
 // ── Skills ──────────────────────────────────────────────────────────────
 
 /// `GET /v1/skills` — list all discovered skills.
-pub async fn get_all_skills(
-    base_url: &str,
-    token: &str,
-) -> Result<Vec<api::SkillEntry>, ApiError> {
+pub async fn get_all_skills(base_url: &str, token: &str) -> Result<Vec<api::SkillEntry>, ApiError> {
     let url = api::build_url(base_url, "/v1/skills");
     let (status, body) = send_text(&url, token).await?;
     if status != 200 {
         return Err(ApiError::Server { status });
     }
-    let v: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| ApiError::Decode { message: e.to_string() })?;
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| ApiError::Decode {
+        message: e.to_string(),
+    })?;
     let skills: Vec<api::SkillEntry> = v["skills"]
         .as_array()
         .map(|arr| {
@@ -712,11 +707,16 @@ pub async fn get_agent_skills(
     if status != 200 {
         return Err(ApiError::Server { status });
     }
-    let v: serde_json::Value = serde_json::from_str(&body)
-        .map_err(|e| ApiError::Decode { message: e.to_string() })?;
+    let v: serde_json::Value = serde_json::from_str(&body).map_err(|e| ApiError::Decode {
+        message: e.to_string(),
+    })?;
     Ok(v["loaded_skill_ids"]
         .as_array()
-        .map(|a| a.iter().filter_map(|s| s.as_str().map(String::from)).collect::<Vec<String>>())
+        .map(|a| {
+            a.iter()
+                .filter_map(|s| s.as_str().map(String::from))
+                .collect::<Vec<String>>()
+        })
         .unwrap_or_default())
 }
 
@@ -733,10 +733,14 @@ pub async fn post_load_skill(
         .header("Authorization", &api::bearer_header(token))
         .header("Content-Type", "application/json")
         .body(body_str)
-        .map_err(|e| ApiError::Transport { message: format!("{e:?}") })?
+        .map_err(|e| ApiError::Transport {
+            message: format!("{e:?}"),
+        })?
         .send()
         .await
-        .map_err(|e| ApiError::Transport { message: e.to_string() })?;
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
     api::classify_upsert(resp.status())
 }
 
@@ -753,10 +757,14 @@ pub async fn post_unload_skill(
         .header("Authorization", &api::bearer_header(token))
         .header("Content-Type", "application/json")
         .body(body_str)
-        .map_err(|e| ApiError::Transport { message: format!("{e:?}") })?
+        .map_err(|e| ApiError::Transport {
+            message: format!("{e:?}"),
+        })?
         .send()
         .await
-        .map_err(|e| ApiError::Transport { message: e.to_string() })?;
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
     api::classify_upsert(resp.status())
 }
 
@@ -773,37 +781,44 @@ pub async fn patch_agent_reasoning(
         .header("Authorization", &api::bearer_header(token))
         .header("Content-Type", "application/json")
         .body(body_str)
-        .map_err(|e| ApiError::Transport { message: format!("{e:?}") })?
+        .map_err(|e| ApiError::Transport {
+            message: format!("{e:?}"),
+        })?
         .send()
         .await
-        .map_err(|e| ApiError::Transport { message: e.to_string() })?;
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
     api::classify_upsert(resp.status())
 }
 
 /// `POST /v1/agents/:id/compact` — synchronously trigger session-summary
 /// consolidation. Returns the size (chars) of the resulting
 /// session_summary block, or 0 if there was nothing to consolidate.
-pub async fn compact(
-    base_url: &str,
-    token: &str,
-    agent_id: &str,
-) -> Result<usize, ApiError> {
+pub async fn compact(base_url: &str, token: &str, agent_id: &str) -> Result<usize, ApiError> {
     let url = api::compact_url(base_url, agent_id);
     let resp = Request::post(&url)
         .header("Authorization", &api::bearer_header(token))
         .header("Content-Type", "application/json")
         .body("{}")
-        .map_err(|e| ApiError::Transport { message: format!("{e:?}") })?
+        .map_err(|e| ApiError::Transport {
+            message: format!("{e:?}"),
+        })?
         .send()
         .await
-        .map_err(|e| ApiError::Transport { message: e.to_string() })?;
+        .map_err(|e| ApiError::Transport {
+            message: e.to_string(),
+        })?;
     if resp.status() < 200 || resp.status() >= 300 {
         return Err(ApiError::Server {
             status: resp.status(),
         });
     }
-    let txt = resp.text().await.map_err(|e| ApiError::Transport { message: e.to_string() })?;
-    let v: serde_json::Value = serde_json::from_str(&txt)
-        .map_err(|e| ApiError::Decode { message: e.to_string() })?;
+    let txt = resp.text().await.map_err(|e| ApiError::Transport {
+        message: e.to_string(),
+    })?;
+    let v: serde_json::Value = serde_json::from_str(&txt).map_err(|e| ApiError::Decode {
+        message: e.to_string(),
+    })?;
     Ok(v["session_summary_chars"].as_u64().unwrap_or(0) as usize)
 }

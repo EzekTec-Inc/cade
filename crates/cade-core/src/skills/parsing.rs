@@ -250,4 +250,3 @@ fn parse_frontmatter(fm: &str) -> Frontmatter {
 
     out
 }
-

@@ -5,8 +5,10 @@ use eframe::egui;
 
 use super::AppAction;
 
-pub fn render_welcome(ui: &mut egui::Ui, md_cache: &mut egui_commonmark::CommonMarkCache,
-    theme: &crate::theme::ThemeColors, 
+pub fn render_welcome(
+    ui: &mut egui::Ui,
+    md_cache: &mut egui_commonmark::CommonMarkCache,
+    theme: &crate::theme::ThemeColors,
 ) {
     ui.add_space(8.0);
     // dim horizontal rule
@@ -45,83 +47,99 @@ pub fn render_timeline_message(
     ui: &mut egui::Ui,
     md_cache: &mut egui_commonmark::CommonMarkCache,
     msg: &cade_api_types::ChatMessage,
-    theme: &crate::theme::ThemeColors, 
+    theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
-    let tool_icon = |name: &str| -> &'static str {
-        match name {
-            // -- Shell / process
-            "bash" | "shell" | "run_command" | "execute_command"
-            | "start_process" | "RunShellCommand" => "\u{f120}",  // 
-            
-            // -- File read
-            "read_file" | "ReadFileGemini" | "read_multiple_files" => "\u{f15c}",  // 
-            
-            // -- File write / edit
-            "write_file" | "edit_file" | "create_file" | "edit_block"
-            | "replace_in_file" => "\u{f0f6}",  // 
-            
-            // -- Patch / diff
-            "apply_patch" | "ide_apply_patch" => "\u{f440}",  // 
-            
-            // -- Search / grep
-            "grep" | "grep_search" | "GlobGemini" | "SearchFileContent"
-            | "start_search" | "find_references" | "symbol_search" => "\u{f002}",  // 
-            
-            // -- Directory / glob
-            "list_directory" | "glob" | "get_file_info" => "\u{f07b}",  // 
-            
-            // -- Git
-            "commit" | "push" | "pull" | "branch" | "merge" | "rebase_op"
-            | "stash_op" | "log" | "diff" | "status" | "add" | "reset"
-            | "restore" | "fetch" | "remote" | "tag" | "show" | "blame"
-            | "cherry_pick" | "clean" | "revert" | "config"
-            | "repository" => "\u{e725}",  // 
-            
-            // -- GitHub
-            "create_pull_request" | "create_issue" | "list_issues"
-            | "search_issues" | "search_code" | "get_issue"
-            | "add_issue_comment" | "list_commits" | "get_file_contents"
-            | "get_repository" | "create_branch" | "search_repositories"
-            | "update_issue" | "get_user" => "\u{f09b}",  // 
-            
-            // -- Memory / knowledge
-            "update_memory" | "memory_apply_patch" | "search_memory"
-            | "conversation_search" | "archival_memory_insert"
-            | "archival_memory_search" | "update_memory_typed"
-            | "link_memory_evidence" | "reflect" => "\u{f0eb}",  // 
-            
-            // -- Skills
-            "load_skill" | "install_skill" | "run_skill_script"
-            | "load_skill_ref" | "unload_skill" => "\u{f085}",  // 
-            
-            // -- Subagents
-            "run_subagent" | "list_agents" | "message_agent" => "\u{f0c0}",  // 
-            
-            // -- Plan / task
-            "EnterPlanMode" | "ExitPlanMode" | "TodoWrite"
-            | "UpdatePlan" | "WriteTodos" | "set_plan" | "workflow" => "\u{f0ae}",  // 
-            
-            // -- Checkpoints / artifacts
-            "create_checkpoint" | "restore_checkpoint"
-            | "list_checkpoints" | "store_artifact" => "\u{f0c7}",  // 
-            
-            // -- Web / network
-            "web_search" | "fetch_doc" | "browser_screenshot"
-            | "http_request" | "get-library-docs"
-            | "resolve-library-id" => "\u{f0ac}",  // 
-            
-            // -- Desktop
-            "screen_capture" | "desktop_screenshot" | "list_windows"
-            | "desktop_list_windows" | "desktop_control"
-            | "image_processor" => "\u{f108}",  // 
-            
-            // -- Default
-            _ => "\u{f0ad}",  //  (wrench — generic tool)
-        }
-    };
+    let tool_icon =
+        |name: &str| -> &'static str {
+            match name {
+                // -- Shell / process
+                "bash" | "shell" | "run_command" | "execute_command" | "start_process"
+                | "RunShellCommand" => "\u{f120}", //
+
+                // -- File read
+                "read_file" | "ReadFileGemini" | "read_multiple_files" => "\u{f15c}", //
+
+                // -- File write / edit
+                "write_file" | "edit_file" | "create_file" | "edit_block" | "replace_in_file" => {
+                    "\u{f0f6}"
+                } //
+
+                // -- Patch / diff
+                "apply_patch" | "ide_apply_patch" => "\u{f440}", //
+
+                // -- Search / grep
+                "grep" | "grep_search" | "GlobGemini" | "SearchFileContent" | "start_search"
+                | "find_references" | "symbol_search" => "\u{f002}", //
+
+                // -- Directory / glob
+                "list_directory" | "glob" | "get_file_info" => "\u{f07b}", //
+
+                // -- Git
+                "commit" | "push" | "pull" | "branch" | "merge" | "rebase_op" | "stash_op"
+                | "log" | "diff" | "status" | "add" | "reset" | "restore" | "fetch" | "remote"
+                | "tag" | "show" | "blame" | "cherry_pick" | "clean" | "revert" | "config"
+                | "repository" => "\u{e725}", //
+
+                // -- GitHub
+                "create_pull_request"
+                | "create_issue"
+                | "list_issues"
+                | "search_issues"
+                | "search_code"
+                | "get_issue"
+                | "add_issue_comment"
+                | "list_commits"
+                | "get_file_contents"
+                | "get_repository"
+                | "create_branch"
+                | "search_repositories"
+                | "update_issue"
+                | "get_user" => "\u{f09b}", //
+
+                // -- Memory / knowledge
+                "update_memory"
+                | "memory_apply_patch"
+                | "search_memory"
+                | "conversation_search"
+                | "archival_memory_insert"
+                | "archival_memory_search"
+                | "update_memory_typed"
+                | "link_memory_evidence"
+                | "reflect" => "\u{f0eb}", //
+
+                // -- Skills
+                "load_skill" | "install_skill" | "run_skill_script" | "load_skill_ref"
+                | "unload_skill" => "\u{f085}", //
+
+                // -- Subagents
+                "run_subagent" | "list_agents" | "message_agent" => "\u{f0c0}", //
+
+                // -- Plan / task
+                "EnterPlanMode" | "ExitPlanMode" | "TodoWrite" | "UpdatePlan" | "WriteTodos"
+                | "set_plan" | "workflow" => "\u{f0ae}", //
+
+                // -- Checkpoints / artifacts
+                "create_checkpoint" | "restore_checkpoint" | "list_checkpoints"
+                | "store_artifact" => "\u{f0c7}", //
+
+                // -- Web / network
+                "web_search" | "fetch_doc" | "browser_screenshot" | "http_request"
+                | "get-library-docs" | "resolve-library-id" => "\u{f0ac}", //
+
+                // -- Desktop
+                "screen_capture"
+                | "desktop_screenshot"
+                | "list_windows"
+                | "desktop_list_windows"
+                | "desktop_control"
+                | "image_processor" => "\u{f108}", //
+
+                // -- Default
+                _ => "\u{f0ad}", //  (wrench — generic tool)
+            }
+        };
 
     match msg.role.as_str() {
-
         // ── User ─────────────────────────────────────────────────────
         "user" => {
             let text = msg.content.as_str().unwrap_or("").trim().to_string();
@@ -215,8 +233,16 @@ pub fn render_timeline_message(
 
         // ── Tool call ─────────────────────────────────────────────────
         "tool_call" => {
-            let name = msg.content.get("name").and_then(|v| v.as_str()).unwrap_or("unknown");
-            let args_raw = msg.content.get("arguments").and_then(|v| v.as_str()).unwrap_or("{}");
+            let name = msg
+                .content
+                .get("name")
+                .and_then(|v| v.as_str())
+                .unwrap_or("unknown");
+            let args_raw = msg
+                .content
+                .get("arguments")
+                .and_then(|v| v.as_str())
+                .unwrap_or("{}");
             let args: serde_json::Value = serde_json::from_str(args_raw).unwrap_or_default();
 
             ui.add_space(1.0);
@@ -224,13 +250,18 @@ pub fn render_timeline_message(
 
             match name {
                 // ── Edit / replace: file badge + inline diff ──────
-                "edit_file" | "replace_in_file" | "Replace"
-                | "desktop-commander__edit_block" | "cade-nvim__ide_propose_edit" => {
+                "edit_file"
+                | "replace_in_file"
+                | "Replace"
+                | "desktop-commander__edit_block"
+                | "cade-nvim__ide_propose_edit" => {
                     let path = args["path"].as_str().unwrap_or("unknown");
-                    let old = args["old_string"].as_str()
+                    let old = args["old_string"]
+                        .as_str()
                         .or_else(|| args["old_str"].as_str())
                         .unwrap_or("");
-                    let new = args["new_string"].as_str()
+                    let new = args["new_string"]
+                        .as_str()
                         .or_else(|| args["new_str"].as_str())
                         .unwrap_or("");
 
@@ -250,17 +281,23 @@ pub fn render_timeline_message(
                 }
 
                 // ── Write file: file badge + content preview ──────
-                "write_file" | "WriteFileGemini" | "create_file"
-                | "desktop-commander__write_file" | "developer__write_file" => {
-                    let path = args["path"].as_str()
+                "write_file"
+                | "WriteFileGemini"
+                | "create_file"
+                | "desktop-commander__write_file"
+                | "developer__write_file" => {
+                    let path = args["path"]
+                        .as_str()
                         .or_else(|| args["file_path"].as_str())
                         .unwrap_or("unknown");
-                    let content = args["content"].as_str()
+                    let content = args["content"]
+                        .as_str()
                         .or_else(|| args["file_text"].as_str())
                         .unwrap_or("");
                     let line_count = content.lines().count();
 
-                    let header = format!("{icon} write  {} ({} lines)", short_path(path), line_count);
+                    let header =
+                        format!("{icon} write  {} ({} lines)", short_path(path), line_count);
                     egui::CollapsingHeader::new(
                         egui::RichText::new(&header)
                             .color(theme.success())
@@ -280,7 +317,11 @@ pub fn render_timeline_message(
                     let patch = args["patch"].as_str().unwrap_or("");
                     let file_count = patch.matches("--- a/").count().max(1);
 
-                    let header = format!("{icon} patch  ({} file{})", file_count, if file_count != 1 { "s" } else { "" });
+                    let header = format!(
+                        "{icon} patch  ({} file{})",
+                        file_count,
+                        if file_count != 1 { "s" } else { "" }
+                    );
                     egui::CollapsingHeader::new(
                         egui::RichText::new(&header)
                             .color(theme.warning())
@@ -296,10 +337,14 @@ pub fn render_timeline_message(
                 }
 
                 // ── Read file: file badge + range ─────────────────
-                "read_file" | "ReadFileGemini" | "developer__read_file"
+                "read_file"
+                | "ReadFileGemini"
+                | "developer__read_file"
                 | "desktop-commander__read_file" => {
                     let path = args["path"].as_str().unwrap_or("unknown");
-                    let offset = args["offset"].as_u64().or_else(|| args["start_line"].as_u64());
+                    let offset = args["offset"]
+                        .as_u64()
+                        .or_else(|| args["start_line"].as_u64());
                     let limit = args["limit"].as_u64().or_else(|| args["end_line"].as_u64());
 
                     let range_str = match (offset, limit) {
@@ -309,18 +354,27 @@ pub fn render_timeline_message(
                     };
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(format!("{icon} read  {}{}", short_path(path), range_str))
-                                .color(theme.text_primary())
-                                .monospace()
-                                .size(12.0),
+                            egui::RichText::new(format!(
+                                "{icon} read  {}{}",
+                                short_path(path),
+                                range_str
+                            ))
+                            .color(theme.text_primary())
+                            .monospace()
+                            .size(12.0),
                         );
                     });
                 }
 
                 // ── Bash / shell: command badge ───────────────────
-                "bash" | "shell" | "run_command" | "execute_command"
-                | "RunShellCommand" | "developer__shell"
-                | "desktop-commander__start_process" | "developer__start_process" => {
+                "bash"
+                | "shell"
+                | "run_command"
+                | "execute_command"
+                | "RunShellCommand"
+                | "developer__shell"
+                | "desktop-commander__start_process"
+                | "developer__start_process" => {
                     let cmd = args["command"].as_str().unwrap_or("…");
                     let cmd_preview: String = cmd.chars().take(120).collect();
                     let suffix = if cmd.len() > 120 { "…" } else { "" };
@@ -347,10 +401,14 @@ pub fn render_timeline_message(
                     let path = args["path"].as_str().unwrap_or(".");
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(format!("{icon} glob  {} in {}", pattern, short_path(path)))
-                                .color(theme.text_primary())
-                                .monospace()
-                                .size(12.0),
+                            egui::RichText::new(format!(
+                                "{icon} glob  {} in {}",
+                                pattern,
+                                short_path(path)
+                            ))
+                            .color(theme.text_primary())
+                            .monospace()
+                            .size(12.0),
                         );
                     });
                 }
@@ -360,35 +418,45 @@ pub fn render_timeline_message(
                     let path = args["path"].as_str().unwrap_or(".");
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(format!("{icon} grep  /{}/  in {}", pattern, short_path(path)))
-                                .color(theme.text_primary())
-                                .monospace()
-                                .size(12.0),
+                            egui::RichText::new(format!(
+                                "{icon} grep  /{}/  in {}",
+                                pattern,
+                                short_path(path)
+                            ))
+                            .color(theme.text_primary())
+                            .monospace()
+                            .size(12.0),
                         );
                     });
                 }
 
                 // ── Git commands: operation badge ─────────────────
-                "git__commit" | "git__add" | "git__push" | "git__pull"
-                | "git__branch" | "git__diff" | "git__status" | "git__log"
-                | "git__stash_op" | "git__merge" | "git__rebase_op"
-                | "git__reset" | "git__restore" | "git__tag" | "git__show"
-                | "git__fetch" | "git__blame" | "git__cherry_pick"
-                | "git__clean" | "git__revert" | "git__config" | "git__remote"
-                | "git__repository" => {
+                "git__commit" | "git__add" | "git__push" | "git__pull" | "git__branch"
+                | "git__diff" | "git__status" | "git__log" | "git__stash_op" | "git__merge"
+                | "git__rebase_op" | "git__reset" | "git__restore" | "git__tag" | "git__show"
+                | "git__fetch" | "git__blame" | "git__cherry_pick" | "git__clean"
+                | "git__revert" | "git__config" | "git__remote" | "git__repository" => {
                     let op = name.strip_prefix("git__").unwrap_or(name);
                     let summary = match op {
-                        "commit" => args["message"].as_str().map(|m| {
-                            let s: String = m.chars().take(72).collect();
-                            format!("\"{}\"", s)
-                        }).unwrap_or_default(),
-                        "add" => args["files"].as_array()
+                        "commit" => args["message"]
+                            .as_str()
+                            .map(|m| {
+                                let s: String = m.chars().take(72).collect();
+                                format!("\"{}\"", s)
+                            })
+                            .unwrap_or_default(),
+                        "add" => args["files"]
+                            .as_array()
                             .map(|f| format!("{} files", f.len()))
                             .unwrap_or_else(|| "all".into()),
                         "branch" => args["name"].as_str().unwrap_or("").to_string(),
                         "diff" => {
                             let staged = args["staged"].as_bool().unwrap_or(false);
-                            if staged { "staged".into() } else { "working tree".into() }
+                            if staged {
+                                "staged".into()
+                            } else {
+                                "working tree".into()
+                            }
                         }
                         _ => String::new(),
                     };
@@ -474,7 +542,9 @@ pub fn render_timeline_message(
             .show(ui, |ui| {
                 let to_show = lines.len();
                 for (i, ln) in lines.iter().take(to_show).enumerate() {
-                    if i == 0 { continue; } // already shown in header
+                    if i == 0 {
+                        continue;
+                    } // already shown in header
                     ui.horizontal(|ui| {
                         ui.label(
                             egui::RichText::new("│      ")
@@ -509,11 +579,7 @@ pub fn render_timeline_message(
                             .size(11.0),
                     );
                     ui.add_space(4.0);
-                    ui.label(
-                        egui::RichText::new(ln)
-                            .color(theme.text_muted())
-                            .size(12.0),
-                    );
+                    ui.label(egui::RichText::new(ln).color(theme.text_muted()).size(12.0));
                 });
             }
             None
@@ -521,7 +587,9 @@ pub fn render_timeline_message(
 
         // ── Fallback ─────────────────────────────────────────────────
         role => {
-            let text = msg.content.as_str()
+            let text = msg
+                .content
+                .as_str()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| msg.content.to_string());
             ui.add_space(2.0);
@@ -554,7 +622,11 @@ pub fn render_live_output(
     theme: &crate::theme::ThemeColors,
 ) {
     let status = if block.done { "done" } else { "running…" };
-    let status_color = if block.done { theme.text_muted() } else { theme.warning() };
+    let status_color = if block.done {
+        theme.text_muted()
+    } else {
+        theme.warning()
+    };
 
     ui.add_space(1.0);
     ui.horizontal(|ui| {
@@ -595,14 +667,14 @@ const CATEGORY_GLYPHS: [&str; 8] = ["█", "▓", "▒", "░", "▪", "■", "�
 /// Category colors — returns a color for each category index.
 fn category_color(idx: usize, theme: &crate::theme::ThemeColors) -> egui::Color32 {
     match idx {
-        0 => theme.primary(),     // system
-        1 => theme.teal(),        // tools
-        2 => theme.purple(),      // mcp
-        3 => theme.warning(),     // memory
-        4 => theme.success(),     // skills
-        5 => theme.text_primary(),// messages
-        6 => theme.text_dim(),    // free
-        7 => theme.text_muted(),  // buffer
+        0 => theme.primary(),      // system
+        1 => theme.teal(),         // tools
+        2 => theme.purple(),       // mcp
+        3 => theme.warning(),      // memory
+        4 => theme.success(),      // skills
+        5 => theme.text_primary(), // messages
+        6 => theme.text_dim(),     // free
+        7 => theme.text_muted(),   // buffer
         _ => theme.text_dim(),
     }
 }
@@ -670,10 +742,8 @@ pub fn render_context_bar(
             }
             let frac = cat.tokens as f32 / breakdown.window_tokens as f32;
             let seg_w = (frac * bar_w).max(1.0);
-            let seg_rect = egui::Rect::from_min_size(
-                egui::pos2(x, r.min.y),
-                egui::vec2(seg_w, bar_h),
-            );
+            let seg_rect =
+                egui::Rect::from_min_size(egui::pos2(x, r.min.y), egui::vec2(seg_w, bar_h));
             painter.rect_filled(seg_rect, 0.0, category_color(idx, theme));
             x += seg_w;
         }
@@ -738,12 +808,7 @@ fn short_path(path: &str) -> String {
 }
 
 /// Render an inline diff view: `- old` lines in red, `+ new` lines in green.
-fn render_inline_diff(
-    ui: &mut egui::Ui,
-    old: &str,
-    new: &str,
-    theme: &crate::theme::ThemeColors,
-) {
+fn render_inline_diff(ui: &mut egui::Ui, old: &str, new: &str, theme: &crate::theme::ThemeColors) {
     use crate::theme::EguiThemeExt;
 
     let del_color = theme.error();
@@ -756,7 +821,8 @@ fn render_inline_diff(
     if !old.is_empty() {
         for ln in old.lines() {
             let row_rect = ui.available_rect_before_wrap();
-            let row_rect = egui::Rect::from_min_size(row_rect.min, egui::vec2(row_rect.width(), 16.0));
+            let row_rect =
+                egui::Rect::from_min_size(row_rect.min, egui::vec2(row_rect.width(), 16.0));
             ui.painter().rect_filled(row_rect, 0.0, bg_del);
             ui.horizontal(|ui| {
                 ui.label(
@@ -779,7 +845,8 @@ fn render_inline_diff(
     if !new.is_empty() {
         for ln in new.lines() {
             let row_rect = ui.available_rect_before_wrap();
-            let row_rect = egui::Rect::from_min_size(row_rect.min, egui::vec2(row_rect.width(), 16.0));
+            let row_rect =
+                egui::Rect::from_min_size(row_rect.min, egui::vec2(row_rect.width(), 16.0));
             ui.painter().rect_filled(row_rect, 0.0, bg_add);
             ui.horizontal(|ui| {
                 ui.label(
@@ -856,11 +923,7 @@ fn render_code_preview(
 }
 
 /// Render a unified diff / patch with colored `+`/`-`/`@@` lines.
-fn render_patch(
-    ui: &mut egui::Ui,
-    patch: &str,
-    theme: &crate::theme::ThemeColors,
-) {
+fn render_patch(ui: &mut egui::Ui, patch: &str, theme: &crate::theme::ThemeColors) {
     use crate::theme::EguiThemeExt;
 
     let del_color = theme.error();
@@ -890,15 +953,11 @@ fn render_patch(
 
                 if bg != egui::Color32::TRANSPARENT {
                     let row_rect = ui.available_rect_before_wrap();
-                    let row_rect = egui::Rect::from_min_size(row_rect.min, egui::vec2(row_rect.width(), 16.0));
+                    let row_rect =
+                        egui::Rect::from_min_size(row_rect.min, egui::vec2(row_rect.width(), 16.0));
                     ui.painter().rect_filled(row_rect, 0.0, bg);
                 }
-                ui.label(
-                    egui::RichText::new(ln)
-                        .color(color)
-                        .monospace()
-                        .size(11.0),
-                );
+                ui.label(egui::RichText::new(ln).color(color).monospace().size(11.0));
             }
         });
 }

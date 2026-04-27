@@ -16,14 +16,14 @@ fn test_agents() -> Vec<AgentInfo> {
             name: "Test Agent".to_string(),
             model: Some("gpt-4o".to_string()),
             provider: None,
-                        theme: None,
+            theme: None,
         },
         AgentInfo {
             id: "agent-2".to_string(),
             name: "Second Agent".to_string(),
             model: None,
             provider: None,
-                        theme: None,
+            theme: None,
         },
     ]
 }
@@ -254,7 +254,7 @@ fn on_select_agent_clears_previous_messages() {
             name: "Second".to_string(),
             model: None,
             provider: None,
-                        theme: None,
+            theme: None,
         });
     }
     s.on_select_agent(0);
@@ -269,7 +269,10 @@ fn on_select_agent_clears_previous_messages() {
     assert_eq!(s.selected_agent_id(), Some("agent-2"));
     match &s {
         SessionState::Connected { messages, .. } => {
-            assert!(messages.is_empty(), "messages should be cleared on agent switch");
+            assert!(
+                messages.is_empty(),
+                "messages should be cleared on agent switch"
+            );
         }
         other => panic!("expected Connected, got {other:?}"),
     }
@@ -454,9 +457,7 @@ fn full_send_stream_cycle() {
         assert_eq!(messages[1].role, "assistant");
         assert_eq!(
             messages[1].content,
-            serde_json::Value::String(
-                "Rust is a systems programming language.".to_string()
-            )
+            serde_json::Value::String("Rust is a systems programming language.".to_string())
         );
     } else {
         panic!("expected Connected");
@@ -541,7 +542,7 @@ fn select_agent_clears_conversation_id() {
             name: "Second Agent".to_string(),
             model: None,
             provider: None,
-                        theme: None,
+            theme: None,
         });
     }
     s.on_conversation_id("conv-old");
@@ -1399,8 +1400,10 @@ fn is_memory_dirty_false_right_after_load() {
     let mut s = connected_session();
     s.open_memory_overlay();
     s.on_memory_loaded(test_blocks());
-    assert!(!s.is_memory_dirty(),
-        "fresh load should have buffer == block value, not dirty");
+    assert!(
+        !s.is_memory_dirty(),
+        "fresh load should have buffer == block value, not dirty"
+    );
 }
 
 #[test]
@@ -1421,8 +1424,10 @@ fn is_memory_dirty_false_after_save() {
     assert!(s.is_memory_dirty());
     s.on_memory_save_start();
     s.on_memory_save_ok();
-    assert!(!s.is_memory_dirty(),
-        "after save the block's saved value == buffer, no longer dirty");
+    assert!(
+        !s.is_memory_dirty(),
+        "after save the block's saved value == buffer, no longer dirty"
+    );
 }
 
 #[test]
@@ -1520,7 +1525,7 @@ fn refresh_agents_preserves_selection_by_id() {
         name: "New Agent".into(),
         model: None,
         provider: None,
-                theme: None,
+        theme: None,
     });
     s.refresh_agents(new_agents);
     // Selection should follow the id, so it's still the same agent.
@@ -1536,7 +1541,7 @@ fn refresh_agents_drops_selection_when_agent_removed() {
         name: "Different".into(),
         model: None,
         provider: None,
-                theme: None,
+        theme: None,
     }];
     s.refresh_agents(new_agents);
     assert!(s.selected_agent_id().is_none());
@@ -1754,9 +1759,7 @@ fn select_artifact_returns_id_and_sets_busy() {
     assert_eq!(id.as_deref(), Some("art-2"));
     assert_eq!(s.selected_artifact_id().as_deref(), Some("art-2"));
     match &s {
-        SessionState::Connected {
-            artifacts_busy, ..
-        } => assert!(*artifacts_busy),
+        SessionState::Connected { artifacts_busy, .. } => assert!(*artifacts_busy),
         _ => panic!(),
     }
 }
@@ -1778,9 +1781,7 @@ fn artifact_detail_loaded_clears_busy() {
     s.select_artifact(0);
     s.on_artifact_detail_loaded(test_artifact_detail("art-1"));
     match &s {
-        SessionState::Connected {
-            artifacts_busy, ..
-        } => assert!(!*artifacts_busy),
+        SessionState::Connected { artifacts_busy, .. } => assert!(!*artifacts_busy),
         _ => panic!(),
     }
     assert_eq!(s.artifact_detail().map(|d| d.id.as_str()), Some("art-1"));
@@ -1845,8 +1846,14 @@ fn tools_loaded_populates_list() {
     let mut s = connected_session();
     s.open_tools_overlay();
     s.on_tools_loaded(vec![
-        crate::api::AgentTool { id: "t1".into(), name: "bash".into() },
-        crate::api::AgentTool { id: "t2".into(), name: "read_file".into() },
+        crate::api::AgentTool {
+            id: "t1".into(),
+            name: "bash".into(),
+        },
+        crate::api::AgentTool {
+            id: "t2".into(),
+            name: "read_file".into(),
+        },
     ]);
     assert_eq!(s.tools_snapshot().len(), 2);
 }
@@ -1857,7 +1864,11 @@ fn tools_error_clears_loading() {
     s.open_tools_overlay();
     s.on_tools_error("net error");
     match &s {
-        SessionState::Connected { tools_loading, tools_error, .. } => {
+        SessionState::Connected {
+            tools_loading,
+            tools_error,
+            ..
+        } => {
             assert!(!*tools_loading);
             assert_eq!(tools_error.as_deref(), Some("net error"));
         }
@@ -1882,9 +1893,18 @@ fn test_question() -> crate::api::Question {
         header: "Choose".into(),
         question: "Pick one".into(),
         options: vec![
-            crate::api::QuestionOption { label: "A".into(), description: "Alpha".into() },
-            crate::api::QuestionOption { label: "B".into(), description: "Beta".into() },
-            crate::api::QuestionOption { label: "C".into(), description: "Gamma".into() },
+            crate::api::QuestionOption {
+                label: "A".into(),
+                description: "Alpha".into(),
+            },
+            crate::api::QuestionOption {
+                label: "B".into(),
+                description: "Beta".into(),
+            },
+            crate::api::QuestionOption {
+                label: "C".into(),
+                description: "Gamma".into(),
+            },
         ],
         multi_select: false,
     }
@@ -1903,7 +1923,9 @@ fn set_active_question_initialises_cursor() {
     s.set_active_question(test_question());
     assert!(s.has_active_question());
     match &s {
-        SessionState::Connected { question_cursor, .. } => assert_eq!(*question_cursor, 0),
+        SessionState::Connected {
+            question_cursor, ..
+        } => assert_eq!(*question_cursor, 0),
         _ => panic!(),
     }
 }
@@ -1914,12 +1936,16 @@ fn move_question_cursor_wraps() {
     s.set_active_question(test_question());
     s.move_question_cursor(-1); // 0 - 1 wraps to 2 (3 options)
     match &s {
-        SessionState::Connected { question_cursor, .. } => assert_eq!(*question_cursor, 2),
+        SessionState::Connected {
+            question_cursor, ..
+        } => assert_eq!(*question_cursor, 2),
         _ => panic!(),
     }
     s.move_question_cursor(1);
     match &s {
-        SessionState::Connected { question_cursor, .. } => assert_eq!(*question_cursor, 0),
+        SessionState::Connected {
+            question_cursor, ..
+        } => assert_eq!(*question_cursor, 0),
         _ => panic!(),
     }
 }
@@ -2052,7 +2078,9 @@ fn open_context_sets_loading() {
     s.open_context_overlay();
     assert!(s.is_context_open());
     match &s {
-        SessionState::Connected { context_loading, .. } => assert!(*context_loading),
+        SessionState::Connected {
+            context_loading, ..
+        } => assert!(*context_loading),
         _ => panic!(),
     }
 }
@@ -2074,7 +2102,11 @@ fn context_error_clears_loading() {
     s.open_context_overlay();
     s.on_context_error("timeout");
     match &s {
-        SessionState::Connected { context_loading, context_error, .. } => {
+        SessionState::Connected {
+            context_loading,
+            context_error,
+            ..
+        } => {
             assert!(!*context_loading);
             assert_eq!(context_error.as_deref(), Some("timeout"));
         }
@@ -2246,7 +2278,12 @@ fn mcp_overlay_open_sets_loading() {
     assert!(!s.is_mcp_open());
     s.open_mcp_overlay();
     assert!(s.is_mcp_open());
-    if let SessionState::Connected { mcp_loading, mcp_error, .. } = &s {
+    if let SessionState::Connected {
+        mcp_loading,
+        mcp_error,
+        ..
+    } = &s
+    {
         assert!(mcp_loading);
         assert!(mcp_error.is_none());
     } else {
@@ -2267,7 +2304,13 @@ fn mcp_on_loaded_populates_servers() {
     let mut s = connected_session();
     s.open_mcp_overlay();
     s.on_mcp_loaded(sample_mcp_servers());
-    if let SessionState::Connected { mcp_servers, mcp_loading, mcp_error, .. } = &s {
+    if let SessionState::Connected {
+        mcp_servers,
+        mcp_loading,
+        mcp_error,
+        ..
+    } = &s
+    {
         assert_eq!(mcp_servers.len(), 2);
         assert_eq!(mcp_servers[0].key, "desktop-commander");
         assert_eq!(mcp_servers[0].tools.len(), 2);
@@ -2284,7 +2327,12 @@ fn mcp_on_error_sets_message() {
     let mut s = connected_session();
     s.open_mcp_overlay();
     s.on_mcp_error("connection refused".into());
-    if let SessionState::Connected { mcp_loading, mcp_error, .. } = &s {
+    if let SessionState::Connected {
+        mcp_loading,
+        mcp_error,
+        ..
+    } = &s
+    {
         assert!(!mcp_loading);
         assert_eq!(mcp_error.as_deref(), Some("connection refused"));
     } else {

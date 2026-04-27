@@ -44,10 +44,7 @@ pub fn render_palette_overlay(
     let max_rows = 16;
     let row_count = filtered.len().min(max_rows);
     let h = (44.0 + (row_count as f32 * 24.0) + 32.0).min(screen.height() - 20.0);
-    let pos = egui::pos2(
-        (screen.width() - w) / 2.0,
-        screen.top() + 40.0,
-    );
+    let pos = egui::pos2((screen.width() - w) / 2.0, screen.top() + 40.0);
 
     egui::Window::new("Command palette")
         .title_bar(false)
@@ -142,7 +139,11 @@ pub fn render_palette_overlay(
                                     // Trigger label
                                     ui.label(
                                         egui::RichText::new(format!("/{}", entry.def.trigger))
-                                            .color(if is_sel { theme.primary() } else { theme.text_primary() })
+                                            .color(if is_sel {
+                                                theme.primary()
+                                            } else {
+                                                theme.text_primary()
+                                            })
                                             .monospace()
                                             .strong()
                                             .size(12.0),
@@ -226,11 +227,19 @@ fn separator(ui: &mut egui::Ui, theme: &crate::theme::ThemeColors) {
 /// Group filtered entries by category, preserving category order.
 fn group_by_category<'a, 'b>(
     entries: &'b [crate::palette::FilteredCmd<'a>],
-) -> Vec<(cade_core::resources::palette::CmdCategory, Vec<&'b crate::palette::FilteredCmd<'a>>)> {
+) -> Vec<(
+    cade_core::resources::palette::CmdCategory,
+    Vec<&'b crate::palette::FilteredCmd<'a>>,
+)> {
     use std::collections::BTreeMap;
 
-    let mut map: BTreeMap<u8, (cade_core::resources::palette::CmdCategory, Vec<&'b crate::palette::FilteredCmd<'a>>)> =
-        BTreeMap::new();
+    let mut map: BTreeMap<
+        u8,
+        (
+            cade_core::resources::palette::CmdCategory,
+            Vec<&'b crate::palette::FilteredCmd<'a>>,
+        ),
+    > = BTreeMap::new();
 
     for entry in entries {
         let order = category_order(entry.def.category);

@@ -1,8 +1,10 @@
+use crate::session::SessionState;
 use crate::theme::EguiThemeExt;
 use eframe::egui;
-use crate::session::SessionState;
 
-pub fn render(ui: &mut egui::Ui, session_snapshot: &Option<SessionState>,
+pub fn render(
+    ui: &mut egui::Ui,
+    session_snapshot: &Option<SessionState>,
     theme: &crate::theme::ThemeColors,
 ) {
     egui::Panel::top("cade_toolbar")
@@ -39,7 +41,10 @@ pub fn render(ui: &mut egui::Ui, session_snapshot: &Option<SessionState>,
                     }
                 }
 
-                if let Some(SessionState::Connected { streaming, health, .. }) = session_snapshot {
+                if let Some(SessionState::Connected {
+                    streaming, health, ..
+                }) = session_snapshot
+                {
                     let version = health.version.as_deref().unwrap_or("unknown");
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         ui.label(

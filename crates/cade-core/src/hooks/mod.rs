@@ -296,11 +296,7 @@ impl HookEngine {
         }
     }
 
-    async fn run_all_fire_forget(
-        &self,
-        entries: &[crate::settings::HookEntry],
-        input: Value,
-    ) {
+    async fn run_all_fire_forget(&self, entries: &[crate::settings::HookEntry], input: Value) {
         for entry in entries {
             for hook in &entry.hooks {
                 let _ = run_hook_command(hook, &input, &self.cwd).await;

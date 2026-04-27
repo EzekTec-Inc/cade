@@ -19,11 +19,10 @@ pub fn render_skills_overlay(
 
     let screen = ctx.content_rect();
     let w = (screen.width() * 0.7).max(500.0).min(screen.width() - 20.0);
-    let h = (screen.height() * 0.7).max(300.0).min(screen.height() - 40.0);
-    let pos = egui::pos2(
-        (screen.width() - w) / 2.0,
-        (screen.height() - h) / 2.0,
-    );
+    let h = (screen.height() * 0.7)
+        .max(300.0)
+        .min(screen.height() - 40.0);
+    let pos = egui::pos2((screen.width() - w) / 2.0, (screen.height() - h) / 2.0);
 
     egui::Window::new("Skills Browser")
         .title_bar(false)
@@ -73,11 +72,7 @@ pub fn render_skills_overlay(
 
             // ── Filter input ────────────────────────────────────
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("🔍")
-                        .color(theme.text_dim())
-                        .size(12.0),
-                );
+                ui.label(egui::RichText::new("🔍").color(theme.text_dim()).size(12.0));
                 let mut q = filter.to_string();
                 let resp = ui.add(
                     egui::TextEdit::singleline(&mut q)
@@ -113,7 +108,9 @@ pub fn render_skills_overlay(
                         || s.id.to_lowercase().contains(&filter_lower)
                         || s.name.to_lowercase().contains(&filter_lower)
                         || s.description.to_lowercase().contains(&filter_lower)
-                        || s.tags.iter().any(|t| t.to_lowercase().contains(&filter_lower))
+                        || s.tags
+                            .iter()
+                            .any(|t| t.to_lowercase().contains(&filter_lower))
                 })
                 .collect();
 
@@ -154,9 +151,7 @@ pub fn render_skills_overlay(
                                     theme.text_dim()
                                 };
                                 ui.label(
-                                    egui::RichText::new(status)
-                                        .color(status_color)
-                                        .size(10.0),
+                                    egui::RichText::new(status).color(status_color).size(10.0),
                                 );
 
                                 // Skill name + ID
@@ -203,23 +198,24 @@ pub fn render_skills_overlay(
                                             ("load", theme.success())
                                         };
                                         if ui
-                                            .add(egui::Label::new(
-                                                egui::RichText::new(format!("[{label}]"))
-                                                    .color(color)
-                                                    .monospace()
-                                                    .strong()
-                                                    .size(10.0),
-                                            ).sense(egui::Sense::click()))
+                                            .add(
+                                                egui::Label::new(
+                                                    egui::RichText::new(format!("[{label}]"))
+                                                        .color(color)
+                                                        .monospace()
+                                                        .strong()
+                                                        .size(10.0),
+                                                )
+                                                .sense(egui::Sense::click()),
+                                            )
                                             .clicked()
                                         {
                                             if is_loaded {
-                                                result = Some(AppAction::UnloadSkill(
-                                                    skill.id.clone(),
-                                                ));
+                                                result =
+                                                    Some(AppAction::UnloadSkill(skill.id.clone()));
                                             } else {
-                                                result = Some(AppAction::LoadSkill(
-                                                    skill.id.clone(),
-                                                ));
+                                                result =
+                                                    Some(AppAction::LoadSkill(skill.id.clone()));
                                             }
                                         }
 

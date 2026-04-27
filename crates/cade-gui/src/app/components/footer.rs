@@ -1,8 +1,10 @@
+use crate::session::SessionState;
 use crate::theme::EguiThemeExt;
 use eframe::egui;
-use crate::session::SessionState;
 
-pub fn render(ui: &mut egui::Ui, session_snapshot: &Option<SessionState>,
+pub fn render(
+    ui: &mut egui::Ui,
+    session_snapshot: &Option<SessionState>,
     theme: &crate::theme::ThemeColors,
 ) {
     if let Some(SessionState::Connected {

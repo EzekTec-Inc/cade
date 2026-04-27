@@ -22,10 +22,7 @@ pub fn render_memory_overlay(
     let screen = ctx.content_rect();
     let w = 760.0_f32.min(screen.width() - 40.0);
     let h = 520.0_f32.min(screen.height() - 80.0);
-    let pos = egui::pos2(
-        screen.center().x - w / 2.0,
-        screen.center().y - h / 2.0,
-    );
+    let pos = egui::pos2(screen.center().x - w / 2.0, screen.center().y - h / 2.0);
 
     let mut open = true;
     egui::Window::new("Memory")
@@ -61,14 +58,11 @@ pub fn render_memory_overlay(
                             .small(),
                     );
                 }
-                ui.with_layout(
-                    egui::Layout::right_to_left(egui::Align::Center),
-                    |ui| {
-                        if ui.small_button("✕").clicked() {
-                            result = Some(AppAction::CloseMemoryOverlay);
-                        }
-                    },
-                );
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("✕").clicked() {
+                        result = Some(AppAction::CloseMemoryOverlay);
+                    }
+                });
             });
 
             ui.add_space(6.0);
@@ -180,11 +174,7 @@ pub fn render_memory_overlay(
                                 .strong(),
                         );
                         if let Some(d) = &block.description {
-                            ui.label(
-                                egui::RichText::new(d)
-                                    .color(theme.text_muted())
-                                    .small(),
-                            );
+                            ui.label(egui::RichText::new(d).color(theme.text_muted()).small());
                         }
                         ui.add_space(4.0);
 
@@ -194,10 +184,7 @@ pub fn render_memory_overlay(
                             egui::TextEdit::multiline(&mut buf)
                                 .desired_rows(12)
                                 .desired_width(ui.available_width())
-                                .min_size(egui::vec2(
-                                    ui.available_width(),
-                                    editor_height,
-                                )),
+                                .min_size(egui::vec2(ui.available_width(), editor_height)),
                         );
                         if resp.changed() {
                             result = Some(AppAction::SetMemoryEditBuffer(buf.clone()));

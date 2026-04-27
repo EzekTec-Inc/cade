@@ -20,10 +20,10 @@
 pub mod api;
 pub mod config;
 pub mod login;
-pub mod session;
-pub mod sse;
 pub mod palette;
+pub mod session;
 pub mod shortcuts;
+pub mod sse;
 pub mod storage;
 pub mod theme;
 

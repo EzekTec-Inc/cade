@@ -41,7 +41,13 @@ impl SessionState {
 
     /// Whether the memory overlay is currently open.
     pub fn is_memory_open(&self) -> bool {
-        matches!(self, Self::Connected { memory_open: true, .. })
+        matches!(
+            self,
+            Self::Connected {
+                memory_open: true,
+                ..
+            }
+        )
     }
 
     /// Feed the result of a successful memory fetch.  Resets selection
@@ -59,10 +65,7 @@ impl SessionState {
             *memory_loading = false;
             *memory_error = None;
             *memory_selection = 0;
-            *memory_edit_buffer = blocks
-                .first()
-                .map(|b| b.value.clone())
-                .unwrap_or_default();
+            *memory_edit_buffer = blocks.first().map(|b| b.value.clone()).unwrap_or_default();
             *memory_blocks = blocks;
         }
     }
@@ -114,8 +117,7 @@ impl SessionState {
     /// Replace the edit-buffer contents — called on every TextEdit change.
     pub fn set_memory_edit_buffer(&mut self, value: &str) {
         if let Self::Connected {
-            memory_edit_buffer,
-            ..
+            memory_edit_buffer, ..
         } = self
         {
             *memory_edit_buffer = value.to_string();
@@ -215,5 +217,4 @@ impl SessionState {
             None
         }
     }
-
 }

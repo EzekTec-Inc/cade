@@ -1,6 +1,6 @@
+use crate::app::AppAction;
 use crate::theme::EguiThemeExt;
 use eframe::egui;
-use crate::app::AppAction;
 
 /// Helper: render a section header in TUI style.
 fn section_header(ui: &mut egui::Ui, label: &str, theme: &crate::theme::ThemeColors) {
@@ -14,7 +14,13 @@ fn section_header(ui: &mut egui::Ui, label: &str, theme: &crate::theme::ThemeCol
 }
 
 /// Helper: render a key-value pair row.
-fn kv_row(ui: &mut egui::Ui, key: &str, val: &str, val_color: egui::Color32, theme: &crate::theme::ThemeColors) {
+fn kv_row(
+    ui: &mut egui::Ui,
+    key: &str,
+    val: &str,
+    val_color: egui::Color32,
+    theme: &crate::theme::ThemeColors,
+) {
     ui.horizontal(|ui| {
         ui.label(
             egui::RichText::new(format!(" {key:<8} "))
@@ -111,9 +117,13 @@ pub fn render(
                         };
                         let ctx_color = {
                             let pct = (total as f64 / 128_000.0 * 100.0) as u8;
-                            if pct >= 90 { theme.error() }
-                            else if pct >= 80 { theme.warning() }
-                            else { theme.text_muted() }
+                            if pct >= 90 {
+                                theme.error()
+                            } else if pct >= 80 {
+                                theme.warning()
+                            } else {
+                                theme.text_muted()
+                            }
                         };
                         kv_row(ui, "context", &ctx_pct, ctx_color, theme);
 
@@ -128,15 +138,31 @@ pub fn render(
 
                         // Metrics
                         if let Some(m) = agent_metrics {
-                            kv_row(ui, "consol.", &m.consolidation_runs.to_string(), theme.text_dim(), theme);
-                            kv_row(ui, "compact", &m.tool_outputs_compacted.to_string(), theme.text_dim(), theme);
+                            kv_row(
+                                ui,
+                                "consol.",
+                                &m.consolidation_runs.to_string(),
+                                theme.text_dim(),
+                                theme,
+                            );
+                            kv_row(
+                                ui,
+                                "compact",
+                                &m.tool_outputs_compacted.to_string(),
+                                theme.text_dim(),
+                                theme,
+                            );
                         }
                         ui.add_space(4.0);
 
                         // ── Activity section ──────────────────────────
                         section_header(ui, "Activity", theme);
                         let activity = if is_streaming { "streaming…" } else { "idle" };
-                        let act_color = if is_streaming { theme.warning() } else { theme.text_muted() };
+                        let act_color = if is_streaming {
+                            theme.warning()
+                        } else {
+                            theme.text_muted()
+                        };
                         ui.label(
                             egui::RichText::new(format!(" {activity}"))
                                 .color(act_color)
@@ -151,7 +177,11 @@ pub fn render(
                             Some(plan) => {
                                 let done = plan.steps.iter().filter(|s| s.is_done).count();
                                 let total = plan.steps.len();
-                                if total > 0 { format!("{done}/{total} complete") } else { "none".into() }
+                                if total > 0 {
+                                    format!("{done}/{total} complete")
+                                } else {
+                                    "none".into()
+                                }
                             }
                             None => "none".into(),
                         };
@@ -207,7 +237,11 @@ pub fn render(
                 } else {
                     for (ci, conv) in conversations.iter().enumerate() {
                         let is_sel = *selected_conversation == Some(ci);
-                        let title = if conv.title.is_empty() { "Untitled" } else { &conv.title };
+                        let title = if conv.title.is_empty() {
+                            "Untitled"
+                        } else {
+                            &conv.title
+                        };
                         ui.horizontal(|ui| {
                             let label = format!("💬 {} ({})", title, conv.message_count);
                             if ui.selectable_label(is_sel, label).clicked() && !is_sel {
@@ -217,9 +251,7 @@ pub fn render(
                                 egui::Layout::right_to_left(egui::Align::Center),
                                 |ui| {
                                     let del_btn = egui::Button::new(
-                                        egui::RichText::new("🗑")
-                                            .color(theme.text_dim())
-                                            .size(10.0),
+                                        egui::RichText::new("🗑").color(theme.text_dim()).size(10.0),
                                     )
                                     .fill(egui::Color32::TRANSPARENT)
                                     .stroke(egui::Stroke::NONE)

@@ -75,12 +75,12 @@ pub const SHORTCUTS: &[(Shortcut, ShortcutAction)] = &[
     // Enter → send (when input is focused and non-empty)
     (Shortcut::new(egui::Key::Enter), ShortcutAction::Send),
     // Ctrl+Enter → send (explicit)
-    (
-        Shortcut::new(egui::Key::Enter).ctrl(),
-        ShortcutAction::Send,
-    ),
+    (Shortcut::new(egui::Key::Enter).ctrl(), ShortcutAction::Send),
     // Escape → dismiss error toast (also closes palette, handled in app.rs)
-    (Shortcut::new(egui::Key::Escape), ShortcutAction::DismissError),
+    (
+        Shortcut::new(egui::Key::Escape),
+        ShortcutAction::DismissError,
+    ),
     // Ctrl+L → focus input
     (
         Shortcut::new(egui::Key::L).ctrl(),
@@ -209,11 +209,7 @@ mod tests {
         ];
         for action in all_actions {
             let hint = shortcut_hint(action);
-            assert!(
-                !hint.is_empty(),
-                "Missing hint for {:?}",
-                action
-            );
+            assert!(!hint.is_empty(), "Missing hint for {:?}", action);
         }
     }
 

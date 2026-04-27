@@ -278,7 +278,10 @@ fn settings_manager_remote_url_mcp_server_retained() -> Result<()> {
     let servers = mgr.merged_mcp_servers();
 
     // Remote URL-based server is retained even though command is empty
-    assert!(servers.contains_key("stitch"), "remote URL server should be retained");
+    assert!(
+        servers.contains_key("stitch"),
+        "remote URL server should be retained"
+    );
     assert_eq!(
         servers["stitch"].url.as_deref(),
         Some("https://stitch.googleapis.com/mcp")
@@ -288,7 +291,10 @@ fn settings_manager_remote_url_mcp_server_retained() -> Result<()> {
     assert!(servers.contains_key("local-srv"));
 
     // Entry with neither command nor url is filtered out
-    assert!(!servers.contains_key("empty-both"), "entry with no command and no url should be dropped");
+    assert!(
+        !servers.contains_key("empty-both"),
+        "entry with no command and no url should be dropped"
+    );
 
     Ok(())
 }

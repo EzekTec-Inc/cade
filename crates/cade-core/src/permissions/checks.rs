@@ -54,17 +54,12 @@ pub fn is_delete_action(
         return true;
     }
     // 2. MCP tool — inspect full prefixed name for delete/remove keywords
-    if is_mcp_write
-        && (tool_name.contains("delete") || tool_name.contains("remove"))
-    {
+    if is_mcp_write && (tool_name.contains("delete") || tool_name.contains("remove")) {
         return true;
     }
     // 3. Bash commands: rm, rmdir, unlink, shred
     if matches!(base_name, "bash") {
-        let cmd = args
-            .get("command")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let cmd = args.get("command").and_then(|v| v.as_str()).unwrap_or("");
         return bash_first_cmd_is_delete(cmd);
     }
     false
@@ -325,5 +320,3 @@ fn segment_is_write(seg: &str) -> bool {
 }
 
 // region:    --- Tests
-
-

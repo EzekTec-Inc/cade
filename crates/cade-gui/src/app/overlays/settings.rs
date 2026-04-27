@@ -3,9 +3,9 @@
 //! Overlays: providers, permissions, hooks, theme, pricing, toolset, backend.
 //! Each is a simple `egui::Window` rendering server-fetched or local config data.
 
+use super::super::AppAction;
 use crate::theme::EguiThemeExt;
 use eframe::egui;
-use super::super::AppAction;
 
 /// Thin separator helper.
 fn sep(ui: &mut egui::Ui, theme: &crate::theme::ThemeColors) {
@@ -25,10 +25,7 @@ fn overlay_frame(
     content: impl FnOnce(&mut egui::Ui),
 ) -> bool {
     let screen = ctx.content_rect();
-    let pos = egui::pos2(
-        (screen.width() - w) / 2.0,
-        (screen.height() - h) / 2.0,
-    );
+    let pos = egui::pos2((screen.width() - w) / 2.0, (screen.height() - h) / 2.0);
 
     let mut open = true;
     egui::Window::new(title)
@@ -75,26 +72,53 @@ pub fn render_providers_overlay(
         if loading {
             ui.horizontal(|ui| {
                 ui.spinner();
-                ui.label(egui::RichText::new("Loading…").color(theme.text_dim()).monospace().size(11.0));
+                ui.label(
+                    egui::RichText::new("Loading…")
+                        .color(theme.text_dim())
+                        .monospace()
+                        .size(11.0),
+                );
             });
             return;
         }
         if providers.is_empty() {
-            ui.label(egui::RichText::new("No providers configured.").color(theme.text_muted()).monospace().size(11.0));
+            ui.label(
+                egui::RichText::new("No providers configured.")
+                    .color(theme.text_muted())
+                    .monospace()
+                    .size(11.0),
+            );
             return;
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
             for p in providers {
                 ui.horizontal(|ui| {
-                    let status_color = if p.is_connected { theme.success() } else { theme.error() };
+                    let status_color = if p.is_connected {
+                        theme.success()
+                    } else {
+                        theme.error()
+                    };
                     ui.label(egui::RichText::new("●").color(status_color).size(10.0));
-                    ui.label(egui::RichText::new(&p.name).color(theme.text_primary()).monospace().strong().size(11.0));
-                    ui.label(egui::RichText::new(format!("({} models)", p.model_count)).color(theme.text_dim()).monospace().size(10.0));
+                    ui.label(
+                        egui::RichText::new(&p.name)
+                            .color(theme.text_primary())
+                            .monospace()
+                            .strong()
+                            .size(11.0),
+                    );
+                    ui.label(
+                        egui::RichText::new(format!("({} models)", p.model_count))
+                            .color(theme.text_dim())
+                            .monospace()
+                            .size(10.0),
+                    );
                 });
             }
         });
     });
-    if !open { result = Some(AppAction::CloseProvidersOverlay); }
+    if !open {
+        result = Some(AppAction::CloseProvidersOverlay);
+    }
     result
 }
 
@@ -118,7 +142,11 @@ pub fn render_permissions_overlay(
         for mode in &modes {
             let is_active = current_mode == *mode;
             let prefix = if is_active { "● " } else { "○ " };
-            let color = if is_active { theme.primary() } else { theme.text_primary() };
+            let color = if is_active {
+                theme.primary()
+            } else {
+                theme.text_primary()
+            };
             let desc = match *mode {
                 "default" => "Ask before each tool execution",
                 "acceptEdits" => "Auto-approve edits, ask for others",
@@ -126,13 +154,20 @@ pub fn render_permissions_overlay(
                 "bypassPermissions" => "Auto-approve all tools (YOLO)",
                 _ => "",
             };
-            if ui.add(egui::Label::new(
-                egui::RichText::new(format!("{prefix}{mode}"))
-                    .color(color)
-                    .monospace()
-                    .strong()
-                    .size(12.0),
-            ).sense(egui::Sense::click())).clicked() && !is_active {
+            if ui
+                .add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("{prefix}{mode}"))
+                            .color(color)
+                            .monospace()
+                            .strong()
+                            .size(12.0),
+                    )
+                    .sense(egui::Sense::click()),
+                )
+                .clicked()
+                && !is_active
+            {
                 result = Some(AppAction::SetPermissionMode(mode.to_string()));
             }
             ui.label(
@@ -143,7 +178,9 @@ pub fn render_permissions_overlay(
             );
         }
     });
-    if !open && result.is_none() { result = Some(AppAction::ClosePermissionsOverlay); }
+    if !open && result.is_none() {
+        result = Some(AppAction::ClosePermissionsOverlay);
+    }
     result
 }
 
@@ -158,27 +195,45 @@ pub fn render_theme_overlay(
     let mut result = None;
     let open = overlay_frame(ctx, "Themes", 400.0, 300.0, theme, |ui| {
         if available_themes.is_empty() {
-            ui.label(egui::RichText::new("No themes found.").color(theme.text_muted()).monospace().size(11.0));
+            ui.label(
+                egui::RichText::new("No themes found.")
+                    .color(theme.text_muted())
+                    .monospace()
+                    .size(11.0),
+            );
             return;
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
             for name in available_themes {
                 let is_active = name == current_theme;
                 let prefix = if is_active { "● " } else { "○ " };
-                let color = if is_active { theme.primary() } else { theme.text_primary() };
-                if ui.add(egui::Label::new(
-                    egui::RichText::new(format!("{prefix}{name}"))
-                        .color(color)
-                        .monospace()
-                        .strong()
-                        .size(12.0),
-                ).sense(egui::Sense::click())).clicked() && !is_active {
+                let color = if is_active {
+                    theme.primary()
+                } else {
+                    theme.text_primary()
+                };
+                if ui
+                    .add(
+                        egui::Label::new(
+                            egui::RichText::new(format!("{prefix}{name}"))
+                                .color(color)
+                                .monospace()
+                                .strong()
+                                .size(12.0),
+                        )
+                        .sense(egui::Sense::click()),
+                    )
+                    .clicked()
+                    && !is_active
+                {
                     result = Some(AppAction::SetTheme(name.clone()));
                 }
             }
         });
     });
-    if !open && result.is_none() { result = Some(AppAction::CloseThemeOverlay); }
+    if !open && result.is_none() {
+        result = Some(AppAction::CloseThemeOverlay);
+    }
     result
 }
 
@@ -193,26 +248,57 @@ pub fn render_hooks_overlay(
     let mut result = None;
     let open = overlay_frame(ctx, "Session Hooks", 480.0, 280.0, theme, |ui| {
         if loading {
-            ui.horizontal(|ui| { ui.spinner(); ui.label(egui::RichText::new("Loading…").color(theme.text_dim()).monospace().size(11.0)); });
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(
+                    egui::RichText::new("Loading…")
+                        .color(theme.text_dim())
+                        .monospace()
+                        .size(11.0),
+                );
+            });
             return;
         }
         if hooks.is_empty() {
-            ui.label(egui::RichText::new("No hooks configured.").color(theme.text_muted()).monospace().size(11.0));
+            ui.label(
+                egui::RichText::new("No hooks configured.")
+                    .color(theme.text_muted())
+                    .monospace()
+                    .size(11.0),
+            );
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("Add hooks in .cade/settings.json → \"hooks\" section.").color(theme.text_dim()).monospace().size(10.0));
+            ui.label(
+                egui::RichText::new("Add hooks in .cade/settings.json → \"hooks\" section.")
+                    .color(theme.text_dim())
+                    .monospace()
+                    .size(10.0),
+            );
             return;
         }
         egui::ScrollArea::vertical().show(ui, |ui| {
             for hook in hooks {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new(&hook.event).color(theme.primary()).monospace().strong().size(11.0));
+                    ui.label(
+                        egui::RichText::new(&hook.event)
+                            .color(theme.primary())
+                            .monospace()
+                            .strong()
+                            .size(11.0),
+                    );
                     ui.label(egui::RichText::new("→").color(theme.text_dim()).size(11.0));
-                    ui.label(egui::RichText::new(&hook.command).color(theme.text_primary()).monospace().size(11.0));
+                    ui.label(
+                        egui::RichText::new(&hook.command)
+                            .color(theme.text_primary())
+                            .monospace()
+                            .size(11.0),
+                    );
                 });
             }
         });
     });
-    if !open && result.is_none() { result = Some(AppAction::CloseHooksOverlay); }
+    if !open && result.is_none() {
+        result = Some(AppAction::CloseHooksOverlay);
+    }
     result
 }
 
@@ -229,19 +315,32 @@ pub fn render_toolset_overlay(
         for ts in &toolsets {
             let is_active = current_toolset == *ts;
             let prefix = if is_active { "● " } else { "○ " };
-            let color = if is_active { theme.primary() } else { theme.text_primary() };
-            if ui.add(egui::Label::new(
-                egui::RichText::new(format!("{prefix}{ts}"))
-                    .color(color)
-                    .monospace()
-                    .strong()
-                    .size(12.0),
-            ).sense(egui::Sense::click())).clicked() && !is_active {
+            let color = if is_active {
+                theme.primary()
+            } else {
+                theme.text_primary()
+            };
+            if ui
+                .add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("{prefix}{ts}"))
+                            .color(color)
+                            .monospace()
+                            .strong()
+                            .size(12.0),
+                    )
+                    .sense(egui::Sense::click()),
+                )
+                .clicked()
+                && !is_active
+            {
                 result = Some(AppAction::SetToolset(ts.to_string()));
             }
         }
     });
-    if !open && result.is_none() { result = Some(AppAction::CloseToolsetOverlay); }
+    if !open && result.is_none() {
+        result = Some(AppAction::CloseToolsetOverlay);
+    }
     result
 }
 
@@ -256,11 +355,18 @@ pub fn render_pricing_overlay(
     let open = overlay_frame(ctx, "Token Pricing", 460.0, 280.0, theme, |ui| {
         egui::ScrollArea::vertical().show(ui, |ui| {
             for line in pricing_info.lines() {
-                ui.label(egui::RichText::new(line).color(theme.text_primary()).monospace().size(11.0));
+                ui.label(
+                    egui::RichText::new(line)
+                        .color(theme.text_primary())
+                        .monospace()
+                        .size(11.0),
+                );
             }
         });
     });
-    if !open && result.is_none() { result = Some(AppAction::ClosePricingOverlay); }
+    if !open && result.is_none() {
+        result = Some(AppAction::ClosePricingOverlay);
+    }
     result
 }
 
@@ -277,19 +383,32 @@ pub fn render_backend_overlay(
         for be in &backends {
             let is_active = current_backend == *be;
             let prefix = if is_active { "● " } else { "○ " };
-            let color = if is_active { theme.primary() } else { theme.text_primary() };
-            if ui.add(egui::Label::new(
-                egui::RichText::new(format!("{prefix}{be}"))
-                    .color(color)
-                    .monospace()
-                    .strong()
-                    .size(12.0),
-            ).sense(egui::Sense::click())).clicked() && !is_active {
+            let color = if is_active {
+                theme.primary()
+            } else {
+                theme.text_primary()
+            };
+            if ui
+                .add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("{prefix}{be}"))
+                            .color(color)
+                            .monospace()
+                            .strong()
+                            .size(12.0),
+                    )
+                    .sense(egui::Sense::click()),
+                )
+                .clicked()
+                && !is_active
+            {
                 result = Some(AppAction::SetBackend(be.to_string()));
             }
         }
     });
-    if !open && result.is_none() { result = Some(AppAction::CloseBackendOverlay); }
+    if !open && result.is_none() {
+        result = Some(AppAction::CloseBackendOverlay);
+    }
     result
 }
 
@@ -310,23 +429,36 @@ pub fn render_reasoning_overlay(
     ];
     let open = overlay_frame(ctx, "Reasoning Effort", 440.0, 280.0, theme, |ui| {
         ui.label(
-            egui::RichText::new("Controls extended thinking / reasoning budget for supported models:")
-                .color(theme.text_muted())
-                .monospace()
-                .size(10.0),
+            egui::RichText::new(
+                "Controls extended thinking / reasoning budget for supported models:",
+            )
+            .color(theme.text_muted())
+            .monospace()
+            .size(10.0),
         );
         ui.add_space(4.0);
         for (level, desc) in &tiers {
             let is_active = current_effort == *level;
             let prefix = if is_active { "● " } else { "○ " };
-            let color = if is_active { theme.primary() } else { theme.text_primary() };
-            if ui.add(egui::Label::new(
-                egui::RichText::new(format!("{prefix}{level}"))
-                    .color(color)
-                    .monospace()
-                    .strong()
-                    .size(12.0),
-            ).sense(egui::Sense::click())).clicked() && !is_active {
+            let color = if is_active {
+                theme.primary()
+            } else {
+                theme.text_primary()
+            };
+            if ui
+                .add(
+                    egui::Label::new(
+                        egui::RichText::new(format!("{prefix}{level}"))
+                            .color(color)
+                            .monospace()
+                            .strong()
+                            .size(12.0),
+                    )
+                    .sense(egui::Sense::click()),
+                )
+                .clicked()
+                && !is_active
+            {
                 result = Some(AppAction::SetReasoning(level.to_string()));
             }
             ui.label(
@@ -337,6 +469,8 @@ pub fn render_reasoning_overlay(
             );
         }
     });
-    if !open && result.is_none() { result = Some(AppAction::CloseReasoningOverlay); }
+    if !open && result.is_none() {
+        result = Some(AppAction::CloseReasoningOverlay);
+    }
     result
 }

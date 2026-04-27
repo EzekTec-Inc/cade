@@ -1,15 +1,14 @@
 // region:    --- Modules
 
-
 // endregion: --- Modules
 
-pub mod rules;
 pub mod checks;
 pub mod manager;
+pub mod rules;
 
-pub use rules::*;
 pub use checks::*;
 pub use manager::*;
+pub use rules::*;
 
 #[cfg(test)]
 mod tests;

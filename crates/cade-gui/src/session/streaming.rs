@@ -118,11 +118,13 @@ impl SessionState {
             if name == "set_plan" {
                 let steps: Vec<String> = serde_json::from_str::<serde_json::Value>(arguments)
                     .ok()
-                    .and_then(|v| v["steps"].as_array().map(|arr| {
-                        arr.iter()
-                            .filter_map(|s| s.as_str().map(|s| s.to_string()))
-                            .collect()
-                    }))
+                    .and_then(|v| {
+                        v["steps"].as_array().map(|arr| {
+                            arr.iter()
+                                .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                                .collect()
+                        })
+                    })
                     .unwrap_or_default();
                 if steps.is_empty() {
                     *active_plan = None;
@@ -264,9 +266,7 @@ impl SessionState {
     /// Last token usage: `(input_tokens, output_tokens, model)`.
     pub fn last_usage(&self) -> Option<(u64, u64, Option<&str>)> {
         if let Self::Connected { last_usage, .. } = self {
-            last_usage
-                .as_ref()
-                .map(|(i, o, m)| (*i, *o, m.as_deref()))
+            last_usage.as_ref().map(|(i, o, m)| (*i, *o, m.as_deref()))
         } else {
             None
         }
@@ -283,5 +283,4 @@ impl SessionState {
             None
         }
     }
-
 }

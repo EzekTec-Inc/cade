@@ -90,10 +90,7 @@ impl CadeApp {
             // Capture the selected agent's persisted theme (if any) before
             // the on_select_agent() call, so we can restore it after
             // selection — Phase 5: GUI theme persistence across reloads.
-            let saved_theme = s
-                .agents()
-                .get(idx)
-                .and_then(|a| a.theme.clone());
+            let saved_theme = s.agents().get(idx).and_then(|a| a.theme.clone());
             let changed = s.on_select_agent(idx);
             if !changed {
                 return;
@@ -118,10 +115,8 @@ impl CadeApp {
         let ctx = self.ctx.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::http_wasm::get_messages_paged(
-                &server_url, &token, &agent_id, 50, 0, None,
-            )
-            .await
+            match crate::http_wasm::get_messages_paged(&server_url, &token, &agent_id, 50, 0, None)
+                .await
             {
                 Ok((msgs, has_more)) => {
                     if let Some(s) = session.borrow_mut().as_mut() {
@@ -188,7 +183,12 @@ impl CadeApp {
                 Some(c) => c.id.clone(),
                 None => return,
             };
-            (s.server_url().to_string(), s.token().to_string(), agent_id, conv_id)
+            (
+                s.server_url().to_string(),
+                s.token().to_string(),
+                agent_id,
+                conv_id,
+            )
         };
 
         let session = Rc::clone(&self.session);
@@ -229,7 +229,12 @@ impl CadeApp {
                 Some(id) => id.to_string(),
                 None => return,
             };
-            (s.server_url().to_string(), s.token().to_string(), agent_id, conv_id)
+            (
+                s.server_url().to_string(),
+                s.token().to_string(),
+                agent_id,
+                conv_id,
+            )
         };
 
         let session = Rc::clone(&self.session);
@@ -237,7 +242,12 @@ impl CadeApp {
 
         wasm_bindgen_futures::spawn_local(async move {
             match crate::http_wasm::get_messages_paged(
-                &server_url, &token, &agent_id, 50, 0, Some(&conv_id),
+                &server_url,
+                &token,
+                &agent_id,
+                50,
+                0,
+                Some(&conv_id),
             )
             .await
             {
@@ -366,7 +376,12 @@ impl CadeApp {
 
         wasm_bindgen_futures::spawn_local(async move {
             match crate::http_wasm::put_memory_block(
-                &server_url, &token, &agent_id, &label, &value, None,
+                &server_url,
+                &token,
+                &agent_id,
+                &label,
+                &value,
+                None,
             )
             .await
             {
@@ -437,16 +452,11 @@ impl CadeApp {
         let ctx = self.ctx.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::http_wasm::patch_agent_model(
-                &server_url, &token, &agent_id, &model,
-            )
-            .await
+            match crate::http_wasm::patch_agent_model(&server_url, &token, &agent_id, &model).await
             {
                 Ok(()) => {
                     // Refetch the agents list so the sidebar shows the new model.
-                    if let Ok(agents) =
-                        crate::http_wasm::get_agents(&server_url, &token).await
-                    {
+                    if let Ok(agents) = crate::http_wasm::get_agents(&server_url, &token).await {
                         if let Some(s) = session.borrow_mut().as_mut() {
                             s.refresh_agents(agents);
                         }
@@ -484,13 +494,15 @@ impl CadeApp {
 
         wasm_bindgen_futures::spawn_local(async move {
             match crate::http_wasm::patch_agent_compaction_model(
-                &server_url, &token, &agent_id, &model,
+                &server_url,
+                &token,
+                &agent_id,
+                &model,
             )
             .await
             {
                 Ok(()) => {
-                    if let Ok(agents) =
-                        crate::http_wasm::get_agents(&server_url, &token).await
+                    if let Ok(agents) = crate::http_wasm::get_agents(&server_url, &token).await
                         && let Some(s) = session.borrow_mut().as_mut()
                     {
                         s.refresh_agents(agents);
@@ -565,13 +577,8 @@ impl CadeApp {
         let ctx = self.ctx.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::http_wasm::restore_checkpoint(
-                &server_url,
-                &token,
-                &agent_id,
-                &cp_id,
-            )
-            .await;
+            let result =
+                crate::http_wasm::restore_checkpoint(&server_url, &token, &agent_id, &cp_id).await;
             match result {
                 Ok(()) => {
                     // Truncate the id for the notice so the banner stays
@@ -581,12 +588,8 @@ impl CadeApp {
                         s.on_checkpoints_action_ok(&format!("Restored {short}…"));
                     }
                     // Refresh to pick up any new auto-save entries.
-                    if let Ok(rows) = crate::http_wasm::get_checkpoints(
-                        &server_url,
-                        &token,
-                        &agent_id,
-                    )
-                    .await
+                    if let Ok(rows) =
+                        crate::http_wasm::get_checkpoints(&server_url, &token, &agent_id).await
                     {
                         if let Some(s) = session.borrow_mut().as_mut() {
                             s.on_checkpoints_loaded(rows);
@@ -623,24 +626,15 @@ impl CadeApp {
         let ctx = self.ctx.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::http_wasm::delete_checkpoint(
-                &server_url,
-                &token,
-                &agent_id,
-                &cp_id,
-            )
-            .await;
+            let result =
+                crate::http_wasm::delete_checkpoint(&server_url, &token, &agent_id, &cp_id).await;
             match result {
                 Ok(()) => {
                     if let Some(s) = session.borrow_mut().as_mut() {
                         s.on_checkpoints_action_ok("Deleted checkpoint");
                     }
-                    if let Ok(rows) = crate::http_wasm::get_checkpoints(
-                        &server_url,
-                        &token,
-                        &agent_id,
-                    )
-                    .await
+                    if let Ok(rows) =
+                        crate::http_wasm::get_checkpoints(&server_url, &token, &agent_id).await
                     {
                         if let Some(s) = session.borrow_mut().as_mut() {
                             s.on_checkpoints_loaded(rows);
@@ -714,9 +708,7 @@ impl CadeApp {
         let ctx = self.ctx.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::http_wasm::get_artifact(&server_url, &token, &agent_id, &art_id)
-                .await
-            {
+            match crate::http_wasm::get_artifact(&server_url, &token, &agent_id, &art_id).await {
                 Ok(d) => {
                     if let Some(s) = session.borrow_mut().as_mut() {
                         s.on_artifact_detail_loaded(d);
@@ -752,21 +744,12 @@ impl CadeApp {
         let ctx = self.ctx.clone();
 
         wasm_bindgen_futures::spawn_local(async move {
-            let result = crate::http_wasm::delete_artifact(
-                &server_url,
-                &token,
-                &agent_id,
-                &art_id,
-            )
-            .await;
+            let result =
+                crate::http_wasm::delete_artifact(&server_url, &token, &agent_id, &art_id).await;
             match result {
                 Ok(()) => {
-                    if let Ok(rows) = crate::http_wasm::get_artifacts(
-                        &server_url,
-                        &token,
-                        &agent_id,
-                    )
-                    .await
+                    if let Ok(rows) =
+                        crate::http_wasm::get_artifacts(&server_url, &token, &agent_id).await
                     {
                         if let Some(s) = session.borrow_mut().as_mut() {
                             s.on_artifacts_loaded(rows);
@@ -846,9 +829,7 @@ impl CadeApp {
         let session = Rc::clone(&self.session);
         let ctx = self.ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            if let Ok(m) =
-                crate::http_wasm::get_metrics(&server_url, &token, &agent_id).await
-            {
+            if let Ok(m) = crate::http_wasm::get_metrics(&server_url, &token, &agent_id).await {
                 if let Some(s) = session.borrow_mut().as_mut() {
                     s.on_metrics_loaded(m);
                 }
@@ -1035,13 +1016,26 @@ impl CadeApp {
                             StreamEvent::ConversationId(cid) => s.on_conversation_id(&cid),
                             StreamEvent::Text(text) => s.on_stream_chunk(&text),
                             StreamEvent::Reasoning(text) => s.on_stream_reasoning(&text),
-                            StreamEvent::ToolCall { id, name, arguments } => {
+                            StreamEvent::ToolCall {
+                                id,
+                                name,
+                                arguments,
+                            } => {
                                 s.on_stream_tool_call(&id, &name, &arguments);
                             }
-                            StreamEvent::ToolResult { id, name, output, is_error } => {
+                            StreamEvent::ToolResult {
+                                id,
+                                name,
+                                output,
+                                is_error,
+                            } => {
                                 s.on_stream_tool_result(&id, &name, &output, is_error);
                             }
-                            StreamEvent::Usage { input_tokens, output_tokens, model } => {
+                            StreamEvent::Usage {
+                                input_tokens,
+                                output_tokens,
+                                model,
+                            } => {
                                 s.on_usage(input_tokens, output_tokens, model.as_deref());
                             }
                             StreamEvent::FinishReason(reason) => {
@@ -1050,16 +1044,49 @@ impl CadeApp {
                             StreamEvent::ThemeUpdate(theme) => {
                                 s.on_theme_update(theme);
                             }
-                            StreamEvent::SubagentStarted { subagent_id, task, mode, model } => {
+                            StreamEvent::SubagentStarted {
+                                subagent_id,
+                                task,
+                                mode,
+                                model,
+                            } => {
                                 s.on_subagent_started(&subagent_id, &task, &mode, &model);
                             }
-                            StreamEvent::SubagentProgress { subagent_id, status, tool_calls, output_lines, elapsed_secs } => {
-                                s.on_subagent_progress(&subagent_id, &status, tool_calls, output_lines, elapsed_secs);
+                            StreamEvent::SubagentProgress {
+                                subagent_id,
+                                status,
+                                tool_calls,
+                                output_lines,
+                                elapsed_secs,
+                            } => {
+                                s.on_subagent_progress(
+                                    &subagent_id,
+                                    &status,
+                                    tool_calls,
+                                    output_lines,
+                                    elapsed_secs,
+                                );
                             }
-                            StreamEvent::SubagentComplete { subagent_id, status, result_preview, elapsed_secs, is_error } => {
-                                s.on_subagent_complete(&subagent_id, &status, &result_preview, elapsed_secs, is_error);
+                            StreamEvent::SubagentComplete {
+                                subagent_id,
+                                status,
+                                result_preview,
+                                elapsed_secs,
+                                is_error,
+                            } => {
+                                s.on_subagent_complete(
+                                    &subagent_id,
+                                    &status,
+                                    &result_preview,
+                                    elapsed_secs,
+                                    is_error,
+                                );
                             }
-                            StreamEvent::SystemNotice { level: _, code: _, message } => {
+                            StreamEvent::SystemNotice {
+                                level: _,
+                                code: _,
+                                message,
+                            } => {
                                 if !message.is_empty() {
                                     // Phase 3: surface the server-side
                                     // notice as a toast in the GUI.
@@ -1211,7 +1238,12 @@ impl CadeApp {
             }
             PaletteCmd::Providers => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { providers_open, providers_loading, .. } = s {
+                    if let SessionState::Connected {
+                        providers_open,
+                        providers_loading,
+                        ..
+                    } = s
+                    {
                         *providers_open = true;
                         *providers_loading = true;
                     }
@@ -1220,14 +1252,20 @@ impl CadeApp {
             }
             PaletteCmd::Permissions => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { permissions_open, .. } = s {
+                    if let SessionState::Connected {
+                        permissions_open, ..
+                    } = s
+                    {
                         *permissions_open = true;
                     }
                 }
             }
             PaletteCmd::Theme => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { theme_picker_open, .. } = s {
+                    if let SessionState::Connected {
+                        theme_picker_open, ..
+                    } = s
+                    {
                         *theme_picker_open = true;
                     }
                 }
@@ -1241,7 +1279,10 @@ impl CadeApp {
             }
             PaletteCmd::Mode(_mode_arg) => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { permissions_open, .. } = s {
+                    if let SessionState::Connected {
+                        permissions_open, ..
+                    } = s
+                    {
                         *permissions_open = true;
                     }
                 }
@@ -1297,9 +1338,7 @@ impl CadeApp {
                     // palette has no confirmation step. Explicit clear is still
                     // available via the CLI `/compaction-model` (no arg).
                     if let Some(s) = self.session.borrow_mut().as_mut() {
-                        s.push_error(
-                            "Usage: /compaction-model <model-id>  (use the CLI to clear)",
-                        );
+                        s.push_error("Usage: /compaction-model <model-id>  (use the CLI to clear)");
                     }
                 } else {
                     self.spawn_set_agent_compaction_model(model);
@@ -1318,7 +1357,12 @@ impl CadeApp {
             }
             PaletteCmd::Skills => {
                 if let Some(s) = self.session.borrow_mut().as_mut() {
-                    if let SessionState::Connected { skills_overlay_open, skills_loading, .. } = s {
+                    if let SessionState::Connected {
+                        skills_overlay_open,
+                        skills_loading,
+                        ..
+                    } = s
+                    {
                         *skills_overlay_open = true;
                         *skills_loading = true;
                     }
@@ -1346,17 +1390,13 @@ impl CadeApp {
                     }
                     return;
                 }
-                let idx = self
-                    .session
-                    .borrow()
-                    .as_ref()
-                    .and_then(|s| {
-                        let agents = s.agents();
-                        agents.iter().position(|a| {
-                            a.name.to_lowercase().contains(&name_lc)
-                                || a.id.to_lowercase().starts_with(&name_lc)
-                        })
-                    });
+                let idx = self.session.borrow().as_ref().and_then(|s| {
+                    let agents = s.agents();
+                    agents.iter().position(|a| {
+                        a.name.to_lowercase().contains(&name_lc)
+                            || a.id.to_lowercase().starts_with(&name_lc)
+                    })
+                });
                 match idx {
                     Some(i) => {
                         self.spawn_fetch_messages(i);
@@ -1412,7 +1452,10 @@ impl CadeApp {
     pub(super) fn spawn_fetch_providers(&mut self) {
         let (server_url, token) = {
             let session = self.session.borrow();
-            let s = match session.as_ref() { Some(s) => s, None => return };
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
             (s.server_url().to_string(), s.token().to_string())
         };
         let session = Rc::clone(&self.session);
@@ -1436,17 +1479,25 @@ impl CadeApp {
     pub(super) fn spawn_fetch_skills(&mut self) {
         let (server_url, token, agent_id) = {
             let session = self.session.borrow();
-            let s = match session.as_ref() { Some(s) => s, None => return };
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
             let agent_id = match s.selected_agent_id() {
-                Some(id) => id.to_string(), None => return,
+                Some(id) => id.to_string(),
+                None => return,
             };
             (s.server_url().to_string(), s.token().to_string(), agent_id)
         };
         let session = Rc::clone(&self.session);
         let ctx = self.ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let all = crate::http_wasm::get_all_skills(&server_url, &token).await.unwrap_or_default();
-            let loaded = crate::http_wasm::get_agent_skills(&server_url, &token, &agent_id).await.unwrap_or_default();
+            let all = crate::http_wasm::get_all_skills(&server_url, &token)
+                .await
+                .unwrap_or_default();
+            let loaded = crate::http_wasm::get_agent_skills(&server_url, &token, &agent_id)
+                .await
+                .unwrap_or_default();
             if let Some(s) = session.borrow_mut().as_mut() {
                 s.on_skills_loaded(all, loaded);
             }
@@ -1458,16 +1509,21 @@ impl CadeApp {
     pub(super) fn spawn_load_skill(&mut self, skill_id: String) {
         let (server_url, token, agent_id) = {
             let session = self.session.borrow();
-            let s = match session.as_ref() { Some(s) => s, None => return };
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
             let agent_id = match s.selected_agent_id() {
-                Some(id) => id.to_string(), None => return,
+                Some(id) => id.to_string(),
+                None => return,
             };
             (s.server_url().to_string(), s.token().to_string(), agent_id)
         };
         let session = Rc::clone(&self.session);
         let ctx = self.ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::http_wasm::post_load_skill(&server_url, &token, &agent_id, &skill_id).await {
+            match crate::http_wasm::post_load_skill(&server_url, &token, &agent_id, &skill_id).await
+            {
                 Ok(()) => {
                     if let Some(s) = session.borrow_mut().as_mut() {
                         s.on_skill_loaded(&skill_id);
@@ -1487,16 +1543,22 @@ impl CadeApp {
     pub(super) fn spawn_unload_skill(&mut self, skill_id: String) {
         let (server_url, token, agent_id) = {
             let session = self.session.borrow();
-            let s = match session.as_ref() { Some(s) => s, None => return };
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
             let agent_id = match s.selected_agent_id() {
-                Some(id) => id.to_string(), None => return,
+                Some(id) => id.to_string(),
+                None => return,
             };
             (s.server_url().to_string(), s.token().to_string(), agent_id)
         };
         let session = Rc::clone(&self.session);
         let ctx = self.ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            match crate::http_wasm::post_unload_skill(&server_url, &token, &agent_id, &skill_id).await {
+            match crate::http_wasm::post_unload_skill(&server_url, &token, &agent_id, &skill_id)
+                .await
+            {
                 Ok(()) => {
                     if let Some(s) = session.borrow_mut().as_mut() {
                         s.on_skill_unloaded(&skill_id);
@@ -1516,15 +1578,21 @@ impl CadeApp {
     pub(super) fn spawn_patch_reasoning(&mut self, effort: String) {
         let (server_url, token, agent_id) = {
             let session = self.session.borrow();
-            let s = match session.as_ref() { Some(s) => s, None => return };
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
             let agent_id = match s.selected_agent_id() {
-                Some(id) => id.to_string(), None => return,
+                Some(id) => id.to_string(),
+                None => return,
             };
             (s.server_url().to_string(), s.token().to_string(), agent_id)
         };
         let ctx = self.ctx.clone();
         wasm_bindgen_futures::spawn_local(async move {
-            let _ = crate::http_wasm::patch_agent_reasoning(&server_url, &token, &agent_id, &effort).await;
+            let _ =
+                crate::http_wasm::patch_agent_reasoning(&server_url, &token, &agent_id, &effort)
+                    .await;
             ctx.request_repaint();
         });
     }
@@ -1540,12 +1608,21 @@ impl CadeApp {
     pub(super) fn spawn_apply_theme(&mut self, name: String) {
         let (server_url, token, agent_id, conv_id) = {
             let session = self.session.borrow();
-            let s = match session.as_ref() { Some(s) => s, None => return };
+            let s = match session.as_ref() {
+                Some(s) => s,
+                None => return,
+            };
             let agent_id = match s.selected_agent_id() {
-                Some(id) => id.to_string(), None => return,
+                Some(id) => id.to_string(),
+                None => return,
             };
             let conv_id = s.conversation_id().map(String::from);
-            (s.server_url().to_string(), s.token().to_string(), agent_id, conv_id)
+            (
+                s.server_url().to_string(),
+                s.token().to_string(),
+                agent_id,
+                conv_id,
+            )
         };
         let session = Rc::clone(&self.session);
         let ctx = self.ctx.clone();

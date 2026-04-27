@@ -164,10 +164,7 @@ pub fn parse_messages(status: u16, body: &str) -> Result<Vec<ChatMessage>, ApiEr
 }
 
 /// Like `parse_messages` but also returns the `has_more` flag.
-pub fn parse_messages_paged(
-    status: u16,
-    body: &str,
-) -> Result<(Vec<ChatMessage>, bool), ApiError> {
+pub fn parse_messages_paged(status: u16, body: &str) -> Result<(Vec<ChatMessage>, bool), ApiError> {
     let envelope: MessagesEnvelope = decode_or_error(status, body)?;
     Ok((envelope.messages, envelope.has_more))
 }
@@ -199,7 +196,8 @@ pub struct ConversationInfo {
     pub message_count: u32,
     #[serde(default)]
     pub updated_at: String,
-}/// Server envelope for `GET /v1/agents/:id/conversations`.
+}
+/// Server envelope for `GET /v1/agents/:id/conversations`.
 #[derive(serde::Deserialize)]
 struct ConversationsEnvelope {
     conversations: Vec<ConversationInfo>,
@@ -212,10 +210,7 @@ pub fn parse_conversations(status: u16, body: &str) -> Result<Vec<ConversationIn
 }
 
 /// Parse a single `ConversationInfo` from a create/get response.
-pub fn decode_conversations_single(
-    status: u16,
-    body: &str,
-) -> Result<ConversationInfo, ApiError> {
+pub fn decode_conversations_single(status: u16, body: &str) -> Result<ConversationInfo, ApiError> {
     decode_or_error(status, body)
 }
 
@@ -271,10 +266,7 @@ pub fn memory_url(server: &str, agent_id: &str) -> String {
 
 /// Build the URL for a single memory-block upsert/delete endpoint.
 pub fn memory_block_url(server: &str, agent_id: &str, label: &str) -> String {
-    build_url(
-        server,
-        &format!("/v1/agents/{agent_id}/memory/{label}"),
-    )
+    build_url(server, &format!("/v1/agents/{agent_id}/memory/{label}"))
 }
 
 /// Build the request body for `PUT /v1/agents/:id/memory/:label`.
@@ -348,10 +340,25 @@ pub fn parse_stream_event(v: &serde_json::Value) -> Option<StreamEvent> {
         "tool_result_message" => {
             let tr = v.get("tool_result")?;
             Some(StreamEvent::ToolResult {
-                id: tr.get("id").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                name: tr.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                output: tr.get("output").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                is_error: tr.get("is_error").and_then(|v| v.as_bool()).unwrap_or(false),
+                id: tr
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                name: tr
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                output: tr
+                    .get("output")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string(),
+                is_error: tr
+                    .get("is_error")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
             })
         }
         "usage_statistics" => Some(StreamEvent::Usage {
@@ -365,33 +372,70 @@ pub fn parse_stream_event(v: &serde_json::Value) -> Option<StreamEvent> {
         }
         "theme_update" => {
             let t = v.get("theme")?;
-            let colors: cade_core::resources::themes::ThemeColors = serde_json::from_value(t.clone()).ok()?;
+            let colors: cade_core::resources::themes::ThemeColors =
+                serde_json::from_value(t.clone()).ok()?;
             Some(StreamEvent::ThemeUpdate(colors))
         }
         "subagent_started" => Some(StreamEvent::SubagentStarted {
             subagent_id: v.get("subagent_id")?.as_str()?.to_string(),
-            task: v.get("task").and_then(|t| t.as_str()).unwrap_or("").to_string(),
-            mode: v.get("mode").and_then(|m| m.as_str()).unwrap_or("build").to_string(),
-            model: v.get("model").and_then(|m| m.as_str()).unwrap_or("").to_string(),
+            task: v
+                .get("task")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string(),
+            mode: v
+                .get("mode")
+                .and_then(|m| m.as_str())
+                .unwrap_or("build")
+                .to_string(),
+            model: v
+                .get("model")
+                .and_then(|m| m.as_str())
+                .unwrap_or("")
+                .to_string(),
         }),
         "subagent_progress" => Some(StreamEvent::SubagentProgress {
             subagent_id: v.get("subagent_id")?.as_str()?.to_string(),
-            status: v.get("status").and_then(|s| s.as_str()).unwrap_or("running").to_string(),
+            status: v
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("running")
+                .to_string(),
             tool_calls: v.get("tool_calls").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
             output_lines: v.get("output_lines").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
             elapsed_secs: v.get("elapsed_secs").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
         }),
         "subagent_complete" => Some(StreamEvent::SubagentComplete {
             subagent_id: v.get("subagent_id")?.as_str()?.to_string(),
-            status: v.get("status").and_then(|s| s.as_str()).unwrap_or("success").to_string(),
-            result_preview: v.get("result_preview").and_then(|r| r.as_str()).unwrap_or("").to_string(),
+            status: v
+                .get("status")
+                .and_then(|s| s.as_str())
+                .unwrap_or("success")
+                .to_string(),
+            result_preview: v
+                .get("result_preview")
+                .and_then(|r| r.as_str())
+                .unwrap_or("")
+                .to_string(),
             elapsed_secs: v.get("elapsed_secs").and_then(|n| n.as_u64()).unwrap_or(0) as u32,
             is_error: v.get("is_error").and_then(|b| b.as_bool()).unwrap_or(false),
         }),
         "system_notice" => Some(StreamEvent::SystemNotice {
-            level: v.get("level").and_then(|s| s.as_str()).unwrap_or("info").to_string(),
-            code: v.get("code").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-            message: v.get("message").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+            level: v
+                .get("level")
+                .and_then(|s| s.as_str())
+                .unwrap_or("info")
+                .to_string(),
+            code: v
+                .get("code")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string(),
+            message: v
+                .get("message")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string(),
         }),
         _ => None,
     }
@@ -525,10 +569,7 @@ pub fn artifacts_url(server: &str, agent_id: &str) -> String {
 
 /// Build the URL for a single artifact (get/delete).
 pub fn artifact_url(server: &str, agent_id: &str, art_id: &str) -> String {
-    build_url(
-        server,
-        &format!("/v1/agents/{agent_id}/artifacts/{art_id}"),
-    )
+    build_url(server, &format!("/v1/agents/{agent_id}/artifacts/{art_id}"))
 }
 
 // ── Agent tools (MCP / skills panel) ──────────────────────────────────
@@ -759,15 +800,13 @@ struct ModelsResponse {
 /// Parse the response from `GET /v1/models`.
 ///
 /// Returns `(dynamic_models, custom_provider_names)`.
-pub fn parse_models(
-    status: u16,
-    body: &str,
-) -> Result<(Vec<ModelInfo>, Vec<String>), ApiError> {
+pub fn parse_models(status: u16, body: &str) -> Result<(Vec<ModelInfo>, Vec<String>), ApiError> {
     if status >= 400 {
         return Err(ApiError::Server { status });
     }
-    let resp: ModelsResponse =
-        serde_json::from_str(body).map_err(|e| ApiError::Decode { message: e.to_string() })?;
+    let resp: ModelsResponse = serde_json::from_str(body).map_err(|e| ApiError::Decode {
+        message: e.to_string(),
+    })?;
     Ok((resp.dynamic, resp.custom_providers))
 }
 
@@ -805,8 +844,9 @@ pub fn parse_mcp_status(status: u16, body: &str) -> Result<Vec<McpServerInfo>, A
     if status >= 400 {
         return Err(ApiError::Server { status });
     }
-    let resp: McpResponse =
-        serde_json::from_str(body).map_err(|e| ApiError::Decode { message: e.to_string() })?;
+    let resp: McpResponse = serde_json::from_str(body).map_err(|e| ApiError::Decode {
+        message: e.to_string(),
+    })?;
     Ok(resp.servers)
 }
 
@@ -840,10 +880,7 @@ mod tests {
     #[test]
     fn build_url_strips_multiple_trailing_slashes() {
         // `trim_end_matches` collapses runs — keeps normalisation predictable.
-        assert_eq!(
-            build_url("http://x///", "/v1/agents"),
-            "http://x/v1/agents"
-        );
+        assert_eq!(build_url("http://x///", "/v1/agents"), "http://x/v1/agents");
     }
 
     // -- bearer_header
@@ -882,8 +919,8 @@ mod tests {
 
     #[test]
     fn parse_health_401_returns_unauthorized() {
-        let err = parse_health(401, "Unauthorized: missing or invalid API key")
-            .expect_err("must error");
+        let err =
+            parse_health(401, "Unauthorized: missing or invalid API key").expect_err("must error");
         assert_eq!(err, ApiError::Unauthorized);
     }
 
@@ -1121,10 +1158,7 @@ mod tests {
 
     #[test]
     fn parse_conversations_unauthorized() {
-        assert_eq!(
-            parse_conversations(401, ""),
-            Err(ApiError::Unauthorized),
-        );
+        assert_eq!(parse_conversations(401, ""), Err(ApiError::Unauthorized),);
     }
 
     #[test]
@@ -1624,17 +1658,18 @@ mod tests {
 
     #[test]
     fn parse_models_empty_response() {
-        let (models, custom) = parse_models(200, r#"{"supported":[],"dynamic":[],"custom_providers":[]}"#).expect("decode");
+        let (models, custom) = parse_models(
+            200,
+            r#"{"supported":[],"dynamic":[],"custom_providers":[]}"#,
+        )
+        .expect("decode");
         assert!(models.is_empty());
         assert!(custom.is_empty());
     }
 
     #[test]
     fn parse_models_500_error() {
-        assert_eq!(
-            parse_models(500, ""),
-            Err(ApiError::Server { status: 500 })
-        );
+        assert_eq!(parse_models(500, ""), Err(ApiError::Server { status: 500 }));
     }
 
     #[test]
@@ -1647,7 +1682,10 @@ mod tests {
 
     #[test]
     fn mcp_url_builds_correctly() {
-        assert_eq!(mcp_url("http://localhost:8284"), "http://localhost:8284/v1/mcp");
+        assert_eq!(
+            mcp_url("http://localhost:8284"),
+            "http://localhost:8284/v1/mcp"
+        );
     }
 
     #[test]

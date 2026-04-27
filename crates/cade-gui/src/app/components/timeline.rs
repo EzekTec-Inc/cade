@@ -1,6 +1,6 @@
+use crate::app::AppAction;
 use crate::theme::EguiThemeExt;
 use eframe::egui;
-use crate::app::AppAction;
 use egui_commonmark::CommonMarkCache;
 
 #[allow(clippy::too_many_arguments)]
@@ -46,25 +46,30 @@ pub fn render(
                     ui.horizontal(|ui| {
                         ui.add_space(pad);
                         ui.label(
-                            egui::RichText::new("No messages yet. Send one to start a conversation.")
-                                .color(theme.text_muted())
-                                .italics()
-                                .size(12.0),
+                            egui::RichText::new(
+                                "No messages yet. Send one to start a conversation.",
+                            )
+                            .color(theme.text_muted())
+                            .italics()
+                            .size(12.0),
                         );
                     });
                 } else {
                     if has_more_messages {
                         ui.horizontal(|ui| {
                             ui.add_space(pad);
-                            if ui.add(
-                                egui::Button::new(
-                                    egui::RichText::new("⬆  Load older messages")
-                                        .color(theme.text_muted())
-                                        .size(11.0),
+                            if ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new("⬆  Load older messages")
+                                            .color(theme.text_muted())
+                                            .size(11.0),
+                                    )
+                                    .fill(egui::Color32::TRANSPARENT)
+                                    .stroke(egui::Stroke::new(1.0, theme.border_base())),
                                 )
-                                .fill(egui::Color32::TRANSPARENT)
-                                .stroke(egui::Stroke::new(1.0, theme.border_base()))
-                            ).clicked() {
+                                .clicked()
+                            {
                                 action = Some(AppAction::LoadMore);
                             }
                         });
@@ -82,10 +87,7 @@ pub fn render(
                             ui.add_space(pad);
                             ui.vertical(|ui| {
                                 if let Some(a) = crate::app::views::render_timeline_message(
-                                    ui,
-                                    md_cache,
-                                    msg,
-                                    theme,
+                                    ui, md_cache, msg, theme,
                                 ) {
                                     action = Some(a);
                                 }
@@ -152,9 +154,9 @@ pub fn render(
             });
 
         let scroll_id = egui::Id::new("timeline_scroll");
-        let mem = ui.ctx().memory(|m| {
-            m.data.get_temp::<egui::scroll_area::State>(scroll_id)
-        });
+        let mem = ui
+            .ctx()
+            .memory(|m| m.data.get_temp::<egui::scroll_area::State>(scroll_id));
         if let Some(st) = mem {
             if st.velocity().y < -5.0 && auto_scroll {
                 action = Some(AppAction::DisableAutoScroll);
@@ -179,11 +181,8 @@ pub fn render(
             } else {
                 theme.bg_surface1()
             };
-            ui.painter().rect_filled(
-                btn_rect,
-                egui::CornerRadius::ZERO,
-                bg,
-            );
+            ui.painter()
+                .rect_filled(btn_rect, egui::CornerRadius::ZERO, bg);
             ui.painter().rect_stroke(
                 btn_rect,
                 egui::CornerRadius::ZERO,
@@ -216,11 +215,9 @@ pub fn render(
                 .map(|r| format!(" · {r}"))
                 .unwrap_or_default();
             ui.label(
-                egui::RichText::new(format!(
-                    "↑{inp} ↓{out} tokens{model_str}{finish}"
-                ))
-                .color(theme.text_dim())
-                .size(11.0),
+                egui::RichText::new(format!("↑{inp} ↓{out} tokens{model_str}{finish}"))
+                    .color(theme.text_dim())
+                    .size(11.0),
             );
         }
 
@@ -248,11 +245,7 @@ pub fn render(
                 .show(ui.ctx(), |ui| {
                     ui.set_width(toast_width);
                     ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new("⚠")
-                                .color(theme.error())
-                                .strong(),
-                        );
+                        ui.label(egui::RichText::new("⚠").color(theme.error()).strong());
                         ui.label(
                             egui::RichText::new(err.as_str())
                                 .color(theme.text_primary())

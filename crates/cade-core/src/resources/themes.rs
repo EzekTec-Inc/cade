@@ -164,7 +164,6 @@ pub struct Theme {
     pub source: PathBuf,
 }
 
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ColorDef {
     Rgb(u8, u8, u8),
@@ -254,7 +253,6 @@ pub struct ThemeColors {
     pub syntax_support_function: ColorDef,
     pub syntax_support_macro: ColorDef,
 
-
     // -- Thinking level borders
     pub thinking_off: ColorDef,
     pub thinking_minimal: ColorDef,
@@ -311,7 +309,6 @@ pub struct ThemeColors {
     pub spinner_2: ColorDef,
     #[serde(default = "ColorDef::default_reset")]
     pub spinner_3: ColorDef,
-
 }
 
 impl ThemeColors {
@@ -328,29 +325,39 @@ impl ThemeColors {
     /// delegate here so the list cannot drift.
     pub fn builtin_by_name(name: &str) -> Option<Self> {
         match name {
-            "dark"              => Some(Self::dark()),
-            "light"             => Some(Self::light()),
-            "catppuccin-mocha"  => Some(Self::catppuccin_mocha()),
-            "catppuccin-latte"  => Some(Self::catppuccin_latte()),
-            "tokyo-night"       => Some(Self::tokyo_night()),
-            _                   => None,
+            "dark" => Some(Self::dark()),
+            "light" => Some(Self::light()),
+            "catppuccin-mocha" => Some(Self::catppuccin_mocha()),
+            "catppuccin-latte" => Some(Self::catppuccin_latte()),
+            "tokyo-night" => Some(Self::tokyo_night()),
+            _ => None,
         }
     }
 
     /// List all built-in theme names in display order.
     pub fn builtin_names() -> &'static [&'static str] {
-        &["dark", "light", "catppuccin-mocha", "catppuccin-latte", "tokyo-night"]
+        &[
+            "dark",
+            "light",
+            "catppuccin-mocha",
+            "catppuccin-latte",
+            "tokyo-night",
+        ]
     }
 
     /// Metadata for every built-in theme (name, description, variant).
     /// Used to populate pickers without fabricating phantom `Theme` structs.
     pub fn builtin_listing() -> &'static [(&'static str, &'static str, &'static str)] {
         &[
-            ("dark",              "Built-in dark theme",              "dark"),
-            ("light",             "Built-in light theme",             "light"),
-            ("catppuccin-mocha",  "Catppuccin Mocha (dark pastel)",   "dark"),
-            ("catppuccin-latte",  "Catppuccin Latte (light pastel)",  "light"),
-            ("tokyo-night",       "Tokyo Night (dark neon)",          "dark"),
+            ("dark", "Built-in dark theme", "dark"),
+            ("light", "Built-in light theme", "light"),
+            ("catppuccin-mocha", "Catppuccin Mocha (dark pastel)", "dark"),
+            (
+                "catppuccin-latte",
+                "Catppuccin Latte (light pastel)",
+                "light",
+            ),
+            ("tokyo-night", "Tokyo Night (dark neon)", "dark"),
         ]
     }
 
@@ -359,48 +366,47 @@ impl ThemeColors {
         Self {
             source_path: None,
 
-
             // Semantic Elevation — noticeable depth between layers
-            bg_base:     ColorDef::Rgb(12,  13,  20),   // near-void blue-black
-            bg_surface0: ColorDef::Rgb(20,  22,  33),   // card base  (+8 step)
-            bg_surface1: ColorDef::Rgb(26,  28,  42),   // overlay base (+6 step)
-            bg_surface2: ColorDef::Rgb(34,  36,  54),   // selection highlight (+8 step)
+            bg_base: ColorDef::Rgb(12, 13, 20), // near-void blue-black
+            bg_surface0: ColorDef::Rgb(20, 22, 33), // card base  (+8 step)
+            bg_surface1: ColorDef::Rgb(26, 28, 42), // overlay base (+6 step)
+            bg_surface2: ColorDef::Rgb(34, 36, 54), // selection highlight (+8 step)
 
-            primary: ColorDef::Rgb(122, 162, 247),   // vivid sky blue
-            success: ColorDef::Rgb( 73, 196, 127),   // fresh green
-            error:   ColorDef::Rgb(247,  93, 100),   // soft coral
-            warning: ColorDef::Rgb(224, 175, 104),   // warm amber
+            primary: ColorDef::Rgb(122, 162, 247), // vivid sky blue
+            success: ColorDef::Rgb(73, 196, 127),  // fresh green
+            error: ColorDef::Rgb(247, 93, 100),    // soft coral
+            warning: ColorDef::Rgb(224, 175, 104), // warm amber
 
-            text_primary: ColorDef::Rgb(205, 214, 244),  // near-white (Catppuccin "Text")
-            text_muted:   ColorDef::Rgb(122, 128, 153),  // mid-grey, blue-tinted
-            text_dim:     ColorDef::Rgb( 72,  78,  98),  // dark hint text
+            text_primary: ColorDef::Rgb(205, 214, 244), // near-white (Catppuccin "Text")
+            text_muted: ColorDef::Rgb(122, 128, 153),   // mid-grey, blue-tinted
+            text_dim: ColorDef::Rgb(72, 78, 98),        // dark hint text
 
-            border_base:  ColorDef::Rgb( 41,  44,  64),  // barely-visible divider
-            border_focus: ColorDef::Rgb(122, 162, 247),  // matches primary
+            border_base: ColorDef::Rgb(41, 44, 64), // barely-visible divider
+            border_focus: ColorDef::Rgb(122, 162, 247), // matches primary
 
-            diff_added:   ColorDef::Rgb( 73, 196, 127),
-            diff_removed: ColorDef::Rgb(247,  93, 100),
-            diff_context: ColorDef::Rgb( 90,  98, 120),
+            diff_added: ColorDef::Rgb(73, 196, 127),
+            diff_removed: ColorDef::Rgb(247, 93, 100),
+            diff_context: ColorDef::Rgb(90, 98, 120),
 
-            md_heading:          ColorDef::Rgb(224, 175, 104),
-            md_link:             ColorDef::Rgb(122, 162, 247),
-            md_link_url:         ColorDef::Rgb(122, 128, 153),
-            md_code:             ColorDef::Rgb(115, 218, 202),
-            md_code_block:       ColorDef::Reset,
-            md_code_block_border: ColorDef::Rgb(48,  52,  72),
-            md_quote:            ColorDef::Rgb(122, 128, 153),
-            md_quote_border:     ColorDef::Rgb(48,  52,  72),
-            md_hr:               ColorDef::Rgb(48,  52,  72),
-            md_list_bullet:      ColorDef::Rgb(115, 218, 202),
+            md_heading: ColorDef::Rgb(224, 175, 104),
+            md_link: ColorDef::Rgb(122, 162, 247),
+            md_link_url: ColorDef::Rgb(122, 128, 153),
+            md_code: ColorDef::Rgb(115, 218, 202),
+            md_code_block: ColorDef::Reset,
+            md_code_block_border: ColorDef::Rgb(48, 52, 72),
+            md_quote: ColorDef::Rgb(122, 128, 153),
+            md_quote_border: ColorDef::Rgb(48, 52, 72),
+            md_hr: ColorDef::Rgb(48, 52, 72),
+            md_list_bullet: ColorDef::Rgb(115, 218, 202),
 
-            syntax_comment:     ColorDef::Rgb( 90,  98, 120),
-            syntax_keyword:     ColorDef::Rgb(187, 154, 247),  // purple
-            syntax_function:    ColorDef::Rgb(122, 162, 247),  // blue
-            syntax_variable:    ColorDef::Rgb(224, 175, 104),  // amber
-            syntax_string:      ColorDef::Rgb(158, 206, 106),  // green
-            syntax_number:      ColorDef::Rgb(255, 158, 100),  // orange
-            syntax_type:        ColorDef::Rgb(115, 218, 202),  // teal
-            syntax_operator:    ColorDef::Rgb(187, 154, 247),
+            syntax_comment: ColorDef::Rgb(90, 98, 120),
+            syntax_keyword: ColorDef::Rgb(187, 154, 247), // purple
+            syntax_function: ColorDef::Rgb(122, 162, 247), // blue
+            syntax_variable: ColorDef::Rgb(224, 175, 104), // amber
+            syntax_string: ColorDef::Rgb(158, 206, 106),  // green
+            syntax_number: ColorDef::Rgb(255, 158, 100),  // orange
+            syntax_type: ColorDef::Rgb(115, 218, 202),    // teal
+            syntax_operator: ColorDef::Rgb(187, 154, 247),
             syntax_punctuation: ColorDef::Rgb(122, 128, 153),
             syntax_constant: ColorDef::Rgb(255, 158, 100),
             syntax_string_escape: ColorDef::Rgb(158, 206, 106),
@@ -414,32 +420,31 @@ impl ThemeColors {
             syntax_support_function: ColorDef::Rgb(122, 162, 247),
             syntax_support_macro: ColorDef::Rgb(122, 162, 247),
 
-
-            thinking_off:     ColorDef::Rgb( 41,  44,  64),
+            thinking_off: ColorDef::Rgb(41, 44, 64),
             thinking_minimal: ColorDef::Rgb(122, 162, 247),
-            thinking_low:     ColorDef::Rgb( 80, 160, 200),
-            thinking_medium:  ColorDef::Rgb(115, 218, 202),
-            thinking_high:    ColorDef::Rgb(224, 175, 104),
-            thinking_xhigh:   ColorDef::Rgb(247,  93, 100),
-            bash_mode:        ColorDef::Rgb(224, 175, 104),
+            thinking_low: ColorDef::Rgb(80, 160, 200),
+            thinking_medium: ColorDef::Rgb(115, 218, 202),
+            thinking_high: ColorDef::Rgb(224, 175, 104),
+            thinking_xhigh: ColorDef::Rgb(247, 93, 100),
+            bash_mode: ColorDef::Rgb(224, 175, 104),
 
             border_style: BorderStyle::Rounded,
-            bg_card:      ColorDef::Rgb(20,  22,  34),
-            bg_input:     ColorDef::Rgb(22,  24,  36),
-            accent_dim:   ColorDef::Rgb(64, 102, 168),
+            bg_card: ColorDef::Rgb(20, 22, 34),
+            bg_input: ColorDef::Rgb(22, 24, 36),
+            accent_dim: ColorDef::Rgb(64, 102, 168),
 
             // Context-bar data-viz
-            ctx_bar_system:       ColorDef::Rgb(120, 120, 120),
-            ctx_bar_native_tools: ColorDef::Rgb(  8, 145, 178),
-            ctx_bar_mcp_tools:    ColorDef::Rgb(  0, 188, 212),
-            ctx_bar_memory:       ColorDef::Rgb(215, 119,  87),
-            ctx_bar_skills:       ColorDef::Rgb(255, 193,   7),
-            ctx_bar_messages:     ColorDef::Rgb(147,  51, 234),
-            ctx_bar_free:         ColorDef::Rgb( 50,  50,  50),
-            ctx_bar_buffer:       ColorDef::Rgb( 80,  80,  80),
+            ctx_bar_system: ColorDef::Rgb(120, 120, 120),
+            ctx_bar_native_tools: ColorDef::Rgb(8, 145, 178),
+            ctx_bar_mcp_tools: ColorDef::Rgb(0, 188, 212),
+            ctx_bar_memory: ColorDef::Rgb(215, 119, 87),
+            ctx_bar_skills: ColorDef::Rgb(255, 193, 7),
+            ctx_bar_messages: ColorDef::Rgb(147, 51, 234),
+            ctx_bar_free: ColorDef::Rgb(50, 50, 50),
+            ctx_bar_buffer: ColorDef::Rgb(80, 80, 80),
 
             // Animated spinner gradient
-            spinner_0: ColorDef::Rgb( 80, 190, 255),
+            spinner_0: ColorDef::Rgb(80, 190, 255),
             spinner_1: ColorDef::Rgb(120, 215, 255),
             spinner_2: ColorDef::Rgb(160, 235, 255),
             spinner_3: ColorDef::Rgb(100, 200, 255),
@@ -462,80 +467,80 @@ impl ThemeColors {
         let t = &theme.colors;
 
         // -- Primary / semantic
-        base.primary      = resolve(&t.accent);
-        base.success      = resolve(&t.success);
-        base.error        = resolve(&t.error);
-        base.warning      = resolve(&t.warning);
+        base.primary = resolve(&t.accent);
+        base.success = resolve(&t.success);
+        base.error = resolve(&t.error);
+        base.warning = resolve(&t.warning);
         // Accent-dim: re-use accent (user themes rarely define a dim variant)
-        base.accent_dim   = resolve(&t.accent);
+        base.accent_dim = resolve(&t.accent);
 
         // -- Backgrounds (semantic elevations)
-        base.bg_base      = resolve(&t.custom_message_bg);
-        base.bg_surface0  = resolve(&t.user_message_bg);
-        base.bg_surface1  = resolve(&t.tool_pending_bg);
-        base.bg_surface2  = resolve(&t.selected_bg);
-        base.bg_card      = resolve(&t.tool_success_bg);
-        base.bg_input     = resolve(&t.user_message_bg);
+        base.bg_base = resolve(&t.custom_message_bg);
+        base.bg_surface0 = resolve(&t.user_message_bg);
+        base.bg_surface1 = resolve(&t.tool_pending_bg);
+        base.bg_surface2 = resolve(&t.selected_bg);
+        base.bg_card = resolve(&t.tool_success_bg);
+        base.bg_input = resolve(&t.user_message_bg);
 
         // -- Borders
-        base.border_base  = resolve(&t.border);
+        base.border_base = resolve(&t.border);
         base.border_focus = resolve(&t.border_accent);
 
         // -- Text
         base.text_primary = resolve(&t.text);
-        base.text_muted   = resolve(&t.muted);
-        base.text_dim     = resolve(&t.dim);
+        base.text_muted = resolve(&t.muted);
+        base.text_dim = resolve(&t.dim);
 
         // -- Diffs
-        base.diff_added   = resolve(&t.tool_diff_added);
+        base.diff_added = resolve(&t.tool_diff_added);
         base.diff_removed = resolve(&t.tool_diff_removed);
         base.diff_context = resolve(&t.tool_diff_context);
 
         // -- Markdown
-        base.md_heading           = resolve(&t.md_heading);
-        base.md_link              = resolve(&t.md_link);
-        base.md_link_url          = resolve(&t.md_link_url);
-        base.md_code              = resolve(&t.md_code);
-        base.md_code_block        = resolve(&t.md_code_block);
+        base.md_heading = resolve(&t.md_heading);
+        base.md_link = resolve(&t.md_link);
+        base.md_link_url = resolve(&t.md_link_url);
+        base.md_code = resolve(&t.md_code);
+        base.md_code_block = resolve(&t.md_code_block);
         base.md_code_block_border = resolve(&t.md_code_block_border);
-        base.md_quote             = resolve(&t.md_quote);
-        base.md_quote_border      = resolve(&t.md_quote_border);
-        base.md_hr                = resolve(&t.md_hr);
-        base.md_list_bullet       = resolve(&t.md_list_bullet);
+        base.md_quote = resolve(&t.md_quote);
+        base.md_quote_border = resolve(&t.md_quote_border);
+        base.md_hr = resolve(&t.md_hr);
+        base.md_list_bullet = resolve(&t.md_list_bullet);
 
         // -- Syntax (primary nine)
-        base.syntax_comment     = resolve(&t.syntax_comment);
-        base.syntax_keyword     = resolve(&t.syntax_keyword);
-        base.syntax_function    = resolve(&t.syntax_function);
-        base.syntax_variable    = resolve(&t.syntax_variable);
-        base.syntax_string      = resolve(&t.syntax_string);
-        base.syntax_number      = resolve(&t.syntax_number);
-        base.syntax_type        = resolve(&t.syntax_type);
-        base.syntax_operator    = resolve(&t.syntax_operator);
+        base.syntax_comment = resolve(&t.syntax_comment);
+        base.syntax_keyword = resolve(&t.syntax_keyword);
+        base.syntax_function = resolve(&t.syntax_function);
+        base.syntax_variable = resolve(&t.syntax_variable);
+        base.syntax_string = resolve(&t.syntax_string);
+        base.syntax_number = resolve(&t.syntax_number);
+        base.syntax_type = resolve(&t.syntax_type);
+        base.syntax_operator = resolve(&t.syntax_operator);
         base.syntax_punctuation = resolve(&t.syntax_punctuation);
 
         // -- Syntax (extended — reuse the closest ThemeTokens field since
         //    the JSON schema doesn't expose all granular slots).  These are
         //    the fine-grained TextMate scopes we approximate.
-        base.syntax_constant               = resolve(&t.syntax_number);
-        base.syntax_string_escape          = resolve(&t.syntax_string);
-        base.syntax_type_builtin           = resolve(&t.syntax_type);
-        base.syntax_keyword_control        = resolve(&t.syntax_keyword);
-        base.syntax_keyword_operator       = resolve(&t.syntax_operator);
-        base.syntax_entity_name_function   = resolve(&t.syntax_function);
-        base.syntax_entity_name_type       = resolve(&t.syntax_type);
-        base.syntax_variable_parameter     = resolve(&t.syntax_variable);
-        base.syntax_variable_other_member  = resolve(&t.syntax_variable);
-        base.syntax_support_function       = resolve(&t.syntax_function);
-        base.syntax_support_macro          = resolve(&t.syntax_function);
+        base.syntax_constant = resolve(&t.syntax_number);
+        base.syntax_string_escape = resolve(&t.syntax_string);
+        base.syntax_type_builtin = resolve(&t.syntax_type);
+        base.syntax_keyword_control = resolve(&t.syntax_keyword);
+        base.syntax_keyword_operator = resolve(&t.syntax_operator);
+        base.syntax_entity_name_function = resolve(&t.syntax_function);
+        base.syntax_entity_name_type = resolve(&t.syntax_type);
+        base.syntax_variable_parameter = resolve(&t.syntax_variable);
+        base.syntax_variable_other_member = resolve(&t.syntax_variable);
+        base.syntax_support_function = resolve(&t.syntax_function);
+        base.syntax_support_macro = resolve(&t.syntax_function);
 
         // -- Reasoning / thinking tiers
-        base.thinking_off     = resolve(&t.thinking_off);
+        base.thinking_off = resolve(&t.thinking_off);
         base.thinking_minimal = resolve(&t.thinking_minimal);
-        base.thinking_low     = resolve(&t.thinking_low);
-        base.thinking_medium  = resolve(&t.thinking_medium);
-        base.thinking_high    = resolve(&t.thinking_high);
-        base.thinking_xhigh   = resolve(&t.thinking_xhigh);
+        base.thinking_low = resolve(&t.thinking_low);
+        base.thinking_medium = resolve(&t.thinking_medium);
+        base.thinking_high = resolve(&t.thinking_high);
+        base.thinking_xhigh = resolve(&t.thinking_xhigh);
 
         // -- Bash mode indicator
         base.bash_mode = resolve(&t.bash_mode);
@@ -548,90 +553,88 @@ impl ThemeColors {
         Self {
             source_path: None,
 
-
             // Semantic Elevation — clear layering on a white surface
-            bg_base:     ColorDef::Rgb(252, 252, 255),   // near-white, slight blue
-            bg_surface0: ColorDef::Rgb(244, 246, 255),   // card base
-            bg_surface1: ColorDef::Rgb(236, 240, 255),   // overlay / panel
-            bg_surface2: ColorDef::Rgb(220, 226, 248),   // selection highlight
+            bg_base: ColorDef::Rgb(252, 252, 255), // near-white, slight blue
+            bg_surface0: ColorDef::Rgb(244, 246, 255), // card base
+            bg_surface1: ColorDef::Rgb(236, 240, 255), // overlay / panel
+            bg_surface2: ColorDef::Rgb(220, 226, 248), // selection highlight
 
-            primary: ColorDef::Rgb( 14,  98, 200),   // rich blue
-            success: ColorDef::Rgb(  0, 135,  75),   // forest green
-            error:   ColorDef::Rgb(185,  28,  28),   // deep red
-            warning: ColorDef::Rgb(146,  88,   0),   // dark amber
+            primary: ColorDef::Rgb(14, 98, 200), // rich blue
+            success: ColorDef::Rgb(0, 135, 75),  // forest green
+            error: ColorDef::Rgb(185, 28, 28),   // deep red
+            warning: ColorDef::Rgb(146, 88, 0),  // dark amber
 
-            text_primary: ColorDef::Rgb( 30,  36,  58),   // dark charcoal — readable on white
-            text_muted:   ColorDef::Rgb( 90, 100, 125),
-            text_dim:     ColorDef::Rgb(148, 158, 180),
+            text_primary: ColorDef::Rgb(30, 36, 58), // dark charcoal — readable on white
+            text_muted: ColorDef::Rgb(90, 100, 125),
+            text_dim: ColorDef::Rgb(148, 158, 180),
 
-            border_base:  ColorDef::Rgb(198, 206, 226),
-            border_focus: ColorDef::Rgb( 14,  98, 200),
+            border_base: ColorDef::Rgb(198, 206, 226),
+            border_focus: ColorDef::Rgb(14, 98, 200),
 
-            diff_added:   ColorDef::Rgb(  0, 135,  75),
-            diff_removed: ColorDef::Rgb(185,  28,  28),
-            diff_context: ColorDef::Rgb( 90, 100, 125),
+            diff_added: ColorDef::Rgb(0, 135, 75),
+            diff_removed: ColorDef::Rgb(185, 28, 28),
+            diff_context: ColorDef::Rgb(90, 100, 125),
 
-            md_heading:          ColorDef::Rgb(146,  88,   0),
-            md_link:             ColorDef::Rgb( 14,  98, 200),
-            md_link_url:         ColorDef::Rgb( 90, 100, 125),
-            md_code:             ColorDef::Rgb(  0, 118, 118),
-            md_code_block:       ColorDef::Rgb( 30,  36,  58),   // explicit dark (not Reset)
+            md_heading: ColorDef::Rgb(146, 88, 0),
+            md_link: ColorDef::Rgb(14, 98, 200),
+            md_link_url: ColorDef::Rgb(90, 100, 125),
+            md_code: ColorDef::Rgb(0, 118, 118),
+            md_code_block: ColorDef::Rgb(30, 36, 58), // explicit dark (not Reset)
             md_code_block_border: ColorDef::Rgb(180, 190, 215),
-            md_quote:            ColorDef::Rgb( 90, 100, 125),
-            md_quote_border:     ColorDef::Rgb(180, 190, 215),
-            md_hr:               ColorDef::Rgb(180, 190, 215),
-            md_list_bullet:      ColorDef::Rgb(  0, 118, 118),
+            md_quote: ColorDef::Rgb(90, 100, 125),
+            md_quote_border: ColorDef::Rgb(180, 190, 215),
+            md_hr: ColorDef::Rgb(180, 190, 215),
+            md_list_bullet: ColorDef::Rgb(0, 118, 118),
 
-            syntax_comment:     ColorDef::Rgb( 90, 100, 125),
-            syntax_keyword:     ColorDef::Rgb(128,  30, 155),
-            syntax_function:    ColorDef::Rgb( 14,  98, 200),
-            syntax_variable:    ColorDef::Rgb(146,  88,   0),
-            syntax_string:      ColorDef::Rgb(  0, 115,  55),
-            syntax_number:      ColorDef::Rgb(155,  70,  15),
-            syntax_type:        ColorDef::Rgb(  0,  95, 155),
-            syntax_operator:    ColorDef::Rgb(128,  30, 155),
-            syntax_punctuation: ColorDef::Rgb( 90, 100, 125),
-            syntax_constant: ColorDef::Rgb(155,  70,  15),
-            syntax_string_escape: ColorDef::Rgb(  0, 115,  55),
-            syntax_type_builtin: ColorDef::Rgb(  0,  95, 155),
-            syntax_keyword_control: ColorDef::Rgb(128,  30, 155),
-            syntax_keyword_operator: ColorDef::Rgb(128,  30, 155),
-            syntax_entity_name_function: ColorDef::Rgb( 14,  98, 200),
-            syntax_entity_name_type: ColorDef::Rgb(  0,  95, 155),
-            syntax_variable_parameter: ColorDef::Rgb(146,  88,   0),
-            syntax_variable_other_member: ColorDef::Rgb(146,  88,   0),
-            syntax_support_function: ColorDef::Rgb( 14,  98, 200),
-            syntax_support_macro: ColorDef::Rgb( 14,  98, 200),
+            syntax_comment: ColorDef::Rgb(90, 100, 125),
+            syntax_keyword: ColorDef::Rgb(128, 30, 155),
+            syntax_function: ColorDef::Rgb(14, 98, 200),
+            syntax_variable: ColorDef::Rgb(146, 88, 0),
+            syntax_string: ColorDef::Rgb(0, 115, 55),
+            syntax_number: ColorDef::Rgb(155, 70, 15),
+            syntax_type: ColorDef::Rgb(0, 95, 155),
+            syntax_operator: ColorDef::Rgb(128, 30, 155),
+            syntax_punctuation: ColorDef::Rgb(90, 100, 125),
+            syntax_constant: ColorDef::Rgb(155, 70, 15),
+            syntax_string_escape: ColorDef::Rgb(0, 115, 55),
+            syntax_type_builtin: ColorDef::Rgb(0, 95, 155),
+            syntax_keyword_control: ColorDef::Rgb(128, 30, 155),
+            syntax_keyword_operator: ColorDef::Rgb(128, 30, 155),
+            syntax_entity_name_function: ColorDef::Rgb(14, 98, 200),
+            syntax_entity_name_type: ColorDef::Rgb(0, 95, 155),
+            syntax_variable_parameter: ColorDef::Rgb(146, 88, 0),
+            syntax_variable_other_member: ColorDef::Rgb(146, 88, 0),
+            syntax_support_function: ColorDef::Rgb(14, 98, 200),
+            syntax_support_macro: ColorDef::Rgb(14, 98, 200),
 
-
-            thinking_off:     ColorDef::Rgb(198, 206, 226),
-            thinking_minimal: ColorDef::Rgb( 14,  98, 200),
-            thinking_low:     ColorDef::Rgb(  0, 118, 160),
-            thinking_medium:  ColorDef::Rgb(  0, 135,  75),
-            thinking_high:    ColorDef::Rgb(146,  88,   0),
-            thinking_xhigh:   ColorDef::Rgb(185,  28,  28),
-            bash_mode:        ColorDef::Rgb(146,  88,   0),
+            thinking_off: ColorDef::Rgb(198, 206, 226),
+            thinking_minimal: ColorDef::Rgb(14, 98, 200),
+            thinking_low: ColorDef::Rgb(0, 118, 160),
+            thinking_medium: ColorDef::Rgb(0, 135, 75),
+            thinking_high: ColorDef::Rgb(146, 88, 0),
+            thinking_xhigh: ColorDef::Rgb(185, 28, 28),
+            bash_mode: ColorDef::Rgb(146, 88, 0),
 
             border_style: BorderStyle::Rounded,
-            bg_card:      ColorDef::Rgb(242, 245, 255),
-            bg_input:     ColorDef::Rgb(236, 240, 255),
-            accent_dim:   ColorDef::Rgb( 76, 136, 210),
+            bg_card: ColorDef::Rgb(242, 245, 255),
+            bg_input: ColorDef::Rgb(236, 240, 255),
+            accent_dim: ColorDef::Rgb(76, 136, 210),
 
             // Context-bar data-viz (lighter variants for readability on white)
-            ctx_bar_system:       ColorDef::Rgb(140, 140, 140),
-            ctx_bar_native_tools: ColorDef::Rgb(  0, 130, 165),
-            ctx_bar_mcp_tools:    ColorDef::Rgb(  0, 160, 190),
-            ctx_bar_memory:       ColorDef::Rgb(195, 100,  70),
-            ctx_bar_skills:       ColorDef::Rgb(200, 155,   0),
-            ctx_bar_messages:     ColorDef::Rgb(130,  40, 210),
-            ctx_bar_free:         ColorDef::Rgb(210, 210, 210),
-            ctx_bar_buffer:       ColorDef::Rgb(180, 180, 180),
+            ctx_bar_system: ColorDef::Rgb(140, 140, 140),
+            ctx_bar_native_tools: ColorDef::Rgb(0, 130, 165),
+            ctx_bar_mcp_tools: ColorDef::Rgb(0, 160, 190),
+            ctx_bar_memory: ColorDef::Rgb(195, 100, 70),
+            ctx_bar_skills: ColorDef::Rgb(200, 155, 0),
+            ctx_bar_messages: ColorDef::Rgb(130, 40, 210),
+            ctx_bar_free: ColorDef::Rgb(210, 210, 210),
+            ctx_bar_buffer: ColorDef::Rgb(180, 180, 180),
 
             // Animated spinner gradient (darker for light bg)
-            spinner_0: ColorDef::Rgb( 20, 130, 210),
-            spinner_1: ColorDef::Rgb( 40, 150, 220),
-            spinner_2: ColorDef::Rgb( 60, 170, 230),
-            spinner_3: ColorDef::Rgb( 30, 140, 215),
+            spinner_0: ColorDef::Rgb(20, 130, 210),
+            spinner_1: ColorDef::Rgb(40, 150, 220),
+            spinner_2: ColorDef::Rgb(60, 170, 230),
+            spinner_3: ColorDef::Rgb(30, 140, 215),
         }
     }
 
@@ -642,46 +645,46 @@ impl ThemeColors {
     pub fn catppuccin_mocha() -> Self {
         let mut c = Self::dark();
         // Base surfaces
-        c.bg_base     = ColorDef::Rgb( 30,  30,  46);  // Crust
-        c.bg_surface0 = ColorDef::Rgb( 36,  36,  54);  // Mantle
-        c.bg_surface1 = ColorDef::Rgb( 49,  50,  68);  // Base
-        c.bg_surface2 = ColorDef::Rgb( 69,  71,  90);  // Surface0
-        c.bg_card     = ColorDef::Rgb( 36,  36,  54);
-        c.bg_input    = ColorDef::Rgb( 49,  50,  68);
+        c.bg_base = ColorDef::Rgb(30, 30, 46); // Crust
+        c.bg_surface0 = ColorDef::Rgb(36, 36, 54); // Mantle
+        c.bg_surface1 = ColorDef::Rgb(49, 50, 68); // Base
+        c.bg_surface2 = ColorDef::Rgb(69, 71, 90); // Surface0
+        c.bg_card = ColorDef::Rgb(36, 36, 54);
+        c.bg_input = ColorDef::Rgb(49, 50, 68);
         // Accents
-        c.primary      = ColorDef::Rgb(137, 180, 250);  // Blue
-        c.success      = ColorDef::Rgb(166, 227, 161);  // Green
-        c.error        = ColorDef::Rgb(243, 139, 168);  // Red
-        c.warning      = ColorDef::Rgb(249, 226, 175);  // Yellow
-        c.accent_dim   = ColorDef::Rgb( 88, 128, 200);
+        c.primary = ColorDef::Rgb(137, 180, 250); // Blue
+        c.success = ColorDef::Rgb(166, 227, 161); // Green
+        c.error = ColorDef::Rgb(243, 139, 168); // Red
+        c.warning = ColorDef::Rgb(249, 226, 175); // Yellow
+        c.accent_dim = ColorDef::Rgb(88, 128, 200);
         // Text
-        c.text_muted   = ColorDef::Rgb(166, 173, 200);  // Overlay2
-        c.text_dim     = ColorDef::Rgb(108, 112, 134);  // Surface2
+        c.text_muted = ColorDef::Rgb(166, 173, 200); // Overlay2
+        c.text_dim = ColorDef::Rgb(108, 112, 134); // Surface2
         // Borders
-        c.border_base  = ColorDef::Rgb( 69,  71,  90);
+        c.border_base = ColorDef::Rgb(69, 71, 90);
         c.border_focus = ColorDef::Rgb(137, 180, 250);
         // Diff
-        c.diff_added   = ColorDef::Rgb(166, 227, 161);
+        c.diff_added = ColorDef::Rgb(166, 227, 161);
         c.diff_removed = ColorDef::Rgb(243, 139, 168);
         // Markdown
-        c.md_heading    = ColorDef::Rgb(249, 226, 175);
-        c.md_link       = ColorDef::Rgb(137, 180, 250);
-        c.md_code       = ColorDef::Rgb(148, 226, 213);  // Teal
+        c.md_heading = ColorDef::Rgb(249, 226, 175);
+        c.md_link = ColorDef::Rgb(137, 180, 250);
+        c.md_code = ColorDef::Rgb(148, 226, 213); // Teal
         c.md_list_bullet = ColorDef::Rgb(148, 226, 213);
         // Syntax
-        c.syntax_keyword    = ColorDef::Rgb(203, 166, 247);  // Mauve
-        c.syntax_function   = ColorDef::Rgb(137, 180, 250);  // Blue
-        c.syntax_string     = ColorDef::Rgb(166, 227, 161);  // Green
-        c.syntax_number     = ColorDef::Rgb(250, 179, 135);  // Peach
-        c.syntax_type       = ColorDef::Rgb(148, 226, 213);  // Teal
-        c.syntax_variable   = ColorDef::Rgb(249, 226, 175);  // Yellow
-        c.syntax_operator   = ColorDef::Rgb(203, 166, 247);
+        c.syntax_keyword = ColorDef::Rgb(203, 166, 247); // Mauve
+        c.syntax_function = ColorDef::Rgb(137, 180, 250); // Blue
+        c.syntax_string = ColorDef::Rgb(166, 227, 161); // Green
+        c.syntax_number = ColorDef::Rgb(250, 179, 135); // Peach
+        c.syntax_type = ColorDef::Rgb(148, 226, 213); // Teal
+        c.syntax_variable = ColorDef::Rgb(249, 226, 175); // Yellow
+        c.syntax_operator = ColorDef::Rgb(203, 166, 247);
         // Thinking
-        c.thinking_minimal  = ColorDef::Rgb(137, 180, 250);
-        c.thinking_medium   = ColorDef::Rgb(148, 226, 213);
-        c.thinking_high     = ColorDef::Rgb(249, 226, 175);
-        c.thinking_xhigh    = ColorDef::Rgb(243, 139, 168);
-        c.bash_mode         = ColorDef::Rgb(249, 226, 175);
+        c.thinking_minimal = ColorDef::Rgb(137, 180, 250);
+        c.thinking_medium = ColorDef::Rgb(148, 226, 213);
+        c.thinking_high = ColorDef::Rgb(249, 226, 175);
+        c.thinking_xhigh = ColorDef::Rgb(243, 139, 168);
+        c.bash_mode = ColorDef::Rgb(249, 226, 175);
 
         c.syntax_constant = c.syntax_number;
         c.syntax_string_escape = c.syntax_string;
@@ -696,14 +699,14 @@ impl ThemeColors {
         c.syntax_support_macro = c.syntax_function;
 
         // Context-bar (catppuccin mocha palette-aligned)
-        c.ctx_bar_system       = ColorDef::Rgb(108, 112, 134); // Surface2
+        c.ctx_bar_system = ColorDef::Rgb(108, 112, 134); // Surface2
         c.ctx_bar_native_tools = ColorDef::Rgb(116, 199, 236); // Sapphire
-        c.ctx_bar_mcp_tools    = ColorDef::Rgb(137, 220, 235); // Sky
-        c.ctx_bar_memory       = ColorDef::Rgb(250, 179, 135); // Peach
-        c.ctx_bar_skills       = ColorDef::Rgb(249, 226, 175); // Yellow
-        c.ctx_bar_messages     = ColorDef::Rgb(203, 166, 247); // Mauve
-        c.ctx_bar_free         = ColorDef::Rgb( 49,  50,  68); // Surface0
-        c.ctx_bar_buffer       = ColorDef::Rgb( 69,  71,  90); // Surface1
+        c.ctx_bar_mcp_tools = ColorDef::Rgb(137, 220, 235); // Sky
+        c.ctx_bar_memory = ColorDef::Rgb(250, 179, 135); // Peach
+        c.ctx_bar_skills = ColorDef::Rgb(249, 226, 175); // Yellow
+        c.ctx_bar_messages = ColorDef::Rgb(203, 166, 247); // Mauve
+        c.ctx_bar_free = ColorDef::Rgb(49, 50, 68); // Surface0
+        c.ctx_bar_buffer = ColorDef::Rgb(69, 71, 90); // Surface1
 
         // Spinner gradient (blue tints from catppuccin)
         c.spinner_0 = ColorDef::Rgb(116, 199, 236); // Sapphire
@@ -717,39 +720,39 @@ impl ThemeColors {
     pub fn catppuccin_latte() -> Self {
         let mut c = Self::light();
         // Base surfaces
-        c.bg_base     = ColorDef::Rgb(239, 241, 245);  // Base
-        c.bg_surface0 = ColorDef::Rgb(230, 233, 239);  // Mantle
-        c.bg_surface1 = ColorDef::Rgb(220, 224, 232);  // Crust
-        c.bg_surface2 = ColorDef::Rgb(204, 208, 218);  // Surface0
-        c.bg_card     = ColorDef::Rgb(230, 233, 239);
-        c.bg_input    = ColorDef::Rgb(220, 224, 232);
+        c.bg_base = ColorDef::Rgb(239, 241, 245); // Base
+        c.bg_surface0 = ColorDef::Rgb(230, 233, 239); // Mantle
+        c.bg_surface1 = ColorDef::Rgb(220, 224, 232); // Crust
+        c.bg_surface2 = ColorDef::Rgb(204, 208, 218); // Surface0
+        c.bg_card = ColorDef::Rgb(230, 233, 239);
+        c.bg_input = ColorDef::Rgb(220, 224, 232);
         // Accents
-        c.primary      = ColorDef::Rgb( 30, 102, 245);  // Blue
-        c.success      = ColorDef::Rgb( 64, 160,  43);  // Green
-        c.error        = ColorDef::Rgb(210,  15,  57);  // Red
-        c.warning      = ColorDef::Rgb(223, 142,  29);  // Yellow
-        c.accent_dim   = ColorDef::Rgb( 80, 140, 210);
+        c.primary = ColorDef::Rgb(30, 102, 245); // Blue
+        c.success = ColorDef::Rgb(64, 160, 43); // Green
+        c.error = ColorDef::Rgb(210, 15, 57); // Red
+        c.warning = ColorDef::Rgb(223, 142, 29); // Yellow
+        c.accent_dim = ColorDef::Rgb(80, 140, 210);
         // Text
-        c.text_primary = ColorDef::Rgb( 76,  79, 105);  // Text
-        c.text_muted   = ColorDef::Rgb( 92, 106, 134);  // Overlay2
-        c.text_dim     = ColorDef::Rgb(156, 160, 176);  // Surface2
+        c.text_primary = ColorDef::Rgb(76, 79, 105); // Text
+        c.text_muted = ColorDef::Rgb(92, 106, 134); // Overlay2
+        c.text_dim = ColorDef::Rgb(156, 160, 176); // Surface2
         // Borders
-        c.border_base  = ColorDef::Rgb(188, 192, 204);
-        c.border_focus = ColorDef::Rgb( 30, 102, 245);
+        c.border_base = ColorDef::Rgb(188, 192, 204);
+        c.border_focus = ColorDef::Rgb(30, 102, 245);
         // Markdown
-        c.md_heading    = ColorDef::Rgb(223, 142,  29);
-        c.md_link       = ColorDef::Rgb( 30, 102, 245);
-        c.md_code       = ColorDef::Rgb( 23, 146, 153);  // Teal
-        c.md_list_bullet = ColorDef::Rgb( 23, 146, 153);
+        c.md_heading = ColorDef::Rgb(223, 142, 29);
+        c.md_link = ColorDef::Rgb(30, 102, 245);
+        c.md_code = ColorDef::Rgb(23, 146, 153); // Teal
+        c.md_list_bullet = ColorDef::Rgb(23, 146, 153);
         // Syntax
-        c.syntax_keyword    = ColorDef::Rgb(136,  57, 239);  // Mauve
-        c.syntax_function   = ColorDef::Rgb( 30, 102, 245);
-        c.syntax_string     = ColorDef::Rgb( 64, 160,  43);
-        c.syntax_number     = ColorDef::Rgb(254, 100,  11);  // Peach
-        c.syntax_type       = ColorDef::Rgb( 23, 146, 153);
-        c.syntax_variable   = ColorDef::Rgb(223, 142,  29);
-        c.syntax_operator   = ColorDef::Rgb(136,  57, 239);
-        c.bash_mode         = ColorDef::Rgb(223, 142,  29);
+        c.syntax_keyword = ColorDef::Rgb(136, 57, 239); // Mauve
+        c.syntax_function = ColorDef::Rgb(30, 102, 245);
+        c.syntax_string = ColorDef::Rgb(64, 160, 43);
+        c.syntax_number = ColorDef::Rgb(254, 100, 11); // Peach
+        c.syntax_type = ColorDef::Rgb(23, 146, 153);
+        c.syntax_variable = ColorDef::Rgb(223, 142, 29);
+        c.syntax_operator = ColorDef::Rgb(136, 57, 239);
+        c.bash_mode = ColorDef::Rgb(223, 142, 29);
 
         c.syntax_constant = c.syntax_number;
         c.syntax_string_escape = c.syntax_string;
@@ -764,20 +767,20 @@ impl ThemeColors {
         c.syntax_support_macro = c.syntax_function;
 
         // Context-bar (catppuccin latte palette-aligned)
-        c.ctx_bar_system       = ColorDef::Rgb(156, 160, 176); // Surface2
-        c.ctx_bar_native_tools = ColorDef::Rgb(  4, 165, 229); // Sapphire
-        c.ctx_bar_mcp_tools    = ColorDef::Rgb(  2, 169, 165); // Sky  (latte sky ≈ teal)
-        c.ctx_bar_memory       = ColorDef::Rgb(254, 100,  11); // Peach
-        c.ctx_bar_skills       = ColorDef::Rgb(223, 142,  29); // Yellow
-        c.ctx_bar_messages     = ColorDef::Rgb(136,  57, 239); // Mauve
-        c.ctx_bar_free         = ColorDef::Rgb(220, 224, 232); // Crust
-        c.ctx_bar_buffer       = ColorDef::Rgb(204, 208, 218); // Surface0
+        c.ctx_bar_system = ColorDef::Rgb(156, 160, 176); // Surface2
+        c.ctx_bar_native_tools = ColorDef::Rgb(4, 165, 229); // Sapphire
+        c.ctx_bar_mcp_tools = ColorDef::Rgb(2, 169, 165); // Sky  (latte sky ≈ teal)
+        c.ctx_bar_memory = ColorDef::Rgb(254, 100, 11); // Peach
+        c.ctx_bar_skills = ColorDef::Rgb(223, 142, 29); // Yellow
+        c.ctx_bar_messages = ColorDef::Rgb(136, 57, 239); // Mauve
+        c.ctx_bar_free = ColorDef::Rgb(220, 224, 232); // Crust
+        c.ctx_bar_buffer = ColorDef::Rgb(204, 208, 218); // Surface0
 
         // Spinner gradient (blue tints from latte)
-        c.spinner_0 = ColorDef::Rgb( 30, 102, 245); // Blue
-        c.spinner_1 = ColorDef::Rgb(  4, 165, 229); // Sapphire
-        c.spinner_2 = ColorDef::Rgb( 23, 146, 153); // Teal
-        c.spinner_3 = ColorDef::Rgb(  2, 169, 165); // Sky
+        c.spinner_0 = ColorDef::Rgb(30, 102, 245); // Blue
+        c.spinner_1 = ColorDef::Rgb(4, 165, 229); // Sapphire
+        c.spinner_2 = ColorDef::Rgb(23, 146, 153); // Teal
+        c.spinner_3 = ColorDef::Rgb(2, 169, 165); // Sky
 
         c
     }
@@ -787,46 +790,46 @@ impl ThemeColors {
     pub fn tokyo_night() -> Self {
         let mut c = Self::dark();
         // Base surfaces
-        c.bg_base     = ColorDef::Rgb( 26,  27,  38);  // bg
-        c.bg_surface0 = ColorDef::Rgb( 28,  29,  44);  // bg_dark
-        c.bg_surface1 = ColorDef::Rgb( 32,  34,  51);  // bg_highlight
-        c.bg_surface2 = ColorDef::Rgb( 41,  44,  66);  // terminal_black
-        c.bg_card     = ColorDef::Rgb( 28,  29,  44);
-        c.bg_input    = ColorDef::Rgb( 32,  34,  51);
+        c.bg_base = ColorDef::Rgb(26, 27, 38); // bg
+        c.bg_surface0 = ColorDef::Rgb(28, 29, 44); // bg_dark
+        c.bg_surface1 = ColorDef::Rgb(32, 34, 51); // bg_highlight
+        c.bg_surface2 = ColorDef::Rgb(41, 44, 66); // terminal_black
+        c.bg_card = ColorDef::Rgb(28, 29, 44);
+        c.bg_input = ColorDef::Rgb(32, 34, 51);
         // Accents
-        c.primary      = ColorDef::Rgb(122, 162, 247);  // blue
-        c.success      = ColorDef::Rgb(158, 206, 106);  // green
-        c.error        = ColorDef::Rgb(247,  93, 100);  // red
-        c.warning      = ColorDef::Rgb(224, 175, 104);  // yellow
-        c.accent_dim   = ColorDef::Rgb( 65, 105, 190);
+        c.primary = ColorDef::Rgb(122, 162, 247); // blue
+        c.success = ColorDef::Rgb(158, 206, 106); // green
+        c.error = ColorDef::Rgb(247, 93, 100); // red
+        c.warning = ColorDef::Rgb(224, 175, 104); // yellow
+        c.accent_dim = ColorDef::Rgb(65, 105, 190);
         // Text
-        c.text_muted   = ColorDef::Rgb(169, 177, 214);  // fg_dark
-        c.text_dim     = ColorDef::Rgb( 86,  95, 137);  // comment
+        c.text_muted = ColorDef::Rgb(169, 177, 214); // fg_dark
+        c.text_dim = ColorDef::Rgb(86, 95, 137); // comment
         // Borders
-        c.border_base  = ColorDef::Rgb( 41,  44,  66);
+        c.border_base = ColorDef::Rgb(41, 44, 66);
         c.border_focus = ColorDef::Rgb(122, 162, 247);
         // Diff
-        c.diff_added   = ColorDef::Rgb(158, 206, 106);
-        c.diff_removed = ColorDef::Rgb(247,  93, 100);
+        c.diff_added = ColorDef::Rgb(158, 206, 106);
+        c.diff_removed = ColorDef::Rgb(247, 93, 100);
         // Markdown
-        c.md_heading    = ColorDef::Rgb(224, 175, 104);
-        c.md_link       = ColorDef::Rgb(122, 162, 247);
-        c.md_code       = ColorDef::Rgb(  42, 195, 222);  // cyan
-        c.md_list_bullet = ColorDef::Rgb( 42, 195, 222);
+        c.md_heading = ColorDef::Rgb(224, 175, 104);
+        c.md_link = ColorDef::Rgb(122, 162, 247);
+        c.md_code = ColorDef::Rgb(42, 195, 222); // cyan
+        c.md_list_bullet = ColorDef::Rgb(42, 195, 222);
         // Syntax
-        c.syntax_keyword    = ColorDef::Rgb(187, 154, 247);  // purple
-        c.syntax_function   = ColorDef::Rgb(122, 162, 247);  // blue
-        c.syntax_string     = ColorDef::Rgb(158, 206, 106);  // green
-        c.syntax_number     = ColorDef::Rgb(255, 158, 100);  // orange
-        c.syntax_type       = ColorDef::Rgb( 42, 195, 222);  // cyan
-        c.syntax_variable   = ColorDef::Rgb(224, 175, 104);  // yellow
-        c.syntax_operator   = ColorDef::Rgb(187, 154, 247);
+        c.syntax_keyword = ColorDef::Rgb(187, 154, 247); // purple
+        c.syntax_function = ColorDef::Rgb(122, 162, 247); // blue
+        c.syntax_string = ColorDef::Rgb(158, 206, 106); // green
+        c.syntax_number = ColorDef::Rgb(255, 158, 100); // orange
+        c.syntax_type = ColorDef::Rgb(42, 195, 222); // cyan
+        c.syntax_variable = ColorDef::Rgb(224, 175, 104); // yellow
+        c.syntax_operator = ColorDef::Rgb(187, 154, 247);
         // Thinking
-        c.thinking_minimal  = ColorDef::Rgb(122, 162, 247);
-        c.thinking_medium   = ColorDef::Rgb( 42, 195, 222);
-        c.thinking_high     = ColorDef::Rgb(224, 175, 104);
-        c.thinking_xhigh    = ColorDef::Rgb(247,  93, 100);
-        c.bash_mode         = ColorDef::Rgb(224, 175, 104);
+        c.thinking_minimal = ColorDef::Rgb(122, 162, 247);
+        c.thinking_medium = ColorDef::Rgb(42, 195, 222);
+        c.thinking_high = ColorDef::Rgb(224, 175, 104);
+        c.thinking_xhigh = ColorDef::Rgb(247, 93, 100);
+        c.bash_mode = ColorDef::Rgb(224, 175, 104);
 
         c.syntax_constant = c.syntax_number;
         c.syntax_string_escape = c.syntax_string;
@@ -841,24 +844,23 @@ impl ThemeColors {
         c.syntax_support_macro = c.syntax_function;
 
         // Context-bar (tokyo-night palette-aligned)
-        c.ctx_bar_system       = ColorDef::Rgb( 86,  95, 137); // comment
-        c.ctx_bar_native_tools = ColorDef::Rgb( 42, 195, 222); // cyan
-        c.ctx_bar_mcp_tools    = ColorDef::Rgb(115, 218, 202); // teal
-        c.ctx_bar_memory       = ColorDef::Rgb(255, 158, 100); // orange
-        c.ctx_bar_skills       = ColorDef::Rgb(224, 175, 104); // yellow
-        c.ctx_bar_messages     = ColorDef::Rgb(187, 154, 247); // magenta
-        c.ctx_bar_free         = ColorDef::Rgb( 32,  34,  51); // bg_highlight
-        c.ctx_bar_buffer       = ColorDef::Rgb( 41,  44,  66); // terminal_black
+        c.ctx_bar_system = ColorDef::Rgb(86, 95, 137); // comment
+        c.ctx_bar_native_tools = ColorDef::Rgb(42, 195, 222); // cyan
+        c.ctx_bar_mcp_tools = ColorDef::Rgb(115, 218, 202); // teal
+        c.ctx_bar_memory = ColorDef::Rgb(255, 158, 100); // orange
+        c.ctx_bar_skills = ColorDef::Rgb(224, 175, 104); // yellow
+        c.ctx_bar_messages = ColorDef::Rgb(187, 154, 247); // magenta
+        c.ctx_bar_free = ColorDef::Rgb(32, 34, 51); // bg_highlight
+        c.ctx_bar_buffer = ColorDef::Rgb(41, 44, 66); // terminal_black
 
         // Spinner gradient (blue→cyan from tokyo-night)
         c.spinner_0 = ColorDef::Rgb(122, 162, 247); // blue
         c.spinner_1 = ColorDef::Rgb(125, 207, 255); // blue5
-        c.spinner_2 = ColorDef::Rgb( 42, 195, 222); // cyan
+        c.spinner_2 = ColorDef::Rgb(42, 195, 222); // cyan
         c.spinner_3 = ColorDef::Rgb(115, 218, 202); // teal
 
         c
     }
-
 }
 
 // endregion: --- Types
@@ -1111,7 +1113,8 @@ mod tests {
             let tc = ThemeColors::builtin_by_name(name)
                 .unwrap_or_else(|| panic!("builtin '{name}' must resolve"));
             assert_ne!(
-                tc.primary, ColorDef::Reset,
+                tc.primary,
+                ColorDef::Reset,
                 "builtin '{name}' primary must not be Reset"
             );
         }
@@ -1240,38 +1243,104 @@ mod tests {
         assert_ne!(tc.error, dark.error, "error not mapped");
         assert_ne!(tc.warning, dark.warning, "warning not mapped");
         assert_ne!(tc.border_base, dark.border_base, "border_base not mapped");
-        assert_ne!(tc.border_focus, dark.border_focus, "border_focus not mapped");
-        assert_ne!(tc.text_primary, dark.text_primary, "text_primary not mapped");
+        assert_ne!(
+            tc.border_focus, dark.border_focus,
+            "border_focus not mapped"
+        );
+        assert_ne!(
+            tc.text_primary, dark.text_primary,
+            "text_primary not mapped"
+        );
         assert_ne!(tc.text_muted, dark.text_muted, "text_muted not mapped");
         assert_ne!(tc.text_dim, dark.text_dim, "text_dim not mapped");
         assert_ne!(tc.diff_added, dark.diff_added, "diff_added not mapped");
-        assert_ne!(tc.diff_removed, dark.diff_removed, "diff_removed not mapped");
-        assert_ne!(tc.diff_context, dark.diff_context, "diff_context not mapped");
+        assert_ne!(
+            tc.diff_removed, dark.diff_removed,
+            "diff_removed not mapped"
+        );
+        assert_ne!(
+            tc.diff_context, dark.diff_context,
+            "diff_context not mapped"
+        );
         assert_ne!(tc.md_heading, dark.md_heading, "md_heading not mapped");
         assert_ne!(tc.md_link, dark.md_link, "md_link not mapped");
         assert_ne!(tc.md_link_url, dark.md_link_url, "md_link_url not mapped");
         assert_ne!(tc.md_code, dark.md_code, "md_code not mapped");
-        assert_ne!(tc.md_code_block, dark.md_code_block, "md_code_block not mapped");
-        assert_ne!(tc.md_code_block_border, dark.md_code_block_border, "md_code_block_border not mapped");
+        assert_ne!(
+            tc.md_code_block, dark.md_code_block,
+            "md_code_block not mapped"
+        );
+        assert_ne!(
+            tc.md_code_block_border, dark.md_code_block_border,
+            "md_code_block_border not mapped"
+        );
         assert_ne!(tc.md_quote, dark.md_quote, "md_quote not mapped");
-        assert_ne!(tc.md_quote_border, dark.md_quote_border, "md_quote_border not mapped");
+        assert_ne!(
+            tc.md_quote_border, dark.md_quote_border,
+            "md_quote_border not mapped"
+        );
         assert_ne!(tc.md_hr, dark.md_hr, "md_hr not mapped");
-        assert_ne!(tc.md_list_bullet, dark.md_list_bullet, "md_list_bullet not mapped");
-        assert_ne!(tc.syntax_comment, dark.syntax_comment, "syntax_comment not mapped");
-        assert_ne!(tc.syntax_keyword, dark.syntax_keyword, "syntax_keyword not mapped");
-        assert_ne!(tc.syntax_function, dark.syntax_function, "syntax_function not mapped");
-        assert_ne!(tc.syntax_variable, dark.syntax_variable, "syntax_variable not mapped");
-        assert_ne!(tc.syntax_string, dark.syntax_string, "syntax_string not mapped");
-        assert_ne!(tc.syntax_number, dark.syntax_number, "syntax_number not mapped");
+        assert_ne!(
+            tc.md_list_bullet, dark.md_list_bullet,
+            "md_list_bullet not mapped"
+        );
+        assert_ne!(
+            tc.syntax_comment, dark.syntax_comment,
+            "syntax_comment not mapped"
+        );
+        assert_ne!(
+            tc.syntax_keyword, dark.syntax_keyword,
+            "syntax_keyword not mapped"
+        );
+        assert_ne!(
+            tc.syntax_function, dark.syntax_function,
+            "syntax_function not mapped"
+        );
+        assert_ne!(
+            tc.syntax_variable, dark.syntax_variable,
+            "syntax_variable not mapped"
+        );
+        assert_ne!(
+            tc.syntax_string, dark.syntax_string,
+            "syntax_string not mapped"
+        );
+        assert_ne!(
+            tc.syntax_number, dark.syntax_number,
+            "syntax_number not mapped"
+        );
         assert_ne!(tc.syntax_type, dark.syntax_type, "syntax_type not mapped");
-        assert_ne!(tc.syntax_operator, dark.syntax_operator, "syntax_operator not mapped");
-        assert_ne!(tc.syntax_punctuation, dark.syntax_punctuation, "syntax_punctuation not mapped");
-        assert_ne!(tc.thinking_off, dark.thinking_off, "thinking_off not mapped");
-        assert_ne!(tc.thinking_minimal, dark.thinking_minimal, "thinking_minimal not mapped");
-        assert_ne!(tc.thinking_low, dark.thinking_low, "thinking_low not mapped");
-        assert_ne!(tc.thinking_medium, dark.thinking_medium, "thinking_medium not mapped");
-        assert_ne!(tc.thinking_high, dark.thinking_high, "thinking_high not mapped");
-        assert_ne!(tc.thinking_xhigh, dark.thinking_xhigh, "thinking_xhigh not mapped");
+        assert_ne!(
+            tc.syntax_operator, dark.syntax_operator,
+            "syntax_operator not mapped"
+        );
+        assert_ne!(
+            tc.syntax_punctuation, dark.syntax_punctuation,
+            "syntax_punctuation not mapped"
+        );
+        assert_ne!(
+            tc.thinking_off, dark.thinking_off,
+            "thinking_off not mapped"
+        );
+        assert_ne!(
+            tc.thinking_minimal, dark.thinking_minimal,
+            "thinking_minimal not mapped"
+        );
+        assert_ne!(
+            tc.thinking_low, dark.thinking_low,
+            "thinking_low not mapped"
+        );
+        assert_ne!(
+            tc.thinking_medium, dark.thinking_medium,
+            "thinking_medium not mapped"
+        );
+        assert_ne!(
+            tc.thinking_high, dark.thinking_high,
+            "thinking_high not mapped"
+        );
+        assert_ne!(
+            tc.thinking_xhigh, dark.thinking_xhigh,
+            "thinking_xhigh not mapped"
+        );
         assert_ne!(tc.bash_mode, dark.bash_mode, "bash_mode not mapped");
     }
 
@@ -1342,8 +1411,7 @@ mod tests {
             match c {
                 ColorDef::Rgb(r, g, b) => {
                     // YIQ perceived brightness; <128 ~= dark enough to read on white.
-                    let brightness =
-                        (*r as u32 * 299 + *g as u32 * 587 + *b as u32 * 114) / 1000;
+                    let brightness = (*r as u32 * 299 + *g as u32 * 587 + *b as u32 * 114) / 1000;
                     brightness < 180
                 }
                 ColorDef::Reset => false, // Reset = terminal default, not safe on GUI
@@ -1521,13 +1589,9 @@ mod tests {
 
 // endregion: --- Tests
 
-
 // region:    --- Support
 
-fn resolve_color(
-    c: &ThemeColor,
-    vars: &std::collections::HashMap<String, ThemeColor>,
-) -> ColorDef {
+fn resolve_color(c: &ThemeColor, vars: &std::collections::HashMap<String, ThemeColor>) -> ColorDef {
     use ThemeColor;
     match c {
         ThemeColor::Index(_i) => ColorDef::Reset, // ColorDef doesn't support index natively

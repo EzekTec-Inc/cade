@@ -116,10 +116,7 @@ impl Skill {
         } else {
             self.description.clone()
         };
-        format!(
-            "- {} [{}]{}{}: {}",
-            self.id, self.scope, cat, phase, desc
-        )
+        format!("- {} [{}]{}{}: {}", self.id, self.scope, cat, phase, desc)
     }
 
     /// Full formatted block returned by `load_skill` tool.
@@ -185,4 +182,3 @@ impl Skill {
         })
     }
 }
-

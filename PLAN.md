@@ -4136,3 +4136,21 @@ their signatures are identical. `tests.rs` (unchanged, 2,412 LOC) still uses
 **Rollback**:
 1. Restore checkpoint `pre-session-phase-b` (cp-7c4802a7), or
 2. `git revert HEAD` once committed.
+
+---
+
+## 2026-04-27T02:10:00Z — chore: cargo fmt cade-gui + cade-core
+
+**Summary**: Applied `cargo fmt -p cade-gui -p cade-core` to clear
+accumulated formatting drift across both crates. No logic changes.
+
+**Files modified**: 67 files in cades-core and cade-gui reformatted
+by rustfmt. No production behaviour change.
+
+**Verification**:
+- `cargo fmt -p cade-gui -p cade-core -- --check` → clean (no diff)
+- `cargo build -p cade-gui -p cade-core` → green
+- `cargo test -p cade-gui -p cade-core --lib` → 312 + 218 = 530 pass
+
+**Rollback**: `git revert HEAD` or restore checkpoint `pre-cleanup`
+(cp-45288df6).

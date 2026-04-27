@@ -27,20 +27,22 @@ pub fn load_or_create_token(path: &Path) -> std::io::Result<String> {
     }
 
     if let Some(parent) = path.parent()
-        && !parent.as_os_str().is_empty() && !parent.exists() {
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::DirBuilderExt;
-                std::fs::DirBuilder::new()
-                    .recursive(true)
-                    .mode(0o700)
-                    .create(parent)?;
-            }
-            #[cfg(not(unix))]
-            {
-                std::fs::create_dir_all(parent)?;
-            }
+        && !parent.as_os_str().is_empty()
+        && !parent.exists()
+    {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::DirBuilderExt;
+            std::fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(parent)?;
         }
+        #[cfg(not(unix))]
+        {
+            std::fs::create_dir_all(parent)?;
+        }
+    }
 
     let mut bytes = [0u8; 32];
     getrandom::getrandom(&mut bytes)

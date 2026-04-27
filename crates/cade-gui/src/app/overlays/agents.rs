@@ -1,8 +1,8 @@
 //! Agents overview overlay.
 
 use crate::theme::EguiThemeExt;
-use eframe::egui;
 use cade_api_types::AgentInfo;
+use eframe::egui;
 
 use super::super::AppAction;
 pub fn render_agents_overlay(
@@ -62,25 +62,54 @@ pub fn render_agents_overlay(
                 .show(ui, |ui| {
                     for (idx, agent) in agents.iter().enumerate() {
                         let is_sel = selected == Some(idx);
-                        let bg = if is_sel { theme.bg_surface2() } else { theme.bg_surface0() };
+                        let bg = if is_sel {
+                            theme.bg_surface2()
+                        } else {
+                            theme.bg_surface0()
+                        };
                         let resp = egui::Frame::new()
                             .fill(bg)
                             .corner_radius(egui::CornerRadius::same(4))
                             .inner_margin(egui::Margin::symmetric(10, 6))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    ui.label(egui::RichText::new(&agent.name).color(theme.text_primary()).strong());
+                                    ui.label(
+                                        egui::RichText::new(&agent.name)
+                                            .color(theme.text_primary())
+                                            .strong(),
+                                    );
                                     if is_sel {
-                                        ui.label(egui::RichText::new("← current").color(theme.primary()).small());
+                                        ui.label(
+                                            egui::RichText::new("← current")
+                                                .color(theme.primary())
+                                                .small(),
+                                        );
                                     }
-                                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                        if let Some(model) = &agent.model {
-                                            ui.label(egui::RichText::new(model).color(theme.text_muted()).monospace().size(10.0));
-                                        }
-                                    });
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if let Some(model) = &agent.model {
+                                                ui.label(
+                                                    egui::RichText::new(model)
+                                                        .color(theme.text_muted())
+                                                        .monospace()
+                                                        .size(10.0),
+                                                );
+                                            }
+                                        },
+                                    );
                                 });
-                                let short_id = if agent.id.len() > 16 { format!("{}…", &agent.id[..16]) } else { agent.id.clone() };
-                                ui.label(egui::RichText::new(short_id).color(theme.text_dim()).monospace().size(10.0));
+                                let short_id = if agent.id.len() > 16 {
+                                    format!("{}…", &agent.id[..16])
+                                } else {
+                                    agent.id.clone()
+                                };
+                                ui.label(
+                                    egui::RichText::new(short_id)
+                                        .color(theme.text_dim())
+                                        .monospace()
+                                        .size(10.0),
+                                );
                             })
                             .response
                             .interact(egui::Sense::click());
@@ -99,4 +128,3 @@ pub fn render_agents_overlay(
 }
 
 // ── Context-stats overlay (M19) ───────────────────────────────────────
-

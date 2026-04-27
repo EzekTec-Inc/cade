@@ -19,10 +19,7 @@ pub fn render_checkpoints_overlay(
     let screen = ctx.content_rect();
     let w = 720.0_f32.min(screen.width() - 40.0);
     let h = 480.0_f32.min(screen.height() - 80.0);
-    let pos = egui::pos2(
-        screen.center().x - w / 2.0,
-        screen.center().y - h / 2.0,
-    );
+    let pos = egui::pos2(screen.center().x - w / 2.0, screen.center().y - h / 2.0);
 
     let mut open = true;
     egui::Window::new("Checkpoints")
@@ -104,9 +101,11 @@ pub fn render_checkpoints_overlay(
 
             if checkpoints.is_empty() && !loading {
                 ui.label(
-                    egui::RichText::new("No checkpoints yet — create one via /checkpoints or the CLI.")
-                        .color(theme.text_muted())
-                        .italics(),
+                    egui::RichText::new(
+                        "No checkpoints yet — create one via /checkpoints or the CLI.",
+                    )
+                    .color(theme.text_muted())
+                    .italics(),
                 );
                 return;
             }
@@ -125,10 +124,7 @@ pub fn render_checkpoints_overlay(
                                 ui.horizontal(|ui| {
                                     // Left: label + meta
                                     ui.vertical(|ui| {
-                                        let title = cp
-                                            .label
-                                            .as_deref()
-                                            .unwrap_or("(unlabelled)");
+                                        let title = cp.label.as_deref().unwrap_or("(unlabelled)");
                                         ui.label(
                                             egui::RichText::new(title)
                                                 .color(theme.text_primary())
@@ -170,8 +166,7 @@ pub fn render_checkpoints_overlay(
                                         egui::Layout::right_to_left(egui::Align::Center),
                                         |ui| {
                                             let del = egui::Button::new(
-                                                egui::RichText::new("🗑")
-                                                    .color(theme.error()),
+                                                egui::RichText::new("🗑").color(theme.error()),
                                             )
                                             .small();
                                             if ui
@@ -183,11 +178,12 @@ pub fn render_checkpoints_overlay(
                                                     cp.id.clone(),
                                                 ));
                                             }
-                                            let restore =
-                                                egui::Button::new("⏪ Restore").small();
+                                            let restore = egui::Button::new("⏪ Restore").small();
                                             if ui
                                                 .add_enabled(!busy, restore)
-                                                .on_hover_text("Restore working tree to this checkpoint")
+                                                .on_hover_text(
+                                                    "Restore working tree to this checkpoint",
+                                                )
                                                 .clicked()
                                             {
                                                 result = Some(AppAction::RestoreCheckpoint(

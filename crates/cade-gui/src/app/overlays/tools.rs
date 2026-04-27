@@ -9,17 +9,14 @@ pub fn render_tools_overlay(
     tools: &[crate::api::AgentTool],
     loading: bool,
     error: Option<&str>,
-    theme: &crate::theme::ThemeColors, 
+    theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
     let screen = ctx.content_rect();
     let w = 560.0_f32.min(screen.width() - 40.0);
     let h = 480.0_f32.min(screen.height() - 80.0);
-    let pos = egui::pos2(
-        screen.center().x - w / 2.0,
-        screen.center().y - h / 2.0,
-    );
+    let pos = egui::pos2(screen.center().x - w / 2.0, screen.center().y - h / 2.0);
 
     let mut open = true;
     egui::Window::new("Tools / MCP")
@@ -114,10 +111,7 @@ pub fn render_tools_overlay(
                             .inner_margin(egui::Margin::symmetric(10, 6))
                             .show(ui, |ui| {
                                 ui.horizontal(|ui| {
-                                    ui.label(
-                                        egui::RichText::new("⚙")
-                                            .color(theme.teal()),
-                                    );
+                                    ui.label(egui::RichText::new("⚙").color(theme.teal()));
                                     ui.label(
                                         egui::RichText::new(&tool.name)
                                             .color(theme.text_primary())
@@ -161,7 +155,7 @@ pub fn render_question_widget(
     question: &crate::api::Question,
     cursor: usize,
     checked: &[bool],
-    theme: &crate::theme::ThemeColors, 
+    theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
@@ -170,10 +164,7 @@ pub fn render_question_widget(
     // Height scales with option count.
     let option_rows = question.options.len().max(1) as f32;
     let h = (160.0 + option_rows * 52.0).min(screen.height() - 80.0);
-    let pos = egui::pos2(
-        screen.center().x - w / 2.0,
-        screen.center().y - h / 2.0,
-    );
+    let pos = egui::pos2(screen.center().x - w / 2.0, screen.center().y - h / 2.0);
 
     let mut open = true;
     egui::Window::new("Question")
@@ -241,44 +232,30 @@ pub fn render_question_widget(
                         ui.horizontal(|ui| {
                             // Cursor indicator
                             if is_cursor {
-                                ui.label(
-                                    egui::RichText::new("❯")
-                                        .color(theme.primary())
-                                        .strong(),
-                                );
+                                ui.label(egui::RichText::new("❯").color(theme.primary()).strong());
                             } else {
-                                ui.label(
-                                    egui::RichText::new(" ")
-                                        .color(theme.text_dim()),
-                                );
+                                ui.label(egui::RichText::new(" ").color(theme.text_dim()));
                             }
 
                             // Checkbox for multi-select
                             if question.multi_select {
                                 let cb = if is_checked { "☑" } else { "☐" };
-                                ui.label(
-                                    egui::RichText::new(cb)
-                                        .color(if is_checked {
-                                            theme.success()
-                                        } else {
-                                            theme.text_muted()
-                                        }),
-                                );
+                                ui.label(egui::RichText::new(cb).color(if is_checked {
+                                    theme.success()
+                                } else {
+                                    theme.text_muted()
+                                }));
                             }
 
                             ui.vertical(|ui| {
                                 ui.label(
-                                    egui::RichText::new(format!(
-                                        "{}. {}",
-                                        idx + 1,
-                                        opt.label
-                                    ))
-                                    .color(if is_cursor {
-                                        theme.text_primary()
-                                    } else {
-                                        theme.text_muted()
-                                    })
-                                    .strong(),
+                                    egui::RichText::new(format!("{}. {}", idx + 1, opt.label))
+                                        .color(if is_cursor {
+                                            theme.text_primary()
+                                        } else {
+                                            theme.text_muted()
+                                        })
+                                        .strong(),
                                 );
                                 if !opt.description.is_empty() {
                                     ui.label(
@@ -353,4 +330,3 @@ pub fn render_question_widget(
 }
 
 // ── Agents overlay (M19) ──────────────────────────────────────────────
-

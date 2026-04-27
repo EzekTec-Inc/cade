@@ -1,8 +1,8 @@
+use super::hooks::*;
+use super::models::*;
 use crate::Result;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
-use super::models::*;
-use super::hooks::*;
 
 pub struct SettingsManager {
     global_path: PathBuf,
@@ -213,12 +213,16 @@ impl SettingsManager {
 
     /// Whether subagent live streaming should be silenced.
     pub fn silent_subagents(&self) -> bool {
-        self.project.silent_subagents.unwrap_or(self.global.silent_subagents.unwrap_or(false))
+        self.project
+            .silent_subagents
+            .unwrap_or(self.global.silent_subagents.unwrap_or(false))
     }
 
     /// Retrieve the optional maximum context budget limit (in chars).
     pub fn max_context_budget(&self) -> Option<usize> {
-        self.project.max_context_budget.or(self.global.max_context_budget)
+        self.project
+            .max_context_budget
+            .or(self.global.max_context_budget)
     }
 
     /// Remove the API key from global settings and persist.
@@ -250,4 +254,3 @@ impl SettingsManager {
         Ok(())
     }
 }
-

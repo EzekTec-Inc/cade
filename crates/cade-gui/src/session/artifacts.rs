@@ -170,5 +170,4 @@ impl SessionState {
             None
         }
     }
-
 }

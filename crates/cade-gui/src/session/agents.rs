@@ -207,11 +207,9 @@ impl SessionState {
         {
             // Prefer to keep selection by agent id, not by index — the
             // list order could theoretically change.
-            let sel_id = selected_agent
-                .and_then(|i| agents.get(i).map(|a| a.id.clone()));
+            let sel_id = selected_agent.and_then(|i| agents.get(i).map(|a| a.id.clone()));
             *agents = new_agents;
-            *selected_agent = sel_id
-                .and_then(|id| agents.iter().position(|a| a.id == id));
+            *selected_agent = sel_id.and_then(|id| agents.iter().position(|a| a.id == id));
         }
     }
 
@@ -245,5 +243,4 @@ impl SessionState {
             (0, 0)
         }
     }
-
 }

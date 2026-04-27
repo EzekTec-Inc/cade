@@ -4,8 +4,8 @@ use std::path::Path;
 
 // endregion: --- Modules
 
-use super::types::*;
 use super::parsing::*;
+use super::types::*;
 // -- Discovery
 
 /// Scan `dir` for SKILL.MD files, tagging each with `scope`.
@@ -131,4 +131,3 @@ pub fn skills_context(skills: &[Skill]) -> Option<String> {
     }
     Some(out)
 }
-

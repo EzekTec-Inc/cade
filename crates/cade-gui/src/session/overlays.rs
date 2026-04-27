@@ -123,9 +123,7 @@ impl SessionState {
                 }
                 labels.join(", ")
             } else {
-                q.options
-                    .get(*question_cursor)
-                    .map(|o| o.label.clone())?
+                q.options.get(*question_cursor).map(|o| o.label.clone())?
             };
             Some(answer)
         } else {
@@ -165,7 +163,13 @@ impl SessionState {
 
     /// Whether the context overlay is open.
     pub fn is_context_open(&self) -> bool {
-        matches!(self, Self::Connected { context_open: true, .. })
+        matches!(
+            self,
+            Self::Connected {
+                context_open: true,
+                ..
+            }
+        )
     }
 
     /// Feed a successful context-stats response.
@@ -221,7 +225,13 @@ impl SessionState {
 
     /// Whether the agents overlay is open.
     pub fn is_agents_open(&self) -> bool {
-        matches!(self, Self::Connected { agents_open: true, .. })
+        matches!(
+            self,
+            Self::Connected {
+                agents_open: true,
+                ..
+            }
+        )
     }
 
     /// Open the stats overlay.
@@ -240,12 +250,24 @@ impl SessionState {
 
     /// Whether the stats overlay is open.
     pub fn is_stats_open(&self) -> bool {
-        matches!(self, Self::Connected { stats_open: true, .. })
+        matches!(
+            self,
+            Self::Connected {
+                stats_open: true,
+                ..
+            }
+        )
     }
 
     /// Open the MCP servers overlay and mark loading state.
     pub fn open_mcp_overlay(&mut self) {
-        if let Self::Connected { mcp_open, mcp_loading, mcp_error, .. } = self {
+        if let Self::Connected {
+            mcp_open,
+            mcp_loading,
+            mcp_error,
+            ..
+        } = self
+        {
             *mcp_open = true;
             *mcp_loading = true;
             *mcp_error = None;
@@ -254,7 +276,12 @@ impl SessionState {
 
     /// Close the MCP servers overlay and clear any error.
     pub fn close_mcp_overlay(&mut self) {
-        if let Self::Connected { mcp_open, mcp_error, .. } = self {
+        if let Self::Connected {
+            mcp_open,
+            mcp_error,
+            ..
+        } = self
+        {
             *mcp_open = false;
             *mcp_error = None;
         }
@@ -267,7 +294,13 @@ impl SessionState {
 
     /// Store freshly-fetched MCP server list and clear loading state.
     pub fn on_mcp_loaded(&mut self, servers: Vec<crate::api::McpServerInfo>) {
-        if let Self::Connected { mcp_servers, mcp_loading, mcp_error, .. } = self {
+        if let Self::Connected {
+            mcp_servers,
+            mcp_loading,
+            mcp_error,
+            ..
+        } = self
+        {
             *mcp_servers = servers;
             *mcp_loading = false;
             *mcp_error = None;
@@ -276,7 +309,12 @@ impl SessionState {
 
     /// Record a fetch error and clear the loading flag.
     pub fn on_mcp_error(&mut self, err: String) {
-        if let Self::Connected { mcp_loading, mcp_error, .. } = self {
+        if let Self::Connected {
+            mcp_loading,
+            mcp_error,
+            ..
+        } = self
+        {
             *mcp_loading = false;
             *mcp_error = Some(err);
         }
@@ -467,7 +505,13 @@ impl SessionState {
 
     /// Whether the palette overlay is currently open.
     pub fn is_palette_open(&self) -> bool {
-        matches!(self, Self::Connected { palette_open: true, .. })
+        matches!(
+            self,
+            Self::Connected {
+                palette_open: true,
+                ..
+            }
+        )
     }
 
     /// Parse the currently-selected palette entry into a concrete
@@ -558,7 +602,13 @@ impl SessionState {
 
     /// Whether the menu overlay is currently open.
     pub fn is_menu_open(&self) -> bool {
-        matches!(self, Self::Connected { menu_open: true, .. })
+        matches!(
+            self,
+            Self::Connected {
+                menu_open: true,
+                ..
+            }
+        )
     }
 
     /// Parse the currently-selected menu entry.
@@ -582,5 +632,4 @@ impl SessionState {
             None
         }
     }
-
 }

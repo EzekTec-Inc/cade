@@ -1,5 +1,3 @@
-
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaletteCmd {
     Help,
@@ -362,10 +360,11 @@ fn word_boundary_bonus(query: &str, label: &str) -> i32 {
             break;
         }
         if let Some(lc) = label.chars().nth(bi)
-            && lc == query_chars[qi] {
-                bonus += 5;
-                qi += 1;
-            }
+            && lc == query_chars[qi]
+        {
+            bonus += 5;
+            qi += 1;
+        }
     }
     bonus
 }
@@ -388,7 +387,10 @@ mod tests {
     #[test]
     fn compact_is_advertised_in_cmd_defs() {
         let trigger_present = CMD_DEFS.iter().any(|d| d.trigger == "compact");
-        assert!(trigger_present, "/compact must appear in command palette listing");
+        assert!(
+            trigger_present,
+            "/compact must appear in command palette listing"
+        );
     }
 
     #[test]

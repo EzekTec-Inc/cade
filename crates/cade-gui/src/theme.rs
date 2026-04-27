@@ -2,8 +2,8 @@
 //!
 //! Converts `cade_core::resources::themes::ColorDef` to `egui::Color32`.
 //!
-use egui::Color32;
 use cade_core::resources::themes::{ColorDef, ThemeColors as CoreThemeColors};
+use egui::Color32;
 
 pub type ThemeColors = CoreThemeColors;
 
@@ -58,26 +58,66 @@ pub trait EguiThemeExt {
 }
 
 impl EguiThemeExt for CoreThemeColors {
-    fn bg_base(&self) -> Color32 { self.bg_base.to_egui() }
-    fn bg_surface0(&self) -> Color32 { self.bg_surface0.to_egui() }
-    fn bg_surface1(&self) -> Color32 { self.bg_surface1.to_egui() }
-    fn bg_surface2(&self) -> Color32 { self.bg_surface2.to_egui() }
-    fn bg_card(&self) -> Color32 { self.bg_card.to_egui() }
-    fn bg_input(&self) -> Color32 { self.bg_input.to_egui() }
-    fn border_base(&self) -> Color32 { self.border_base.to_egui() }
-    fn border_focus(&self) -> Color32 { self.border_focus.to_egui() }
-    fn primary(&self) -> Color32 { self.primary.to_egui() }
-    fn success(&self) -> Color32 { self.success.to_egui() }
-    fn error(&self) -> Color32 { self.error.to_egui() }
-    fn warning(&self) -> Color32 { self.warning.to_egui() }
-    fn accent_dim(&self) -> Color32 { self.accent_dim.to_egui() }
-    fn text_primary(&self) -> Color32 { self.text_primary.to_egui() }
-    fn text_muted(&self) -> Color32 { self.text_muted.to_egui() }
-    fn text_dim(&self) -> Color32 { self.text_dim.to_egui() }
-    fn teal(&self) -> Color32 { self.syntax_type.to_egui() }
-    fn purple(&self) -> Color32 { self.syntax_keyword.to_egui() }
-    fn diff_added(&self) -> Color32 { self.diff_added.to_egui() }
-    fn diff_removed(&self) -> Color32 { self.diff_removed.to_egui() }
+    fn bg_base(&self) -> Color32 {
+        self.bg_base.to_egui()
+    }
+    fn bg_surface0(&self) -> Color32 {
+        self.bg_surface0.to_egui()
+    }
+    fn bg_surface1(&self) -> Color32 {
+        self.bg_surface1.to_egui()
+    }
+    fn bg_surface2(&self) -> Color32 {
+        self.bg_surface2.to_egui()
+    }
+    fn bg_card(&self) -> Color32 {
+        self.bg_card.to_egui()
+    }
+    fn bg_input(&self) -> Color32 {
+        self.bg_input.to_egui()
+    }
+    fn border_base(&self) -> Color32 {
+        self.border_base.to_egui()
+    }
+    fn border_focus(&self) -> Color32 {
+        self.border_focus.to_egui()
+    }
+    fn primary(&self) -> Color32 {
+        self.primary.to_egui()
+    }
+    fn success(&self) -> Color32 {
+        self.success.to_egui()
+    }
+    fn error(&self) -> Color32 {
+        self.error.to_egui()
+    }
+    fn warning(&self) -> Color32 {
+        self.warning.to_egui()
+    }
+    fn accent_dim(&self) -> Color32 {
+        self.accent_dim.to_egui()
+    }
+    fn text_primary(&self) -> Color32 {
+        self.text_primary.to_egui()
+    }
+    fn text_muted(&self) -> Color32 {
+        self.text_muted.to_egui()
+    }
+    fn text_dim(&self) -> Color32 {
+        self.text_dim.to_egui()
+    }
+    fn teal(&self) -> Color32 {
+        self.syntax_type.to_egui()
+    }
+    fn purple(&self) -> Color32 {
+        self.syntax_keyword.to_egui()
+    }
+    fn diff_added(&self) -> Color32 {
+        self.diff_added.to_egui()
+    }
+    fn diff_removed(&self) -> Color32 {
+        self.diff_removed.to_egui()
+    }
 }
 
 /// Fraction of the context window consumed by `total_tokens`, clamped 0.0-1.0.
@@ -100,7 +140,7 @@ pub fn context_fill_color(fraction: f32, theme: &CoreThemeColors) -> Color32 {
 }
 
 pub fn apply_theme(ctx: &egui::Context, theme: &CoreThemeColors) {
-    use egui::{style::WidgetVisuals, CornerRadius, Stroke, Visuals};
+    use egui::{CornerRadius, Stroke, Visuals, style::WidgetVisuals};
 
     // TUI-fication: zero rounding for sharp, terminal-like edges.
     let rounding_none = CornerRadius::ZERO;

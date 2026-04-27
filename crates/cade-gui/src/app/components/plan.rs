@@ -1,6 +1,6 @@
+use crate::session::PlanState;
 use crate::theme::EguiThemeExt;
 use eframe::egui;
-use crate::session::PlanState;
 
 /// Render the plan panel inside the sidebar when a plan is active.
 ///

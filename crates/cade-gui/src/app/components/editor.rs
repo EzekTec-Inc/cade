@@ -1,9 +1,9 @@
-use crate::theme::EguiThemeExt;
-use eframe::egui;
 use crate::app::AppAction;
 use crate::session::SessionState;
-use std::rc::Rc;
+use crate::theme::EguiThemeExt;
+use eframe::egui;
 use std::cell::RefCell;
+use std::rc::Rc;
 
 pub fn render(
     ui: &mut egui::Ui,
@@ -28,10 +28,8 @@ pub fn render(
                 theme.border_base()
             };
             let sep_rect = ui.available_rect_before_wrap();
-            let sep_rect = egui::Rect::from_min_size(
-                sep_rect.min,
-                egui::vec2(sep_rect.width(), 1.0),
-            );
+            let sep_rect =
+                egui::Rect::from_min_size(sep_rect.min, egui::vec2(sep_rect.width(), 1.0));
             ui.painter().rect_filled(sep_rect, 0.0, sep_color);
             ui.advance_cursor_after_rect(sep_rect);
 
@@ -83,10 +81,7 @@ pub fn render(
                             can_edit,
                             egui::TextEdit::multiline(&mut input_edit)
                                 .id(input_id)
-                                .hint_text(
-                                    egui::RichText::new(hint)
-                                        .color(theme.text_dim()),
-                                )
+                                .hint_text(egui::RichText::new(hint).color(theme.text_dim()))
                                 .desired_width(desired_w)
                                 .desired_rows(1)
                                 .lock_focus(true)
@@ -107,12 +102,10 @@ pub fn render(
                         }
 
                         // Enter sends (Shift+Enter for newline in multiline)
-                        let enter_pressed = ui.input(|i| {
-                            i.key_pressed(egui::Key::Enter)
-                                && !i.modifiers.shift
-                        }) && resp.has_focus();
-                        let send_enabled =
-                            can_edit && !input_edit.trim().is_empty();
+                        let enter_pressed = ui
+                            .input(|i| i.key_pressed(egui::Key::Enter) && !i.modifiers.shift)
+                            && resp.has_focus();
+                        let send_enabled = can_edit && !input_edit.trim().is_empty();
 
                         if is_streaming {
                             ui.spinner();
@@ -152,10 +145,8 @@ pub fn render(
 
             // ── Bottom separator ──────────────────────
             let sep_rect = ui.available_rect_before_wrap();
-            let sep_rect = egui::Rect::from_min_size(
-                sep_rect.min,
-                egui::vec2(sep_rect.width(), 1.0),
-            );
+            let sep_rect =
+                egui::Rect::from_min_size(sep_rect.min, egui::vec2(sep_rect.width(), 1.0));
             ui.painter().rect_filled(sep_rect, 0.0, theme.border_base());
             ui.advance_cursor_after_rect(sep_rect);
         });
