@@ -4218,3 +4218,30 @@ as documentation.
 - `cargo test -p cade-server --lib` → 249/249 pass
 
 **Rollback**: Restore checkpoint `pre-parking-lot` (cp-6877e4d9).
+
+---
+
+## 2025-07-?? UTC — Code Review 2.1: Extract `run_agent_loop` from `run_agent`
+
+**Summary**: Extracted the `tokio::spawn` closure body from `pub async fn run_agent`
+into a new private async function `run_agent_loop`. Added a `SseTx` type alias.
+
+**Files modified**:
+- `crates/cade-server/src/server/api/run.rs`
+
+**Reason**: Code review item 2.1 — `run_agent` was ~450 LOC due to a large inlined
+async closure; splitting it into `run_agent` (~25 LOC) + `run_agent_loop` (~390 LOC)
+makes both individually readable without changing any logic.
+
+**Previous behaviour**: `run_agent` contained the full agentic loop inline inside
+`tokio::spawn(async move { … })`.
+
+**New behaviour**: `run_agent` calls `tokio::spawn(run_agent_loop(…))`. The body is
+identical — all variable names (`state2`, `agent_id2`, `conv_id2`, `run_id2`,
+`theme_cmd`, `tx`) match the captures, so no internal renames were needed.
+
+**Verification**:
+- `cargo build -p cade-server` → green (3 pre-existing warnings, none new)
+- `cargo test -p cade-server` → 249/249 pass
+
+**Rollback**: `restore_checkpoint before-run-agent-extract` (cp-8c33ee20).

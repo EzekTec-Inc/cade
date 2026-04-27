@@ -201,403 +201,419 @@ pub async fn run_agent(
     // We use an mpsc channel to bridge the async loop into an SSE stream.
     let (tx, rx) = tokio::sync::mpsc::channel::<Result<Event, std::convert::Infallible>>(128);
 
-    tokio::spawn(async move {
-        let send = |data: Value| {
-            let tx = tx.clone();
-            let ev = Event::default().data(data.to_string());
-            async move {
-                let _ = tx.send(Ok(ev)).await;
-            }
+    tokio::spawn(run_agent_loop(state2, agent_id2, conv_id2, run_id2, theme_cmd, tx));
+
+    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+    Sse::new(stream).into_response()
+}
+
+/// Type alias for the SSE sender used by [`run_agent_loop`].
+type SseTx = tokio::sync::mpsc::Sender<Result<Event, std::convert::Infallible>>;
+
+/// Async body of [`run_agent`], extracted for readability.
+///
+/// Handles `/theme <name>` commands and the full multi-turn agentic loop.
+/// All SSE events are sent via `tx`; the caller owns the receiver side.
+async fn run_agent_loop(
+    state2: AppState,
+    agent_id2: String,
+    conv_id2: Option<String>,
+    run_id2: String,
+    theme_cmd: Option<String>,
+    tx: SseTx,
+) {
+    let send = |data: Value| {
+        let tx = tx.clone();
+        let ev = Event::default().data(data.to_string());
+        async move {
+            let _ = tx.send(Ok(ev)).await;
+        }
+    };
+
+    // ── stream_start ──────────────────────────────────────────────────
+    send(json!({
+        "message_type": "stream_start",
+        "conversation_id": conv_id2,
+        "run_id": run_id2,
+    }))
+    .await;
+
+    if let Some(t_name) = theme_cmd {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+        let agent_dir = dirs::home_dir()
+            .map(|h| h.join(".cade"))
+            .unwrap_or_else(|| std::path::PathBuf::from(".cade"));
+
+        // `/theme reload` — re-resolve the agent's persisted theme from
+        // disk.  Useful after editing a JSON/tmTheme file: the user
+        // doesn't need to retype the name.  If no theme was persisted,
+        // fall through to literal name resolution (which will fail
+        // loudly with "not found").
+        let effective_name = if t_name == "reload" {
+            cade_store::sqlite::agents::get_agent(&state2.db, &agent_id2)
+                .ok()
+                .flatten()
+                .and_then(|row| row.theme)
+                .unwrap_or_else(|| t_name.clone())
+        } else {
+            t_name.clone()
         };
 
-        // ── stream_start ──────────────────────────────────────────────────
-        send(json!({
-            "message_type": "stream_start",
-            "conversation_id": conv_id2,
-            "run_id": run_id2,
-        }))
-        .await;
+        // Resolution order: built-in registry first, then on-disk themes.
+        let colors_opt =
+            cade_core::resources::themes::ThemeColors::builtin_by_name(&effective_name)
+                .or_else(|| {
+                    let all = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
+                    all.iter()
+                        .find(|t| t.name == effective_name)
+                        .map(cade_core::resources::themes::ThemeColors::from_theme)
+                });
 
-        if let Some(t_name) = theme_cmd {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-            let agent_dir = dirs::home_dir()
-                .map(|h| h.join(".cade"))
-                .unwrap_or_else(|| std::path::PathBuf::from(".cade"));
-
-            // `/theme reload` — re-resolve the agent's persisted theme from
-            // disk.  Useful after editing a JSON/tmTheme file: the user
-            // doesn't need to retype the name.  If no theme was persisted,
-            // fall through to literal name resolution (which will fail
-            // loudly with "not found").
-            let effective_name = if t_name == "reload" {
-                cade_store::sqlite::agents::get_agent(&state2.db, &agent_id2)
-                    .ok()
-                    .flatten()
-                    .and_then(|row| row.theme)
-                    .unwrap_or_else(|| t_name.clone())
-            } else {
-                t_name.clone()
-            };
-
-            // Resolution order: built-in registry first, then on-disk themes.
-            let colors_opt =
-                cade_core::resources::themes::ThemeColors::builtin_by_name(&effective_name)
-                    .or_else(|| {
-                        let all = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
-                        all.iter()
-                            .find(|t| t.name == effective_name)
-                            .map(cade_core::resources::themes::ThemeColors::from_theme)
-                    });
-
-            if let Some(colors) = colors_opt {
-                // Persist the chosen theme on the agent row so GUI reloads
-                // restore it automatically.  (Skip persist for `reload`
-                // when the lookup already returned the persisted name —
-                // writing the same value back is a no-op but clutters
-                // audit trails; check string equality to avoid it.)
-                if effective_name != t_name || t_name != "reload" {
-                    let _ = cade_store::sqlite::agents::update_agent_theme(
-                        &state2.db,
-                        &agent_id2,
-                        Some(&effective_name),
-                    );
-                }
-
-                send(json!({
-                    "message_type": "theme_update",
-                    "theme": colors,
-                    "theme_name": effective_name,
-                }))
-                .await;
-            } else {
-                let all_themes = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
-                let mut available: Vec<&str> =
-                    cade_core::resources::themes::ThemeColors::builtin_names()
-                        .iter()
-                        .copied()
-                        .collect();
-                available.extend(all_themes.iter().map(|t| t.name.as_str()));
-                send(json!({
-                    "message_type": "assistant_message",
-                    "content": format!("Theme '{}' not found. Available themes: {}", t_name, available.join(", ")),
-                })).await;
+        if let Some(colors) = colors_opt {
+            // Persist the chosen theme on the agent row so GUI reloads
+            // restore it automatically.  (Skip persist for `reload`
+            // when the lookup already returned the persisted name —
+            // writing the same value back is a no-op but clutters
+            // audit trails; check string equality to avoid it.)
+            if effective_name != t_name || t_name != "reload" {
+                let _ = cade_store::sqlite::agents::update_agent_theme(
+                    &state2.db,
+                    &agent_id2,
+                    Some(&effective_name),
+                );
             }
 
-            let _ = sqlite::finish_run(&state2.db, &run_id2, "done");
-            let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
-            return;
+            send(json!({
+                "message_type": "theme_update",
+                "theme": colors,
+                "theme_name": effective_name,
+            }))
+            .await;
+        } else {
+            let all_themes = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
+            let mut available: Vec<&str> =
+                cade_core::resources::themes::ThemeColors::builtin_names()
+                    .iter()
+                    .copied()
+                    .collect();
+            available.extend(all_themes.iter().map(|t| t.name.as_str()));
+            send(json!({
+                "message_type": "assistant_message",
+                "content": format!("Theme '{}' not found. Available themes: {}", t_name, available.join(", ")),
+            })).await;
         }
 
-        let mut turns = 0usize;
+        let _ = sqlite::finish_run(&state2.db, &run_id2, "done");
+        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
+        return;
+    }
 
-        loop {
-            turns += 1;
-            if turns > MAX_TURNS {
-                send(json!({
-                    "message_type": "error",
-                    "error": format!("Agentic loop exceeded {MAX_TURNS} turns — stopping"),
-                }))
-                .await;
-                break;
-            }
+    let mut turns = 0usize;
 
-            // ── P4: cost guardrail ────────────────────────────────────────
-            // Abort when cumulative session cost (across the server's lifetime
-            // for this agent) exceeds the configured cap.  Disabled by default
-            // (unset env var → no cap).  Pricing comes from ~/.cade/pricing.json
-            // or the bundled fallback table.
-            if let Some(cap) = max_session_cost_usd() {
-                let map = state2.agent_metrics.read().await;
-                if let Some(m) = map.get(&agent_id2) {
-                    let pricing = pricing_registry()
-                        .pricing_for_model(&model_for_pricing(&state2.db, &agent_id2).await);
-                    let cost = m.compute_cost_usd(&pricing);
-                    if cost >= cap {
-                        send(json!({
-                            "message_type": "error",
-                            "error": format!(
-                                "Session cost cap reached (${:.4} ≥ ${:.4}); set CADE_MAX_SESSION_COST_USD to a higher value to continue.",
-                                cost, cap
-                            ),
-                        })).await;
-                        break;
-                    }
-                }
-            }
+    loop {
+        turns += 1;
+        if turns > MAX_TURNS {
+            send(json!({
+                "message_type": "error",
+                "error": format!("Agentic loop exceeded {MAX_TURNS} turns — stopping"),
+            }))
+            .await;
+            break;
+        }
 
-            // ── Build context ─────────────────────────────────────────────
-            let (model, messages, tools) =
-                match build_context(&state2, &agent_id2, conv_id2.as_deref(), false).await {
-                    Ok(ctx) => ctx,
-                    Err(e) => {
-                        send(json!({ "message_type": "error", "error": e })).await;
-                        break;
-                    }
-                };
-
-            let max_tokens_cap = catalogue::max_tokens_for_model(&model);
-            // P6: on iterations after the first (= tool-dispatch turns
-            // continuing the loop after a tool_result), apply the optional
-            // CADE_TOOL_TURN_MAX_TOKENS cap.  First turn and turns where the
-            // model returns no further tool_calls (final answer) get full budget.
-            let max_tokens = if turns > 1
-                && let Some(tool_cap) = tool_turn_max_tokens()
-            {
-                tool_cap.min(max_tokens_cap)
-            } else {
-                max_tokens_cap
-            };
-            let req = CompletionRequest {
-                model: model.clone(),
-                messages,
-                tools,
-                max_tokens,
-                reasoning_effort: None,
-            };
-
-            // ── Stream LLM response ───────────────────────────────────────
-            // First attempt; if the provider rejects with a context-overflow
-            // error before any chunks arrive, run synchronous consolidation
-            // and rebuild the context once, then retry exactly once.
-            let stream_result = state2.llm.stream(&req).await;
-            let mut llm_stream = match stream_result {
-                Ok(s) => s,
-                Err(e) if e.is_context_overflow() => {
-                    tracing::warn!(
-                        "stream [{}]: context overflow ({}); consolidating and retrying once",
-                        agent_id2,
-                        e
-                    );
-                    // Phase 3: surface a user-visible toast so the user
-                    // knows their session was *automatically* recovered
-                    // rather than failing silently or with a cryptic
-                    // provider error.
+        // ── P4: cost guardrail ────────────────────────────────────────
+        // Abort when cumulative session cost (across the server's lifetime
+        // for this agent) exceeds the configured cap.  Disabled by default
+        // (unset env var → no cap).  Pricing comes from ~/.cade/pricing.json
+        // or the bundled fallback table.
+        if let Some(cap) = max_session_cost_usd() {
+            let map = state2.agent_metrics.read().await;
+            if let Some(m) = map.get(&agent_id2) {
+                let pricing = pricing_registry()
+                    .pricing_for_model(&model_for_pricing(&state2.db, &agent_id2).await);
+                let cost = m.compute_cost_usd(&pricing);
+                if cost >= cap {
                     send(json!({
-                        "message_type": "system_notice",
-                        "level":        "warning",
-                        "code":         "context_overflow_recovering",
-                        "message":      "Context window full — compacting older turns and retrying…"
-                    }))
-                    .await;
-                    crate::server::consolidation::consolidate_agent(
-                        &state2,
-                        &agent_id2,
-                        conv_id2.as_deref(),
-                    )
-                    .await;
-                    // Drop cached context entry so build_context recomputes.
-                    {
-                        let mut cache = state2.context_cache.lock();
-                        let key = format!("{}:{:?}", agent_id2, conv_id2.as_deref());
-                        cache.pop(&key);
-                    }
-                    let (model2, mut messages2, tools2) = match build_context(
-                        &state2,
-                        &agent_id2,
-                        conv_id2.as_deref(),
-                        false,
-                    )
-                    .await
-                    {
-                        Ok(ctx) => ctx,
-                        Err(build_err) => {
-                            send(json!({ "message_type": "error", "error": build_err })).await;
-                            break;
-                        }
-                    };
-                    // Belt-and-suspenders: drop the older half of trailing
-                    // (non-system) messages on retry.
-                    let split_idx = messages2
-                        .iter()
-                        .position(|m| m.role != "system")
-                        .unwrap_or(messages2.len());
-                    let trail_len = messages2.len().saturating_sub(split_idx);
-                    if trail_len > 2 {
-                        let drop_n = trail_len / 2;
-                        messages2.drain(split_idx..split_idx + drop_n);
-                    }
-                    let retry_req = CompletionRequest {
-                        model: model2,
-                        messages: messages2,
-                        tools: tools2,
-                        max_tokens,
-                        reasoning_effort: None,
-                    };
-                    match state2.llm.stream(&retry_req).await {
-                        Ok(s) => {
-                            // Phase 3: tell the user that the recovery
-                            // worked and the conversation continues.
-                            send(json!({
-                                "message_type": "system_notice",
-                                "level":        "info",
-                                "code":         "context_overflow_recovered",
-                                "message":      "Context recovered — older turns are now in session_summary."
-                            })).await;
-                            s
-                        }
-                        Err(e2) => {
-                            send(json!({
-                                "message_type": "error",
-                                "error": format!("Context overflow persisted after consolidation: {e2}"),
-                            }))
-                            .await;
-                            break;
-                        }
-                    }
+                        "message_type": "error",
+                        "error": format!(
+                            "Session cost cap reached (${:.4} ≥ ${:.4}); set CADE_MAX_SESSION_COST_USD to a higher value to continue.",
+                            cost, cap
+                        ),
+                    })).await;
+                    break;
                 }
+            }
+        }
+
+        // ── Build context ─────────────────────────────────────────────
+        let (model, messages, tools) =
+            match build_context(&state2, &agent_id2, conv_id2.as_deref(), false).await {
+                Ok(ctx) => ctx,
                 Err(e) => {
-                    send(json!({ "message_type": "error", "error": e.to_string() })).await;
+                    send(json!({ "message_type": "error", "error": e })).await;
                     break;
                 }
             };
 
-            let mut text_acc = String::new();
-            let mut tool_calls: Vec<LlmToolCall> = Vec::new();
+        let max_tokens_cap = catalogue::max_tokens_for_model(&model);
+        // P6: on iterations after the first (= tool-dispatch turns
+        // continuing the loop after a tool_result), apply the optional
+        // CADE_TOOL_TURN_MAX_TOKENS cap.  First turn and turns where the
+        // model returns no further tool_calls (final answer) get full budget.
+        let max_tokens = if turns > 1
+            && let Some(tool_cap) = tool_turn_max_tokens()
+        {
+            tool_cap.min(max_tokens_cap)
+        } else {
+            max_tokens_cap
+        };
+        let req = CompletionRequest {
+            model: model.clone(),
+            messages,
+            tools,
+            max_tokens,
+            reasoning_effort: None,
+        };
 
-            while let Some(chunk) = llm_stream.next().await {
-                match chunk {
-                    Ok(StreamChunk::Text(t)) => {
-                        text_acc.push_str(&t);
-                        send(json!({ "message_type": "assistant_message", "content": t })).await;
+        // ── Stream LLM response ───────────────────────────────────────
+        // First attempt; if the provider rejects with a context-overflow
+        // error before any chunks arrive, run synchronous consolidation
+        // and rebuild the context once, then retry exactly once.
+        let stream_result = state2.llm.stream(&req).await;
+        let mut llm_stream = match stream_result {
+            Ok(s) => s,
+            Err(e) if e.is_context_overflow() => {
+                tracing::warn!(
+                    "stream [{}]: context overflow ({}); consolidating and retrying once",
+                    agent_id2,
+                    e
+                );
+                // Phase 3: surface a user-visible toast so the user
+                // knows their session was *automatically* recovered
+                // rather than failing silently or with a cryptic
+                // provider error.
+                send(json!({
+                    "message_type": "system_notice",
+                    "level":        "warning",
+                    "code":         "context_overflow_recovering",
+                    "message":      "Context window full — compacting older turns and retrying…"
+                }))
+                .await;
+                crate::server::consolidation::consolidate_agent(
+                    &state2,
+                    &agent_id2,
+                    conv_id2.as_deref(),
+                )
+                .await;
+                // Drop cached context entry so build_context recomputes.
+                {
+                    let mut cache = state2.context_cache.lock();
+                    let key = format!("{}:{:?}", agent_id2, conv_id2.as_deref());
+                    cache.pop(&key);
+                }
+                let (model2, mut messages2, tools2) = match build_context(
+                    &state2,
+                    &agent_id2,
+                    conv_id2.as_deref(),
+                    false,
+                )
+                .await
+                {
+                    Ok(ctx) => ctx,
+                    Err(build_err) => {
+                        send(json!({ "message_type": "error", "error": build_err })).await;
+                        break;
                     }
-                    Ok(StreamChunk::Reasoning(r)) => {
-                        send(json!({ "message_type": "reasoning_message", "reasoning": r })).await;
-                    }
-                    Ok(StreamChunk::ToolCall(tc)) => {
+                };
+                // Belt-and-suspenders: drop the older half of trailing
+                // (non-system) messages on retry.
+                let split_idx = messages2
+                    .iter()
+                    .position(|m| m.role != "system")
+                    .unwrap_or(messages2.len());
+                let trail_len = messages2.len().saturating_sub(split_idx);
+                if trail_len > 2 {
+                    let drop_n = trail_len / 2;
+                    messages2.drain(split_idx..split_idx + drop_n);
+                }
+                let retry_req = CompletionRequest {
+                    model: model2,
+                    messages: messages2,
+                    tools: tools2,
+                    max_tokens,
+                    reasoning_effort: None,
+                };
+                match state2.llm.stream(&retry_req).await {
+                    Ok(s) => {
+                        // Phase 3: tell the user that the recovery
+                        // worked and the conversation continues.
                         send(json!({
-                            "message_type": "tool_call_message",
-                            "tool_call": {
-                                "id": tc.id,
-                                "name": tc.name,
-                                "arguments": tc.arguments,
-                            }
+                            "message_type": "system_notice",
+                            "level":        "info",
+                            "code":         "context_overflow_recovered",
+                            "message":      "Context recovered — older turns are now in session_summary."
+                        })).await;
+                        s
+                    }
+                    Err(e2) => {
+                        send(json!({
+                            "message_type": "error",
+                            "error": format!("Context overflow persisted after consolidation: {e2}"),
                         }))
                         .await;
-                        tool_calls.push(tc);
-                    }
-                    Ok(StreamChunk::Usage(u)) => {
-                        // P2: accumulate into AgentMetrics so cache tokens
-                        // are not silently dropped server-side.
-                        {
-                            let mut map = state2.agent_metrics.write().await;
-                            map.entry(agent_id2.clone())
-                                .or_default()
-                                .accumulate_usage(&u);
-                        }
-                        send(json!({
-                            "message_type": "usage_statistics",
-                            "input_tokens":  u.input_tokens,
-                            "output_tokens": u.output_tokens,
-                            "cache_read_tokens":  u.cache_read_tokens,
-                            "cache_write_tokens": u.cache_write_tokens,
-                            "model": u.model,
-                        }))
-                        .await;
-                    }
-                    Ok(StreamChunk::FinishReason(r)) => {
-                        send(json!({ "message_type": "finish_reason", "reason": r })).await;
-                    }
-                    Err(e) => {
-                        send(json!({ "message_type": "error", "error": e.to_string() })).await;
-                    }
-                    Ok(StreamChunk::Done) => {
-                        // Stream ended cleanly (some providers emit Done before FinishReason)
+                        break;
                     }
                 }
             }
-
-            // ── Persist assistant message ─────────────────────────────────
-            let tool_calls_json: Vec<Value> = tool_calls
-                .iter()
-                .filter_map(|tc| serde_json::to_value(tc).ok())
-                .collect();
-            let has_text = !text_acc.is_empty();
-            let has_tools = !tool_calls.is_empty();
-            if has_text || has_tools {
-                persist(
-                    &state2,
-                    &agent_id2,
-                    conv_id2.as_deref(),
-                    "assistant",
-                    json!({
-                        "content": text_acc,
-                        "tool_calls": tool_calls_json,
-                    }),
-                );
-            }
-
-            // ── Done if no tool calls ──────────────────────────────────────
-            if tool_calls.is_empty() {
+            Err(e) => {
+                send(json!({ "message_type": "error", "error": e.to_string() })).await;
                 break;
             }
+        };
 
-            // ── Execute tools and persist results ─────────────────────────
-            for tc in &tool_calls {
-                // Server-side meta-tool intercepts (Phase A: ToolRuntime
-                // parity).  `intercept_meta_tool` returns Some for tools
-                // that need access to AppState (DB, agent_id, sse_tx);
-                // returns None to fall through to native + MCP dispatch.
-                let result = if let Some(intercepted) =
-                    intercept_meta_tool(&state2, &agent_id2, tc, tx.clone()).await
-                {
-                    intercepted
-                } else {
-                    cade_agent::tools::manager::dispatch(
-                        tc.id.clone(),
-                        &tc.name,
-                        &tc.arguments,
-                        &state2.mcp,
-                    )
-                    .await
-                };
+        let mut text_acc = String::new();
+        let mut tool_calls: Vec<LlmToolCall> = Vec::new();
 
-                let output_trimmed = if result.output.len() > 8_192 {
-                    format!(
-                        "{}\n[... truncated: {} bytes]",
-                        &result.output[..8_192],
-                        result.output.len()
-                    )
-                } else {
-                    result.output.clone()
-                };
-
-                // Stream the result to the GUI
-                send(json!({
-                    "message_type": "tool_result_message",
-                    "tool_result": {
-                        "id":       result.tool_call_id,
-                        "name":     result.tool_name,
-                        "output":   output_trimmed,
-                        "is_error": result.is_error,
+        while let Some(chunk) = llm_stream.next().await {
+            match chunk {
+                Ok(StreamChunk::Text(t)) => {
+                    text_acc.push_str(&t);
+                    send(json!({ "message_type": "assistant_message", "content": t })).await;
+                }
+                Ok(StreamChunk::Reasoning(r)) => {
+                    send(json!({ "message_type": "reasoning_message", "reasoning": r })).await;
+                }
+                Ok(StreamChunk::ToolCall(tc)) => {
+                    send(json!({
+                        "message_type": "tool_call_message",
+                        "tool_call": {
+                            "id": tc.id,
+                            "name": tc.name,
+                            "arguments": tc.arguments,
+                        }
+                    }))
+                    .await;
+                    tool_calls.push(tc);
+                }
+                Ok(StreamChunk::Usage(u)) => {
+                    // P2: accumulate into AgentMetrics so cache tokens
+                    // are not silently dropped server-side.
+                    {
+                        let mut map = state2.agent_metrics.write().await;
+                        map.entry(agent_id2.clone())
+                            .or_default()
+                            .accumulate_usage(&u);
                     }
-                }))
-                .await;
-
-                // Persist into DB so next build_context sees it
-                persist(
-                    &state2,
-                    &agent_id2,
-                    conv_id2.as_deref(),
-                    "tool",
-                    json!({
-                        "content":      output_trimmed,
-                        "tool_call_id": result.tool_call_id,
-                        "tool_name":    result.tool_name,
-                    }),
-                );
+                    send(json!({
+                        "message_type": "usage_statistics",
+                        "input_tokens":  u.input_tokens,
+                        "output_tokens": u.output_tokens,
+                        "cache_read_tokens":  u.cache_read_tokens,
+                        "cache_write_tokens": u.cache_write_tokens,
+                        "model": u.model,
+                    }))
+                    .await;
+                }
+                Ok(StreamChunk::FinishReason(r)) => {
+                    send(json!({ "message_type": "finish_reason", "reason": r })).await;
+                }
+                Err(e) => {
+                    send(json!({ "message_type": "error", "error": e.to_string() })).await;
+                }
+                Ok(StreamChunk::Done) => {
+                    // Stream ended cleanly (some providers emit Done before FinishReason)
+                }
             }
-
-            // Loop → re-invoke LLM with tool results
         }
 
-        let _ = sqlite::finish_run(&state2.db, &run_id2, "done");
+        // ── Persist assistant message ─────────────────────────────────
+        let tool_calls_json: Vec<Value> = tool_calls
+            .iter()
+            .filter_map(|tc| serde_json::to_value(tc).ok())
+            .collect();
+        let has_text = !text_acc.is_empty();
+        let has_tools = !tool_calls.is_empty();
+        if has_text || has_tools {
+            persist(
+                &state2,
+                &agent_id2,
+                conv_id2.as_deref(),
+                "assistant",
+                json!({
+                    "content": text_acc,
+                    "tool_calls": tool_calls_json,
+                }),
+            );
+        }
 
-        // ── End of stream ─────────────────────────────────────────────────
-        let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
-    });
+        // ── Done if no tool calls ──────────────────────────────────────
+        if tool_calls.is_empty() {
+            break;
+        }
 
-    let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-    Sse::new(stream).into_response()
+        // ── Execute tools and persist results ─────────────────────────
+        for tc in &tool_calls {
+            // Server-side meta-tool intercepts (Phase A: ToolRuntime
+            // parity).  `intercept_meta_tool` returns Some for tools
+            // that need access to AppState (DB, agent_id, sse_tx);
+            // returns None to fall through to native + MCP dispatch.
+            let result = if let Some(intercepted) =
+                intercept_meta_tool(&state2, &agent_id2, tc, tx.clone()).await
+            {
+                intercepted
+            } else {
+                cade_agent::tools::manager::dispatch(
+                    tc.id.clone(),
+                    &tc.name,
+                    &tc.arguments,
+                    &state2.mcp,
+                )
+                .await
+            };
+
+            let output_trimmed = if result.output.len() > 8_192 {
+                format!(
+                    "{}\n[... truncated: {} bytes]",
+                    &result.output[..8_192],
+                    result.output.len()
+                )
+            } else {
+                result.output.clone()
+            };
+
+            // Stream the result to the GUI
+            send(json!({
+                "message_type": "tool_result_message",
+                "tool_result": {
+                    "id":       result.tool_call_id,
+                    "name":     result.tool_name,
+                    "output":   output_trimmed,
+                    "is_error": result.is_error,
+                }
+            }))
+            .await;
+
+            // Persist into DB so next build_context sees it
+            persist(
+                &state2,
+                &agent_id2,
+                conv_id2.as_deref(),
+                "tool",
+                json!({
+                    "content":      output_trimmed,
+                    "tool_call_id": result.tool_call_id,
+                    "tool_name":    result.tool_name,
+                }),
+            );
+        }
+
+        // Loop → re-invoke LLM with tool results
+    }
+
+    let _ = sqlite::finish_run(&state2.db, &run_id2, "done");
+
+    // ── End of stream ─────────────────────────────────────────────────
+    let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
 }
 
 /// Handle `load_skill` tool call server-side.
