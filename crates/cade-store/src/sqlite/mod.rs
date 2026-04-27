@@ -2,7 +2,7 @@ use crate::error::Result;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 use std::sync::Arc;
-use std::sync::Mutex;
+use parking_lot::Mutex;
 
 // -- Provider row
 

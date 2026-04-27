@@ -17,8 +17,7 @@ pub fn upsert_memory_block_typed(
     // Update typed columns (safe — ALTER TABLE already ran in migration 14)
     if memory_type.is_some() || confidence.is_some() {
         let conn = db
-            .lock()
-            .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+            .lock();
         if let Some(mt) = memory_type {
             let _ = conn.execute(
                 "UPDATE shared_memory_blocks SET memory_type = ?1 WHERE label = ?2",
@@ -46,8 +45,7 @@ pub fn insert_memory_evidence(
     confidence: f64,
 ) -> Result<String> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
 
     // Find the block_id
     let block_id: Option<String> = conn
@@ -83,8 +81,7 @@ pub fn list_memory_evidence(
     label: &str,
 ) -> Result<Vec<(String, String, String, Option<String>, f64, i64)>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let mut stmt = conn.prepare(
         "SELECT e.id, e.kind, e.reference, e.excerpt, e.confidence, e.created_at
          FROM memory_evidence e
@@ -119,8 +116,7 @@ pub fn insert_reflection_log(
     duration_ms: u128,
 ) -> Result<()> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     conn.execute(
         "INSERT OR IGNORE INTO reflection_log
          (id, agent_id, trigger, blocks_created, blocks_updated, summary, duration_ms, created_at)
@@ -142,8 +138,7 @@ pub fn insert_reflection_log(
 /// List reflection log entries for an agent.
 pub fn list_reflection_log(db: &Db, agent_id: &str) -> Result<Vec<serde_json::Value>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let mut stmt = conn.prepare(
         "SELECT id, trigger, blocks_created, blocks_updated, summary, duration_ms, created_at
          FROM reflection_log WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 50",
@@ -220,8 +215,7 @@ mod tests {
         // Find the block ID
         let block_id: String = {
             let conn = db
-                .lock()
-                .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+                .lock();
             conn.query_row(
                 "SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?1",
                 params![agent1],

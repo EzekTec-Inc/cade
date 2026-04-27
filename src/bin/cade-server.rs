@@ -142,11 +142,11 @@ async fn main() -> Result<()> {
         config: Arc::new(config.clone()),
         mcp,
         rate_limiter: RateLimiter::from_env(),
-        memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+        memory_cache: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+        context_cache: Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
             cade_server::server::state::CONTEXT_CACHE_CAPACITY,
         ))),
         all_skills: Arc::new(RwLock::new(all_skills)),

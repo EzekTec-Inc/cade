@@ -2,8 +2,7 @@ use super::*;
 
 pub fn get_max_rowid(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<u64> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let sql = if conversation_id.is_some() {
         "SELECT COALESCE(MAX(rowid), 0) FROM messages WHERE agent_id = ?1 AND conversation_id = ?2"
     } else {
@@ -24,8 +23,7 @@ pub fn last_assistant_message(
     conversation_id: Option<&str>,
 ) -> Result<Option<MessageRow>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
 
     let sql = if conversation_id.is_some() {
         "SELECT id, agent_id, conversation_id, role, content, char_count FROM messages
@@ -67,8 +65,7 @@ pub fn get_latest_user_message(
     conversation_id: Option<&str>,
 ) -> Result<Option<String>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
 
     let sql = if conversation_id.is_some() {
         "SELECT content FROM messages
@@ -98,8 +95,7 @@ pub fn get_latest_user_message(
 
 pub fn insert_message(db: &Db, row: &MessageRow) -> Result<()> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     conn.execute(
         "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at, char_count)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -141,8 +137,7 @@ pub fn list_messages_since_last_compaction(
     limit: usize,
 ) -> Result<Vec<MessageRow>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
 
     let sql = if conversation_id.is_some() {
         "WITH boundary AS (
@@ -210,8 +205,7 @@ pub fn list_messages_page(
     offset: usize,
 ) -> Result<Vec<MessageRow>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     // Filter: conversation_id IS NULL for legacy messages, or matches given id.
     // Exclude compaction markers — they are DB-level sentinels, not real messages.
     let sql = if conversation_id.is_some() {
@@ -271,8 +265,7 @@ pub fn get_context_window(
     char_budget: usize,
 ) -> Result<Vec<MessageRow>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
 
     // The CTE `boundary` finds the rowid of the most recent compaction marker.
     // If none exists, COALESCE falls back to 0 (scan all messages).
@@ -374,8 +367,7 @@ pub fn compact_old_tool_outputs(
     min_chars: usize,
 ) -> Result<usize> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
 
     // Find all tool messages ordered newest-first.
     let sql = if conversation_id.is_some() {
@@ -714,10 +706,7 @@ mod tests {
 
     /// Helper: insert a message with a specific created_at timestamp.
     fn insert_message_at(db: &Db, row: &MessageRow, ts: i64) -> Result<()> {
-        let conn = db.lock().map_err(|e| {
-            Box::new(std::io::Error::other(e.to_string()))
-                as Box<dyn std::error::Error>
-        })?;
+        let conn = db.lock();
         conn.execute(
             "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at, char_count)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",

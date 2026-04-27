@@ -1,31 +1,18 @@
 use crate::server::api::evals::list_eval_tasks;
 use crate::server::state::AppState;
-use axum::http::StatusCode;
-use std::sync::{Arc, Mutex};
+use axum::Json;
+use std::sync::Arc;
 use tokio::sync::RwLock;
 
+/// Verify that `list_eval_tasks` returns an empty array (not an error) when
+/// the DB is freshly initialised and contains no eval tasks.
+///
+/// This replaces the former `test_db_lock_poisoning_yields_500` test, which
+/// was testing `std::sync::Mutex` poison semantics that no longer apply now
+/// that `Db` uses `parking_lot::Mutex` (which never poisons).
 #[tokio::test]
-async fn test_db_lock_poisoning_yields_500() {
-    // 1. Create a memory DB and poison it
-    let conn = rusqlite::Connection::open_in_memory().unwrap();
-    let db = Arc::new(std::sync::Mutex::new(conn));
-
-    // Force poison the DB lock
-    let db_clone = db.clone();
-    let _ = std::thread::spawn(move || {
-        let _guard = db_clone.lock().unwrap();
-        panic!("Intentionally poisoning the lock");
-    })
-    .join();
-
-    assert!(db.lock().is_err(), "Lock should be poisoned");
-
-    // 2. Set up AppState
-    let _reqwest_client = reqwest::Client::new();
-    let empty_path = std::path::PathBuf::new();
-    let _settings = Arc::new(RwLock::new(
-        cade_core::settings::SettingsManager::new(&empty_path).unwrap(),
-    ));
+async fn list_eval_tasks_returns_empty_on_fresh_db() {
+    let db = cade_store::sqlite::open(":memory:").unwrap();
     let config = Arc::new(crate::server::config::ServerConfig {
         addr: "127.0.0.1:0".parse().unwrap(),
         db_path: ":memory:".into(),
@@ -36,7 +23,6 @@ async fn test_db_lock_poisoning_yields_500() {
         google_api_key: None,
         ollama_base_url: String::new(),
         api_key: None,
-
         allowed_origin: None,
         max_context_budget: None,
     });
@@ -73,19 +59,8 @@ async fn test_db_lock_poisoning_yields_500() {
         subagent_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
     };
 
-    // 3. Call the handler directly
     let result = list_eval_tasks(axum::extract::State(state)).await;
-
-    // 4. Verify the poisoned lock resulted in a 500 error gracefully
-    match result {
-        Ok(_) => panic!("Expected error due to poisoned lock, but got Ok"),
-        Err((status, body)) => {
-            assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
-            let body_str = serde_json::to_string(&body.0).unwrap_or_default();
-            assert!(
-                body_str.contains("db lock poisoned"),
-                "Error response should indicate poisoned lock"
-            );
-        }
-    }
+    let Json(body) = result.expect("list_eval_tasks must succeed on a fresh DB");
+    let tasks = body.as_array().expect("response body must be a JSON array");
+    assert!(tasks.is_empty(), "fresh DB must return zero eval tasks");
 }

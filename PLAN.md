@@ -4245,3 +4245,32 @@ identical — all variable names (`state2`, `agent_id2`, `conv_id2`, `run_id2`,
 - `cargo test -p cade-server` → 249/249 pass
 
 **Rollback**: `restore_checkpoint before-run-agent-extract` (cp-8c33ee20).
+
+---
+
+## 2025-07-?? UTC — Code Review 1.3: Db mutex → parking_lot
+
+**Summary**: Replaced `std::sync::Mutex` with `parking_lot::Mutex` in the `Db` type alias
+(`Arc<Mutex<Connection>>`). Removed all `map_err` / `unwrap` / `ok()?` poison-error guards
+from every lock site (75 in cade-store, ~30 in cade-server). Updated one obsolete poison-test
+(`test_db_lock_poisoning_yields_500`) to test meaningful behavior instead.
+
+**Files modified**:
+- `crates/cade-store/src/sqlite/mod.rs` — `use std::sync::Mutex` → `use parking_lot::Mutex`
+- `crates/cade-store/src/sqlite/{agents,conversations,event_log,evidence,memory,messages,providers,runs,skills,tools}.rs` — removed `.map_err(|e| …)?` / `.unwrap()` / `.ok()?` after `.lock()`
+- `crates/cade-server/src/server/api/{evals,checkpoints,artifacts,run,complete,messages/tests.rs}` — same clean-up
+- `crates/cade-server/src/server/consolidation.rs` — simplified match block + `if let Ok(conn)` guard
+- `src/bin/cade-server.rs` — `memory_cache`/`context_cache` constructors use `parking_lot::Mutex::new`
+- `crates/cade-server/src/server/api/evals_test.rs` — replaced poison test with `list_eval_tasks_returns_empty_on_fresh_db`
+
+**Reason**: Code review item 1.3. `parking_lot::Mutex` eliminates poisoning, performs faster under contention, and simplifies every lock site. No new dependencies needed (`parking_lot` already in the workspace).
+
+**Previous behaviour**: `Db = Arc<std::sync::Mutex<Connection>>`, every lock call had `map_err` poison handling.
+
+**New behaviour**: `Db = Arc<parking_lot::Mutex<Connection>>`, every lock call returns the guard directly.
+
+**Verification**:
+- `cargo build --workspace` → green
+- `cargo test --workspace` → all tests pass (0 failures)
+
+**Rollback**: restore checkpoint `before-parking-lot-db` (cp-e19700a3).

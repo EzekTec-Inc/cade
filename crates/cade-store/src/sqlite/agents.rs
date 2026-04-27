@@ -2,8 +2,7 @@ use super::*;
 
 pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     conn.execute(
         "INSERT INTO agents (id, name, model, description, system_prompt, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -21,8 +20,7 @@ pub fn create_agent(db: &Db, row: &AgentRow) -> Result<()> {
 
 pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let mut stmt = conn.prepare(
         "SELECT id, name, model, description, system_prompt, created_at, compaction_model, theme FROM agents WHERE id = ?1",
     )?;
@@ -45,8 +43,7 @@ pub fn get_agent(db: &Db, id: &str) -> Result<Option<AgentRow>> {
 
 pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let mut stmt = conn.prepare(
         "SELECT id, name, model, description, system_prompt, created_at, compaction_model, theme FROM agents ORDER BY created_at DESC"
     )?;
@@ -67,8 +64,7 @@ pub fn list_agents(db: &Db) -> Result<Vec<AgentRow>> {
 
 pub fn delete_agent(db: &Db, id: &str) -> Result<bool> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let n = conn.execute("DELETE FROM agents WHERE id = ?1", params![id])?;
     Ok(n > 0)
 }
@@ -76,8 +72,7 @@ pub fn delete_agent(db: &Db, id: &str) -> Result<bool> {
 /// Update the model used by an agent. Returns false if the agent was not found.
 pub fn update_agent_model(db: &Db, id: &str, model: &str) -> Result<bool> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let n = conn.execute(
         "UPDATE agents SET model = ?1 WHERE id = ?2",
         params![model, id],
@@ -87,8 +82,7 @@ pub fn update_agent_model(db: &Db, id: &str, model: &str) -> Result<bool> {
 
 pub fn update_agent_name(db: &Db, id: &str, name: &str) -> Result<bool> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let n = conn.execute(
         "UPDATE agents SET name = ?1 WHERE id = ?2",
         params![name, id],
@@ -98,8 +92,7 @@ pub fn update_agent_name(db: &Db, id: &str, name: &str) -> Result<bool> {
 
 pub fn update_agent_system_prompt(db: &Db, id: &str, prompt: &str) -> Result<bool> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let n = conn.execute(
         "UPDATE agents SET system_prompt = ?1 WHERE id = ?2",
         params![prompt, id],
@@ -111,8 +104,7 @@ pub fn update_agent_system_prompt(db: &Db, id: &str, prompt: &str) -> Result<boo
 /// Pass `None` to clear the override and fall back to the main model.
 pub fn update_agent_compaction_model(db: &Db, id: &str, model: Option<&str>) -> Result<bool> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let n = conn.execute(
         "UPDATE agents SET compaction_model = ?1 WHERE id = ?2",
         params![model, id],
@@ -124,8 +116,7 @@ pub fn update_agent_compaction_model(db: &Db, id: &str, model: Option<&str>) -> 
 /// Pass `None` to clear the override and inherit the global setting.
 pub fn update_agent_theme(db: &Db, id: &str, theme: Option<&str>) -> Result<bool> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let n = conn.execute(
         "UPDATE agents SET theme = ?1 WHERE id = ?2",
         params![theme, id],
@@ -136,8 +127,7 @@ pub fn update_agent_theme(db: &Db, id: &str, theme: Option<&str>) -> Result<bool
 /// Associate a set of tool IDs with an agent (upsert).
 pub fn attach_tools_to_agent(db: &Db, agent_id: &str, tool_ids: &[String]) -> Result<()> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     for tid in tool_ids {
         conn.execute(
             "INSERT OR IGNORE INTO agent_tools (agent_id, tool_id) VALUES (?1, ?2)",
@@ -150,8 +140,7 @@ pub fn attach_tools_to_agent(db: &Db, agent_id: &str, tool_ids: &[String]) -> Re
 /// Return tool IDs associated with an agent (if any; falls back to all tools).
 pub fn get_agent_tool_ids(db: &Db, agent_id: &str) -> Result<Vec<String>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let mut stmt = conn.prepare("SELECT tool_id FROM agent_tools WHERE agent_id = ?1")?;
     let rows = stmt.query_map(params![agent_id], |r| r.get::<_, String>(0))?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
@@ -160,8 +149,7 @@ pub fn get_agent_tool_ids(db: &Db, agent_id: &str) -> Result<Vec<String>> {
 /// Return (tool_id, tool_name) pairs for all tools attached to an agent.
 pub fn get_agent_tools_with_names(db: &Db, agent_id: &str) -> Result<Vec<(String, String)>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let mut stmt = conn.prepare(
         "SELECT at.tool_id, t.name FROM agent_tools at
          JOIN tools t ON t.id = at.tool_id
@@ -177,8 +165,7 @@ pub fn get_agent_tools_with_names(db: &Db, agent_id: &str) -> Result<Vec<(String
 /// Detach ALL tools from an agent (clear agent_tools rows for this agent).
 pub fn detach_all_tools_from_agent(db: &Db, agent_id: &str) -> Result<usize> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let n = conn.execute(
         "DELETE FROM agent_tools WHERE agent_id = ?1",
         params![agent_id],

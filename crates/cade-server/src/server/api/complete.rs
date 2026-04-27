@@ -375,7 +375,6 @@ mod tests {
         let count: i64 = state
             .db
             .lock()
-            .unwrap()
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
             .unwrap();
         assert_eq!(

@@ -4,8 +4,7 @@ pub fn create_run(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Res
     let id = format!("run-{}", uuid::Uuid::new_v4());
     let ts = now_ts();
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     conn.execute(
         "INSERT INTO runs (id, agent_id, conversation_id, status, created_at, updated_at)
          VALUES (?1, ?2, ?3, 'running', ?4, ?5)",
@@ -23,8 +22,7 @@ pub fn create_run(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Res
 
 pub fn get_run(db: &Db, run_id: &str) -> Result<Option<RunRow>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let mut stmt = conn.prepare(
         "SELECT id, agent_id, conversation_id, status, created_at, updated_at
          FROM runs WHERE id = ?1",
@@ -46,8 +44,7 @@ pub fn get_run(db: &Db, run_id: &str) -> Result<Option<RunRow>> {
 
 pub fn finish_run(db: &Db, run_id: &str, status: &str) -> Result<()> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     conn.execute(
         "UPDATE runs SET status = ?1, updated_at = ?2 WHERE id = ?3",
         params![status, now_ts(), run_id],
@@ -59,8 +56,7 @@ pub fn finish_run(db: &Db, run_id: &str, status: &str) -> Result<()> {
 /// Returns the assigned seq_id.
 pub fn append_run_event(db: &Db, run_id: &str, data: &str) -> Result<i64> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
 
     let next_seq: i64 = conn.query_row(
         "INSERT INTO run_events (run_id, seq_id, data)
@@ -76,8 +72,7 @@ pub fn append_run_event(db: &Db, run_id: &str, data: &str) -> Result<i64> {
 /// Load run events after a given seq_id (exclusive).
 pub fn run_events_after(db: &Db, run_id: &str, after_seq: i64) -> Result<Vec<(i64, String)>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let mut stmt = conn.prepare(
         "SELECT seq_id, data FROM run_events
          WHERE run_id = ?1 AND seq_id > ?2

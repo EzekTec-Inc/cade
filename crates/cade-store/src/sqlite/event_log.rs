@@ -21,7 +21,7 @@ pub fn insert_event(
     let id = format!("ev_{}", uuid::Uuid::new_v4().to_string().replace("-", ""));
     let created_at = now_ts();
 
-    let conn = db.lock().unwrap();
+    let conn = db.lock();
     let mut stmt = conn.prepare_cached(
         r#"
         INSERT INTO event_log (id, agent_id, conversation_id, event_type, content, created_at)
@@ -56,7 +56,7 @@ pub fn query_event_log(
     keyword: &str,
     limit: usize,
 ) -> Result<Vec<EventLogEntry>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock();
     let mut stmt = conn.prepare_cached(
         r#"
         SELECT id, agent_id, conversation_id, event_type, content, created_at
@@ -92,7 +92,7 @@ pub fn list_recent_events(
     agent_id: &str,
     limit: usize,
 ) -> Result<Vec<EventLogEntry>> {
-    let conn = db.lock().unwrap();
+    let conn = db.lock();
     let mut stmt = conn.prepare_cached(
         r#"
         SELECT id, agent_id, conversation_id, event_type, content, created_at

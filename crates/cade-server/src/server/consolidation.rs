@@ -493,24 +493,18 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
 
     if let Some(ref bid) = boundary_msg_id {
         let marker_ts = {
-            let conn = state.db.lock().map_err(|e| {
-                tracing::warn!("consolidate [{}]: DB lock: {}", agent_id, e);
-            });
-            match conn {
-                Ok(c) => c
-                    .query_row(
-                        "SELECT created_at FROM messages WHERE id = ?1",
-                        rusqlite::params![bid],
-                        |r| r.get::<_, i64>(0),
-                    )
-                    .unwrap_or_else(|_| {
-                        std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .unwrap_or_default()
-                            .as_secs() as i64
-                    }),
-                Err(_) => return,
-            }
+            let conn = state.db.lock();
+            conn.query_row(
+                    "SELECT created_at FROM messages WHERE id = ?1",
+                    rusqlite::params![bid],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap_or_else(|_| {
+                    std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_secs() as i64
+                })
         };
 
         let marker_content = serde_json::json!({
@@ -530,7 +524,8 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
         };
 
         // Insert with the boundary timestamp so ordering is correct.
-        if let Ok(conn) = state.db.lock() {
+        {
+            let conn = state.db.lock();
             let _ = conn.execute(
                 "INSERT INTO messages (id, agent_id, conversation_id, role, content, created_at, char_count)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",

@@ -2,8 +2,7 @@ use super::*;
 
 pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     conn.execute(
         "INSERT INTO tools (id, name, description, source_code, json_schema, tags, created_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7)
@@ -26,7 +25,7 @@ pub fn upsert_tool(db: &Db, row: &ToolRow) -> Result<()> {
 }
 
 pub fn get_tool_id_by_name(db: &Db, name: &str) -> Option<String> {
-    let conn = db.lock().ok()?;
+    let conn = db.lock();
     let mut stmt = conn.prepare("SELECT id FROM tools WHERE name = ?1").ok()?;
     stmt.query_row(params![name], |r| r.get::<_, String>(0))
         .ok()
@@ -36,8 +35,7 @@ pub fn get_tool_id_by_name(db: &Db, name: &str) -> Option<String> {
 /// If conversation_id is None, deletes all messages for the agent.
 pub fn clear_messages(db: &Db, agent_id: &str, conversation_id: Option<&str>) -> Result<usize> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let n = if let Some(conv_id) = conversation_id {
         conn.execute(
             "DELETE FROM messages WHERE agent_id = ?1 AND conversation_id = ?2",
@@ -81,8 +79,7 @@ pub fn search_messages(
     conversation_id: Option<&str>,
 ) -> Result<Vec<MessageSearchResult>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
 
     // Build safe FTS5 query: wrap the whole phrase in double-quotes to handle
     // spaces and special chars; escape internal quotes.
@@ -179,8 +176,7 @@ pub fn search_memory(
     query: &str,
 ) -> Result<Vec<(String, String, String)>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
     let mut stmt = conn.prepare(
         "SELECT b.label, b.value FROM shared_memory_blocks b
@@ -245,8 +241,7 @@ pub fn insert_archival_memory(
     tags: &[String],
 ) -> Result<String> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let id = uuid::Uuid::new_v4().to_string();
     let tags_json = serde_json::to_string(tags).unwrap_or_else(|_| "[]".to_string());
 
@@ -266,8 +261,7 @@ pub fn search_archival_memory(
     limit: usize,
 ) -> Result<Vec<ArchivalRecord>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
 
     // FTS5 requires queries to be properly quoted to avoid syntax errors
     let fts_query = format!("\"{}\"", query.replace('\"', "\"\""));
@@ -343,8 +337,7 @@ pub fn pending_tool_results(
 
 pub fn list_tools(db: &Db) -> Result<Vec<ToolRow>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let mut stmt = conn.prepare(
         "SELECT id, name, description, source_code, json_schema, tags FROM tools ORDER BY name",
     )?;

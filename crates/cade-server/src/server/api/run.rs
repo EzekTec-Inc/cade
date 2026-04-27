@@ -1234,10 +1234,7 @@ async fn handle_create_checkpoint_meta(
 
     let id = format!("cp-{}", uuid::Uuid::new_v4());
     let now = crate::server::api::checkpoints::unix_ts_pub();
-    let conn = match state.db.lock() {
-        Ok(c) => c,
-        Err(e) => return (format!("DB lock poisoned: {e}"), true),
-    };
+    let conn = state.db.lock();
     let result = conn.execute(
         "INSERT INTO checkpoints (id, agent_id, conversation_id, branch_id, label, description, created_at, git_stash_ref, git_commit_hash, parent_id)
          VALUES (?1, ?2, NULL, 'main', ?3, ?4, ?5, NULL, NULL, NULL)",
@@ -1256,10 +1253,7 @@ async fn handle_list_checkpoints_meta(
     agent_id: &str,
     _args: &serde_json::Value,
 ) -> (String, bool) {
-    let conn = match state.db.lock() {
-        Ok(c) => c,
-        Err(e) => return (format!("DB lock poisoned: {e}"), true),
-    };
+    let conn = state.db.lock();
     let mut stmt = match conn.prepare(
         "SELECT id, label, description, created_at FROM checkpoints
          WHERE agent_id = ?1 ORDER BY created_at DESC LIMIT 200",
@@ -1307,10 +1301,7 @@ async fn handle_restore_checkpoint_meta(
         return ("Error: 'checkpoint_id' is required".to_string(), true);
     }
 
-    let conn = match state.db.lock() {
-        Ok(c) => c,
-        Err(e) => return (format!("DB lock poisoned: {e}"), true),
-    };
+    let conn = state.db.lock();
     let row: Option<(String, Option<String>, Option<String>)> = conn
         .query_row(
             "SELECT id, label, git_stash_ref FROM checkpoints WHERE id = ?1 AND agent_id = ?2",
@@ -1359,10 +1350,7 @@ async fn handle_store_artifact_meta(
     let now = crate::server::api::checkpoints::unix_ts_pub();
     let size_bytes = content.len() as i64;
 
-    let conn = match state.db.lock() {
-        Ok(c) => c,
-        Err(e) => return (format!("DB lock poisoned: {e}"), true),
-    };
+    let conn = state.db.lock();
     let result = conn.execute(
         "INSERT INTO artifacts (id, agent_id, run_id, tool_call_id, kind, content_type, data_text, metadata_json, size_bytes, created_at)
          VALUES (?1, ?2, NULL, NULL, ?3, 'text/plain', ?4, '{}', ?5, ?6)",
@@ -2226,13 +2214,11 @@ mod tests {
         let agents_before: i64 = state
             .db
             .lock()
-            .unwrap()
             .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
             .unwrap();
         let messages_before: i64 = state
             .db
             .lock()
-            .unwrap()
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
             .unwrap();
 
@@ -2242,13 +2228,11 @@ mod tests {
         let agents_after: i64 = state
             .db
             .lock()
-            .unwrap()
             .query_row("SELECT COUNT(*) FROM agents", [], |r| r.get(0))
             .unwrap();
         let messages_after: i64 = state
             .db
             .lock()
-            .unwrap()
             .query_row("SELECT COUNT(*) FROM messages", [], |r| r.get(0))
             .unwrap();
 

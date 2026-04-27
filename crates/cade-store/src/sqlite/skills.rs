@@ -13,8 +13,7 @@ use crate::sqlite::Db;
 /// Idempotent — safe to call if the row already exists.
 pub fn disable_skill(db: &Db, agent_id: &str, skill_id: &str) -> Result<()> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     conn.execute(
         "INSERT OR IGNORE INTO agent_skill_blacklist (agent_id, skill_id) VALUES (?1, ?2)",
         rusqlite::params![agent_id, skill_id],
@@ -26,8 +25,7 @@ pub fn disable_skill(db: &Db, agent_id: &str, skill_id: &str) -> Result<()> {
 /// Idempotent — safe to call even if the row does not exist.
 pub fn enable_skill(db: &Db, agent_id: &str, skill_id: &str) -> Result<()> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     conn.execute(
         "DELETE FROM agent_skill_blacklist WHERE agent_id = ?1 AND skill_id = ?2",
         rusqlite::params![agent_id, skill_id],
@@ -38,8 +36,7 @@ pub fn enable_skill(db: &Db, agent_id: &str, skill_id: &str) -> Result<()> {
 /// Return the set of skill IDs that are disabled for `agent_id`.
 pub fn get_disabled_skills(db: &Db, agent_id: &str) -> Result<Vec<String>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let mut stmt = conn.prepare(
         "SELECT skill_id FROM agent_skill_blacklist WHERE agent_id = ?1",
     )?;
@@ -53,8 +50,7 @@ pub fn get_disabled_skills(db: &Db, agent_id: &str) -> Result<Vec<String>> {
 /// Return `true` if `skill_id` is disabled for `agent_id`.
 pub fn is_skill_disabled(db: &Db, agent_id: &str, skill_id: &str) -> Result<bool> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let count: i64 = conn.query_row(
         "SELECT COUNT(*) FROM agent_skill_blacklist WHERE agent_id = ?1 AND skill_id = ?2",
         rusqlite::params![agent_id, skill_id],
@@ -92,7 +88,7 @@ mod tests {
     #[test]
     fn blacklist_table_exists_after_open() {
         let db = mem_db();
-        let conn = db.lock().unwrap();
+        let conn = db.lock();
         let count: i64 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='agent_skill_blacklist'",

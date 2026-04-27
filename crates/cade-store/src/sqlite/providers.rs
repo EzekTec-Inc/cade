@@ -2,8 +2,7 @@ use super::*;
 
 pub fn upsert_provider(db: &Db, row: &ProviderRow) -> Result<()> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
 
     // SEC-02: Encrypt API key at rest
     let encrypted_key = match &row.api_key {
@@ -33,8 +32,7 @@ pub fn upsert_provider(db: &Db, row: &ProviderRow) -> Result<()> {
 
 pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let mut stmt =
         conn.prepare("SELECT name, kind, api_key, base_url, enabled FROM providers ORDER BY name")?;
     let mut providers = Vec::new();
@@ -84,8 +82,7 @@ pub fn list_providers(db: &Db) -> Result<Vec<ProviderRow>> {
 
 pub fn delete_provider(db: &Db, name: &str) -> Result<bool> {
     let conn = db
-        .lock()
-        .map_err(|e| crate::error::Error::custom(format!("db lock poisoned: {e}")))?;
+        .lock();
     let n = conn.execute("DELETE FROM providers WHERE name = ?1", params![name])?;
     Ok(n > 0)
 }
