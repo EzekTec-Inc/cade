@@ -1,5 +1,157 @@
 use super::*;
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Shared / standalone block types & operations
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Info about a memory block, independent of any agent attachment.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BlockInfo {
+    pub id: String,
+    pub label: String,
+    pub value: String,
+    pub description: String,
+    pub tier: String,
+    pub max_chars: Option<usize>,
+    pub updated_at: i64,
+}
+
+/// Create a standalone block with NO agent attachment.
+/// Returns the new block ID (UUID).
+pub fn create_standalone_block(
+    db: &Db,
+    label: &str,
+    value: &str,
+    description: Option<&str>,
+    max_chars: Option<usize>,
+) -> Result<String> {
+    let conn = db.lock();
+    let id = uuid::Uuid::new_v4().to_string();
+    let ts = now_ts();
+    conn.execute(
+        "INSERT INTO shared_memory_blocks (id, label, value, description, max_chars, updated_at, tier)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'short')",
+        params![id, label, value, description.unwrap_or(""), max_chars.map(|n| n as i64), ts],
+    )?;
+    Ok(id)
+}
+
+/// Fetch a block by its primary-key ID, regardless of agent attachment.
+pub fn get_block_by_id(db: &Db, block_id: &str) -> Result<Option<BlockInfo>> {
+    let conn = db.lock();
+    conn.query_row(
+        "SELECT id, label, value, description, tier, max_chars, updated_at
+         FROM shared_memory_blocks WHERE id = ?1",
+        params![block_id],
+        |r| {
+            Ok(BlockInfo {
+                id: r.get(0)?,
+                label: r.get(1)?,
+                value: r.get(2)?,
+                description: r.get::<_, String>(3).unwrap_or_default(),
+                tier: r.get::<_, String>(4).unwrap_or_else(|_| "short".to_string()),
+                max_chars: r.get::<_, Option<i64>>(5)?.map(|n| n as usize),
+                updated_at: r.get(6)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(Into::into)
+}
+
+/// List all blocks in the system. Optional exact-match label filter.
+/// Ordered by updated_at DESC.
+pub fn list_all_blocks(db: &Db, label_filter: Option<&str>) -> Result<Vec<BlockInfo>> {
+    let conn = db.lock();
+    if let Some(label) = label_filter {
+        let mut stmt = conn.prepare(
+            "SELECT id, label, value, description, tier, max_chars, updated_at
+             FROM shared_memory_blocks WHERE label = ?1 ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map(params![label], block_info_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    } else {
+        let mut stmt = conn.prepare(
+            "SELECT id, label, value, description, tier, max_chars, updated_at
+             FROM shared_memory_blocks ORDER BY updated_at DESC",
+        )?;
+        let rows = stmt.query_map([], block_info_from_row)?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+}
+
+/// Permanently delete a block from the system. FK CASCADE removes all
+/// agent_memory_blocks junction rows automatically.
+pub fn delete_block_permanently(db: &Db, block_id: &str) -> Result<bool> {
+    let conn = db.lock();
+    let n = conn.execute(
+        "DELETE FROM shared_memory_blocks WHERE id = ?1",
+        params![block_id],
+    )?;
+    Ok(n > 0)
+}
+
+/// Remove the link between an agent and a block (by block_id).
+/// Does NOT delete the block itself.
+pub fn unlink_shared_memory_block(db: &Db, agent_id: &str, block_id: &str) -> Result<bool> {
+    let conn = db.lock();
+    let n = conn.execute(
+        "DELETE FROM agent_memory_blocks WHERE agent_id = ?1 AND block_id = ?2",
+        params![agent_id, block_id],
+    )?;
+    Ok(n > 0)
+}
+
+/// Return the list of agent IDs that have this block attached.
+pub fn list_agents_for_block(db: &Db, block_id: &str) -> Result<Vec<String>> {
+    let conn = db.lock();
+    let mut stmt = conn.prepare(
+        "SELECT agent_id FROM agent_memory_blocks WHERE block_id = ?1 ORDER BY agent_id",
+    )?;
+    let rows = stmt.query_map(params![block_id], |r| r.get::<_, String>(0))?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Like `get_memory_blocks` but includes the block_id as the first tuple element.
+/// Returns (block_id, label, value, description) ordered by label.
+pub fn get_memory_blocks_with_ids(
+    db: &Db,
+    agent_id: &str,
+) -> Result<Vec<(String, String, String, String)>> {
+    let conn = db.lock();
+    let mut stmt = conn.prepare(
+        "SELECT b.id, b.label, b.value, b.description FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 ORDER BY b.label",
+    )?;
+    let rows = stmt.query_map(params![agent_id], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3).unwrap_or_default(),
+        ))
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Row mapper shared by list_all_blocks queries.
+fn block_info_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BlockInfo> {
+    Ok(BlockInfo {
+        id: r.get(0)?,
+        label: r.get(1)?,
+        value: r.get(2)?,
+        description: r.get::<_, String>(3).unwrap_or_default(),
+        tier: r.get::<_, String>(4).unwrap_or_else(|_| "short".to_string()),
+        max_chars: r.get::<_, Option<i64>>(5)?.map(|n| n as usize),
+        updated_at: r.get(6)?,
+    })
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Agent-scoped memory operations (existing)
+// ─────────────────────────────────────────────────────────────────────────────
+
 pub fn upsert_memory_block(
     db: &Db,
     agent_id: &str,

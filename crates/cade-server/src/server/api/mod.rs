@@ -3,6 +3,7 @@
 pub mod agents;
 pub mod artifacts;
 pub mod auth;
+pub mod blocks;
 pub mod checkpoints;
 pub mod compact;
 pub mod complete;
@@ -121,6 +122,25 @@ pub fn router(state: AppState) -> Router {
         )
         // Agent memory
         .route("/v1/agents/:id/memory", get(agents::search_memory_handler))
+        // Standalone shared blocks
+        .route(
+            "/v1/blocks",
+            post(blocks::create_block).get(blocks::list_blocks),
+        )
+        .route(
+            "/v1/blocks/:block_id",
+            get(blocks::get_block)
+                .put(blocks::update_block)
+                .delete(blocks::delete_block),
+        )
+        .route(
+            "/v1/agents/:id/blocks/attach",
+            post(blocks::attach_block),
+        )
+        .route(
+            "/v1/agents/:id/blocks/detach",
+            post(blocks::detach_block),
+        )
         .route(
             "/v1/agents/:id/archival",
             post(agents::insert_archival_memory_handler),

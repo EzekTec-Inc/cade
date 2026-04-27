@@ -770,3 +770,178 @@ fn m1_active_goal_remains_pinned_on_subsequent_writes() -> Result<()> {
     assert_eq!(value, "v2");
     Ok(())
 }
+
+// ── Shared / standalone block tests ──────────────────────────────────────────
+
+#[test]
+fn test_create_standalone_block() -> Result<()> {
+    let db = setup_mem_db()?;
+    let id = create_standalone_block(&db, "org_policy", "No tabs", Some("style guide"), None)?;
+    assert!(!id.is_empty());
+
+    // Block exists in shared_memory_blocks
+    let info = get_block_by_id(&db, &id)?.expect("block must exist");
+    assert_eq!(info.label, "org_policy");
+    assert_eq!(info.value, "No tabs");
+    assert_eq!(info.description, "style guide");
+    assert_eq!(info.tier, "short");
+
+    // NOT in any agent junction
+    let agents = list_agents_for_block(&db, &id)?;
+    assert!(agents.is_empty(), "standalone block must not be attached to any agent");
+    Ok(())
+}
+
+#[test]
+fn test_get_block_by_id_not_found() -> Result<()> {
+    let db = setup_mem_db()?;
+    assert!(get_block_by_id(&db, "nonexistent")?.is_none());
+    Ok(())
+}
+
+#[test]
+fn test_list_all_blocks() -> Result<()> {
+    let db = setup_mem_db()?;
+    let id1 = create_standalone_block(&db, "alpha", "v1", None, None)?;
+    let id2 = create_standalone_block(&db, "beta", "v2", None, None)?;
+
+    let all = list_all_blocks(&db, None)?;
+    assert_eq!(all.len(), 2);
+    // Both blocks present (order may vary when timestamps are identical)
+    let ids: Vec<&str> = all.iter().map(|b| b.id.as_str()).collect();
+    assert!(ids.contains(&id1.as_str()));
+    assert!(ids.contains(&id2.as_str()));
+    Ok(())
+}
+
+#[test]
+fn test_list_all_blocks_with_filter() -> Result<()> {
+    let db = setup_mem_db()?;
+    create_standalone_block(&db, "alpha", "v1", None, None)?;
+    let id2 = create_standalone_block(&db, "beta", "v2", None, None)?;
+
+    let filtered = list_all_blocks(&db, Some("beta"))?;
+    assert_eq!(filtered.len(), 1);
+    assert_eq!(filtered[0].id, id2);
+
+    let empty = list_all_blocks(&db, Some("nope"))?;
+    assert!(empty.is_empty());
+    Ok(())
+}
+
+#[test]
+fn test_delete_block_permanently() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    let id = create_standalone_block(&db, "temp", "data", None, None)?;
+    link_shared_memory_block(&db, "a1", &id)?;
+    assert_eq!(list_agents_for_block(&db, &id)?.len(), 1);
+
+    // Permanent delete cascades junction rows
+    assert!(delete_block_permanently(&db, &id)?);
+    assert!(get_block_by_id(&db, &id)?.is_none());
+    assert!(list_agents_for_block(&db, &id)?.is_empty());
+
+    // Idempotent — second delete returns false
+    assert!(!delete_block_permanently(&db, &id)?);
+    Ok(())
+}
+
+#[test]
+fn test_unlink_shared_memory_block() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    let id = create_standalone_block(&db, "shared", "val", None, None)?;
+    link_shared_memory_block(&db, "a1", &id)?;
+
+    // Agent sees the block
+    let blocks = get_memory_blocks(&db, "a1")?;
+    assert_eq!(blocks.len(), 1);
+
+    // Unlink removes agent view but block survives
+    assert!(unlink_shared_memory_block(&db, "a1", &id)?);
+    let blocks = get_memory_blocks(&db, "a1")?;
+    assert!(blocks.is_empty());
+    assert!(get_block_by_id(&db, &id)?.is_some(), "block must still exist");
+
+    // Second unlink returns false
+    assert!(!unlink_shared_memory_block(&db, "a1", &id)?);
+    Ok(())
+}
+
+#[test]
+fn test_list_agents_for_block() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    make_agent(&db, "a2")?;
+
+    let id = create_standalone_block(&db, "shared_kb", "facts", None, None)?;
+    link_shared_memory_block(&db, "a1", &id)?;
+    link_shared_memory_block(&db, "a2", &id)?;
+
+    let agents = list_agents_for_block(&db, &id)?;
+    assert_eq!(agents, vec!["a1", "a2"]);
+    Ok(())
+}
+
+#[test]
+fn test_get_memory_blocks_with_ids() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block(&db, "a1", "project", "Rust app", Some("desc"), None)?;
+    upsert_memory_block(&db, "a1", "persona", "Helpful", None, None)?;
+
+    let rows = get_memory_blocks_with_ids(&db, "a1")?;
+    assert_eq!(rows.len(), 2);
+    // Ordered by label: persona < project
+    assert_eq!(rows[0].1, "persona");
+    assert_eq!(rows[1].1, "project");
+    // block_id is non-empty UUID
+    assert!(!rows[0].0.is_empty());
+    assert!(!rows[1].0.is_empty());
+    assert_ne!(rows[0].0, rows[1].0, "each block gets a unique ID");
+    Ok(())
+}
+
+#[test]
+fn test_shared_block_cross_agent_live_sync() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    make_agent(&db, "a2")?;
+
+    // Agent 1 creates a block
+    upsert_memory_block(&db, "a1", "team_info", "Initial", None, None)?;
+
+    // Find the block_id
+    let rows = get_memory_blocks_with_ids(&db, "a1")?;
+    let block_id = &rows[0].0;
+
+    // Attach to agent 2
+    link_shared_memory_block(&db, "a2", block_id)?;
+
+    // Both see the same value
+    let b1 = get_memory_blocks(&db, "a1")?;
+    let b2 = get_memory_blocks(&db, "a2")?;
+    assert_eq!(b1[0].1, "Initial");
+    assert_eq!(b2[0].1, "Initial");
+
+    // Agent 2 updates
+    upsert_memory_block(&db, "a2", "team_info", "Updated by A2", None, None)?;
+
+    // Agent 1 sees the update (live sync)
+    let b1 = get_memory_blocks(&db, "a1")?;
+    assert_eq!(b1[0].1, "Updated by A2");
+    Ok(())
+}
+
+#[test]
+fn test_standalone_block_with_max_chars() -> Result<()> {
+    let db = setup_mem_db()?;
+    let id = create_standalone_block(&db, "limited", "hi", None, Some(100))?;
+    let info = get_block_by_id(&db, &id)?.unwrap();
+    assert_eq!(info.max_chars, Some(100));
+    Ok(())
+}

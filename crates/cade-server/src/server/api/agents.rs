@@ -714,14 +714,21 @@ pub async fn search_memory_handler(
 ) -> Result<Json<Value>, (StatusCode, Json<Value>)> {
     let query = params.get("q").map(String::as_str).unwrap_or("");
     if query.is_empty() {
-        // No ?q= → delegate to get_memory_full (list all with tier)
+        // No ?q= → delegate to get_memory_full (list all with tier + block_id)
         let blocks = sqlite::get_memory_blocks_full(&state.db, &agent_id)
+            .map_err(|e| server_err(e.to_string()))?;
+        let ids = sqlite::get_memory_blocks_with_ids(&state.db, &agent_id)
             .map_err(|e| server_err(e.to_string()))?;
         let out: Vec<Value> = blocks
             .iter()
             .map(|(l, v, d, t)| {
+                let block_id = ids
+                    .iter()
+                    .find(|(_, label, _, _)| label == l)
+                    .map(|(id, _, _, _)| id.as_str())
+                    .unwrap_or("");
                 json!({
-                    "label": l, "value": v, "description": d, "tier": t
+                    "id": block_id, "label": l, "value": v, "description": d, "tier": t
                 })
             })
             .collect();

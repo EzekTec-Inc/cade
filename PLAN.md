@@ -4274,3 +4274,49 @@ from every lock site (75 in cade-store, ~30 in cade-server). Updated one obsolet
 - `cargo test --workspace` → all tests pass (0 failures)
 
 **Rollback**: restore checkpoint `before-parking-lot-db` (cp-e19700a3).
+
+---
+
+## 2026-04-27T23:05Z — feat(store+server): shared memory blocks Phase 1
+
+**Summary**: Implement Letta-style shared memory blocks — standalone block CRUD,
+cross-agent attach/detach, and block_id exposure in the GET /memory response.
+
+**Files modified**:
+- `crates/cade-store/src/sqlite/memory.rs` — Added `BlockInfo` struct + 7 new
+  store functions: `create_standalone_block`, `get_block_by_id`, `list_all_blocks`,
+  `delete_block_permanently`, `unlink_shared_memory_block`, `list_agents_for_block`,
+  `get_memory_blocks_with_ids`
+- `crates/cade-store/src/sqlite/memory/tests.rs` — 10 new tests (39 total in file)
+- `crates/cade-server/src/server/api/blocks.rs` — NEW module: 7 endpoint handlers
+  (create_block, list_blocks, get_block, update_block, delete_block, attach_block,
+  detach_block)
+- `crates/cade-server/src/server/api/mod.rs` — Registered `blocks` module + 5 new
+  routes
+- `crates/cade-server/src/server/api/agents.rs` — Modified `search_memory_handler`
+  to include `id` (block_id) in the GET /memory response
+
+**New API routes**:
+- `POST   /v1/blocks`                  — create standalone block
+- `GET    /v1/blocks`                  — list all blocks (?label= filter)
+- `GET    /v1/blocks/:block_id`        — get block + attached agents
+- `PUT    /v1/blocks/:block_id`        — update block fields
+- `DELETE /v1/blocks/:block_id`        — permanent delete (FK cascade)
+- `POST   /v1/agents/:id/blocks/attach`  — attach block to agent
+- `POST   /v1/agents/:id/blocks/detach`  — detach block from agent
+
+**Previous behavior**: Blocks were agent-local; no standalone CRUD; no block_id
+exposed in memory responses.
+
+**New behavior**: Blocks can be created independently, attached to multiple
+agents for live-sync shared memory, and managed via dedicated API endpoints.
+GET /v1/agents/:id/memory now returns `id` field per block.
+
+**Migration**: None required — schema already had `shared_memory_blocks` +
+`agent_memory_blocks` tables.
+
+**Verification**:
+- `cargo test --workspace` → 1,326 tests, 0 failures
+- `cargo build -p cade-gui --target wasm32-unknown-unknown` → green
+
+**Rollback**: restore checkpoint `before-shared-memory-phase1` (cp-45cd1779).
