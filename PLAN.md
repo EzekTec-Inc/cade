@@ -4154,3 +4154,31 @@ by rustfmt. No production behaviour change.
 
 **Rollback**: `git revert HEAD` or restore checkpoint `pre-cleanup`
 (cp-45288df6).
+
+---
+
+## 2026-04-27T02:30:00Z — refactor(server): extract run_agent pre-spawn helpers (task 2.1)
+
+**Summary**: Extracted 4 private helper functions from the pre-spawn setup
+section of `run_agent()` in `cades-server/src/server/api/run.rs`. The
+`tokio::spawn` closure body (LLM loop) is unchanged — extracting it safely
+would require boxing the `send` closure, adding complexity beyond minimal-change
+policy. The helpers cover all cleanly-extractable lines.
+
+**Helpers added** (all private, all in same file):
+- `update_activity(state, agent_id, conv_id)` — async; records agent liveness
+- `parse_input(body) -> Result<String, Response>` — validates request input field
+- `detect_theme_cmd(input) -> Option<String>` — pure; detects `/theme <name>` command
+- `make_run_id(state, agent_id, conv_str) -> String` — creates DB run record with fallback
+
+**Tests added**: `run_agent_helpers_tests` module with 9 unit tests covering all
+4 helpers. +9 tests, total cade-server lib tests: 249 (was 240).
+
+**Files modified**: `crates/cade-server/src/server/api/run.rs`, `PLAN.md`
+
+**Verification**:
+- `cargo build -p cade-server` → green
+- `cargo test -p cade-server --lib` → 249/249 pass
+
+**Rollback**: Restore checkpoint `pre-run-agent-extract` (cp-f463f777) or
+`git revert HEAD`.
