@@ -1,4 +1,10 @@
-# Theme System Refactoring Plan
+# Theme System Refactoring Plan — COMPLETED
+
+> **Status:** Archived 2026-04-27. All four phases shipped and verified
+> by the test suites in `cade-core::resources::themes`,
+> `cade-tui::app::layout::pickers`, `cade-gui::theme`, and the
+> `theme_update` SSE path in `cade-server::server::api::run`.
+> See `ARCHITECTURE.md` § Theme System for the resulting design.
 
 ## Phase 1: Unify Color Core (cade-core) - [DONE]
 1. Move `ThemeColors` out of `cade-tui/src/colors.rs` into `cade-core/src/resources/themes.rs`.

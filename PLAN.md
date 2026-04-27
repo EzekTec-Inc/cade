@@ -4016,3 +4016,71 @@ fail on HEAD too, so this batch is not a regression.
 **Rollback**: restore checkpoint `pre-resolution-plan` (cp-de20e6fb), or
 `git revert` the eventual commit. The workspace tree was clean at that
 checkpoint.
+
+---
+
+## 2026-04-27T01:05:00Z — Code review batch 2: split cade-gui session.rs (Phase A)
+
+**Summary**: Lowest-risk first phase of code-review task 2.2 — extract the
+`#[cfg(test)] mod tests` block out of the 5,084-LOC monolith
+`crates/cade-gui/src/session.rs` into a sibling test file. Pure mechanical
+move. Zero behaviour change. No new dependencies. No public API change.
+
+Also archived the fully-implemented theme-system plan (`.cade-todo.md`) into
+`docs/history/theme-system-plan.md` and added a `[DONE]` header noting which
+crates own the resulting design (matches `ARCHITECTURE.md` § Theme System).
+
+**Files modified**:
+- `.cade-todo.md` → `docs/history/theme-system-plan.md` (renamed, [DONE] banner added)
+- `crates/cade-gui/src/session.rs` → `crates/cade-gui/src/session/mod.rs` (renamed)
+- `crates/cade-gui/src/session/tests.rs` (new file — 2,412 LOC, 183 tests)
+
+**Reason**:
+- `session.rs` was the largest file in the workspace (5,084 LOC) and had been
+  flagged in the code-review backlog. The `#[cfg(test)] mod tests` block
+  alone was 2,414 LOC. Pulling it into a sibling file via a module folder is
+  the standard Rust pattern for keeping production code searchable without
+  changing any behaviour.
+- The theme-system plan had all four phases marked [DONE] in
+  `.cade-todo.md`, was fully implemented (verified by 17 cade-core +
+  3 cade-tui + 2 cade-gui theme tests, all green), and the design was
+  documented in `ARCHITECTURE.md`. Living TODO at the repo root with
+  nothing left to do is misleading — moved to `docs/history/` next to the
+  other completed plans.
+
+**Previous behaviour**:
+- `crates/cade-gui/src/session.rs` (5,084 LOC) — production impl on lines
+  1–2,668, indented `mod tests` block on lines 2,670–5,084.
+- `.cade-todo.md` lived at the repo root, all four theme-system phases
+  marked [DONE] but no archival or status banner.
+
+**New behaviour**:
+- `crates/cade-gui/src/session/mod.rs` (2,672 LOC) — production impl
+  unchanged, ends with `#[cfg(test)] mod tests;` declaration.
+- `crates/cade-gui/src/session/tests.rs` (2,412 LOC) — same 183 tests,
+  dedented by four spaces (now top-level inside the file). Uses
+  `use super::*;` to access the parent module exactly as before.
+- `docs/history/theme-system-plan.md` — same content with a `Status:
+  Archived 2026-04-27` banner and pointers into the implementing crates
+  and `ARCHITECTURE.md`.
+
+**Verification**:
+- `cargo build -p cade-gui` → green
+- `cargo test -p cade-gui --lib` → **312/312 tests pass** (183 from
+  `session/tests` + 129 from sibling modules; same count as before).
+- Pre-existing clippy errors in `crates/cade-core/src/skills/watcher.rs`
+  (unused `Error`, `Result`, `super::parsing::*` imports) and pre-existing
+  fmt drift in `crates/cade-gui/src/api.rs` and `theme.rs` were already
+  on master before this batch and are NOT caused by this change.
+
+**Rollback**:
+1. Restore checkpoint `pre-session-split` (cp-df13ff1b), or
+2. `git mv crates/cade-gui/src/session/mod.rs crates/cade-gui/src/session.rs`,
+   inline the contents of `session/tests.rs` back into `session.rs` wrapped
+   in `#[cfg(test)] mod tests { ... }` with four-space indent, delete the
+   `session/` directory, and `git mv docs/history/theme-system-plan.md .cade-todo.md`.
+
+**Phase B (deferred, requires user approval)**:
+Partition the five `impl SessionState` blocks in `session/mod.rs` by domain
+(memory overlay / checkpoints / artifacts / conversations / streaming /
+planning). Phase B is NOT included in this batch.
