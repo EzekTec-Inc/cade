@@ -4182,3 +4182,39 @@ policy. The helpers cover all cleanly-extractable lines.
 
 **Rollback**: Restore checkpoint `pre-run-agent-extract` (cp-f463f777) or
 `git revert HEAD`.
+
+---
+
+## 2026-04-27T03:00:00Z — refactor(server): swap Mutex to parking_lot (task 2.4)
+
+**Summary**: Replaced `std::sync::Mutex` with `parking_lot::Mutex` for the
+three shared-state fields (`memory_cache`, `context_cache`) in `AppState` and
+the `buckets` field in `RateLimiter`. Also removed all six `lock_or_recover`
+call sites (the poison-recovery wrapper from batch 1) replacing them with plain
+`.lock()`. `parking_lot::Mutex` is infallible — it never poisons — so the
+recovery wrapper is no longer needed for these fields. `poison.rs` is retained
+as documentation.
+
+**Files modified**:
+- `crates/cade-server/Cargo.toml` — added `parking_lot.workspace = true`
+- `crates/cade-server/src/server/state.rs` — `memory_cache` and
+  `context_cache` field types changed to `Arc<parking_lot::Mutex<…>>`
+- `crates/cade-server/src/server/rate_limit.rs` — `buckets` field type +
+  import swapped; `lock_or_recover` call → `.lock()`; test `.map_err` removed
+- `crates/cade-server/src/server/api/messages/context.rs` — 4 `lock_or_recover`
+  calls → `.lock()`
+- `crates/cade-server/src/server/api/run.rs` — 1 `lock_or_recover` call →
+  `.lock()`; `if let Ok(mut cache) = …` guards removed
+- `crates/cade-server/src/server/api/skills.rs` — `if let Ok(mut cache) =` →
+  plain block
+- `crates/cade-server/src/server/api/messages/mod.rs` — `if let Ok(g) =
+  acc.lock()` guards removed; ToolCall arm fixed to direct `.lock().push()`
+- All test constructors updated to use `parking_lot::Mutex::new()` for
+  `memory_cache` / `context_cache`; `db` (cade-store) and test-local mocks
+  kept on `std::sync::Mutex`
+
+**Verification**:
+- `cargo build -p cade-server` → green
+- `cargo test -p cade-server --lib` → 249/249 pass
+
+**Rollback**: Restore checkpoint `pre-parking-lot` (cp-6877e4d9).

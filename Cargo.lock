@@ -954,6 +954,7 @@ dependencies = [
  "futures",
  "getrandom 0.2.17",
  "lru 0.12.5",
+ "parking_lot",
  "reqwest 0.12.28",
  "rusqlite",
  "rust-embed",

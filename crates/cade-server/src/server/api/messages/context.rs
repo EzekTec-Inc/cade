@@ -280,8 +280,7 @@ pub(crate) async fn complete_with_overflow_recovery(
 
             // 2. Drop the context cache entry so build_context recomputes.
             {
-                let mut cache =
-                    crate::server::poison::lock_or_recover(&state.context_cache, "context_cache");
+                let mut cache = state.context_cache.lock();
                 let key = format!("{agent_id}:{conversation_id:?}");
                 cache.pop(&key);
             }
@@ -445,7 +444,7 @@ pub(crate) async fn build_context(
         let mut h = std::collections::hash_map::DefaultHasher::new();
         system_static.hash(&mut h);
         let new_hash = h.finish();
-        let mut cache = crate::server::poison::lock_or_recover(&state.memory_cache, "memory_cache");
+        let mut cache = state.memory_cache.lock();
         let entry = cache
             .entry(agent_id.to_string())
             .or_insert((0, String::new()));
@@ -469,8 +468,7 @@ pub(crate) async fn build_context(
     };
 
     {
-        let mut cache =
-            crate::server::poison::lock_or_recover(&state.context_cache, "context_cache");
+        let mut cache = state.context_cache.lock();
         if let Some((cached_hash, cached_tuple)) = cache.get(&cache_key) {
             if *cached_hash == state_hash {
                 return Ok(cached_tuple.clone());
@@ -1076,8 +1074,7 @@ pub(crate) async fn build_context(
 
     let result_tuple = (agent.model, messages, tool_schemas);
     {
-        let mut cache =
-            crate::server::poison::lock_or_recover(&state.context_cache, "context_cache");
+        let mut cache = state.context_cache.lock();
         cache.put(cache_key, (state_hash, result_tuple.clone()));
     }
 

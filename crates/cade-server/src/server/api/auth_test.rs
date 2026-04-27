@@ -11,7 +11,7 @@ use tower::ServiceExt; // for `oneshot`
 /// `api_key` controls the auth token configured on the server.
 fn make_state(api_key: Option<String>) -> AppState {
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    let db = Arc::new(Mutex::new(conn));
+    let db = Arc::new(std::sync::Mutex::new(conn));
 
     let config = Arc::new(crate::server::config::ServerConfig {
         addr: "127.0.0.1:0".parse().unwrap(),
@@ -46,11 +46,11 @@ fn make_state(api_key: Option<String>) -> AppState {
         config,
         mcp: Arc::new(crate::server::state::McpManager::empty()),
         rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
-        memory_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        memory_cache: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+        context_cache: Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
             crate::server::state::CONTEXT_CACHE_CAPACITY,
         ))),
         all_skills: Arc::new(RwLock::new(Vec::new())),

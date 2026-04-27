@@ -387,10 +387,7 @@ pub async fn run_agent(
                     .await;
                     // Drop cached context entry so build_context recomputes.
                     {
-                        let mut cache = crate::server::poison::lock_or_recover(
-                            &state2.context_cache,
-                            "context_cache",
-                        );
+                        let mut cache = state2.context_cache.lock();
                         let key = format!("{}:{:?}", agent_id2, conv_id2.as_deref());
                         cache.pop(&key);
                     }
@@ -646,7 +643,8 @@ async fn handle_load_skill_tool(
             }
 
             // Invalidate context cache
-            if let Ok(mut cache) = state.context_cache.lock() {
+            {
+                let mut cache = state.context_cache.lock();
                 let keys: Vec<String> = cache
                     .iter()
                     .filter(|(k, _)| k.starts_with(&format!("{agent_id}:")))
@@ -2081,7 +2079,7 @@ mod tests {
             config,
             mcp: std::sync::Arc::new(crate::server::state::McpManager::empty()),
             rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
-            memory_cache: std::sync::Arc::new(std::sync::Mutex::new(
+            memory_cache: std::sync::Arc::new(parking_lot::Mutex::new(
                 std::collections::HashMap::new(),
             )),
             agent_activity: std::sync::Arc::new(tokio::sync::RwLock::new(
@@ -2093,7 +2091,7 @@ mod tests {
             agent_context_telemetry: std::sync::Arc::new(tokio::sync::RwLock::new(
                 std::collections::HashMap::new(),
             )),
-            context_cache: std::sync::Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+            context_cache: std::sync::Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
                 crate::server::state::CONTEXT_CACHE_CAPACITY,
             ))),
             all_skills: std::sync::Arc::new(tokio::sync::RwLock::new(Vec::new())),

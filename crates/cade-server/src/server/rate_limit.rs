@@ -11,9 +11,10 @@
 //! Returns HTTP 429 with a Retry-After header when a bucket is exhausted.
 
 use serde_json::json;
+use parking_lot::Mutex;
 use std::{
     collections::HashMap,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Instant,
 };
 
@@ -68,7 +69,7 @@ impl Bucket {
 
 #[derive(Clone, Debug)]
 pub struct RateLimiter {
-    buckets: Arc<Mutex<HashMap<String, Bucket>>>,
+    buckets: Arc<parking_lot::Mutex<HashMap<String, Bucket>>>,
     capacity: f64,
     rpm: f64,
 }
@@ -87,7 +88,7 @@ impl RateLimiter {
         let capacity = burst.max(1.0);
         tracing::info!("Rate limiter: {rpm} req/min per agent, burst={capacity} tokens");
         Self {
-            buckets: Arc::new(Mutex::new(HashMap::new())),
+            buckets: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             capacity,
             rpm,
         }
@@ -102,7 +103,7 @@ impl RateLimiter {
 
     /// Try to consume one token for `agent_id`.
     pub fn check(&self, agent_id: &str) -> Result<(), u64> {
-        let mut map = crate::server::poison::lock_or_recover(&self.buckets, "rate_limit::buckets");
+        let mut map = self.buckets.lock();
 
         if map.len() > 10_000 && !map.contains_key(agent_id) {
             let now = Instant::now();
@@ -213,7 +214,7 @@ mod tests {
     #[test]
     fn rate_limiter_different_agents_independent() {
         let limiter = RateLimiter {
-            buckets: Arc::new(Mutex::new(HashMap::new())),
+            buckets: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             capacity: 1.0,
             rpm: 60.0,
         };
@@ -227,7 +228,7 @@ mod tests {
     #[test]
     fn rate_limiter_config_summary() {
         let limiter = RateLimiter {
-            buckets: Arc::new(Mutex::new(HashMap::new())),
+            buckets: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             capacity: 10.0,
             rpm: 120.0,
         };
@@ -248,7 +249,7 @@ mod tests {
     fn rate_limiter_prevents_oom() -> Result<()> {
         // -- Setup & Fixtures
         let limiter = RateLimiter {
-            buckets: Arc::new(Mutex::new(HashMap::new())),
+            buckets: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             capacity: 1.0,
             rpm: 60.0,
         };
@@ -259,7 +260,7 @@ mod tests {
         }
 
         // -- Check
-        let count = limiter.buckets.lock().map_err(|e| e.to_string())?.len();
+        let count = limiter.buckets.lock().len();
         assert!(count <= 100);
 
         Ok(())

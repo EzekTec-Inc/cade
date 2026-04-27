@@ -159,7 +159,7 @@ pub struct AppState {
     /// Per-agent system-prompt cache: key=agent_id, value=(hash, system_prompt_without_tool_rule).
     /// When memory blocks are unchanged the hash matches and we reuse the cached string, keeping
     /// the system-prompt prefix byte-identical across turns so OpenAI/Gemini implicit caches hit.
-    pub memory_cache: Arc<std::sync::Mutex<std::collections::HashMap<String, (u64, String)>>>,
+    pub memory_cache: Arc<parking_lot::Mutex<std::collections::HashMap<String, (u64, String)>>>,
     /// Tracks `(last_active_ts, needs_consolidation, conversation_id)` per agent.
     /// `needs_consolidation` is set by `build_context` whenever older turns are
     /// dropped from the context window — the Sleeptime background task picks it
@@ -178,7 +178,7 @@ pub struct AppState {
     /// Key: `format!("{agent_id}:{conversation_id}")`
     /// Value: `(max_rowid, cached_context_tuple)`
     pub context_cache:
-        Arc<std::sync::Mutex<lru::LruCache<String, (u64, (String, Vec<LlmMessage>, Vec<Value>))>>>,
+        Arc<parking_lot::Mutex<lru::LruCache<String, (u64, (String, Vec<LlmMessage>, Vec<Value>))>>>,
 
     // ── Skills ──────────────────────────────────────────────────────────────
     /// All discovered skills (global + project). Populated at boot from

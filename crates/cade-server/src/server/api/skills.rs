@@ -108,7 +108,8 @@ pub async fn load_skill(
     }
 
     // Invalidate context cache for this agent so next build_context picks up the skill
-    if let Ok(mut cache) = state.context_cache.lock() {
+    {
+        let mut cache = state.context_cache.lock();
         let keys_to_remove: Vec<String> = cache
             .iter()
             .filter(|(k, _)| k.starts_with(&format!("{agent_id}:")))
@@ -268,11 +269,11 @@ mod tests {
             config,
             mcp: Arc::new(crate::server::state::McpManager::empty()),
             rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
-            memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            memory_cache: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
             agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
             agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
-            context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+            context_cache: Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
                 crate::server::state::CONTEXT_CACHE_CAPACITY,
             ))),
             all_skills: Arc::new(RwLock::new(Vec::new())),

@@ -172,7 +172,7 @@ pub(crate) fn should_eager_consolidate(
 /// window and write the result to the agent's `session_summary` memory block.
 ///
 /// This is safe to call concurrently for different agents; all DB access is
-/// through the existing `Arc<Mutex<Connection>>` pool.
+/// through the existing `Arc<parking_lot::Mutex<Connection>>` pool.
 pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id: Option<&str>) {
     let agent = match sqlite::get_agent(&state.db, agent_id) {
         Ok(Some(a)) => a,
@@ -1412,11 +1412,11 @@ mod tests {
             config: Arc::new(cfg),
             mcp: Arc::new(crate::server::state::McpManager::empty()),
             rate_limiter: RateLimiter::from_env(),
-            memory_cache: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
+            memory_cache: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
             agent_activity: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
             agent_metrics: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
             agent_context_telemetry: Arc::new(AsyncRwLock::new(std::collections::HashMap::new())),
-            context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+            context_cache: Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
                 crate::server::state::CONTEXT_CACHE_CAPACITY,
             ))),
             all_skills: Arc::new(AsyncRwLock::new(Vec::new())),

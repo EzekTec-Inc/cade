@@ -561,10 +561,10 @@ pub async fn stream_message(
         }
     };
 
-    let acc = std::sync::Arc::new(std::sync::Mutex::new((String::new(), Vec::<Value>::new(), String::new())));
+    let acc = std::sync::Arc::new(parking_lot::Mutex::new((String::new(), Vec::<Value>::new(), String::new())));
     let acc_clone = acc.clone();
     // Accumulate token usage across chunks
-    let usage_acc = std::sync::Arc::new(std::sync::Mutex::new(TokenUsage::default()));
+    let usage_acc = std::sync::Arc::new(parking_lot::Mutex::new(TokenUsage::default()));
     let usage_acc2 = usage_acc.clone();
     let usage_acc3 = usage_acc.clone();
 
@@ -599,22 +599,20 @@ pub async fn stream_message(
 
             let event = match chunk {
                 Ok(StreamChunk::Reasoning(text)) => {
-                    if let Ok(mut g) = acc_clone.lock() {
+                    { let mut g = acc_clone.lock();
                         g.2.push_str(&text);
                     }
                     emit(json!({ "message_type": "reasoning_message", "reasoning": text }))
                 }
                 Ok(StreamChunk::Text(text)) => {
-                    if let Ok(mut g) = acc_clone.lock() {
+                    { let mut g = acc_clone.lock();
                         g.0.push_str(&text);
                     }
                     emit(json!({ "message_type": "assistant_message", "content": text }))
                 }
                 Ok(StreamChunk::ToolCall(tc)) => {
-                    if let Ok(mut g) = acc_clone.lock()
-                        && let Ok(v) = serde_json::to_value(&tc)
-                    {
-                        g.1.push(v);
+                    if let Ok(v) = serde_json::to_value(&tc) {
+                        acc_clone.lock().1.push(v);
                     }
                     emit(json!({
                         "message_type": "tool_call_message",
@@ -622,7 +620,7 @@ pub async fn stream_message(
                     }))
                 }
                 Ok(StreamChunk::Usage(u)) => {
-                    if let Ok(mut acc) = usage_acc2.lock() {
+                    { let mut acc = usage_acc2.lock();
                         // P2: accumulate all 4 token fields (was input/output only —
                         // cache_read/cache_write were silently dropped).
                         acc.input_tokens += u.input_tokens;
@@ -645,7 +643,7 @@ pub async fn stream_message(
                     "reason": reason,
                 })),
                 Ok(StreamChunk::Done) => {
-                    if let Ok(g) = acc_clone.lock() {
+                    { let g = acc_clone.lock();
                         // Skip persisting empty assistant responses — they clutter
                         // the conversation and produce invalid turn ordering on
                         // next context load (e.g. Gemini consecutive-user-turn 400).
@@ -672,7 +670,7 @@ pub async fn stream_message(
                     // P2: flush accumulated token usage into AgentMetrics so
                     // server-side cost dashboards / future cost guardrails see
                     // cache_read + cache_write tokens (previously dropped).
-                    if let Ok(u) = usage_acc3.lock() {
+                    { let u = usage_acc3.lock();
                         let snap = u.clone();
                         let agent_metrics = state_clone.agent_metrics.clone();
                         let agent_id_for_metrics = agent_id_clone.clone();

@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 async fn test_db_lock_poisoning_yields_500() {
     // 1. Create a memory DB and poison it
     let conn = rusqlite::Connection::open_in_memory().unwrap();
-    let db = Arc::new(Mutex::new(conn));
+    let db = Arc::new(std::sync::Mutex::new(conn));
 
     // Force poison the DB lock
     let db_clone = db.clone();
@@ -60,11 +60,11 @@ async fn test_db_lock_poisoning_yields_500() {
         config,
         mcp: Arc::new(crate::server::state::McpManager::empty()),
         rate_limiter: crate::server::rate_limit::RateLimiter::from_env(),
-        memory_cache: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        memory_cache: Arc::new(parking_lot::Mutex::new(std::collections::HashMap::new())),
         agent_activity: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_metrics: Arc::new(RwLock::new(std::collections::HashMap::new())),
         agent_context_telemetry: Arc::new(RwLock::new(std::collections::HashMap::new())),
-        context_cache: Arc::new(std::sync::Mutex::new(lru::LruCache::new(
+        context_cache: Arc::new(parking_lot::Mutex::new(lru::LruCache::new(
             crate::server::state::CONTEXT_CACHE_CAPACITY,
         ))),
         all_skills: Arc::new(RwLock::new(Vec::new())),
