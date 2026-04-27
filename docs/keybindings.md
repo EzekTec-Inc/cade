@@ -76,6 +76,8 @@ While the picker overlay is open:
 | **Alt+E** | Jump to the next error block |
 | **Ctrl+Shift+C** | Copy the focused timeline block to the system clipboard |
 | **Ctrl+O** | Toggle expand / collapse the focused block *(or all blocks if none is focused)* |
+| **Ctrl+P** | Open command palette |
+| **Ctrl+T** | Toggle plan panel visibility |
 
 ---
 

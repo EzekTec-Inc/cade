@@ -240,6 +240,10 @@ pub(crate) fn render_sidebar(
             " Ctrl+P command palette",
             colors.text_muted(),
         )),
+        Line::from(Span::styled(
+            " Ctrl+T toggle plan",
+            colors.text_muted(),
+        )),
     ];
 
     // Split inner into text content area + sparkline area at bottom.

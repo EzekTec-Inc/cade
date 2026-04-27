@@ -535,6 +535,22 @@ impl TuiApp {
                 self.command_palette = Some(super::command_palette::CommandPaletteState::new());
             }
 
+            // -- Toggle Plan Panel (Ctrl+T)
+            (KeyCode::Char('t'), KeyModifiers::CONTROL) => {
+                if let Some(plan) = &mut self.active_plan {
+                    plan.is_visible = !plan.is_visible;
+                    let msg = if plan.is_visible {
+                        "Plan panel shown"
+                    } else {
+                        "Plan panel hidden"
+                    };
+                    self.show_toast(msg, ToastLevel::Info);
+                } else {
+                    self.show_toast("No active plan", ToastLevel::Info);
+                }
+                self.draw_dirty = true;
+            }
+
             // -- Image / clipboard paste
             // Ctrl+V (universal) or Alt+V (Windows Terminal fallback):
             // query the OS clipboard for image data; fall through silently if

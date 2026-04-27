@@ -105,8 +105,8 @@ See [memory-system.md](memory-system.md) for tier semantics.
 | `/theme [name]` | Switch theme; empty arg opens picker |
 | `/copy` | Copy last assistant reply to clipboard |
 | `/mouse` | `/select` — toggle mouse capture (enables OS text selection) |
-| `/todos` | Toggle visibility of the active plan checklist |
-| `/todo` | Show full plan |
+| `/todos` | Toggle visibility of the active plan checklist (`Ctrl+T`) |
+| `/todo` | Show contents of `.cade-todo.md` (static scratchpad) |
 | `/debug-last` | Dump the last assistant message as stored on the server |
 | `/providers` | `/provider-list` — list LLM providers |
 
