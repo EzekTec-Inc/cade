@@ -815,6 +815,32 @@ async fn intercept_meta_tool(
             let (output, is_error) = handle_reflect_meta(state, agent_id, &tc.arguments).await;
             Some(mk(output, is_error))
         }
+        // ── Phase A1b: memory-read tools ──────────────────────────────────
+        "search_memory" => {
+            let (output, is_error) =
+                handle_search_memory_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "conversation_search" => {
+            let (output, is_error) =
+                handle_conversation_search_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "archival_memory_insert" => {
+            let (output, is_error) =
+                handle_archival_memory_insert_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "archival_memory_search" => {
+            let (output, is_error) =
+                handle_archival_memory_search_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
+        "query_event_log" => {
+            let (output, is_error) =
+                handle_query_event_log_meta(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
         // ── Phase A2: skill meta-tools ────────────────────────────────────
         "install_skill" => {
             let (output, is_error) =
@@ -1066,6 +1092,166 @@ async fn handle_reflect_meta(
         ),
         false,
     )
+}
+
+/// Phase A1b handler: `search_memory` server-side.
+/// Searches the agent's memory blocks by keyword directly via the DB.
+async fn handle_search_memory_meta(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let query = args["query"].as_str().unwrap_or("").trim().to_string();
+    if query.is_empty() {
+        return ("Error: 'query' is required".to_string(), true);
+    }
+    match cade_store::sqlite::search_memory(&state.db, agent_id, &query) {
+        Ok(results) if results.is_empty() => (
+            format!(
+                "No memory blocks matched '{query}'. \
+                 Try a shorter keyword, or use conversation_search to look through message history."
+            ),
+            false,
+        ),
+        Ok(results) => {
+            let mut out = format!(
+                "Found {} matching memory block(s) for '{query}':\n\n",
+                results.len()
+            );
+            for (label, _value, snippet) in &results {
+                out.push_str(&format!("[{label}]\n{snippet}\n\n"));
+            }
+            (out.trim_end().to_string(), false)
+        }
+        Err(e) => (format!("search_memory error: {e}"), true),
+    }
+}
+
+/// Phase A1b handler: `conversation_search` server-side.
+/// Searches past messages by keyword directly via the DB.
+async fn handle_conversation_search_meta(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let query = args["query"].as_str().unwrap_or("").trim().to_string();
+    if query.is_empty() {
+        return ("Error: 'query' is required".to_string(), true);
+    }
+    match cade_store::sqlite::search_messages(&state.db, agent_id, &query, None) {
+        Ok(results) if results.is_empty() => (
+            format!("No conversation messages matched '{query}'."),
+            false,
+        ),
+        Ok(results) => {
+            let mut out = format!(
+                "Found {} result(s) for '{query}' in conversation history:\n\n",
+                results.len()
+            );
+            for r in &results {
+                out.push_str(&format!("[{}] {}\n", r.role, r.snippet));
+            }
+            (out.trim_end().to_string(), false)
+        }
+        Err(e) => (format!("conversation_search error: {e}"), true),
+    }
+}
+
+/// Phase A1b handler: `archival_memory_insert` server-side.
+/// Stores large text into archival memory directly via the DB.
+async fn handle_archival_memory_insert_meta(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let content = args["content"].as_str().unwrap_or("").to_string();
+    if content.is_empty() {
+        return ("Error: 'content' is required".to_string(), true);
+    }
+    let tags: Vec<String> = args["tags"]
+        .as_array()
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    match cade_store::sqlite::insert_archival_memory(&state.db, agent_id, &content, &tags) {
+        Ok(id) => (
+            format!("Stored in archival memory (id: {id}, {} chars)", content.len()),
+            false,
+        ),
+        Err(e) => (format!("archival_memory_insert error: {e}"), true),
+    }
+}
+
+/// Phase A1b handler: `archival_memory_search` server-side.
+/// Searches archival memory using FTS5 directly via the DB.
+async fn handle_archival_memory_search_meta(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let query = args["query"].as_str().unwrap_or("").trim().to_string();
+    let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+    if query.is_empty() {
+        return ("Error: 'query' is required".to_string(), true);
+    }
+    match cade_store::sqlite::search_archival_memory(&state.db, agent_id, &query, limit) {
+        Ok(results) if results.is_empty() => (
+            format!("No archival memory matched '{query}'."),
+            false,
+        ),
+        Ok(results) => {
+            let mut out = format!(
+                "Found {} archival record(s) for '{query}':\n\n",
+                results.len()
+            );
+            for r in &results {
+                let preview: String = r.content.chars().take(300).collect();
+                let tags = if r.tags.is_empty() {
+                    String::new()
+                } else {
+                    format!(" [tags: {}]", r.tags.join(", "))
+                };
+                out.push_str(&format!("• {}{}\n  {preview}…\n\n", r.id, tags));
+            }
+            (out.trim_end().to_string(), false)
+        }
+        Err(e) => (format!("archival_memory_search error: {e}"), true),
+    }
+}
+
+/// Phase A1b handler: `query_event_log` server-side.
+/// Searches the event log by keyword directly via the DB.
+async fn handle_query_event_log_meta(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let keyword = args["keyword"].as_str().unwrap_or("").trim().to_string();
+    let limit = args["limit"].as_u64().unwrap_or(10) as usize;
+    if keyword.is_empty() {
+        return ("Error: 'keyword' is required".to_string(), true);
+    }
+    match cade_store::sqlite::event_log::query_event_log(&state.db, agent_id, &keyword, limit) {
+        Ok(entries) if entries.is_empty() => (
+            format!("No event log entries matched '{keyword}'."),
+            false,
+        ),
+        Ok(entries) => {
+            let mut out = format!(
+                "Found {} event(s) for '{keyword}':\n\n",
+                entries.len()
+            );
+            for e in &entries {
+                let preview: String = e.content.chars().take(200).collect();
+                out.push_str(&format!("[{}] {}: {preview}\n", e.event_type, e.created_at));
+            }
+            (out.trim_end().to_string(), false)
+        }
+        Err(e) => (format!("query_event_log error: {e}"), true),
+    }
 }
 
 /// Phase A2 handler: `install_skill` server-side.
@@ -1707,6 +1893,13 @@ async fn handle_run_subagent_tool(
                     sse_tx.clone(),
                 ))
                 .await
+            } else if let Some(intercepted) =
+                Box::pin(intercept_meta_tool(state, parent_agent_id, tc, sse_tx.clone())).await
+            {
+                // Meta-tools (memory, skills, checkpoints, artifacts)
+                // are dispatched against the parent agent's DB — same
+                // path the parent agentic loop uses.
+                intercepted
             } else {
                 cade_agent::tools::manager::dispatch(
                     tc.id.clone(),
@@ -2727,6 +2920,175 @@ mod tests {
             result.output.to_lowercase().contains("depth"),
             "error message must mention depth, got: {}",
             result.output
+        );
+    }
+
+    // ── subagent meta-tool dispatch ───────────────────────────────────────
+
+    /// Mock LLM that, on the first call, returns a tool_call for a
+    /// specified meta-tool.  On the second call captures the messages
+    /// (so we can inspect the tool result) and returns final text.
+    struct MetaToolLlm {
+        tool_name: String,
+        tool_args: serde_json::Value,
+        call_count: std::sync::atomic::AtomicUsize,
+        captured_iter2: std::sync::Mutex<Vec<cade_ai::LlmMessage>>,
+    }
+    #[async_trait::async_trait]
+    impl cade_ai::LlmProvider for MetaToolLlm {
+        async fn complete(
+            &self,
+            r: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+            let n = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if n == 0 {
+                Ok(cade_ai::CompletionResponse {
+                    content: None,
+                    tool_calls: vec![cade_ai::LlmToolCall {
+                        id: "tc_meta_1".into(),
+                        name: self.tool_name.clone(),
+                        arguments: self.tool_args.clone(),
+                        thought_signature: None,
+                    }],
+                    finish_reason: "tool_use".into(),
+                })
+            } else {
+                *self.captured_iter2.lock().unwrap() = r.messages.clone();
+                Ok(cade_ai::CompletionResponse {
+                    content: Some("meta-tool subagent done".into()),
+                    tool_calls: vec![],
+                    finish_reason: "stop".into(),
+                })
+            }
+        }
+        async fn stream(
+            &self,
+            _r: &cade_ai::CompletionRequest,
+        ) -> cade_ai::Result<
+            std::pin::Pin<
+                Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+            >,
+        > {
+            unreachable!()
+        }
+    }
+
+    /// Subagent loop must route `update_memory` through the meta-tool
+    /// intercept rather than falling through to `dispatch()` which would
+    /// return "Unknown tool".
+    #[tokio::test]
+    async fn subagent_loop_dispatches_update_memory_via_intercept() {
+        let llm = std::sync::Arc::new(MetaToolLlm {
+            tool_name: "update_memory".into(),
+            tool_args: serde_json::json!({
+                "label": "sa_block",
+                "value": "written by subagent",
+                "operation": "set",
+            }),
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+            captured_iter2: std::sync::Mutex::new(Vec::new()),
+        });
+        let llm_dyn = llm.clone() as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm_dyn);
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+
+        // Create parent agent so memory writes have a home.
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "parent_sa".into(),
+                name: "t".into(),
+                model: "test".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        let args = serde_json::json!({ "prompt": "update memory test" });
+        let result =
+            handle_run_subagent_tool(&state, "parent_sa", "tc_sa", &args, tx).await;
+
+        assert!(
+            !result.is_error,
+            "subagent must succeed, got: {}",
+            result.output,
+        );
+
+        // The tool result fed back to the LLM must NOT be "Unknown tool".
+        let iter2 = llm.captured_iter2.lock().unwrap().clone();
+        let tool_msg = iter2
+            .iter()
+            .find(|m| m.role == "tool")
+            .expect("must have a tool-role message in iter-2");
+        assert!(
+            !tool_msg.content.contains("Unknown tool"),
+            "update_memory must be intercepted in subagent loop, got: {}",
+            tool_msg.content,
+        );
+
+        // The memory block must actually be persisted in the parent's DB.
+        let blocks =
+            cade_store::sqlite::get_memory_blocks(&state.db, "parent_sa").unwrap();
+        let found = blocks
+            .iter()
+            .any(|(label, value, _)| label == "sa_block" && value == "written by subagent");
+        assert!(
+            found,
+            "subagent update_memory must persist to parent agent's DB, got: {blocks:?}",
+        );
+    }
+
+    /// Subagent loop must route `search_memory` through the meta-tool
+    /// intercept so it can read the parent agent's memory blocks.
+    #[tokio::test]
+    async fn subagent_loop_dispatches_search_memory_via_intercept() {
+        let llm = std::sync::Arc::new(MetaToolLlm {
+            tool_name: "search_memory".into(),
+            tool_args: serde_json::json!({ "query": "anything" }),
+            call_count: std::sync::atomic::AtomicUsize::new(0),
+            captured_iter2: std::sync::Mutex::new(Vec::new()),
+        });
+        let llm_dyn = llm.clone() as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm_dyn);
+        let (tx, _rx) = tokio::sync::mpsc::channel(64);
+
+        // Create parent agent.
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "parent_sm".into(),
+                name: "t".into(),
+                model: "test".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        let args = serde_json::json!({ "prompt": "search memory test" });
+        let result =
+            handle_run_subagent_tool(&state, "parent_sm", "tc_sm", &args, tx).await;
+
+        assert!(!result.is_error, "got: {}", result.output);
+
+        let iter2 = llm.captured_iter2.lock().unwrap().clone();
+        let tool_msg = iter2
+            .iter()
+            .find(|m| m.role == "tool")
+            .expect("must have a tool-role message");
+        assert!(
+            !tool_msg.content.contains("Unknown tool"),
+            "search_memory must be intercepted in subagent loop, got: {}",
+            tool_msg.content,
         );
     }
 }

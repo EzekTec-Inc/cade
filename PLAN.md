@@ -4320,3 +4320,51 @@ GET /v1/agents/:id/memory now returns `id` field per block.
 - `cargo build -p cade-gui --target wasm32-unknown-unknown` → green
 
 **Rollback**: restore checkpoint `before-shared-memory-phase1` (cp-45cd1779).
+
+## fix: route meta-tools through intercept in server-side subagent loop
+
+**Date**: 2025-07-27
+**Checkpoint**: `pre-subagent-meta-tool-fix` (cp-f87b8d3d)
+
+### Problem
+Server-side subagent loop (`handle_run_subagent_tool`) dispatched all non-`run_subagent`
+tool calls through `cade_agent::tools::manager::dispatch()`, which only handles native
+dev tools (bash, read_file, write_file, etc.) and MCP tools. Meta-tools like
+`update_memory`, `search_memory`, `conversation_search`, `archival_memory_insert/search`,
+`query_event_log`, `load_skill`, `create_checkpoint`, `store_artifact`, etc. all returned
+"Unknown tool" when called by a server-side subagent.
+
+This caused subagents to silently fail when trying to record their work or search for
+context, making it appear as if "edits don't persist" — the filesystem writes succeeded
+but the agent's memory of those edits was lost.
+
+### Fix
+1. **Subagent loop now routes through `intercept_meta_tool`** (run.rs ~line 1711):
+   Added `else if let Some(intercepted) = Box::pin(intercept_meta_tool(...)).await`
+   between the `run_subagent` re-entry guard and the `dispatch()` fallback.
+   `Box::pin` required to satisfy async recursion size constraints.
+
+2. **Added 5 missing memory-read handlers to `intercept_meta_tool`**:
+   - `search_memory` → `handle_search_memory_meta` (DB-direct via `cade_store::sqlite::search_memory`)
+   - `conversation_search` → `handle_conversation_search_meta` (via `search_messages`)
+   - `archival_memory_insert` → `handle_archival_memory_insert_meta` (via `insert_archival_memory`)
+   - `archival_memory_search` → `handle_archival_memory_search_meta` (via `search_archival_memory`)
+   - `query_event_log` → `handle_query_event_log_meta` (via `event_log::query_event_log`)
+
+   These were missing from the parent agentic loop too (not just the subagent loop).
+
+### Files changed
+- `crates/cade-server/src/server/api/run.rs`
+
+### Tests (TDD red-green)
+- `subagent_loop_dispatches_update_memory_via_intercept` — MetaToolLlm mock calls
+  `update_memory`; verifies tool result is not "Unknown tool" and DB is written.
+- `subagent_loop_dispatches_search_memory_via_intercept` — MetaToolLlm mock calls
+  `search_memory`; verifies tool result is not "Unknown tool".
+
+### Verification
+- `cargo test -p cade-server` → 251 tests, 0 failures
+- `cargo build` → green
+
+### Rollback
+Restore checkpoint `pre-subagent-meta-tool-fix` (cp-f87b8d3d).
