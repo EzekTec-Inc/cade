@@ -317,20 +317,17 @@ async fn finalize_tool_result(
     is_error: bool,
 ) -> (String, String, String, bool) {
     if !is_error {
-        match tool_name.as_str() {
-            "write_file" | "edit_file" | "apply_patch" | "Replace" | "WriteFileGemini" => {
-                let path = args["file_path"]
-                    .as_str()
-                    .or(args["path"].as_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                let c = client.clone();
-                let a = agent_id.to_string();
-                tokio::spawn(async move {
-                    let _ = c.record_recent_edit(&a, &path).await;
-                });
-            }
-            _ => {}
+        if cade_agent::tools::manager::is_file_edit_tool(tool_name.as_str()) {
+            let path = args["file_path"]
+                .as_str()
+                .or(args["path"].as_str())
+                .unwrap_or("unknown")
+                .to_string();
+            let c = client.clone();
+            let a = agent_id.to_string();
+            tokio::spawn(async move {
+                let _ = c.record_recent_edit(&a, &path).await;
+            });
         }
     }
 

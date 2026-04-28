@@ -725,20 +725,17 @@ impl Repl {
         };
 
         if !result.is_error {
-            match tool_name {
-                "write_file" | "edit_file" | "apply_patch" | "Replace" | "WriteFileGemini" => {
-                    let path = args["file_path"]
-                        .as_str()
-                        .or(args["path"].as_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    let c = runtime.client.clone();
-                    let a = runtime.agent_id.clone();
-                    tokio::spawn(async move {
-                        let _ = c.record_recent_edit(&a, &path).await;
-                    });
-                }
-                _ => {}
+            if cade_agent::tools::manager::is_file_edit_tool(tool_name) {
+                let path = args["file_path"]
+                    .as_str()
+                    .or(args["path"].as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let c = runtime.client.clone();
+                let a = runtime.agent_id.clone();
+                tokio::spawn(async move {
+                    let _ = c.record_recent_edit(&a, &path).await;
+                });
             }
         }
 

@@ -113,6 +113,33 @@ pub fn canonical_name(name: &str) -> &str {
     }
 }
 
+/// Strip the MCP server prefix from a tool name.
+///
+/// `"developer__write_file"` → `"write_file"`, `"write_file"` → `"write_file"`.
+pub fn strip_mcp_prefix(name: &str) -> &str {
+    if let Some(pos) = name.rfind("__") {
+        &name[pos + 2..]
+    } else {
+        name
+    }
+}
+
+/// Returns `true` if `name` is a file-editing tool — native, Gemini alias,
+/// or MCP-prefixed.  Used for `recent_edits` tracking.
+pub fn is_file_edit_tool(name: &str) -> bool {
+    // Resolve Gemini/Codex aliases first, then strip MCP prefix.
+    let base = strip_mcp_prefix(canonical_name(name));
+    matches!(
+        base,
+        "write_file"
+            | "edit_file"
+            | "apply_patch"
+            | "apply_edit"
+            | "replace_in_file"
+            | "edit_block"
+    )
+}
+
 /// All tool JSON schemas for a given toolset.
 pub fn schemas_for_toolset(toolset: Toolset, allow_agent_mode_changes: bool) -> Vec<Value> {
     #[cfg(feature = "desktop")]
@@ -376,6 +403,35 @@ mod tests {
         assert!(output.contains("Cargo.toml"), "got: {output}");
 
         Ok(())
+    }
+
+    // -- is_file_edit_tool
+
+    #[test]
+    fn is_file_edit_native_names() {
+        assert!(is_file_edit_tool("write_file"));
+        assert!(is_file_edit_tool("edit_file"));
+        assert!(is_file_edit_tool("apply_patch"));
+        assert!(is_file_edit_tool("Replace"));
+        assert!(is_file_edit_tool("WriteFileGemini"));
+    }
+
+    #[test]
+    fn is_file_edit_mcp_prefixed_names() {
+        assert!(is_file_edit_tool("developer__write_file"));
+        assert!(is_file_edit_tool("developer__replace_in_file"));
+        assert!(is_file_edit_tool("desktop-commander__write_file"));
+        assert!(is_file_edit_tool("desktop-commander__edit_block"));
+        assert!(is_file_edit_tool("cade-ide-mcp__apply_edit"));
+    }
+
+    #[test]
+    fn is_file_edit_rejects_non_edit_tools() {
+        assert!(!is_file_edit_tool("read_file"));
+        assert!(!is_file_edit_tool("bash"));
+        assert!(!is_file_edit_tool("developer__read_file"));
+        assert!(!is_file_edit_tool("grep"));
+        assert!(!is_file_edit_tool("run_subagent"));
     }
 
     // -- Schema validation
