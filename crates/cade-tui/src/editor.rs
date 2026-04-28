@@ -28,6 +28,11 @@ pub struct Editor<'a> {
     pub paste_buffers: Vec<PasteEntry>,
     image_counter: usize,
     pub paste_images: Vec<ImageEntry>,
+    /// Last terminal area the editor was rendered into, captured by
+    /// the `EditorComponent::render` impl.  Used by `cursor_position()`
+    /// to compute absolute screen coordinates for the IME hardware-
+    /// cursor sync path.  `None` until the first render.
+    last_render_area: Option<ratatui::layout::Rect>,
 }
 
 const PASTE_COLLAPSE_THRESHOLD: usize = 10;
@@ -47,6 +52,7 @@ impl<'a> Editor<'a> {
             paste_buffers: Vec::new(),
             image_counter: 0,
             paste_images: Vec::new(),
+            last_render_area: None,
         }
     }
 
@@ -242,6 +248,74 @@ impl<'a> Editor<'a> {
         }
     }
 }
+
+// region:    --- EditorComponent impl
+//
+// Adapter that exposes [`Editor`] through the host-agnostic
+// [`crate::editor_component::EditorComponent`] trait so the TUI event
+// loop, render path, and IME cursor sync can target the trait rather
+// than the concrete textarea-backed editor.
+
+impl<'a> crate::editor_component::EditorComponent for Editor<'a> {
+    fn render(
+        &mut self,
+        frame: &mut ratatui::Frame,
+        area: ratatui::layout::Rect,
+        _colors: &crate::colors::ThemeColors,
+    ) {
+        self.last_render_area = Some(area);
+        frame.render_widget(&self.textarea, area);
+    }
+
+    fn handle_input(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+    ) -> crate::editor_component::EditorAction {
+        use crate::editor_component::EditorAction;
+        use crossterm::event::{KeyCode, KeyModifiers};
+
+        match (key.code, key.modifiers) {
+            // Plain Enter submits.  Shift+Enter / Alt+Enter still reach
+            // the textarea below to insert a newline.
+            (KeyCode::Enter, m) if m == KeyModifiers::NONE => {
+                EditorAction::Submit(self.text())
+            }
+            (KeyCode::Esc, _) => EditorAction::Cancel,
+            _ => {
+                let modified = self.handle_key_event(key, 0);
+                if modified {
+                    EditorAction::Consumed
+                } else {
+                    // Let the host route this to global shortcuts /
+                    // overlays (Ctrl+P palette, Ctrl+L clear, …).
+                    EditorAction::Unhandled(key)
+                }
+            }
+        }
+    }
+
+    fn text(&self) -> String {
+        Editor::text(self)
+    }
+
+    fn set_text(&mut self, text: String) {
+        Editor::set_text(self, text);
+    }
+
+    fn cursor_position(&self) -> Option<(u16, u16)> {
+        let area = self.last_render_area?;
+        let (row, col) = self.textarea.cursor();
+        // Clamp to the rendered area to avoid emitting a MoveTo
+        // outside the input region (which terminals interpret
+        // unpredictably).
+        let x = area.x.saturating_add(col as u16).min(area.x + area.width.saturating_sub(1));
+        let y = area.y.saturating_add(row as u16).min(area.y + area.height.saturating_sub(1));
+        Some((x, y))
+    }
+}
+
+// endregion: --- EditorComponent impl
+
 #[cfg(test)]
 mod tests {
     use super::*;
