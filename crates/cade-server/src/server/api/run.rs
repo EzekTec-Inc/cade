@@ -47,6 +47,30 @@ use crate::server::state::AppState;
 /// Maximum agentic turns per request (prevents infinite loops).
 const MAX_TURNS: usize = 20;
 
+/// Maximum bytes of a tool's `output` to send over SSE before truncation.
+/// The full output is still persisted to the DB so future turns see complete
+/// history; only the SSE payload is capped to keep the GUI responsive.
+const SSE_OUTPUT_TRUNCATE_BYTES: usize = 8_192;
+
+/// Truncate a string at a UTF-8 char boundary at or below `max_bytes`.
+///
+/// `String::len()` is in bytes, but slicing with `s[..n]` panics if `n` is
+/// not on a char boundary.  This helper walks back to the previous char
+/// boundary so multi-byte UTF-8 (CJK, emoji, accented Latin) never causes
+/// a panic in tool-output truncation.  Returns the original string if it
+/// is already shorter than the limit.
+fn truncate_at_char_boundary(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    // Walk backwards from `max_bytes` until we land on a char boundary.
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// P4: parse a `CADE_MAX_SESSION_COST_USD`-style env value into an optional
 /// cap.  Pure function for testing; the production wrapper [`max_session_cost_usd`]
 /// reads the live env var and delegates to this.
@@ -571,36 +595,44 @@ async fn run_agent_loop(
                 .await
             };
 
-            let output_trimmed = if result.output.len() > 8_192 {
+            // H3: persist the FULL output to the DB so future build_context
+            // calls feed complete tool results back to the LLM.  Only the
+            // SSE payload is truncated for GUI responsiveness.
+            //
+            // C2: truncate at a UTF-8 char boundary, never at a raw byte
+            // index — multi-byte chars (emoji, CJK, accented Latin) at the
+            // boundary would otherwise panic.
+            let output_for_sse = if result.output.len() > SSE_OUTPUT_TRUNCATE_BYTES {
+                let head = truncate_at_char_boundary(&result.output, SSE_OUTPUT_TRUNCATE_BYTES);
                 format!(
                     "{}\n[... truncated: {} bytes]",
-                    &result.output[..8_192],
+                    head,
                     result.output.len()
                 )
             } else {
                 result.output.clone()
             };
 
-            // Stream the result to the GUI
+            // Stream the (possibly truncated) result to the GUI
             send(json!({
                 "message_type": "tool_result_message",
                 "tool_result": {
                     "id":       result.tool_call_id,
                     "name":     result.tool_name,
-                    "output":   output_trimmed,
+                    "output":   output_for_sse,
                     "is_error": result.is_error,
                 }
             }))
             .await;
 
-            // Persist into DB so next build_context sees it
+            // Persist the FULL output into DB so next build_context sees it.
             persist(
                 &state2,
                 &agent_id2,
                 conv_id2.as_deref(),
                 "tool",
                 json!({
-                    "content":      output_trimmed,
+                    "content":      result.output,
                     "tool_call_id": result.tool_call_id,
                     "tool_name":    result.tool_name,
                 }),
@@ -693,9 +725,12 @@ async fn handle_load_skill_tool(
 
 /// Handle `unload_skill` tool call server-side.
 ///
-/// Removes the skill from the agent's active set. Does **not** invalidate
-/// the context cache — the stale entry expires naturally on the next turn
-/// when message history changes.
+/// Removes the skill from the agent's active set and invalidates the
+/// context cache so the next `build_context` call drops the skill's
+/// system-prompt content.  Without the cache invalidation, an LRU cached
+/// context built before the unload would keep serving the skill until
+/// natural eviction — leaving the agent acting as if the skill was still
+/// active.
 async fn handle_unload_skill_tool(
     state: &AppState,
     agent_id: &str,
@@ -730,6 +765,21 @@ async fn handle_unload_skill_tool(
     };
 
     if removed {
+        // H5: invalidate context cache so the unloaded skill no longer
+        // appears in the agent's system prompt on the next turn.
+        // Mirrors the same logic in `handle_load_skill_tool`.
+        {
+            let mut cache = state.context_cache.lock();
+            let keys: Vec<String> = cache
+                .iter()
+                .filter(|(k, _)| k.starts_with(&format!("{agent_id}:")))
+                .map(|(k, _)| k.clone())
+                .collect();
+            for k in keys {
+                cache.pop(&k);
+            }
+        }
+
         ToolResult {
             tool_call_id: tool_call_id.to_string(),
             tool_name: "unload_skill".to_string(),
@@ -1970,10 +2020,12 @@ async fn handle_run_subagent_tool(
             .push(sr);
     }
 
-    let output_final = if output.len() > 8_192 {
+    // C2: truncate at a UTF-8 char boundary, never at a raw byte index.
+    let output_final = if output.len() > SSE_OUTPUT_TRUNCATE_BYTES {
+        let head = truncate_at_char_boundary(&output, SSE_OUTPUT_TRUNCATE_BYTES);
         format!(
             "{}…\n[truncated: {} chars total]",
-            &output[..8_192],
+            head,
             output.len()
         )
     } else {
@@ -2039,6 +2091,61 @@ fn record_recent_edit_db(db: &cade_store::sqlite::Db, agent_id: &str, path: &str
 mod tests {
     use super::*;
     use cade_ai::LlmToolCall;
+
+    // ── truncate_at_char_boundary (C2) ────────────────────────────────
+
+    #[test]
+    fn truncate_at_char_boundary_short_string_unchanged() {
+        let s = "hello world";
+        assert_eq!(truncate_at_char_boundary(s, 100), "hello world");
+    }
+
+    #[test]
+    fn truncate_at_char_boundary_ascii_exact() {
+        let s = "abcdefghij";
+        assert_eq!(truncate_at_char_boundary(s, 5), "abcde");
+    }
+
+    #[test]
+    fn truncate_at_char_boundary_does_not_panic_on_multibyte() {
+        // 4-byte emoji at the boundary: byte index 8 splits the emoji.
+        // Without the fix this would panic with "byte index 8 is not a
+        // char boundary".
+        let s = "abcdefg🚀hijk"; // bytes: 7 ascii + 4-byte emoji + 4 ascii
+        assert_eq!(s.len(), 15);
+        // Cut at byte 8 — middle of the emoji's 4-byte sequence.
+        let result = truncate_at_char_boundary(s, 8);
+        // Should walk back to byte 7 (just before the emoji).
+        assert_eq!(result, "abcdefg");
+    }
+
+    #[test]
+    fn truncate_at_char_boundary_keeps_complete_chars() {
+        let s = "héllo"; // 'é' is 2 bytes (0xC3 0xA9). Bytes: h(1) é(2) l(1) l(1) o(1) = 6
+        assert_eq!(s.len(), 6);
+        // Cut at byte 2 — middle of 'é'? 'h' is byte 0, 'é' starts at byte 1
+        // and ends at byte 3.  Byte index 2 is mid-é and not a boundary.
+        let result = truncate_at_char_boundary(s, 2);
+        // Should walk back to byte 1.
+        assert_eq!(result, "h");
+    }
+
+    #[test]
+    fn truncate_at_char_boundary_zero_max() {
+        let s = "abc";
+        assert_eq!(truncate_at_char_boundary(s, 0), "");
+    }
+
+    #[test]
+    fn truncate_at_char_boundary_large_utf8() {
+        // 8192 bytes worth of multi-byte CJK — verifies we never panic at
+        // the production cap.
+        let cjk = "中".repeat(3000); // 3 bytes each → 9000 bytes
+        let result = truncate_at_char_boundary(&cjk, 8192);
+        // Length must be ≤ 8192 and on a char boundary.
+        assert!(result.len() <= 8192);
+        assert!(cjk.is_char_boundary(result.len()));
+    }
 
     /// RED for Phase A0: an `intercept_meta_tool` helper must exist and
     /// dispatch the existing in-loop intercepts (`load_skill`,
