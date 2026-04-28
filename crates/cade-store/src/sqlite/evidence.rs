@@ -1,5 +1,15 @@
 use super::*;
 
+/// Base confidence for memory types that represent durable knowledge
+/// (decisions, constraints, conventions). Set high enough that a single
+/// `search_memory` hit (`+0.15`) pushes them above the
+/// `CONFIDENCE_RETENTION_THRESHOLD` (1.5), making them immune to
+/// archival demotion.
+const TYPED_CONFIDENCE_BOOST: f64 = 1.35;
+
+/// Memory types that receive the initial confidence boost.
+const BOOSTED_TYPES: &[&str] = &["decision", "constraint", "convention"];
+
 #[allow(clippy::too_many_arguments)]
 pub fn upsert_memory_block_typed(
     db: &Db,
@@ -23,6 +33,15 @@ pub fn upsert_memory_block_typed(
                 "UPDATE shared_memory_blocks SET memory_type = ?1 WHERE label = ?2",
                 params![mt, label],
             );
+
+            // Apply confidence boost for durable knowledge types when no
+            // explicit confidence was provided by the caller.
+            if confidence.is_none() && BOOSTED_TYPES.contains(&mt) {
+                let _ = conn.execute(
+                    "UPDATE shared_memory_blocks SET confidence = MAX(confidence, ?1) WHERE label = ?2",
+                    params![TYPED_CONFIDENCE_BOOST, label],
+                );
+            }
         }
         if let Some(c) = confidence {
             let _ = conn.execute(

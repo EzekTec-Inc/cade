@@ -945,3 +945,112 @@ fn test_standalone_block_with_max_chars() -> Result<()> {
     assert_eq!(info.max_chars, Some(100));
     Ok(())
 }
+
+// ── Typed confidence boost ────────────────────────────────────────────────
+
+/// Typed memory blocks of types `decision`, `constraint`, and `convention`
+/// should receive a higher initial confidence so they resist archival
+/// demotion with fewer (or zero) search hits.
+#[test]
+fn typed_decision_block_gets_confidence_boost() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block_typed(
+        &db, "a1", "db_choice", "use postgres", None, None,
+        Some("decision"), None,
+    )?;
+
+    let c = get_block_confidence(&db, "a1", "db_choice")?;
+    assert!(
+        c > 1.0,
+        "decision block should have confidence > 1.0 (default), got {c}"
+    );
+    Ok(())
+}
+
+#[test]
+fn typed_constraint_block_gets_confidence_boost() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block_typed(
+        &db, "a1", "no_new_deps", "no new dependencies without approval", None, None,
+        Some("constraint"), None,
+    )?;
+
+    let c = get_block_confidence(&db, "a1", "no_new_deps")?;
+    assert!(
+        c > 1.0,
+        "constraint block should have confidence > 1.0 (default), got {c}"
+    );
+    Ok(())
+}
+
+#[test]
+fn typed_convention_block_gets_confidence_boost() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block_typed(
+        &db, "a1", "commit_style", "use conventional commits", None, None,
+        Some("convention"), None,
+    )?;
+
+    let c = get_block_confidence(&db, "a1", "commit_style")?;
+    assert!(
+        c > 1.0,
+        "convention block should have confidence > 1.0 (default), got {c}"
+    );
+    Ok(())
+}
+
+#[test]
+fn typed_generic_block_does_not_get_boost() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block_typed(
+        &db, "a1", "random_note", "some note", None, None,
+        Some("generic"), None,
+    )?;
+
+    let c = get_block_confidence(&db, "a1", "random_note")?;
+    assert!(
+        (c - 1.0).abs() < f64::EPSILON,
+        "generic block should keep default confidence 1.0, got {c}"
+    );
+    Ok(())
+}
+
+/// A decision block with a single search_memory hit should reach the
+/// retention threshold (1.5), making it immune to archival.
+#[test]
+fn typed_decision_resists_demotion_after_one_search_hit() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block_typed(
+        &db, "a1", "arch_choice", "chose microservices", None, None,
+        Some("decision"), None,
+    )?;
+
+    // One search hit
+    boost_confidence(&db, "a1", "arch_choice")?;
+    let c = get_block_confidence(&db, "a1", "arch_choice")?;
+    assert!(
+        c >= CONFIDENCE_RETENTION_THRESHOLD,
+        "decision + 1 boost should reach retention threshold {CONFIDENCE_RETENTION_THRESHOLD}, got {c}"
+    );
+
+    // Advance turns way past stale threshold
+    for _ in 0..100 {
+        increment_turn_counter(&db, "a1")?;
+    }
+    let current_turn = get_turn_counter(&db, "a1")?;
+
+    let promoted = promote_stale_blocks(&db, "a1", current_turn, 80)?;
+    assert_eq!(promoted, 0, "decision block with one search hit should resist demotion");
+
+    Ok(())
+}
