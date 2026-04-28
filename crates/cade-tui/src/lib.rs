@@ -24,6 +24,7 @@ pub mod markdown;
 pub mod mcp_picker;
 pub mod menu;
 pub mod overlay;
+pub mod overlay_component;
 pub mod question;
 pub mod session_tree;
 pub mod skills;
