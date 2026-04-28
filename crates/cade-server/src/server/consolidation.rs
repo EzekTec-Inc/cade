@@ -127,13 +127,12 @@ fn preview_limit_for_role(role: &str) -> usize {
 ///
 /// M2: the old heuristic (`len < 15 && no '/' && no digit`) incorrectly
 /// dropped legitimate short confirmations such as `"ok"` or `"done"`, making
-/// the summariser think those tools never ran. The `MAX_SUMMARY_INPUT_CHARS`
-/// cap upstream is now the only safeguard against runaway input, and
-/// whitespace-only content is already filtered via `trimmed.is_empty()` before
-/// this function is called.
-fn should_skip_noisy_tool(_role: &str, _trimmed: &str) -> bool {
-    false
-}
+/// the summariser think those tools never ran.
+///
+/// M5: removed — the function had become a permanent no-op (always
+/// returned `false`).  The `MAX_SUMMARY_INPUT_CHARS` cap upstream is the
+/// only safeguard against runaway input, and whitespace-only content is
+/// already filtered via `trimmed.is_empty()` at the call site.
 
 /// Number of turns between eager (turn-count-driven) consolidation runs.
 ///
@@ -274,11 +273,9 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
             if trimmed.is_empty() {
                 continue;
             }
-            // Filter pure-noise tool messages (no-op after M2 — retained for
-            // call-site readability in case future heuristics are added).
-            if should_skip_noisy_tool(role, trimmed) {
-                continue;
-            }
+            // M5: removed `should_skip_noisy_tool` filter — it was a
+            // permanent no-op.  Whitespace-only content is filtered above
+            // and `MAX_SUMMARY_INPUT_CHARS` caps total input.
             // Extract high-signal artifacts before truncation: file paths,
             // function signatures, and error-like strings survive even when
             // the full message is cut to the per-role preview limit.
@@ -1079,35 +1076,6 @@ mod tests {
         // flood the summary prompt.
         assert_eq!(preview_limit_for_role("system"), 400);
         assert_eq!(preview_limit_for_role(""), 400);
-    }
-
-    #[test]
-    fn m2_should_skip_noisy_tool_returns_false_for_any_content() {
-        // The noisy-tool-skip heuristic was removed in M2: the MAX_SUMMARY_INPUT_CHARS
-        // cap is the only safeguard against runaway input. Short success confirmations
-        // like "ok" and "done" must now survive into the summary prompt so the LLM
-        // knows a tool ran successfully.
-        assert!(!should_skip_noisy_tool("tool", "ok"));
-        assert!(!should_skip_noisy_tool("tool", "done"));
-        assert!(!should_skip_noisy_tool("tool", "nothing"));
-        assert!(!should_skip_noisy_tool("tool", "a/b"));
-        assert!(!should_skip_noisy_tool("tool", "E42"));
-    }
-
-    #[test]
-    fn m2_should_skip_noisy_tool_still_skips_empty() {
-        // Empty/whitespace-only content is already filtered earlier via
-        // `trimmed.is_empty()`, but should_skip_noisy_tool must not re-introduce
-        // the old behaviour for it.
-        assert!(!should_skip_noisy_tool("tool", ""));
-    }
-
-    #[test]
-    fn m2_should_skip_noisy_tool_never_skips_non_tool_roles() {
-        // The filter only applies to `role == "tool"`; user/assistant messages
-        // are never dropped by this rule.
-        assert!(!should_skip_noisy_tool("user", "hi"));
-        assert!(!should_skip_noisy_tool("assistant", "ok"));
     }
 
     // ── M3: eager consolidation trigger (turn-count based) ───────────────

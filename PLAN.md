@@ -4368,3 +4368,55 @@ but the agent's memory of those edits was lost.
 
 ### Rollback
 Restore checkpoint `pre-subagent-meta-tool-fix` (cp-f87b8d3d).
+
+---
+
+## 2026-04-28T02:09:40Z — Code review cleanup batch (M9r, M6, M5, M1, N1–N3)
+
+### Summary
+Apply 6 lower-severity findings from the validated code review.
+
+### Files modified
+- `crates/cade-server/src/server/api/run.rs` (M9r, M1)
+- `crates/cade-server/src/server/consolidation.rs` (M5)
+- `crates/cade-agent/src/tools/manager.rs` (M6, N3)
+- `crates/cade-agent/src/tools/runtime/mod.rs` (N1, N2)
+
+### Reasons (per finding)
+- **M9r**: `finish_run` always passed `"done"` even on error/MAX_TURNS exits. Audit/observability could not distinguish clean vs aborted runs.
+- **M6**: `strip_mcp_prefix` used `rfind("__")`; would mis-strip MCP tools whose base name itself contains `__`.
+- **M5**: `should_skip_noisy_tool` was a permanent no-op (always `false`) but still called and tested. Dead code.
+- **M1**: `handle_load_skill_tool`/`handle_unload_skill_tool` accepted `&str` and re-parsed it via `serde_json::from_str`, even though the caller already had a `&serde_json::Value`. Wasted allocation + parse round-trip.
+- **N1**: dead commented import `// use crate::tools::git_checkpoint;` in runtime/mod.rs:26.
+- **N2**: empty `region/endregion: Memory handlers` block in runtime/mod.rs:245-249.
+- **N3**: stray `// endregion: --- Tests` at manager.rs:228 with no matching opening region.
+
+### Previous behavior
+- M9r: SSE error events fired but `runs.status = "done"` regardless of outcome.
+- M6: `strip_mcp_prefix("server__nested__tool")` → `"tool"` (drops `nested__`).
+- M5: filter no-op every call; `should_skip_noisy_tool` symbol present.
+- M1: `tc.arguments` (Value) → `.to_string()` → `serde_json::from_str` → access `["id"]`.
+- N1–N3: comments / dead code present.
+
+### New behavior
+- M9r: introduced private `RunExitStatus { Done, Error }` enum; loop sets `Error` before each error-path `break`; main `finish_run` call uses `exit_status.as_str()`. Theme-path `finish_run("done")` unchanged (always a clean exit).
+- M6: `strip_mcp_prefix` uses `find("__")` (first occurrence). `is_file_edit_tool` round-trip preserved.
+- M5: function and call site removed; the 3 obsolete tests guarding the no-op also removed. Behaviour unchanged (always-false → unconditional pass-through).
+- M1: signatures now take `arguments: &serde_json::Value`; callers pass `&tc.arguments` directly.
+- N1: dead import deleted.
+- N2: empty region block deleted.
+- N3: stray `endregion` line deleted (matching `region` retained at line 233 in old layout, now first opener).
+
+### Tests (TDD red-green)
+- `run_exit_status_done_renders_as_done`, `run_exit_status_error_renders_as_error` (RED → GREEN for M9r).
+- `strip_mcp_prefix_basic`, `strip_mcp_prefix_no_prefix_passes_through`, `strip_mcp_prefix_handles_double_underscore_in_tool_name` (last one was RED → GREEN for M6).
+- M5: 3 obsolete tests removed; the 4 remaining `m2_*` consolidation tests + 52 consolidation tests still green.
+- M1, N1–N3: structural refactor / cleanup; existing tests cover.
+
+### Verification
+- `cargo build -p cade-agent -p cade-server` → green.
+- `cargo test -p cade-server --lib` → 256 passed (was 259 — 3 obsolete M5 tests removed; 2 new M9r tests added; net –1).
+- `cargo test -p cade-agent --lib` → 113 passed (was 110 — 3 new M6 tests added).
+
+### Rollback
+`restore_checkpoint cp-4c0fecf4-dc79-4580-aad8-31a45bfdfb22` (label: `pre-cleanup-batch`).

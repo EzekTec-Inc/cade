@@ -52,6 +52,26 @@ const MAX_TURNS: usize = 20;
 /// history; only the SSE payload is capped to keep the GUI responsive.
 const SSE_OUTPUT_TRUNCATE_BYTES: usize = 8_192;
 
+/// M9r: status the agentic run exited with.  Stored in the `runs.status`
+/// column so audit / observability can distinguish a clean termination
+/// (`"done"`) from an aborted one (`"error"` — `MAX_TURNS` exceeded, cost
+/// cap hit, build_context error, LLM stream error, context-overflow
+/// retry exhausted, etc.).  Pure value type; no I/O.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RunExitStatus {
+    Done,
+    Error,
+}
+
+impl RunExitStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            RunExitStatus::Done => "done",
+            RunExitStatus::Error => "error",
+        }
+    }
+}
+
 /// Truncate a string at a UTF-8 char boundary at or below `max_bytes`.
 ///
 /// `String::len()` is in bytes, but slicing with `s[..n]` panics if `n` is
@@ -333,6 +353,11 @@ async fn run_agent_loop(
     }
 
     let mut turns = 0usize;
+    // M9r: track the loop exit reason so `finish_run` records the right
+    // status.  Any break preceded by an `"message_type": "error"` SSE
+    // event flips this to `Error`; the natural "no more tool calls"
+    // termination keeps `Done`.
+    let mut exit_status = RunExitStatus::Done;
 
     loop {
         turns += 1;
@@ -342,6 +367,7 @@ async fn run_agent_loop(
                 "error": format!("Agentic loop exceeded {MAX_TURNS} turns — stopping"),
             }))
             .await;
+            exit_status = RunExitStatus::Error;
             break;
         }
 
@@ -364,6 +390,7 @@ async fn run_agent_loop(
                             cost, cap
                         ),
                     })).await;
+                    exit_status = RunExitStatus::Error;
                     break;
                 }
             }
@@ -375,6 +402,7 @@ async fn run_agent_loop(
                 Ok(ctx) => ctx,
                 Err(e) => {
                     send(json!({ "message_type": "error", "error": e })).await;
+                    exit_status = RunExitStatus::Error;
                     break;
                 }
             };
@@ -446,6 +474,7 @@ async fn run_agent_loop(
                     Ok(ctx) => ctx,
                     Err(build_err) => {
                         send(json!({ "message_type": "error", "error": build_err })).await;
+                        exit_status = RunExitStatus::Error;
                         break;
                     }
                 };
@@ -485,12 +514,14 @@ async fn run_agent_loop(
                             "error": format!("Context overflow persisted after consolidation: {e2}"),
                         }))
                         .await;
+                        exit_status = RunExitStatus::Error;
                         break;
                     }
                 }
             }
             Err(e) => {
                 send(json!({ "message_type": "error", "error": e.to_string() })).await;
+                exit_status = RunExitStatus::Error;
                 break;
             }
         };
@@ -642,7 +673,7 @@ async fn run_agent_loop(
         // Loop → re-invoke LLM with tool results
     }
 
-    let _ = sqlite::finish_run(&state2.db, &run_id2, "done");
+    let _ = sqlite::finish_run(&state2.db, &run_id2, exit_status.as_str());
 
     // ── End of stream ─────────────────────────────────────────────────
     let _ = tx.send(Ok(Event::default().data("[DONE]"))).await;
@@ -656,13 +687,13 @@ async fn handle_load_skill_tool(
     state: &AppState,
     agent_id: &str,
     tool_call_id: &str,
-    arguments: &str,
+    arguments: &serde_json::Value,
 ) -> cade_agent::tools::manager::ToolResult {
     use cade_agent::tools::manager::ToolResult;
 
-    let skill_id = serde_json::from_str::<serde_json::Value>(arguments)
-        .ok()
-        .and_then(|v| v["id"].as_str().map(|s| s.to_string()))
+    let skill_id = arguments["id"]
+        .as_str()
+        .map(|s| s.to_string())
         .unwrap_or_default();
 
     if skill_id.is_empty() {
@@ -735,13 +766,13 @@ async fn handle_unload_skill_tool(
     state: &AppState,
     agent_id: &str,
     tool_call_id: &str,
-    arguments: &str,
+    arguments: &serde_json::Value,
 ) -> cade_agent::tools::manager::ToolResult {
     use cade_agent::tools::manager::ToolResult;
 
-    let skill_id = serde_json::from_str::<serde_json::Value>(arguments)
-        .ok()
-        .and_then(|v| v["id"].as_str().map(|s| s.to_string()))
+    let skill_id = arguments["id"]
+        .as_str()
+        .map(|s| s.to_string())
         .unwrap_or_default();
 
     if skill_id.is_empty() {
@@ -829,12 +860,10 @@ async fn intercept_meta_tool(
     };
     match tc.name.as_str() {
         "load_skill" => {
-            let args_str = tc.arguments.to_string();
-            Some(handle_load_skill_tool(state, agent_id, &tc.id, &args_str).await)
+            Some(handle_load_skill_tool(state, agent_id, &tc.id, &tc.arguments).await)
         }
         "unload_skill" => {
-            let args_str = tc.arguments.to_string();
-            Some(handle_unload_skill_tool(state, agent_id, &tc.id, &args_str).await)
+            Some(handle_unload_skill_tool(state, agent_id, &tc.id, &tc.arguments).await)
         }
         "run_subagent" => {
             let args: serde_json::Value =
@@ -2145,6 +2174,18 @@ mod tests {
         // Length must be ≤ 8192 and on a char boundary.
         assert!(result.len() <= 8192);
         assert!(cjk.is_char_boundary(result.len()));
+    }
+
+    // ── RunExitStatus (M9r) ────────────────────────────────────────────
+
+    #[test]
+    fn run_exit_status_done_renders_as_done() {
+        assert_eq!(RunExitStatus::Done.as_str(), "done");
+    }
+
+    #[test]
+    fn run_exit_status_error_renders_as_error() {
+        assert_eq!(RunExitStatus::Error.as_str(), "error");
     }
 
     /// RED for Phase A0: an `intercept_meta_tool` helper must exist and

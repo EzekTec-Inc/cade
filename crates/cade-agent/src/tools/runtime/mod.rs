@@ -23,7 +23,6 @@ use cade_core::tool_ids::*;
 use crate::agent::client::HttpTransport;
 use crate::backends::{ExecutionBackend, LocalBackend};
 use crate::mcp::McpManager;
-// use crate::tools::git_checkpoint;
 use crate::tools::dispatch;
 use crate::tools::memory as store_memory;
 
@@ -242,12 +241,6 @@ impl ToolRuntime {
     }
 
     // endregion: --- Dispatch
-
-    // region:    --- Memory handlers
-
-
-
-    // endregion: --- Memory handlers
 
     // region:    --- Skill handlers
 

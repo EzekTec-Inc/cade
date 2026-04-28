@@ -116,8 +116,13 @@ pub fn canonical_name(name: &str) -> &str {
 /// Strip the MCP server prefix from a tool name.
 ///
 /// `"developer__write_file"` → `"write_file"`, `"write_file"` → `"write_file"`.
+///
+/// M6: uses `find` (FIRST `__`) not `rfind` so MCP tools whose base name
+/// itself contains `__` round-trip correctly — the `__` separator we want
+/// to strip is always the server-name/tool-name boundary, which is the
+/// first occurrence.
 pub fn strip_mcp_prefix(name: &str) -> &str {
-    if let Some(pos) = name.rfind("__") {
+    if let Some(pos) = name.find("__") {
         &name[pos + 2..]
     } else {
         name
@@ -219,8 +224,6 @@ pub fn schemas_for_names(
         })
         .collect()
 }
-
-// endregion: --- Tests
 
 /// Returns true if the tool is an MCP tool that can mutate state.
 pub async fn is_mcp_write_tool(name: &str, mcp: &McpManager) -> bool {
@@ -432,6 +435,31 @@ mod tests {
         assert!(!is_file_edit_tool("developer__read_file"));
         assert!(!is_file_edit_tool("grep"));
         assert!(!is_file_edit_tool("run_subagent"));
+    }
+
+    // -- strip_mcp_prefix (M6)
+
+    #[test]
+    fn strip_mcp_prefix_basic() {
+        assert_eq!(strip_mcp_prefix("developer__write_file"), "write_file");
+    }
+
+    #[test]
+    fn strip_mcp_prefix_no_prefix_passes_through() {
+        assert_eq!(strip_mcp_prefix("write_file"), "write_file");
+    }
+
+    /// M6: `strip_mcp_prefix` must strip only the FIRST `__` (the
+    /// server-name / tool-name boundary), so MCP tools whose base name
+    /// itself contains `__` round-trip correctly.  Using `rfind` would
+    /// drop everything but the trailing segment.
+    #[test]
+    fn strip_mcp_prefix_handles_double_underscore_in_tool_name() {
+        // hypothetical MCP tool whose base name contains `__`
+        assert_eq!(
+            strip_mcp_prefix("server__nested__tool"),
+            "nested__tool"
+        );
     }
 
     // -- Schema validation
