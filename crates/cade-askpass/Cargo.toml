@@ -2,15 +2,28 @@
 name        = "cade-askpass"
 version     = "0.1.0"
 edition     = "2024"
-description = "Askpass helper binary for CADE — captures sudo/ssh password prompts via 127.0.0.1 IPC"
+description = "Askpass helper binary + IPC server for CADE — captures sudo/ssh password prompts via authenticated 127.0.0.1 IPC"
 license     = "MIT OR Apache-2.0"
+
+[lib]
+name = "cade_askpass"
+path = "src/lib.rs"
 
 [[bin]]
 name = "cade-askpass"
 path = "src/main.rs"
 
+[features]
+default = []
+# Tokio-based IPC server.  Used by cade-agent to host the password
+# channel.  The binary itself does NOT enable this feature so it
+# stays std-only and small.
+server = ["dep:tokio"]
+
 [dependencies]
 anyhow = "1"
+tokio = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"
+tokio = { workspace = true }
