@@ -1,0 +1,16 @@
+[package]
+name        = "cade-askpass"
+version     = "0.1.0"
+edition     = "2024"
+description = "Askpass helper binary for CADE — captures sudo/ssh password prompts via 127.0.0.1 IPC"
+license     = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "cade-askpass"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = "1"
+
+[dev-dependencies]
+tempfile = "3"

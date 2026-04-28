@@ -14,6 +14,7 @@ members = [
     "crates/cade-mcp",
     "crates/cade-cli",
     ".", "crates/cade-ide-mcp", "crates/cade-store",          # root package — owns the two binaries
+    "crates/cade-askpass",
 ]
 resolver = "3"
 
