@@ -724,8 +724,8 @@ impl Repl {
             },
         };
 
-        if !result.is_error {
-            if cade_agent::tools::manager::is_file_edit_tool(tool_name) {
+        if !result.is_error
+            && cade_agent::tools::manager::is_file_edit_tool(tool_name) {
                 let path = args["file_path"]
                     .as_str()
                     .or(args["path"].as_str())
@@ -737,7 +737,6 @@ impl Repl {
                     let _ = c.record_recent_edit(&a, &path).await;
                 });
             }
-        }
 
         if result.is_error {
             hooks

@@ -151,8 +151,7 @@ pub(crate) const COMPRESSED_DESCRIPTION_CHAR_CAP: usize = 80;
 pub(crate) fn compress_tool_schema(mut schema: Value) -> Value {
     // Truncate top-level description.
     if let Some(desc) = schema.get("description").and_then(|v| v.as_str()) {
-        let trimmed: String = desc
-            .splitn(2, '\n')
+        let trimmed: String = desc.split('\n')
             .next()
             .unwrap_or(desc)
             .chars()
@@ -469,11 +468,10 @@ pub(crate) async fn build_context(
 
     {
         let mut cache = state.context_cache.lock();
-        if let Some((cached_hash, cached_tuple)) = cache.get(&cache_key) {
-            if *cached_hash == state_hash {
+        if let Some((cached_hash, cached_tuple)) = cache.get(&cache_key)
+            && *cached_hash == state_hash {
                 return Ok(cached_tuple.clone());
             }
-        }
     }
 
     // Message history from DB — oldest first, scoped to conversation

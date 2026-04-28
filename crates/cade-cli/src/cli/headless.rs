@@ -316,8 +316,8 @@ async fn finalize_tool_result(
     mut output: String,
     is_error: bool,
 ) -> (String, String, String, bool) {
-    if !is_error {
-        if cade_agent::tools::manager::is_file_edit_tool(tool_name.as_str()) {
+    if !is_error
+        && cade_agent::tools::manager::is_file_edit_tool(tool_name.as_str()) {
             let path = args["file_path"]
                 .as_str()
                 .or(args["path"].as_str())
@@ -329,7 +329,6 @@ async fn finalize_tool_result(
                 let _ = c.record_recent_edit(&a, &path).await;
             });
         }
-    }
 
     if hooks.is_empty() {
         return (call_id, tool_name, output, is_error);

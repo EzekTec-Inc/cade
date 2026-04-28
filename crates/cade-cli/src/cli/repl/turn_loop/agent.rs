@@ -110,8 +110,6 @@ impl Repl {
             }
         }
 
-        let effective_input = effective_input;
-
         // -- Thinking animation
         let bar_text = self
             .app

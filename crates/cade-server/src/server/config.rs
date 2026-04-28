@@ -152,18 +152,15 @@ impl ServerConfig {
         let mut max_context_budget = std::env::var("CADE_MAX_CONTEXT_BUDGET")
             .ok()
             .and_then(|v| v.parse().ok());
-        if max_context_budget.is_none() {
-            if let Some(home) = dirs::home_dir() {
+        if max_context_budget.is_none()
+            && let Some(home) = dirs::home_dir() {
                 let settings_path = home.join(".cade").join("settings.json");
-                if let Ok(content) = std::fs::read_to_string(&settings_path) {
-                    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                        if let Some(budget) = json.get("max_context_budget").and_then(|v| v.as_u64()) {
+                if let Ok(content) = std::fs::read_to_string(&settings_path)
+                    && let Ok(json) = serde_json::from_str::<serde_json::Value>(&content)
+                        && let Some(budget) = json.get("max_context_budget").and_then(|v| v.as_u64()) {
                             max_context_budget = Some(budget as usize);
                         }
-                    }
-                }
             }
-        }
 
         Ok(Self {
             addr,

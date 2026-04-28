@@ -336,10 +336,7 @@ async fn run_agent_loop(
         } else {
             let all_themes = cade_core::resources::themes::discover_themes(&cwd, &agent_dir);
             let mut available: Vec<&str> =
-                cade_core::resources::themes::ThemeColors::builtin_names()
-                    .iter()
-                    .copied()
-                    .collect();
+                cade_core::resources::themes::ThemeColors::builtin_names().to_vec();
             available.extend(all_themes.iter().map(|t| t.name.as_str()));
             send(json!({
                 "message_type": "assistant_message",
@@ -1993,14 +1990,12 @@ async fn handle_run_subagent_tool(
             // memory block so the parent knows what the subagent changed.
             if !tool_result.is_error
                 && cade_agent::tools::manager::is_file_edit_tool(&tc.name)
-            {
-                if let Some(path) = tc.arguments["path"]
+                && let Some(path) = tc.arguments["path"]
                     .as_str()
                     .or_else(|| tc.arguments["file_path"].as_str())
                 {
                     record_recent_edit_db(&state.db, parent_agent_id, path);
                 }
-            }
 
             messages.push(LlmMessage {
                 role: "tool".to_string(),

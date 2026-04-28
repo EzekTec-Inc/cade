@@ -77,10 +77,9 @@ fn cache_ratios(model_id: &str) -> (f64, f64) {
         (0.25, 0.0) // 25% read, no write charge
     } else if model_id.starts_with("deepseek/") {
         (0.10, 0.0)
-    } else if model_id.starts_with("mistralai/") {
-        (0.25, 0.0)
     } else {
-        (0.25, 0.0) // safe default
+        // mistralai/ and unknown providers — same conservative default
+        (0.25, 0.0)
     }
 }
 
