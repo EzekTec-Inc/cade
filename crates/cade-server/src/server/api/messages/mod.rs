@@ -21,13 +21,6 @@ use cade_ai::{CompletionRequest, LlmMessage, LlmToolCall, MessageImage, StreamCh
 
 /// Maximum length for auto-generated conversation titles (chars from first user message).
 const CONV_TITLE_MAX: usize = 60;
-/// Appended to every agent's system prompt so the LLM always produces
-/// plain-text analysis after tool use, regardless of the stored system_prompt.
-pub(crate) const TOOL_RESPONSE_RULE: &str = "\n\n\
-After every tool execution, always provide a plain-text response that explains \
-the result, what you found, or what you are doing next. \
-Never end a turn silently after running a tool. \
-Do not include filler phrases like 'Understood' or 'I will adhere to the rules'. Just do the work.";
 /// Number of recent messages examined when deciding whether to include MCP
 /// tool schemas.  MCP tools (identified by `__` namespace separator) are only
 /// sent when actually called within this window, saving prompt tokens.

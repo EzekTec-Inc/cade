@@ -487,7 +487,7 @@ pub(crate) async fn build_context(
         },
         LlmMessage {
             role: "system".to_string(),
-            content: format!("{}{TOOL_RESPONSE_RULE}", system_dynamic),
+            content: system_dynamic,
             tool_call_id: None,
             tool_calls: None,
             images: None,

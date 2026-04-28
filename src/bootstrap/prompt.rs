@@ -23,6 +23,13 @@ executes on their real filesystem. Be precise and careful.\n\
   Start every response by directly addressing the task or question.\n\
 - **Be direct**: Execute your tasks immediately. Never say 'Understood', 'I will adhere to the rules', or acknowledge your constraints. Just do the work.\n\
 - **Code speaks**: When the answer is code, show code. Skip the English wrapper.\n\
+- **Parallel tool calls**: When multiple tool calls are independent, make them in the same \
+  request to reduce round-trips.\n\
+- **Batch over narrow**: Prefer fewer, broader tool calls over many narrow ones.\n\
+\n\
+After every tool execution, always provide a plain-text response that explains \
+the result, what you found, or what you are doing next. \
+Never end a turn silently after running a tool.\n\
 \n\
 ## Planning (CRITICAL)\n\
 \n\
@@ -71,6 +78,30 @@ in your prompt).\n\
 - **NEVER hallucinate**: If you do not see something in your current context, DO NOT guess. \n\
   Use `conversation_search` or `search_memory` first.\n\
 ";
+
+// -- Capability-gated prompt fragments (stripped by build_system_prompt when
+//    the corresponding capability is disabled).
+
+/// Subagent guidance — only relevant when `Capability::Agentic` is on.
+const SUBAGENT_FRAGMENT: &str = "- **Subagents (`run_subagent`)**: Delegate complex or long-running tasks (like deep codebase \
+exploration, large file rewrites, or code review) to subagents to keep your active context clean. Ensure that each subagent is equipped with the best model for the tasks given and ensure such model is a balance between token usage and excellent capabilities in accomplishing the tasks given to the subagent.\n";
+
+/// Checkpoint guidance — only relevant when `Capability::Agentic` is on
+/// (checkpoints are a meta-tool dispatched through the agentic loop).
+const CHECKPOINT_FRAGMENT: &str = "- **Checkpoints**: Always use `create_checkpoint` before risky operations, large refactors, or \
+  destructive file modifications so you can easily revert if you make a mistake.\n";
+
+/// Hooks guidance — only relevant when `Capability::Mcp` is on (hooks
+/// are implemented via MCP tool interception).
+const HOOKS_FRAGMENT: &str = "- **Hooks**: Tools may be intercepted by user-defined Hooks. If a tool returns \
+  `[Blocked by hook: <reason>]`, fix the root cause instead of trying to bypass it. If it returns \
+  `[Hook context: ...]`, incorporate that extra context into your next steps.\n";
+
+/// Advanced memory tools — only relevant when `Capability::AdvancedMemory` is on.
+const ADVANCED_MEMORY_FRAGMENT: &str = "- **Proactive Memory Typing**: When resolving constraints, conventions, or decisions, \
+  use `update_memory_typed(label, value, memory_type)` to permanently record them \
+  so they do not get lost when the transient active goal resets.\n";
+
 /// Build the effective system prompt, omitting sections for capabilities
 /// that are not enabled.  When `caps` enables everything (Profile::Full),
 /// the output is identical to the static BASE_SYSTEM_PROMPT.
@@ -79,14 +110,20 @@ pub fn build_system_prompt(caps: &cade_core::capabilities::CapabilitySet) -> Str
 
     let mut prompt = String::from(BASE_SYSTEM_PROMPT);
 
-    // Append capability-specific guidance only when enabled
+    // Strip guidance for disabled capabilities so the LLM never attempts
+    // to call tools that don't exist, saving tokens and avoiding errors.
+
     if !caps.is_enabled(Capability::Agentic) {
-        // Remove subagent/agent references from the prompt to avoid confusing the model
-        prompt = prompt.replace(
-            "- **Subagents (`run_subagent`)**: Delegate complex or long-running tasks (like deep codebase \
-exploration, large file rewrites, or code review) to subagents to keep your active context clean. Ensure that each subagent is equipped with the best model for the tasks given and ensure such model is a balance between token usage and excellent capabilities in accomplishing the tasks given to the subagent.\n",
-            "",
-        );
+        prompt = prompt.replace(SUBAGENT_FRAGMENT, "");
+        prompt = prompt.replace(CHECKPOINT_FRAGMENT, "");
+    }
+
+    if !caps.is_enabled(Capability::Mcp) {
+        prompt = prompt.replace(HOOKS_FRAGMENT, "");
+    }
+
+    if !caps.is_enabled(Capability::AdvancedMemory) {
+        prompt = prompt.replace(ADVANCED_MEMORY_FRAGMENT, "");
     }
 
     prompt
