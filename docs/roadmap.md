@@ -84,12 +84,17 @@
 - [x] **P8** — `tool_executions.output_chars` column for per-call cost telemetry
 
 ### Quality
-- [x] Test coverage: 540+ unit tests across the workspace
+- [x] Test coverage: 1,346 tests across the workspace
 - [x] CI/CD pipeline: GitHub Actions (build, test, release)
 - [x] Plugin system: dynamic loading via shared libraries / WASM
 - [x] Multi-agent collaboration: named agents with message passing
 - [x] Self-improvement loop: reflection subagent updates memory automatically
 - [x] Session replay: timeline export
+- [x] **Clippy clean** under `-D warnings` across the entire workspace
+- [x] **TUI IME — hardware cursor sync (Phase 1)** — implemented in
+      `crates/cade-tui/src/app/mod.rs`; `MoveTo` + `Show`/`Hide` is
+      emitted after every frame so OS IMEs spawn their candidate window
+      at the correct text cursor position
 
 ---
 
@@ -97,12 +102,22 @@
 
 | Area | Status |
 |---|---|
-| TUI IME (hardware cursor sync, preedit display) | Phase 1 of `docs/history/tui-refactor-implementation.md` |
-| Askpass implementation | Plan in `docs/history/askpass-implementation-plan.md` — not started |
+| TUI Refactor — Phase 2 (pluggable `EditorComponent`) | Plan in `docs/history/tui-refactor-implementation.md` — not started |
+| TUI Refactor — Phase 3 (dynamic overlay stack) | Plan in `docs/history/tui-refactor-implementation.md` — not started |
+| TUI Refactor — Phase 4 (UI extension slots) | Plan in `docs/history/tui-refactor-implementation.md` — not started |
+| Askpass implementation (`crates/cade-askpass`) | Plan in `docs/history/askpass-implementation-plan.md` — not started |
 
 ---
 
 ## Planned
+
+### Near term
+- [ ] **TUI Refactor Phases 2–4** — pluggable editor trait, dynamic
+      overlay stack, UI extension slots; enables Vim-mode editor and
+      plugin-injected widgets without touching the core state machine.
+- [ ] **Askpass** — new `cade-askpass` binary crate, ephemeral 127.0.0.1
+      IPC server in `BashTool`, masked-input modal in `cade-tui`.
+      Captures `sudo`/`ssh` password prompts safely without PTY scraping.
 
 ### Long term
 - [ ] **Team features** — shared agents, memory, and skills across a team
