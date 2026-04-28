@@ -17,11 +17,13 @@
 //! own a recovery policy beyond "log and continue" because the pre-
 //! existing call sites already chose that policy.
 
+#[allow(unused_imports)]
 use std::sync::{Mutex, MutexGuard};
 
 /// Format the structured log message emitted on poison recovery.
 /// Pure helper, kept side-effect free so it can be unit-tested without
 /// installing a tracing subscriber.
+#[allow(dead_code)]
 pub(crate) fn fmt_poison_recovery(label: &str) -> String {
     format!("mutex poisoned at '{label}': recovering inner data; a previous holder panicked")
 }
@@ -30,6 +32,7 @@ pub(crate) fn fmt_poison_recovery(label: &str) -> String {
 /// `error!(target = "cade::poison")` event.  `label` should identify
 /// the lock's purpose (e.g. `"context_cache"`); it is included verbatim
 /// in the log line.
+#[allow(dead_code)]
 pub(crate) fn lock_or_recover<'a, T>(m: &'a Mutex<T>, label: &'static str) -> MutexGuard<'a, T> {
     match m.lock() {
         Ok(g) => g,

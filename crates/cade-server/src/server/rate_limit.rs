@@ -11,7 +11,6 @@
 //! Returns HTTP 429 with a Retry-After header when a bucket is exhausted.
 
 use serde_json::json;
-use parking_lot::Mutex;
 use std::{
     collections::HashMap,
     sync::Arc,

@@ -1,6 +1,5 @@
 use crate::server::{config::ServerConfig, rate_limit::RateLimiter};
 use cade_ai::{LlmMessage, LlmProvider, LlmRouter};
-use cade_core::hooks::HookEngine;
 use cade_core::skills::Skill;
 use cade_store::sqlite::Db;
 use serde_json::Value;
