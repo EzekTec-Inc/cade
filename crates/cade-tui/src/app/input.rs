@@ -159,6 +159,22 @@ impl TuiApp {
         // (summary, command palette, theme picker, file picker) are now
         // handled by the dynamic overlay stack above (Phase 3).
 
+        // -- UI extension slot input (Phase 4)
+        // Give installed slot widgets a chance to consume the key event.
+        // Slots are passive by default (handle_input returns false).
+        {
+            use crate::slots::UiSlot;
+            for slot in [UiSlot::Sidebar, UiSlot::Header, UiSlot::Footer] {
+                if let Some(widget) = self.slots.get_mut(slot) {
+                    if widget.handle_input(k) {
+                        self.draw_dirty = true;
+                        let _ = self.draw();
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+
         match (k.code, k.modifiers) {
             // -- Submit
             // Alt+Enter  — universal cross-terminal newline.
