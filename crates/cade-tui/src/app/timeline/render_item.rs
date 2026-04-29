@@ -1,5 +1,6 @@
 use crate::colors::{ThemeColorsExt, ColorDefExt};
 use crate::app::*;
+use unicode_width::UnicodeWidthStr;
 
 
 // -- Line renderers
@@ -646,20 +647,21 @@ pub(crate) fn render_table_item(
         return;
     }
     let n_cols = headers.len();
-    let mut widths = vec![0; n_cols];
+    // Width measurement uses Unicode display width so emoji/CJK align.
+    let mut widths = vec![0usize; n_cols];
     for (i, h) in headers.iter().enumerate() {
-        widths[i] = h.len();
+        widths[i] = UnicodeWidthStr::width(h.as_str());
     }
     for row in rows {
         for (i, cell) in row.iter().enumerate() {
             if i < n_cols {
-                widths[i] = widths[i].max(cell.len());
+                widths[i] = widths[i].max(UnicodeWidthStr::width(cell.as_str()));
             }
         }
     }
 
     // Cap column widths so total fits within viewport.
-    // Overhead per row: 4 chars padding per column (2 left + 2 right).
+    // Each cell is wrapped in "  cell  " — 4 chars of padding per column.
     if width > 0 && n_cols > 0 {
         let overhead = 4 * n_cols;
         let budget = width.saturating_sub(overhead);
@@ -675,19 +677,39 @@ pub(crate) fn render_table_item(
         }
     }
 
+    // Truncate `s` to fit within `max` Unicode columns; trailing `…` if cut.
     let truncate = |s: &str, max: usize| -> String {
-        if s.len() <= max {
-            s.to_string()
-        } else {
-            let t: String = s.chars().take(max.saturating_sub(1)).collect();
-            format!("{t}…")
+        let w = UnicodeWidthStr::width(s);
+        if w <= max {
+            return s.to_string();
         }
+        let target = max.saturating_sub(1);
+        let mut out_s = String::new();
+        let mut acc = 0usize;
+        for ch in s.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if acc + cw > target {
+                break;
+            }
+            out_s.push(ch);
+            acc += cw;
+        }
+        out_s.push('…');
+        out_s
+    };
+
+    // Pad `s` with spaces on the right to reach exactly `width` Unicode cols.
+    let pad_right = |s: &str, width: usize| -> String {
+        let w = UnicodeWidthStr::width(s);
+        let extra = width.saturating_sub(w);
+        format!("{s}{}", " ".repeat(extra))
     };
 
     let mut header_spans = Vec::new();
     for (i, h) in headers.iter().enumerate() {
+        let cell = pad_right(&truncate(h, widths[i]), widths[i]);
         header_spans.push(Span::styled(
-            format!("  {:<width$}  ", truncate(h, widths[i]), width = widths[i]),
+            format!("  {cell}  "),
             Style::default()
                 .fg(colors.primary.to_ratatui())
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
@@ -699,8 +721,9 @@ pub(crate) fn render_table_item(
         let mut row_spans = Vec::new();
         for (i, cell) in row.iter().enumerate() {
             if i < n_cols {
+                let body = pad_right(&truncate(cell, widths[i]), widths[i]);
                 row_spans.push(Span::styled(
-                    format!("  {:<width$}  ", truncate(cell, widths[i]), width = widths[i]),
+                    format!("  {body}  "),
                     colors.text_primary(),
                 ));
             }

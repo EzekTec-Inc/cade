@@ -1,11 +1,12 @@
 use crate::colors::{ThemeColorsExt, ColorDefExt};
 use crate::colors::ThemeColors;
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use ratatui::{
     style::{Color as RC, Modifier, Style},
     text::{Line, Span},
 };
 use std::sync::LazyLock;
+use unicode_width::UnicodeWidthStr;
 
 #[cfg(feature = "syntax-highlighting")]
 use syntect::easy::HighlightLines;
@@ -57,6 +58,144 @@ fn code_border_style(colors: &ThemeColors) -> Style {
     colors.md_code_block_border()
 }
 
+/// Word-wrap a vector of styled spans into one or more `Line`s, breaking
+/// only on whitespace and preserving each span's style across line breaks.
+///
+/// Behaviour:
+/// - Splits each span's text into whitespace-delimited words; each word
+///   carries the span's style.
+/// - Greedily fills lines up to `max_width` Unicode display columns.
+/// - Words longer than `max_width` are placed on their own line (and may
+///   still overflow — ratatui's `Wrap` will then break them mid-word).
+/// - Continuation lines start with `continuation_prefix` (typically the
+///   same indent as the first line) so wrapped paragraphs stay aligned.
+/// - Spans with embedded line breaks are NOT special-cased — the parser
+///   already converts `SoftBreak`/`HardBreak` into spaces / explicit pushes.
+///
+/// `max_width = 0` disables wrapping entirely (a single Line is returned).
+fn wrap_spans_to_width(
+    spans: Vec<Span<'static>>,
+    max_width: usize,
+    continuation_prefix: Option<Span<'static>>,
+) -> Vec<Line<'static>> {
+    if spans.is_empty() {
+        return vec![];
+    }
+    if max_width == 0 {
+        return vec![Line::from(spans)];
+    }
+
+    // Width of the leading prefix span (if any) — counts toward the first
+    // line's used width so the first word doesn't immediately overflow.
+    let prefix_width = |s: &Span<'_>| UnicodeWidthStr::width(s.content.as_ref());
+
+    // Compute width of any leading raw-INDENT/glyph spans so we treat them
+    // as already-laid-out prefix on the first line.  Walk forward over
+    // spans whose content is whitespace-only — those are layout spans.
+    let mut first_prefix_w = 0usize;
+    for s in &spans {
+        let c = s.content.as_ref();
+        if c.is_empty() {
+            continue;
+        }
+        if c.chars().all(|ch| ch.is_whitespace()) {
+            first_prefix_w += prefix_width(s);
+        } else {
+            break;
+        }
+    }
+
+    let cont_w = continuation_prefix.as_ref().map(prefix_width).unwrap_or(0);
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut current: Vec<Span<'static>> = Vec::new();
+    let mut current_w: usize = first_prefix_w;
+    let mut on_first_line = true;
+
+    let push_current = |lines: &mut Vec<Line<'static>>,
+                        current: &mut Vec<Span<'static>>,
+                        on_first_line: &mut bool,
+                        current_w: &mut usize,
+                        cont_prefix: &Option<Span<'static>>| {
+        if !current.is_empty() {
+            lines.push(Line::from(std::mem::take(current)));
+        }
+        *on_first_line = false;
+        if let Some(p) = cont_prefix.clone() {
+            current.push(p);
+            *current_w = cont_w;
+        } else {
+            *current_w = 0;
+        }
+    };
+
+    for span in spans {
+        let style = span.style;
+        let content = span.content.into_owned();
+
+        // Layout-only spans (pure whitespace at the leading edge) pass through.
+        if content.is_empty() {
+            continue;
+        }
+
+        // Tokenise: split_inclusive(' ') keeps the trailing space attached
+        // to the word, so widths accumulate correctly.
+        let mut buf = String::new();
+        let mut buf_w = 0usize;
+
+        let flush_buf = |buf: &mut String,
+                         buf_w: &mut usize,
+                         current: &mut Vec<Span<'static>>,
+                         current_w: &mut usize| {
+            if !buf.is_empty() {
+                current.push(Span::styled(std::mem::take(buf), style));
+                *current_w += *buf_w;
+                *buf_w = 0;
+            }
+        };
+
+        for word in content.split_inclusive(|c: char| c == ' ') {
+            let word_w = UnicodeWidthStr::width(word);
+            // If adding this word would overflow, flush + wrap.
+            // Allow trailing whitespace to fit even if it pushes one over —
+            // the trailing space is invisible at the line edge.
+            let trimmed_w = UnicodeWidthStr::width(word.trim_end_matches(' '));
+            if current_w + buf_w + trimmed_w > max_width && (current_w + buf_w) > 0 {
+                // Flush the in-progress span buffer to current line, then wrap.
+                flush_buf(&mut buf, &mut buf_w, &mut current, &mut current_w);
+                push_current(
+                    &mut lines,
+                    &mut current,
+                    &mut on_first_line,
+                    &mut current_w,
+                    &continuation_prefix,
+                );
+                // Drop leading spaces of the wrapped word so wrapped lines
+                // do not start with a stray space.
+                let stripped = word.trim_start_matches(' ');
+                if !stripped.is_empty() {
+                    buf.push_str(stripped);
+                    buf_w += UnicodeWidthStr::width(stripped);
+                }
+            } else {
+                buf.push_str(word);
+                buf_w += word_w;
+            }
+        }
+
+        flush_buf(&mut buf, &mut buf_w, &mut current, &mut current_w);
+    }
+
+    if !current.is_empty() {
+        lines.push(Line::from(current));
+    }
+
+    // Suppress unused-variable lint when on_first_line is only updated.
+    let _ = on_first_line;
+
+    lines
+}
+
 pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
     parse_markdown_lines_with_theme(text, &ThemeColors::dark(), 0)
 }
@@ -93,6 +232,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
     let mut list_counters: Vec<Option<u64>> = Vec::new();
 
     let mut table_rows: Vec<Vec<String>> = Vec::new();
+    let mut table_alignments: Vec<Alignment> = Vec::new();
     let mut current_cell = String::new();
     let mut in_table = false;
 
@@ -124,6 +264,13 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                         lines.push(Line::from(""));
                     }
                     last_was_block_end = false;
+                    // Indent paragraph body so it aligns with headings/lists.
+                    // Skip the indent inside blockquotes (the "▎ " prefix already
+                    // provides visual inset) and inside list items (Tag::Item
+                    // emits its own bullet/number indent prefix).
+                    if !in_blockquote && list_depth == 0 && current_spans.is_empty() {
+                        current_spans.push(Span::raw(INDENT.to_string()));
+                    }
                 }
                 Tag::Heading { level, .. } => {
                     // Blank line before every heading for visual breathing room.
@@ -183,11 +330,20 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                         highlighter = Some(HighlightLines::new(syntax, &dyn_theme));
                     }
 
-                    // Top border with optional language label
-                    let label = if current_lang.is_empty() {
-                        format!("{INDENT}┌─────────────────────────────────")
+                    // Top border with optional language label, sized to viewport
+                    let border_w = if max_width > 2 {
+                        max_width.saturating_sub(INDENT.len()).max(8)
                     } else {
-                        format!("{INDENT}┌── {} ──────────────────────────", current_lang)
+                        33
+                    };
+                    let label = if current_lang.is_empty() {
+                        let dashes = "─".repeat(border_w.saturating_sub(1));
+                        format!("{INDENT}┌{dashes}")
+                    } else {
+                        let prefix = format!("┌── {} ", current_lang);
+                        let prefix_w = UnicodeWidthStr::width(prefix.as_str());
+                        let dashes = "─".repeat(border_w.saturating_sub(prefix_w));
+                        format!("{INDENT}{prefix}{dashes}")
                     };
                     lines.push(Line::from(Span::styled(label, code_border_style(colors))));
                 }
@@ -246,13 +402,14 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                         .add_modifier(Modifier::CROSSED_OUT);
                     style_stack.push(s);
                 }
-                Tag::Table(_) => {
+                Tag::Table(alignments) => {
                     if last_was_block_end && !lines.is_empty() {
                         lines.push(Line::from(""));
                     }
                     last_was_block_end = false;
                     in_table = true;
                     table_rows.clear();
+                    table_alignments = alignments;
                 }
                 Tag::TableHead | Tag::TableRow => {
                     table_rows.push(Vec::new());
@@ -273,7 +430,43 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
             },
             Event::End(tag) => match tag {
                 TagEnd::Paragraph => {
-                    push_line(&mut lines, &mut current_spans, in_blockquote);
+                    // Pre-wrap paragraph spans at viewport width so continuation
+                    // lines get a proper INDENT prefix (or blockquote bar) — ratatui's
+                    // `Wrap { trim: false }` would otherwise leave wrapped lines
+                    // hanging flush-left.
+                    if max_width > 0 && !current_spans.is_empty() {
+                        let cont_prefix = if in_blockquote {
+                            Some(Span::styled(
+                                format!("{INDENT}▎ "),
+                                colors.md_quote_border(),
+                            ))
+                        } else if list_depth == 0 {
+                            Some(Span::raw(INDENT.to_string()))
+                        } else {
+                            // Inside list items the bullet/number prefix is already
+                            // on the first line; continuations align under the body.
+                            let pad = "  ".repeat(list_depth.saturating_sub(1));
+                            Some(Span::raw(format!("{INDENT}    {pad}")))
+                        };
+                        let spans = std::mem::take(&mut current_spans);
+                        let prefixed = if in_blockquote {
+                            // Insert blockquote bar at the head of the first line.
+                            let mut v = vec![Span::styled(
+                                format!("{INDENT}▎ "),
+                                colors.md_quote_border(),
+                            )];
+                            v.extend(spans);
+                            v
+                        } else {
+                            spans
+                        };
+                        let wrapped = wrap_spans_to_width(prefixed, max_width, cont_prefix);
+                        for l in wrapped {
+                            lines.push(l);
+                        }
+                    } else {
+                        push_line(&mut lines, &mut current_spans, in_blockquote);
+                    }
                     last_was_block_end = true;
                 }
                 TagEnd::Heading(_) => {
@@ -288,9 +481,15 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                 }
                 TagEnd::CodeBlock => {
                     push_line(&mut lines, &mut current_spans, in_blockquote);
-                    // Bottom border
+                    // Bottom border, sized to viewport
+                    let border_w = if max_width > 2 {
+                        max_width.saturating_sub(INDENT.len()).max(8)
+                    } else {
+                        33
+                    };
+                    let dashes = "─".repeat(border_w.saturating_sub(1));
                     lines.push(Line::from(Span::styled(
-                        format!("{INDENT}└─────────────────────────────────"),
+                        format!("{INDENT}└{dashes}"),
                         code_border_style(colors),
                     )));
                     in_code_block = false;
@@ -312,8 +511,14 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                 }
                 TagEnd::Table => {
                     in_table = false;
-                    lines.extend(render_table_data(&table_rows, colors, max_width));
+                    lines.extend(render_table_data(
+                        &table_rows,
+                        &table_alignments,
+                        colors,
+                        max_width,
+                    ));
                     table_rows.clear();
+                    table_alignments.clear();
                     last_was_block_end = true;
                 }
                 TagEnd::TableCell => {
@@ -413,8 +618,13 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
             }
             Event::Rule => {
                 lines.push(Line::from(""));
+                let hr_w = if max_width > 2 {
+                    max_width.saturating_sub(INDENT.len()).max(8)
+                } else {
+                    40
+                };
                 lines.push(Line::from(Span::styled(
-                    format!("{INDENT}{}", "─".repeat(40)),
+                    format!("{INDENT}{}", "─".repeat(hr_w)),
                     colors.md_hr(),
                 )));
                 lines.push(Line::from(""));
@@ -429,7 +639,30 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
     lines
 }
 
-fn render_table_data(data: &[Vec<String>], colors: &ThemeColors, max_width: usize) -> Vec<Line<'static>> {
+/// Render a parsed markdown table to styled lines.
+///
+/// Layout:
+///   ┌─────────┬──────┐    top border
+///   │ Header  │  Hdr │    header row (bold, themed)
+///   ├─────────┼──────┤    header/body separator
+///   │ cell    │ cell │    body rows
+///   └─────────┴──────┘    bottom border
+///
+/// Column widths and cell text are measured using Unicode display width
+/// (`UnicodeWidthStr::width`) so emoji, CJK, and accented Latin chars
+/// align correctly.  When the natural total width exceeds `max_width`,
+/// columns are proportionally shrunk to a `min_col` floor, and individual
+/// cells are truncated with a trailing `…` to fit.
+///
+/// `alignments` should have the same length as the widest row; trailing
+/// columns without an explicit alignment fall back to `Alignment::None`
+/// (rendered left-aligned).
+fn render_table_data(
+    data: &[Vec<String>],
+    alignments: &[Alignment],
+    colors: &ThemeColors,
+    max_width: usize,
+) -> Vec<Line<'static>> {
     if data.is_empty() {
         return vec![];
     }
@@ -438,23 +671,32 @@ fn render_table_data(data: &[Vec<String>], colors: &ThemeColors, max_width: usiz
         return vec![];
     }
 
-    let mut col_widths = vec![0; num_cols];
+    // Width measurement uses Unicode display width, NOT byte length, so
+    // emoji and CJK characters align correctly in the rendered grid.
+    let mut col_widths = vec![0usize; num_cols];
     for row in data {
         for (i, cell) in row.iter().enumerate() {
             if i < num_cols {
-                col_widths[i] = col_widths[i].max(cell.len());
+                col_widths[i] = col_widths[i].max(UnicodeWidthStr::width(cell.as_str()));
             }
         }
     }
 
     // Cap column widths so the total row fits within max_width.
-    // Overhead per row: INDENT(2) + "│ "(2) + " │"(2) + separators " │ "(3) * (n-1)
-    if max_width > 0 && num_cols > 0 {
-        let overhead = 2 + 2 + 2 + 3 * num_cols.saturating_sub(1);
-        let budget = max_width.saturating_sub(overhead);
+    //
+    // Each row layout:  INDENT + "│ " + col0 + " │ " + col1 + " │ " + … + " │"
+    //   prefix:    INDENT(2) + "│ "(2)            = 4
+    //   suffix:    " │"(2)                        = 2
+    //   inter-col: " │ "(3) × (num_cols - 1)
+    //
+    // Total non-content overhead = 6 + 3 * (num_cols - 1).  This MUST match
+    // the separator/border calculations below so the borders line up exactly
+    // with the cell pipes.
+    let row_overhead = 6 + 3 * num_cols.saturating_sub(1);
+    if max_width > 0 {
+        let budget = max_width.saturating_sub(row_overhead);
         let total: usize = col_widths.iter().sum();
         if total > budget && budget > 0 {
-            // Proportionally shrink columns, with a minimum of 3 chars each.
             let min_col = 3usize;
             let min_total = min_col * num_cols;
             let target = budget.max(min_total);
@@ -468,6 +710,18 @@ fn render_table_data(data: &[Vec<String>], colors: &ThemeColors, max_width: usiz
     let border_style = colors.md_code_block_border();
     let mut lines = Vec::new();
 
+    // ── Top border:  ┌─────┬─────┐ ────────────────────────────────────────
+    let mut top_spans = vec![Span::styled(format!("{INDENT}┌─"), border_style)];
+    for (i, w) in col_widths.iter().enumerate() {
+        top_spans.push(Span::styled("─".repeat(*w), border_style));
+        if i < num_cols - 1 {
+            top_spans.push(Span::styled("─┬─", border_style));
+        }
+    }
+    top_spans.push(Span::styled("─┐", border_style));
+    lines.push(Line::from(top_spans));
+
+    // ── Data rows + header separator ────────────────────────────────────────
     for (row_idx, row) in data.iter().enumerate() {
         let mut spans = vec![Span::styled(format!("{INDENT}│ "), border_style)];
         for (i, cell) in row.iter().take(num_cols).enumerate() {
@@ -478,17 +732,17 @@ fn render_table_data(data: &[Vec<String>], colors: &ThemeColors, max_width: usiz
             } else {
                 Style::default()
             };
-            // Truncate cell content to column width.
-            let display = if cell.len() > col_widths[i] {
-                let trunc: String = cell.chars().take(col_widths[i].saturating_sub(1)).collect();
-                format!("{trunc}…")
-            } else {
-                cell.clone()
-            };
-            spans.push(Span::styled(
-                format!("{:<width$}", display, width = col_widths[i]),
-                style,
-            ));
+            let align = alignments.get(i).copied().unwrap_or(Alignment::None);
+            let display = pad_cell_aligned(cell, col_widths[i], align);
+            spans.push(Span::styled(display, style));
+            if i < num_cols - 1 {
+                spans.push(Span::styled(" │ ", border_style));
+            }
+        }
+        // Pad missing trailing cells (jagged rows) so the right border lines up.
+        for i in row.len()..num_cols {
+            let blank = " ".repeat(col_widths[i]);
+            spans.push(Span::raw(blank));
             if i < num_cols - 1 {
                 spans.push(Span::styled(" │ ", border_style));
             }
@@ -496,7 +750,7 @@ fn render_table_data(data: &[Vec<String>], colors: &ThemeColors, max_width: usiz
         spans.push(Span::styled(" │", border_style));
         lines.push(Line::from(spans));
 
-        // Separator line after the header row
+        // Header/body separator after row 0.
         if row_idx == 0 {
             let mut sep_spans = vec![Span::styled(format!("{INDENT}├─"), border_style)];
             for (i, w) in col_widths.iter().enumerate() {
@@ -509,5 +763,269 @@ fn render_table_data(data: &[Vec<String>], colors: &ThemeColors, max_width: usiz
             lines.push(Line::from(sep_spans));
         }
     }
+
+    // ── Bottom border:  └─────┴─────┘ ───────────────────────────────────────
+    let mut bot_spans = vec![Span::styled(format!("{INDENT}└─"), border_style)];
+    for (i, w) in col_widths.iter().enumerate() {
+        bot_spans.push(Span::styled("─".repeat(*w), border_style));
+        if i < num_cols - 1 {
+            bot_spans.push(Span::styled("─┴─", border_style));
+        }
+    }
+    bot_spans.push(Span::styled("─┘", border_style));
+    lines.push(Line::from(bot_spans));
+
     lines
+}
+
+/// Truncate a cell to fit within `width` Unicode display columns and pad
+/// to that width using the given alignment.  Truncated cells get a trailing
+/// `…` (single column) in place of the dropped tail.
+fn pad_cell_aligned(cell: &str, width: usize, align: Alignment) -> String {
+    let cell_w = UnicodeWidthStr::width(cell);
+    let display = if cell_w > width {
+        // Reserve one column for the ellipsis.
+        let target = width.saturating_sub(1);
+        let mut out = String::new();
+        let mut acc = 0usize;
+        for ch in cell.chars() {
+            let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+            if acc + cw > target {
+                break;
+            }
+            out.push(ch);
+            acc += cw;
+        }
+        out.push('…');
+        out
+    } else {
+        cell.to_string()
+    };
+
+    let display_w = UnicodeWidthStr::width(display.as_str());
+    let padding = width.saturating_sub(display_w);
+
+    match align {
+        Alignment::Right => format!("{}{}", " ".repeat(padding), display),
+        Alignment::Center => {
+            let left = padding / 2;
+            let right = padding - left;
+            format!("{}{}{}", " ".repeat(left), display, " ".repeat(right))
+        }
+        // Default + explicit Left both render left-aligned.
+        Alignment::Left | Alignment::None => {
+            format!("{}{}", display, " ".repeat(padding))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::colors::ThemeColors;
+
+    fn dark() -> ThemeColors {
+        ThemeColors::dark()
+    }
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    fn lines_text(lines: &[Line<'_>]) -> Vec<String> {
+        lines.iter().map(line_text).collect()
+    }
+
+    // ── Unicode-width table rendering ─────────────────────────────────────
+
+    #[test]
+    fn table_uses_unicode_display_width_for_emoji() {
+        // Each emoji is 2 cols wide; "🚀🚀" measures 4 cols, not 8 (bytes).
+        let data = vec![
+            vec!["A".to_string(), "B".to_string()],
+            vec!["🚀🚀".to_string(), "ok".to_string()],
+        ];
+        let lines = render_table_data(&data, &[], &dark(), 80);
+        // Layout: INDENT + ┌─ + (─*col0_w) + ─┬─ + (─*col1_w) + ─┐
+        // col0_w = 4 (emoji width), col1_w = 2 ("ok") ⇒ 6 dashes, then 4.
+        let top = line_text(&lines[0]);
+        assert!(
+            top.contains("┌──────┬────┐"),
+            "expected col0=4 col1=2 layout, got: {top}"
+        );
+    }
+
+    #[test]
+    fn table_truncates_with_ellipsis_at_unicode_boundary() {
+        let data = vec![
+            vec!["Header".to_string()],
+            vec!["a-very-long-value-here".to_string()],
+        ];
+        let lines = render_table_data(&data, &[], &dark(), 20);
+        let body = line_text(&lines[3]);
+        assert!(body.contains('…'), "expected ellipsis, got: {body}");
+        assert!(!body.contains("very-long-value-here"));
+    }
+
+    #[test]
+    fn table_renders_top_and_bottom_borders() {
+        let data = vec![
+            vec!["A".to_string(), "B".to_string()],
+            vec!["1".to_string(), "2".to_string()],
+        ];
+        let lines = render_table_data(&data, &[], &dark(), 80);
+        assert_eq!(lines.len(), 5);
+        let top = line_text(&lines[0]);
+        let bot = line_text(&lines[4]);
+        assert!(top.starts_with("  ┌"), "expected top border, got: {top}");
+        assert!(top.contains('┬'), "expected ┬ in top border");
+        assert!(top.ends_with('┐'), "expected ┐ corner");
+        assert!(bot.starts_with("  └"), "expected bottom border, got: {bot}");
+        assert!(bot.contains('┴'), "expected ┴ in bottom border");
+        assert!(bot.ends_with('┘'), "expected ┘ corner");
+    }
+
+    #[test]
+    fn table_respects_right_alignment() {
+        let data = vec![
+            vec!["Hdr".to_string()],
+            vec!["x".to_string()],
+        ];
+        let lines = render_table_data(&data, &[Alignment::Right], &dark(), 80);
+        let body = line_text(&lines[3]);
+        assert!(body.contains("  x "), "expected right-aligned x, got: {body:?}");
+    }
+
+    #[test]
+    fn table_respects_center_alignment() {
+        let data = vec![
+            vec!["Hdr".to_string()],
+            vec!["x".to_string()],
+        ];
+        let lines = render_table_data(&data, &[Alignment::Center], &dark(), 80);
+        let body = line_text(&lines[3]);
+        assert!(body.contains(" x "), "expected centered x, got: {body:?}");
+    }
+
+    #[test]
+    fn table_pads_jagged_rows_to_full_width() {
+        let data = vec![
+            vec!["A".to_string(), "B".to_string(), "C".to_string()],
+            vec!["x".to_string()],
+        ];
+        let lines = render_table_data(&data, &[], &dark(), 80);
+        let body = line_text(&lines[3]);
+        assert!(body.ends_with(" │"), "jagged row not padded: {body:?}");
+    }
+
+    // ── Code block + horizontal rule width ────────────────────────────────
+
+    #[test]
+    fn code_block_borders_size_to_viewport() {
+        let md = "```\nlet x = 1;\n```";
+        let lines = parse_markdown_lines_with_theme(md, &dark(), 50);
+        let top = line_text(&lines[0]);
+        let dashes = top.chars().filter(|c| *c == '─').count();
+        assert!(
+            dashes >= 40,
+            "code top border too short ({dashes} dashes): {top:?}"
+        );
+    }
+
+    #[test]
+    fn horizontal_rule_sizes_to_viewport() {
+        let md = "para\n\n---\n\npara2";
+        let lines = parse_markdown_lines_with_theme(md, &dark(), 60);
+        let hr_line = lines
+            .iter()
+            .find(|l| {
+                let t = line_text(l);
+                t.chars().filter(|c| *c == '─').count() > 20
+            })
+            .expect("expected an HR line");
+        let dashes = line_text(hr_line)
+            .chars()
+            .filter(|c| *c == '─')
+            .count();
+        assert!(dashes >= 50, "HR too short ({dashes} dashes)");
+    }
+
+    // ── Paragraph indent + word wrap ──────────────────────────────────────
+
+    #[test]
+    fn paragraph_text_starts_with_indent() {
+        let md = "hello world";
+        let lines = parse_markdown_lines_with_theme(md, &dark(), 80);
+        let first = line_text(&lines[0]);
+        assert!(
+            first.starts_with("  "),
+            "paragraph not indented: {first:?}"
+        );
+    }
+
+    #[test]
+    fn paragraph_wraps_long_text_with_continuation_indent() {
+        let words = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do".to_string();
+        let lines = parse_markdown_lines_with_theme(&words, &dark(), 30);
+        let para_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| !line_text(l).trim().is_empty())
+            .collect();
+        assert!(
+            para_lines.len() >= 2,
+            "expected wrap into multiple lines, got {}: {:?}",
+            para_lines.len(),
+            lines_text(&lines)
+        );
+        for l in &para_lines {
+            let t = line_text(l);
+            assert!(
+                t.starts_with("  "),
+                "wrapped line missing indent: {t:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn paragraph_wrap_preserves_bold_style_across_break() {
+        let md = "intro **VERY-LONG-BOLD-WORD-HERE** outro";
+        let lines = parse_markdown_lines_with_theme(md, &dark(), 30);
+        let mut found_bold = false;
+        for l in &lines {
+            for s in &l.spans {
+                if s.content.contains("VERY-LONG-BOLD-WORD-HERE") {
+                    let has_bold = s.style.add_modifier.contains(Modifier::BOLD);
+                    assert!(has_bold, "bold modifier lost on wrap: {:?}", s.style);
+                    found_bold = true;
+                }
+            }
+        }
+        assert!(found_bold, "bold span never appeared in output");
+    }
+
+    #[test]
+    fn empty_input_returns_empty_lines() {
+        let lines = parse_markdown_lines_with_theme("", &dark(), 80);
+        assert!(lines.is_empty(), "expected no lines, got {lines:?}");
+    }
+
+    #[test]
+    fn pad_cell_aligned_handles_emoji_width() {
+        let s = pad_cell_aligned("🚀", 6, Alignment::Left);
+        assert_eq!(UnicodeWidthStr::width(s.as_str()), 6, "{s:?}");
+        assert!(s.starts_with('🚀'));
+    }
+
+    #[test]
+    fn pad_cell_aligned_truncates_with_ellipsis() {
+        let s = pad_cell_aligned("hello world", 5, Alignment::Left);
+        assert_eq!(s, "hell…");
+        assert_eq!(UnicodeWidthStr::width(s.as_str()), 5);
+    }
+
+    #[test]
+    fn pad_cell_aligned_center_with_odd_padding() {
+        let s = pad_cell_aligned("ab", 5, Alignment::Center);
+        assert_eq!(s, " ab  ");
+    }
 }
