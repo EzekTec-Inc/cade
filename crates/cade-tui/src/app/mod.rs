@@ -38,7 +38,6 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Padding, Paragraph, Wrap},
 };
-use unicode_width::UnicodeWidthStr;
 
 use crate::autocomplete::FileAutocompleteProvider;
 use crate::colors::{ThemeColors, ColorDefExt};
