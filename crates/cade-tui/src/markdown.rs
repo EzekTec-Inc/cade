@@ -58,10 +58,16 @@ fn code_border_style(colors: &ThemeColors) -> Style {
 }
 
 pub fn parse_markdown_lines(text: &str) -> Vec<Line<'static>> {
-    parse_markdown_lines_with_theme(text, &ThemeColors::dark())
+    parse_markdown_lines_with_theme(text, &ThemeColors::dark(), 0)
 }
 
-pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<Line<'static>> {
+/// Parse markdown text into styled `Line`s.
+///
+/// `max_width` is the available viewport width in columns.  When `> 0`
+/// it is used to cap table column widths and truncate long code-block
+/// lines so that rendered content stays within the viewport.  Pass `0`
+/// to disable width-capping (legacy callers).
+pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_width: usize) -> Vec<Line<'static>> {
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
     options.insert(Options::ENABLE_STRIKETHROUGH);
@@ -306,7 +312,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
                 }
                 TagEnd::Table => {
                     in_table = false;
-                    lines.extend(render_table_data(&table_rows, colors));
+                    lines.extend(render_table_data(&table_rows, colors, max_width));
                     table_rows.clear();
                     last_was_block_end = true;
                 }
@@ -423,7 +429,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors) -> Vec<
     lines
 }
 
-fn render_table_data(data: &[Vec<String>], colors: &ThemeColors) -> Vec<Line<'static>> {
+fn render_table_data(data: &[Vec<String>], colors: &ThemeColors, max_width: usize) -> Vec<Line<'static>> {
     if data.is_empty() {
         return vec![];
     }
@@ -441,6 +447,24 @@ fn render_table_data(data: &[Vec<String>], colors: &ThemeColors) -> Vec<Line<'st
         }
     }
 
+    // Cap column widths so the total row fits within max_width.
+    // Overhead per row: INDENT(2) + "│ "(2) + " │"(2) + separators " │ "(3) * (n-1)
+    if max_width > 0 && num_cols > 0 {
+        let overhead = 2 + 2 + 2 + 3 * num_cols.saturating_sub(1);
+        let budget = max_width.saturating_sub(overhead);
+        let total: usize = col_widths.iter().sum();
+        if total > budget && budget > 0 {
+            // Proportionally shrink columns, with a minimum of 3 chars each.
+            let min_col = 3usize;
+            let min_total = min_col * num_cols;
+            let target = budget.max(min_total);
+            for w in col_widths.iter_mut() {
+                let share = (*w as f64 / total as f64 * target as f64).floor() as usize;
+                *w = share.max(min_col);
+            }
+        }
+    }
+
     let border_style = colors.md_code_block_border();
     let mut lines = Vec::new();
 
@@ -454,8 +478,15 @@ fn render_table_data(data: &[Vec<String>], colors: &ThemeColors) -> Vec<Line<'st
             } else {
                 Style::default()
             };
+            // Truncate cell content to column width.
+            let display = if cell.len() > col_widths[i] {
+                let trunc: String = cell.chars().take(col_widths[i].saturating_sub(1)).collect();
+                format!("{trunc}…")
+            } else {
+                cell.clone()
+            };
             spans.push(Span::styled(
-                format!("{:<width$}", cell, width = col_widths[i]),
+                format!("{:<width$}", display, width = col_widths[i]),
                 style,
             ));
             if i < num_cols - 1 {

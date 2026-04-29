@@ -165,7 +165,7 @@ pub(crate) fn render_context_bar_item(
 
 pub(crate) fn render_user_message_item(
     text: &str,
-    _width: usize,
+    width: usize,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
@@ -176,23 +176,23 @@ pub(crate) fn render_user_message_item(
             .add_modifier(Modifier::BOLD),
     )]));
     out.extend(crate::markdown::parse_markdown_lines_with_theme(
-        text, colors,
+        text, colors, width,
     ));
 }
 
-pub(crate) fn render_assistant_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+pub(crate) fn render_assistant_item(text: &str, width: usize, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
     out.push(Line::from(vec![Span::styled(
         "▍ CADE",
         Style::default()
             .fg(colors.primary.to_ratatui())
             .add_modifier(Modifier::BOLD),
     )]));
-    let md_lines = crate::markdown::parse_markdown_lines_with_theme(text, colors);
+    let md_lines = crate::markdown::parse_markdown_lines_with_theme(text, colors, width);
     out.extend(md_lines);
 }
 
-pub(crate) fn render_streaming_assistant_item(text: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
-    render_assistant_item(text, out, colors);
+pub(crate) fn render_streaming_assistant_item(text: &str, width: usize, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+    render_assistant_item(text, width, out, colors);
 }
 
 pub(crate) fn render_tool_call_item(
@@ -554,10 +554,11 @@ pub(crate) fn render_dim_item(text: &str, out: &mut Vec<Line<'static>>, colors: 
     }
 }
 
-pub(crate) fn render_pair_item(label: &str, value: &str, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+pub(crate) fn render_pair_item(label: &str, value: &str, width: usize, out: &mut Vec<Line<'static>>, colors: &ThemeColors) {
+    let val_w = width.saturating_sub(26);
     out.push(Line::from(vec![
         Span::styled(format!("  {label:<24}"), colors.text_dim()),
-        Span::styled(value.to_string(), colors.text_primary()),
+        Span::styled(truncate_str(value, val_w), colors.text_primary()),
     ]));
 }
 
@@ -637,6 +638,7 @@ pub(crate) fn render_heuristic_summary_item(
 pub(crate) fn render_table_item(
     headers: &[String],
     rows: &[Vec<String>],
+    width: usize,
     out: &mut Vec<Line<'static>>,
     colors: &ThemeColors,
 ) {
@@ -656,10 +658,36 @@ pub(crate) fn render_table_item(
         }
     }
 
+    // Cap column widths so total fits within viewport.
+    // Overhead per row: 4 chars padding per column (2 left + 2 right).
+    if width > 0 && n_cols > 0 {
+        let overhead = 4 * n_cols;
+        let budget = width.saturating_sub(overhead);
+        let total: usize = widths.iter().sum();
+        if total > budget && budget > 0 {
+            let min_col = 3usize;
+            let min_total = min_col * n_cols;
+            let target = budget.max(min_total);
+            for w in widths.iter_mut() {
+                let share = (*w as f64 / total as f64 * target as f64).floor() as usize;
+                *w = share.max(min_col);
+            }
+        }
+    }
+
+    let truncate = |s: &str, max: usize| -> String {
+        if s.len() <= max {
+            s.to_string()
+        } else {
+            let t: String = s.chars().take(max.saturating_sub(1)).collect();
+            format!("{t}…")
+        }
+    };
+
     let mut header_spans = Vec::new();
     for (i, h) in headers.iter().enumerate() {
         header_spans.push(Span::styled(
-            format!("  {:<width$}  ", h, width = widths[i]),
+            format!("  {:<width$}  ", truncate(h, widths[i]), width = widths[i]),
             Style::default()
                 .fg(colors.primary.to_ratatui())
                 .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
@@ -672,7 +700,7 @@ pub(crate) fn render_table_item(
         for (i, cell) in row.iter().enumerate() {
             if i < n_cols {
                 row_spans.push(Span::styled(
-                    format!("  {:<width$}  ", cell, width = widths[i]),
+                    format!("  {:<width$}  ", truncate(cell, widths[i]), width = widths[i]),
                     colors.text_primary(),
                 ));
             }

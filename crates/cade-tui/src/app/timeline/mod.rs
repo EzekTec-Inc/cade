@@ -205,7 +205,7 @@ impl<'a> TimelineItem<'a> {
                 category_tokens,
             } => render_context_bar_item(model, *window, *pct, category_tokens, width, out, colors),
             Self::User(text) => render_user_message_item(text, width, out, colors),
-            Self::Assistant(text) => render_assistant_item(text, out, colors),
+            Self::Assistant(text) => render_assistant_item(text, width, out, colors),
             Self::ToolCall { name, preview } => {
                 render_tool_call_item(name, preview, width, expand_all, out, colors, nerd)
             }
@@ -226,16 +226,16 @@ impl<'a> TimelineItem<'a> {
             Self::Success(text) => render_success_item(text, out, colors),
             Self::InfoHeader(text) => render_info_header_item(text, out, colors),
             Self::Dim(text) => render_dim_item(text, out, colors),
-            Self::Pair { label, value } => render_pair_item(label, value, out, colors),
+            Self::Pair { label, value } => render_pair_item(label, value, width, out, colors),
             Self::Error(text) => render_error_item(text, out, colors),
             Self::QuestionResult { header, answer } => {
                 render_question_result_item(header, answer, out, colors)
             }
-            Self::Table { headers, rows } => render_table_item(headers, rows, out, colors),
+            Self::Table { headers, rows } => render_table_item(headers, rows, width, out, colors),
             Self::HeuristicSummary { intent, safety, directives } => {
                 render_heuristic_summary_item(intent, safety, directives, width, out, colors)
             }
-            Self::StreamingAssistant(text) => render_streaming_assistant_item(text, out, colors),
+            Self::StreamingAssistant(text) => render_streaming_assistant_item(text, width, out, colors),
         }
     }
 

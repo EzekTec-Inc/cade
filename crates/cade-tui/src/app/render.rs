@@ -415,6 +415,10 @@ pub(crate) fn render_frame(
         status_text
     };
 
+    // B5: Truncate status text to available width so it doesn't bleed
+    // into other regions on narrow terminals.
+    let status_text = truncate_str(&status_text, chunks[3].width as usize);
+
     frame.render_widget(
         Paragraph::new(Span::styled(status_text, status_style)),
         chunks[3],
@@ -538,6 +542,25 @@ pub(crate) fn render_frame(
         } else {
             1 + left_glyph.chars().count() as u16
         };
+    let right_fixed_len: u16 = (right_agent.chars().count()
+        + right_model.chars().count()
+        + right_reasoning.chars().count()
+        + right_ctx.chars().count()
+        + right_tokens.chars().count()) as u16;
+    // B6: Truncate cwd to fit when terminal is narrow, keeping at least
+    // left label and the fixed right-side segments visible.
+    let footer_w = chunks[7].width as usize;
+    let available_for_cwd = footer_w
+        .saturating_sub(left_base_len as usize)
+        .saturating_sub(right_fixed_len as usize)
+        .saturating_sub(1); // at least 1 char padding
+    let mid_cwd = if mid_cwd.chars().count() > available_for_cwd && available_for_cwd > 4 {
+        truncate_str(&mid_cwd, available_for_cwd)
+    } else if available_for_cwd <= 4 {
+        String::new() // too tight — drop cwd entirely
+    } else {
+        mid_cwd
+    };
     let right_len: u16 = (mid_cwd.chars().count()
         + right_agent.chars().count()
         + right_model.chars().count()

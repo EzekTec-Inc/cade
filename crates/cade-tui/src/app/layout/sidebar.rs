@@ -91,6 +91,11 @@ pub(crate) fn render_sidebar(
     let think_text = state.format_activity();
     let plan_summary = state.format_plan_summary();
 
+    // B7: Derive truncation width from actual inner area instead of
+    // hardcoded 28.  Label prefix is 9 chars (" agent   "), so the
+    // value column gets the rest.
+    let val_w = (inner.width as usize).saturating_sub(10);
+
     let lines = vec![
         Line::from(Span::styled(
             " Session ",
@@ -101,21 +106,21 @@ pub(crate) fn render_sidebar(
         Line::from(vec![
             Span::styled(" agent   ", colors.text_muted()),
             Span::styled(
-                truncate_str(state.agent_name, 28),
+                truncate_str(state.agent_name, val_w),
                 colors.text_primary(),
             ),
         ]),
         Line::from(vec![
             Span::styled(" model   ", colors.text_muted()),
             Span::styled(
-                truncate_str(state.model, 28),
+                truncate_str(state.model, val_w),
                 colors.text_primary(),
             ),
         ]),
         Line::from(vec![
             Span::styled(" cwd     ", colors.text_muted()),
             Span::styled(
-                truncate_str(state.cwd, 28),
+                truncate_str(state.cwd, val_w),
                 colors.text_primary(),
             ),
         ]),
@@ -191,7 +196,7 @@ pub(crate) fn render_sidebar(
                 .add_modifier(Modifier::BOLD),
         )),
         Line::from(Span::styled(
-            truncate_str(&think_text, 36),
+            truncate_str(&think_text, val_w),
             colors.text_muted(),
         )),
         Line::from(""),
