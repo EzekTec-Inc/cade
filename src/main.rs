@@ -726,8 +726,9 @@ async fn main() -> Result<()> {
         let theme_name = settings.global().theme.clone().unwrap_or_default();
         if theme_name.is_empty() || theme_name == "dark" {
             ThemeColors::dark()
-        } else if theme_name == "light" {
-            ThemeColors::light()
+        } else if let Some(builtin) = ThemeColors::builtin_by_name(&theme_name) {
+            // B6: try all built-in themes (catppuccin-mocha, tokyo-night, etc.)
+            builtin
         } else {
             let discovered = discover_themes(&cwd, &agent_dir);
             discovered

@@ -199,23 +199,18 @@ impl TuiApp {
         // -- A-01b: theme picker routing
         if self.theme_picker.is_some() {
             match (k.code, k.modifiers) {
+                // B7: removed 'q' — it conflicts with typing 'q' in the filter.
                 (KeyCode::Esc, _)
-                | (KeyCode::Char('q'), KeyModifiers::NONE)
                 | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
                     if let Some(tp) = self.theme_picker.take() {
                         self.apply_theme(tp.original_theme);
+                        self.show_toast("Theme reverted", ToastLevel::Info); // U8
                     }
                 }
                 (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
                     if let Some(tp) = &mut self.theme_picker {
                         tp.cursor = tp.cursor.saturating_sub(1);
-                        if !tp.filtered_indices.is_empty() {
-                            let idx = tp.filtered_indices[tp.cursor];
-                            let t = &tp.themes[idx];
-                            let colors = crate::colors::ThemeColors::builtin_by_name(&t.name)
-                                .unwrap_or_else(|| crate::colors::ThemeColors::from_theme(t));
-                            self.apply_theme(colors);
-                        }
+                        self.apply_theme_from_picker();
                     }
                 }
                 (KeyCode::Down, _) | (KeyCode::Tab, _) => {
@@ -225,37 +220,39 @@ impl TuiApp {
                         {
                             tp.cursor += 1;
                         }
-                        if !tp.filtered_indices.is_empty() {
-                            let idx = tp.filtered_indices[tp.cursor];
-                            let t = &tp.themes[idx];
-                            let colors = crate::colors::ThemeColors::builtin_by_name(&t.name)
-                                .unwrap_or_else(|| crate::colors::ThemeColors::from_theme(t));
-                            self.apply_theme(colors);
+                        self.apply_theme_from_picker();
+                    }
+                }
+                // B3: check *before* take() so the picker survives empty results.
+                // A3: return the theme name directly — the REPL handles persistence.
+                (KeyCode::Enter, _) => {
+                    let has_results = self
+                        .theme_picker
+                        .as_ref()
+                        .is_some_and(|tp| !tp.filtered_indices.is_empty());
+                    if has_results {
+                        if let Some(tp) = self.theme_picker.take() {
+                            let t = &tp.themes[tp.filtered_indices[tp.cursor]];
+                            return Ok(Some(Some(format!("/theme {}", t.name))));
                         }
                     }
-                }
-                (KeyCode::Enter, _) => {
-                    if let Some(tp) = self.theme_picker.take()
-                        && !tp.filtered_indices.is_empty()
-                    {
-                        let t = &tp.themes[tp.filtered_indices[tp.cursor]];
-                        return Ok(Some(Some(format!("/theme {}", t.name))));
-                    }
+                    // empty results: do nothing, keep picker open
                 }
                 (KeyCode::Backspace, _) => {
-                    if self.theme_picker.is_some() {
-                        self.theme_picker.as_mut().unwrap().query.pop();
+                    if let Some(tp) = self.theme_picker.as_mut() {
+                        tp.query.pop();
                         self.update_theme_picker_filter();
                     }
                 }
                 (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
-                    if self.theme_picker.is_some() {
-                        self.theme_picker.as_mut().unwrap().query.push(c);
+                    if let Some(tp) = self.theme_picker.as_mut() {
+                        tp.query.push(c);
                         self.update_theme_picker_filter();
                     }
                 }
                 _ => {}
             }
+            self.draw_dirty = true;
             let _ = self.draw();
             return Ok(None);
         }

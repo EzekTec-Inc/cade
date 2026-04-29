@@ -546,7 +546,9 @@ impl TuiApp {
     pub fn apply_theme(&mut self, colors: ThemeColors) {
         self.colors = colors;
         self.draw_dirty = true;
-        let _ = self.draw();
+        // U7: do NOT call self.draw() here — let the tick loop or the
+        // caller coalesce redraws.  Previously every Up/Down in the
+        // theme picker triggered two full draws per keystroke.
     }
 
 
