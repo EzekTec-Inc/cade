@@ -346,7 +346,7 @@ impl TuiApp {
                 // then drain any pasted images (stripping their placeholders)
                 // into pending_submit_images for repl.rs to pick up.
                 self.editor.expand_pastes();
-                self.pending_submit_images = self.editor.drain_images();
+                self.pending_submit_images = self.drain_images();
                 let line = self.editor.text();
                 self.editor.clear();
                 self.scroll_instant(0); // snap to bottom on submit
@@ -389,7 +389,7 @@ impl TuiApp {
             // row do we switch to history navigation.
             (KeyCode::Up, _) => {
                 let available_w = self.term_width.saturating_sub(2).max(1);
-                let (badge_text, _) = input_mode_badge(self.editor.detect_mode(), &self.colors);
+                let (badge_text, _) = input_mode_badge(self.editor_input_mode(), &self.colors);
                 let input_prefix_w = badge_text.chars().count() as u16 + 1 + 2;
                 let before = &self.editor.text()[..self.editor.cursor_pos()];
                 let (cur_row, cur_col) = calc_visual_cursor(before, available_w, input_prefix_w);
@@ -424,7 +424,7 @@ impl TuiApp {
             }
             (KeyCode::Down, _) => {
                 let available_w = self.term_width.saturating_sub(2).max(1);
-                let (badge_text, _) = input_mode_badge(self.editor.detect_mode(), &self.colors);
+                let (badge_text, _) = input_mode_badge(self.editor_input_mode(), &self.colors);
                 let input_prefix_w = badge_text.chars().count() as u16 + 1 + 2;
                 let total_rows = {
                     let (tr, _) =
@@ -561,7 +561,7 @@ impl TuiApp {
             }
 
             _ => {
-                self.editor.handle_key_event(k, self.last_input_width);
+                self.editor.handle_input(k);
                 if let KeyCode::Char('@') = k.code
                     && self.picker.is_none()
                 {

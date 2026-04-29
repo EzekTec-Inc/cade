@@ -450,4 +450,55 @@ impl TuiApp {
         self.turn_count = self.turn_count.saturating_add(1);
     }
 
+    // -- ImageChannel (side-channel for image pastes) --
+
+    pub fn handle_image_paste(&mut self, media_type: &str, data: String, width: u32, height: u32) {
+        self.image_counter += 1;
+        let id = self.image_counter;
+        self.pending_paste_images.push(crate::editor::ImageEntry {
+            id,
+            media_type: media_type.to_string(),
+            data,
+            width,
+            height,
+        });
+        let marker = format!("[image #{id}: {width}x{height}]");
+        self.editor.insert_str(&marker);
+        self.editor.insert_newline();
+    }
+
+    pub fn drain_images(&mut self) -> Vec<crate::editor::ImageEntry> {
+        let mut extracted = Vec::new();
+        let mut text = self.editor.text();
+        let current_images = std::mem::take(&mut self.pending_paste_images);
+        for img in current_images {
+            let marker_prefix = format!("[image #{}:", img.id);
+            if text.contains(&marker_prefix) {
+                if let Some(start) = text.find(&marker_prefix)
+                    && let Some(end_offset) = text[start..].find(']')
+                {
+                    let end = start + end_offset + 1;
+                    text.replace_range(start..end, "");
+                    extracted.push(img);
+                }
+            }
+        }
+        if !extracted.is_empty() {
+            self.editor.set_text(text);
+        }
+        self.image_counter = 0;
+        extracted
+    }
+
+    // -- Mode hint parsing --
+
+    /// Parse the editor's `mode_hint()` into the concrete `InputMode` enum.
+    pub fn editor_input_mode(&self) -> InputMode {
+        match self.editor.mode_hint().as_deref() {
+            Some("slash") => InputMode::SlashCommand,
+            Some("bash") => InputMode::BashCommand { silent: false },
+            Some("bash:silent") => InputMode::BashCommand { silent: true },
+            _ => InputMode::Regular,
+        }
+    }
 }

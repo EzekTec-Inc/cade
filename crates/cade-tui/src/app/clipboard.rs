@@ -65,7 +65,7 @@ impl TuiApp {
 
         use base64::Engine;
         let b64 = base64::prelude::BASE64_STANDARD.encode(&raw);
-        self.editor.handle_image_paste(media_type, b64, w, h);
+        self.handle_image_paste(media_type, b64, w, h);
         true
     }
 
@@ -124,7 +124,7 @@ impl TuiApp {
         };
 
         // -- Insert into editor
-        self.editor.handle_image_paste("image/png", b64, w, h);
+        self.handle_image_paste("image/png", b64, w, h);
         true
     }
 }

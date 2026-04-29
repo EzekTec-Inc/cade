@@ -50,7 +50,7 @@ pub enum EditorAction {
 /// Any input editor used by `TuiApp` must implement this trait so the
 /// host event loop, render path, and IME cursor sync all stay
 /// editor-agnostic.
-pub trait EditorComponent {
+pub trait EditorComponent: Send {
     /// Draw the editor into `area` of `frame`.
     ///
     /// Implementations should respect the active [`ThemeColors`] for
@@ -76,6 +76,59 @@ pub trait EditorComponent {
     /// `crossterm::cursor::MoveTo(x, y); Show` after each frame so OS
     /// IMEs spawn their candidate window at the correct position.
     fn cursor_position(&self) -> Option<(u16, u16)>;
+
+    // -- Buffer operations --
+
+    /// Whether the editor buffer is empty.
+    fn is_empty(&self) -> bool;
+
+    /// Clear the editor buffer.
+    fn clear(&mut self);
+
+    /// Byte offset of the cursor within the flat text.
+    fn cursor_pos(&self) -> usize;
+
+    /// Set cursor to a byte offset within the flat text.
+    fn set_cursor_pos(&mut self, pos: usize);
+
+    /// Insert `s` at byte position `pos` and move cursor after it.
+    fn insert_str_at(&mut self, pos: usize, s: &str);
+
+    /// Remove the char at byte position `pos`.
+    fn remove_char_at(&mut self, pos: usize);
+
+    /// Insert char `c` at byte position `pos`.
+    fn insert_char_at(&mut self, pos: usize, c: char);
+
+    /// Insert a string at the current cursor position.
+    fn insert_str(&mut self, s: &str);
+
+    /// Insert a single character at the current cursor position.
+    fn insert_char(&mut self, c: char);
+
+    /// Insert a newline at the current cursor position.
+    fn insert_newline(&mut self);
+
+    // -- Undo --
+
+    /// Save an undo snapshot.
+    fn snapshot(&mut self);
+
+    // -- Paste --
+
+    /// Handle a bracketed paste (may collapse large pastes into markers).
+    fn handle_paste(&mut self, text: &str);
+
+    /// Expand collapsed paste markers back into their full text.
+    fn expand_pastes(&mut self);
+
+    // -- Mode --
+
+    /// Return an opaque mode hint string for the input handler.
+    /// Built-in editor returns `"regular"`, `"slash"`, `"bash"`, or
+    /// `"bash:silent"`.  Returns `None` if the editor doesn't support
+    /// mode detection.
+    fn mode_hint(&self) -> Option<String>;
 }
 
 #[cfg(test)]
@@ -90,7 +143,7 @@ mod tests {
     #[test]
     fn editor_implements_editor_component() {
         fn assert_impl<T: EditorComponent>() {}
-        assert_impl::<Editor<'static>>();
+        assert_impl::<Editor>();
     }
 
     #[test]

@@ -22,8 +22,8 @@ pub struct ImageEntry {
     pub height: u32,
 }
 
-pub struct Editor<'a> {
-    pub textarea: TextArea<'a>,
+pub struct Editor {
+    pub textarea: TextArea<'static>,
     paste_counter: usize,
     pub paste_buffers: Vec<PasteEntry>,
     image_counter: usize,
@@ -38,13 +38,13 @@ pub struct Editor<'a> {
 const PASTE_COLLAPSE_THRESHOLD: usize = 10;
 const PASTE_CHAR_THRESHOLD: usize = 1000;
 
-impl Default for Editor<'static> {
+impl Default for Editor {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<'a> Editor<'a> {
+impl Editor {
     pub fn new() -> Self {
         Self {
             textarea: TextArea::default(),
@@ -256,7 +256,7 @@ impl<'a> Editor<'a> {
 // loop, render path, and IME cursor sync can target the trait rather
 // than the concrete textarea-backed editor.
 
-impl<'a> crate::editor_component::EditorComponent for Editor<'a> {
+impl crate::editor_component::EditorComponent for Editor {
     fn render(
         &mut self,
         frame: &mut ratatui::Frame,
@@ -311,6 +311,68 @@ impl<'a> crate::editor_component::EditorComponent for Editor<'a> {
         let x = area.x.saturating_add(col as u16).min(area.x + area.width.saturating_sub(1));
         let y = area.y.saturating_add(row as u16).min(area.y + area.height.saturating_sub(1));
         Some((x, y))
+    }
+
+    fn is_empty(&self) -> bool {
+        Editor::is_empty(self)
+    }
+
+    fn clear(&mut self) {
+        Editor::clear(self)
+    }
+
+    fn cursor_pos(&self) -> usize {
+        Editor::cursor_pos(self)
+    }
+
+    fn set_cursor_pos(&mut self, pos: usize) {
+        Editor::set_cursor_pos(self, pos)
+    }
+
+    fn insert_str_at(&mut self, pos: usize, s: &str) {
+        Editor::insert_str_at(self, pos, s)
+    }
+
+    fn remove_char_at(&mut self, pos: usize) {
+        Editor::remove_char_at(self, pos)
+    }
+
+    fn insert_char_at(&mut self, pos: usize, c: char) {
+        Editor::insert_char_at(self, pos, c)
+    }
+
+    fn insert_str(&mut self, s: &str) {
+        Editor::insert_str(self, s)
+    }
+
+    fn insert_char(&mut self, c: char) {
+        Editor::insert_char(self, c)
+    }
+
+    fn insert_newline(&mut self) {
+        Editor::insert_newline(self)
+    }
+
+    fn snapshot(&mut self) {
+        Editor::snapshot(self)
+    }
+
+    fn handle_paste(&mut self, text: &str) {
+        Editor::handle_paste(self, text)
+    }
+
+    fn expand_pastes(&mut self) {
+        Editor::expand_pastes(self)
+    }
+
+    fn mode_hint(&self) -> Option<String> {
+        Some(match self.detect_mode() {
+            InputMode::Regular => "regular".to_string(),
+            InputMode::SlashCommand => "slash".to_string(),
+            InputMode::BashCommand { silent } => {
+                if silent { "bash:silent".to_string() } else { "bash".to_string() }
+            }
+        })
     }
 }
 

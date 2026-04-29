@@ -342,7 +342,11 @@ pub struct TuiApp {
     reasoning_active: bool,
 
     // -- Input state
-    pub editor: Editor<'static>,
+    pub editor: Box<dyn crate::editor_component::EditorComponent>,
+    /// Image paste side-channel (not on the trait — image handling is
+    /// a CADE-specific concern, not a generic editor concern).
+    pub image_counter: usize,
+    pub pending_paste_images: Vec<ImageEntry>,
     /// Last known terminal width — kept in sync during draw() so that
     /// Up/Down cursor navigation uses the real column width.
     term_width: u16,
@@ -505,7 +509,9 @@ impl TuiApp {
             streaming_reveal_len: 0,
             reasoning_text: String::new(),
             reasoning_active: false,
-            editor: Editor::new(),
+            editor: Box::new(Editor::new()),
+            image_counter: 0,
+            pending_paste_images: Vec::new(),
             term_width: 80,
             thinking: None,
             last_status: None,
@@ -704,8 +710,25 @@ impl TuiApp {
             self.scroll_target = 0;
             scroll = 0;
         }
-        let mut textarea = self.editor.textarea.clone();
-        let input_mode = self.editor.detect_mode();
+        let mut textarea = {
+            let text = self.editor.text();
+            let cursor_byte = self.editor.cursor_pos();
+            let mut ta = tui_textarea::TextArea::from(text.lines().map(|s| s.to_string()));
+            // Restore cursor position from byte offset
+            let lines = ta.lines().to_vec();
+            let mut remaining = cursor_byte;
+            for (row, line) in lines.iter().enumerate() {
+                let line_len = line.len() + 1; // +1 for newline
+                if remaining < line_len || row == lines.len() - 1 {
+                    let col = remaining.min(line.len());
+                    ta.move_cursor(tui_textarea::CursorMove::Jump(row as u16, col as u16));
+                    break;
+                }
+                remaining -= line_len;
+            }
+            ta
+        };
+        let input_mode = self.editor_input_mode();
         let mode = self.mode;
         let agent_name = self.agent_name.clone();
         let model = self.model.clone();
