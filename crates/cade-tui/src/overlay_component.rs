@@ -62,7 +62,7 @@ pub enum OverlayInputResult {
 /// Implementations encapsulate their own state — the host only knows
 /// the trait surface.  This is the seam that makes overlays
 /// composable instead of hardcoded into `TuiApp`.
-pub trait OverlayComponent {
+pub trait OverlayComponent: Send + Sync {
     /// Stable identifier for this overlay kind.  Used for logging,
     /// focus tracking, and "is this overlay open?" queries by name.
     fn id(&self) -> &'static str;

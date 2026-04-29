@@ -51,7 +51,7 @@ pub enum UiSlot {
 /// Distinct from [`crate::component::Component`] (which returns
 /// `Vec<RenderedLine>`) because slot widgets draw directly into a
 /// [`ratatui::Frame`], the same surface the rest of the TUI uses.
-pub trait SlotComponent {
+pub trait SlotComponent: Send + Sync {
     /// Render the widget into `area` of `frame`.
     fn render(&mut self, frame: &mut Frame, area: Rect, colors: &ThemeColors);
 
