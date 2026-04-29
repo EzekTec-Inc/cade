@@ -24,13 +24,13 @@
 | # | Work Item | Status | Est. Size |
 |---|-----------|--------|-----------|
 | WI-1 | TUI Refactor Phase 2: EditorComponent | ✅ Done (already shipped) | — |
-| WI-2 | TUI Refactor Phase 3: Overlay Stack Migration | 🟡 Partial | Medium |
+| WI-2 | TUI Refactor Phase 3: Overlay Stack Migration | ✅ Done (4/6 overlays) | Medium |
 | WI-3 | TUI Refactor Phase 4: Slot Rendering + Input | 🟡 Partial | Small |
 | WI-4 | Askpass Integration | ✅ Done (already shipped) | — |
 | WI-5 | MCP Prefix Stripping | ✅ Done (already shipped) | — |
 | WI-6 | Semantic Memory Search (P2) | ❌ Not started | Large |
 | WI-7 | System Prompt Optimization | 🟡 Analysis done | Small |
-| WI-8 | Unused Import Cleanup | ❌ Trivial | Trivial |
+| WI-8 | Unused Import Cleanup | ✅ Done | Trivial |
 
 **Execution order:** WI-8 → WI-2 → WI-3 → WI-7 → WI-6
 
@@ -302,4 +302,5 @@ _Append entries here as work items are finished._
 
 | Date | WI | Commit | Notes |
 |------|----|--------|-------|
-| — | — | — | — |
+| 2026-04-29 | WI-8 | `2dbb9d3e` | Removed unused `unicode_width::UnicodeWidthStr` import |
+| 2026-04-29 | WI-2 | `ae34cd3e` | Migrated 4 overlays to dynamic stack, -333/+21 lines. ActiveQuestion + Password remain as legacy Option fields (blocking modals). |
