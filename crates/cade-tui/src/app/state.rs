@@ -380,15 +380,25 @@ impl TuiApp {
         themes: Vec<cade_core::resources::themes::Theme>,
         original_theme: crate::colors::ThemeColors,
     ) {
+        // U5: init cursor at the position of the currently active theme
+        let initial_cursor = themes
+            .iter()
+            .enumerate()
+            .position(|(_, t)| {
+                let tc = crate::colors::ThemeColors::builtin_by_name(&t.name)
+                    .unwrap_or_else(|| crate::colors::ThemeColors::from_theme(t));
+                tc.primary == original_theme.primary && tc.bg_base == original_theme.bg_base
+            })
+            .unwrap_or(0);
         let tp = ThemePickerState {
             query: String::new(),
             filtered_indices: (0..themes.len()).collect(),
             themes,
-            cursor: 0,
+            cursor: initial_cursor,
             original_theme,
         };
         self.theme_picker = Some(tp);
-        self.apply_theme_from_picker();
+        self.draw_dirty = true;
     }
     pub(crate) fn apply_theme_from_picker(&mut self) {
         if let Some(tp) = &self.theme_picker
@@ -407,12 +417,17 @@ impl TuiApp {
     pub(crate) fn update_theme_picker_filter(&mut self) {
         if let Some(tp) = &mut self.theme_picker {
             tp.cursor = 0;
+            // U1: match name, description, and variant (hoisted to avoid per-item alloc)
+            let query_lower = tp.query.to_lowercase();
             tp.filtered_indices = tp
                 .themes
                 .iter()
                 .enumerate()
                 .filter(|(_, t)| {
-                    tp.query.is_empty() || t.name.to_lowercase().contains(&tp.query.to_lowercase())
+                    query_lower.is_empty()
+                        || t.name.to_lowercase().contains(&query_lower)
+                        || t.description.as_deref().unwrap_or("").to_lowercase().contains(&query_lower)
+                        || t.variant.as_deref().unwrap_or("").to_lowercase().contains(&query_lower)
                 })
                 .map(|(i, _)| i)
                 .collect();

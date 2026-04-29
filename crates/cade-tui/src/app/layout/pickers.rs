@@ -71,15 +71,13 @@ fn theme_swatches(tc: &TC) -> Vec<Span<'static>> {
         .collect()
 }
 
-/// Resolve a built-in theme name to `ThemeColors`.
+/// Resolve theme colors for picker swatches.
 ///
-/// Falls back to `dark()` for unknown names (custom JSON themes, which
-/// cannot be resolved here because they need filesystem access).
-///
-/// Delegates to `cade_core::resources::themes::ThemeColors::builtin_by_name`
-/// — single source of truth for the built-in registry.
-fn builtin_colors(name: &str) -> TC {
-    TC::builtin_by_name(name).unwrap_or_else(TC::dark)
+/// Built-ins are resolved via `builtin_by_name` (single source of truth).
+/// Custom themes use `from_theme` so their actual colors appear in swatches (B1).
+fn resolve_theme_colors(t: &cade_core::resources::themes::Theme) -> TC {
+    TC::builtin_by_name(&t.name)
+        .unwrap_or_else(|| TC::from_theme(t))
 }
 
 
@@ -111,6 +109,17 @@ fn theme_row<'a>(
     };
     let name_cell = Cell::from(Span::styled(t.name.clone(), name_style));
 
+    // U2: variant badge after name
+    let variant_badge = match t.variant.as_deref() {
+        Some("dark") => " [dark]",
+        Some("light") => " [light]",
+        _ => "",
+    };
+    let badge_cell = Cell::from(Span::styled(
+        variant_badge.to_string(),
+        Style::default().fg(colors.text_dim.to_ratatui()).add_modifier(Modifier::DIM),
+    ));
+
     // Description cell
     let desc = t.description.as_deref().unwrap_or("").to_string();
     let desc_cell = Cell::from(Span::styled(desc, colors.text_muted()));
@@ -124,6 +133,7 @@ fn theme_row<'a>(
     Row::new(vec![
         Cell::from(swatch_line),
         name_cell,
+        badge_cell,
         desc_cell,
     ])
     .style(row_style)
@@ -172,50 +182,36 @@ pub(crate) fn render_theme_picker(
     let inner_table_area = outer_block.inner(table_area);
     frame.render_widget(outer_block, table_area);
 
-    // -- Group themes: built-in first, then custom
-    let builtin_names = ["dark", "light", "catppuccin-mocha", "catppuccin-latte", "tokyo-night"];
-    let mut builtin_rows: Vec<(usize, Row)> = Vec::new();
-    let mut custom_rows:  Vec<(usize, Row)> = Vec::new();
+    // -- B5/A2: derive builtin names from the single source of truth
+    let builtin_names: Vec<&str> = cade_core::resources::themes::ThemeColors::builtin_listing()
+        .iter()
+        .map(|(n, _, _)| *n)
+        .collect();
 
-    // Track which flat cursor index maps to which theme for TableState
+    // -- B2+A1: simplified selection + flat_cursor that accounts for header rows.
+    // We iterate filtered_indices once, partitioning into built-in and custom,
+    // computing is_sel purely from tp.cursor (an index into filtered_indices).
+    let mut builtin_rows: Vec<Row> = Vec::new();
+    let mut custom_rows: Vec<Row> = Vec::new();
+
+    for (fi_pos, &orig_idx) in tp.filtered_indices.iter().enumerate() {
+        let t = &tp.themes[orig_idx];
+        let is_sel = fi_pos == tp.cursor;
+        // B1: resolve actual theme colors — from_theme for custom themes
+        let tc = resolve_theme_colors(t);
+        let row = theme_row(t, is_sel, colors, &tc);
+        if builtin_names.contains(&t.name.as_str()) {
+            builtin_rows.push(row);
+        } else {
+            custom_rows.push(row);
+        }
+    }
+
+    // Assemble rows with section headers, tracking the selected flat index
+    let mut all_rows: Vec<Row> = Vec::new();
     let mut flat_cursor: Option<usize> = None;
     let mut flat_idx = 0usize;
 
-    // Built-in group
-    for &orig_idx in &tp.filtered_indices {
-        let t = &tp.themes[orig_idx];
-        if builtin_names.contains(&t.name.as_str()) {
-            let is_sel = builtin_rows.len() + 1 /* header */ == tp.cursor && custom_rows.is_empty()
-                || flat_cursor.is_none() && {
-                    // count position in full filtered list
-                    let pos = tp.filtered_indices.iter().position(|&i| i == orig_idx).unwrap_or(usize::MAX);
-                    pos == tp.cursor
-                };
-            if flat_cursor.is_none() && tp.filtered_indices.iter().position(|&i| i == orig_idx) == Some(tp.cursor) {
-                flat_cursor = Some(flat_idx);
-            }
-            let tc = builtin_colors(&t.name);
-            builtin_rows.push((flat_idx, theme_row(t, is_sel, colors, &tc)));
-            flat_idx += 1;
-        }
-    }
-
-    // Custom group
-    for &orig_idx in &tp.filtered_indices {
-        let t = &tp.themes[orig_idx];
-        if !builtin_names.contains(&t.name.as_str()) {
-            let is_sel = tp.filtered_indices.iter().position(|&i| i == orig_idx) == Some(tp.cursor);
-            if flat_cursor.is_none() && is_sel {
-                flat_cursor = Some(flat_idx);
-            }
-            let tc = builtin_colors(&t.name); // falls back to dark() for custom
-            custom_rows.push((flat_idx, theme_row(t, is_sel, colors, &tc)));
-            flat_idx += 1;
-        }
-    }
-
-    // Assemble rows with section headers
-    let mut all_rows: Vec<Row> = Vec::new();
     if !builtin_rows.is_empty() {
         all_rows.push(
             Row::new(vec![
@@ -227,10 +223,24 @@ pub(crate) fn render_theme_picker(
                 )),
                 Cell::from(""),
                 Cell::from(""),
+                Cell::from(""),
             ])
             .style(Style::default().bg(colors.bg_surface0.to_ratatui())),
         );
-        all_rows.extend(builtin_rows.into_iter().map(|(_, r)| r));
+        flat_idx += 1; // header row
+
+        // Find selected row among builtins
+        let mut bi = 0usize;
+        for (fi_pos, &orig_idx) in tp.filtered_indices.iter().enumerate() {
+            if builtin_names.contains(&tp.themes[orig_idx].name.as_str()) {
+                if fi_pos == tp.cursor {
+                    flat_cursor = Some(flat_idx + bi);
+                }
+                bi += 1;
+            }
+        }
+        flat_idx += builtin_rows.len();
+        all_rows.extend(builtin_rows);
     }
     if !custom_rows.is_empty() {
         all_rows.push(
@@ -243,10 +253,25 @@ pub(crate) fn render_theme_picker(
                 )),
                 Cell::from(""),
                 Cell::from(""),
+                Cell::from(""),
             ])
             .style(Style::default().bg(colors.bg_surface0.to_ratatui())),
         );
-        all_rows.extend(custom_rows.into_iter().map(|(_, r)| r));
+        flat_idx += 1; // header row
+
+        // Find selected row among custom
+        if flat_cursor.is_none() {
+            let mut ci = 0usize;
+            for (fi_pos, &orig_idx) in tp.filtered_indices.iter().enumerate() {
+                if !builtin_names.contains(&tp.themes[orig_idx].name.as_str()) {
+                    if fi_pos == tp.cursor {
+                        flat_cursor = Some(flat_idx + ci);
+                    }
+                    ci += 1;
+                }
+            }
+        }
+        all_rows.extend(custom_rows);
     }
 
     // swatch cell width = 3 (cursor) + 5 (swatches) + 1 (space) = 9
@@ -255,6 +280,7 @@ pub(crate) fn render_theme_picker(
         [
             Constraint::Length(9),
             Constraint::Length(22),
+            Constraint::Length(8),   // U2: variant badge
             Constraint::Min(10),
         ],
     )
@@ -269,8 +295,9 @@ pub(crate) fn render_theme_picker(
     let filter_block = Block::default()
         .borders(Borders::ALL)
         .border_type(colors.border_style.to_ratatui())
+        // U3: shortened title to fit narrow pickers
         .title(Span::styled(
-            " Filter — type to search  ↑↓ navigate  Enter confirm  Esc cancel ",
+            " ↑↓ nav · Enter ok · Esc cancel · type to filter ",
             Style::default().fg(colors.text_muted.to_ratatui()).add_modifier(Modifier::DIM),
         ))
         .border_style(colors.border_base())
@@ -312,21 +339,49 @@ mod tests {
 
     #[test]
     fn test_builtin_colors_dark() {
-        let tc = builtin_colors("dark");
+        let t = cade_core::resources::themes::Theme {
+            name: "dark".to_string(),
+            description: None,
+            author: None,
+            variant: None,
+            vars: Default::default(),
+            colors: Default::default(),
+            source: std::path::PathBuf::new(),
+        };
+        let tc = resolve_theme_colors(&t);
         assert_ne!(tc.primary.to_ratatui(), ratatui::style::Color::Reset);
     }
 
     #[test]
-    fn test_builtin_colors_unknown_falls_back_to_dark() {
-        let tc = builtin_colors("totally-unknown-theme");
-        let dark = TC::dark();
-        assert_eq!(tc.primary.to_ratatui(), dark.primary.to_ratatui());
+    fn test_builtin_colors_unknown_falls_back_to_from_theme() {
+        let t = cade_core::resources::themes::Theme {
+            name: "totally-unknown-theme".to_string(),
+            description: None,
+            author: None,
+            variant: None,
+            vars: Default::default(),
+            colors: Default::default(),
+            source: std::path::PathBuf::new(),
+        };
+        // B1: custom themes use from_theme(), not dark() fallback
+        let tc = resolve_theme_colors(&t);
+        // from_theme on default tokens produces default colors — just verify it doesn't panic
+        let _ = tc.primary.to_ratatui();
     }
 
     #[test]
     fn test_builtin_colors_all_named() {
-        for name in ["dark", "light", "catppuccin-mocha", "catppuccin-latte", "tokyo-night"] {
-            let tc = builtin_colors(name);
+        for (name, _, _) in cade_core::resources::themes::ThemeColors::builtin_listing() {
+            let t = cade_core::resources::themes::Theme {
+                name: name.to_string(),
+                description: None,
+                author: None,
+                variant: None,
+                vars: Default::default(),
+                colors: Default::default(),
+                source: std::path::PathBuf::new(),
+            };
+            let tc = resolve_theme_colors(&t);
             assert_ne!(tc.primary.to_ratatui(), ratatui::style::Color::Reset, "theme {name} primary must not be Reset");
         }
     }

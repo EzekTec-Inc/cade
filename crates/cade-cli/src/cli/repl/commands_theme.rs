@@ -58,7 +58,21 @@ impl Repl {
             if let Some(t) = discovered.iter().find(|t| t.name == name) {
                 (ThemeColors::from_theme(t), t.name.clone())
             } else {
-                (ThemeColors::dark(), String::new())
+                // U9: case-insensitive substring fallback — try builtins first
+                let name_lower = name.to_lowercase();
+                if let Some(&bn) = ThemeColors::builtin_names()
+                    .iter()
+                    .find(|n| n.to_lowercase().contains(&name_lower))
+                {
+                    (ThemeColors::builtin_by_name(bn).unwrap(), bn.to_string())
+                } else if let Some(t) = discovered
+                    .iter()
+                    .find(|t| t.name.to_lowercase().contains(&name_lower))
+                {
+                    (ThemeColors::from_theme(t), t.name.clone())
+                } else {
+                    (ThemeColors::dark(), String::new())
+                }
             }
         };
 

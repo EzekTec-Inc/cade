@@ -334,8 +334,18 @@ pub(crate) fn render_frame(
         let w = (frame.area().width / 2)
             .max(40)
             .min(frame.area().width.saturating_sub(4));
-        let n = tp.filtered_indices.len().max(1).min(10);
-        let h = (n as u16 + 4).clamp(5, frame.area().height.saturating_sub(4));
+        // B4: account for section header rows (Built-in / Custom)
+        let builtin_names: Vec<&str> = crate::colors::ThemeColors::builtin_listing()
+            .iter()
+            .map(|(n, _, _)| *n)
+            .collect();
+        let has_builtins = tp.filtered_indices.iter().any(|&i| builtin_names.contains(&tp.themes[i].name.as_str()));
+        let has_custom = tp.filtered_indices.iter().any(|&i| !builtin_names.contains(&tp.themes[i].name.as_str()));
+        let header_rows = has_builtins as u16 + has_custom as u16;
+        // U6: adaptive height — cap to terminal height minus chrome, not hard 10
+        let max_visible = frame.area().height.saturating_sub(8);
+        let n = (tp.filtered_indices.len() as u16 + header_rows).max(1).min(max_visible);
+        let h = (n + 4).clamp(5, frame.area().height.saturating_sub(4));
 
         let r = ratatui::layout::Rect {
             x: frame.area().x + (frame.area().width.saturating_sub(w)) / 2,
