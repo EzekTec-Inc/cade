@@ -103,8 +103,8 @@
 | Area | Status |
 |---|---|
 | TUI Refactor — Phase 2 (pluggable `EditorComponent`) | ✅ Done — `EditorComponent` trait + `DefaultEditor` wrapper + TuiApp wired |
-| TUI Refactor — Phase 3 (dynamic overlay stack) | 🟡 Partial — trait + Vec field exist; 5 legacy Option overlays not yet migrated |
-| TUI Refactor — Phase 4 (UI extension slots) | 🟡 Partial — `SlotManager` + types defined; render/input not wired |
+| TUI Refactor — Phase 3 (dynamic overlay stack) | ✅ Done — 4 overlays migrated to Vec stack; ActiveQuestion + Password remain legacy |
+| TUI Refactor — Phase 4 (UI extension slots) | ✅ Done — SlotManager render + input fully wired |
 | Askpass implementation (`crates/cade-askpass`) | ✅ Done — IPC server, protocol, TUI modal, BashTool wiring, all shipped |
 | MCP prefix stripping for edit tracking | ✅ Done — `strip_mcp_prefix` + `is_file_edit_tool` + 3 tests |
 
@@ -115,12 +115,11 @@
 > Detailed plan with per-item context: see `IMPLEMENTATION_PLAN.md` (repo root).
 
 ### Near term
-- [ ] **TUI overlay stack migration** — migrate 5 legacy `Option<...>` overlay
-      fields to the `Vec<Box<dyn OverlayComponent>>` stack (WI-2)
-- [ ] **TUI slot rendering** — wire `SlotManager` into `render.rs` and
-      `input.rs` for Header/Footer/Sidebar injection (WI-3)
-- [ ] **System prompt optimization** — 5 targeted edits to `BASE_SYSTEM_PROMPT`
-      for dynamic tool awareness, RAG-first framing, memory guidance (WI-7)
+- [x] **TUI overlay stack migration** — migrated 4 overlays from legacy `Option<...>` fields
+      to `Vec<Box<dyn OverlayComponent>>` stack (WI-2)
+- [x] **TUI slot rendering** — wired `SlotManager` into `render.rs` and `input.rs` (WI-3)
+- [x] **System prompt optimization** — added dynamic tool filtering, search-first
+      lookup, and `/memory pin` guidance to BASE_SYSTEM_PROMPT (WI-7)
 - [ ] **Semantic memory search** — embedding-based `search_memory_semantic()`
       with hybrid FTS5 + cosine ranking (WI-6)
 
