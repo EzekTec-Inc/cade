@@ -665,6 +665,28 @@ async fn run_agent_loop(
                     "tool_name":    result.tool_name,
                 }),
             );
+
+            // ── P1: Record observation for this tool call ─────────────────
+            // Summarise the tool invocation into a lightweight observation so
+            // the context builder can inject a compressed trail of past actions
+            // even after the original messages have been dropped.
+            {
+                let turn = sqlite::get_turn_counter(&state2.db, &agent_id2).unwrap_or(0);
+                let summary = build_observation_summary(&result.tool_name, &tc.arguments, &result.output);
+                let importance = rate_observation_importance(&result.tool_name, result.is_error);
+                let files = extract_file_paths(&tc.arguments);
+                let _ = sqlite::observations::insert_observation(
+                    &state2.db,
+                    &agent_id2,
+                    turn,
+                    &result.tool_name,
+                    "tool_call",
+                    &summary,
+                    &files,
+                    "[]",
+                    importance,
+                );
+            }
         }
 
         // Loop → re-invoke LLM with tool results
@@ -2107,6 +2129,84 @@ fn record_recent_edit_db(db: &cade_store::sqlite::Db, agent_id: &str, path: &str
     if let Err(e) = cade_store::sqlite::upsert_memory_block(db, agent_id, label, &new_value, None, Some(2000)) {
         tracing::warn!("record_recent_edit_db failed for agent={agent_id} path={path}: {e}");
     }
+}
+
+// ── P1: Observation helpers ──────────────────────────────────────────────────
+
+/// Build a one-line summary of a tool call for observation storage.
+///
+/// Extracts the most informative argument (path, command, query) and
+/// truncates the output to a short excerpt.
+fn build_observation_summary(
+    tool_name: &str,
+    arguments: &serde_json::Value,
+    output: &str,
+) -> String {
+    let key_arg = arguments
+        .get("path")
+        .or_else(|| arguments.get("command"))
+        .or_else(|| arguments.get("query"))
+        .or_else(|| arguments.get("pattern"))
+        .or_else(|| arguments.get("old_string"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+
+    let key_excerpt = if key_arg.len() > 80 {
+        format!("{}…", &key_arg[..key_arg.char_indices().take(77).last().map(|(i, _)| i).unwrap_or(77)])
+    } else {
+        key_arg.to_string()
+    };
+
+    let output_head = if output.len() > 60 {
+        let end = output.char_indices().take(57).last().map(|(i, _)| i).unwrap_or(57);
+        format!("{}…", &output[..end])
+    } else {
+        output.to_string()
+    };
+    // Collapse newlines for compact storage
+    let output_head = output_head.replace('\n', " ");
+
+    if key_excerpt.is_empty() {
+        format!("{tool_name} → {output_head}")
+    } else {
+        format!("{tool_name}({key_excerpt}) → {output_head}")
+    }
+}
+
+/// Rate observation importance (1=routine, 5=critical).
+///
+/// - Errors always get 5
+/// - File writes/edits get 4
+/// - Builds/tests get 4
+/// - File reads get 2
+/// - Everything else gets 3
+fn rate_observation_importance(tool_name: &str, is_error: bool) -> i64 {
+    if is_error {
+        return 5;
+    }
+    match tool_name {
+        n if n.contains("write") || n.contains("edit") || n.contains("replace") => 4,
+        n if n.contains("bash") || n.contains("shell") || n.contains("test") => 4,
+        n if n.contains("commit") || n.contains("push") => 5,
+        n if n.contains("read") || n.contains("glob") || n.contains("grep") => 2,
+        n if n.contains("search") => 2,
+        _ => 3,
+    }
+}
+
+/// Extract file paths from tool arguments as a JSON array string.
+fn extract_file_paths(arguments: &serde_json::Value) -> String {
+    let mut paths = Vec::new();
+    if let Some(p) = arguments.get("path").and_then(|v| v.as_str()) {
+        paths.push(p.to_string());
+    }
+    if let Some(p) = arguments.get("source").and_then(|v| v.as_str()) {
+        paths.push(p.to_string());
+    }
+    if let Some(p) = arguments.get("destination").and_then(|v| v.as_str()) {
+        paths.push(p.to_string());
+    }
+    serde_json::to_string(&paths).unwrap_or_else(|_| "[]".to_string())
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

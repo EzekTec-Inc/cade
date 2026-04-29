@@ -192,7 +192,7 @@ pub fn search_memory(
     })?;
 
     let q_lower = query.to_lowercase();
-    let results = rows
+    let mut results: Vec<(String, String, String)> = rows
         .filter_map(|r| r.ok())
         .map(|(label, value)| {
             // Generate a contextual snippet: find first match position, extract ±100 chars
@@ -221,6 +221,37 @@ pub fn search_memory(
             (label, value, snippet)
         })
         .collect();
+
+    // ── P2: Fuzzy fallback — if LIKE found nothing, try word-level matching ──
+    // Split the query into words and match blocks containing ANY word.
+    // This catches cases where the user's search phrase doesn't appear verbatim
+    // but the individual terms do (e.g. "auth middleware" matches a block
+    // containing "authentication" and "middleware" separately).
+    if results.is_empty() {
+        let words: Vec<String> = query
+            .split_whitespace()
+            .filter(|w| w.len() >= 3)
+            .map(|w| w.to_lowercase())
+            .collect();
+        if !words.is_empty() {
+            let all_blocks = super::memory::get_memory_blocks(db, agent_id).unwrap_or_default();
+            let mut scored: Vec<(usize, String, String, String)> = Vec::new();
+            for (label, value, _desc) in &all_blocks {
+                let combined = format!("{} {}", label, value).to_lowercase();
+                let hits = words.iter().filter(|w| combined.contains(w.as_str())).count();
+                if hits > 0 {
+                    let snippet = value.chars().take(200).collect::<String>();
+                    scored.push((hits, label.clone(), value.clone(), snippet));
+                }
+            }
+            scored.sort_by(|a, b| b.0.cmp(&a.0));
+            results = scored
+                .into_iter()
+                .take(10)
+                .map(|(_, label, value, snippet)| (label, value, snippet))
+                .collect();
+        }
+    }
 
     Ok(results)
 }

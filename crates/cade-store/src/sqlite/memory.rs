@@ -292,6 +292,13 @@ pub fn upsert_memory_block(
             params![agent_id, id],
         )?;
     }
+
+    // ── P6: Auto-type memory blocks on write ─────────────────────────────────
+    // When no explicit memory_type is set, infer it from content heuristics.
+    // This ensures durable knowledge (decisions, constraints, conventions) gets
+    // the confidence boost that prevents the 80-turn archival cliff.
+    auto_type_block_if_untyped(&conn, label);
+
     Ok(())
 }
 
@@ -354,6 +361,71 @@ pub fn get_block_confidence(db: &Db, agent_id: &str, label: &str) -> Result<f64>
         |row| row.get(0),
     )?;
     Ok(confidence)
+}
+
+// ── P6: Auto-type memory blocks ──────────────────────────────────────────────
+
+/// Confidence boost applied to auto-typed durable blocks (same as
+/// `evidence.rs::TYPED_CONFIDENCE_BOOST`).
+const AUTO_TYPE_CONFIDENCE_BOOST: f64 = 1.35;
+
+/// Infer a memory_type from block content when none is explicitly set.
+///
+/// Runs inside `upsert_memory_block` on the already-held connection. Only
+/// updates blocks whose `memory_type` is NULL (never overwrites an explicit
+/// type set via `update_memory_typed`).
+///
+/// Pattern rules (checked in priority order):
+///   1. Contains "decided"/"chosen"/"rejected"/"approved" → `decision`
+///   2. Contains "must"/"always"/"never"/"rule"/"mandatory" → `constraint`
+///   3. Contains "convention"/"pattern"/"style"/"naming" + file path → `convention`
+///   4. Contains "user prefers"/"user wants"/"user likes" → `user_pref`
+fn auto_type_block_if_untyped(
+    conn: &parking_lot::MutexGuard<'_, rusqlite::Connection>,
+    label: &str,
+) {
+    // Read current memory_type + value
+    let row: Option<(Option<String>, String)> = conn
+        .query_row(
+            "SELECT memory_type, value FROM shared_memory_blocks WHERE label = ?1",
+            params![label],
+            |r| Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?)),
+        )
+        .ok();
+
+    let Some((existing_type, value)) = row else {
+        return;
+    };
+
+    // Skip if already typed
+    if existing_type.is_some() {
+        return;
+    }
+
+    let lower = value.to_lowercase();
+    let inferred = if contains_any(&lower, &["decided", "chosen", "rejected", "approved", "decision"]) {
+        "decision"
+    } else if contains_any(&lower, &["must ", "always ", "never ", " rule", "mandatory", "forbidden"]) {
+        "constraint"
+    } else if contains_any(&lower, &["convention", "pattern", "naming", "style guide"])
+        && (lower.contains('/') || lower.contains('.'))
+    {
+        "convention"
+    } else if contains_any(&lower, &["user prefers", "user wants", "user likes", "user asked"]) {
+        "user_pref"
+    } else {
+        return; // No match — leave untyped
+    };
+
+    let _ = conn.execute(
+        "UPDATE shared_memory_blocks SET memory_type = ?1, confidence = MAX(confidence, ?2) WHERE label = ?3",
+        params![inferred, AUTO_TYPE_CONFIDENCE_BOOST, label],
+    );
+}
+
+/// Check if `haystack` contains any of the `needles`.
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|n| haystack.contains(n))
 }
 
 /// Returns (label, value, description) tuples ordered by label.

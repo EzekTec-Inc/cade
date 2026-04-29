@@ -55,6 +55,64 @@ pub(crate) fn active_goal_archive_tags() -> Vec<String> {
     ]
 }
 
+// ── P4: Structured session handoff ───────────────────────────────────────────
+
+/// Build a structured session handoff note from the current memory state.
+///
+/// Collects `active_goal`, `recent_edits`, and `session_summary` into a
+/// single archival entry with clear sections. Returns `None` if all inputs
+/// are empty — nothing worth archiving.
+pub(crate) fn build_session_handoff(
+    active_goal: &str,
+    recent_edits: &str,
+    session_summary: &str,
+    conversation_id: Option<&str>,
+) -> Option<String> {
+    let goal = active_goal.trim();
+    let edits = recent_edits.trim();
+    let summary = session_summary.trim();
+
+    if goal.is_empty() && edits.is_empty() && summary.is_empty() {
+        return None;
+    }
+
+    let ts = chrono::Utc::now().format("%Y-%m-%d %H:%M UTC");
+    let conv_part = conversation_id
+        .map(|c| format!(" (conversation {})", &c[..c.len().min(20)]))
+        .unwrap_or_default();
+
+    let mut sections = vec![format!("## Session Handoff — {ts}{conv_part}")];
+
+    if !goal.is_empty() {
+        sections.push(format!("### Task & Status\n{goal}"));
+    }
+    if !edits.is_empty() {
+        // Take only the first 20 lines of recent_edits to keep it compact
+        let compact_edits: String = edits.lines().take(20).collect::<Vec<_>>().join("\n");
+        sections.push(format!("### Files Modified\n{compact_edits}"));
+    }
+    if !summary.is_empty() {
+        // Take only the last 2000 chars of summary (most recent context)
+        let tail: String = if summary.chars().count() > 2_000 {
+            let skip = summary.chars().count() - 2_000;
+            summary.chars().skip(skip).collect()
+        } else {
+            summary.to_string()
+        };
+        sections.push(format!("### Session Context\n{tail}"));
+    }
+
+    Some(sections.join("\n\n"))
+}
+
+/// Tags for session handoff archival entries.
+pub(crate) fn session_handoff_tags() -> Vec<String> {
+    vec![
+        "session_handoff".to_string(),
+        "slash_new".to_string(),
+    ]
+}
+
 impl Repl {
     /// Dispatch a parsed slash command.
     ///
@@ -383,20 +441,51 @@ impl Repl {
                 match self.client.create_conversation(&agent_id, "").await {
                     Ok(conv) => {
                         let cid = conv["id"].as_str().unwrap_or("").to_string();
-                        // Archive the existing active_goal value to archival memory before
-                        // the destructive delete below. This way an accidental /new still
-                        // leaves a trail recoverable via archival_memory_search.
-                        let prev = self
+
+                        // P4: Build a structured session handoff before clearing state.
+                        // Collects active_goal + recent_edits + session_summary into a
+                        // rich snapshot that survives in archival memory.
+                        let blocks = self
                             .client
                             .get_memory(&agent_id)
                             .await
-                            .unwrap_or_default()
-                            .into_iter()
+                            .unwrap_or_default();
+                        let active_goal = blocks
+                            .iter()
                             .find(|b| b.label == "active_goal")
-                            .map(|b| b.value);
-                        if let Some(value) = prev
-                            && let Some(snapshot) =
-                                build_active_goal_archive_snapshot(&value, Some(&cid))
+                            .map(|b| b.value.as_str())
+                            .unwrap_or("");
+                        let recent_edits = blocks
+                            .iter()
+                            .find(|b| b.label == "recent_edits")
+                            .map(|b| b.value.as_str())
+                            .unwrap_or("");
+                        let session_summary = blocks
+                            .iter()
+                            .find(|b| b.label == "session_summary")
+                            .map(|b| b.value.as_str())
+                            .unwrap_or("");
+
+                        // Build the structured handoff note
+                        if let Some(handoff) = build_session_handoff(
+                            active_goal,
+                            recent_edits,
+                            session_summary,
+                            Some(&cid),
+                        ) {
+                            let _ = self
+                                .client
+                                .insert_archival_memory(
+                                    &agent_id,
+                                    &handoff,
+                                    &session_handoff_tags(),
+                                )
+                                .await;
+                        }
+
+                        // Also archive raw active_goal for backward compat
+                        if let Some(snapshot) =
+                            build_active_goal_archive_snapshot(active_goal, Some(&cid))
                         {
                             let _ = self
                                 .client
@@ -407,6 +496,7 @@ impl Repl {
                                 )
                                 .await;
                         }
+
                         // Clear the active_goal memory block so the agent forgets the previous task
                         let _ = self.client.delete_memory(&agent_id, "active_goal").await;
                         // Reset the C3 staleness counter so the next session starts clean

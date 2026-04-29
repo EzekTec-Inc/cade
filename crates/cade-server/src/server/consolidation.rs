@@ -38,28 +38,38 @@ fn resolve_rag_export_dir(agent_id: &str) -> Option<std::path::PathBuf> {
 const MIN_ROWS_FOR_CONSOLIDATION: usize = 20;
 
 /// Maximum chars of formatted history text fed to the summarisation LLM call.
-/// ~8 k tokens at 3 chars/token — enough context without blowing cost.
-const MAX_SUMMARY_INPUT_CHARS: usize = 24_000;
+/// P5: doubled from 24k → 48k so more dropped-turn detail survives into the
+/// summary. At 3 chars/token this is ~16k input tokens on the compaction model.
+const MAX_SUMMARY_INPUT_CHARS: usize = 48_000;
 
 /// Maximum tokens the summarisation LLM is allowed to emit.
-/// Budget: ~700 tokens for the narrative summary + ~100 tokens for search anchors.
-const SUMMARY_MAX_TOKENS: u32 = 900;
+/// P5: raised from 900 → 1500 so the summary can preserve more decisions,
+/// error details, and reasoning chains.
+const SUMMARY_MAX_TOKENS: u32 = 1_500;
 
 /// Maximum chars stored in the `session_summary` memory block.
-const SESSION_SUMMARY_MAX_CHARS: usize = 4_500;
+/// P5: raised from 4,500 → 8,000. The extra 3.5k of prompt budget is
+/// acceptable on 128k+ context windows and dramatically reduces detail loss.
+const SESSION_SUMMARY_MAX_CHARS: usize = 8_000;
 
 /// Phase C: maximum number of rotated `session_summary_N` blocks to keep in
 /// the long-term tier. When the ring fills, the oldest is evicted and a
 /// one-line excerpt is appended to the pinned `session_index` block.
-const SESSION_SUMMARY_RING_CAP: usize = 5;
+/// P5: raised from 5 → 8 for longer project continuity.
+const SESSION_SUMMARY_RING_CAP: usize = 8;
 
 /// Max chars retained per rotated `session_summary_N` block. Lower than the
 /// live cap because older phases get less frequent attention.
-const SESSION_SUMMARY_ARCHIVED_MAX_CHARS: usize = 2_000;
+/// P5: raised from 2,000 → 4,000 to preserve more cross-session history.
+const SESSION_SUMMARY_ARCHIVED_MAX_CHARS: usize = 4_000;
 
 /// Max chars retained in the `session_index` pinned block. When the FIFO
 /// line-buffer exceeds this, the oldest lines are dropped.
-const SESSION_INDEX_MAX_CHARS: usize = 3_000;
+/// P5: raised from 3,000 → 5,000.
+const SESSION_INDEX_MAX_CHARS: usize = 5_000;
+
+/// Maximum tokens for the P7 active_goal auto-update LLM call.
+const ACTIVE_GOAL_UPDATE_MAX_TOKENS: u32 = 400;
 
 /// Fraction of the estimated history budget used as the threshold: turns that
 /// fit within `char_budget * HISTORY_BUDGET_FRACTION` are considered "in
@@ -114,11 +124,13 @@ pub(crate) fn default_compaction_model(primary_model: &str) -> String {
 /// clipped at the old flat 600-char cap. Tool outputs are medium-signal;
 /// user prompts are shortest on average. Unknown roles get the smallest
 /// limit to prevent an unexpected role from flooding the summariser.
+/// P5: raised assistant from 1200→2000 to preserve more technical detail
+/// (file edits, decisions, error reports) in the consolidation input.
 fn preview_limit_for_role(role: &str) -> usize {
     match role {
-        "assistant" => 1_200,
-        "tool" => 800,
-        "user" => 400,
+        "assistant" => 2_000,
+        "tool" => 1_200,
+        "user" => 600,
         _ => 400,
     }
 }
@@ -287,7 +299,10 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
             };
             // Truncate very long individual messages (file dumps, base64, etc.)
             // using per-role limits so assistant technical content survives.
-            let preview_cap = preview_limit_for_role(role);
+            // P3: High-priority messages get 2× preview cap to preserve detail.
+            let base_cap = preview_limit_for_role(role);
+            let priority_boost = is_high_priority_message(role, trimmed);
+            let preview_cap = if priority_boost { base_cap * 2 } else { base_cap };
             let preview: String = if trimmed.chars().count() > preview_cap {
                 format!("{}…", trimmed.chars().take(preview_cap).collect::<String>())
             } else {
@@ -452,6 +467,12 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
         dropped,
     );
 
+    // ── 5b. P7: Auto-update `active_goal` from the summary ──────────────────
+    // The agent often forgets to call `update_memory(active_goal)`. Rather than
+    // only nagging (C3 staleness), we extract a fresh snapshot from the summary
+    // we just produced. This runs on the same cheap compaction model.
+    auto_update_active_goal(state, agent_id, &summary, &compaction_model).await;
+
     // Phase B.2: export memory to a directory cade-rag-mcp can index.
     //
     // The export path is `<cade_home>/rag/<agent_id>/memory/` unless the
@@ -550,6 +571,171 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     m.consolidation_runs += 1;
     m.chars_summarised += dropped_chars;
     m.chars_produced += summary_chars;
+
+    // ── P8: Prune old observations during consolidation ──────────────────
+    // Keep the observation table bounded by removing entries from turns
+    // that have been compacted.  The current turn counter is the high-water
+    // mark; anything older than `current_turn - 100` is stale.
+    let current_turn = sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
+    let prune_before = (current_turn - 100).max(0);
+    if let Ok(pruned) = sqlite::observations::prune_old_observations(&state.db, agent_id, prune_before) {
+        if pruned > 0 {
+            tracing::debug!(
+                "consolidate [{}]: P8 pruned {} stale observations (before turn {})",
+                agent_id,
+                pruned,
+                prune_before,
+            );
+        }
+    }
+}
+
+// ── P7: active_goal auto-update ───────────────────────────────────────────────
+
+// ── P3: Event-driven consolidation priority ──────────────────────────────────
+
+/// Detect whether a message contains high-priority signals that deserve
+/// extra detail preservation during consolidation.
+///
+/// High-priority signals:
+///   - Git commit messages (milestone reached)
+///   - Test results (pass/fail state is critical context)
+///   - Error corrections ("actually", "no, that's wrong")
+///   - Decision statements ("decided", "chosen", "rejected")
+///   - Memory updates (update_memory calls carry decision context)
+fn is_high_priority_message(role: &str, content: &str) -> bool {
+    let lower = content.to_lowercase();
+    match role {
+        "tool" => {
+            // Git commits, test results, error outputs
+            lower.contains("commit")
+                || lower.contains("test result")
+                || lower.contains("tests passed")
+                || lower.contains("tests failed")
+                || lower.contains("cargo test")
+                || lower.contains("exit code")
+                || lower.contains("error[e")
+                || lower.contains("panicked at")
+        }
+        "user" => {
+            // User corrections and explicit decisions
+            lower.starts_with("no,")
+                || lower.starts_with("actually")
+                || lower.starts_with("wrong")
+                || lower.contains("that's wrong")
+                || lower.contains("not what i")
+                || lower.contains("i decided")
+                || lower.contains("let's go with")
+                || lower.contains("approved")
+        }
+        "assistant" => {
+            // Agent decisions and memory operations
+            lower.contains("update_memory")
+                || lower.contains("create_checkpoint")
+                || lower.contains("decided to")
+                || lower.contains("the approach")
+                || lower.contains("rejected because")
+        }
+        _ => false,
+    }
+}
+
+// ── P7: active_goal auto-update ───────────────────────────────────────────────
+
+/// Extract a fresh `active_goal` snapshot from the consolidation summary.
+///
+/// Called at the end of `consolidate_agent` with the summary text that was just
+/// written to `session_summary`. Uses the same cheap compaction model so the
+/// marginal cost is ~400 tokens.
+///
+/// If the LLM returns "UNCHANGED" or fails, the existing `active_goal` is left
+/// untouched — this is best-effort and must never break the main path.
+async fn auto_update_active_goal(
+    state: &AppState,
+    agent_id: &str,
+    summary: &str,
+    compaction_model: &str,
+) {
+    if summary.trim().is_empty() {
+        return;
+    }
+
+    let prompt = format!(
+        "You are a memory maintenance sub-agent. Based on this consolidation summary, \
+         produce an updated `active_goal` memory block.\n\
+         \n\
+         Include:\n\
+         1. **Current task** — what is being worked on\n\
+         2. **Status** — in-progress / completed / blocked\n\
+         3. **Files in play** — exact paths of files being modified\n\
+         4. **Key decisions made** — and why\n\
+         5. **Next steps** — what should happen next\n\
+         \n\
+         Write as a concise structured note (max 200 words). Be factual and specific.\n\
+         If the summary does not contain enough information to determine the current task, \
+         respond with exactly: UNCHANGED\n\
+         \n\
+         SUMMARY:\n\
+         {summary}"
+    );
+
+    let req = CompletionRequest {
+        model: compaction_model.to_string(),
+        messages: vec![LlmMessage {
+            role: "user".to_string(),
+            content: prompt,
+            tool_call_id: None,
+            tool_calls: None,
+            images: None,
+        }],
+        tools: vec![],
+        max_tokens: ACTIVE_GOAL_UPDATE_MAX_TOKENS,
+        reasoning_effort: None,
+    };
+
+    let goal_text = match state.llm.complete(&req).await {
+        Ok(resp) => resp.content.unwrap_or_default().trim().to_string(),
+        Err(e) => {
+            tracing::debug!(
+                "consolidate [{}]: P7 active_goal auto-update LLM failed: {}",
+                agent_id,
+                e
+            );
+            return;
+        }
+    };
+
+    if goal_text.is_empty() || goal_text == "UNCHANGED" {
+        tracing::debug!(
+            "consolidate [{}]: P7 active_goal unchanged",
+            agent_id
+        );
+        return;
+    }
+
+    if let Err(e) = sqlite::upsert_memory_block(
+        &state.db,
+        agent_id,
+        "active_goal",
+        &goal_text,
+        Some("Auto-updated by Sleeptime consolidation (P7)"),
+        Some(3_000),
+    ) {
+        tracing::debug!(
+            "consolidate [{}]: P7 active_goal upsert failed: {}",
+            agent_id,
+            e
+        );
+        return;
+    }
+
+    let _ = sqlite::set_memory_tier(&state.db, agent_id, "active_goal", "pinned", true);
+
+    tracing::debug!(
+        "consolidate [{}]: P7 auto-updated active_goal ({} chars)",
+        agent_id,
+        goal_text.chars().count(),
+    );
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -1057,17 +1243,20 @@ mod tests {
 
     #[test]
     fn m2_preview_limit_assistant_is_1200() {
-        assert_eq!(preview_limit_for_role("assistant"), 1_200);
+        // P5: raised from 1200 → 2000
+        assert_eq!(preview_limit_for_role("assistant"), 2_000);
     }
 
     #[test]
     fn m2_preview_limit_tool_is_800() {
-        assert_eq!(preview_limit_for_role("tool"), 800);
+        // P5: raised from 800 → 1200
+        assert_eq!(preview_limit_for_role("tool"), 1_200);
     }
 
     #[test]
     fn m2_preview_limit_user_is_400() {
-        assert_eq!(preview_limit_for_role("user"), 400);
+        // P5: raised from 400 → 600
+        assert_eq!(preview_limit_for_role("user"), 600);
     }
 
     #[test]
@@ -1211,30 +1400,33 @@ mod tests {
     #[test]
     fn rotate_evicts_to_session_index_when_ring_full() {
         let db = setup_db();
-        // Fill RING_CAP slots (5).
+        // Fill RING_CAP slots (P5: raised from 5 → 8).
         rotate_and_archive_session_summary_db(&db, "a1", "Summary ONE first line\nmore");
         rotate_and_archive_session_summary_db(&db, "a1", "Summary TWO first line\nmore");
         rotate_and_archive_session_summary_db(&db, "a1", "Summary THREE first line\nmore");
         rotate_and_archive_session_summary_db(&db, "a1", "Summary FOUR first line\nmore");
         rotate_and_archive_session_summary_db(&db, "a1", "Summary FIVE first line\nmore");
-        // All 5 slots should now be occupied, no index yet.
-        assert!(block_value(&db, "session_summary_5").is_some());
+        rotate_and_archive_session_summary_db(&db, "a1", "Summary SIX first line\nmore");
+        rotate_and_archive_session_summary_db(&db, "a1", "Summary SEVEN first line\nmore");
+        rotate_and_archive_session_summary_db(&db, "a1", "Summary EIGHT first line\nmore");
+        // All 8 slots should now be occupied, no index yet.
+        assert!(block_value(&db, "session_summary_8").is_some());
         assert!(block_value(&db, "session_index").is_none());
 
         // One more rotation — "ONE" should be evicted to session_index.
-        rotate_and_archive_session_summary_db(&db, "a1", "Summary SIX first line\nmore");
+        rotate_and_archive_session_summary_db(&db, "a1", "Summary NINE first line\nmore");
         let index = block_value(&db, "session_index").expect("index block must exist");
         assert!(
             index.contains("Summary ONE first line"),
             "expected ONE's first line in index, got: {index}"
         );
-        // Ring still bounded at 5.
-        assert!(block_value(&db, "session_summary_5").is_some());
-        assert!(block_value(&db, "session_summary_6").is_none());
+        // Ring still bounded at 8.
+        assert!(block_value(&db, "session_summary_8").is_some());
+        assert!(block_value(&db, "session_summary_9").is_none());
         // Slot 1 has the newest.
         assert_eq!(
             block_value(&db, "session_summary_1").as_deref(),
-            Some("Summary SIX first line\nmore")
+            Some("Summary NINE first line\nmore")
         );
     }
 
@@ -1453,11 +1645,12 @@ mod tests {
 
         // ── assert ──────────────────────────────────────────────────────
 
-        // 1. The mock LLM's complete() was invoked exactly once.
+        // 1. The mock LLM's complete() was invoked exactly twice:
+        //    once for session_summary consolidation, once for P7 active_goal auto-update.
         assert_eq!(
             llm.calls.load(Ordering::SeqCst),
-            1,
-            "consolidate_agent must call LLM.complete exactly once when there are dropped turns"
+            2,
+            "consolidate_agent must call LLM.complete twice (summary + P7 active_goal)"
         );
 
         // 2. `session_summary` block exists and contains the mock output verbatim.

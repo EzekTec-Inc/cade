@@ -488,6 +488,31 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 6", [])?;
     }
 
+    // ── Migration 7: P1 — observations table ─────────────────────────────────
+    if current_version < 7 {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS observations (
+                id TEXT PRIMARY KEY,
+                agent_id TEXT NOT NULL,
+                turn INTEGER NOT NULL DEFAULT 0,
+                tool_name TEXT NOT NULL,
+                observation_type TEXT NOT NULL DEFAULT 'tool_call',
+                summary TEXT NOT NULL,
+                files TEXT NOT NULL DEFAULT '[]',
+                concepts TEXT NOT NULL DEFAULT '[]',
+                importance INTEGER NOT NULL DEFAULT 3,
+                created_at INTEGER NOT NULL
+            )",
+            [],
+        )?;
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_observations_agent_turn
+             ON observations (agent_id, turn DESC)",
+            [],
+        )?;
+        conn.execute("PRAGMA user_version = 7", [])?;
+    }
+
     Ok(())
 }
 
@@ -526,6 +551,7 @@ pub mod conversations;
 pub mod evidence;
 pub mod memory;
 pub mod messages;
+pub mod observations;
 pub mod providers;
 pub mod runs;
 pub mod skills;
@@ -537,6 +563,7 @@ pub use conversations::*;
 pub use evidence::*;
 pub use memory::*;
 pub use messages::*;
+pub use observations::*;
 pub use providers::*;
 pub use runs::*;
 pub use tools::*;
