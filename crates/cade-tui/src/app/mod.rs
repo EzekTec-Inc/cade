@@ -748,6 +748,12 @@ pub struct TuiApp {
     /// Optional extra row rendered below the footer (plugin/extension status).
     pub footer_extra: Option<String>,
 
+    // -- Dynamic UI extension slots (Phase 4)
+    /// Registry of plugin-injected widgets keyed by [`UiSlot`].
+    /// The render path queries this for Header, Footer, and Sidebar
+    /// components; each gets a dedicated layout region when occupied.
+    pub slots: crate::slots::SlotManager,
+
     // -- Scroll indicator
     /// Number of committed lines pushed while the user was scrolled up.
     /// Reset to 0 whenever scroll returns to 0 (bottom).
@@ -883,6 +889,7 @@ impl TuiApp {
             pending_submit_images: Vec::new(),
             header_lines: Vec::new(),
             footer_extra: None,
+            slots: crate::slots::SlotManager::new(),
             pending_lines: 0,
             queued_count: 0,
             toast: None,
@@ -1134,6 +1141,7 @@ impl TuiApp {
         // call render_overlay(&mut self) inside the terminal.draw
         // closure (which already borrows self.terminal mutably).
         let mut overlay_stack = std::mem::take(&mut self.overlays);
+        let mut slot_mgr = std::mem::take(&mut self.slots);
 
         self.terminal.draw(|frame| {
             let (m_skip, cur_pos) = render_frame(
@@ -1175,6 +1183,45 @@ impl TuiApp {
             );
             max_skip = m_skip;
             input_cursor_pos = cur_pos;
+
+            // -- Dynamic UI extension slots (Phase 4)
+            // Slots render into dedicated regions of the frame.
+            // Header: top of frame, Footer: bottom, Sidebar: right edge.
+            // They paint on top of render_frame's output — occupied slots
+            // use Clear to wipe their region first, so there's no bleed-through.
+            {
+                use crate::slots::UiSlot;
+                use ratatui::layout::Rect;
+                use ratatui::widgets::Clear;
+
+                let full = frame.area();
+
+                // -- Header slot: top N rows
+                if let Some(hdr) = slot_mgr.get_mut(UiSlot::Header) {
+                    let h = hdr.preferred_height().min(full.height / 4).max(1);
+                    let area = Rect::new(full.x, full.y, full.width, h);
+                    frame.render_widget(Clear, area);
+                    hdr.render(frame, area, &colors);
+                }
+
+                // -- Footer slot: bottom N rows
+                if let Some(ftr) = slot_mgr.get_mut(UiSlot::Footer) {
+                    let h = ftr.preferred_height().min(full.height / 4).max(1);
+                    let y = full.y + full.height.saturating_sub(h);
+                    let area = Rect::new(full.x, y, full.width, h);
+                    frame.render_widget(Clear, area);
+                    ftr.render(frame, area, &colors);
+                }
+
+                // -- Sidebar slot: right edge (only when terminal is wide enough)
+                if let Some(sb) = slot_mgr.get_mut(UiSlot::Sidebar) {
+                    let sb_w = sb.preferred_height().min(full.width / 3).max(1);
+                    let x = full.x + full.width.saturating_sub(sb_w);
+                    let area = Rect::new(x, full.y, sb_w, full.height);
+                    frame.render_widget(Clear, area);
+                    sb.render(frame, area, &colors);
+                }
+            }
 
             // -- Password prompt overlay (centered modal)
             if let Some(pw) = &active_password {
@@ -1227,8 +1274,9 @@ impl TuiApp {
             }
         })?;
 
-        // Restore the overlay stack.
+        // Restore the overlay stack and slot manager.
         self.overlays = overlay_stack;
+        self.slots = slot_mgr;
 
         if let Some((x, y)) = input_cursor_pos {
             let _ = crossterm::execute!(
