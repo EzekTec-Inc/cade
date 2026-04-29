@@ -33,6 +33,7 @@ pub trait AutocompleteProvider {
 // -- FileAutocompleteProvider
 
 /// Provides Tab path completion and `@` fuzzy file browsing.
+#[derive(Debug, Clone)]
 pub struct FileAutocompleteProvider {
     root: PathBuf,
 }

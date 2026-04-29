@@ -396,6 +396,7 @@ impl TuiApp {
             themes,
             cursor: initial_cursor,
             original_theme,
+            pending_action: None,
         };
         self.theme_picker = Some(tp);
         self.draw_dirty = true;

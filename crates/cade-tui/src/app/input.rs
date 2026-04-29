@@ -7,7 +7,7 @@ use crossterm::event::{
 
 use crate::Result;
 
-use super::{FIXED_ROWS, MAX_INPUT_ROWS, PickerState, ToastLevel, TuiApp};
+use super::{FIXED_ROWS, MAX_INPUT_ROWS, FilePickerAction, PickerState, ThemePickerAction, ToastLevel, TuiApp};
 use super::layout::cursor::{calc_visual_cursor, find_cursor_at_visual_row_col, input_mode_badge};
 
 impl TuiApp {
@@ -119,6 +119,41 @@ impl TuiApp {
         // Some(None)        = Ctrl+D (exit)
         // Some(Some(s))     = line submitted
         // None              = continue reading
+
+        // -- Dynamic overlay stack (Phase 3: highest priority)
+        if let Some(overlay) = self.overlays.last_mut() {
+            use crate::overlay_component::OverlayInputResult;
+            let result = overlay.handle_input(k);
+
+            // Drain side effects (preview, insert, etc.) on every dispatch.
+            let action = overlay.take_result();
+
+            match result {
+                OverlayInputResult::Dismiss => {
+                    // Pop the overlay, then process its final action.
+                    let mut popped = self.overlays.pop().unwrap();
+                    // Drain final result if handle_input didn't already produce one.
+                    let final_action = action.or_else(|| popped.take_result());
+                    if let Some(any_val) = final_action {
+                        return self.process_overlay_action(any_val);
+                    }
+                }
+                OverlayInputResult::Consumed => {
+                    if let Some(any_val) = action {
+                        let _ = self.process_overlay_action(any_val);
+                    }
+                }
+                OverlayInputResult::NotHandled => {
+                    // Fall through to legacy handlers below.
+                }
+            }
+
+            if !matches!(result, OverlayInputResult::NotHandled) {
+                self.draw_dirty = true;
+                let _ = self.draw();
+                return Ok(None);
+            }
+        }
 
         // -- Summary overlay routing
         if self.summary_overlay.is_some() {
@@ -566,16 +601,96 @@ impl TuiApp {
                     && self.picker.is_none()
                 {
                     let at_pos = self.editor.cursor_pos().saturating_sub(1);
-                    let matches = self.file_ac.collect_files("");
-                    self.picker = Some(PickerState {
+                    self.picker = Some(PickerState::new(
                         at_pos,
-                        query: String::new(),
-                        matches,
-                        cursor: 0,
-                    });
+                        String::new(),
+                        &self.file_ac,
+                    ));
                 }
             }
         }
+        Ok(None)
+    }
+
+    /// Interpret a boxed `dyn Any` action produced by an overlay's
+    /// [`OverlayComponent::take_result`].
+    ///
+    /// Returns `Ok(Some(Some(cmd)))` when the overlay wants to submit
+    /// a REPL command, `Ok(None)` for side-effect-only actions.
+    fn process_overlay_action(
+        &mut self,
+        action: Box<dyn std::any::Any>,
+    ) -> Result<Option<Option<String>>> {
+        // -- Command palette → submit a slash command
+        let action = match action.downcast::<String>() {
+            Ok(cmd) => return Ok(Some(Some(*cmd))),
+            Err(a) => a,
+        };
+
+        // -- Theme picker actions (preview / submit / revert)
+        let action = match action.downcast::<ThemePickerAction>() {
+            Ok(tp_action) => {
+                match *tp_action {
+                    ThemePickerAction::Preview(colors) => {
+                        self.apply_theme(colors);
+                    }
+                    ThemePickerAction::Submit(cmd) => {
+                        return Ok(Some(Some(cmd)));
+                    }
+                    ThemePickerAction::Revert(colors) => {
+                        self.apply_theme(colors);
+                        self.show_toast("Theme reverted", ToastLevel::Info);
+                    }
+                }
+                return Ok(None);
+            }
+            Err(a) => a,
+        };
+
+        // -- File picker actions
+        let _action = match action.downcast::<FilePickerAction>() {
+            Ok(fp_action) => {
+                match *fp_action {
+                    FilePickerAction::Select {
+                        at_pos,
+                        query_len,
+                        selected,
+                    } => {
+                        self.editor.snapshot();
+                        let query_end = at_pos + 1 + query_len;
+                        let drain_end = query_end.min(self.editor.text().len());
+                        let mut text = self.editor.text();
+                        text.drain(at_pos..drain_end);
+                        self.editor.set_text(text);
+                        self.editor.insert_str_at(at_pos, &selected);
+                        self.editor.set_cursor_pos(at_pos + selected.len());
+                    }
+                    FilePickerAction::BackspaceChar {
+                        at_pos,
+                        query_len_before,
+                    } => {
+                        let remove_at = at_pos + 1 + query_len_before - 1;
+                        if remove_at < self.editor.text().len() {
+                            self.editor.remove_char_at(remove_at);
+                        }
+                    }
+                    FilePickerAction::DeleteAt { at_pos } => {
+                        if at_pos < self.editor.text().len() {
+                            self.editor.remove_char_at(at_pos);
+                            self.editor.set_cursor_pos(at_pos);
+                        }
+                    }
+                    FilePickerAction::InsertChar { position, ch } => {
+                        self.editor.insert_char_at(position, ch);
+                        self.editor.set_cursor_pos(position + ch.len_utf8());
+                    }
+                }
+                return Ok(None);
+            }
+            Err(a) => a,
+        };
+
+        // Unknown action type — ignore.
         Ok(None)
     }
 }

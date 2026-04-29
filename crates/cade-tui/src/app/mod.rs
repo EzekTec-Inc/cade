@@ -152,6 +152,40 @@ pub enum RenderLine {
 
 // -- PickerState (A-01)
 
+/// Result produced by the file picker overlay.
+///
+/// The host drains this via [`OverlayComponent::take_result`] and
+/// acts on the variant (insert text, remove chars, update query, etc.).
+#[derive(Debug, Clone)]
+pub enum FilePickerAction {
+    /// User selected a file — replace @query range and insert selected path.
+    Select {
+        /// Position of `@` in the editor buffer.
+        at_pos: usize,
+        /// Length of the query that follows `@`.
+        query_len: usize,
+        /// The selected file path to insert.
+        selected: String,
+    },
+    /// Backspace on the query — host should remove a char from the editor.
+    BackspaceChar {
+        /// Position of `@` in the editor buffer.
+        at_pos: usize,
+        /// Current query length *before* the pop (host removes char at at_pos + 1 + query_len - 1).
+        query_len_before: usize,
+    },
+    /// Backspace with empty query — host should delete the `@` and dismiss.
+    DeleteAt {
+        at_pos: usize,
+    },
+    /// User typed a character — host should insert it into the editor.
+    InsertChar {
+        /// Byte offset where the char should go.
+        position: usize,
+        ch: char,
+    },
+}
+
 /// State for the `@` file fuzzy picker overlay.
 #[derive(Debug, Clone)]
 pub struct PickerState {
@@ -163,9 +197,132 @@ pub struct PickerState {
     pub matches: Vec<String>,
     /// Index of the highlighted entry.
     pub cursor: usize,
+    /// Pending action to be drained by the host.
+    pending_action: Option<FilePickerAction>,
+    /// Autocomplete provider for file matching.
+    /// Cloned from TuiApp on overlay creation.
+    file_ac: crate::autocomplete::FileAutocompleteProvider,
+}
+
+impl PickerState {
+    /// Create a new picker at the given `@` position.
+    pub fn new(
+        at_pos: usize,
+        query: String,
+        file_ac: &crate::autocomplete::FileAutocompleteProvider,
+    ) -> Self {
+        let matches = file_ac.collect_files(&query);
+        Self {
+            at_pos,
+            query,
+            matches,
+            cursor: 0,
+            pending_action: None,
+            file_ac: file_ac.clone(),
+        }
+    }
+}
+
+impl crate::overlay_component::OverlayComponent for PickerState {
+    fn id(&self) -> &'static str {
+        "file_picker"
+    }
+
+    fn render_overlay(
+        &mut self,
+        frame: &mut ratatui::Frame,
+        area: ratatui::layout::Rect,
+        colors: &crate::colors::ThemeColors,
+    ) {
+        crate::app::layout::pickers::render_picker(frame, self, area, colors);
+    }
+
+    fn handle_input(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+    ) -> crate::overlay_component::OverlayInputResult {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use crate::overlay_component::OverlayInputResult;
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) => OverlayInputResult::Dismiss,
+            (KeyCode::Up, _) => {
+                self.cursor = self.cursor.saturating_sub(1);
+                OverlayInputResult::Consumed
+            }
+            (KeyCode::Down, _) => {
+                if !self.matches.is_empty() && self.cursor + 1 < self.matches.len() {
+                    self.cursor += 1;
+                }
+                OverlayInputResult::Consumed
+            }
+            (KeyCode::Enter, KeyModifiers::NONE) => {
+                if let Some(selected) = self.matches.get(self.cursor).cloned() {
+                    self.pending_action = Some(FilePickerAction::Select {
+                        at_pos: self.at_pos,
+                        query_len: self.query.len(),
+                        selected,
+                    });
+                }
+                OverlayInputResult::Dismiss
+            }
+            (KeyCode::Backspace, _) => {
+                if self.query.is_empty() {
+                    self.pending_action = Some(FilePickerAction::DeleteAt {
+                        at_pos: self.at_pos,
+                    });
+                    OverlayInputResult::Dismiss
+                } else {
+                    let old_len = self.query.len();
+                    self.pending_action = Some(FilePickerAction::BackspaceChar {
+                        at_pos: self.at_pos,
+                        query_len_before: old_len,
+                    });
+                    self.query.pop();
+                    self.cursor = 0;
+                    self.matches = self.file_ac.collect_files(&self.query);
+                    OverlayInputResult::Consumed
+                }
+            }
+            (KeyCode::Char(c), m)
+                if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
+            {
+                let insert_pos = self.at_pos + 1 + self.query.len();
+                self.pending_action = Some(FilePickerAction::InsertChar {
+                    position: insert_pos,
+                    ch: c,
+                });
+                self.query.push(c);
+                self.cursor = 0;
+                self.matches = self.file_ac.collect_files(&self.query);
+                OverlayInputResult::Consumed
+            }
+            _ => OverlayInputResult::Consumed,
+        }
+    }
+
+    fn take_result(&mut self) -> Option<Box<dyn std::any::Any>> {
+        self.pending_action
+            .take()
+            .map(|a| Box::new(a) as Box<dyn std::any::Any>)
+    }
 }
 
 // -- ThemePickerState
+
+/// Result produced by the theme picker overlay.
+///
+/// The host calls [`OverlayComponent::take_result`] after every input
+/// dispatch and downcasts to this enum to apply side effects.
+#[derive(Debug, Clone)]
+pub enum ThemePickerAction {
+    /// Cursor moved — apply this theme as a live preview.
+    Preview(crate::colors::ThemeColors),
+    /// User confirmed selection — submit this as a REPL command.
+    Submit(String),
+    /// User cancelled — revert to this theme and show a toast.
+    Revert(crate::colors::ThemeColors),
+}
 
 /// State for the `/theme` floating picker overlay.
 #[derive(Debug, Clone)]
@@ -176,6 +333,145 @@ pub struct ThemePickerState {
     pub cursor: usize,
     /// If cancelled, restore to this
     pub original_theme: crate::colors::ThemeColors,
+    /// Pending action to be drained by the host via `take_result()`.
+    pending_action: Option<ThemePickerAction>,
+}
+
+impl ThemePickerState {
+    /// Resolve the theme colors for the currently highlighted entry.
+    fn current_preview_colors(&self) -> Option<crate::colors::ThemeColors> {
+        if self.filtered_indices.is_empty() {
+            return None;
+        }
+        let idx = self.filtered_indices[self.cursor];
+        let t = &self.themes[idx];
+        Some(
+            crate::colors::ThemeColors::builtin_by_name(&t.name)
+                .unwrap_or_else(|| crate::colors::ThemeColors::from_theme(t)),
+        )
+    }
+
+    /// Re-filter the theme list based on the current query and reset cursor.
+    fn update_filter(&mut self) {
+        self.cursor = 0;
+        let query_lower = self.query.to_lowercase();
+        self.filtered_indices = self
+            .themes
+            .iter()
+            .enumerate()
+            .filter(|(_, t)| {
+                query_lower.is_empty()
+                    || t.name.to_lowercase().contains(&query_lower)
+                    || t.description
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&query_lower)
+                    || t.variant
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&query_lower)
+            })
+            .map(|(i, _)| i)
+            .collect();
+        // Emit preview for new cursor position after filter.
+        if let Some(colors) = self.current_preview_colors() {
+            self.pending_action = Some(ThemePickerAction::Preview(colors));
+        }
+    }
+
+    /// Move cursor and emit a preview action.
+    fn move_cursor(&mut self, delta: isize) {
+        if self.filtered_indices.is_empty() {
+            return;
+        }
+        let new = (self.cursor as isize + delta)
+            .max(0)
+            .min(self.filtered_indices.len() as isize - 1) as usize;
+        if new != self.cursor {
+            self.cursor = new;
+            if let Some(colors) = self.current_preview_colors() {
+                self.pending_action = Some(ThemePickerAction::Preview(colors));
+            }
+        }
+    }
+}
+
+impl crate::overlay_component::OverlayComponent for ThemePickerState {
+    fn id(&self) -> &'static str {
+        "theme_picker"
+    }
+
+    fn render_overlay(
+        &mut self,
+        frame: &mut ratatui::Frame,
+        area: ratatui::layout::Rect,
+        colors: &crate::colors::ThemeColors,
+    ) {
+        crate::app::layout::pickers::render_theme_picker(frame, self, area, colors);
+    }
+
+    fn handle_input(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+    ) -> crate::overlay_component::OverlayInputResult {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use crate::overlay_component::OverlayInputResult;
+
+        match (key.code, key.modifiers) {
+            // Cancel → revert
+            (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                self.pending_action =
+                    Some(ThemePickerAction::Revert(self.original_theme.clone()));
+                OverlayInputResult::Dismiss
+            }
+            // Navigate up
+            (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
+                self.move_cursor(-1);
+                OverlayInputResult::Consumed
+            }
+            // Navigate down
+            (KeyCode::Down, _) | (KeyCode::Tab, _) => {
+                self.move_cursor(1);
+                OverlayInputResult::Consumed
+            }
+            // Confirm selection
+            (KeyCode::Enter, _) => {
+                if !self.filtered_indices.is_empty() {
+                    let idx = self.filtered_indices[self.cursor];
+                    let name = self.themes[idx].name.clone();
+                    self.pending_action =
+                        Some(ThemePickerAction::Submit(format!("/theme {}", name)));
+                    OverlayInputResult::Dismiss
+                } else {
+                    // Empty results — stay open
+                    OverlayInputResult::Consumed
+                }
+            }
+            // Filter: backspace
+            (KeyCode::Backspace, _) => {
+                self.query.pop();
+                self.update_filter();
+                OverlayInputResult::Consumed
+            }
+            // Filter: type char
+            (KeyCode::Char(c), m)
+                if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT =>
+            {
+                self.query.push(c);
+                self.update_filter();
+                OverlayInputResult::Consumed
+            }
+            _ => OverlayInputResult::Consumed,
+        }
+    }
+
+    fn take_result(&mut self) -> Option<Box<dyn std::any::Any>> {
+        self.pending_action
+            .take()
+            .map(|a| Box::new(a) as Box<dyn std::any::Any>)
+    }
 }
 
 // -- SummaryState
@@ -185,6 +481,52 @@ pub struct ThemePickerState {
 pub struct SummaryState {
     pub text: String,
     pub scroll_y: u16,
+}
+
+impl crate::overlay_component::OverlayComponent for SummaryState {
+    fn id(&self) -> &'static str {
+        "summary"
+    }
+
+    fn render_overlay(
+        &mut self,
+        frame: &mut ratatui::Frame,
+        area: ratatui::layout::Rect,
+        colors: &crate::colors::ThemeColors,
+    ) {
+        crate::app::layout::summary::render_summary(frame, self, area, colors);
+    }
+
+    fn handle_input(
+        &mut self,
+        key: crossterm::event::KeyEvent,
+    ) -> crate::overlay_component::OverlayInputResult {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        use crate::overlay_component::OverlayInputResult;
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _)
+            | (KeyCode::Enter, _)
+            | (KeyCode::Char('c'), KeyModifiers::CONTROL) => OverlayInputResult::Dismiss,
+            (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
+                self.scroll_y = self.scroll_y.saturating_sub(1);
+                OverlayInputResult::Consumed
+            }
+            (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
+                self.scroll_y = self.scroll_y.saturating_add(1);
+                OverlayInputResult::Consumed
+            }
+            (KeyCode::PageUp, _) => {
+                self.scroll_y = self.scroll_y.saturating_sub(20);
+                OverlayInputResult::Consumed
+            }
+            (KeyCode::PageDown, _) => {
+                self.scroll_y = self.scroll_y.saturating_add(20);
+                OverlayInputResult::Consumed
+            }
+            _ => OverlayInputResult::Consumed,
+        }
+    }
 }
 
 // -- ThinkingState
@@ -387,6 +729,13 @@ pub struct TuiApp {
     /// Active `/summarize` overlay. `None` when inactive.
     pub summary_overlay: Option<SummaryState>,
 
+    // -- Dynamic overlay stack (Phase 3 migration)
+    /// Heterogeneous stack of modal overlays.  The host dispatches
+    /// input to `overlays.last_mut()` and renders bottom-to-top.
+    /// Overlays migrated from legacy `Option<...State>` fields live
+    /// here once they implement [`OverlayComponent`].
+    pub overlays: Vec<Box<dyn crate::overlay_component::OverlayComponent>>,
+
     // -- Image paste staging
     /// Images drained from the editor on the last submission.
     /// `repl.rs` reads and clears this after calling `read_input()`.
@@ -530,6 +879,7 @@ impl TuiApp {
             theme_picker: None,
             command_palette: None,
             summary_overlay: None,
+            overlays: Vec::new(),
             pending_submit_images: Vec::new(),
             header_lines: Vec::new(),
             footer_extra: None,
@@ -780,6 +1130,11 @@ impl TuiApp {
         // sequence — no feature detection needed.
         let _ = write!(std::io::stdout(), "\x1b[?2026h");
 
+        // Temporarily take the overlay stack out of self so we can
+        // call render_overlay(&mut self) inside the terminal.draw
+        // closure (which already borrows self.terminal mutably).
+        let mut overlay_stack = std::mem::take(&mut self.overlays);
+
         self.terminal.draw(|frame| {
             let (m_skip, cur_pos) = render_frame(
                 frame,
@@ -859,7 +1214,21 @@ impl TuiApp {
                 // Override cursor pos to hide it (modal handles its own cursor)
                 input_cursor_pos = None;
             }
+
+            // -- Dynamic overlay stack (Phase 3: renders on top of everything)
+            if !overlay_stack.is_empty() {
+                let full_area = frame.area();
+                for overlay in overlay_stack.iter_mut() {
+                    overlay.render_overlay(frame, full_area, &colors);
+                }
+                // When any overlay is open, hide the main cursor
+                // (the overlay is responsible for its own cursor, if any).
+                input_cursor_pos = None;
+            }
         })?;
+
+        // Restore the overlay stack.
+        self.overlays = overlay_stack;
 
         if let Some((x, y)) = input_cursor_pos {
             let _ = crossterm::execute!(

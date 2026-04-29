@@ -3,7 +3,14 @@
 //! Provides a VS-Code-style command palette overlay that lets users fuzzy-search
 //! and execute any slash command without memorising the exact name.
 
+use std::any::Any;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
 use cade_core::resources::palette::{fuzzy_score, CMD_DEFS};
+
+use crate::colors::ThemeColors;
+use crate::overlay_component::{OverlayComponent, OverlayInputResult};
 
 // -- State
 
@@ -16,6 +23,8 @@ pub struct CommandPaletteState {
     pub filtered: Vec<usize>,
     /// Currently highlighted entry in `filtered`.
     pub cursor: usize,
+    /// Result to be returned to the host on dismiss (e.g. `"/help"`).
+    result: Option<String>,
 }
 
 impl Default for CommandPaletteState {
@@ -32,6 +41,7 @@ impl CommandPaletteState {
             query: String::new(),
             filtered,
             cursor: 0,
+            result: None,
         }
     }
 
@@ -100,6 +110,64 @@ impl CommandPaletteState {
     }
 }
 
+// -- OverlayComponent impl
+
+impl OverlayComponent for CommandPaletteState {
+    fn id(&self) -> &'static str {
+        "command_palette"
+    }
+
+    fn render_overlay(
+        &mut self,
+        frame: &mut ratatui::Frame,
+        area: ratatui::layout::Rect,
+        colors: &ThemeColors,
+    ) {
+        super::layout::command_palette::render_command_palette(frame, self, area, colors);
+    }
+
+    fn handle_input(&mut self, key: KeyEvent) -> OverlayInputResult {
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                OverlayInputResult::Dismiss
+            }
+            (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
+                self.cursor_up();
+                OverlayInputResult::Consumed
+            }
+            (KeyCode::Down, _) | (KeyCode::Tab, _) => {
+                self.cursor_down();
+                OverlayInputResult::Consumed
+            }
+            (KeyCode::Enter, _) => {
+                if let Some(cmd) = self.selected_command() {
+                    self.result = Some(format!("/{}", cmd));
+                    OverlayInputResult::Dismiss
+                } else {
+                    OverlayInputResult::Consumed
+                }
+            }
+            (KeyCode::Backspace, _) => {
+                if self.query.is_empty() {
+                    OverlayInputResult::Dismiss
+                } else {
+                    self.pop_char();
+                    OverlayInputResult::Consumed
+                }
+            }
+            (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+                self.push_char(c);
+                OverlayInputResult::Consumed
+            }
+            _ => OverlayInputResult::Consumed,
+        }
+    }
+
+    fn take_result(&mut self) -> Option<Box<dyn Any>> {
+        self.result.take().map(|s| Box::new(s) as Box<dyn Any>)
+    }
+}
+
 // -- Tests
 
 #[cfg(test)]
@@ -120,5 +188,56 @@ mod tests {
         let score_agents = fuzzy_score("agents", "/agents", "List agents", "Session").unwrap();
         let score_memory = fuzzy_score("agents", "/memory", "List agents in memory", "Session").unwrap();
         assert!(score_agents > score_memory);
+    }
+
+    // -- OverlayComponent tests
+
+    #[test]
+    fn overlay_esc_dismisses() {
+        use crate::overlay_component::{OverlayComponent, OverlayInputResult};
+        let mut cp = CommandPaletteState::new();
+        let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
+        assert_eq!(cp.handle_input(key), OverlayInputResult::Dismiss);
+        assert!(cp.take_result().is_none()); // no command selected
+    }
+
+    #[test]
+    fn overlay_enter_selects_command() {
+        use crate::overlay_component::{OverlayComponent, OverlayInputResult};
+        let mut cp = CommandPaletteState::new();
+        // First item should be a valid command
+        assert!(!cp.filtered.is_empty());
+        let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
+        assert_eq!(cp.handle_input(key), OverlayInputResult::Dismiss);
+        let result = cp.take_result().unwrap();
+        let cmd = result.downcast::<String>().unwrap();
+        assert!(cmd.starts_with('/'));
+    }
+
+    #[test]
+    fn overlay_typing_filters() {
+        use crate::overlay_component::{OverlayComponent, OverlayInputResult};
+        let mut cp = CommandPaletteState::new();
+        let initial_count = cp.filtered.len();
+        let key = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::NONE);
+        assert_eq!(cp.handle_input(key), OverlayInputResult::Consumed);
+        assert_eq!(cp.query, "h");
+        // Filtering should reduce (or at least not increase) matches
+        assert!(cp.filtered.len() <= initial_count);
+    }
+
+    #[test]
+    fn overlay_backspace_on_empty_dismisses() {
+        use crate::overlay_component::{OverlayComponent, OverlayInputResult};
+        let mut cp = CommandPaletteState::new();
+        let key = KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE);
+        assert_eq!(cp.handle_input(key), OverlayInputResult::Dismiss);
+    }
+
+    #[test]
+    fn overlay_id_is_command_palette() {
+        use crate::overlay_component::OverlayComponent;
+        let cp = CommandPaletteState::new();
+        assert_eq!(cp.id(), "command_palette");
     }
 }

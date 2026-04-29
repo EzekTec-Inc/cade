@@ -23,10 +23,21 @@
 //! - **`is_dismissed`** signals that the host should pop this overlay
 //!   from the stack.
 //!
-//! Migration is incremental: in this milestone the trait simply
-//! exists alongside the legacy `Option<...State>` fields.  Future
-//! commits migrate each overlay one at a time, then collapse the
-//! fields into a `Vec`.
+//! Migration is incremental: overlays are migrated one at a time from
+//! legacy `Option<...State>` fields into a `Vec<Box<dyn
+//! OverlayComponent>>` stack.  The host dispatches input to the
+//! topmost overlay, renders all of them bottom-to-top, and pops on
+//! dismiss.
+//!
+//! ## Result channel
+//!
+//! Some overlays produce a value when they close (e.g. command
+//! palette → `/command`, file picker → insertion text).  The
+//! [`OverlayComponent::take_result`] method lets the host retrieve
+//! that value after a `Dismiss` signal, downcast it via
+//! `Box<dyn Any>`, and act accordingly.
+
+use std::any::Any;
 
 use crossterm::event::KeyEvent;
 use ratatui::{Frame, layout::Rect};
@@ -39,7 +50,8 @@ pub enum OverlayInputResult {
     /// Event was consumed; do not propagate further.
     Consumed,
     /// Event was consumed and the overlay should be dismissed.
-    /// The host pops it from the stack.
+    /// The host pops it from the stack and may call
+    /// [`OverlayComponent::take_result`] for the return value.
     Dismiss,
     /// Event was not relevant to this overlay; bubble up.
     NotHandled,
@@ -72,6 +84,18 @@ pub trait OverlayComponent {
     /// than only via `OverlayInputResult::Dismiss`.
     fn is_dismissed(&self) -> bool {
         false
+    }
+
+    /// Drain the overlay's result value, if any.
+    ///
+    /// Called by the host after receiving [`OverlayInputResult::Dismiss`].
+    /// The concrete type is overlay-specific — callers downcast via
+    /// `Box<dyn Any>::downcast::<T>()`.
+    ///
+    /// Returns `None` for overlays that have no meaningful return
+    /// value (e.g. summary viewer).
+    fn take_result(&mut self) -> Option<Box<dyn Any>> {
+        None
     }
 }
 
@@ -174,5 +198,48 @@ mod tests {
             dismissed: false,
         };
         assert_eq!(o.id(), "command_palette");
+    }
+
+    /// Overlay stub that produces a typed result on dismiss.
+    struct ResultOverlay {
+        result: Option<String>,
+    }
+
+    impl OverlayComponent for ResultOverlay {
+        fn id(&self) -> &'static str {
+            "result_stub"
+        }
+        fn render_overlay(&mut self, _f: &mut Frame, _a: Rect, _c: &ThemeColors) {}
+        fn handle_input(&mut self, key: KeyEvent) -> OverlayInputResult {
+            if matches!(key.code, KeyCode::Enter) {
+                OverlayInputResult::Dismiss
+            } else {
+                OverlayInputResult::Consumed
+            }
+        }
+        fn take_result(&mut self) -> Option<Box<dyn Any>> {
+            self.result.take().map(|s| Box::new(s) as Box<dyn Any>)
+        }
+    }
+
+    #[test]
+    fn take_result_returns_typed_value() {
+        let mut o = ResultOverlay {
+            result: Some("/help".into()),
+        };
+        let r = o.take_result().unwrap();
+        let s = r.downcast::<String>().unwrap();
+        assert_eq!(*s, "/help");
+        // Second call returns None (drained).
+        assert!(o.take_result().is_none());
+    }
+
+    #[test]
+    fn take_result_default_is_none() {
+        let mut o = StubOverlay {
+            ident: "no_result",
+            dismissed: false,
+        };
+        assert!(o.take_result().is_none());
     }
 }
