@@ -102,22 +102,27 @@
 
 | Area | Status |
 |---|---|
-| TUI Refactor — Phase 2 (pluggable `EditorComponent`) | Plan in `docs/history/tui-refactor-implementation.md` — not started |
-| TUI Refactor — Phase 3 (dynamic overlay stack) | Plan in `docs/history/tui-refactor-implementation.md` — not started |
-| TUI Refactor — Phase 4 (UI extension slots) | Plan in `docs/history/tui-refactor-implementation.md` — not started |
-| Askpass implementation (`crates/cade-askpass`) | Plan in `docs/history/askpass-implementation-plan.md` — not started |
+| TUI Refactor — Phase 2 (pluggable `EditorComponent`) | ✅ Done — `EditorComponent` trait + `DefaultEditor` wrapper + TuiApp wired |
+| TUI Refactor — Phase 3 (dynamic overlay stack) | 🟡 Partial — trait + Vec field exist; 5 legacy Option overlays not yet migrated |
+| TUI Refactor — Phase 4 (UI extension slots) | 🟡 Partial — `SlotManager` + types defined; render/input not wired |
+| Askpass implementation (`crates/cade-askpass`) | ✅ Done — IPC server, protocol, TUI modal, BashTool wiring, all shipped |
+| MCP prefix stripping for edit tracking | ✅ Done — `strip_mcp_prefix` + `is_file_edit_tool` + 3 tests |
 
 ---
 
 ## Planned
 
+> Detailed plan with per-item context: see `IMPLEMENTATION_PLAN.md` (repo root).
+
 ### Near term
-- [ ] **TUI Refactor Phases 2–4** — pluggable editor trait, dynamic
-      overlay stack, UI extension slots; enables Vim-mode editor and
-      plugin-injected widgets without touching the core state machine.
-- [ ] **Askpass** — new `cade-askpass` binary crate, ephemeral 127.0.0.1
-      IPC server in `BashTool`, masked-input modal in `cade-tui`.
-      Captures `sudo`/`ssh` password prompts safely without PTY scraping.
+- [ ] **TUI overlay stack migration** — migrate 5 legacy `Option<...>` overlay
+      fields to the `Vec<Box<dyn OverlayComponent>>` stack (WI-2)
+- [ ] **TUI slot rendering** — wire `SlotManager` into `render.rs` and
+      `input.rs` for Header/Footer/Sidebar injection (WI-3)
+- [ ] **System prompt optimization** — 5 targeted edits to `BASE_SYSTEM_PROMPT`
+      for dynamic tool awareness, RAG-first framing, memory guidance (WI-7)
+- [ ] **Semantic memory search** — embedding-based `search_memory_semantic()`
+      with hybrid FTS5 + cosine ranking (WI-6)
 
 ### Long term
 - [ ] **Team features** — shared agents, memory, and skills across a team
