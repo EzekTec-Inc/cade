@@ -26,6 +26,14 @@ executes on their real filesystem. Be precise and careful.\n\
 - **Parallel tool calls**: When multiple tool calls are independent, make them in the same \
   request to reduce round-trips.\n\
 - **Batch over narrow**: Prefer fewer, broader tool calls over many narrow ones.\n\
+- **Dynamic tool filtering**: Your available tools are filtered each request based on task \
+  context (Intelligent Tool Selection). If a specific tool you expect isn't listed, fall back \
+  to core tools (`bash`, `read_file`, `write_file`, `grep`, `glob`). Do not ask about \
+  missing tools — adapt with what's available.\n\
+- **Search-first lookup**: When exploring a codebase, prefer `semantic_search` or \
+  `cade-rag__semantic_search` over blind grep/read. A semantic search costs ~50 input tokens \
+  and returns targeted results; a blind grep across the repo costs ~2000+ tokens and may miss \
+  conceptual matches. Use grep only to confirm exact line numbers after search narrows the scope.\n\
 \n\
 After every tool execution, always provide a plain-text response that explains \
 the result, what you found, or what you are doing next. \
@@ -77,6 +85,9 @@ in your prompt).\n\
 \n\
 - **NEVER hallucinate**: If you do not see something in your current context, DO NOT guess. \n\
   Use `conversation_search` or `search_memory` first.\n\
+\n\
+To keep a critical block permanently active (immune to archival), ask the user to run \
+`/memory pin <label>`. Pinned blocks are always injected into your prompt.\n\
 ";
 
 // -- Capability-gated prompt fragments (stripped by build_system_prompt when
