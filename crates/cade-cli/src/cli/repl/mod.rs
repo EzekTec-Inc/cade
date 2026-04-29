@@ -480,6 +480,49 @@ impl Repl {
         }
 
         // Push banner + agent info into TuiApp content.
+        // -- Start askpass IPC server for sudo/ssh/git password capture --
+        let _askpass_server = {
+            let app_for_pw = self.app.clone();
+            match cade_askpass::server::AskpassServer::start(move |prompt| {
+                let app_handle = app_for_pw.clone();
+                async move {
+                    // Use spawn_blocking so the blocking TUI modal doesn't
+                    // stall the tokio runtime.
+                    let result = tokio::task::spawn_blocking(move || {
+                        let mut app = app_handle.lock();
+                        app.ask_password(&prompt).ok().flatten()
+                    })
+                    .await
+                    .ok()
+                    .flatten();
+                    match result {
+                        Some(pw) => cade_askpass::server::PasswordResponse::Password(pw),
+                        None => cade_askpass::server::PasswordResponse::Cancel,
+                    }
+                }
+            })
+            .await
+            {
+                Ok(server) => {
+                    // Register the channel so every Command spawned by the
+                    // agent inherits the SUDO_ASKPASS / SSH_ASKPASS env vars.
+                    cade_core::askpass::register(cade_core::askpass::AskpassChannel {
+                        socket: server.addr().to_string(),
+                        token: server.token().to_string(),
+                    });
+                    tracing::info!(
+                        addr = %server.addr(),
+                        "askpass IPC server started"
+                    );
+                    Some(server) // keep alive for REPL lifetime
+                }
+                Err(e) => {
+                    tracing::warn!("failed to start askpass IPC server: {e:#}");
+                    None
+                }
+            }
+        };
+
         {
             let mut app = self.app.lock();
             let agent_id = self.agent_id.lock().clone();
@@ -665,6 +708,7 @@ impl Repl {
                 if !cmd_str.is_empty() {
                     let mut cmd = cade_core::shell::shell_command(cmd_str);
                     cade_core::agent_env::apply_agent_env(&mut cmd);
+                    cade_core::askpass::apply_askpass_env(&mut cmd);
                     let run = cmd.output().await;
                     match run {
                         Ok(out) => {
@@ -758,6 +802,10 @@ impl Repl {
 
         // SessionEnd hook (non-blocking)
         self.hooks.session_end(&self.agent_id()).await;
+
+        // Clean up the askpass channel so stale state isn't left behind.
+        drop(_askpass_server);
+        cade_core::askpass::clear();
 
         Ok(())
     }

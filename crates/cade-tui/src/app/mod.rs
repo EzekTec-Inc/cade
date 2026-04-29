@@ -1,6 +1,7 @@
 pub mod clipboard;
 pub mod command_palette;
 pub mod input;
+pub mod password;
 pub mod questions;
 pub mod render;
 pub mod layout;
@@ -40,7 +41,7 @@ use ratatui::{
 use unicode_width::UnicodeWidthStr;
 
 use crate::autocomplete::FileAutocompleteProvider;
-use crate::colors::ThemeColors;
+use crate::colors::{ThemeColors, ColorDefExt};
 use crate::editor::{Editor, ImageEntry};
 // Re-export for child modules that `use super::*`
 pub(crate) use crate::editor::InputMode;
@@ -328,6 +329,7 @@ pub struct TuiApp {
     /// Per-item expansion overrides keyed by stable timeline identity.
     expanded_items: std::collections::HashSet<TimelineKey>,
     pub active_question: Option<ActiveQuestionState>,
+    pub active_password: Option<password::PasswordPromptState>,
     pub active_plan: Option<PlanState>,
 
     // -- Streaming state
@@ -496,6 +498,7 @@ impl TuiApp {
             expand_all: false,
             expanded_items: std::collections::HashSet::new(),
             active_question: None,
+            active_password: None,
             active_plan: None,
             streaming_text: String::new(),
             streaming_active: false,
@@ -713,6 +716,7 @@ impl TuiApp {
         let expand_all = self.expand_all;
         let expanded_items = self.expanded_items.clone();
         let active_question = self.active_question.as_ref().map(|s| s.draw_state.clone());
+        let active_password = self.active_password.clone();
         let pending_lines = self.pending_lines;
         let queued_count = self.queued_count;
         let cwd = self.cwd.clone();
@@ -791,6 +795,45 @@ impl TuiApp {
             );
             max_skip = m_skip;
             input_cursor_pos = cur_pos;
+
+            // -- Password prompt overlay (centered modal)
+            if let Some(pw) = &active_password {
+                use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+                use ratatui::layout::{Constraint, Layout, Rect};
+                use ratatui::style::{Modifier, Style};
+                use ratatui::text::{Line, Span};
+                let area = frame.area();
+                let popup_w = 50u16.min(area.width.saturating_sub(4));
+                let popup_h = 5u16;
+                let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
+                let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+                let popup_area = Rect::new(x, y, popup_w, popup_h);
+                frame.render_widget(Clear, popup_area);
+                let block = Block::default()
+                    .title(" 🔒 Password ")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(colors.primary.to_ratatui()));
+                let inner = block.inner(popup_area);
+                frame.render_widget(block, popup_area);
+                let prompt_line = Line::from(Span::styled(
+                    &pw.prompt,
+                    Style::default().add_modifier(Modifier::BOLD),
+                ));
+                let mask: String = "*".repeat(pw.input.len());
+                let input_line = Line::from(vec![
+                    Span::raw("> "),
+                    Span::styled(mask, Style::default().fg(colors.primary.to_ratatui())),
+                    Span::raw("█"),
+                ]);
+                let rows = Layout::vertical([
+                    Constraint::Length(1),
+                    Constraint::Length(1),
+                ]).split(inner);
+                frame.render_widget(Paragraph::new(prompt_line), rows[0]);
+                frame.render_widget(Paragraph::new(input_line), rows[1]);
+                // Override cursor pos to hide it (modal handles its own cursor)
+                input_cursor_pos = None;
+            }
         })?;
 
         if let Some((x, y)) = input_cursor_pos {

@@ -445,6 +445,7 @@ async fn spawn_command(
     let mut child = {
         let mut cmd = crate::shell::shell_command(command);
         crate::agent_env::apply_agent_env(&mut cmd);
+        crate::askpass::apply_askpass_env(&mut cmd);
         cmd.current_dir(cwd)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())

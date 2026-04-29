@@ -11,6 +11,7 @@ doctest     = false
 cade-core.path    = "../cade-core"
 cade-agent = { path = "../cade-agent", default-features = false, features = ["mcp"] }
 cade-ai.path      = "../cade-ai"
+cade-askpass = { path = "../cade-askpass", features = ["server"] }
 cade-tui.path     = "../cade-tui"
 # -- Error handling
 # -- Others

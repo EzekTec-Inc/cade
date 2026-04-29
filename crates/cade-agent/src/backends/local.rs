@@ -26,6 +26,7 @@ impl ExecutionBackend for LocalBackend {
         let mut child = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
             let mut cmd = cade_core::shell::shell_command(command);
             cade_core::agent_env::apply_agent_env(&mut cmd);
+            cade_core::askpass::apply_askpass_env(&mut cmd);
             cmd.current_dir(cwd)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())

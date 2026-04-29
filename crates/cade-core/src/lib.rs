@@ -9,6 +9,8 @@ pub use error::{Error, Result};
 #[cfg(not(target_arch = "wasm32"))]
 pub mod agent_env;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod askpass;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod bootstrap_token;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod capabilities;

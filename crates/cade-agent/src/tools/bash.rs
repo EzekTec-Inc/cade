@@ -40,6 +40,7 @@ impl BashTool {
         let output = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
             let mut cmd = cade_core::shell::shell_command(command);
             cade_core::agent_env::apply_agent_env(&mut cmd);
+            cade_core::askpass::apply_askpass_env(&mut cmd);
             cmd.output().await
         })
         .await
@@ -107,6 +108,7 @@ impl BashTool {
         let mut child = tokio::time::timeout(Duration::from_secs(timeout_secs), async {
             let mut cmd = cade_core::shell::shell_command(command);
             cade_core::agent_env::apply_agent_env(&mut cmd);
+            cade_core::askpass::apply_askpass_env(&mut cmd);
             cmd.stdout(Stdio::piped())
                 .stderr(Stdio::piped())
                 .spawn()

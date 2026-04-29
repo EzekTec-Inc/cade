@@ -68,6 +68,7 @@ impl ToolRuntime {
 
         let mut cmd = tokio::process::Command::new(&sk.path);
         cade_core::agent_env::apply_agent_env(&mut cmd);
+        cade_core::askpass::apply_askpass_env(&mut cmd);
         match cmd.args(&script_args).output().await {
             Err(e) => (format!("Failed to run script: {e}"), true),
             Ok(out) => {
