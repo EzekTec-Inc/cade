@@ -158,6 +158,8 @@ impl HttpTransport {
     pub fn new(base_url: String, api_key: String) -> Result<Self> {
         let client = Client::builder()
             .user_agent("cade/0.1.0")
+            .timeout(std::time::Duration::from_secs(30))
+            .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .map_err(|e| crate::Error::custom(format!("build HTTP client: {e}")))?;
         Ok(Self {

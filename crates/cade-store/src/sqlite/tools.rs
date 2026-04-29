@@ -175,58 +175,54 @@ pub fn search_memory(
     agent_id: &str,
     query: &str,
 ) -> Result<Vec<(String, String, String)>> {
-    let conn = db
-        .lock();
-    let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
-    let mut stmt = conn.prepare(
-        "SELECT b.label, b.value FROM shared_memory_blocks b
-         JOIN agent_memory_blocks amb ON amb.block_id = b.id
-         WHERE amb.agent_id = ?1
-           AND (LOWER(b.label) LIKE LOWER(?2) ESCAPE '\\'
-                OR LOWER(b.value) LIKE LOWER(?2) ESCAPE '\\')
-         ORDER BY b.updated_at DESC
-         LIMIT 10",
-    )?;
-    let rows = stmt.query_map(params![agent_id, pattern], |row| {
-        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
-    })?;
-
+    // Phase 1: LIKE search — acquire and release lock in a scoped block
+    // to avoid deadlock with the fuzzy fallback (which also needs the lock).
     let q_lower = query.to_lowercase();
-    let mut results: Vec<(String, String, String)> = rows
-        .filter_map(|r| r.ok())
-        .map(|(label, value)| {
-            // Generate a contextual snippet: find first match position, extract ±100 chars
-            let val_lower = value.to_lowercase();
-            let snippet = if let Some(pos) = val_lower.find(&q_lower) {
-                let start = pos.saturating_sub(80);
-                let end = (pos + q_lower.len() + 80).min(value.len());
-                let prefix = if start > 0 { "…" } else { "" };
-                let suffix = if end < value.len() { "…" } else { "" };
-                // Find char boundaries
-                let s = value
-                    .char_indices()
-                    .map(|(i, _)| i)
-                    .find(|&i| i >= start)
-                    .unwrap_or(start);
-                let e = value
-                    .char_indices()
-                    .map(|(i, _)| i)
-                    .find(|&i| i >= end)
-                    .unwrap_or(end);
-                format!("{prefix}{}{suffix}", &value[s..e])
-            } else {
-                // Match is in label — return value preview
-                value.chars().take(160).collect::<String>()
-            };
-            (label, value, snippet)
-        })
-        .collect();
+    let mut results: Vec<(String, String, String)> = {
+        let conn = db.lock();
+        let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
+        let mut stmt = conn.prepare(
+            "SELECT b.label, b.value FROM shared_memory_blocks b
+             JOIN agent_memory_blocks amb ON amb.block_id = b.id
+             WHERE amb.agent_id = ?1
+               AND (LOWER(b.label) LIKE LOWER(?2) ESCAPE '\\'
+                    OR LOWER(b.value) LIKE LOWER(?2) ESCAPE '\\')
+             ORDER BY b.updated_at DESC
+             LIMIT 10",
+        )?;
+        let rows = stmt.query_map(params![agent_id, pattern], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
 
-    // ── P2: Fuzzy fallback — if LIKE found nothing, try word-level matching ──
+        rows.filter_map(|r| r.ok())
+            .map(|(label, value)| {
+                let val_lower = value.to_lowercase();
+                let snippet = if let Some(pos) = val_lower.find(&q_lower) {
+                    let start = pos.saturating_sub(80);
+                    let end = (pos + q_lower.len() + 80).min(value.len());
+                    let prefix = if start > 0 { "…" } else { "" };
+                    let suffix = if end < value.len() { "…" } else { "" };
+                    let s = value
+                        .char_indices()
+                        .map(|(i, _)| i)
+                        .find(|&i| i >= start)
+                        .unwrap_or(start);
+                    let e = value
+                        .char_indices()
+                        .map(|(i, _)| i)
+                        .find(|&i| i >= end)
+                        .unwrap_or(end);
+                    format!("{prefix}{}{suffix}", &value[s..e])
+                } else {
+                    value.chars().take(160).collect::<String>()
+                };
+                (label, value, snippet)
+            })
+            .collect()
+    }; // conn lock released here
+
+    // Phase 2: Fuzzy fallback — lock is free, safe to call get_memory_blocks.
     // Split the query into words and match blocks containing ANY word.
-    // This catches cases where the user's search phrase doesn't appear verbatim
-    // but the individual terms do (e.g. "auth middleware" matches a block
-    // containing "authentication" and "middleware" separately).
     if results.is_empty() {
         let words: Vec<String> = query
             .split_whitespace()

@@ -1194,6 +1194,8 @@ async fn handle_reflect_meta(
 
 /// Phase A1b handler: `search_memory` server-side.
 /// Searches the agent's memory blocks by keyword directly via the DB.
+/// Uses `spawn_blocking` + timeout to avoid blocking the async runtime
+/// and to prevent runaway queries from hanging the agentic loop.
 async fn handle_search_memory_meta(
     state: &AppState,
     agent_id: &str,
@@ -1203,15 +1205,25 @@ async fn handle_search_memory_meta(
     if query.is_empty() {
         return ("Error: 'query' is required".to_string(), true);
     }
-    match cade_store::sqlite::search_memory(&state.db, agent_id, &query) {
-        Ok(results) if results.is_empty() => (
+    let db = state.db.clone();
+    let aid = agent_id.to_string();
+    let q = query.clone();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || {
+            cade_store::sqlite::search_memory(&db, &aid, &q)
+        }),
+    )
+    .await;
+    match result {
+        Ok(Ok(Ok(results))) if results.is_empty() => (
             format!(
                 "No memory blocks matched '{query}'. \
                  Try a shorter keyword, or use conversation_search to look through message history."
             ),
             false,
         ),
-        Ok(results) => {
+        Ok(Ok(Ok(results))) => {
             let mut out = format!(
                 "Found {} matching memory block(s) for '{query}':\n\n",
                 results.len()
@@ -1221,12 +1233,18 @@ async fn handle_search_memory_meta(
             }
             (out.trim_end().to_string(), false)
         }
-        Err(e) => (format!("search_memory error: {e}"), true),
+        Ok(Ok(Err(e))) => (format!("search_memory error: {e}"), true),
+        Ok(Err(e)) => (format!("search_memory task panicked: {e}"), true),
+        Err(_) => (
+            "search_memory timed out after 10s. The query may be too broad.".to_string(),
+            true,
+        ),
     }
 }
 
 /// Phase A1b handler: `conversation_search` server-side.
 /// Searches past messages by keyword directly via the DB.
+/// Uses `spawn_blocking` + timeout to avoid blocking the async runtime.
 async fn handle_conversation_search_meta(
     state: &AppState,
     agent_id: &str,
@@ -1236,12 +1254,22 @@ async fn handle_conversation_search_meta(
     if query.is_empty() {
         return ("Error: 'query' is required".to_string(), true);
     }
-    match cade_store::sqlite::search_messages(&state.db, agent_id, &query, None) {
-        Ok(results) if results.is_empty() => (
+    let db = state.db.clone();
+    let aid = agent_id.to_string();
+    let q = query.clone();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || {
+            cade_store::sqlite::search_messages(&db, &aid, &q, None)
+        }),
+    )
+    .await;
+    match result {
+        Ok(Ok(Ok(results))) if results.is_empty() => (
             format!("No conversation messages matched '{query}'."),
             false,
         ),
-        Ok(results) => {
+        Ok(Ok(Ok(results))) => {
             let mut out = format!(
                 "Found {} result(s) for '{query}' in conversation history:\n\n",
                 results.len()
@@ -1251,7 +1279,12 @@ async fn handle_conversation_search_meta(
             }
             (out.trim_end().to_string(), false)
         }
-        Err(e) => (format!("conversation_search error: {e}"), true),
+        Ok(Ok(Err(e))) => (format!("conversation_search error: {e}"), true),
+        Ok(Err(e)) => (format!("conversation_search task panicked: {e}"), true),
+        Err(_) => (
+            "conversation_search timed out after 10s. The query may be too broad.".to_string(),
+            true,
+        ),
     }
 }
 
@@ -1285,6 +1318,7 @@ async fn handle_archival_memory_insert_meta(
 
 /// Phase A1b handler: `archival_memory_search` server-side.
 /// Searches archival memory using FTS5 directly via the DB.
+/// Uses `spawn_blocking` + timeout to prevent blocking the async runtime.
 async fn handle_archival_memory_search_meta(
     state: &AppState,
     agent_id: &str,
@@ -1295,12 +1329,22 @@ async fn handle_archival_memory_search_meta(
     if query.is_empty() {
         return ("Error: 'query' is required".to_string(), true);
     }
-    match cade_store::sqlite::search_archival_memory(&state.db, agent_id, &query, limit) {
-        Ok(results) if results.is_empty() => (
+    let db = state.db.clone();
+    let aid = agent_id.to_string();
+    let q = query.clone();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || {
+            cade_store::sqlite::search_archival_memory(&db, &aid, &q, limit)
+        }),
+    )
+    .await;
+    match result {
+        Ok(Ok(Ok(results))) if results.is_empty() => (
             format!("No archival memory matched '{query}'."),
             false,
         ),
-        Ok(results) => {
+        Ok(Ok(Ok(results))) => {
             let mut out = format!(
                 "Found {} archival record(s) for '{query}':\n\n",
                 results.len()
@@ -1316,12 +1360,18 @@ async fn handle_archival_memory_search_meta(
             }
             (out.trim_end().to_string(), false)
         }
-        Err(e) => (format!("archival_memory_search error: {e}"), true),
+        Ok(Ok(Err(e))) => (format!("archival_memory_search error: {e}"), true),
+        Ok(Err(e)) => (format!("archival_memory_search task panicked: {e}"), true),
+        Err(_) => (
+            "archival_memory_search timed out after 10s. The query may be too broad.".to_string(),
+            true,
+        ),
     }
 }
 
 /// Phase A1b handler: `query_event_log` server-side.
 /// Searches the event log by keyword directly via the DB.
+/// Uses `spawn_blocking` + timeout to prevent blocking the async runtime.
 async fn handle_query_event_log_meta(
     state: &AppState,
     agent_id: &str,
@@ -1332,12 +1382,22 @@ async fn handle_query_event_log_meta(
     if keyword.is_empty() {
         return ("Error: 'keyword' is required".to_string(), true);
     }
-    match cade_store::sqlite::event_log::query_event_log(&state.db, agent_id, &keyword, limit) {
-        Ok(entries) if entries.is_empty() => (
+    let db = state.db.clone();
+    let aid = agent_id.to_string();
+    let kw = keyword.clone();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || {
+            cade_store::sqlite::event_log::query_event_log(&db, &aid, &kw, limit)
+        }),
+    )
+    .await;
+    match result {
+        Ok(Ok(Ok(entries))) if entries.is_empty() => (
             format!("No event log entries matched '{keyword}'."),
             false,
         ),
-        Ok(entries) => {
+        Ok(Ok(Ok(entries))) => {
             let mut out = format!(
                 "Found {} event(s) for '{keyword}':\n\n",
                 entries.len()
@@ -1348,7 +1408,12 @@ async fn handle_query_event_log_meta(
             }
             (out.trim_end().to_string(), false)
         }
-        Err(e) => (format!("query_event_log error: {e}"), true),
+        Ok(Ok(Err(e))) => (format!("query_event_log error: {e}"), true),
+        Ok(Err(e)) => (format!("query_event_log task panicked: {e}"), true),
+        Err(_) => (
+            "query_event_log timed out after 10s.".to_string(),
+            true,
+        ),
     }
 }
 

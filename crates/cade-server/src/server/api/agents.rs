@@ -485,8 +485,23 @@ pub async fn search_messages_handler(
         return Ok(Json(json!({ "messages": messages, "query": query, "has_more": has_more })));
     }
 
-    let rows = sqlite::search_messages(&state.db, &agent_id, query, conv_id)
-        .map_err(|e| server_err(e.to_string()))?;
+    let db = state.db.clone();
+    let aid = agent_id.clone();
+    let q = query.to_string();
+    let cid = conv_id.map(String::from);
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || {
+            sqlite::search_messages(&db, &aid, &q, cid.as_deref())
+        }),
+    )
+    .await;
+    let rows = match result {
+        Ok(Ok(Ok(r))) => r,
+        Ok(Ok(Err(e))) => return Err(server_err(e.to_string())),
+        Ok(Err(e)) => return Err(server_err(format!("search task panicked: {e}"))),
+        Err(_) => return Err(server_err("search_messages timed out after 10s".to_string())),
+    };
     let messages: Vec<Value> = rows
         .into_iter()
         .map(|r| {
@@ -735,8 +750,22 @@ pub async fn search_memory_handler(
         return Ok(Json(json!({ "blocks": out })));
     }
 
-    let rows = sqlite::search_memory(&state.db, &agent_id, query)
-        .map_err(|e| server_err(e.to_string()))?;
+    let db = state.db.clone();
+    let aid = agent_id.clone();
+    let q = query.to_string();
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        tokio::task::spawn_blocking(move || {
+            sqlite::search_memory(&db, &aid, &q)
+        }),
+    )
+    .await;
+    let rows = match result {
+        Ok(Ok(Ok(r))) => r,
+        Ok(Ok(Err(e))) => return Err(server_err(e.to_string())),
+        Ok(Err(e)) => return Err(server_err(format!("search task panicked: {e}"))),
+        Err(_) => return Err(server_err("search_memory timed out after 10s".to_string())),
+    };
 
     // Boost confidence for every block returned by search — relevance weighting.
     for (label, _value, _snippet) in &rows {
