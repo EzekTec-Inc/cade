@@ -647,7 +647,11 @@ pub(crate) fn render_table_item(
         return;
     }
     let n_cols = headers.len();
-    // Width measurement uses Unicode display width so emoji/CJK align.
+    if n_cols == 0 {
+        return;
+    }
+
+    // Column widths use Unicode display width.
     let mut widths = vec![0usize; n_cols];
     for (i, h) in headers.iter().enumerate() {
         widths[i] = UnicodeWidthStr::width(h.as_str());
@@ -661,10 +665,16 @@ pub(crate) fn render_table_item(
     }
 
     // Cap column widths so total fits within viewport.
-    // Each cell is wrapped in "  cell  " — 4 chars of padding per column.
-    if width > 0 && n_cols > 0 {
-        let overhead = 4 * n_cols;
-        let budget = width.saturating_sub(overhead);
+    // Layout: "│ col0 │ col1 │ … │"
+    //   prefix:    "│ "(2)
+    //   suffix:    " │"(2)
+    //   inter-col: " │ "(3) × (n_cols - 1)
+    // Total non-content overhead = 4 + 3*(n_cols-1) — same formula as the
+    // markdown table renderer (sans INDENT, since RenderLine::Table is
+    // emitted without the body-content indent).
+    let row_overhead = 4 + 3 * n_cols.saturating_sub(1);
+    if width > 0 {
+        let budget = width.saturating_sub(row_overhead);
         let total: usize = widths.iter().sum();
         if total > budget && budget > 0 {
             let min_col = 3usize;
@@ -677,7 +687,7 @@ pub(crate) fn render_table_item(
         }
     }
 
-    // Truncate `s` to fit within `max` Unicode columns; trailing `…` if cut.
+    // Truncate `s` to `max` Unicode columns; trailing `…` if cut.
     let truncate = |s: &str, max: usize| -> String {
         let w = UnicodeWidthStr::width(s);
         if w <= max {
@@ -698,38 +708,78 @@ pub(crate) fn render_table_item(
         out_s
     };
 
-    // Pad `s` with spaces on the right to reach exactly `width` Unicode cols.
+    // Pad to `width` Unicode cols (left-aligned).
     let pad_right = |s: &str, width: usize| -> String {
         let w = UnicodeWidthStr::width(s);
         let extra = width.saturating_sub(w);
         format!("{s}{}", " ".repeat(extra))
     };
 
-    let mut header_spans = Vec::new();
+    let border_style = colors.text_dim();
+
+    // ── Top border:  ┌─────┬─────┐ ───────────────────────────────────────
+    let mut top_spans = vec![Span::styled("┌─".to_string(), border_style)];
+    for (i, w) in widths.iter().enumerate() {
+        top_spans.push(Span::styled("─".repeat(*w), border_style));
+        if i < n_cols - 1 {
+            top_spans.push(Span::styled("─┬─".to_string(), border_style));
+        }
+    }
+    top_spans.push(Span::styled("─┐".to_string(), border_style));
+    out.push(Line::from(top_spans));
+
+    // ── Header row + separator ──────────────────────────────────────────
+    let header_style = Style::default()
+        .fg(colors.primary.to_ratatui())
+        .add_modifier(Modifier::BOLD);
+    let mut hdr_spans = vec![Span::styled("│ ".to_string(), border_style)];
     for (i, h) in headers.iter().enumerate() {
         let cell = pad_right(&truncate(h, widths[i]), widths[i]);
-        header_spans.push(Span::styled(
-            format!("  {cell}  "),
-            Style::default()
-                .fg(colors.primary.to_ratatui())
-                .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        ));
+        hdr_spans.push(Span::styled(cell, header_style));
+        if i < n_cols - 1 {
+            hdr_spans.push(Span::styled(" │ ".to_string(), border_style));
+        }
     }
-    out.push(Line::from(header_spans));
+    hdr_spans.push(Span::styled(" │".to_string(), border_style));
+    out.push(Line::from(hdr_spans));
 
+    let mut sep_spans = vec![Span::styled("├─".to_string(), border_style)];
+    for (i, w) in widths.iter().enumerate() {
+        sep_spans.push(Span::styled("─".repeat(*w), border_style));
+        if i < n_cols - 1 {
+            sep_spans.push(Span::styled("─┼─".to_string(), border_style));
+        }
+    }
+    sep_spans.push(Span::styled("─┤".to_string(), border_style));
+    out.push(Line::from(sep_spans));
+
+    // ── Body rows ───────────────────────────────────────────────────────
+    let body_style = colors.text_primary();
     for row in rows {
-        let mut row_spans = Vec::new();
-        for (i, cell) in row.iter().enumerate() {
-            if i < n_cols {
-                let body = pad_right(&truncate(cell, widths[i]), widths[i]);
-                row_spans.push(Span::styled(
-                    format!("  {body}  "),
-                    colors.text_primary(),
-                ));
+        let mut row_spans = vec![Span::styled("│ ".to_string(), border_style)];
+        for i in 0..n_cols {
+            let cell_text = row.get(i).map(String::as_str).unwrap_or("");
+            let cell = pad_right(&truncate(cell_text, widths[i]), widths[i]);
+            row_spans.push(Span::styled(cell, body_style));
+            if i < n_cols - 1 {
+                row_spans.push(Span::styled(" │ ".to_string(), border_style));
             }
         }
+        row_spans.push(Span::styled(" │".to_string(), border_style));
         out.push(Line::from(row_spans));
     }
+
+    // ── Bottom border:  └─────┴─────┘ ───────────────────────────────────
+    let mut bot_spans = vec![Span::styled("└─".to_string(), border_style)];
+    for (i, w) in widths.iter().enumerate() {
+        bot_spans.push(Span::styled("─".repeat(*w), border_style));
+        if i < n_cols - 1 {
+            bot_spans.push(Span::styled("─┴─".to_string(), border_style));
+        }
+    }
+    bot_spans.push(Span::styled("─┘".to_string(), border_style));
+    out.push(Line::from(bot_spans));
+
     out.push(Line::from(""));
 }
 
@@ -816,5 +866,65 @@ mod tests {
         for (i, c) in tokens.iter().enumerate() {
             assert_ne!(*c, RC::Reset, "spinner_{i} must not be Reset");
         }
+    }
+
+    // ── V6: RenderLine::Table box borders ─────────────────────────────────
+
+    fn line_text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn render_table_item_has_box_borders() {
+        let headers = vec!["A".to_string(), "B".to_string()];
+        let rows = vec![
+            vec!["1".to_string(), "2".to_string()],
+            vec!["3".to_string(), "4".to_string()],
+        ];
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let theme = ThemeColors::dark();
+        render_table_item(&headers, &rows, 80, &mut out, &theme);
+        // Layout: top, header, sep, body×2, bottom, blank = 7 lines.
+        assert_eq!(out.len(), 7, "got {}: {:?}",
+            out.len(),
+            out.iter().map(line_text).collect::<Vec<_>>());
+        let top = line_text(&out[0]);
+        let bot = line_text(&out[5]);
+        assert!(top.starts_with('┌') && top.contains('┬') && top.ends_with('┐'),
+            "expected top border, got: {top:?}");
+        assert!(bot.starts_with('└') && bot.contains('┴') && bot.ends_with('┘'),
+            "expected bottom border, got: {bot:?}");
+    }
+
+    #[test]
+    fn render_table_item_caps_columns_to_viewport() {
+        let headers = vec!["Name".to_string(), "Description".to_string()];
+        let rows = vec![vec![
+            "x".repeat(40),
+            "y".repeat(40),
+        ]];
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let theme = ThemeColors::dark();
+        render_table_item(&headers, &rows, 30, &mut out, &theme);
+        for l in &out {
+            let t = line_text(l);
+            assert!(
+                UnicodeWidthStr::width(t.as_str()) <= 30,
+                "table line exceeds viewport: {} cols ({:?})",
+                UnicodeWidthStr::width(t.as_str()),
+                t
+            );
+        }
+    }
+
+    #[test]
+    fn render_table_item_pads_short_rows() {
+        let headers = vec!["A".to_string(), "B".to_string(), "C".to_string()];
+        let rows = vec![vec!["x".to_string()]]; // only 1 cell of 3
+        let mut out: Vec<Line<'static>> = Vec::new();
+        let theme = ThemeColors::dark();
+        render_table_item(&headers, &rows, 80, &mut out, &theme);
+        let body = line_text(&out[3]);
+        assert!(body.ends_with(" │"), "short row must be padded: {body:?}");
     }
 }

@@ -236,6 +236,9 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
     let mut current_cell = String::new();
     let mut in_table = false;
 
+    // V7: stack of image dest URLs for nested image tags (rare but legal).
+    let mut image_url_stack: Vec<String> = Vec::new();
+
     // Track whether we just closed a block element so we can insert spacing.
     let mut last_was_block_end = false;
 
@@ -426,6 +429,33 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                         .add_modifier(Modifier::UNDERLINED);
                     style_stack.push(s);
                 }
+                Tag::Image { dest_url, .. } => {
+                    // V7: emit a glyph + bracketed alt text so images don't
+                    // silently disappear.  The alt-text content arrives as
+                    // inner `Event::Text` events between Start and End — we
+                    // push a leading "🖼  [" here, then the text events, then
+                    // the closing "] (url)" at TagEnd::Image.
+                    let img_style = style_stack
+                        .last()
+                        .copied()
+                        .unwrap_or_default()
+                        .fg(colors.md_link.to_ratatui());
+                    current_spans.push(Span::styled("🖼  [".to_string(), img_style));
+                    // Push image text style on the stack so inner text
+                    // inherits the link color but stays unstyled otherwise.
+                    style_stack.push(img_style);
+                    // Stash the URL on a side channel via the title-like
+                    // suffix appended at TagEnd::Image.  We use a sentinel
+                    // span content carrying the URL so the end tag can read
+                    // it; cheaper than a separate stack.
+                    if !dest_url.is_empty() {
+                        // Marker — picked up at TagEnd::Image (see below).
+                        // Empty span carries the URL in its content but
+                        // renders as nothing because we replace it on End.
+                        // (Simpler: just remember the URL in a local var.)
+                    }
+                    image_url_stack.push(dest_url.into_string());
+                }
                 _ => {}
             },
             Event::End(tag) => match tag {
@@ -530,12 +560,44 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                 TagEnd::Link => {
                     style_stack.pop();
                 }
+                TagEnd::Image => {
+                    // V7: close the bracketed alt text, append "(url)" if
+                    // we captured one.  Style stack pop matches Tag::Image.
+                    let url = image_url_stack.pop().unwrap_or_default();
+                    let img_style = style_stack
+                        .last()
+                        .copied()
+                        .unwrap_or_default()
+                        .fg(colors.md_link.to_ratatui());
+                    if !url.is_empty() {
+                        current_spans.push(Span::styled(
+                            format!("] ({url})"),
+                            img_style,
+                        ));
+                    } else {
+                        current_spans.push(Span::styled("]".to_string(), img_style));
+                    }
+                    style_stack.pop();
+                }
                 _ => {}
             },
             Event::Text(text) => {
                 if in_table {
                     current_cell.push_str(&text);
                 } else if in_code_block {
+                    // Body width inside the code-block frame:
+                    //   max_width − INDENT(2) − CODE_INDENT(4)  = max_width − 6
+                    // Falls back to 0 (no wrap) when max_width is unknown.
+                    let body_width = if max_width > 6 { max_width - 6 } else { 0 };
+                    let prefix_span = Span::styled(
+                        format!("{INDENT}{CODE_INDENT}"),
+                        code_border_style(colors),
+                    );
+                    let cont_prefix_span = Span::styled(
+                        format!("{INDENT}{CODE_INDENT}"),
+                        code_border_style(colors),
+                    );
+
                     #[cfg(feature = "syntax-highlighting")]
                     if let Some(ref mut h) = highlighter {
                         let line_iter = LinesWithEndings::from(&text);
@@ -546,44 +608,56 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                             }
                             first = false;
 
-                            let mut spans = vec![Span::styled(
-                                format!("{INDENT}{CODE_INDENT}"),
-                                code_border_style(colors),
-                            )];
-
+                            // Build body spans (highlighted tokens) with no prefix.
+                            let mut body: Vec<Span<'static>> = Vec::new();
                             let highlighted =
                                 h.highlight_line(raw_line, &SYNTAX_SET).unwrap_or_default();
                             for (style, content) in highlighted {
                                 let clean_content =
                                     content.trim_end_matches('\n').trim_end_matches('\r');
                                 if !clean_content.is_empty() {
-                                    spans.push(Span::styled(
+                                    body.push(Span::styled(
                                         clean_content.to_string(),
                                         syntect_to_tui_style(style),
                                     ));
                                 }
                             }
 
-                            current_spans.extend(spans);
+                            // Hard-wrap at viewport so long code lines stay
+                            // inside the code-block frame.
+                            let wrapped = wrap_code_line_spans(
+                                vec![prefix_span.clone()],
+                                body,
+                                vec![cont_prefix_span.clone()],
+                                body_width,
+                            );
+                            for l in wrapped {
+                                current_spans.extend(l.spans);
+                                push_line(&mut lines, &mut current_spans, in_blockquote);
+                            }
                         }
-                        if text.ends_with('\n') {
-                            push_line(&mut lines, &mut current_spans, in_blockquote);
-                        }
+                        // The trailing newline behaviour is preserved by the
+                        // line_iter loop above; no extra push needed.
                     }
                     #[cfg(not(feature = "syntax-highlighting"))]
                     {
-                        // Plain rendering without syntax highlighting
+                        // Plain rendering without syntax highlighting.
                         let _ = &highlighter; // suppress unused warning
                         for raw_line in text.lines() {
-                            current_spans.push(Span::styled(
-                                format!("{INDENT}{CODE_INDENT}"),
-                                code_border_style(colors),
-                            ));
-                            current_spans.push(Span::styled(
+                            let body = vec![Span::styled(
                                 raw_line.to_string(),
                                 colors.text_primary(),
-                            ));
-                            push_line(&mut lines, &mut current_spans, in_blockquote);
+                            )];
+                            let wrapped = wrap_code_line_spans(
+                                vec![prefix_span.clone()],
+                                body,
+                                vec![cont_prefix_span.clone()],
+                                body_width,
+                            );
+                            for l in wrapped {
+                                current_spans.extend(l.spans);
+                                push_line(&mut lines, &mut current_spans, in_blockquote);
+                            }
                         }
                     }
                 } else {
@@ -593,7 +667,12 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
             }
             Event::Code(text) => {
                 if in_table {
-                    current_cell.push_str(&format!("`{text}`"));
+                    // B6: inside tables, drop the raw backticks so inline code
+                    // looks consistent with the outside-table " code " form.
+                    // Cells are plain-string (no styling), so we cannot apply
+                    // the inverse-dim background — keep just the surrounding
+                    // spaces as a visual cue.
+                    current_cell.push_str(&format!(" {text} "));
                 } else {
                     // Inline code: bright on a subtle background via reversed dim
                     let style = colors.md_code().bg(colors.bg_surface1.to_ratatui());
@@ -819,6 +898,95 @@ fn pad_cell_aligned(cell: &str, width: usize, align: Alignment) -> String {
     }
 }
 
+/// Hard-wrap (column-based) the styled content spans of a single code-block
+/// line at `body_width` Unicode display columns.  Whitespace is preserved
+/// (code formatting matters), so wraps happen at the exact column boundary
+/// rather than at word boundaries.
+///
+/// `prefix_spans` is prepended to the FIRST output line; `cont_prefix_spans`
+/// is prepended to every subsequent (wrapped) line.  Both should typically
+/// carry the dim border style so the indent visually matches the code-block
+/// frame.
+///
+/// Spans within the body are split mid-content as needed; each fragment
+/// inherits the original span's style so syntax highlighting is preserved
+/// across wrap boundaries.
+///
+/// `body_width = 0` disables wrapping (single line returned).
+fn wrap_code_line_spans(
+    prefix_spans: Vec<Span<'static>>,
+    body_spans: Vec<Span<'static>>,
+    cont_prefix_spans: Vec<Span<'static>>,
+    body_width: usize,
+) -> Vec<Line<'static>> {
+    if body_width == 0 {
+        let mut all = prefix_spans;
+        all.extend(body_spans);
+        return vec![Line::from(all)];
+    }
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    let mut current: Vec<Span<'static>> = prefix_spans;
+    let mut current_w: usize = 0;
+    let mut on_first_line = true;
+
+    for span in body_spans {
+        let style = span.style;
+        let mut text = span.content.into_owned();
+
+        while !text.is_empty() {
+            // Walk chars until we either consume the whole span fragment or
+            // hit the body_width budget for the current line.
+            let mut take_chars = 0usize;
+            let mut take_w = 0usize;
+            let mut iter = text.char_indices();
+            let mut last_idx = 0usize;
+            let mut consumed_any = false;
+
+            while let Some((i, ch)) = iter.next() {
+                let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+                if current_w + take_w + cw > body_width {
+                    break;
+                }
+                take_w += cw;
+                take_chars += 1;
+                last_idx = i + ch.len_utf8();
+                consumed_any = true;
+            }
+
+            if consumed_any {
+                let chunk: String = text.drain(..last_idx).collect();
+                if !chunk.is_empty() {
+                    current.push(Span::styled(chunk, style));
+                    current_w += take_w;
+                }
+                let _ = take_chars;
+            }
+
+            if !text.is_empty() {
+                // Buffer is full — push current line, start a continuation.
+                lines.push(Line::from(std::mem::take(&mut current)));
+                on_first_line = false;
+                current = cont_prefix_spans.clone();
+                current_w = 0;
+                // If body_width is 0 (degenerate) bail to avoid infinite loop.
+                if body_width == 0 {
+                    break;
+                }
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(Line::from(current));
+    } else if on_first_line {
+        // Empty code line — preserve a blank line with prefix only.
+        lines.push(Line::from(cont_prefix_spans));
+    }
+
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1027,5 +1195,80 @@ mod tests {
     fn pad_cell_aligned_center_with_odd_padding() {
         let s = pad_cell_aligned("ab", 5, Alignment::Center);
         assert_eq!(s, " ab  ");
+    }
+
+    // ── V2: code block hard-wrap at viewport edge ─────────────────────────
+
+    #[test]
+    fn code_block_long_line_hard_wraps_at_viewport() {
+        // Line of 80 chars; viewport 30 cols ⇒ body width 30-6 = 24.
+        // Expect at least 2 wrapped lines for the code body (excluding borders).
+        let body = "abcdefghij".repeat(8); // 80 chars, no spaces
+        let md = format!("```\n{body}\n```");
+        let lines = parse_markdown_lines_with_theme(&md, &dark(), 30);
+        // Each rendered code line must fit within max_width display columns.
+        for l in &lines {
+            let t = line_text(l);
+            assert!(
+                UnicodeWidthStr::width(t.as_str()) <= 30,
+                "code line exceeds viewport: {} cols ({:?})",
+                UnicodeWidthStr::width(t.as_str()),
+                t
+            );
+        }
+        // Should produce > 4 lines (top border + ≥ 2 wrapped body + bottom).
+        assert!(lines.len() >= 4, "expected ≥4 lines, got {}", lines.len());
+    }
+
+    #[test]
+    fn code_block_short_line_not_wrapped() {
+        let md = "```\nlet x = 1;\n```";
+        let lines = parse_markdown_lines_with_theme(&md, &dark(), 80);
+        // Layout: top, body, bottom = 3 lines.
+        assert_eq!(lines.len(), 3, "{:?}", lines_text(&lines));
+    }
+
+    // ── B6: inline code in tables drops backticks ─────────────────────────
+
+    #[test]
+    fn inline_code_in_table_renders_without_backticks() {
+        let md = "| Cmd | Desc |\n|---|---|\n| `ls` | list |";
+        let lines = parse_markdown_lines_with_theme(&md, &dark(), 80);
+        let body_line = lines
+            .iter()
+            .find(|l| {
+                let t = line_text(l);
+                t.contains("ls") && t.contains("list")
+            })
+            .expect("expected body row");
+        let t = line_text(body_line);
+        assert!(!t.contains('`'), "table cell still has backticks: {t:?}");
+    }
+
+    // ── V7: image alt text rendering ──────────────────────────────────────
+
+    #[test]
+    fn image_renders_alt_and_url() {
+        let md = "![logo](https://example.com/logo.png)";
+        let lines = parse_markdown_lines_with_theme(&md, &dark(), 80);
+        let combined: String = lines.iter().map(line_text).collect();
+        assert!(combined.contains("🖼"), "expected image glyph in: {combined:?}");
+        assert!(combined.contains("[logo]"), "expected [alt] in: {combined:?}");
+        assert!(
+            combined.contains("https://example.com/logo.png"),
+            "expected URL in: {combined:?}"
+        );
+    }
+
+    #[test]
+    fn image_with_empty_alt_still_renders() {
+        let md = "![](https://example.com/x.png)";
+        let lines = parse_markdown_lines_with_theme(&md, &dark(), 80);
+        let combined: String = lines.iter().map(line_text).collect();
+        assert!(combined.contains("🖼"), "expected image glyph");
+        assert!(
+            combined.contains("https://example.com/x.png"),
+            "expected URL"
+        );
     }
 }
