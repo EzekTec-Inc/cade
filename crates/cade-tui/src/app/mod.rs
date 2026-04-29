@@ -719,20 +719,12 @@ pub struct TuiApp {
     // -- Autocomplete (A-01)
     /// File autocomplete provider (Tab path completion + `@` fuzzy picker).
     pub file_ac: FileAutocompleteProvider,
-    /// Active `@` file picker overlay. `None` when inactive.
-    pub picker: Option<PickerState>,
-    /// Active `/theme` picker overlay. `None` when inactive.
-    pub theme_picker: Option<ThemePickerState>,
-    /// Active command palette overlay (`Ctrl+P`). `None` when inactive.
-    pub command_palette: Option<command_palette::CommandPaletteState>,
-    /// Active `/summarize` overlay. `None` when inactive.
-    pub summary_overlay: Option<SummaryState>,
 
-    // -- Dynamic overlay stack (Phase 3 migration)
+    // -- Dynamic overlay stack (Phase 3)
     /// Heterogeneous stack of modal overlays.  The host dispatches
     /// input to `overlays.last_mut()` and renders bottom-to-top.
-    /// Overlays migrated from legacy `Option<...State>` fields live
-    /// here once they implement [`OverlayComponent`].
+    /// All modal overlays (file picker, theme picker, command palette,
+    /// summary viewer) live here via [`OverlayComponent`].
     pub overlays: Vec<Box<dyn crate::overlay_component::OverlayComponent>>,
 
     // -- Image paste staging
@@ -880,10 +872,6 @@ impl TuiApp {
             token_history: Vec::new(),
             mouse_capture_disabled: false,
             file_ac: FileAutocompleteProvider::new(std::env::current_dir().unwrap_or_default()),
-            picker: None,
-            theme_picker: None,
-            command_palette: None,
-            summary_overlay: None,
             overlays: Vec::new(),
             pending_submit_images: Vec::new(),
             header_lines: Vec::new(),
@@ -1104,10 +1092,6 @@ impl TuiApp {
         let context_pct = self.context_pct;
         let turn_count = self.turn_count;
         let token_history = self.token_history.clone();
-        let picker = self.picker.clone();
-        let theme_picker = self.theme_picker.clone();
-        let command_palette = self.command_palette.clone();
-        let summary_overlay = self.summary_overlay.clone();
         let header_lines = self.header_lines.clone();
         let footer_extra = self.footer_extra.clone();
         let reasoning_effort = self.reasoning_effort.clone();
@@ -1165,10 +1149,6 @@ impl TuiApp {
                 self.session_tokens,
                 turn_count,
                 &token_history,
-                picker.as_ref(),
-                theme_picker.as_ref(),
-                command_palette.as_ref(),
-                summary_overlay.as_ref(),
                 &header_lines,
                 footer_extra.as_deref(),
                 reasoning_effort.as_deref(),

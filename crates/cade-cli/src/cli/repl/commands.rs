@@ -183,8 +183,9 @@ impl Repl {
 
                 match summary {
                     Some(text) if !text.is_empty() => {
-                        self.app.lock().summary_overlay =
-                            Some(crate::ui::app::SummaryState { text, scroll_y: 0 });
+                        self.app.lock().overlays.push(
+                            Box::new(crate::ui::app::SummaryState { text, scroll_y: 0 }),
+                        );
                         let _ = self.app.lock().draw();
                     }
                     _ => {

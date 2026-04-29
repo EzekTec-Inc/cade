@@ -155,217 +155,9 @@ impl TuiApp {
             }
         }
 
-        // -- Summary overlay routing
-        if self.summary_overlay.is_some() {
-            match (k.code, k.modifiers) {
-                (KeyCode::Esc, _) | (KeyCode::Enter, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                    self.summary_overlay = None;
-                }
-                (KeyCode::Up, _) | (KeyCode::Char('k'), _) => {
-                    if let Some(su) = &mut self.summary_overlay {
-                        su.scroll_y = su.scroll_y.saturating_sub(1);
-                    }
-                }
-                (KeyCode::Down, _) | (KeyCode::Char('j'), _) => {
-                    if let Some(su) = &mut self.summary_overlay {
-                        su.scroll_y = su.scroll_y.saturating_add(1);
-                    }
-                }
-                (KeyCode::PageUp, _) => {
-                    if let Some(su) = &mut self.summary_overlay {
-                        su.scroll_y = su.scroll_y.saturating_sub(20);
-                    }
-                }
-                (KeyCode::PageDown, _) => {
-                    if let Some(su) = &mut self.summary_overlay {
-                        su.scroll_y = su.scroll_y.saturating_add(20);
-                    }
-                }
-                _ => {}
-            }
-            let _ = self.draw();
-            return Ok(None);
-        }
-
-        // -- Command palette routing (Ctrl+P overlay)
-        if self.command_palette.is_some() {
-            match (k.code, k.modifiers) {
-                (KeyCode::Esc, _)
-                | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                    self.command_palette = None;
-                }
-                (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
-                    if let Some(cp) = &mut self.command_palette {
-                        cp.cursor_up();
-                    }
-                }
-                (KeyCode::Down, _) | (KeyCode::Tab, _) => {
-                    if let Some(cp) = &mut self.command_palette {
-                        cp.cursor_down();
-                    }
-                }
-                (KeyCode::Enter, _) => {
-                    if let Some(cp) = self.command_palette.take()
-                        && let Some(cmd) = cp.selected_command() {
-                            let cmd = format!("/{}", cmd);
-                            return Ok(Some(Some(cmd)));
-                        }
-                }
-                (KeyCode::Backspace, _) => {
-                    if let Some(cp) = &mut self.command_palette {
-                        if cp.query.is_empty() {
-                            self.command_palette = None;
-                        } else {
-                            cp.pop_char();
-                        }
-                    }
-                }
-                (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
-                    if let Some(cp) = &mut self.command_palette {
-                        cp.push_char(c);
-                    }
-                }
-                _ => {}
-            }
-            let _ = self.draw();
-            return Ok(None);
-        }
-
-        // -- A-01b: theme picker routing
-        if self.theme_picker.is_some() {
-            match (k.code, k.modifiers) {
-                // B7: removed 'q' — it conflicts with typing 'q' in the filter.
-                (KeyCode::Esc, _)
-                | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
-                    if let Some(tp) = self.theme_picker.take() {
-                        self.apply_theme(tp.original_theme);
-                        self.show_toast("Theme reverted", ToastLevel::Info); // U8
-                    }
-                }
-                (KeyCode::Up, _) | (KeyCode::BackTab, _) => {
-                    if let Some(tp) = &mut self.theme_picker {
-                        tp.cursor = tp.cursor.saturating_sub(1);
-                        self.apply_theme_from_picker();
-                    }
-                }
-                (KeyCode::Down, _) | (KeyCode::Tab, _) => {
-                    if let Some(tp) = &mut self.theme_picker {
-                        if !tp.filtered_indices.is_empty()
-                            && tp.cursor + 1 < tp.filtered_indices.len()
-                        {
-                            tp.cursor += 1;
-                        }
-                        self.apply_theme_from_picker();
-                    }
-                }
-                // B3: check *before* take() so the picker survives empty results.
-                // A3: return the theme name directly — the REPL handles persistence.
-                (KeyCode::Enter, _) => {
-                    let has_results = self
-                        .theme_picker
-                        .as_ref()
-                        .is_some_and(|tp| !tp.filtered_indices.is_empty());
-                    if has_results {
-                        if let Some(tp) = self.theme_picker.take() {
-                            let t = &tp.themes[tp.filtered_indices[tp.cursor]];
-                            return Ok(Some(Some(format!("/theme {}", t.name))));
-                        }
-                    }
-                    // empty results: do nothing, keep picker open
-                }
-                (KeyCode::Backspace, _) => {
-                    if let Some(tp) = self.theme_picker.as_mut() {
-                        tp.query.pop();
-                        self.update_theme_picker_filter();
-                    }
-                }
-                (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
-                    if let Some(tp) = self.theme_picker.as_mut() {
-                        tp.query.push(c);
-                        self.update_theme_picker_filter();
-                    }
-                }
-                _ => {}
-            }
-            self.draw_dirty = true;
-            let _ = self.draw();
-            return Ok(None);
-        }
-
-        // -- A-01: file picker routing
-        if self.picker.is_some() {
-            match (k.code, k.modifiers) {
-                (KeyCode::Esc, _) => {
-                    self.picker = None;
-                }
-                (KeyCode::Up, _) => {
-                    if let Some(pk) = &mut self.picker
-                        && pk.cursor > 0
-                    {
-                        pk.cursor -= 1;
-                    }
-                }
-                (KeyCode::Down, _) => {
-                    if let Some(pk) = &mut self.picker
-                        && !pk.matches.is_empty()
-                        && pk.cursor + 1 < pk.matches.len()
-                    {
-                        pk.cursor += 1;
-                    }
-                }
-                (KeyCode::Enter, m) if m == KeyModifiers::NONE => {
-                    if let Some(pk) = self.picker.take()
-                        && let Some(selected) = pk.matches.get(pk.cursor).cloned()
-                    {
-                        self.editor.snapshot();
-                        let query_end = pk.at_pos + 1 + pk.query.len();
-                        let drain_end = query_end.min(self.editor.text().len());
-                        let mut text = self.editor.text();
-                        text.drain(pk.at_pos..drain_end);
-                        self.editor.set_text(text);
-                        self.editor.insert_str_at(pk.at_pos, &selected);
-                        self.editor.set_cursor_pos(pk.at_pos + selected.len());
-                    }
-                    // dismiss whether or not a match was selected
-                }
-                (KeyCode::Backspace, _) => {
-                    if let Some(pk) = &mut self.picker {
-                        if pk.query.is_empty() {
-                            // Delete the @ and dismiss
-                            if pk.at_pos < self.editor.text().len() {
-                                self.editor.remove_char_at(pk.at_pos);
-                                self.editor.set_cursor_pos(pk.at_pos);
-                            }
-                            self.picker = None;
-                        } else {
-                            // Remove last query char from both query and input
-                            let query_end = pk.at_pos + 1 + pk.query.len();
-                            let remove_at = query_end.saturating_sub(1);
-                            if remove_at < self.editor.text().len() {
-                                self.editor.remove_char_at(remove_at);
-                            }
-                            pk.query.pop();
-                            pk.cursor = 0;
-                            pk.matches = self.file_ac.collect_files(&pk.query);
-                        }
-                    }
-                }
-                (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
-                    // Append char to both input and picker query
-                    if let Some(pk) = &mut self.picker {
-                        let query_end = pk.at_pos + 1 + pk.query.len();
-                        self.editor.insert_char_at(query_end, c);
-                        self.editor.set_cursor_pos(query_end + c.len_utf8());
-                        pk.query.push(c);
-                        pk.cursor = 0;
-                        pk.matches = self.file_ac.collect_files(&pk.query);
-                    }
-                }
-                _ => {}
-            }
-            let _ = self.draw();
-            return Ok(None);
-        }
+        // Legacy overlay dispatch blocks removed — all four overlays
+        // (summary, command palette, theme picker, file picker) are now
+        // handled by the dynamic overlay stack above (Phase 3).
 
         match (k.code, k.modifiers) {
             // -- Submit
@@ -564,7 +356,7 @@ impl TuiApp {
 
             // -- Command Palette (Ctrl+P)
             (KeyCode::Char('p'), KeyModifiers::CONTROL) => {
-                self.command_palette = Some(super::command_palette::CommandPaletteState::new());
+                self.overlays.push(Box::new(super::command_palette::CommandPaletteState::new()));
             }
 
             // -- Toggle Plan Panel (Ctrl+T)
@@ -598,14 +390,14 @@ impl TuiApp {
             _ => {
                 self.editor.handle_input(k);
                 if let KeyCode::Char('@') = k.code
-                    && self.picker.is_none()
+                    && !self.overlays.iter().any(|o| o.id() == "file_picker")
                 {
                     let at_pos = self.editor.cursor_pos().saturating_sub(1);
-                    self.picker = Some(PickerState::new(
+                    self.overlays.push(Box::new(PickerState::new(
                         at_pos,
                         String::new(),
                         &self.file_ac,
-                    ));
+                    )));
                 }
             }
         }

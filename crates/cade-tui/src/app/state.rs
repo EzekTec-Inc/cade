@@ -398,42 +398,8 @@ impl TuiApp {
             original_theme,
             pending_action: None,
         };
-        self.theme_picker = Some(tp);
+        self.overlays.push(Box::new(tp));
         self.draw_dirty = true;
-    }
-    pub(crate) fn apply_theme_from_picker(&mut self) {
-        if let Some(tp) = &self.theme_picker
-            && !tp.filtered_indices.is_empty()
-        {
-            let idx = tp.filtered_indices[tp.cursor];
-            let t = &tp.themes[idx];
-            // Built-ins first (avoids corruption from phantom Theme
-            // structs that have colors: Default::default()).  Falls back
-            // to from_theme() for custom on-disk themes.
-            let colors = crate::colors::ThemeColors::builtin_by_name(&t.name)
-                .unwrap_or_else(|| crate::colors::ThemeColors::from_theme(t));
-            self.apply_theme(colors);
-        }
-    }
-    pub(crate) fn update_theme_picker_filter(&mut self) {
-        if let Some(tp) = &mut self.theme_picker {
-            tp.cursor = 0;
-            // U1: match name, description, and variant (hoisted to avoid per-item alloc)
-            let query_lower = tp.query.to_lowercase();
-            tp.filtered_indices = tp
-                .themes
-                .iter()
-                .enumerate()
-                .filter(|(_, t)| {
-                    query_lower.is_empty()
-                        || t.name.to_lowercase().contains(&query_lower)
-                        || t.description.as_deref().unwrap_or("").to_lowercase().contains(&query_lower)
-                        || t.variant.as_deref().unwrap_or("").to_lowercase().contains(&query_lower)
-                })
-                .map(|(i, _)| i)
-                .collect();
-        }
-        self.apply_theme_from_picker();
     }
 
     pub fn set_context_pct(&mut self, pct: u8) {

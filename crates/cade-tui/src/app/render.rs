@@ -1,9 +1,6 @@
 use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
 use crate::app::layout::question::{question_height, render_question_inline};
-use crate::app::layout::pickers::{render_picker, render_theme_picker};
-use crate::app::layout::command_palette::render_command_palette;
 use crate::app::layout::breadcrumb::render_breadcrumb;
-use crate::app::layout::summary::render_summary;
 use crate::app::layout::helpers::{mode_sep_color, mode_footer_left, truncate_str, format_token_count};
 
 /// Pick the animated spinner color for the current elapsed ms.
@@ -37,12 +34,11 @@ use crate::editor::InputMode;
 use cade_core::permissions::PermissionMode;
 
 use super::{
-    ActiveQuestionDrawState, PlanState, PickerState, RenderLine,
-    ThemePickerState, Toast, SummaryState,
+    ActiveQuestionDrawState, PlanState, RenderLine,
+    Toast,
     BRAILLE, DOTS, FIXED_ROWS,
     MAX_INPUT_ROWS, SIDEBAR_BREAKPOINT, SIDEBAR_WIDTH,
 };
-use super::command_palette::CommandPaletteState;
 use super::timeline::{
     PreparedTimelineEntry, TimelineEntry, TimelineKey,
     build_timeline_entries, prepare_timeline_entries, render_timeline_viewport,
@@ -133,10 +129,6 @@ pub(crate) fn render_frame(
     session_tokens: (u64, u64),
     turn_count: u32,
     token_history: &[u8],
-    picker: Option<&PickerState>,
-    theme_picker: Option<&ThemePickerState>,
-    command_palette: Option<&CommandPaletteState>,
-    summary_overlay: Option<&SummaryState>,
     header_lines: &[RenderLine],
     footer_extra: Option<&str>,
     reasoning_effort: Option<&str>,
@@ -316,45 +308,8 @@ pub(crate) fn render_frame(
 
     let max_skip = render_timeline_viewport(frame, messages_area, &prepared, scroll, colors);
 
-    // -- A-01: File picker overlay
-    if let Some(pk) = picker {
-        let n = pk.matches.len().min(6);
-        let picker_h = ((2 + n) as u16).clamp(2, messages_area.height.saturating_sub(1));
-        let picker_rect = ratatui::layout::Rect {
-            x: messages_area.x,
-            y: messages_area.y + messages_area.height.saturating_sub(picker_h),
-            width: messages_area.width,
-            height: picker_h,
-        };
-        render_picker(frame, pk, picker_rect, colors);
-    }
-
-    // -- A-01b: Theme picker overlay
-    if let Some(tp) = theme_picker {
-        let w = (frame.area().width / 2)
-            .max(40)
-            .min(frame.area().width.saturating_sub(4));
-        // B4: account for section header rows (Built-in / Custom)
-        let builtin_names: Vec<&str> = crate::colors::ThemeColors::builtin_listing()
-            .iter()
-            .map(|(n, _, _)| *n)
-            .collect();
-        let has_builtins = tp.filtered_indices.iter().any(|&i| builtin_names.contains(&tp.themes[i].name.as_str()));
-        let has_custom = tp.filtered_indices.iter().any(|&i| !builtin_names.contains(&tp.themes[i].name.as_str()));
-        let header_rows = has_builtins as u16 + has_custom as u16;
-        // U6: adaptive height — cap to terminal height minus chrome, not hard 10
-        let max_visible = frame.area().height.saturating_sub(8);
-        let n = (tp.filtered_indices.len() as u16 + header_rows).max(1).min(max_visible);
-        let h = (n + 4).clamp(5, frame.area().height.saturating_sub(4));
-
-        let r = ratatui::layout::Rect {
-            x: frame.area().x + (frame.area().width.saturating_sub(w)) / 2,
-            y: frame.area().y + (frame.area().height.saturating_sub(h)) / 2,
-            width: w,
-            height: h,
-        };
-        render_theme_picker(frame, tp, r, colors);
-    }
+    // File picker and theme picker overlays are now rendered by the
+    // dynamic overlay stack in TuiApp::draw().
 
     // -- Status row
     let (status_text, status_style) = if let Some(t) = thinking_text {
@@ -652,14 +607,8 @@ pub(crate) fn render_frame(
         render_toast(frame, main_area, toast, colors);
     }
 
-    // -- Command palette overlay (renders on top of everything)
-    if let Some(cp) = command_palette {
-        render_command_palette(frame, cp, frame.area(), colors);
-    }
-
-    if let Some(su) = summary_overlay {
-        render_summary(frame, su, frame.area(), colors);
-    }
+    // Command palette and summary overlays are now rendered by the
+    // dynamic overlay stack in TuiApp::draw().
 
     if let Some(plan) = active_plan
         && plan.is_visible
