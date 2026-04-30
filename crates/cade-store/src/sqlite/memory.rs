@@ -538,8 +538,51 @@ pub fn get_turn_counter(db: &Db, agent_id: &str) -> Result<i64> {
     Ok(n)
 }
 
+/// F7: bump `access_count` and stamp `last_access_turn` for the named blocks.
+///
+/// Call this whenever the agent intentionally reads memory (e.g.
+/// `search_memory` returning a hit).  Bumping these counters extends the
+/// retention window in `promote_stale_blocks` so frequently-consulted
+/// blocks survive the 80-turn idle cliff.
+///
+/// The update is bounded to the agent's own blocks via `agent_memory_blocks`
+/// so two agents reading the same shared block don't accumulate ghost
+/// access counts for each other.
+///
+/// Errors are logged at trace level and swallowed: a missed access bump
+/// is never worth failing a search call over.
+pub fn bump_block_access(db: &Db, agent_id: &str, labels: &[&str]) {
+    if labels.is_empty() {
+        return;
+    }
+    let current_turn = get_turn_counter(db, agent_id).unwrap_or(0);
+    let conn = db.lock();
+    for label in labels {
+        let res = conn.execute(
+            "UPDATE shared_memory_blocks
+             SET access_count     = access_count + 1,
+                 last_access_turn = ?1
+             WHERE label = ?2
+               AND id IN (SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?3)",
+            params![current_turn, label, agent_id],
+        );
+        if let Err(e) = res {
+            tracing::trace!("bump_block_access [{agent_id}/{label}] skipped: {e}");
+        }
+    }
+}
+
 /// Promote 'short' blocks idle for >= threshold turns to 'long'.
 /// 'pinned' blocks are never promoted. Returns number of blocks promoted.
+///
+/// F7 (activity-weighted aging): the staleness clock is the **maximum** of
+/// `last_turn` (last write) and `last_access_turn` (last read via
+/// `search_memory`). Additionally, the effective threshold is multiplied by
+/// an access-frequency boost: each intentional read up to a cap of 10 adds
+/// 20% to the retention window, so a block read 5 times survives 2× longer
+/// than an unread block, and one read 10+ times survives 3× longer. This
+/// prevents the 80-turn cliff from prematurely archiving blocks the agent
+/// has been actively consulting.
 pub fn promote_stale_blocks(
     db: &Db,
     agent_id: &str,
@@ -548,13 +591,17 @@ pub fn promote_stale_blocks(
 ) -> Result<u64> {
     let conn = db
         .lock();
+    // Per-row threshold = base × (1 + min(access_count, 10) × 0.20)
+    // Implemented in SQL as base * (5 + MIN(access_count, 10)) / 5 so we stay
+    // in integer arithmetic and avoid round-off surprises across SQLite versions.
     let n = conn.execute(
         "UPDATE shared_memory_blocks SET tier = 'long'
          WHERE tier = 'short'
-           AND (? - last_turn) >= ?
-           AND confidence < ?
+           AND (?1 - MAX(last_turn, last_access_turn)) >=
+               (?2 * (5 + MIN(access_count, 10)) / 5)
+           AND confidence < ?3
            AND id IN (
-               SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?
+               SELECT block_id FROM agent_memory_blocks WHERE agent_id = ?4
            )",
         params![
             current_turn,

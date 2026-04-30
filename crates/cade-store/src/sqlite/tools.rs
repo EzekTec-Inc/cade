@@ -329,6 +329,14 @@ pub fn search_memory(
         }
     }
 
+    // F7: activity-weighted aging — bump access counters for every label we
+    // just returned to the agent.  This is an intentional read, so the
+    // staleness clock should restart and the access boost should grow.
+    if !results.is_empty() {
+        let labels: Vec<&str> = results.iter().map(|(l, _, _)| l.as_str()).collect();
+        super::memory::bump_block_access(db, agent_id, &labels);
+    }
+
     Ok(results)
 }
 

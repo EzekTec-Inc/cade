@@ -106,7 +106,10 @@ fn apply_schema(conn: &Connection) -> Result<()> {
             source_msg_id TEXT,
             source_te_id  TEXT,
             tags_json   TEXT NOT NULL DEFAULT '[]',
-            expires_at  INTEGER
+            expires_at  INTEGER,
+            -- F7 (Migration 9): activity-weighted aging
+            access_count       INTEGER NOT NULL DEFAULT 0,
+            last_access_turn   INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS agent_memory_blocks (
@@ -562,6 +565,40 @@ fn run_migrations(conn: &Connection) -> Result<()> {
             tracing::debug!("Migration 8 skipped: semantic-search feature not enabled");
         }
         conn.execute("PRAGMA user_version = 8", [])?;
+    }
+
+    // ── Migration 9: F7 — activity-weighted aging ────────────────────────────
+    // Adds two columns to `shared_memory_blocks` so `promote_stale_blocks`
+    // can extend the retention window for memory blocks the agent has read
+    // recently or frequently:
+    //   - access_count       : total intentional reads (bumped by search_memory)
+    //   - last_access_turn   : turn counter at the most recent intentional read
+    //
+    // Without these columns, the only signal the aging pass had was
+    // `last_turn` (= last *write* turn), so a heavily consulted block that
+    // was written once at turn 0 would be archived on turn 80 even if the
+    // agent had searched for it 50 times in between.
+    if current_version < 9 {
+        let r1 = conn.execute(
+            "ALTER TABLE shared_memory_blocks
+             ADD COLUMN access_count INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let r2 = conn.execute(
+            "ALTER TABLE shared_memory_blocks
+             ADD COLUMN last_access_turn INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        if let Err(e) = r1.and(r2) {
+            // ALTER TABLE is idempotent only when the column doesn't exist —
+            // if a previous partial run left one of the columns in place we
+            // tolerate "duplicate column" errors and continue.
+            let msg = e.to_string();
+            if !msg.contains("duplicate column name") {
+                tracing::warn!("Migration 9 (F7) ALTER TABLE failed: {e}");
+            }
+        }
+        conn.execute("PRAGMA user_version = 9", [])?;
     }
 
     Ok(())

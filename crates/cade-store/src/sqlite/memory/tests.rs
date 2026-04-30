@@ -1074,3 +1074,136 @@ fn typed_decision_resists_demotion_after_one_search_hit() -> Result<()> {
 
     Ok(())
 }
+
+// ── F7: activity-weighted aging tests ───────────────────────────────────────
+
+/// F7: bump_block_access on a block must increment access_count and stamp
+/// last_access_turn to the current turn counter.
+#[test]
+fn f7_bump_block_access_increments_count_and_stamp() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    upsert_memory_block(&db, "a1", "tracked", "value", None, None)?;
+
+    // Advance turn counter so last_access_turn is meaningfully > 0
+    for _ in 0..7 {
+        increment_turn_counter(&db, "a1")?;
+    }
+    let current_turn = get_turn_counter(&db, "a1")?;
+
+    bump_block_access(&db, "a1", &["tracked"]);
+    bump_block_access(&db, "a1", &["tracked"]);
+    bump_block_access(&db, "a1", &["tracked"]);
+
+    // Read back access_count + last_access_turn directly.
+    let conn = db.lock();
+    let (count, stamp): (i64, i64) = conn.query_row(
+        "SELECT access_count, last_access_turn
+         FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = ?1 AND b.label = ?2",
+        params!["a1", "tracked"],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    assert_eq!(count, 3, "access_count must reflect three reads");
+    assert_eq!(stamp, current_turn, "last_access_turn must equal current turn");
+    Ok(())
+}
+
+/// F7: a block that has been accessed many times survives the standard
+/// staleness threshold even though it's never been re-written.
+#[test]
+fn f7_high_access_block_resists_demotion() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    upsert_memory_block(&db, "a1", "frequent", "data", None, None)?;
+
+    // Bump access 10 times — caps the boost at 3× the base threshold.
+    for _ in 0..10 {
+        bump_block_access(&db, "a1", &["frequent"]);
+    }
+
+    // Advance turn counter to just past the base threshold (not the boosted one).
+    // Base threshold = 80; with 10 accesses the effective threshold is 240.
+    // Stamp `last_access_turn` at turn N, then advance 100 turns: idle = 100 < 240.
+    bump_block_access(&db, "a1", &["frequent"]); // resets last_access_turn
+    let stamp_turn = get_turn_counter(&db, "a1")?;
+    for _ in 0..100 {
+        increment_turn_counter(&db, "a1")?;
+    }
+    let current_turn = get_turn_counter(&db, "a1")?;
+    assert_eq!(current_turn - stamp_turn, 100);
+
+    let promoted = promote_stale_blocks(&db, "a1", current_turn, 80)?;
+    assert_eq!(
+        promoted, 0,
+        "F7: block with 10 accesses must survive 100 idle turns when base threshold is 80"
+    );
+
+    let full = get_memory_blocks_full(&db, "a1")?;
+    let frequent = full
+        .iter()
+        .find(|(l, _, _, _)| l == "frequent")
+        .expect("frequent block must still exist");
+    assert_eq!(
+        frequent.3, "short",
+        "frequent block must remain in short tier"
+    );
+    Ok(())
+}
+
+/// F7: a block that has NEVER been accessed gets demoted on the standard
+/// schedule — the access boost is purely additive.
+#[test]
+fn f7_zero_access_block_demotes_on_base_threshold() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    upsert_memory_block(&db, "a1", "ignored", "data", None, None)?;
+
+    for _ in 0..100 {
+        increment_turn_counter(&db, "a1")?;
+    }
+    let current_turn = get_turn_counter(&db, "a1")?;
+
+    let promoted = promote_stale_blocks(&db, "a1", current_turn, 80)?;
+    assert_eq!(
+        promoted, 1,
+        "F7: zero-access block must demote on the base threshold"
+    );
+    Ok(())
+}
+
+/// F7: bumping access on one agent's block must not leak access counts to
+/// the same shared block on another agent.
+#[test]
+fn f7_access_bump_is_scoped_to_agent() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+    make_agent(&db, "a2")?;
+    // Same label on both agents, distinct rows (cross-agent shared block
+    // semantics are tested elsewhere — here we just want two separate ids).
+    upsert_memory_block(&db, "a1", "shared_label", "for-a1", None, None)?;
+    upsert_memory_block(&db, "a2", "shared_label", "for-a2", None, None)?;
+
+    bump_block_access(&db, "a1", &["shared_label"]);
+    bump_block_access(&db, "a1", &["shared_label"]);
+
+    let conn = db.lock();
+    let a1_count: i64 = conn.query_row(
+        "SELECT access_count FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = 'a1' AND b.label = 'shared_label'",
+        [],
+        |r| r.get(0),
+    )?;
+    let a2_count: i64 = conn.query_row(
+        "SELECT access_count FROM shared_memory_blocks b
+         JOIN agent_memory_blocks amb ON amb.block_id = b.id
+         WHERE amb.agent_id = 'a2' AND b.label = 'shared_label'",
+        [],
+        |r| r.get(0),
+    )?;
+    assert_eq!(a1_count, 2, "a1's block must have 2 accesses");
+    assert_eq!(a2_count, 0, "a2's block must NOT have inherited any accesses");
+    Ok(())
+}
