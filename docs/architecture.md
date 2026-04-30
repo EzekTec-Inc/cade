@@ -96,7 +96,7 @@ same REST API.
 - `providers` (encrypted API keys via AES-GCM)
 - `runs` (background mode)
 - `observations` (tool call capture with importance scoring)
-- `vec_memory_blocks`, `vec_archival_memory`, `vec_messages` — `sqlite-vec` virtual tables for embedding-based semantic search (Migration 8, requires `--features semantic-search`)
+- `vec_memory_blocks`, `vec_archival_memory`, `vec_messages` — `sqlite-vec` virtual tables for embedding-based semantic search (Migration 8, populated when the `semantic-search` feature is enabled; on by default since 2026-04-30)
 
 The DB key lives at `~/.cade/db.key` (also re-derivable from
 `CADE_DB_KEY` or `CADE_MACHINE_SECRET`). Path protection in

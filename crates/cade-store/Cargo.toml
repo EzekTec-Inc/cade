@@ -4,8 +4,12 @@ version = "0.2.0"
 edition = "2024"
 
 [features]
-default         = ["bundled-sqlite"]
+default         = ["bundled-sqlite", "semantic-search"]
 bundled-sqlite  = ["rusqlite/bundled"]
+# Enabled by default since 2026-04-30 (F3 in memory-system refactor): provides
+# cosine-similarity hybrid ranking in `search_memory()` via fastembed + sqlite-vec.
+# To opt out (smaller binary, no ONNX runtime), build with `--no-default-features
+# --features bundled-sqlite`.
 semantic-search = ["dep:fastembed", "dep:sqlite-vec", "dep:zerocopy"]
 
 [dependencies]

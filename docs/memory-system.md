@@ -102,9 +102,12 @@ retrieve them:
 When matched, archived blocks are **auto-promoted** back into active
 memory for the next prompt.
 
-### Semantic Search (optional)
+### Semantic Search (default)
 
-When built with `--features semantic-search`, `search_memory()` uses a **hybrid ranking** pipeline:
+`search_memory()` uses a **hybrid ranking** pipeline by default. The
+underlying `semantic-search` feature is enabled in `cade-store`'s default
+feature set (since 2026-04-30); to disable it, build with
+`--no-default-features --features bundled-sqlite` — Phases 1 and 2 still run.
 
 1. **Phase 1 — Keyword (LIKE)**: Exact substring matching against block labels and values
 2. **Phase 2 — Fuzzy word-match**: Splits query into words, matches blocks containing any word ≥3 chars
@@ -112,4 +115,4 @@ When built with `--features semantic-search`, `search_memory()` uses a **hybrid 
 
 Results from all three phases are merged via **Reciprocal Rank Fusion** (k=60), which boosts blocks that appear in multiple result sets.
 
-Embeddings are automatically computed and stored whenever a memory block is written via `update_memory`. The embedding model (~50MB) downloads on first use. Without this feature flag, Phases 1 and 2 still run — semantic search is purely additive.
+Embeddings are automatically computed and stored whenever a memory block is written via `update_memory`. The embedding model (~50MB) downloads on first use. With the feature disabled, Phases 1 and 2 still run — semantic ranking is purely additive.

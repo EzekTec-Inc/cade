@@ -95,8 +95,10 @@ cargo test --workspace
 # Specific crate
 cargo test -p cade-cli
 
-# With semantic search embedding tests (~132 tests)
-cargo test -p cade-store --features semantic-search
+# Semantic search tests are included in the default suite as of 2026-04-30
+# (~132 of cade-store's 133 lib tests exercise the embedding code path).
+# To run the keyword-only path, disable default features:
+cargo test -p cade-store --no-default-features --features bundled-sqlite
 
 # With output
 cargo test --workspace -- --nocapture
@@ -105,11 +107,13 @@ cargo test --workspace -- --nocapture
 ## Release Build
 
 ```bash
-# Standard build
+# Standard build (semantic memory search enabled — adds ~50MB for the
+# embedding model + ONNX runtime; first run downloads the model)
 cargo build --release
 
-# With semantic memory search (adds ~50MB for embedding model)
-cargo build --release --features semantic-search
+# Lean build without semantic memory search (keyword search only)
+cargo build --release -p cade-store --no-default-features --features bundled-sqlite
+cargo build --release
 
 # Binaries: target/release/cade, target/release/cade-server
 ```
@@ -157,7 +161,7 @@ cargo build --no-default-features --features lean    # minimal core only
 Feature flags are defined in:
 - `Cargo.toml` (root) — `full`, `pro`, `lean`, `desktop`, `web`, `mcp`, `integration`
 - `crates/cade-agent/Cargo.toml` — `desktop`, `web`, `mcp`
-- `crates/cade-store/Cargo.toml` — `semantic-search` (fastembed + sqlite-vec embeddings)
+- `crates/cade-store/Cargo.toml` — `semantic-search` (fastembed + sqlite-vec embeddings, **enabled by default since 2026-04-30**)
 
 When adding a new optional dependency, place it behind a feature flag in the
 owning crate and wire it through the root Cargo.toml.

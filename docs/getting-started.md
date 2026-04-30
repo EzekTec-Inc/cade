@@ -26,15 +26,20 @@ cargo build --release
 The release binary is `target/release/cade` (CLI) and `target/release/cade-server`
 (HTTP server).
 
-### Optional: Semantic Memory Search
+### Semantic Memory Search (enabled by default)
 
-To enable local embedding-based memory search (hybrid keyword + cosine similarity):
+The default release build includes local embedding-based memory search
+(hybrid keyword + cosine similarity via fastembed + sqlite-vec). This adds
+~50MB to the binary (bundled ONNX runtime + AllMiniLML6V2 model that downloads
+on first use).
+
+To opt out for a leaner binary (keyword search only), build without the default
+`semantic-search` feature:
 
 ```bash
-cargo build --release --features semantic-search
+cargo build --release -p cade-store --no-default-features --features bundled-sqlite
+cargo build --release  # then build the workspace as usual
 ```
-
-This adds ~50MB to the binary (bundles an ONNX model for AllMiniLML6V2 embeddings). The model downloads automatically on first use. Without this flag, memory search uses keyword matching only — still fully functional.
 
 ## 3. First session
 
