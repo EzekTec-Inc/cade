@@ -156,9 +156,14 @@ pub struct CreateToolRequest {
 
 impl HttpTransport {
     pub fn new(base_url: String, api_key: String) -> Result<Self> {
+        // LLM inference can legitimately take several minutes (long context,
+        // reasoning models, slow providers).  The previous 30 s request
+        // timeout caused spurious "error sending request" failures on
+        // long-running turns; bump to 5 minutes.  Connect timeout stays at
+        // 10 s — that only covers TCP handshake to a local server.
         let client = Client::builder()
             .user_agent("cade/0.1.0")
-            .timeout(std::time::Duration::from_secs(30))
+            .timeout(std::time::Duration::from_secs(300))
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .map_err(|e| crate::Error::custom(format!("build HTTP client: {e}")))?;

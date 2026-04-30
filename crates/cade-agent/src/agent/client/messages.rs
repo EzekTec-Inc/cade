@@ -371,16 +371,14 @@ impl HttpTransport {
                 }
                 Err(e) => {
                     // Network / transport errors (connection refused, timeout, etc.).
-                    // Fall back to the blocking endpoint only for transport errors —
-                    // these typically mean the SSE endpoint is unavailable but the
-                    // server itself might still respond to regular POST.
-                    tracing::debug!("SSE transport error: {e}, falling back to send_message");
+                    // We previously fell back to POST /messages here, but if SSE
+                    // failed at the transport layer the regular POST will fail
+                    // with the same error after another 30 s timeout, only making
+                    // the user wait longer for the same failure.  Surface the
+                    // real transport error immediately instead.
+                    tracing::debug!("SSE transport error: {e}");
                     es.close();
-                    let fallback = self.send_message(agent_id, input, ephemeral).await?;
-                    for lm in &fallback {
-                        on_event(lm);
-                    }
-                    return Ok(fallback);
+                    return Err(crate::Error::custom(e.to_string()));
                 }
             }
         }
@@ -527,16 +525,15 @@ impl HttpTransport {
                         "Server returned HTTP {status}"
                     )));
                 }
-                Err(_) => {
-                    // Fallback to non-streaming
+                Err(e) => {
+                    // Network / transport errors.  Same rationale as
+                    // stream_message_cancellable_with_images: a failing SSE
+                    // connection means the next blocking POST will also fail;
+                    // surface the real error immediately rather than waiting
+                    // for a second 30 s timeout.
+                    tracing::debug!("SSE tool-return transport error: {e}");
                     es.close();
-                    let fallback = self
-                        .send_tool_return(agent_id, tool_call_id, tool_name, output, is_error)
-                        .await?;
-                    for lm in &fallback {
-                        on_event(lm);
-                    }
-                    return Ok(fallback);
+                    return Err(crate::Error::custom(e.to_string()));
                 }
             }
         }
