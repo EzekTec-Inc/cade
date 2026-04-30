@@ -12,10 +12,12 @@ impl Repl {
                 self.tui_dim("  Usage: /search <query>");
                 return Ok(false);
             }
-            // Run both searches concurrently
+            // Run both searches concurrently. CLI `/search` always spans all
+            // conversations for the agent (None) — agents can scope narrower
+            // via the `conversation_search` tool with `conversation_id`.
             let agent_id = self.agent_id();
             let (msg_res, mem_res) = tokio::join!(
-                self.client.search_messages(&agent_id, &query),
+                self.client.search_messages(&agent_id, &query, None),
                 self.client.search_memory(&agent_id, &query),
             );
             let msgs_empty = msg_res.as_ref().map(|v| v.is_empty()).unwrap_or(true);

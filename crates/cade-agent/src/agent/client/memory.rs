@@ -383,15 +383,24 @@ impl HttpTransport {
         Ok(body["deleted"].as_u64().unwrap_or(0) as usize)
     }
 
-    /// Search message history for an agent.
-    pub async fn search_messages(&self, agent_id: &str, query: &str) -> Result<Vec<Value>> {
-        let resp = self
+    /// Search message history for an agent. If `conversation_id` is `Some`,
+    /// results are scoped to that conversation; if `None`, search spans all
+    /// conversations recorded for the agent.
+    pub async fn search_messages(
+        &self,
+        agent_id: &str,
+        query: &str,
+        conversation_id: Option<&str>,
+    ) -> Result<Vec<Value>> {
+        let mut req = self
             .client
             .get(self.url(&format!("/agents/{agent_id}/messages")))
             .header("Authorization", format!("Bearer {}", self.api_key))
-            .query(&[("q", query)])
-            .send()
-            .await?;
+            .query(&[("q", query)]);
+        if let Some(cid) = conversation_id {
+            req = req.query(&[("conversation_id", cid)]);
+        }
+        let resp = req.send().await?;
         if !resp.status().is_success() {
             return Err(crate::Error::custom(format!(
                 "search_messages failed {}",

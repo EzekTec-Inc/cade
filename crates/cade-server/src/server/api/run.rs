@@ -1277,6 +1277,10 @@ async fn handle_search_memory_meta(
 /// Phase A1b handler: `conversation_search` server-side.
 /// Searches past messages by keyword directly via the DB.
 /// Uses `spawn_blocking` + timeout to avoid blocking the async runtime.
+///
+/// F6 (cross-conversation search): the optional `conversation_id` argument
+/// scopes results to a single conversation; when omitted (or empty) the
+/// search spans every conversation recorded for the agent.
 async fn handle_conversation_search_meta(
     state: &AppState,
     agent_id: &str,
@@ -1286,24 +1290,34 @@ async fn handle_conversation_search_meta(
     if query.is_empty() {
         return ("Error: 'query' is required".to_string(), true);
     }
+    let conversation_id: Option<String> = args["conversation_id"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from);
     let db = state.db.clone();
     let aid = agent_id.to_string();
     let q = query.clone();
+    let cid = conversation_id.clone();
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(10),
         tokio::task::spawn_blocking(move || {
-            cade_store::sqlite::search_messages(&db, &aid, &q, None)
+            cade_store::sqlite::search_messages(&db, &aid, &q, cid.as_deref())
         }),
     )
     .await;
+    let scope_label = match conversation_id.as_deref() {
+        Some(cid) => format!(" (conversation {cid})"),
+        None => " (all conversations)".to_string(),
+    };
     match result {
         Ok(Ok(Ok(results))) if results.is_empty() => (
-            format!("No conversation messages matched '{query}'."),
+            format!("No conversation messages matched '{query}'{scope_label}."),
             false,
         ),
         Ok(Ok(Ok(results))) => {
             let mut out = format!(
-                "Found {} result(s) for '{query}' in conversation history:\n\n",
+                "Found {} result(s) for '{query}'{scope_label} in conversation history:\n\n",
                 results.len()
             );
             for r in &results {
@@ -3373,6 +3387,151 @@ mod tests {
             res.output
         );
         assert!(res.is_error, "unknown target → is_error");
+    }
+
+    // ── F6: cross-conversation search ────────────────────────────────────────
+
+    /// F6: when no conversation_id is given, conversation_search must
+    /// match messages from every conversation associated with the agent.
+    /// Empty-string conversation_id is treated identically to omitted.
+    #[tokio::test]
+    async fn f6_conversation_search_spans_all_conversations_when_omitted() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "agent_f6".into(),
+                name: "f6".into(),
+                model: "t".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        // Insert two messages in two different conversations, each containing
+        // the unique token "rivulet" we'll search for.
+        for (id, conv) in [("m_a", "conv-a"), ("m_b", "conv-b")] {
+            cade_store::sqlite::insert_message(
+                &state.db,
+                &cade_store::sqlite::MessageRow {
+                    id: id.into(),
+                    agent_id: "agent_f6".into(),
+                    conversation_id: Some(conv.into()),
+                    role: "user".into(),
+                    content: serde_json::json!({ "content": "the rivulet runs deep" }),
+                    char_count: 32,
+                },
+            )
+            .unwrap();
+        }
+
+        let (out, is_err) = handle_conversation_search_meta(
+            &state,
+            "agent_f6",
+            &serde_json::json!({ "query": "rivulet" }),
+        )
+        .await;
+
+        assert!(!is_err, "no scope → ok, got: {out}");
+        assert!(
+            out.contains("all conversations"),
+            "scope label must say 'all conversations', got: {out}"
+        );
+        // Both conversations' messages should surface (we inserted matches in both).
+        assert!(
+            out.contains("rivulet"),
+            "matched snippet must echo the query token, got: {out}"
+        );
+    }
+
+    /// F6: when a specific conversation_id is supplied, only messages from
+    /// that conversation are returned.
+    #[tokio::test]
+    async fn f6_conversation_search_scopes_to_single_conversation_when_given() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "agent_f6b".into(),
+                name: "f6b".into(),
+                model: "t".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        // Only conversation `keep` contains the marker token; conversation
+        // `drop` contains a different unique token.
+        cade_store::sqlite::insert_message(
+            &state.db,
+            &cade_store::sqlite::MessageRow {
+                id: "m_keep".into(),
+                agent_id: "agent_f6b".into(),
+                conversation_id: Some("keep".into()),
+                role: "user".into(),
+                content: serde_json::json!({ "content": "alpha kestrel" }),
+                char_count: 14,
+            },
+        )
+        .unwrap();
+        cade_store::sqlite::insert_message(
+            &state.db,
+            &cade_store::sqlite::MessageRow {
+                id: "m_drop".into(),
+                agent_id: "agent_f6b".into(),
+                conversation_id: Some("drop".into()),
+                role: "user".into(),
+                content: serde_json::json!({ "content": "alpha falcon" }),
+                char_count: 12,
+            },
+        )
+        .unwrap();
+
+        // Scope to `keep` and search for `kestrel` — must match the keep row.
+        let (out_keep, _) = handle_conversation_search_meta(
+            &state,
+            "agent_f6b",
+            &serde_json::json!({ "query": "kestrel", "conversation_id": "keep" }),
+        )
+        .await;
+        assert!(
+            out_keep.contains("conversation keep"),
+            "scope label must name the requested conversation, got: {out_keep}"
+        );
+        assert!(
+            out_keep.contains("kestrel"),
+            "must surface the matching message, got: {out_keep}"
+        );
+
+        // Scope to `keep` and search for `falcon` — must miss because the
+        // falcon message is in conversation `drop`.
+        let (out_miss, is_err_miss) = handle_conversation_search_meta(
+            &state,
+            "agent_f6b",
+            &serde_json::json!({ "query": "falcon", "conversation_id": "keep" }),
+        )
+        .await;
+        assert!(!is_err_miss, "no-match is not an error, got: {out_miss}");
+        assert!(
+            out_miss.starts_with("No conversation messages matched"),
+            "scoped search must not leak other-conversation hits, got: {out_miss}"
+        );
+        assert!(
+            out_miss.contains("conversation keep"),
+            "miss message must include the scope label, got: {out_miss}"
+        );
     }
 
     /// RED: at depth >= CADE_SUBAGENT_MAX_DEPTH (default 3), the tool must

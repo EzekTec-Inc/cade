@@ -136,13 +136,19 @@ impl ConversationSearchTool {
             "name": "conversation_search",
             "description": "Search past conversation history. Your active context window drops older \
                             messages. Use this tool to retrieve dropped dialogue — decisions made, \
-                            errors seen, steps already completed.",
+                            errors seen, steps already completed. By default searches across all \
+                            conversations for this agent; pass `conversation_id` to scope to one.",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
                         "description": "Keyword or phrase to search for in past messages"
+                    },
+                    "conversation_id": {
+                        "type": "string",
+                        "description": "Optional. Restrict the search to a single conversation. \
+                                        Omit (or pass an empty string) to search across all conversations."
                     }
                 },
                 "required": ["query"]
@@ -159,14 +165,32 @@ impl ConversationSearchTool {
         if query.is_empty() {
             return Ok("Error: query cannot be empty".to_string());
         }
+        let conversation_id = args["conversation_id"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
 
-        let results = client.search_messages(agent_id, query).await?;
+        let results = client
+            .search_messages(agent_id, query, conversation_id)
+            .await?;
         if results.is_empty() {
-            return Ok(format!("No conversation history matched '{query}'."));
+            let scope = match conversation_id {
+                Some(cid) => format!(" in conversation {cid}"),
+                None => String::new(),
+            };
+            return Ok(format!(
+                "No conversation history matched '{query}'{scope}."
+            ));
         }
 
         let count = results.len().min(10);
-        let mut out = format!("Found {count} result(s) for '{query}' in conversation history:\n\n");
+        let scope = match conversation_id {
+            Some(cid) => format!(" (conversation {cid})"),
+            None => " (all conversations)".to_string(),
+        };
+        let mut out = format!(
+            "Found {count} result(s) for '{query}'{scope} in conversation history:\n\n"
+        );
 
         for msg in results.into_iter().take(10) {
             let role = msg["role"].as_str().unwrap_or("?");
@@ -447,6 +471,39 @@ mod tests {
                 .iter()
                 .any(|v| v.as_str() == Some("query")),
             "query must be required"
+        );
+    }
+
+    // F6: cross-conversation search — `conversation_id` is OPTIONAL and
+    // documented in the schema so the agent can scope when needed.
+    #[test]
+    fn conversation_search_schema_exposes_optional_conversation_id() {
+        let schema = ConversationSearchTool::schema();
+        let props = &schema["parameters"]["properties"];
+        let cid = &props["conversation_id"];
+        assert_eq!(
+            cid["type"].as_str(),
+            Some("string"),
+            "conversation_id must be a string property"
+        );
+        assert!(
+            cid["description"]
+                .as_str()
+                .unwrap_or("")
+                .to_lowercase()
+                .contains("all conversations"),
+            "conversation_id description should explain default-all-conversations behaviour"
+        );
+        // It must NOT be required — that would break the existing default contract.
+        let required = schema["parameters"]["required"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        assert!(
+            !required
+                .iter()
+                .any(|v| v.as_str() == Some("conversation_id")),
+            "conversation_id must remain optional"
         );
     }
 
