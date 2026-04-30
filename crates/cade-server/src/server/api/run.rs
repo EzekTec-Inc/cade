@@ -986,6 +986,38 @@ async fn intercept_meta_tool(
                 handle_message_agent_meta(state, agent_id, &tc.arguments, sse_tx).await;
             Some(mk(output, is_error))
         }
+        // ── Plan-panel tools (TUI-rendered, server-side ack) ─────────────
+        //
+        // `set_plan` and `UpdatePlan` are normally handled by the TUI client
+        // intercept (see crates/cade-cli/src/cli/repl/turn_tools/runner.rs)
+        // because they need access to the live `TuiApp` to draw the plan
+        // panel.  Subagents run inside the server's agentic loop and never
+        // reach that client intercept, so calls fell through to the generic
+        // dispatcher and returned `"Unknown tool"`, confusing the
+        // subagent's LLM and burning iterations on retries.
+        //
+        // Intercept here so subagents get a clean success ack.  The plan
+        // itself is not rendered (no TuiApp is attached in this path), but
+        // the LLM proceeds normally and surfaces its plan via prose in the
+        // accumulated `last_text` returned to the parent.
+        "set_plan" => {
+            let n = tc.arguments["steps"]
+                .as_array()
+                .map(|a| a.len())
+                .unwrap_or(0);
+            Some(mk(format!("Plan acknowledged with {n} step(s)."), false))
+        }
+        "UpdatePlan" => {
+            let step = tc.arguments["step_id"].as_u64().unwrap_or(0);
+            let done = tc.arguments["done"].as_bool().unwrap_or(true);
+            Some(mk(
+                format!(
+                    "Step {step} marked {}.",
+                    if done { "done" } else { "not done" }
+                ),
+                false,
+            ))
+        }
         _ => None,
     }
 }
@@ -2078,11 +2110,23 @@ async fn handle_run_subagent_tool(
             }
         };
 
-        // Persist any text the assistant produced this iteration.
+        // Accumulate the assistant's prose across iterations.
+        //
+        // Previously this overwrote `last_text` on every iter, which silently
+        // discarded all intermediate explanation/working/findings the
+        // subagent produced before its final tool call.  The parent only
+        // ever saw the LAST iteration's text — typically empty, since the
+        // last iter is often a tool call with no prose.
+        //
+        // Now we append, joining iterations with a blank line so the parent
+        // receives the full investigation log as a single coherent message.
         if let Some(t) = &resp.content
             && !t.is_empty()
         {
-            last_text = t.clone();
+            if !last_text.is_empty() {
+                last_text.push_str("\n\n");
+            }
+            last_text.push_str(t);
         }
 
         if resp.tool_calls.is_empty() {
