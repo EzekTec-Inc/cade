@@ -31,8 +31,9 @@
 | WI-6 | Semantic Memory Search (P2) | ✅ Done | Large |
 | WI-7 | System Prompt Optimization | ✅ Done | Small |
 | WI-8 | Unused Import Cleanup | ✅ Done | Trivial |
+| WI-9 | Mobile / Responsive Dashboard | 📋 Planned (exploration done) | XL |
 
-**Execution order:** WI-8 → WI-2 → WI-3 → WI-7 → WI-6
+**Execution order:** WI-8 → WI-2 → WI-3 → WI-7 → WI-6 → WI-9
 
 Rationale: WI-8 is a 10-second fix. WI-2 must precede WI-3 (slots depend on
 clean overlay dispatch). WI-7 is a small prompt edit. WI-6 is a standalone
@@ -286,13 +287,157 @@ be the last item implemented.
 
 ---
 
+## WI-9: Mobile / Responsive Dashboard
+
+**Memory anchor:** `ANCHOR_WI9_RESPONSIVE_DASHBOARD`
+
+**Status:** Exploration complete (2026-04-29). Not started. Largest remaining
+item — multi-week effort across layout, theming, and gesture handling.
+
+### Problem
+
+`cade-gui` (the egui/eframe WASM dashboard served at `/dashboard`) is
+desktop-only by construction. Opening it on a phone or tablet produces an
+unusable layout:
+
+- Overlay dialogs hardcode initial dimensions (e.g. 800×600 menu, 720×480
+  checkpoints) and only clamp via `.min(screen_size - margin)` — no adaptive
+  reflow, just visual squeeze.
+- Sidebar has a fixed pixel width and never collapses (the TUI already
+  collapses its sidebar at <110 chars; the GUI has no equivalent).
+- Body fonts are 10–13pt; iOS / Material guidelines require ≥28pt touch
+  targets and ≥17pt body text for legibility on phones.
+- No gesture handling (swipe-to-dismiss, pinch-to-zoom, pull-to-refresh) —
+  egui is immediate-mode and ships none of these primitives.
+- Toolbar / footer use `egui::TopBottomPanel` with fixed heights (24px /
+  18px) that are too small for thumb taps.
+
+The `index.html` already has a correct `viewport` meta tag and `100vw/100vh`
+canvas sizing, so the **canvas** scales — but the **layout inside it** does
+not.
+
+### Design Decisions Needed
+
+1. **Breakpoint thresholds.** Proposed:
+   - `mobile`   : viewport width < 640px
+   - `tablet`   : 640px ≤ width < 1024px
+   - `desktop`  : width ≥ 1024px (current behaviour, unchanged)
+   Detected once per frame from `ctx.screen_rect().width()` and exposed as
+   a `Viewport` enum on `AppState`.
+
+2. **Sidebar strategy on narrow viewports.** Two options:
+   - **Collapse + drawer** (preferred): sidebar disappears below `tablet`;
+     a hamburger button in the toolbar opens it as a full-height drawer
+     overlay. Mirrors the TUI's collapse-at-110-chars pattern.
+   - **Bottom tab bar**: replace sidebar with a 5-icon tab bar at the
+     bottom (mobile-app idiom). More work, more divergence from TUI.
+
+3. **Overlay sizing on narrow viewports.** Three options:
+   - **Full-screen modals** (preferred): every overlay (palette, menu,
+     checkpoints, settings) takes 100% of the viewport on `mobile`, with
+     a clear close button in the top-left. No clamping — just full takeover.
+   - **Bottom sheets**: overlays slide up from the bottom and cover ~70% of
+     the viewport. Native-feeling but requires animation we don't have.
+   - **Centered with reduced padding** (current): rejected — already
+     produces unusable cramped layouts.
+
+4. **Touch target & font scaling.** Proposed: introduce a `ResponsiveStyle`
+   helper that adjusts `egui::Style.spacing.button_padding`, font sizes,
+   and `interact_size.y` based on the detected `Viewport`. Apply it once at
+   the top of `App::update()` before any UI draws.
+
+5. **Gesture support — scope?** Recommendation: **defer to a follow-up
+   item.** egui has no native gesture API; implementing swipe-to-dismiss
+   would require tracking pointer deltas manually. Ship without gestures
+   first; add them only if user feedback demands it.
+
+### Proposed Architecture
+
+```
+crates/cade-gui/src/responsive.rs       (new)
+  pub enum Viewport { Mobile, Tablet, Desktop }
+  pub fn detect(ctx: &egui::Context) -> Viewport
+  pub fn apply_style(ctx: &egui::Context, vp: Viewport)
+  // Touch-friendly spacing, font sizes, button heights per breakpoint
+
+crates/cade-gui/src/app/mod.rs          (modified)
+  - Detect Viewport once per frame; store on AppState
+  - Pass &Viewport into every component / overlay render call
+  - Apply responsive style before drawing
+
+crates/cade-gui/src/app/components/sidebar.rs   (modified)
+  - On Mobile/Tablet: do not render inline; render only when
+    `app_state.sidebar_drawer_open == true` as a full-height overlay
+
+crates/cade-gui/src/app/components/toolbar.rs   (modified)
+  - On Mobile/Tablet: show a hamburger button that toggles
+    `sidebar_drawer_open`
+
+crates/cade-gui/src/app/overlays/*.rs           (modified, ~8 files)
+  - Replace `fixed_size((W, H))` with viewport-aware sizing:
+      Desktop  → existing fixed size (clamped to screen)
+      Tablet   → 90% of viewport
+      Mobile   → 100% of viewport (full-screen modal)
+```
+
+### Plan (high-level)
+
+Order matters — earlier steps unblock later ones.
+
+1. [ ] Add `crates/cade-gui/src/responsive.rs` with `Viewport` enum +
+       `detect()` + unit tests for the breakpoint boundaries (639/640,
+       1023/1024).
+2. [ ] Detect viewport once per frame in `App::update()`; thread it into
+       the render call signature for components/overlays.
+3. [ ] Implement `apply_style(ctx, vp)` — touch-friendly fonts +
+       `interact_size` + button padding for `Mobile`/`Tablet`.
+4. [ ] Sidebar: collapse on `Mobile`/`Tablet`; render as full-height drawer
+       when `sidebar_drawer_open == true`.
+5. [ ] Toolbar: add hamburger button visible only on `Mobile`/`Tablet`;
+       wire to `sidebar_drawer_open` toggle.
+6. [ ] Migrate one overlay (suggest `palette` — simplest) to viewport-aware
+       sizing as a reference implementation.
+7. [ ] Migrate remaining overlays (`menu`, `memory`, `settings`,
+       `checkpoints`, `artifacts`, `stats`, `tools`) using the palette
+       pattern.
+8. [ ] Manual QA at three browser widths (375px, 768px, 1440px).
+9. [ ] `cargo test --workspace` + `trunk build --release` — all pass; WASM
+       size delta < 100KB.
+10. [ ] Commit: `feat(gui): responsive layout with mobile/tablet
+        breakpoints (WI-9)`
+
+### Verification
+
+- At 375px wide (iPhone SE): sidebar hidden, hamburger visible, opening
+  any overlay produces a full-screen modal with ≥28pt touch targets.
+- At 768px wide (iPad portrait): sidebar hidden but accessible via
+  hamburger, overlays cover 90% of viewport.
+- At 1440px wide (desktop): zero visual change vs. current `master`.
+- Existing `cargo test --workspace` passes.
+- WASM artifact size growth < 100KB (no new heavy dependencies).
+
+### Dependencies
+
+None at the code level. **Conceptually depends on accepting** that gestures
+are out of scope for this WI (deferred to a follow-up).
+
+### Risk
+
+**Extra-Large.** Touches every component and overlay in `cade-gui`. High
+probability of visual regressions on desktop. Should be implemented on a
+feature branch with screenshot diffs before merge. Schedule **after** all
+other WIs and a stable release tag, not interleaved with feature work.
+
+---
+
 ## Long-Term (not planned for immediate execution)
 
 These are documented in `docs/roadmap.md` but not actionable yet:
 
 - **Team features** — shared agents, memory, skills across a team
 - **Voice mode** — speech-to-text input + audio output
-- **Mobile/responsive dashboard** — `cade-gui` adapts to smaller viewports
+- **Gesture support for mobile dashboard** — swipe-to-dismiss, pull-to-refresh
+  (follow-up to WI-9 once base responsive layout ships)
 
 ---
 
