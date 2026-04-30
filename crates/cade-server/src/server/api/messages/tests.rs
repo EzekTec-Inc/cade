@@ -373,12 +373,31 @@ fn constants_are_sane() {
         "recent window too small for useful tool-usage detection"
     );
     assert!(
-        PINNED_BUDGET >= 5_000,
-        "pinned budget too small for typical memory blocks"
+        PINNED_BUDGET_MIN >= 5_000,
+        "pinned budget minimum too small for typical memory blocks"
     );
     assert!(
-        SHORT_BUDGET > PINNED_BUDGET,
-        "short budget should exceed pinned budget"
+        SHORT_BUDGET_MIN > PINNED_BUDGET_MIN,
+        "short budget minimum should exceed pinned budget minimum"
+    );
+    // Verify dynamic budgets scale properly.
+    let small = MemoryBudgets::for_model("openai/gpt-4o-mini"); // 128k
+    assert!(
+        small.pinned >= PINNED_BUDGET_MIN,
+        "dynamic pinned must be >= minimum"
+    );
+    assert!(
+        small.short >= SHORT_BUDGET_MIN,
+        "dynamic short must be >= minimum"
+    );
+    let large = MemoryBudgets::for_model("gemini/gemini-2.5-pro"); // 1M
+    assert!(
+        large.pinned > small.pinned,
+        "larger model should get larger pinned budget"
+    );
+    assert!(
+        large.short > small.short,
+        "larger model should get larger short budget"
     );
     assert!(MIN_CONTEXT_CHARS < MAX_CONTEXT_CHARS);
     assert!(OUTPUT_RESERVE_FRACTION > 0.0 && OUTPUT_RESERVE_FRACTION < 0.5);

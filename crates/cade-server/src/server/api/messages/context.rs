@@ -1103,12 +1103,13 @@ fn assemble_system_prompt_memory(
     let _ = sqlite::promote_stale_blocks(&state.db, agent_id, current_turn, STALE_THRESHOLD);
 
     // 3. Pinned + short-term blocks → full value, greedy-packed into budgets.
+    let budgets = MemoryBudgets::for_model(&agent.model);
     let active_blocks = sqlite::get_active_blocks(&state.db, agent_id).unwrap_or_default();
     let mut pinned_parts: Vec<String> = Vec::new();
     let mut short_parts: Vec<String> = Vec::new();
     let mut dynamic_parts: Vec<String> = Vec::new();
-    let mut pinned_remaining = PINNED_BUDGET;
-    let mut short_remaining = SHORT_BUDGET;
+    let mut pinned_remaining = budgets.pinned;
+    let mut short_remaining = budgets.short;
     let mut active_omitted = 0usize;
 
     for (label, val, _desc, tier, _lt) in &active_blocks {
@@ -1161,7 +1162,7 @@ fn assemble_system_prompt_memory(
     let long_excerpts =
         sqlite::get_long_term_excerpts(&state.db, agent_id, current_turn).unwrap_or_default();
     let mut long_parts: Vec<String> = Vec::new();
-    let mut long_remaining = LONG_BUDGET;
+    let mut long_remaining = budgets.long;
     let mut long_omitted = 0usize;
 
     for (label, excerpt, _idle) in &long_excerpts {

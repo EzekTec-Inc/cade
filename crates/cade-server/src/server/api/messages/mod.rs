@@ -37,14 +37,48 @@ pub(crate) const ALWAYS_INCLUDE_TOOL_NAMES: &[&str] = &[
     "update_memory",
     "memory_apply_patch",
 ];
-/// Character budget for pinned memory blocks (always injected, highest priority).
-pub(crate) const PINNED_BUDGET: usize = 10_000;
-/// Character budget for short-term active memory blocks (full fidelity).
-pub(crate) const SHORT_BUDGET: usize = 25_000;
-/// Character budget for the long-term archived index (label + 80-char excerpt).
-pub(crate) const LONG_BUDGET: usize = 5_000;
+/// Minimum character budget for pinned memory blocks (always injected, highest priority).
+pub(crate) const PINNED_BUDGET_MIN: usize = 10_000;
+/// Minimum character budget for short-term active memory blocks (full fidelity).
+pub(crate) const SHORT_BUDGET_MIN: usize = 25_000;
+/// Minimum character budget for the long-term archived index (label + 80-char excerpt).
+pub(crate) const LONG_BUDGET_MIN: usize = 5_000;
 /// Turns of inactivity before a short-term block is promoted to long-term.
 pub(crate) const STALE_THRESHOLD: i64 = 80;
+
+/// Dynamic memory budgets scaled to the model's context window.
+///
+/// On small models (32k) the budgets equal the minimums.  On large models
+/// (128k+) they scale proportionally so the agent can hold more memory
+/// without wasting context capacity.
+///
+/// Formula per tier:
+///   budget = max(MIN, context_window_chars × fraction)
+///
+/// Fractions:
+///   pinned  = 2%   (persona, human, project, working_set)
+///   short   = 8%   (active task notes, skills metadata)
+///   long    = 1.5% (archived excerpts)
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MemoryBudgets {
+    pub pinned: usize,
+    pub short: usize,
+    pub long: usize,
+}
+
+impl MemoryBudgets {
+    /// Compute budgets from the model's context window (in tokens).
+    pub fn for_model(model: &str) -> Self {
+        let window_tokens = catalogue::context_window_for_model(model) as usize;
+        // Approximate chars: tokens × 4 (slightly generous to avoid under-budgeting)
+        let window_chars = window_tokens.saturating_mul(4);
+        Self {
+            pinned: ((window_chars as f64 * 0.02) as usize).max(PINNED_BUDGET_MIN),
+            short: ((window_chars as f64 * 0.08) as usize).max(SHORT_BUDGET_MIN),
+            long: ((window_chars as f64 * 0.015) as usize).max(LONG_BUDGET_MIN),
+        }
+    }
+}
 /// Awareness footer appended to system prompt when any memory tier is present.
 pub(crate) const MEMORY_AWARENESS_FOOTER: &str = "\n\nMemory system: blocks idle for 80+ turns are \
 archived. The Archived Memory section above lists them with label + excerpt only. \
