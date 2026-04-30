@@ -120,8 +120,8 @@
 - [x] **TUI slot rendering** — wired `SlotManager` into `render.rs` and `input.rs` (WI-3)
 - [x] **System prompt optimization** — added dynamic tool filtering, search-first
       lookup, and `/memory pin` guidance to BASE_SYSTEM_PROMPT (WI-7)
-- [ ] **Semantic memory search** — embedding-based `search_memory_semantic()`
-      with hybrid FTS5 + cosine ranking (WI-6)
+- [x] **Semantic memory search** — embedding-based `search_memory_semantic()`
+      with hybrid FTS5 + cosine ranking via sqlite-vec (WI-6)
 
 ### Long term
 - [ ] **Team features** — shared agents, memory, and skills across a team

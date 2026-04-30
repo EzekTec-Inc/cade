@@ -28,7 +28,7 @@
 | WI-3 | TUI Refactor Phase 4: Slot Rendering + Input | ✅ Done | Small |
 | WI-4 | Askpass Integration | ✅ Done (already shipped) | — |
 | WI-5 | MCP Prefix Stripping | ✅ Done (already shipped) | — |
-| WI-6 | Semantic Memory Search (P2) | ❌ Not started | Large |
+| WI-6 | Semantic Memory Search (P2) | ✅ Done | Large |
 | WI-7 | System Prompt Optimization | ✅ Done | Small |
 | WI-8 | Unused Import Cleanup | ✅ Done | Trivial |
 
@@ -306,3 +306,4 @@ _Append entries here as work items are finished._
 | 2026-04-29 | WI-2 | `ae34cd3e` | Migrated 4 overlays to dynamic stack, -333/+21 lines. ActiveQuestion + Password remain as legacy Option fields (blocking modals). |
 | 2026-04-29 | WI-3 | `b056216c` | Wired SlotManager into input dispatch — Header/Footer/Sidebar can now consume keys. Render was already wired in draw(). |
 | 2026-04-29 | WI-7 | `2e761ce0` | Added dynamic tool filtering note, search-first lookup guidance, and /memory pin tip to BASE_SYSTEM_PROMPT. |
+| 2026-04-29 | WI-6 | `bbcae64c` | Semantic memory search via fastembed + sqlite-vec. Hybrid LIKE + fuzzy + cosine via RRF. Feature-gated behind `semantic-search`. 7 new tests. |
