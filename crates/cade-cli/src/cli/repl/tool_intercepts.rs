@@ -65,7 +65,13 @@ impl Repl {
         // Clone what we need for the async task
         let client = self.client.clone();
         let main_model = self.model();
-        let permissions = cade_core::permissions::PermissionManager::default();
+        // Bug 1 fix: inherit parent's permission mode. Headless mode treats
+        // `Verdict::Ask` as deny — using a `default()` PermissionManager would
+        // block every write/execute tool. Subagents should have at least the
+        // same authority as their parent, otherwise they can only read.
+        let permissions = cade_core::permissions::PermissionManager::new(
+            self.permissions.mode(),
+        );
         let call_id_owned = call_id.to_string();
         let bg_results = Arc::clone(&self.background_results);
         let mcp_ref = std::sync::Arc::clone(&self.mcp);

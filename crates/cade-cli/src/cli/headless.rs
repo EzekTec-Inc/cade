@@ -289,7 +289,39 @@ async fn run_one_tool(
         .await;
     }
 
-    // -- Fallback: interactive-only tools (run_subagent, ask_user_question) — dispatch natively
+    // Bug 7 fix: gracefully handle interactive-only tools that can't run in headless context.
+    // `ToolRuntime.execute` returns None for `run_subagent`, `ask_user_question`,
+    // `EnterPlanMode`, `ExitPlanMode`. Falling through to `dispatch()` would yield
+    // "Unknown tool" because these are intercepted by the REPL layer (which isn't
+    // available here — this code path is the headless subagent loop, where any
+    // run_subagent call is a NESTED subagent attempt).
+    let canonical = cade_agent::tools::manager::canonical_name(&tool_name);
+    if matches!(
+        canonical,
+        "run_subagent" | "ask_user_question" | "EnterPlanMode" | "ExitPlanMode"
+    ) {
+        let msg = match canonical {
+            "run_subagent" => "Nested run_subagent calls are not supported from a headless subagent context. \
+                               Complete the work directly or return control to the parent agent.",
+            "ask_user_question" => "ask_user_question is unavailable in headless mode (no interactive user). \
+                                   Make a reasonable assumption and proceed, or return for parent guidance.",
+            "EnterPlanMode" | "ExitPlanMode" => "Permission mode changes are not allowed from a subagent.",
+            _ => "Tool unavailable in headless context.",
+        };
+        return finalize_tool_result(
+            client,
+            agent_id,
+            hooks,
+            call_id,
+            tool_name,
+            args,
+            msg.to_string(),
+            true,
+        )
+        .await;
+    }
+
+    // -- Fallback: native + MCP dispatch
     tracing::info!("Executing tool: {tool_name}");
     let result = dispatch(call_id.clone(), &tool_name, &args, mcp).await;
     finalize_tool_result(

@@ -229,9 +229,13 @@ pub fn context_window_for_model(model_id: &str) -> u32 {
 pub fn fast_model_for_main_model(main_model: &str) -> String {
     let provider = main_model.split('/').next().unwrap_or(main_model);
     match provider {
-        "anthropic" => "anthropic/claude-3-5-haiku-20241022".to_string(),
-        "openai" => "openai/gpt-4o-mini".to_string(),
-        "gemini" => "gemini/gemini-2.5-pro".to_string(),
+        // Bug 6 fix: updated stale defaults.
+        // - Haiku 4.5 (current generation, supports adaptive thinking).
+        // - o4-mini (better tool-calling than gpt-4o-mini).
+        // - gemini-2.0-flash (actually fast — 2.5-pro is the large reasoning model).
+        "anthropic" => "anthropic/claude-haiku-4-5".to_string(),
+        "openai" => "openai/o4-mini".to_string(),
+        "gemini" => "gemini/gemini-2.0-flash".to_string(),
         _ => main_model.to_string(), // Fallback: use exactly what the user is using
     }
 }

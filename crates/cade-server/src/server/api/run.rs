@@ -1843,6 +1843,11 @@ async fn handle_run_subagent_tool(
     let mode = args["mode"].as_str().unwrap_or("build").to_string();
     let background = args["background"].as_bool().unwrap_or(false);
     let model_override = args["model"].as_str().map(|s| s.to_string());
+    // Bug 3 fix: parse caller-provided system_prompt + description (previously ignored).
+    let custom_system_prompt = args["system_prompt"]
+        .as_str()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
     let _description = args["description"]
         .as_str()
         .unwrap_or("subagent task")
@@ -1923,21 +1928,79 @@ async fn handle_run_subagent_tool(
 
     let start_time = std::time::Instant::now();
 
-    let system_prompt = if mode == "plan" {
-        format!(
-            "You are a read-only planning subagent. Analyze and report. \
-             Do NOT modify files.\n\nTask: {prompt}"
-        )
+    // Bug 3 fix: resolve the subagent definition by `mode` (custom or built-in).
+    // Falls back to the built-in `worker` when no custom definition matches.
+    let cwd_for_defs = std::env::current_dir().unwrap_or_default();
+    let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
+    let def_opt = cade_agent::subagents::resolve_subagent_def(&mode, &all_defs);
+    let def_system_prompt: Option<String> = def_opt.map(|d| d.system_prompt.clone());
+
+    // Bug 2 fix: build a substantive system prompt.
+    //
+    // Resolution order:
+    //   1. caller's explicit `system_prompt` argument (highest priority)
+    //   2. the resolved subagent definition's system prompt
+    //   3. mode-aware built-in default
+    //
+    // For `mode == "plan"` we always append a strict read-only directive,
+    // even if a custom prompt is supplied — plan mode must be safe by
+    // construction.
+    let mode_directive = if mode == "plan" {
+        "\n\nIMPORTANT: You are in PLAN mode. Analyze and report only. \
+         Do NOT modify files, do NOT run mutating commands, do NOT use \
+         write_file / edit_file / apply_patch."
     } else {
-        format!(
-            "You are a subagent. Complete the task and return a concise summary.\n\nTask: {prompt}"
-        )
+        ""
     };
+    let base_prompt = custom_system_prompt
+        .or(def_system_prompt)
+        .unwrap_or_else(|| {
+            "You are a CADE subagent — an autonomous coding assistant spawned \
+             to complete a focused task. You have access to the full CADE \
+             tool suite (file operations, shell, search, memory). Use tools \
+             aggressively to gather information before answering. Return a \
+             concise final summary describing what you did, what you found, \
+             and any follow-ups for the parent agent. Do NOT ask the parent \
+             clarifying questions — make reasonable assumptions and proceed."
+                .to_string()
+        });
+    let system_prompt = format!("{base_prompt}{mode_directive}\n\nTask: {prompt}");
+
+    // Bug 5 fix: seed the parent agent's pinned + short-tier memory blocks
+    // into the subagent's system prompt so it inherits project context,
+    // persona, and the active goal. Each block is capped at 1500 chars to
+    // keep the seed compact. Only included when the parent has any blocks.
+    let seed_section: String = {
+        match cade_store::sqlite::get_active_blocks(&state.db, parent_agent_id) {
+            Ok(blocks) if !blocks.is_empty() => {
+                let mut out = String::from("\n\n# Inherited memory (from parent agent)\n");
+                for (label, value, _desc, _tier, _last_turn) in blocks {
+                    if label.starts_with("__") || value.trim().is_empty() {
+                        continue;
+                    }
+                    let capped = if value.chars().count() > 1500 {
+                        let end = value
+                            .char_indices()
+                            .nth(1500)
+                            .map(|(i, _)| i)
+                            .unwrap_or(value.len());
+                        format!("{}…", &value[..end])
+                    } else {
+                        value
+                    };
+                    out.push_str(&format!("\n## {label}\n{capped}\n"));
+                }
+                out
+            }
+            _ => String::new(),
+        }
+    };
+    let system_prompt_full = format!("{system_prompt}{seed_section}");
 
     let messages_init = vec![
         LlmMessage {
             role: "system".to_string(),
-            content: system_prompt,
+            content: system_prompt_full,
             tool_calls: None,
             tool_call_id: None,
             images: None,
@@ -1999,7 +2062,11 @@ async fn handle_run_subagent_tool(
             model: model.clone(),
             messages: messages.clone(),
             tools: parent_tool_schemas.clone(),
-            max_tokens: 4096,
+            // Bug 4 fix: raised from 4096 → 8192. 4k was too low for coding
+            // subagents; complex outputs (file writes, detailed analysis)
+            // were silently truncated mid-response. 8k matches the typical
+            // per-turn budget for the parent agent loop.
+            max_tokens: 8192,
             reasoning_effort: None,
         };
 
