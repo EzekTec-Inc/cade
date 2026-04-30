@@ -1281,6 +1281,14 @@ async fn handle_search_memory_meta(
 /// F6 (cross-conversation search): the optional `conversation_id` argument
 /// scopes results to a single conversation; when omitted (or empty) the
 /// search spans every conversation recorded for the agent.
+///
+/// F8 (compaction transparency): when any matched snippet sits before a
+/// compaction marker, the header reports how many of the hits were
+/// pre-compaction.  When the search returns zero hits but the agent does
+/// have at least one compaction marker, the empty response includes a
+/// hint pointing at `archival_memory_search` (tag: `dropped-turns`,
+/// shipped by F2) and `session_summary` so the agent knows where the raw
+/// dialogue lives.
 async fn handle_conversation_search_meta(
     state: &AppState,
     agent_id: &str,
@@ -1311,15 +1319,45 @@ async fn handle_conversation_search_meta(
         None => " (all conversations)".to_string(),
     };
     match result {
-        Ok(Ok(Ok(results))) if results.is_empty() => (
-            format!("No conversation messages matched '{query}'{scope_label}."),
-            false,
-        ),
+        Ok(Ok(Ok(results))) if results.is_empty() => {
+            // F8: empty hit-list — but if a compaction marker exists, point
+            // the agent at the F2 archival cache + session_summary.
+            let has_marker = cade_store::sqlite::has_compaction_marker(
+                &state.db,
+                agent_id,
+                conversation_id.as_deref(),
+            )
+            .unwrap_or(false);
+            let mut out =
+                format!("No conversation messages matched '{query}'{scope_label}.");
+            if has_marker {
+                out.push_str(
+                    "\nNote: this agent has compacted history. The raw dropped turns are \
+                     stored in archival memory (try `archival_memory_search` with tag \
+                     `dropped-turns`); a higher-level summary lives in the \
+                     `session_summary` memory block.",
+                );
+            }
+            (out, false)
+        }
         Ok(Ok(Ok(results))) => {
+            // F8: count how many hits sat before a compaction marker so the
+            // header line gives the agent an at-a-glance signal.
+            let pre_compaction_hits = results
+                .iter()
+                .filter(|r| r.snippet.contains("[pre-compaction"))
+                .count();
             let mut out = format!(
-                "Found {} result(s) for '{query}'{scope_label} in conversation history:\n\n",
-                results.len()
+                "Found {} result(s) for '{query}'{scope_label} in conversation history",
+                results.len(),
             );
+            if pre_compaction_hits > 0 {
+                out.push_str(&format!(
+                    " ({pre_compaction_hits} from pre-compaction history — \
+                     see archival_memory_search with tag `dropped-turns` for full text)"
+                ));
+            }
+            out.push_str(":\n\n");
             for r in &results {
                 out.push_str(&format!("[{}] {}\n", r.role, r.snippet));
             }
@@ -3531,6 +3569,191 @@ mod tests {
         assert!(
             out_miss.contains("conversation keep"),
             "miss message must include the scope label, got: {out_miss}"
+        );
+    }
+
+    // ── F8: compaction transparency in conversation_search ────────────────────
+
+    /// F8: when no hits but a compaction marker exists, the empty response
+    /// must point the agent at the F2 archival cache + session_summary.
+    #[tokio::test]
+    async fn f8_empty_search_with_compaction_marker_hints_at_archival() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "agent_f8a".into(),
+                name: "f8a".into(),
+                model: "t".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        // Insert ONLY a compaction marker — no other messages to match.
+        cade_store::sqlite::insert_message(
+            &state.db,
+            &cade_store::sqlite::MessageRow {
+                id: "compact-1".into(),
+                agent_id: "agent_f8a".into(),
+                conversation_id: None,
+                role: "compaction".into(),
+                content: serde_json::json!({ "content": "[Compaction marker: 5 turns]" }),
+                char_count: 0,
+            },
+        )
+        .unwrap();
+
+        let (out, is_err) = handle_conversation_search_meta(
+            &state,
+            "agent_f8a",
+            &serde_json::json!({ "query": "ghost-token-no-match" }),
+        )
+        .await;
+
+        assert!(!is_err, "no-hit is not an error, got: {out}");
+        assert!(
+            out.contains("No conversation messages matched"),
+            "must report no matches, got: {out}"
+        );
+        assert!(
+            out.contains("compacted history") && out.contains("archival_memory_search"),
+            "F8: empty-with-marker must hint at archival_memory_search, got: {out}"
+        );
+        assert!(
+            out.contains("dropped-turns"),
+            "F8: hint must reference the F2 'dropped-turns' tag, got: {out}"
+        );
+        assert!(
+            out.contains("session_summary"),
+            "F8: hint must also point at session_summary, got: {out}"
+        );
+    }
+
+    /// F8: when no hits AND no compaction marker exists, the empty response
+    /// must NOT spam an irrelevant archival hint.
+    #[tokio::test]
+    async fn f8_empty_search_without_marker_omits_archival_hint() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "agent_f8b".into(),
+                name: "f8b".into(),
+                model: "t".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        let (out, _) = handle_conversation_search_meta(
+            &state,
+            "agent_f8b",
+            &serde_json::json!({ "query": "ghost-token-no-match" }),
+        )
+        .await;
+        assert!(
+            !out.contains("compacted history"),
+            "F8: clean agent must not get the compaction hint, got: {out}"
+        );
+        assert!(
+            !out.contains("archival_memory_search"),
+            "F8: clean agent must not be redirected to archival, got: {out}"
+        );
+    }
+
+    /// F8: when at least one hit sits before the compaction marker, the
+    /// header line must report the count of pre-compaction hits.
+    #[tokio::test]
+    async fn f8_header_reports_pre_compaction_hit_count() {
+        let llm = std::sync::Arc::new(PanicOnCallLlm) as std::sync::Arc<dyn cade_ai::LlmProvider>;
+        let state = build_state_with_llm(llm);
+        cade_store::sqlite::create_agent(
+            &state.db,
+            &cade_store::sqlite::AgentRow {
+                id: "agent_f8c".into(),
+                name: "f8c".into(),
+                model: "t".into(),
+                description: None,
+                system_prompt: None,
+                created_at: None,
+                compaction_model: None,
+                theme: None,
+            },
+        )
+        .unwrap();
+
+        // Two messages before the compaction marker, one after.
+        // FTS5 indexes by rowid (insertion order) and the compaction marker
+        // sits between them — so both pre-marker rows are tagged
+        // 'pre-compaction' and the post-marker row is not.
+        for (id, role, body) in [
+            ("m1", "user", "the unique-token f8c lives here"),
+            ("m2", "assistant", "I saw the unique-token f8c too"),
+        ] {
+            cade_store::sqlite::insert_message(
+                &state.db,
+                &cade_store::sqlite::MessageRow {
+                    id: id.into(),
+                    agent_id: "agent_f8c".into(),
+                    conversation_id: None,
+                    role: role.into(),
+                    content: serde_json::json!({ "content": body }),
+                    char_count: body.chars().count(),
+                },
+            )
+            .unwrap();
+        }
+        cade_store::sqlite::insert_message(
+            &state.db,
+            &cade_store::sqlite::MessageRow {
+                id: "compact-c".into(),
+                agent_id: "agent_f8c".into(),
+                conversation_id: None,
+                role: "compaction".into(),
+                content: serde_json::json!({ "content": "[marker]" }),
+                char_count: 0,
+            },
+        )
+        .unwrap();
+        cade_store::sqlite::insert_message(
+            &state.db,
+            &cade_store::sqlite::MessageRow {
+                id: "m3".into(),
+                agent_id: "agent_f8c".into(),
+                conversation_id: None,
+                role: "user".into(),
+                content: serde_json::json!({ "content": "post-compaction unique-token f8c" }),
+                char_count: 30,
+            },
+        )
+        .unwrap();
+
+        let (out, is_err) = handle_conversation_search_meta(
+            &state,
+            "agent_f8c",
+            &serde_json::json!({ "query": "unique-token f8c" }),
+        )
+        .await;
+        assert!(!is_err, "search must succeed, got: {out}");
+        assert!(
+            out.contains("from pre-compaction history"),
+            "F8: header must annotate pre-compaction hit count, got: {out}"
+        );
+        // Sanity: the snippet markers themselves still carry the pre-compaction tag.
+        assert!(
+            out.contains("[pre-compaction"),
+            "F8: snippets for pre-compaction rows must keep their inline tag, got: {out}"
         );
     }
 

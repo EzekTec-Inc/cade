@@ -65,6 +65,40 @@ pub struct MessageSearchResult {
     pub snippet: String,
 }
 
+/// True iff the agent has at least one compaction marker in `messages`.
+///
+/// Used by `conversation_search` (F8) so the agent can be told — even when
+/// the current search returns zero hits — that older history was summarised
+/// into `session_summary` and the F2 archival cache.
+///
+/// When `conversation_id` is `None`, the check spans every conversation.
+/// When `Some(_)`, only that conversation's compaction markers count.
+pub fn has_compaction_marker(
+    db: &Db,
+    agent_id: &str,
+    conversation_id: Option<&str>,
+) -> Result<bool> {
+    let conn = db.lock();
+    let count: i64 = if let Some(cid) = conversation_id {
+        conn.query_row(
+            "SELECT COUNT(*) FROM messages
+             WHERE agent_id = ?1 AND conversation_id = ?2 AND role = 'compaction'",
+            params![agent_id, cid],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+    } else {
+        conn.query_row(
+            "SELECT COUNT(*) FROM messages
+             WHERE agent_id = ?1 AND role = 'compaction'",
+            params![agent_id],
+            |r| r.get(0),
+        )
+        .unwrap_or(0)
+    };
+    Ok(count > 0)
+}
+
 /// Search messages using FTS5 with BM25 ranking and context snippets.
 ///
 /// Results are ordered by BM25 relevance (best match first).
@@ -103,7 +137,7 @@ pub fn search_messages(
          SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content,
                 bm25(messages_fts) AS score,
                 CASE WHEN m.rowid <= (SELECT marker_rowid FROM boundary)
-                     THEN snippet(messages_fts, 0, '**', '**', '…', 32) || '\n[pre-compaction, summary available in session_summary]'
+                     THEN snippet(messages_fts, 0, '**', '**', '…', 32) || '\n[pre-compaction; full text in archival_memory_search (tag: dropped-turns) and summary in session_summary]'
                      ELSE snippet(messages_fts, 0, '**', '**', '…', 32)
                 END AS snip
          FROM messages m
@@ -125,7 +159,7 @@ pub fn search_messages(
          SELECT m.id, m.agent_id, m.conversation_id, m.role, m.content,
                 bm25(messages_fts) AS score,
                 CASE WHEN m.rowid <= (SELECT marker_rowid FROM boundary)
-                     THEN snippet(messages_fts, 0, '**', '**', '…', 32) || '\n[pre-compaction, summary available in session_summary]'
+                     THEN snippet(messages_fts, 0, '**', '**', '…', 32) || '\n[pre-compaction; full text in archival_memory_search (tag: dropped-turns) and summary in session_summary]'
                      ELSE snippet(messages_fts, 0, '**', '**', '…', 32)
                 END AS snip
          FROM messages m
