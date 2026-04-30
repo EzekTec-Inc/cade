@@ -374,4 +374,30 @@ mod tests {
     fn context_window_completely_unknown() {
         assert_eq!(context_window_for_model("random/model-xyz"), 32_000);
     }
+
+    // -- Bug 6: fast_model_for_main_model returns current-gen models
+
+    #[test]
+    fn fast_model_anthropic_returns_haiku_4_5() {
+        let result = super::fast_model_for_main_model("anthropic/claude-sonnet-4-20250514");
+        assert_eq!(result, "anthropic/claude-haiku-4-5");
+    }
+
+    #[test]
+    fn fast_model_openai_returns_o4_mini() {
+        let result = super::fast_model_for_main_model("openai/gpt-4.1");
+        assert_eq!(result, "openai/o4-mini");
+    }
+
+    #[test]
+    fn fast_model_gemini_returns_2_0_flash() {
+        let result = super::fast_model_for_main_model("gemini/gemini-2.5-pro");
+        assert_eq!(result, "gemini/gemini-2.0-flash");
+    }
+
+    #[test]
+    fn fast_model_unknown_provider_echoes_input() {
+        let result = super::fast_model_for_main_model("ollama/llama3");
+        assert_eq!(result, "ollama/llama3");
+    }
 }

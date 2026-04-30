@@ -785,3 +785,49 @@ fn resolve_config_edit_protection() {
         .is_ask()
     );
 }
+
+// -- Bug 1: subagent permission inheritance (default asks, bypass allows)
+//
+// This proves the pre-fix behavior was broken: PermissionManager::default()
+// returns Verdict::Ask for write_file, which headless mode treats as Deny.
+// The fix uses PermissionManager::new(parent.mode()) instead.
+
+#[test]
+fn default_mode_asks_for_write_file() {
+    let mgr = PermissionManager::default();
+    let args = json!({"path": "foo.rs", "content": "bar"});
+    assert!(
+        mgr.resolve("write_file", &args, false).is_ask(),
+        "default mode should Ask for write_file (headless would deny)"
+    );
+}
+
+#[test]
+fn bypass_mode_allows_write_file() {
+    let mgr = PermissionManager::new(PermissionMode::BypassPermissions);
+    let args = json!({"path": "foo.rs", "content": "bar"});
+    assert!(
+        mgr.resolve("write_file", &args, false).is_allow(),
+        "bypassPermissions mode should Allow write_file"
+    );
+}
+
+#[test]
+fn accept_edits_mode_allows_write_file() {
+    let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
+    let args = json!({"path": "foo.rs", "content": "bar"});
+    assert!(
+        mgr.resolve("write_file", &args, false).is_allow(),
+        "acceptEdits mode should Allow write_file"
+    );
+}
+
+#[test]
+fn accept_edits_mode_asks_for_bash() {
+    let mgr = PermissionManager::new(PermissionMode::AcceptEdits);
+    let args = json!({"command": "rm -rf /tmp/foo"});
+    assert!(
+        mgr.resolve("bash", &args, false).is_ask(),
+        "acceptEdits mode should Ask for bash (only file edits are auto-approved)"
+    );
+}

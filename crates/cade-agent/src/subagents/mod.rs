@@ -449,4 +449,29 @@ mod tests {
         let got = resolve_subagent_def("worker", &defs);
         assert_eq!(got.map(|d| d.name.as_str()), Some("worker"));
     }
+
+    // -- Bug 2+3: system prompt inherited from resolved definition
+
+    #[test]
+    fn resolved_def_carries_system_prompt() {
+        let defs = vec![def("worker"), def("bug-hunter")];
+        let got = resolve_subagent_def("bug-hunter", &defs).unwrap();
+        assert_eq!(got.system_prompt, "prompt-bug-hunter");
+    }
+
+    #[test]
+    fn worker_fallback_carries_worker_system_prompt() {
+        let defs = vec![def("worker")];
+        let got = resolve_subagent_def("build", &defs).unwrap();
+        assert_eq!(got.system_prompt, "prompt-worker");
+    }
+
+    #[test]
+    fn custom_def_model_available_for_override() {
+        let mut custom = def("custom-agent");
+        custom.model = Some("anthropic/claude-haiku-4-5".to_string());
+        let defs = vec![def("worker"), custom];
+        let got = resolve_subagent_def("custom-agent", &defs).unwrap();
+        assert_eq!(got.model.as_deref(), Some("anthropic/claude-haiku-4-5"));
+    }
 }

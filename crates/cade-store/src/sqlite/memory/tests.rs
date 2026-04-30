@@ -133,6 +133,26 @@ fn test_get_active_blocks() -> Result<()> {
     Ok(())
 }
 
+/// Bug 5: get_active_blocks must exclude long-tier blocks so that subagent
+/// memory seeding only inherits pinned + short (active context), not stale
+/// archived blocks that would waste the subagent's context window.
+#[test]
+fn get_active_blocks_excludes_long_tier() -> Result<()> {
+    let db = setup_mem_db()?;
+    make_agent(&db, "a1")?;
+
+    upsert_memory_block(&db, "a1", "project", "rust project", None, None)?;
+    upsert_memory_block(&db, "a1", "archived_stuff", "old data", None, None)?;
+
+    // Demote one block to long tier
+    set_memory_tier(&db, "a1", "archived_stuff", "long", false)?;
+
+    let active = get_active_blocks(&db, "a1")?;
+    assert_eq!(active.len(), 1, "only pinned+short blocks should be returned");
+    assert_eq!(active[0].0, "project");
+    Ok(())
+}
+
 #[test]
 fn test_get_long_term_excerpts() -> Result<()> {
     let db = setup_mem_db()?;

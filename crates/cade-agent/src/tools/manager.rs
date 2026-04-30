@@ -479,4 +479,41 @@ mod tests {
             }
         }
     }
+
+    // -- Bug 7: dispatch does NOT handle interactive-only tools
+    // This proves the old headless fallback was broken — `dispatch()` returns
+    // "Unknown tool" for run_subagent because it's not in `run_native_tool`.
+    // The headless code now intercepts these BEFORE calling dispatch.
+
+    #[tokio::test]
+    async fn dispatch_returns_unknown_for_run_subagent() {
+        let mcp = crate::mcp::McpManager::empty();
+        let result = dispatch(
+            "tc_1".into(),
+            "run_subagent",
+            &serde_json::json!({"prompt": "test"}),
+            &mcp,
+        )
+        .await;
+        assert!(result.is_error, "run_subagent should error in dispatch");
+        assert!(
+            result.output.contains("Unknown tool"),
+            "expected 'Unknown tool', got: {}",
+            result.output
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_returns_unknown_for_ask_user_question() {
+        let mcp = crate::mcp::McpManager::empty();
+        let result = dispatch(
+            "tc_2".into(),
+            "ask_user_question",
+            &serde_json::json!({}),
+            &mcp,
+        )
+        .await;
+        assert!(result.is_error);
+        assert!(result.output.contains("Unknown tool"));
+    }
 }

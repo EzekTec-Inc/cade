@@ -453,3 +453,77 @@ fn parse_hunk_start(hdr: &str) -> Option<usize> {
 }
 
 // endregion: --- Support
+
+// region:    --- Tests
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    /// Build a ToolRuntime with a fake client (no actual HTTP).
+    fn build_test_runtime() -> ToolRuntime {
+        let client = Arc::new(
+            crate::agent::HttpTransport::new(
+                "http://localhost:0".to_string(),
+                "fake-key".to_string(),
+            ).unwrap(),
+        );
+        let mcp = Arc::new(crate::mcp::McpManager::empty());
+        ToolRuntime::new(client, mcp, "test-agent".to_string(), PathBuf::from("/tmp"))
+    }
+
+    // -- Bug 7: ToolRuntime returns None for interactive-only tools
+
+    #[tokio::test]
+    async fn runtime_returns_none_for_run_subagent() {
+        let rt = build_test_runtime();
+        let result = rt
+            .execute(
+                "tc_1".into(),
+                "run_subagent",
+                &serde_json::json!({"prompt": "hello"}),
+            )
+            .await;
+        assert!(result.is_none(), "run_subagent must not be handled by ToolRuntime");
+    }
+
+    #[tokio::test]
+    async fn runtime_returns_none_for_ask_user_question() {
+        let rt = build_test_runtime();
+        let result = rt
+            .execute(
+                "tc_2".into(),
+                "ask_user_question",
+                &serde_json::json!({}),
+            )
+            .await;
+        assert!(result.is_none(), "ask_user_question must not be handled by ToolRuntime");
+    }
+
+    #[tokio::test]
+    async fn runtime_returns_none_for_enter_plan_mode() {
+        let rt = build_test_runtime();
+        let result = rt
+            .execute("tc_3".into(), "EnterPlanMode", &serde_json::json!({}))
+            .await;
+        assert!(result.is_none());
+    }
+
+    // Verify that a known tool DOES return Some
+
+    #[tokio::test]
+    async fn runtime_returns_some_for_read_file() {
+        let rt = build_test_runtime();
+        let result = rt
+            .execute(
+                "tc_4".into(),
+                "read_file",
+                &serde_json::json!({"path": "/dev/null"}),
+            )
+            .await;
+        assert!(result.is_some(), "read_file must be handled by ToolRuntime");
+    }
+}
+
+// endregion: --- Tests
