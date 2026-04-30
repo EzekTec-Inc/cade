@@ -46,6 +46,13 @@ pub(crate) const LONG_BUDGET_MIN: usize = 5_000;
 /// Turns of inactivity before a short-term block is promoted to long-term.
 pub(crate) const STALE_THRESHOLD: i64 = 80;
 
+/// Fraction of the message budget at which `build_context` proactively
+/// signals the Sleeptime consolidation task.  Lowered from 80% → 70% as
+/// F4 of the 2026-04-30 memory-system refactor: consolidation costs an
+/// LLM call and runs on a 20 s timer, so we need a wider runway between
+/// "summary requested" and "next request actually overflows".
+pub(crate) const PROACTIVE_CONSOLIDATION_THRESHOLD: f64 = 0.70;
+
 /// Dynamic memory budgets scaled to the model's context window.
 ///
 /// On small models (32k) the budgets equal the minimums.  On large models

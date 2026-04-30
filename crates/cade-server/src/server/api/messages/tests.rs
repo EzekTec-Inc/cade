@@ -401,6 +401,17 @@ fn constants_are_sane() {
     );
     assert!(MIN_CONTEXT_CHARS < MAX_CONTEXT_CHARS);
     assert!(OUTPUT_RESERVE_FRACTION > 0.0 && OUTPUT_RESERVE_FRACTION < 0.5);
+
+    // F4: proactive consolidation threshold must give the Sleeptime task a
+    // real runway between "summary requested" and "context overflows".  The
+    // accepted band is 50–75% — below 50% we'd consolidate too aggressively
+    // and burn LLM calls; above 75% we lose the safety margin we set out to
+    // create when we lowered from 80%.
+    assert!(
+        (0.50..=0.75).contains(&PROACTIVE_CONSOLIDATION_THRESHOLD),
+        "PROACTIVE_CONSOLIDATION_THRESHOLD outside sane band: {}",
+        PROACTIVE_CONSOLIDATION_THRESHOLD
+    );
 }
 
 // ── End-to-end integration logic for P4-C ────────────────────────────────

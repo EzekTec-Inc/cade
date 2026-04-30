@@ -706,10 +706,11 @@ pub(crate) async fn build_context(
         );
     }
     // ── Proactive overflow signal ──────────────────────────────────────────
-    // Trigger consolidation early when context usage ≥ 80%, even if no turns
-    // were dropped yet.  This gives the Sleeptime task time to produce a
-    // summary before the next request actually overflows.
-    const PROACTIVE_CONSOLIDATION_THRESHOLD: f64 = 0.80;
+    // Trigger consolidation early when context usage crosses
+    // PROACTIVE_CONSOLIDATION_THRESHOLD (70% as of F4, 2026-04-30), even if
+    // no turns were dropped yet.  This gives the Sleeptime task a wider
+    // runway to produce a `session_summary` block before the next request
+    // actually overflows.
     let usage_fraction = if message_budget > 0 {
         budget_used as f64 / message_budget as f64
     } else {
@@ -719,7 +720,7 @@ pub(crate) async fn build_context(
 
     // P5-B: Trigger consolidation if there are too many turns since the last compaction marker.
     // This handles the case where the context budget is large enough to fit many turns, but
-    // the growing history causes token bloat even before hitting 80% usage.
+    // the growing history causes token bloat even before hitting the usage threshold.
     const PROACTIVE_MAX_TURNS: usize = 20;
     let needs_proactive_length = turns_len >= PROACTIVE_MAX_TURNS;
 
