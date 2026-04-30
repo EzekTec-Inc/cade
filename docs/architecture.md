@@ -15,7 +15,7 @@ crates/
 ├── cade-core/                   # shared types — leaf, no workspace deps
 ├── cade-ai/                     # LLM providers + model catalogue — leaf
 ├── cade-desktop/                # OS extensions (capture, control, notify) — leaf
-├── cade-store/                  # SQLite + AES-GCM crypto       (→ core, ai)
+├── cade-store/                  # SQLite + AES-GCM crypto + embeddings (→ core, ai)
 ├── cade-server/                 # HTTP API + consolidation       (→ core, ai, store)
 ├── cade-agent/                  # client + tools + MCP + subagents (→ core, desktop)
 ├── cade-cli/                    # CLI + REPL + headless mode     (→ core, agent, ai)
@@ -25,6 +25,7 @@ crates/
 ├── cade-plugin/                 # plugin loading
 ├── cade-sdk/                    # Rust SDK for programmatic control
 ├── cade-ide-mcp/                # IDE bridge (Neovim, VS Code, JetBrains)
+├── cade-askpass/                # SSH/GPG password prompt (IPC, token auth)
 └── cade-gui/                    # WASM dashboard (eframe/egui)
 
 extensions/
@@ -94,6 +95,8 @@ same REST API.
 - `artifacts` (logs, diffs, fetched docs)
 - `providers` (encrypted API keys via AES-GCM)
 - `runs` (background mode)
+- `observations` (tool call capture with importance scoring)
+- `vec_memory_blocks`, `vec_archival_memory`, `vec_messages` — `sqlite-vec` virtual tables for embedding-based semantic search (Migration 8, requires `--features semantic-search`)
 
 The DB key lives at `~/.cade/db.key` (also re-derivable from
 `CADE_DB_KEY` or `CADE_MACHINE_SECRET`). Path protection in

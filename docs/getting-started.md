@@ -4,7 +4,7 @@ Up and running in five minutes.
 
 ## 1. Prerequisites
 
-- Rust toolchain (1.78+ recommended) — `rustup` from <https://rustup.rs>
+- Rust toolchain (1.85+ required — Edition 2024) — `rustup` from <https://rustup.rs>
 - An LLM API key (one of):
   - Anthropic — `ANTHROPIC_API_KEY=sk-ant-...`
   - OpenAI — `OPENAI_API_KEY=sk-...`
@@ -25,6 +25,16 @@ cargo build --release
 
 The release binary is `target/release/cade` (CLI) and `target/release/cade-server`
 (HTTP server).
+
+### Optional: Semantic Memory Search
+
+To enable local embedding-based memory search (hybrid keyword + cosine similarity):
+
+```bash
+cargo build --release --features semantic-search
+```
+
+This adds ~50MB to the binary (bundles an ONNX model for AllMiniLML6V2 embeddings). The model downloads automatically on first use. Without this flag, memory search uses keyword matching only — still fully functional.
 
 ## 3. First session
 

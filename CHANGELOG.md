@@ -7,15 +7,83 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); version
 
 ## [Unreleased]
 
+### Added
+
+#### Semantic Memory Search
+- Hybrid memory search combining keyword (LIKE), fuzzy word-match, and cosine similarity via `fastembed` + `sqlite-vec`, merged with Reciprocal Rank Fusion (k=60)
+- Local text embeddings using AllMiniLML6V2 (384-dim, ~50MB ONNX model, downloaded on first use)
+- `sqlite-vec` virtual tables (`vec_memory_blocks`, `vec_archival_memory`, `vec_messages`) for vector similarity search
+- Feature-gated behind `--features semantic-search` to keep default binary lean
+- Embeddings auto-computed on memory block write
+- Migration 8: vec0 virtual tables with graceful fallback when extension unavailable
+
+#### Memory System Improvements (P1–P8)
+- **P1**: Observation capture — records tool calls with importance scoring (1–5 scale) and injects high-signal observations into agent context
+- **P3**: Event-driven consolidation priority — consolidation triggers based on context pressure, not just turn count
+- **P4**: Structured session handoff — `/new` builds a handoff summary so the next conversation inherits key state
+- **P5**: Consolidation fidelity tuning — improved summarization quality during auto-compaction
+- **P6**: Auto-type memory blocks on write — infers `memory_type` from content heuristics (decision, constraint, convention) for confidence boost
+- **P7**: Auto-update `active_goal` during consolidation — ensures task state survives context rotation
+- **P8**: Prune stale observations during consolidation — keeps observation trail compact
+
+#### TUI Refactoring (Phases 2–4)
+- **Phase 2**: `EditorComponent` trait — pluggable editor with `DefaultEditor` wrapper; `TuiApp.editor` is now `Box<dyn EditorComponent>`
+- **Phase 3**: Dynamic overlay stack — `Vec<Box<dyn OverlayComponent>>` replaces 4 legacy `Option<...>` fields (summary, command palette, theme picker, file picker); -333 lines
+- **Phase 4**: UI extension slots — `SlotManager` with `Header`, `Footer`, `Sidebar` regions; render + input fully wired
+
+#### Askpass Integration
+- `cade-askpass` crate: IPC server with token-based authentication for SSH/GPG password prompts
+- Protocol layer (`protocol.rs`) with `RequestMessage`/`ResponseMessage` envelopes
+- Tokio-based Unix domain socket server (`server.rs`)
+- TUI password modal wired into `BashTool` via `SSH_ASKPASS` environment variable
+- 23 tests (17 lib + 6 integration)
+
+#### TUI Rendering
+- Accurate Markdown rendering via pulldown-cmark AST parser with viewport-aware widths
+- Table rendering with proper column alignment and Unicode borders
+- Code block text wrapping for long lines
+- Image alt-text display in Markdown blocks
+- Content overflow prevention in viewport
+
+#### System Prompt
+- Dynamic tool filtering note — explains Intelligent Tool Selection to the agent
+- Search-first lookup guidance — prefer `semantic_search` (~50 tokens) over blind grep (~2000+ tokens)
+- `/memory pin` guidance — tells agent how to keep critical blocks permanently active
+- Capability-gated prompt fragments — strip guidance for disabled capabilities to save tokens
+
+#### Other
+- `SlotComponent` trait with `render()`, `handle_input()`, `preferred_height()` for plugin widgets
+- `OverlayComponent` trait with `OverlayInputResult` enum for modal dispatch
+- Shared memory blocks (Phase 1) — `shared_memory_blocks` + `agent_memory_blocks` tables
+- Mandatory planning in system prompt + `Ctrl+T` plan toggle in TUI
+
 ### Changed
-- Replaced the `esc to interrupt` prompt text with `Ctrl+c to interrupt` in the REPL's thinking animation loop (`agent_turn`) for better clarity.
-- Updated `Cargo.lock` and `Cargo.toml` dependencies via `cargo update` to address identified security vulnerabilities in `ring` (RUSTSEC-2025-0009) and `rustls-webpki` (RUSTSEC-2026-0099).
+- Replaced the `esc to interrupt` prompt text with `Ctrl+c to interrupt` in the REPL's thinking animation loop for better clarity
+- Updated `Cargo.lock` and `Cargo.toml` dependencies via `cargo update` to address security vulnerabilities in `ring` (RUSTSEC-2025-0009) and `rustls-webpki` (RUSTSEC-2026-0099)
+- MCP prefix stripping for edit tracking — `strip_mcp_prefix` + `is_file_edit_tool` ensures subagent file edits are recorded regardless of MCP server prefix
+- Meta-tools now route through intercept in subagent loop for consistent handling
+- Theme picker: fixed Enter key on empty filter, removed `q` as close key (conflicted with typing), live preview uses `builtin_by_name()` registry
+- Ctrl+T matches both Kitty-protocol and legacy VT forms
 
 ### Fixed
-- Fixed a dual-store file corruption bug where `SessionStore` and `SettingsManager` were overwriting each other's data in `.cade/settings.local.json`. The session store now uses a dedicated `.cade/session.json` file.
-- Fixed the `/agents` REPL command not updating the project's local session file.
-- Fixed `--agent` and `--name` CLI flags to properly persist the user's explicit selection.
-- Fixed missing cross-syncing between the global last agent and the local session agent during happy-path agent resolution.
+- **Deadlock in `search_memory()`**: `parking_lot::Mutex` held while fuzzy fallback tried to re-acquire same lock — scoped lock acquisition to release before fallback
+- **Blocking DB calls in async context**: Wrapped meta-handlers (`handle_search_memory_meta`, `handle_archival_memory_search_meta`, `handle_query_event_log_meta`) and HTTP endpoints with `tokio::task::spawn_blocking()` + 10s timeout
+- **Missing HTTP client timeouts**: Added `timeout(30s)` + `connect_timeout(10s)` to `HttpTransport` in cade-agent
+- Dual-store file corruption where `SessionStore` and `SettingsManager` overwrote each other in `.cade/settings.local.json` — session store now uses dedicated `.cade/session.json`
+- `/agents` REPL command not updating the project's local session file
+- `--agent` and `--name` CLI flags now properly persist the user's explicit selection
+- Missing cross-syncing between global last agent and local session agent during agent resolution
+- UTF-8 safe truncation in server message handling
+- Full DB persist for skill cache invalidation
+- Subagent file edit tracking for MCP-prefixed tool names
+- Table and content overflow in TUI viewport
+- `Send + Sync` bounds on `OverlayComponent` and `SlotComponent` traits
+- 12 Clippy lints across cade-server/cli/gui
+
+### Removed
+- Unused `unicode_width::UnicodeWidthStr` import from TUI
+- Stale `drift_check.rs` debug script
+- `TOOL_RESPONSE_RULE` duplication in system prompt
 
 ---
 

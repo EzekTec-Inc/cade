@@ -89,11 +89,14 @@ sqlite3 ~/.cade/cade.db "SELECT id, name, model FROM agents ORDER BY created_at 
 ## Testing
 
 ```bash
-# All workspace tests
+# All workspace tests (~1,434 tests)
 cargo test --workspace
 
 # Specific crate
 cargo test -p cade-cli
+
+# With semantic search embedding tests (~132 tests)
+cargo test -p cade-store --features semantic-search
 
 # With output
 cargo test --workspace -- --nocapture
@@ -102,7 +105,12 @@ cargo test --workspace -- --nocapture
 ## Release Build
 
 ```bash
+# Standard build
 cargo build --release
+
+# With semantic memory search (adds ~50MB for embedding model)
+cargo build --release --features semantic-search
+
 # Binaries: target/release/cade, target/release/cade-server
 ```
 
@@ -149,6 +157,7 @@ cargo build --no-default-features --features lean    # minimal core only
 Feature flags are defined in:
 - `Cargo.toml` (root) — `full`, `pro`, `lean`, `desktop`, `web`, `mcp`, `integration`
 - `crates/cade-agent/Cargo.toml` — `desktop`, `web`, `mcp`
+- `crates/cade-store/Cargo.toml` — `semantic-search` (fastembed + sqlite-vec embeddings)
 
 When adding a new optional dependency, place it behind a feature flag in the
 owning crate and wire it through the root Cargo.toml.

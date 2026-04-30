@@ -16,6 +16,8 @@ read or written. The system prompt then carries only its label and a short
 FTS snippet — the full body is fetched again the moment it's matched by
 `search_memory()` or referenced by name.
 
+> **Tip:** Use `/memory pin <label>` to make any block permanently active (immune to archival). Pinned blocks are always injected into the agent's prompt.
+
 ## Built-in blocks
 
 | Block | Pinned | Purpose |
@@ -99,3 +101,15 @@ retrieve them:
 
 When matched, archived blocks are **auto-promoted** back into active
 memory for the next prompt.
+
+### Semantic Search (optional)
+
+When built with `--features semantic-search`, `search_memory()` uses a **hybrid ranking** pipeline:
+
+1. **Phase 1 — Keyword (LIKE)**: Exact substring matching against block labels and values
+2. **Phase 2 — Fuzzy word-match**: Splits query into words, matches blocks containing any word ≥3 chars
+3. **Phase 3 — Cosine similarity**: Embeds the query via `fastembed` (AllMiniLML6V2, 384-dim) and searches `sqlite-vec` virtual tables for nearest neighbors
+
+Results from all three phases are merged via **Reciprocal Rank Fusion** (k=60), which boosts blocks that appear in multiple result sets.
+
+Embeddings are automatically computed and stored whenever a memory block is written via `update_memory`. The embedding model (~50MB) downloads on first use. Without this feature flag, Phases 1 and 2 still run — semantic search is purely additive.

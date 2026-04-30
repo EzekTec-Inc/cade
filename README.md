@@ -1,5 +1,7 @@
 # CADE
 
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%2FApache--2.0-blue.svg)](LICENSE-MIT)
+
 **Coding AI assistant with Desktop Extensions**
 
 A stateful, self-improving Rust CLI coding agent. CADE gives an AI agent full access to your local development environment — including your desktop — and ships its own server, so no external platform account is required.
@@ -40,6 +42,7 @@ A stateful, self-improving Rust CLI coding agent. CADE gives an AI agent full ac
 - **Dynamic Pricing Registry**: Real-time token cost estimation using an efficient, JSON-driven `ModelRegistry`.
 - **Heuristic Evaluator Layer**: A fast, dynamically configurable subagent layer that intercepts user input to evaluate intent, safety, and pathfinding *before* any tool executes, ensuring strict adherence to project constraints while conserving the main context window.
 - **Zero-Panic Safety**: Enforces the `rust10x` standard (no unhandled `unwrap()`/`expect()` in production code) and SQLite WAL mode for high integrity.
+- **Semantic Memory Search**: Hybrid search combining keyword matching, fuzzy word-match, and cosine similarity via local embeddings (`fastembed` + `sqlite-vec`), merged with Reciprocal Rank Fusion. Feature-gated behind `--features semantic-search`.
 
 ---
 
@@ -272,6 +275,8 @@ The agent has persistent memory blocks, updated via `update_memory`:
 | `session_summary` | Auto-generated summary of older conversation turns |
 
 Memory persists across sessions — the agent builds up context over time.
+
+> **Tip:** Use `/memory pin <label>` to make a block permanently active (immune to the 80-turn archival threshold). Use `search_memory(query)` to find and auto-promote archived blocks.
 
 ### Memory Aging & Consolidation
 
@@ -601,4 +606,10 @@ cargo build --release --no-default-features --features lean  # minimal core only
 
 ---
 
-Built by [EzekTec Inc.](https://github.com/EzekTec-Inc) · Apache-2.0 / MIT
+## License
+
+CADE is dual-licensed under [MIT](LICENSE-MIT) and [Apache-2.0](LICENSE-APACHE), at your option. See the respective license files for details.
+
+---
+
+Built by [EzekTec Inc.](https://github.com/EzekTec-Inc)

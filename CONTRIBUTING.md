@@ -6,7 +6,7 @@ Thank you for your interest in contributing to CADE!
 
 ### Prerequisites
 
-- **Rust** (stable, 1.75+): `rustup default stable`
+- **Rust** (stable, 1.85+): `rustup default stable`
 - **Supported platforms**: Linux (primary), macOS, Windows
 - **Linux desktop deps** (optional — only needed for `--features desktop`):
   ```bash
@@ -37,6 +37,9 @@ cargo build
 # Release build
 cargo build --release
 
+# Build with semantic search (local embeddings via fastembed + sqlite-vec)
+cargo build --release --features semantic-search
+
 # Run tests
 cargo test --workspace
 ```
@@ -53,14 +56,14 @@ ANTHROPIC_API_KEY=sk-ant-... ./target/debug/cade-server
 
 ## Project Structure
 
-CADE is a Cargo workspace with fourteen crates. See [ARCHITECTURE.md](ARCHITECTURE.md)
+CADE is a Cargo workspace with sixteen crates. See [ARCHITECTURE.md](ARCHITECTURE.md)
 for full details.
 
 ```
 cade-core       Shared types (permissions, settings, skills, hooks, toolsets)
 cade-ai         LLM providers and model catalogue
 cade-desktop    Desktop extensions (screen capture, window control) — cross-platform
-cade-store      SQLite persistence + AES-GCM crypto
+cade-store      SQLite persistence + AES-GCM crypto + embedding search
 cade-server     HTTP API server + consolidation pipeline
 cade-agent      REST client, tool implementations, MCP, subagents
 cade-cli        Terminal UI (Ratatui) + REPL + headless mode
@@ -70,6 +73,8 @@ cade-tui        Standalone TUI component library
 cade-plugin     Plugin loading and manifests
 cade-sdk        Rust SDK for programmatic agent control
 cade-ide-mcp    IDE MCP bridge (editor integrations)
+cade-askpass    SSH/GPG password prompt IPC server
+cade-gui        WASM dashboard (egui/eframe)
 ```
 
 ### Dependency Graph (acyclic)
@@ -80,6 +85,8 @@ cade-store   → cade-core, cade-ai
 cade-server  → cade-core, cade-ai, cade-store
 cade-agent   → cade-core, cade-desktop
 cade-cli     → cade-core, cade-agent, cade-ai
+cade-askpass → (standalone — IPC protocol only)
+cade-gui     → (standalone WASM — talks to server via HTTP)
 ```
 
 ### Which Files to Edit

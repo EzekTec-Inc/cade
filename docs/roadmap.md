@@ -84,7 +84,7 @@
 - [x] **P8** — `tool_executions.output_chars` column for per-call cost telemetry
 
 ### Quality
-- [x] Test coverage: 1,346 tests across the workspace
+- [x] Test coverage: 1,434+ tests across the workspace
 - [x] CI/CD pipeline: GitHub Actions (build, test, release)
 - [x] Plugin system: dynamic loading via shared libraries / WASM
 - [x] Multi-agent collaboration: named agents with message passing
@@ -98,15 +98,18 @@
 
 ---
 
-## In flight
+## Recently Completed
 
-| Area | Status |
-|---|---|
-| TUI Refactor — Phase 2 (pluggable `EditorComponent`) | ✅ Done — `EditorComponent` trait + `DefaultEditor` wrapper + TuiApp wired |
-| TUI Refactor — Phase 3 (dynamic overlay stack) | ✅ Done — 4 overlays migrated to Vec stack; ActiveQuestion + Password remain legacy |
-| TUI Refactor — Phase 4 (UI extension slots) | ✅ Done — SlotManager render + input fully wired |
-| Askpass implementation (`crates/cade-askpass`) | ✅ Done — IPC server, protocol, TUI modal, BashTool wiring, all shipped |
-| MCP prefix stripping for edit tracking | ✅ Done — `strip_mcp_prefix` + `is_file_edit_tool` + 3 tests |
+All near-term planned items have shipped. See `IMPLEMENTATION_PLAN.md` for detailed commit history.
+
+- TUI Refactor — Phase 2 (pluggable `EditorComponent`) — done
+- TUI Refactor — Phase 3 (dynamic overlay stack) — done
+- TUI Refactor — Phase 4 (UI extension slots) — done
+- Askpass implementation (`crates/cade-askpass`) — done
+- MCP prefix stripping for edit tracking — done
+- Memory system improvements (P1–P8) — done
+- System prompt optimization — done
+- Semantic memory search (fastembed + sqlite-vec) — done
 
 ---
 
