@@ -6,6 +6,7 @@ edition = "2024"
 [features]
 default         = ["bundled-sqlite"]
 bundled-sqlite  = ["rusqlite/bundled"]
+semantic-search = ["dep:fastembed", "dep:sqlite-vec", "dep:zerocopy"]
 
 [dependencies]
 cade-core = { path = "../cade-core" }
@@ -28,3 +29,8 @@ machine-uid = { workspace = true }
 getrandom = { workspace = true }
 derive_more = { workspace = true }
 dirs = { workspace = true }
+
+# Optional: semantic search embeddings
+fastembed = { workspace = true, optional = true }
+sqlite-vec = { workspace = true, optional = true }
+zerocopy = { workspace = true, optional = true }

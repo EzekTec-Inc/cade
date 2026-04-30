@@ -19,6 +19,9 @@ pub struct ProviderRow {
 pub type Db = Arc<Mutex<Connection>>;
 
 pub fn open(path: &str) -> Result<Db> {
+    // Register sqlite-vec extension (no-op if feature disabled or already done).
+    embedding::register_sqlite_vec();
+
     if let Some(parent) = std::path::Path::new(path).parent()
         && !parent.as_os_str().is_empty()
     {
@@ -513,6 +516,54 @@ fn run_migrations(conn: &Connection) -> Result<()> {
         conn.execute("PRAGMA user_version = 7", [])?;
     }
 
+    // ── Migration 8: Semantic search — vec0 virtual tables ───────────────────
+    if current_version < 8 {
+        #[cfg(feature = "semantic-search")]
+        {
+            // Ensure sqlite-vec is registered before creating vec0 tables.
+            // This is idempotent (Once guard inside).
+            embedding::register_sqlite_vec();
+
+            tracing::info!("Running Migration 8: Create vec0 virtual tables for semantic search");
+
+            // Memory block embeddings (384-dim float vectors)
+            let r1 = conn.execute_batch(&format!(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS vec_memory_blocks USING vec0(
+                    block_id TEXT PRIMARY KEY,
+                    embedding float[{dim}]
+                );",
+                dim = embedding::EMBEDDING_DIM,
+            ));
+
+            // Archival memory embeddings
+            let r2 = conn.execute_batch(&format!(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS vec_archival_memory USING vec0(
+                    entry_id TEXT PRIMARY KEY,
+                    embedding float[{dim}]
+                );",
+                dim = embedding::EMBEDDING_DIM,
+            ));
+
+            // Message embeddings (for conversation_search)
+            let r3 = conn.execute_batch(&format!(
+                "CREATE VIRTUAL TABLE IF NOT EXISTS vec_messages USING vec0(
+                    message_id TEXT PRIMARY KEY,
+                    embedding float[{dim}]
+                );",
+                dim = embedding::EMBEDDING_DIM,
+            ));
+
+            if let Err(e) = r1.and(r2).and(r3) {
+                tracing::warn!("Migration 8: vec0 table creation failed (sqlite-vec may not be available): {e}");
+            }
+        }
+        #[cfg(not(feature = "semantic-search"))]
+        {
+            tracing::debug!("Migration 8 skipped: semantic-search feature not enabled");
+        }
+        conn.execute("PRAGMA user_version = 8", [])?;
+    }
+
     Ok(())
 }
 
@@ -548,6 +599,7 @@ pub struct AgentRow {
 
 pub mod agents;
 pub mod conversations;
+pub mod embedding;
 pub mod evidence;
 pub mod memory;
 pub mod messages;
