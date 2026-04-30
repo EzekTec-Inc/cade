@@ -320,6 +320,76 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
         return;
     }
 
+    // ── 3b. F2: Cache full dropped turns into archival memory ────────────────
+    //
+    // BEFORE the LLM lossy summarisation, write the *full untruncated* text
+    // of every dropped turn to archival memory.  This makes the original
+    // dialogue recoverable via `archival_memory_search` even after the
+    // session_summary entry is overwritten or rotated.  Without this cache,
+    // the only post-compaction trace of the raw turns was the truncated
+    // preview baked into `history_text` — which is fed to the LLM and then
+    // discarded.
+    //
+    // We build the archival payload from the *flat* role+text pairs (full
+    // length, no per-role caps), but still cap the total at
+    // MAX_ARCHIVAL_PAYLOAD_CHARS so a single compaction event cannot blow up
+    // the archival store.
+    {
+        const MAX_ARCHIVAL_PAYLOAD_CHARS: usize = 64_000;
+        let dropped_msg_count: usize = turns[..dropped].iter().map(|t| t.len()).sum();
+        let mut payload = String::with_capacity(8_192);
+        payload.push_str(&format!(
+            "Dropped turns from agent {agent_id} (consolidation pass).\n\
+             Source: pre-compaction conversation history.\n\
+             Turn count: {dropped} | Message count: {dropped_msg_count}\n\
+             ---\n\n"
+        ));
+        let mut truncated = false;
+        'outer: for turn in &turns[..dropped] {
+            for (role, text) in turn {
+                let trimmed = text.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                let entry = format!("[{role}] {trimmed}\n\n");
+                if payload.chars().count() + entry.chars().count()
+                    > MAX_ARCHIVAL_PAYLOAD_CHARS
+                {
+                    payload.push_str("\n[…remaining dropped turns truncated for archival cap…]");
+                    truncated = true;
+                    break 'outer;
+                }
+                payload.push_str(&entry);
+            }
+        }
+
+        let mut tags = vec![
+            "consolidation".to_string(),
+            "dropped-turns".to_string(),
+            format!("agent:{agent_id}"),
+        ];
+        if let Some(cid) = conversation_id {
+            tags.push(format!("conversation:{cid}"));
+        }
+        if truncated {
+            tags.push("truncated".to_string());
+        }
+        match sqlite::insert_archival_memory(&state.db, agent_id, payload.trim_end(), &tags) {
+            Ok(id) => tracing::debug!(
+                "consolidate [{}]: cached {} dropped turn(s) ({} chars) to archival id={}",
+                agent_id,
+                dropped,
+                payload.chars().count(),
+                id,
+            ),
+            Err(e) => tracing::warn!(
+                "consolidate [{}]: failed to cache dropped turns to archival: {}",
+                agent_id,
+                e,
+            ),
+        }
+    }
+
     // ── 4. Call the LLM to produce a consolidation summary ───────────────────
     let prompt = format!(
         "You are a memory consolidation sub-agent for a stateful coding assistant.\n\
@@ -1675,6 +1745,119 @@ mod tests {
         assert_eq!(
             tier, "pinned",
             "session_summary must be pinned so next build_context always injects it"
+        );
+    }
+
+    // ── F2: cache full dropped turns to archival before compaction ──────────
+
+    /// F2: when consolidate_agent runs, the full text of dropped turns must
+    /// be written to archival memory BEFORE the LLM summarisation lossy
+    /// step.  This guarantees the raw dialogue is recoverable later via
+    /// `archival_memory_search` even after `session_summary` is rotated or
+    /// overwritten.
+    #[tokio::test]
+    async fn f2_consolidation_caches_dropped_turns_to_archival() {
+        let db = setup_db();
+        let agent_id = "a1";
+
+        // Seed enough turns to force a non-trivial number of dropped turns.
+        // The user/assistant bodies contain unique tokens we can search for
+        // afterwards to confirm the raw dialogue made it into archival.
+        seed_turns(&db, agent_id, 40, 2_000);
+
+        // Sanity: archival is empty before the consolidation pass.
+        let pre_hits =
+            store_sqlite::search_archival_memory(&db, agent_id, "compute_5", 10).unwrap();
+        assert!(
+            pre_hits.is_empty(),
+            "archival must be empty before consolidate_agent runs; got {} hits",
+            pre_hits.len()
+        );
+
+        let llm = Arc::new(MockSummaryLlm::new("F2 mock summary"));
+        let llm_trait: Arc<dyn LlmProvider> = llm.clone();
+        let state = mk_state(db.clone(), llm_trait);
+
+        consolidate_agent(&state, agent_id, None).await;
+
+        // The raw seed text included `compute_<n>` tokens for each turn —
+        // every dropped turn's user message contains one. Searching archival
+        // for that token must hit the cached payload.
+        let hits = store_sqlite::search_archival_memory(&db, agent_id, "compute_5", 10).unwrap();
+        assert!(
+            !hits.is_empty(),
+            "F2: archival must contain the dropped turns after consolidation"
+        );
+
+        // The cache row carries the F2 tags so it can be filtered later.
+        let combined_tags: Vec<String> =
+            hits.iter().flat_map(|r| r.tags.clone()).collect();
+        assert!(
+            combined_tags.iter().any(|t| t == "consolidation"),
+            "F2 archival entry must be tagged 'consolidation', got {combined_tags:?}"
+        );
+        assert!(
+            combined_tags.iter().any(|t| t == "dropped-turns"),
+            "F2 archival entry must be tagged 'dropped-turns', got {combined_tags:?}"
+        );
+        assert!(
+            combined_tags.iter().any(|t| t == &format!("agent:{agent_id}")),
+            "F2 archival entry must be tagged with agent id, got {combined_tags:?}"
+        );
+    }
+
+    /// F2: when the LLM call later fails, the archival cache must already be
+    /// in place — the raw turns are preserved even though no session_summary
+    /// was written.
+    #[tokio::test]
+    async fn f2_archival_cache_survives_llm_failure() {
+        // Re-use the round-trip seed setup, but swap the LLM for one that
+        // always errors.  consolidate_agent should still write to archival
+        // BEFORE attempting the LLM call.
+        struct FailingLlm;
+        #[async_trait::async_trait]
+        impl LlmProvider for FailingLlm {
+            async fn complete(
+                &self,
+                _req: &cade_ai::CompletionRequest,
+            ) -> cade_ai::Result<cade_ai::CompletionResponse> {
+                Err(cade_ai::Error::custom("forced LLM failure for F2 test"))
+            }
+            async fn stream(
+                &self,
+                _req: &cade_ai::CompletionRequest,
+            ) -> cade_ai::Result<
+                std::pin::Pin<
+                    Box<dyn tokio_stream::Stream<Item = cade_ai::Result<cade_ai::StreamChunk>> + Send>,
+                >,
+            > {
+                Err(cade_ai::Error::custom("forced LLM stream failure for F2 test"))
+            }
+        }
+
+        let db = setup_db();
+        let agent_id = "a1";
+        seed_turns(&db, agent_id, 40, 2_000);
+
+        let llm: Arc<dyn LlmProvider> = Arc::new(FailingLlm);
+        let state = mk_state(db.clone(), llm);
+
+        consolidate_agent(&state, agent_id, None).await;
+
+        // No session_summary was written (LLM failed) — but the archival cache
+        // must still hold the raw dropped turns.
+        let hits = store_sqlite::search_archival_memory(&db, agent_id, "compute_3", 10).unwrap();
+        assert!(
+            !hits.is_empty(),
+            "F2: archival cache must persist even when the LLM call fails"
+        );
+
+        let blocks = store_sqlite::get_memory_blocks(&db, agent_id).unwrap();
+        let summary_block = blocks.iter().find(|(l, _, _)| l == "session_summary");
+        assert!(
+            summary_block.is_none(),
+            "session_summary should NOT exist when the LLM failed; got: {:?}",
+            summary_block
         );
     }
 
