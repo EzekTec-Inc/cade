@@ -12,7 +12,7 @@ pub fn render_agents_overlay(
     theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
-    let screen = ctx.content_rect();
+
     let rect = crate::responsive::overlay_rect(ctx, 480.0, 400.0, None);
     let w = rect.width();
     let h = rect.height();

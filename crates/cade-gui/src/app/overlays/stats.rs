@@ -12,7 +12,7 @@ pub fn render_stats_overlay(
     theme: &crate::theme::ThemeColors,
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
-    let screen = ctx.content_rect();
+
     let rect = crate::responsive::overlay_rect(ctx, 380.0, 240.0, None);
     let w = rect.width();
     let h = rect.height();

@@ -34,6 +34,7 @@ pub fn render(
             ui.advance_cursor_after_rect(sep_rect);
 
             // ── Input row ─────────────────────────────
+            let total_avail_w = ui.available_width();
             egui::Frame::new()
                 .fill(theme.bg_input())
                 .inner_margin(egui::Margin::symmetric(4, 3))
@@ -57,10 +58,10 @@ pub fn render(
                             .strong()
                             .size(11.0)
                             .background_color(badge_bg);
-                        ui.label(badge);
+                        let badge_resp = ui.label(badge);
 
                         // Prompt prefix "> "
-                        ui.label(
+                        let prefix_resp = ui.label(
                             egui::RichText::new("> ")
                                 .color(theme.text_dim())
                                 .monospace()
@@ -76,7 +77,11 @@ pub fn render(
                             "Type a message or paste code…"
                         };
 
-                        let desired_w = ui.available_width() - 40.0;
+                        // Calculate available width by subtracting the badge, prefix, spacing, and send button
+                        let used_w = badge_resp.rect.width() + prefix_resp.rect.width() + ui.spacing().item_spacing.x * 3.0;
+                        let btn_w = 24.0;
+                        let desired_w = (total_avail_w - used_w - btn_w - 16.0).max(100.0);
+
                         let resp = ui.add_enabled(
                             can_edit,
                             egui::TextEdit::multiline(&mut input_edit)
@@ -133,7 +138,7 @@ pub fn render(
 
                             if ui
                                 .add_enabled(send_enabled, send_btn)
-                                .on_hover_text("Send (Enter)")
+                                .on_hover_text("Send (Enter)\nNewline (Shift+Enter)")
                                 .clicked()
                                 || (enter_pressed && send_enabled)
                             {

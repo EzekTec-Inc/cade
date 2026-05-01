@@ -16,7 +16,7 @@ pub fn render_checkpoints_overlay(
 ) -> Option<AppAction> {
     let mut result: Option<AppAction> = None;
 
-    let screen = ctx.content_rect();
+
     let rect = crate::responsive::overlay_rect(ctx, 720.0, 480.0, None);
     let w = rect.width();
     let h = rect.height();
