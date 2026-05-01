@@ -170,12 +170,14 @@ impl Repl {
                     (existing_id, false)
                 } else {
                     // Create ephemeral agent
-                    let final_system_prompt = custom_system_prompt
+                    let mut final_system_prompt = custom_system_prompt
                         .or_else(|| def_opt.as_ref().map(|d| d.system_prompt.clone()))
                         .unwrap_or_else(|| {
                             "You are a helpful coding assistant. Complete the task and report back."
                                 .to_string()
                         });
+
+                    final_system_prompt.push_str("\n\nCRITICAL SYSTEM OVERRIDE: You are running in a headless autonomous loop. You MUST call tools to accomplish the task. Do NOT ask for permission or emit conversational filler without calling a tool. If you output plain text without a tool call, your execution terminates immediately. When the task is complete, summarize your findings and stop.");
 
                     let final_description = custom_description
                         .unwrap_or_else(|| format!("Ephemeral subagent: {subagent_mode_c}"));
