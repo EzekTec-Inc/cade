@@ -12,11 +12,9 @@ pub(crate) fn question_height(aq: &ActiveQuestionDrawState, content_height: u16)
     // Here we return the total including the separator row.
     let mut rows: u16 = 0;
 
-    // header chip + blank
-    rows += 2;
-    // question text (treat as 1 row; long questions word-wrap but we keep it simple)
+    // header chip (no blank)
     rows += 1;
-    // blank after question
+    // question text (treat as 1 row; long questions word-wrap but we keep it simple)
     rows += 1;
 
     // progress indicator
@@ -85,14 +83,12 @@ pub(crate) fn render_question_inline(
                 .add_modifier(Modifier::BOLD),
         ),
     ]));
-    lines.push(Line::from(""));
 
     // Question text
     lines.push(Line::from(Span::styled(
         q.text.clone(),
         colors.text_primary(),
     )));
-    lines.push(Line::from(""));
 
     // Progress indicator
     if let Some((cur, tot)) = q.progress {
