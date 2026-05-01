@@ -1,5 +1,4 @@
 use crate::colors::{ThemeColorsExt, ColorDefExt, BorderStyleExt};
-use crate::app::layout::question::{question_height, render_question_inline};
 use crate::app::layout::breadcrumb::render_breadcrumb;
 use crate::app::layout::helpers::{mode_sep_color, mode_footer_left, truncate_str, format_token_count};
 
@@ -34,7 +33,7 @@ use crate::editor::InputMode;
 use cade_core::permissions::PermissionMode;
 
 use super::{
-    ActiveQuestionDrawState, PlanState, RenderLine,
+    PlanState, RenderLine,
     Toast,
     BRAILLE, DOTS, FIXED_ROWS,
     MAX_INPUT_ROWS, SIDEBAR_BREAKPOINT, SIDEBAR_WIDTH,
@@ -121,7 +120,7 @@ pub(crate) fn render_frame(
     last_status: &Option<String>,
     thinking_text: Option<&str>,
     thinking_elapsed: Option<std::time::Duration>,
-    active_question: Option<&ActiveQuestionDrawState>,
+    overlay_inline_height: u16,
     pending_lines: usize,
     queued_count: usize,
     cwd: &str,
@@ -159,12 +158,8 @@ pub(crate) fn render_frame(
     let mut input_rows =
         calc_input_rows(&input, available_w, input_prefix_w).clamp(1, MAX_INPUT_ROWS);
 
-    let inline_h = active_question
-        .map(|aq| question_height(aq, main_area.height))
-        .unwrap_or(0);
-
-    if inline_h > 0 {
-        input_rows = inline_h;
+    if overlay_inline_height > 0 {
+        input_rows = overlay_inline_height;
     }
 
     // A-02: footer_extra adds one row below the normal footer when present.
@@ -409,9 +404,7 @@ pub(crate) fn render_frame(
 
     let mut input_cursor_pos: Option<(u16, u16)> = None;
     // -- Input area or Question Panel
-    if let Some(aq) = active_question {
-        render_question_inline(frame, aq, chunks[5], chunks[5], colors);
-    } else {
+    if overlay_inline_height == 0 {
         let (badge_text, badge_color) = input_mode_badge(input_mode, colors);
         let prefix_w = badge_text.chars().count() as u16 + 3;
         

@@ -630,8 +630,13 @@ impl OverlayComponent for ActiveQuestionState {
     fn render_overlay(&mut self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
         let h = crate::app::layout::question::question_height(&self.draw_state, area.height);
         let y = area.y + area.height.saturating_sub(h);
-        let rect = Rect::new(area.x, y, area.width, h);
-        crate::app::layout::question::render_question_inline(frame, &self.draw_state, rect, rect, colors);
+        // The render_question_inline expects two Rects: sep_area (separator row)
+        // and body_area (the main panel). By using the same rect for both,
+        // we likely trigger drawing artifacts (overwriting the separator with content).
+        // Let's explicitly separate them.
+        let sep_area = Rect::new(area.x, y, area.width, 1);
+        let body_area = Rect::new(area.x, y + 1, area.width, h.saturating_sub(1));
+        crate::app::layout::question::render_question_inline(frame, &self.draw_state, sep_area, body_area, colors);
     }
 
     fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> OverlayInputResult {
@@ -796,7 +801,6 @@ pub struct TuiApp {
     pub expand_all: bool,
     /// Per-item expansion overrides keyed by stable timeline identity.
     expanded_items: std::collections::HashSet<TimelineKey>,
-    pub active_question: Option<ActiveQuestionState>,
     pub active_plan: Option<PlanState>,
 
     // -- Streaming state
@@ -973,7 +977,6 @@ impl TuiApp {
             follow: true,
             expand_all: false,
             expanded_items: std::collections::HashSet::new(),
-            active_question: None,
             active_plan: None,
             streaming_text: String::new(),
             streaming_active: false,
@@ -1209,7 +1212,6 @@ impl TuiApp {
         let thinking_elapsed = self.thinking.as_ref().map(|ts| ts.started.elapsed());
         let expand_all = self.expand_all;
         let expanded_items = self.expanded_items.clone();
-        let active_question = self.active_question.as_ref().map(|s| s.draw_state.clone());
         let pending_lines = self.pending_lines;
         let queued_count = self.queued_count;
         let cwd = self.cwd.clone();
@@ -1265,7 +1267,7 @@ impl TuiApp {
                 &last_status,
                 thinking_text.as_deref(),
                 thinking_elapsed,
-                active_question.as_ref(),
+                overlay_stack.last().map(|o| o.inline_height(frame.area().height)).unwrap_or(0),
                 pending_lines,
                 queued_count,
                 &cwd,

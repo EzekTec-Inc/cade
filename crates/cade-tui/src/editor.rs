@@ -282,7 +282,8 @@ impl crate::editor_component::EditorComponent for Editor {
             }
             (KeyCode::Esc, _) => EditorAction::Cancel,
             _ => {
-                let modified = self.handle_key_event(key, 0);
+                let max_width = self.last_render_area.map(|a| a.width).unwrap_or(0);
+                let modified = self.handle_key_event(key, max_width);
                 if modified {
                     EditorAction::Consumed
                 } else {
