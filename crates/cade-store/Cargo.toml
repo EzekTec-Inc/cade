@@ -4,13 +4,9 @@ version = "0.2.0"
 edition = "2024"
 
 [features]
-default         = ["bundled-sqlite", "semantic-search"]
+default         = ["bundled-sqlite"]
 bundled-sqlite  = ["rusqlite/bundled"]
-# Enabled by default since 2026-04-30 (F3 in memory-system refactor): provides
-# cosine-similarity hybrid ranking in `search_memory()` via fastembed + sqlite-vec.
-# To opt out (smaller binary, no ONNX runtime), build with `--no-default-features
-# --features bundled-sqlite`.
-semantic-search = ["dep:fastembed", "dep:sqlite-vec", "dep:zerocopy"]
+# Removed semantic-search (fastembed/sqlite-vec) to eliminate C++/ONNX build overhead.
 
 [dependencies]
 cade-core = { path = "../cade-core" }
@@ -34,7 +30,3 @@ getrandom = { workspace = true }
 derive_more = { workspace = true }
 dirs = { workspace = true }
 
-# Optional: semantic search embeddings
-fastembed = { workspace = true, optional = true }
-sqlite-vec = { workspace = true, optional = true }
-zerocopy = { workspace = true, optional = true }

@@ -283,49 +283,8 @@ pub fn search_memory(
         }
     }
 
-    // Phase 3: Semantic search (when feature is enabled).
+    // Phase 3: Semantic search (removed).
     // Merge semantic results with keyword results using Reciprocal Rank Fusion.
-    #[cfg(feature = "semantic-search")]
-    if super::embedding::is_available()
-        && let Ok(query_embedding) = super::embedding::embed_text(query)
-    {
-            let conn = db.lock();
-            if let Ok(semantic_hits) = super::embedding::search_memory_blocks_semantic(
-                &conn, agent_id, &query_embedding, 10,
-            ) && !semantic_hits.is_empty() {
-                    // Build label-keyed maps for both result sets
-                    let keyword_labels: Vec<String> =
-                        results.iter().map(|(l, _, _)| l.clone()).collect();
-                    let semantic_labels: Vec<String> =
-                        semantic_hits.iter().map(|(_, l, _, _)| l.clone()).collect();
-
-                    // Merge ordering via RRF
-                    let fused_order =
-                        super::embedding::reciprocal_rank_fusion(&keyword_labels, &semantic_labels, 60.0);
-
-                    // Build a combined map of all results (keyword + semantic)
-                    let mut combined: std::collections::HashMap<String, (String, String, String)> =
-                        std::collections::HashMap::new();
-                    for (label, value, snippet) in &results {
-                        combined.entry(label.clone()).or_insert_with(|| {
-                            (label.clone(), value.clone(), snippet.clone())
-                        });
-                    }
-                    for (_id, label, value, _dist) in &semantic_hits {
-                        combined.entry(label.clone()).or_insert_with(|| {
-                            let snippet = value.chars().take(200).collect::<String>();
-                            (label.clone(), value.clone(), snippet)
-                        });
-                    }
-
-                    // Reorder by fused ranking
-                    results = fused_order
-                        .into_iter()
-                        .filter_map(|label| combined.remove(&label))
-                        .take(10)
-                        .collect();
-            }
-    }
 
     // F7: activity-weighted aging — bump access counters for every label we
     // just returned to the agent.  This is an intentional read, so the
