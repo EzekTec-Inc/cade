@@ -402,7 +402,7 @@ impl TuiApp {
             }
 
             _ => {
-                self.editor.handle_input(k);
+                self.editor.handle_input(k, self.last_input_width);
                 if let KeyCode::Char('@') = k.code
                     && !self.overlays.iter().any(|o| o.id() == "file_picker")
                 {

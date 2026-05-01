@@ -59,7 +59,7 @@ pub trait EditorComponent: Send {
 
     /// Process a single key event.  See [`EditorAction`] for the
     /// possible outcomes.
-    fn handle_input(&mut self, key: KeyEvent) -> EditorAction;
+    fn handle_input(&mut self, key: KeyEvent, max_width: u16) -> EditorAction;
 
     /// Return the current buffer text as a single `String` with `\n`
     /// joining lines.
@@ -168,7 +168,7 @@ mod tests {
     fn editor_handle_input_inserts_char_via_trait() {
         let mut e = Editor::new();
         let key = KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE);
-        let action = EditorComponent::handle_input(&mut e, key);
+        let action = EditorComponent::handle_input(&mut e, key, 0);
         assert_eq!(action, EditorAction::Consumed);
         assert_eq!(EditorComponent::text(&e), "x");
     }
@@ -178,7 +178,7 @@ mod tests {
         let mut e = Editor::new();
         EditorComponent::set_text(&mut e, "ship it".into());
         let key = KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE);
-        let action = EditorComponent::handle_input(&mut e, key);
+        let action = EditorComponent::handle_input(&mut e, key, 0);
         assert_eq!(action, EditorAction::Submit("ship it".into()));
     }
 
@@ -187,7 +187,7 @@ mod tests {
         let mut e = Editor::new();
         EditorComponent::set_text(&mut e, "draft".into());
         let key = KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE);
-        let action = EditorComponent::handle_input(&mut e, key);
+        let action = EditorComponent::handle_input(&mut e, key, 0);
         assert_eq!(action, EditorAction::Cancel);
     }
 

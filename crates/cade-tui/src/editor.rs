@@ -270,6 +270,7 @@ impl crate::editor_component::EditorComponent for Editor {
     fn handle_input(
         &mut self,
         key: crossterm::event::KeyEvent,
+        max_width: u16,
     ) -> crate::editor_component::EditorAction {
         use crate::editor_component::EditorAction;
         use crossterm::event::{KeyCode, KeyModifiers};
@@ -282,7 +283,6 @@ impl crate::editor_component::EditorComponent for Editor {
             }
             (KeyCode::Esc, _) => EditorAction::Cancel,
             _ => {
-                let max_width = self.last_render_area.map(|a| a.width).unwrap_or(0);
                 let modified = self.handle_key_event(key, max_width);
                 if modified {
                     EditorAction::Consumed

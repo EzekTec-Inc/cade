@@ -344,7 +344,8 @@ impl Repl {
                                                         }
                                                     }
                                                     (KeyCode::Char(_), _) | (KeyCode::Backspace, _) | (KeyCode::Delete, _) | (KeyCode::Left, _) | (KeyCode::Right, _) | (KeyCode::Home, _) | (KeyCode::End, _) | (KeyCode::Up, _) | (KeyCode::Down, _) => {
-                                                        app.editor.handle_input(k);
+                                                        let w = app.last_input_width;
+                                                        app.editor.handle_input(k, w);
                                                         let _ = app.draw();
                                                     }
                                                     _ => {}
