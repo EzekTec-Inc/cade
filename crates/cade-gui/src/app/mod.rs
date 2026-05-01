@@ -295,7 +295,24 @@ impl eframe::App for CadeApp {
                     // Clone input buffer for the editable text field.
                     let input_edit = input_buffer.clone();
 
-                    // ── Map keyboard shortcuts to actions ─────────
+                    // ── Map keyboard shortcuts and gestures to actions ─────────
+                    let gesture = crate::gestures::detect_swipe(ui.ctx());
+                    let mut dismiss_gesture = false;
+                    if let Some(g) = gesture {
+                        match g {
+                            crate::gestures::Gesture::SwipeDown | crate::gestures::Gesture::SwipeRight => {
+                                dismiss_gesture = true;
+                            }
+                            crate::gestures::Gesture::SwipeLeft => {
+                                // If sidebar drawer is open, close it on swipe left
+                                if self.sidebar_drawer_open {
+                                    self.sidebar_drawer_open = false;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+
                     //
                     // When an overlay is open, keys are reinterpreted:
                     //   Palette open:
@@ -324,7 +341,9 @@ impl eframe::App for CadeApp {
                                 i.key_pressed(egui::Key::ArrowDown),
                             )
                         });
-                        if up {
+                        if dismiss_gesture {
+                            action = AppAction::ClosePalette;
+                        } else if up {
                             action = AppAction::MovePaletteSelection(-1);
                         } else if down {
                             action = AppAction::MovePaletteSelection(1);
@@ -346,7 +365,9 @@ impl eframe::App for CadeApp {
                                 i.key_pressed(egui::Key::ArrowDown),
                             )
                         });
-                        if up {
+                        if dismiss_gesture {
+                            action = AppAction::CloseMenu;
+                        } else if up {
                             action = AppAction::MoveMenuSelection(-1);
                         } else if down {
                             action = AppAction::MoveMenuSelection(1);
@@ -368,41 +389,59 @@ impl eframe::App for CadeApp {
                         let dirty_buf = memory_blocks
                             .get(memory_selection)
                             .is_some_and(|b| b.value != *memory_edit_buffer);
-                        if ctrl_s && dirty_buf && !memory_saving {
+                        if dismiss_gesture {
+                            action = AppAction::CloseMemoryOverlay;
+                        } else if ctrl_s && dirty_buf && !memory_saving {
                             action = AppAction::SaveMemoryBlock;
                         } else if let Some(ShortcutAction::DismissError) = shortcut {
                             action = AppAction::CloseMemoryOverlay;
                         }
                     } else if checkpoints_open {
-                        if let Some(ShortcutAction::DismissError) = shortcut {
+                        if dismiss_gesture {
+                            action = AppAction::CloseCheckpointsOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
                             action = AppAction::CloseCheckpointsOverlay;
                         }
                     } else if artifacts_open {
-                        if let Some(ShortcutAction::DismissError) = shortcut {
+                        if dismiss_gesture {
+                            action = AppAction::CloseArtifactsOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
                             action = AppAction::CloseArtifactsOverlay;
                         }
                     } else if tools_open {
-                        if let Some(ShortcutAction::DismissError) = shortcut {
+                        if dismiss_gesture {
+                            action = AppAction::CloseToolsOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
                             action = AppAction::CloseToolsOverlay;
                         }
                     } else if agents_open {
-                        if let Some(ShortcutAction::DismissError) = shortcut {
+                        if dismiss_gesture {
+                            action = AppAction::CloseAgentsOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
                             action = AppAction::CloseAgentsOverlay;
                         }
                     } else if context_open {
-                        if let Some(ShortcutAction::DismissError) = shortcut {
+                        if dismiss_gesture {
+                            action = AppAction::CloseContextOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
                             action = AppAction::CloseContextOverlay;
                         }
                     } else if stats_open {
-                        if let Some(ShortcutAction::DismissError) = shortcut {
+                        if dismiss_gesture {
+                            action = AppAction::CloseStatsOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
                             action = AppAction::CloseStatsOverlay;
                         }
                     } else if mcp_open {
-                        if let Some(ShortcutAction::DismissError) = shortcut {
+                        if dismiss_gesture {
+                            action = AppAction::CloseMcpOverlay;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
                             action = AppAction::CloseMcpOverlay;
                         }
                     } else if model_picker_open {
-                        if let Some(ShortcutAction::DismissError) = shortcut {
+                        if dismiss_gesture {
+                            action = AppAction::CloseModelPicker;
+                        } else if let Some(ShortcutAction::DismissError) = shortcut {
                             action = AppAction::CloseModelPicker;
                         }
                     } else if active_question.is_some() {

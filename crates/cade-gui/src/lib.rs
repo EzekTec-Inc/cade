@@ -19,6 +19,7 @@
 
 pub mod api;
 pub mod config;
+pub mod gestures;
 pub mod login;
 pub mod palette;
 pub mod responsive;
