@@ -648,15 +648,15 @@ pub async fn consolidate_agent(state: &AppState, agent_id: &str, conversation_id
     // mark; anything older than `current_turn - 100` is stale.
     let current_turn = sqlite::get_turn_counter(&state.db, agent_id).unwrap_or(0);
     let prune_before = (current_turn - 100).max(0);
-    if let Ok(pruned) = sqlite::observations::prune_old_observations(&state.db, agent_id, prune_before) {
-        if pruned > 0 {
-            tracing::debug!(
-                "consolidate [{}]: P8 pruned {} stale observations (before turn {})",
-                agent_id,
-                pruned,
-                prune_before,
-            );
-        }
+    if let Ok(pruned) = sqlite::observations::prune_old_observations(&state.db, agent_id, prune_before)
+        && pruned > 0
+    {
+        tracing::debug!(
+            "consolidate [{}]: P8 pruned {} stale observations (before turn {})",
+            agent_id,
+            pruned,
+            prune_before,
+        );
     }
 }
 

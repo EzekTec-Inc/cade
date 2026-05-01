@@ -165,12 +165,12 @@ impl TuiApp {
         {
             use crate::slots::UiSlot;
             for slot in [UiSlot::Sidebar, UiSlot::Header, UiSlot::Footer] {
-                if let Some(widget) = self.slots.get_mut(slot) {
-                    if widget.handle_input(k) {
-                        self.draw_dirty = true;
-                        let _ = self.draw();
-                        return Ok(None);
-                    }
+                if let Some(widget) = self.slots.get_mut(slot)
+                    && widget.handle_input(k)
+                {
+                    self.draw_dirty = true;
+                    let _ = self.draw();
+                    return Ok(None);
                 }
             }
         }

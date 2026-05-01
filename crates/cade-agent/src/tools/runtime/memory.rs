@@ -189,6 +189,82 @@ impl ToolRuntime {
         }
     }
 
+    pub(crate) async fn handle_update_memory_field(&self, args: &Value) -> (String, bool) {
+        let label = args["label"].as_str().unwrap_or("").trim().to_string();
+        let pointer = args["path"].as_str().unwrap_or("").to_string();
+        let op_str = args["op"].as_str().unwrap_or("");
+        let value = args.get("value").cloned();
+
+        if label.is_empty() || pointer.is_empty() {
+            return ("Error: 'label' and 'path' are required".to_string(), true);
+        }
+
+        let op = match cade_core::structured_patch::PatchOp::from_str_loose(op_str) {
+            Some(o) => o,
+            None => {
+                return (
+                    format!("Error: invalid op '{op_str}' — must be set, append, or remove"),
+                    true,
+                );
+            }
+        };
+
+        // Fetch existing block
+        let current = self
+            .client
+            .get_memory(&self.agent_id)
+            .await
+            .unwrap_or_default()
+            .into_iter()
+            .find(|b| b.label == label)
+            .map(|b| b.value)
+            .unwrap_or_default();
+
+        if current.is_empty() {
+            return (
+                format!(
+                    "Error: memory block '{label}' is empty or does not exist. \
+                     Use update_memory(set,...) to seed it with JSON first."
+                ),
+                true,
+            );
+        }
+
+        // Parse as JSON
+        let mut root = match cade_core::structured_patch::parse_block(&current) {
+            Ok(v) => v,
+            Err(e) => return (format!("Error: {e}. Use update_memory(set,...) to seed JSON."), true),
+        };
+
+        // Apply the patch
+        if let Err(e) = cade_core::structured_patch::apply_pointer_patch(
+            &mut root, &pointer, op, value,
+        ) {
+            return (format!("Patch error: {e}"), true);
+        }
+
+        // Serialize and persist
+        let new_body = cade_core::structured_patch::serialize_back(&root);
+        match self
+            .client
+            .upsert_memory(&self.agent_id, &label, &new_body, None)
+            .await
+        {
+            Ok(_) => (
+                format!("Memory block '{label}' field '{pointer}' updated ({op_str})"),
+                false,
+            ),
+            Err(e) => {
+                let err_str = e.to_string();
+                if err_str.contains("exceeds character limit") {
+                    (format!("Error: patched block too large — {err_str}"), true)
+                } else {
+                    (format!("Failed to save: {err_str}"), true)
+                }
+            }
+        }
+    }
+
     pub(crate) async fn handle_link_memory_evidence(&self, args: &Value) -> (String, bool) {
         let label = args["label"].as_str().unwrap_or("").trim().to_string();
         let kind = args["kind"].as_str().unwrap_or("user_assertion");

@@ -440,14 +440,13 @@ impl TuiApp {
         let current_images = std::mem::take(&mut self.pending_paste_images);
         for img in current_images {
             let marker_prefix = format!("[image #{}:", img.id);
-            if text.contains(&marker_prefix) {
-                if let Some(start) = text.find(&marker_prefix)
-                    && let Some(end_offset) = text[start..].find(']')
-                {
-                    let end = start + end_offset + 1;
-                    text.replace_range(start..end, "");
-                    extracted.push(img);
-                }
+            if text.contains(&marker_prefix)
+                && let Some(start) = text.find(&marker_prefix)
+                && let Some(end_offset) = text[start..].find(']')
+            {
+                let end = start + end_offset + 1;
+                text.replace_range(start..end, "");
+                extracted.push(img);
             }
         }
         if !extracted.is_empty() {

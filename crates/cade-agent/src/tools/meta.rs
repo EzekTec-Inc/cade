@@ -53,6 +53,7 @@ pub fn all_meta_schemas() -> Vec<Value> {
         schema_store_artifact(),
         schema_update_memory_typed(),
         schema_link_memory_evidence(),
+        schema_update_memory_field(),
         schema_reflect(),
     ];
 
@@ -519,6 +520,35 @@ fn schema_update_memory_typed() -> Value {
                 }
             },
             "required": ["label", "value", "memory_type"]
+        }
+    })
+}
+
+fn schema_update_memory_field() -> Value {
+    json!({
+        "name": "update_memory_field",
+        "description": "Patch a single field of a structured (JSON) memory block at a JSON-pointer path without re-emitting the entire body. The block body must already be valid JSON; if not, use update_memory(set,...) first to seed structure.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "label": {
+                    "type": "string",
+                    "description": "Memory block name (e.g. 'active_goal', 'project', 'working_set')"
+                },
+                "path": {
+                    "type": "string",
+                    "description": "JSON pointer (RFC 6901), e.g. '/next_steps/0' or '/status'"
+                },
+                "op": {
+                    "type": "string",
+                    "enum": ["set", "append", "remove"],
+                    "description": "set = replace/create at path, append = push onto array at path, remove = delete key/index at path"
+                },
+                "value": {
+                    "description": "JSON value to set or append (required for set/append, ignored for remove)"
+                }
+            },
+            "required": ["label", "path", "op"]
         }
     })
 }

@@ -7,7 +7,7 @@ use crate::server::api::router;
 use crate::server::state::AppState;
 use axum::body::Body;
 use axum::http::{Method, Request, StatusCode};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tokio::sync::RwLock;
 use tower::ServiceExt;
 

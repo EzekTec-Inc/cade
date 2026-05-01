@@ -94,6 +94,7 @@ pub const LIST_CHECKPOINTS: &str = "list_checkpoints";
 // region:    --- Typed memory / provenance / reflection (Phase 5)
 
 pub const UPDATE_MEMORY_TYPED: &str = "update_memory_typed";
+pub const UPDATE_MEMORY_FIELD: &str = "update_memory_field";
 pub const LINK_MEMORY_EVIDENCE: &str = "link_memory_evidence";
 pub const REFLECT: &str = "reflect";
 
@@ -118,6 +119,7 @@ pub const MEMORY_TOOL_IDS: &[&str] = &[
     CONVERSATION_SEARCH,
     ARCHIVAL_MEMORY_INSERT,
     ARCHIVAL_MEMORY_SEARCH,
+    UPDATE_MEMORY_FIELD,
 ];
 
 // endregion: --- Typed memory / provenance / reflection (Phase 5)
@@ -142,6 +144,7 @@ pub const META_TOOL_IDS: &[&str] = &[
     RESTORE_CHECKPOINT,
     STORE_ARTIFACT,
     UPDATE_MEMORY_TYPED,
+    UPDATE_MEMORY_FIELD,
     LINK_MEMORY_EVIDENCE,
     REFLECT,
     BROWSER_SCREENSHOT,

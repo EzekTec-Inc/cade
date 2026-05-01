@@ -176,6 +176,7 @@ impl ToolRuntime {
 
             // -- Typed memory / provenance / reflection
             UPDATE_MEMORY_TYPED => self.handle_update_memory_typed(args).await,
+            UPDATE_MEMORY_FIELD => self.handle_update_memory_field(args).await,
             LINK_MEMORY_EVIDENCE => self.handle_link_memory_evidence(args).await,
             REFLECT => self.handle_reflect(args).await,
 

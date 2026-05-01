@@ -563,7 +563,7 @@ fn truncate_oversize_message_passthrough_when_under_cap() {
 
 #[test]
 fn truncate_oversize_message_caps_huge_tool_result() {
-    let huge = "x".repeat(PER_MESSAGE_CHAR_CAP * 4);
+    let huge = "x".repeat(PER_MESSAGE_CHAR_CAP + 100);
     let msg = LlmMessage {
         role: "tool".to_string(),
         content: huge,
@@ -635,7 +635,7 @@ async fn build_context_caps_oversize_tool_result_messages() {
     .unwrap();
 
     // Insert: user, assistant(huge text), assistant(text)
-    let huge = "Z".repeat(PER_MESSAGE_CHAR_CAP * 10);
+    let huge = "Z".repeat(PER_MESSAGE_CHAR_CAP + 100);
     let rows: Vec<(&str, &str, serde_json::Value)> = vec![
         ("u1", "user", serde_json::json!({"content": "do it"})),
         ("a1", "assistant", serde_json::json!({"content": huge})),
@@ -718,8 +718,6 @@ async fn build_context_caps_oversize_tool_result_messages() {
     let (_model, messages, _tools) = super::context::build_context(&state, agent_id, None, false)
         .await
         .expect("build_context");
-
-    // Find the giant assistant message in the assembled context
     let big_msg = messages
         .iter()
         .find(|m| m.role == "assistant" && m.content.len() > 100)

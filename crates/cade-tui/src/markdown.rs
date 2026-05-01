@@ -154,7 +154,7 @@ fn wrap_spans_to_width(
             }
         };
 
-        for word in content.split_inclusive(|c: char| c == ' ') {
+        for word in content.split_inclusive(' ') {
             let word_w = UnicodeWidthStr::width(word);
             // If adding this word would overflow, flush + wrap.
             // Allow trailing whitespace to fit even if it pushes one over —
@@ -588,7 +588,7 @@ pub fn parse_markdown_lines_with_theme(text: &str, colors: &ThemeColors, max_wid
                     // Body width inside the code-block frame:
                     //   max_width − INDENT(2) − CODE_INDENT(4)  = max_width − 6
                     // Falls back to 0 (no wrap) when max_width is unknown.
-                    let body_width = if max_width > 6 { max_width - 6 } else { 0 };
+                    let body_width = max_width.saturating_sub(6);
                     let prefix_span = Span::styled(
                         format!("{INDENT}{CODE_INDENT}"),
                         code_border_style(colors),
@@ -943,7 +943,7 @@ fn wrap_code_line_spans(
             let mut last_idx = 0usize;
             let mut consumed_any = false;
 
-            while let Some((i, ch)) = iter.next() {
+            for (i, ch) in iter.by_ref() {
                 let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
                 if current_w + take_w + cw > body_width {
                     break;

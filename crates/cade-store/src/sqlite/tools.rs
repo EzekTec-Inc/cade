@@ -286,13 +286,13 @@ pub fn search_memory(
     // Phase 3: Semantic search (when feature is enabled).
     // Merge semantic results with keyword results using Reciprocal Rank Fusion.
     #[cfg(feature = "semantic-search")]
-    if super::embedding::is_available() {
-        if let Ok(query_embedding) = super::embedding::embed_text(query) {
+    if super::embedding::is_available()
+        && let Ok(query_embedding) = super::embedding::embed_text(query)
+    {
             let conn = db.lock();
             if let Ok(semantic_hits) = super::embedding::search_memory_blocks_semantic(
                 &conn, agent_id, &query_embedding, 10,
-            ) {
-                if !semantic_hits.is_empty() {
+            ) && !semantic_hits.is_empty() {
                     // Build label-keyed maps for both result sets
                     let keyword_labels: Vec<String> =
                         results.iter().map(|(l, _, _)| l.clone()).collect();
@@ -324,9 +324,7 @@ pub fn search_memory(
                         .filter_map(|label| combined.remove(&label))
                         .take(10)
                         .collect();
-                }
             }
-        }
     }
 
     // F7: activity-weighted aging — bump access counters for every label we

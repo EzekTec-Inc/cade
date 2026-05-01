@@ -904,6 +904,11 @@ async fn intercept_meta_tool(
                 handle_memory_apply_patch(state, agent_id, &tc.arguments).await;
             Some(mk(output, is_error))
         }
+        "update_memory_field" => {
+            let (output, is_error) =
+                handle_update_memory_field(state, agent_id, &tc.arguments).await;
+            Some(mk(output, is_error))
+        }
         "link_memory_evidence" => {
             let (output, is_error) =
                 handle_link_memory_evidence(state, agent_id, &tc.arguments).await;
@@ -1168,6 +1173,86 @@ async fn handle_memory_apply_patch(
             Err(e) => (format!("Failed to save patched memory: {e}"), true),
         },
         Err(e) => (format!("Patch failed: {e}"), true),
+    }
+}
+
+/// Phase A1 handler: `update_memory_field` server-side.  Loads the current
+/// JSON block, applies a JSON-pointer patch, and writes back.
+async fn handle_update_memory_field(
+    state: &AppState,
+    agent_id: &str,
+    args: &serde_json::Value,
+) -> (String, bool) {
+    let label = args["label"].as_str().unwrap_or("").trim().to_string();
+    let pointer = args["path"].as_str().unwrap_or("").to_string();
+    let op_str = args["op"].as_str().unwrap_or("");
+    let value = args.get("value").cloned();
+
+    if label.is_empty() || pointer.is_empty() {
+        return (
+            "Error: 'label' and 'path' are required".to_string(),
+            true,
+        );
+    }
+
+    let op = match cade_core::structured_patch::PatchOp::from_str_loose(op_str) {
+        Some(o) => o,
+        None => {
+            return (
+                format!("Error: invalid op '{op_str}' — must be set, append, or remove"),
+                true,
+            );
+        }
+    };
+
+    let current = cade_store::sqlite::get_memory_blocks(&state.db, agent_id)
+        .ok()
+        .unwrap_or_default()
+        .into_iter()
+        .find(|(l, _, _)| l == &label)
+        .map(|(_, v, _)| v)
+        .unwrap_or_default();
+
+    if current.is_empty() {
+        return (
+            format!(
+                "Error: memory block '{label}' is empty or does not exist. \
+                 Use update_memory(set,...) to seed it with JSON first."
+            ),
+            true,
+        );
+    }
+
+    let mut root = match cade_core::structured_patch::parse_block(&current) {
+        Ok(v) => v,
+        Err(e) => {
+            return (
+                format!("Error: {e}. Use update_memory(set,...) to seed JSON."),
+                true,
+            )
+        }
+    };
+
+    if let Err(e) =
+        cade_core::structured_patch::apply_pointer_patch(&mut root, &pointer, op, value)
+    {
+        return (format!("Patch error: {e}"), true);
+    }
+
+    let new_body = cade_core::structured_patch::serialize_back(&root);
+    match cade_store::sqlite::upsert_memory_block(
+        &state.db,
+        agent_id,
+        &label,
+        &new_body,
+        None,
+        None,
+    ) {
+        Ok(_) => (
+            format!("Memory block '{label}' field '{pointer}' updated ({op_str})"),
+            false,
+        ),
+        Err(e) => (format!("Failed to save: {e}"), true),
     }
 }
 
