@@ -459,3 +459,4 @@ _Append entries here as work items are finished._
 | 2026-05-01 | TUI | `44f14b14` | Fixed input field word-wrap and newline insertion by wiring max_width into EditorComponent |
 | 2026-05-01 | WI-9 (Follow-up) | `03444456` | Added mobile touch gestures (swipe to dismiss overlays, swipe to control sidebar drawer) |
 | 2026-05-01 | GUI Bug | `151002bb` | Fixed text input field horizontal overflow, word wrapping, and newline bugs in the web dashboard |
+| 2026-05-01 | TUI Bug | `94fb88d0` | Removed excess padding from the inline question modal |

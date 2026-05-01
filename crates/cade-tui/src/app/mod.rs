@@ -627,15 +627,11 @@ impl OverlayComponent for ActiveQuestionState {
         "active_question"
     }
 
-    fn render_overlay(&mut self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
-        let h = crate::app::layout::question::question_height(&self.draw_state, area.height);
-        let y = area.y + area.height.saturating_sub(h);
-        // The render_question_inline expects two Rects: sep_area (separator row)
-        // and body_area (the main panel). By using the same rect for both,
-        // we likely trigger drawing artifacts (overwriting the separator with content).
-        // Let's explicitly separate them.
-        let sep_area = Rect::new(area.x, y, area.width, 1);
-        let body_area = Rect::new(area.x, y + 1, area.width, h.saturating_sub(1));
+    fn render_overlay(&mut self, _frame: &mut Frame, _area: Rect, _colors: &ThemeColors) {}
+
+    fn render_inline(&self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
+        let sep_area = Rect::new(area.x, area.y, area.width, 1);
+        let body_area = Rect::new(area.x, area.y + 1, area.width, area.height.saturating_sub(1));
         crate::app::layout::question::render_question_inline(frame, &self.draw_state, sep_area, body_area, colors);
     }
 
@@ -1267,7 +1263,7 @@ impl TuiApp {
                 &last_status,
                 thinking_text.as_deref(),
                 thinking_elapsed,
-                overlay_stack.last().map(|o| o.inline_height(frame.area().height)).unwrap_or(0),
+                overlay_stack.last().map(|o| &**o as &dyn crate::overlay_component::OverlayComponent),
                 pending_lines,
                 queued_count,
                 &cwd,

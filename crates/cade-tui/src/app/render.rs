@@ -120,7 +120,7 @@ pub(crate) fn render_frame(
     last_status: &Option<String>,
     thinking_text: Option<&str>,
     thinking_elapsed: Option<std::time::Duration>,
-    overlay_inline_height: u16,
+    top_overlay: Option<&dyn crate::overlay_component::OverlayComponent>,
     pending_lines: usize,
     queued_count: usize,
     cwd: &str,
@@ -155,11 +155,12 @@ pub(crate) fn render_frame(
     let (input_badge, _input_badge_color) = input_mode_badge(input_mode, colors);
     let input_prefix_w = input_badge.chars().count() as u16 + 1 + 2;
     let available_w = main_area.width;
+    let inline_h = top_overlay.map(|o| o.inline_height(main_area.height)).unwrap_or(0);
     let mut input_rows =
         calc_input_rows(&input, available_w, input_prefix_w).clamp(1, MAX_INPUT_ROWS);
 
-    if overlay_inline_height > 0 {
-        input_rows = overlay_inline_height;
+    if inline_h > 0 {
+        input_rows = inline_h;
     }
 
     // A-02: footer_extra adds one row below the normal footer when present.
@@ -404,7 +405,11 @@ pub(crate) fn render_frame(
 
     let mut input_cursor_pos: Option<(u16, u16)> = None;
     // -- Input area or Question Panel
-    if overlay_inline_height == 0 {
+    if inline_h > 0 {
+        if let Some(top) = top_overlay {
+            top.render_inline(frame, chunks[5], colors);
+        }
+    } else {
         let (badge_text, badge_color) = input_mode_badge(input_mode, colors);
         let prefix_w = badge_text.chars().count() as u16 + 3;
         

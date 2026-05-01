@@ -103,6 +103,9 @@ pub trait OverlayComponent: Send + Sync {
     fn inline_height(&self, _max_height: u16) -> u16 {
         0
     }
+
+    /// Draw the overlay inline within the layout area reserved by `inline_height`.
+    fn render_inline(&self, _frame: &mut Frame, _area: Rect, _colors: &ThemeColors) {}
 }
 
 #[cfg(test)]
