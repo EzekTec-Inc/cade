@@ -204,37 +204,53 @@ pub fn generate_syntect_theme(colors: &ThemeColors) -> syntect::highlighting::Th
         scopes: Vec::new(),
     };
 
-    let mut add_scope = |scope: &str, fg: &ColorDef| {
+    let mut add_scope = |scope: &str, fg: &ColorDef, font_style: Option<syntect::highlighting::FontStyle>| {
         if let Ok(selectors) = ScopeSelectors::from_str(scope) {
             theme.scopes.push(ThemeItem {
                 scope: selectors,
                 style: syntect::highlighting::StyleModifier {
                     foreground: Some(to_color(fg)),
                     background: None,
-                    font_style: None,
+                    font_style,
                 },
             });
         }
     };
 
-    add_scope("comment", &colors.syntax_comment);
-    add_scope("keyword", &colors.syntax_keyword);
-    add_scope("entity.name.function", &colors.syntax_entity_name_function);
-    add_scope("variable", &colors.syntax_variable);
-    add_scope("string", &colors.syntax_string);
-    add_scope("constant.numeric", &colors.syntax_number);
-    add_scope("entity.name.type", &colors.syntax_entity_name_type);
-    add_scope("keyword.operator", &colors.syntax_keyword_operator);
-    add_scope("punctuation", &colors.syntax_punctuation);
+    use syntect::highlighting::FontStyle;
+
+    // Base syntax
+    add_scope("comment", &colors.syntax_comment, Some(FontStyle::ITALIC));
+    add_scope("keyword", &colors.syntax_keyword, Some(FontStyle::BOLD));
+    add_scope("entity.name.function", &colors.syntax_entity_name_function, None);
+    add_scope("variable", &colors.syntax_variable, None);
+    add_scope("string", &colors.syntax_string, None);
+    add_scope("constant.numeric", &colors.syntax_number, None);
+    add_scope("entity.name.type", &colors.syntax_entity_name_type, None);
+    add_scope("keyword.operator", &colors.syntax_keyword_operator, None);
+    add_scope("punctuation", &colors.syntax_punctuation, None);
     
-    add_scope("constant", &colors.syntax_constant);
-    add_scope("constant.character.escape", &colors.syntax_string_escape);
-    add_scope("support.type", &colors.syntax_type_builtin);
-    add_scope("keyword.control", &colors.syntax_keyword_control);
-    add_scope("variable.parameter", &colors.syntax_variable_parameter);
-    add_scope("variable.other.member", &colors.syntax_variable_other_member);
-    add_scope("support.function", &colors.syntax_support_function);
-    add_scope("support.macro", &colors.syntax_support_macro);
+    // Extended syntax
+    add_scope("constant", &colors.syntax_constant, None);
+    add_scope("constant.character.escape", &colors.syntax_string_escape, None);
+    add_scope("support.type", &colors.syntax_type_builtin, Some(FontStyle::ITALIC));
+    add_scope("keyword.control", &colors.syntax_keyword_control, Some(FontStyle::BOLD));
+    add_scope("variable.parameter", &colors.syntax_variable_parameter, Some(FontStyle::ITALIC));
+    add_scope("variable.other.member", &colors.syntax_variable_other_member, None);
+    add_scope("support.function", &colors.syntax_support_function, None);
+    add_scope("support.macro", &colors.syntax_support_macro, None);
+
+    // Additional premium scopes to map to existing colors
+    add_scope("storage.type", &colors.syntax_type, Some(FontStyle::ITALIC));
+    add_scope("storage.modifier", &colors.syntax_keyword, Some(FontStyle::BOLD));
+    add_scope("entity.name.tag", &colors.syntax_keyword, None);
+    add_scope("entity.other.attribute-name", &colors.syntax_variable_parameter, Some(FontStyle::ITALIC));
+    add_scope("string.regexp", &colors.syntax_string_escape, None);
+    add_scope("markup.heading", &colors.md_heading, Some(FontStyle::BOLD));
+    add_scope("markup.bold", &colors.text_primary, Some(FontStyle::BOLD));
+    add_scope("markup.italic", &colors.text_primary, Some(FontStyle::ITALIC));
+    add_scope("markup.inline.raw", &colors.md_code, None);
+    add_scope("markup.quote", &colors.md_quote, Some(FontStyle::ITALIC));
 
     theme
 }
