@@ -38,8 +38,9 @@ fn kv_row(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn render(
+fn inner_render(
     ui: &mut egui::Ui,
+    action: &mut Option<AppAction>,
     agents: &[cade_api_types::AgentInfo],
     selected_agent: &Option<usize>,
     has_agent: bool,
@@ -50,13 +51,7 @@ pub fn render(
     active_plan: Option<&crate::session::PlanState>,
     total_tokens: (u64, u64),
     theme: &crate::theme::ThemeColors,
-) -> Option<AppAction> {
-    let mut action: Option<AppAction> = None;
-
-    egui::Panel::left("agent_sidebar")
-        .default_size(200.0)
-        .resizable(true)
-        .show_inside(ui, |ui| {
+) {
             // ── Agent selection ────────────────────────
             ui.label(
                 egui::RichText::new("Agents")
@@ -77,7 +72,7 @@ pub fn render(
                     let is_selected = *selected_agent == Some(i);
                     let label = format!("🤖 {}", agent.name);
                     if ui.selectable_label(is_selected, label).clicked() && !is_selected {
-                        action = Some(AppAction::SelectAgent(i));
+                        *action = Some(AppAction::SelectAgent(i));
                     }
                 }
             }
@@ -222,7 +217,7 @@ pub fn render(
                             .size(11.0),
                     );
                     if ui.small_button("+ New").clicked() {
-                        action = Some(AppAction::NewConversation);
+                        *action = Some(AppAction::NewConversation);
                     }
                 });
                 ui.add_space(2.0);
@@ -245,7 +240,7 @@ pub fn render(
                         ui.horizontal(|ui| {
                             let label = format!("💬 {} ({})", title, conv.message_count);
                             if ui.selectable_label(is_sel, label).clicked() && !is_sel {
-                                action = Some(AppAction::SelectConversation(ci));
+                                *action = Some(AppAction::SelectConversation(ci));
                             }
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -257,7 +252,7 @@ pub fn render(
                                     .stroke(egui::Stroke::NONE)
                                     .min_size(egui::vec2(16.0, 16.0));
                                     if ui.add(del_btn).on_hover_text("Delete").clicked() {
-                                        action = Some(AppAction::DeleteConversation(ci));
+                                        *action = Some(AppAction::DeleteConversation(ci));
                                     }
                                 },
                             );
@@ -275,9 +270,63 @@ pub fn render(
             }
 
             if ui.button("🚪 Logout").clicked() {
-                action = Some(AppAction::Logout);
+                **action = Some(AppAction::Logout);
             }
-        });
+}
+
+
+#[allow(clippy::too_many_arguments)]
+pub fn render(
+    ui: &mut egui::Ui,
+    agents: &[cade_api_types::AgentInfo],
+    selected_agent: &Option<usize>,
+    has_agent: bool,
+    agent_metrics: Option<&crate::api::AgentMetrics>,
+    conversations: &[crate::api::ConversationInfo],
+    selected_conversation: &Option<usize>,
+    is_streaming: bool,
+    active_plan: Option<&crate::session::PlanState>,
+    total_tokens: (u64, u64),
+    theme: &crate::theme::ThemeColors,
+    viewport: crate::responsive::Viewport,
+    sidebar_drawer_open: &mut bool,
+) -> Option<AppAction> {
+    let mut action: Option<AppAction> = None;
+
+    if viewport.is_desktop() {
+        egui::Panel::left("agent_sidebar")
+            .default_size(200.0)
+            .resizable(true)
+            .show_inside(ui, |ui| {
+                inner_render(ui, &mut action, agents, selected_agent, has_agent, agent_metrics, conversations, selected_conversation, is_streaming, active_plan, total_tokens, theme);
+            });
+    } else if *sidebar_drawer_open {
+        let screen_rect = ui.ctx().screen_rect();
+        egui::Window::new("agent_sidebar_drawer")
+            .title_bar(false)
+            .resizable(false)
+            .collapsible(false)
+            .fixed_pos(screen_rect.min)
+            .fixed_size(egui::vec2(250.0, screen_rect.height()))
+            .frame(egui::Frame::window(ui.style()).fill(theme.bg_surface0()))
+            .show(ui.ctx(), |ui| {
+                ui.set_height(screen_rect.height());
+                ui.horizontal(|ui| {
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        let btn = egui::Button::new(egui::RichText::new("❌").size(16.0).color(theme.text_primary())).fill(egui::Color32::TRANSPARENT).frame(false);
+                        if ui.add(btn).clicked() { *sidebar_drawer_open = false; }
+                    });
+                });
+                ui.add_space(8.0);
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    inner_render(ui, &mut action, agents, selected_agent, has_agent, agent_metrics, conversations, selected_conversation, is_streaming, active_plan, total_tokens, theme);
+                    if let Some(plan) = active_plan {
+                        ui.add_space(8.0);
+                        crate::app::components::plan::render(ui, plan, theme);
+                    }
+                });
+            });
+    }
 
     action
 }

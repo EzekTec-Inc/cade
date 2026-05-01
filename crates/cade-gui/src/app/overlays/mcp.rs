@@ -21,8 +21,11 @@ pub fn render_mcp_overlay(
     let screen = ctx.content_rect();
     let w = 640.0_f32.min(screen.width() - 40.0);
     let h = 520.0_f32.min(screen.height() - 60.0);
-    let x = (screen.width() - w) / 2.0 + screen.left();
-    let y = (screen.height() - h) / 2.0 + screen.top();
+    
+    let rect = crate::responsive::overlay_rect(ctx, w, h, None);
+    let w = rect.width();
+    let h = rect.height();
+    let pos = rect.min;
 
     // Dim backdrop
     let painter = ctx.layer_painter(egui::LayerId::new(
@@ -37,7 +40,7 @@ pub fn render_mcp_overlay(
     }
 
     egui::Area::new(egui::Id::new("mcp_overlay_area"))
-        .fixed_pos(egui::pos2(x, y))
+        .fixed_pos(pos)
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::new()

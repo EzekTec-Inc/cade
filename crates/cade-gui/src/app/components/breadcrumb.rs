@@ -6,9 +6,15 @@ pub fn render(
     ui: &mut egui::Ui,
     session_snapshot: &Option<SessionState>,
     theme: &crate::theme::ThemeColors,
-) {
+    viewport: crate::responsive::Viewport,
+) -> bool {
+    let mut toggle_sidebar = false;
+
+    // Height increases slightly on touch devices
+    let height = if viewport.is_desktop() { 24.0 } else { 32.0 };
+
     egui::Panel::top("cade_toolbar")
-        .exact_size(24.0)
+        .exact_size(height)
         .frame(
             egui::Frame::new()
                 .fill(theme.bg_surface0())
@@ -16,6 +22,16 @@ pub fn render(
         )
         .show_inside(ui, |ui| {
             ui.horizontal(|ui| {
+                if !viewport.is_desktop() {
+                    let btn = egui::Button::new(
+                        egui::RichText::new("☰").size(16.0).color(theme.text_primary())
+                    ).fill(egui::Color32::TRANSPARENT).frame(false);
+                    if ui.add(btn).clicked() {
+                        toggle_sidebar = true;
+                    }
+                    ui.add_space(4.0);
+                }
+
                 ui.label(
                     egui::RichText::new("CADE")
                         .strong()
@@ -61,4 +77,6 @@ pub fn render(
                 }
             });
         });
+
+    toggle_sidebar
 }

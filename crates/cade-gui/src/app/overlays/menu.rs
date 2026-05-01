@@ -15,9 +15,10 @@ pub fn render_menu_overlay(
     let mut result: Option<AppAction> = None;
 
     let screen = ctx.content_rect();
-    let w = 800.0_f32.min(screen.width() - 40.0);
-    let h = 600.0_f32.min(screen.height() - 80.0);
-    let pos = egui::pos2(screen.center().x - w / 2.0, screen.center().y - h / 2.0);
+    let rect = crate::responsive::overlay_rect(ctx, 800.0, 600.0, None);
+    let w = rect.width();
+    let h = rect.height();
+    let pos = rect.min;
 
     // Dim backdrop
     let painter = ctx.layer_painter(egui::LayerId::new(

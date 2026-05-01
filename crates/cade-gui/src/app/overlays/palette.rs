@@ -44,7 +44,11 @@ pub fn render_palette_overlay(
     let max_rows = 16;
     let row_count = filtered.len().min(max_rows);
     let h = (44.0 + (row_count as f32 * 24.0) + 32.0).min(screen.height() - 20.0);
-    let pos = egui::pos2((screen.width() - w) / 2.0, screen.top() + 40.0);
+    
+    let rect = crate::responsive::overlay_rect(ctx, w, h, Some(screen.top() + 40.0));
+    let w = rect.width();
+    let h = rect.height();
+    let pos = rect.min;
 
     egui::Window::new("Command palette")
         .title_bar(false)

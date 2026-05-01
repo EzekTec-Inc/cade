@@ -24,8 +24,10 @@ fn overlay_frame(
     theme: &crate::theme::ThemeColors,
     content: impl FnOnce(&mut egui::Ui),
 ) -> bool {
-    let screen = ctx.content_rect();
-    let pos = egui::pos2((screen.width() - w) / 2.0, (screen.height() - h) / 2.0);
+    let rect = crate::responsive::overlay_rect(ctx, w, h, None);
+    let w = rect.width();
+    let h = rect.height();
+    let pos = rect.min;
 
     let mut open = true;
     egui::Window::new(title)

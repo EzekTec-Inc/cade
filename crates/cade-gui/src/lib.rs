@@ -21,6 +21,7 @@ pub mod api;
 pub mod config;
 pub mod login;
 pub mod palette;
+pub mod responsive;
 pub mod session;
 pub mod shortcuts;
 pub mod sse;

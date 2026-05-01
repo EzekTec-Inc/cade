@@ -63,6 +63,8 @@ pub struct CadeApp {
     /// Stable ID for the chat input field — used by Ctrl+L to request focus.
     input_id: egui::Id,
     theme: crate::theme::ThemeColors,
+    viewport: crate::responsive::Viewport,
+    sidebar_drawer_open: bool,
 }
 
 impl CadeApp {
@@ -99,12 +101,18 @@ impl CadeApp {
             md_cache: CommonMarkCache::default(),
             input_id: egui::Id::new("chat_input"),
             theme: crate::theme::ThemeColors::dark(),
+            viewport: crate::responsive::Viewport::Desktop,
+            sidebar_drawer_open: false,
         }
     }
 }
 
 impl eframe::App for CadeApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Update viewport based on current window size and apply responsive styling
+        self.viewport = crate::responsive::detect(ui.ctx());
+        crate::responsive::apply_style(ui.ctx(), self.viewport);
+
         // Collect actions during rendering so we can apply them after
         // all borrows are released.  This avoids borrow-conflict issues
         // with Rc<RefCell<..>>.
@@ -119,7 +127,9 @@ impl eframe::App for CadeApp {
         let session_snapshot_for_toolbar = self.session.borrow().clone();
 
         // ── Top toolbar (M1) ─────────────────────────────────────────────
-        components::breadcrumb::render(ui, &session_snapshot_for_toolbar, &self.theme);
+        if components::breadcrumb::render(ui, &session_snapshot_for_toolbar, &self.theme, self.viewport) {
+            self.sidebar_drawer_open = !self.sidebar_drawer_open;
+        }
 
         // ── Bottom status bar (M1) ────────────────────────────────────────
         components::footer::render(ui, &session_snapshot_for_toolbar, &self.theme);
@@ -460,6 +470,8 @@ impl eframe::App for CadeApp {
                         active_plan.as_ref(),
                         (total_input_tokens, total_output_tokens),
                         &self.theme,
+                        self.viewport,
+                        &mut self.sidebar_drawer_open,
                     ) {
                         action = new_action;
                     }
@@ -468,12 +480,14 @@ impl eframe::App for CadeApp {
                     if let Some(plan) = active_plan {
                         // Plan steps already summarized in sidebar Status section.
                         // Full checklist rendered inline below sidebar.
-                        egui::Panel::left("plan_panel")
-                            .default_size(200.0)
-                            .resizable(false)
-                            .show_inside(ui, |ui| {
-                                components::plan::render(ui, plan, &self.theme);
-                            });
+                        if self.viewport.is_desktop() {
+                            egui::Panel::left("plan_panel")
+                                .default_size(200.0)
+                                .resizable(false)
+                                .show_inside(ui, |ui| {
+                                    components::plan::render(ui, plan, &self.theme);
+                                });
+                        }
                     }
 
                     // ── Bottom panel: input bar (TUI-matched) ────────

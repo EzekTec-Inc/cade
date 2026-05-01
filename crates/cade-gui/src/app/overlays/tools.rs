@@ -14,9 +14,10 @@ pub fn render_tools_overlay(
     let mut result: Option<AppAction> = None;
 
     let screen = ctx.content_rect();
-    let w = 560.0_f32.min(screen.width() - 40.0);
-    let h = 480.0_f32.min(screen.height() - 80.0);
-    let pos = egui::pos2(screen.center().x - w / 2.0, screen.center().y - h / 2.0);
+    let rect = crate::responsive::overlay_rect(ctx, 560.0, 480.0, None);
+    let w = rect.width();
+    let h = rect.height();
+    let pos = rect.min;
 
     let mut open = true;
     egui::Window::new("Tools / MCP")
@@ -164,7 +165,11 @@ pub fn render_question_widget(
     // Height scales with option count.
     let option_rows = question.options.len().max(1) as f32;
     let h = (160.0 + option_rows * 52.0).min(screen.height() - 80.0);
-    let pos = egui::pos2(screen.center().x - w / 2.0, screen.center().y - h / 2.0);
+    
+    let rect = crate::responsive::overlay_rect(ctx, w, h, None);
+    let w = rect.width();
+    let h = rect.height();
+    let pos = rect.min;
 
     let mut open = true;
     egui::Window::new("Question")
