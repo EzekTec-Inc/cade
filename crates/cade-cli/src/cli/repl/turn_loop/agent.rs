@@ -169,11 +169,14 @@ impl Repl {
                                 // then process the key (async question or Esc/scroll).
                                 loop {
                                     if let Some(mut app) = tick_app.try_lock() {
-                                        let has_async_question = app.active_question
-                                            .as_ref()
-                                            .is_some_and(|aq| aq.tx.is_some());
+                                        let has_async_question = app.overlays.last().is_some_and(|o| o.id() == "active_question");
                                         if has_async_question {
-                                            app.handle_question_key(k);
+                                            if let Some(top) = app.overlays.last_mut() {
+                                                let res = top.handle_input(k);
+                                                if matches!(res, cade_tui::overlay_component::OverlayInputResult::Dismiss) {
+                                                    app.overlays.pop();
+                                                }
+                                            }
                                         } else {
                                             match (k.code, k.modifiers) {
                                                     (KeyCode::Char('K'), _) => { app.follow = false; app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }

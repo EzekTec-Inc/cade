@@ -40,7 +40,7 @@ use ratatui::{
 };
 
 use crate::autocomplete::FileAutocompleteProvider;
-use crate::colors::{ThemeColors, ColorDefExt};
+use crate::colors::ThemeColors;
 use crate::editor::{Editor, ImageEntry};
 // Re-export for child modules that `use super::*`
 pub(crate) use crate::editor::InputMode;
@@ -613,12 +613,139 @@ pub struct ActiveQuestionDrawState {
     pub submit_idx: usize,
 }
 
+use crate::overlay_component::{OverlayComponent, OverlayInputResult};
+use std::any::Any;
+
 pub struct ActiveQuestionState {
     pub draw_state: ActiveQuestionDrawState,
-    /// For async questions (ask_question_async).
     pub tx: Option<tokio::sync::oneshot::Sender<Option<crate::question::QuestionAnswer>>>,
-    /// For blocking questions: key events forwarded from the tick task.
-    pub key_tx: Option<std::sync::mpsc::SyncSender<crossterm::event::KeyEvent>>,
+    pub result: Option<Option<crate::question::QuestionAnswer>>,
+}
+
+impl OverlayComponent for ActiveQuestionState {
+    fn id(&self) -> &'static str {
+        "active_question"
+    }
+
+    fn render_overlay(&mut self, frame: &mut Frame, area: Rect, colors: &ThemeColors) {
+        let h = crate::app::layout::question::question_height(&self.draw_state, area.height);
+        let y = area.y + area.height.saturating_sub(h);
+        let rect = Rect::new(area.x, y, area.width, h);
+        crate::app::layout::question::render_question_inline(frame, &self.draw_state, rect, rect, colors);
+    }
+
+    fn handle_input(&mut self, key: crossterm::event::KeyEvent) -> OverlayInputResult {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        let st = &mut self.draw_state;
+        let mut ans_opt: Option<Option<crate::question::QuestionAnswer>> = None;
+
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, _) | (KeyCode::Char('c'), KeyModifiers::CONTROL) => {
+                ans_opt = Some(None);
+            }
+            (KeyCode::Up, _) => {
+                if st.cursor_pos > 0 {
+                    st.cursor_pos -= 1;
+                }
+            }
+            (KeyCode::Down, _) => {
+                if st.cursor_pos + 1 < st.total_items {
+                    st.cursor_pos += 1;
+                }
+            }
+            (KeyCode::Tab, _) => {
+                st.cursor_pos = (st.cursor_pos + 1) % st.total_items;
+            }
+            (KeyCode::BackTab, _) => {
+                st.cursor_pos = if st.cursor_pos == 0 {
+                    st.total_items.saturating_sub(1)
+                } else {
+                    st.cursor_pos - 1
+                };
+            }
+            (KeyCode::Char(c), KeyModifiers::NONE) if c.is_ascii_digit() && c != '0' => {
+                let idx = (c as usize) - ('0' as usize) - 1;
+                if idx < st.total_items {
+                    if st.question.multi_select {
+                        if idx < st.n_real {
+                            st.checked[idx] = !st.checked[idx];
+                            st.cursor_pos = idx;
+                        }
+                    } else if idx != st.other_idx {
+                        let label = st.question.options[idx].label.clone();
+                        ans_opt = Some(Some(crate::question::QuestionAnswer::Single(label)));
+                    } else {
+                        st.cursor_pos = idx;
+                    }
+                }
+            }
+            (KeyCode::Backspace, _) if st.cursor_pos == st.other_idx => {
+                st.custom_text.pop();
+            }
+            (KeyCode::Enter, _) => {
+                if st.question.multi_select {
+                    if st.cursor_pos == st.submit_idx {
+                        let selected: Vec<String> = st
+                            .checked
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, c)| **c)
+                            .map(|(i, _)| st.question.options[i].label.clone())
+                            .collect();
+                        if !selected.is_empty() {
+                            ans_opt = Some(Some(crate::question::QuestionAnswer::Multi(selected)));
+                        }
+                    } else if st.cursor_pos == st.other_idx {
+                        if !st.custom_text.is_empty() {
+                            ans_opt = Some(Some(crate::question::QuestionAnswer::Multi(vec![
+                                st.custom_text.clone(),
+                            ])));
+                        }
+                    } else if st.cursor_pos < st.n_real {
+                        st.checked[st.cursor_pos] = !st.checked[st.cursor_pos];
+                    }
+                } else if st.cursor_pos == st.other_idx {
+                    if !st.custom_text.is_empty() {
+                        ans_opt = Some(Some(crate::question::QuestionAnswer::Single(
+                            st.custom_text.clone(),
+                        )));
+                    }
+                } else {
+                    let label = st.question.options[st.cursor_pos].label.clone();
+                    ans_opt = Some(Some(crate::question::QuestionAnswer::Single(label)));
+                }
+            }
+            (KeyCode::Char('u'), KeyModifiers::CONTROL) if st.cursor_pos == st.other_idx => {
+                st.custom_text.clear();
+            }
+            (KeyCode::Char(c), m) if m == KeyModifiers::NONE || m == KeyModifiers::SHIFT => {
+                if st.cursor_pos == st.other_idx {
+                    st.custom_text.push(c);
+                } else {
+                    return OverlayInputResult::NotHandled;
+                }
+            }
+            _ => return OverlayInputResult::NotHandled,
+        }
+
+        if let Some(ans) = ans_opt {
+            if let Some(tx) = self.tx.take() {
+                let _ = tx.send(ans.clone());
+            }
+            self.result = Some(ans);
+            OverlayInputResult::Dismiss
+        } else {
+            OverlayInputResult::Consumed
+        }
+    }
+
+    fn take_result(&mut self) -> Option<Box<dyn Any>> {
+        self.result.take().map(|r| Box::new(r) as Box<dyn Any>)
+    }
+
+    fn inline_height(&self, max_height: u16) -> u16 {
+        crate::app::layout::question::question_height(&self.draw_state, max_height)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -670,7 +797,6 @@ pub struct TuiApp {
     /// Per-item expansion overrides keyed by stable timeline identity.
     expanded_items: std::collections::HashSet<TimelineKey>,
     pub active_question: Option<ActiveQuestionState>,
-    pub active_password: Option<password::PasswordPromptState>,
     pub active_plan: Option<PlanState>,
 
     // -- Streaming state
@@ -848,7 +974,6 @@ impl TuiApp {
             expand_all: false,
             expanded_items: std::collections::HashSet::new(),
             active_question: None,
-            active_password: None,
             active_plan: None,
             streaming_text: String::new(),
             streaming_active: false,
@@ -1085,7 +1210,6 @@ impl TuiApp {
         let expand_all = self.expand_all;
         let expanded_items = self.expanded_items.clone();
         let active_question = self.active_question.as_ref().map(|s| s.draw_state.clone());
-        let active_password = self.active_password.clone();
         let pending_lines = self.pending_lines;
         let queued_count = self.queued_count;
         let cwd = self.cwd.clone();
@@ -1200,45 +1324,6 @@ impl TuiApp {
                     frame.render_widget(Clear, area);
                     sb.render(frame, area, &colors);
                 }
-            }
-
-            // -- Password prompt overlay (centered modal)
-            if let Some(pw) = &active_password {
-                use ratatui::widgets::{Block, Borders, Clear, Paragraph};
-                use ratatui::layout::{Constraint, Layout, Rect};
-                use ratatui::style::{Modifier, Style};
-                use ratatui::text::{Line, Span};
-                let area = frame.area();
-                let popup_w = 50u16.min(area.width.saturating_sub(4));
-                let popup_h = 5u16;
-                let x = area.x + (area.width.saturating_sub(popup_w)) / 2;
-                let y = area.y + (area.height.saturating_sub(popup_h)) / 2;
-                let popup_area = Rect::new(x, y, popup_w, popup_h);
-                frame.render_widget(Clear, popup_area);
-                let block = Block::default()
-                    .title(" 🔒 Password ")
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(colors.primary.to_ratatui()));
-                let inner = block.inner(popup_area);
-                frame.render_widget(block, popup_area);
-                let prompt_line = Line::from(Span::styled(
-                    &pw.prompt,
-                    Style::default().add_modifier(Modifier::BOLD),
-                ));
-                let mask: String = "*".repeat(pw.input.len());
-                let input_line = Line::from(vec![
-                    Span::raw("> "),
-                    Span::styled(mask, Style::default().fg(colors.primary.to_ratatui())),
-                    Span::raw("█"),
-                ]);
-                let rows = Layout::vertical([
-                    Constraint::Length(1),
-                    Constraint::Length(1),
-                ]).split(inner);
-                frame.render_widget(Paragraph::new(prompt_line), rows[0]);
-                frame.render_widget(Paragraph::new(input_line), rows[1]);
-                // Override cursor pos to hide it (modal handles its own cursor)
-                input_cursor_pos = None;
             }
 
             // -- Dynamic overlay stack (Phase 3: renders on top of everything)

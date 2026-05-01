@@ -54,9 +54,7 @@ impl TuiApp {
             match event::read()? {
                 Event::Key(k) if k.kind == KeyEventKind::Press => {
                     let was_empty = self.editor.is_empty();
-                    if self.active_question.is_some() {
-                        self.handle_question_key(k);
-                    } else if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
+                    if let Some(result) = self.handle_key_input(k, history, hist_idx)? {
                         return Ok(result);
                     } else {
                         if was_empty && !self.editor.is_empty() {

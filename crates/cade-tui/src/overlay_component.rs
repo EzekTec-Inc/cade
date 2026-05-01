@@ -97,6 +97,12 @@ pub trait OverlayComponent: Send + Sync {
     fn take_result(&mut self) -> Option<Box<dyn Any>> {
         None
     }
+
+    /// Returns the number of rows this overlay wants to reserve at the bottom
+    /// of the main layout, if it renders inline instead of as a floating modal.
+    fn inline_height(&self, _max_height: u16) -> u16 {
+        0
+    }
 }
 
 #[cfg(test)]

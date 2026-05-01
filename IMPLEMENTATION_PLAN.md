@@ -452,3 +452,4 @@ _Append entries here as work items are finished._
 | 2026-04-29 | WI-3 | `b056216c` | Wired SlotManager into input dispatch — Header/Footer/Sidebar can now consume keys. Render was already wired in draw(). |
 | 2026-04-29 | WI-7 | `2e761ce0` | Added dynamic tool filtering note, search-first lookup guidance, and /memory pin tip to BASE_SYSTEM_PROMPT. |
 | 2026-04-29 | WI-6 | `bbcae64c` | Semantic memory search via fastembed + sqlite-vec. Hybrid LIKE + fuzzy + cosine via RRF. Feature-gated behind `semantic-search`. 7 new tests. |
+| 2026-04-30 | F5 | `9e1eed54` | Structured memory field-level patches |
