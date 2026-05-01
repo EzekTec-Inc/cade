@@ -1,11 +1,14 @@
 // region:    --- Modules
 
-use crate::{Error, Result};
 use std::path::{Path, PathBuf};
 
 // endregion: --- Modules
 
+#[cfg(feature = "http")]
+use crate::{Error, Result};
+#[cfg(feature = "http")]
 use super::parsing::*;
+
 use super::types::*;
 // -- Live file watcher
 

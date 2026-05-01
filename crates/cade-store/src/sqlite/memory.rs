@@ -300,37 +300,7 @@ pub fn upsert_memory_block(
     auto_type_block_if_untyped(&conn, label);
 
     // ── Semantic search: compute and store embedding for this block ──────────
-    #[cfg(feature = "semantic-search")]
-    {
-        // Look up the block_id for this label (we may have just inserted it)
-        let block_id_for_embed: Option<String> = conn
-            .query_row(
-                "SELECT b.id FROM shared_memory_blocks b
-                 JOIN agent_memory_blocks amb ON amb.block_id = b.id
-                 WHERE amb.agent_id = ?1 AND b.label = ?2",
-                params![agent_id, label],
-                |r| r.get(0),
-            )
-            .optional()?;
-
-        if let Some(bid) = block_id_for_embed {
-            // Embed in a background-friendly way: text concat of label + value
-            let embed_text = format!("{}: {}", label, final_value);
-            match super::embedding::embed_text(&embed_text) {
-                Ok(embedding) => {
-                    if let Err(e) =
-                        super::embedding::upsert_memory_block_embedding(&conn, &bid, &embedding)
-                    {
-                        tracing::warn!("Failed to store memory block embedding: {e}");
-                    }
-                }
-                Err(e) => {
-                    tracing::warn!("Failed to compute memory block embedding: {e}");
-                }
-            }
-        }
-    }
-
+    // Semantic search feature removed (F5).
     Ok(())
 }
 

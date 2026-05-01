@@ -106,7 +106,11 @@ You are a highly capable unified worker agent. Complete the assigned task autono
 You have full access to tools—use them dynamically to explore code, plan changes, and implement them. \
 Ensure changes are correct and idiomatic. Report back with a clear summary of what you did, \
 what files were changed, and any important decisions made. \
-Use `archival_memory_insert` for storing large text artifacts or logs."
+Use `archival_memory_insert` for storing large text artifacts or logs.\n\
+\n\
+CRITICAL: You are running in a headless autonomous loop without human interaction. \
+Do NOT ask for permission or output conversational filler without making a tool call. \
+If you do not emit a tool call, your execution will terminate immediately."
                 .to_string(),
             skills: vec![],
             scope: SubagentScope::Builtin,

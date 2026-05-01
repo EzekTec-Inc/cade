@@ -270,7 +270,7 @@ fn inner_render(
             }
 
             if ui.button("🚪 Logout").clicked() {
-                **action = Some(AppAction::Logout);
+                *action = Some(AppAction::Logout);
             }
 }
 
@@ -301,7 +301,7 @@ pub fn render(
                 inner_render(ui, &mut action, agents, selected_agent, has_agent, agent_metrics, conversations, selected_conversation, is_streaming, active_plan, total_tokens, theme);
             });
     } else if *sidebar_drawer_open {
-        let screen_rect = ui.ctx().screen_rect();
+        let screen_rect = ui.ctx().content_rect();
         egui::Window::new("agent_sidebar_drawer")
             .title_bar(false)
             .resizable(false)
