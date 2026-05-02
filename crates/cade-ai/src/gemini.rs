@@ -301,23 +301,13 @@ impl GeminiProvider {
         // original `functionCall.name`; using a hardcoded "tool" causes 400s).
         let mut call_id_to_name: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
-        // Track tool call IDs that lack thought_signatures.  Newer Gemini models
-        // (e.g. gemini-3.x) require a `thoughtSignature` on every `functionCall`
-        // part.  Historical calls from other providers (Anthropic, OpenAI) or
-        // older Gemini models will not have one — we convert those exchanges to
-        // plain text summaries so the model still sees the context without
-        // triggering a 400 validation error.
-        let mut unsigned_call_ids: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+
         for msg in &req.messages {
             if msg.role == "assistant"
                 && let Some(calls) = &msg.tool_calls
             {
                 for tc in calls {
                     call_id_to_name.insert(tc.id.clone(), tc.name.clone());
-                    if tc.thought_signature.is_none() {
-                        unsigned_call_ids.insert(tc.id.clone());
-                    }
                 }
             }
         }
@@ -356,199 +346,68 @@ impl GeminiProvider {
                     // Batch ALL consecutive tool messages into one user turn.
                     // Resolves each function name from the pre-built lookup so the
                     // functionResponse.name always matches its functionCall.name.
-                    //
-                    // If ANY tool result in this batch belongs to a tool call
-                    // that lacked a thought_signature, the entire batch is
-                    // converted to plain text.  Gemini rejects mixed
-                    // functionResponse / text parts in the same turn when some
-                    // of the matching functionCall parts had no signature.
-                    let _batch_start = i;
-                    let mut has_unsigned = false;
-                    {
-                        let mut j = i;
-                        while j < req.messages.len() && req.messages[j].role == "tool" {
-                            if let Some(id) = &req.messages[j].tool_call_id
-                                && unsigned_call_ids.contains(id)
-                            {
-                                has_unsigned = true;
-                            }
-                            j += 1;
-                        }
+                    let mut parts: Vec<Value> = Vec::new();
+                    while i < req.messages.len() && req.messages[i].role == "tool" {
+                        let m = &req.messages[i];
+                        let fn_name = m
+                            .tool_call_id
+                            .as_deref()
+                            .and_then(|id| call_id_to_name.get(id).map(String::as_str))
+                            .or(m.tool_call_id.as_deref())
+                            .unwrap_or("tool")
+                            .to_string();
+                        parts.push(json!({ "functionResponse": {
+                            "name": fn_name,
+                            "response": { "result": m.content }
+                        }}));
+                        i += 1;
                     }
-
-                    if has_unsigned {
-                        // Convert to text summaries instead of functionResponse
-                        use std::fmt::Write;
-                        let mut text = String::new();
-                        let mut first = true;
-                        while i < req.messages.len() && req.messages[i].role == "tool" {
-                            if !first {
-                                text.push('\n');
-                            }
-                            first = false;
-                            let m = &req.messages[i];
-                            let fn_name = m
-                                .tool_call_id
-                                .as_deref()
-                                .and_then(|id| call_id_to_name.get(id).map(String::as_str))
-                                .unwrap_or("tool");
-                            let content_preview: String = m.content.chars().take(500).collect();
-                            let truncated = if m.content.chars().count() > 500 {
-                                "…"
-                            } else {
-                                ""
-                            };
-                            let _ = write!(
-                                text,
-                                "[Result of '{fn_name}': {content_preview}{truncated}]"
-                            );
-                            i += 1;
-                        }
-                        // Merge with preceding user turn if possible
-                        let merged = if let Some(last) = contents.last_mut() {
-                            if last.get("role").and_then(|v| v.as_str()) == Some("user") {
-                                if let Some(arr) =
-                                    last.get_mut("parts").and_then(|v| v.as_array_mut())
-                                {
-                                    arr.push(json!({"text": text}));
-                                    true
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-                        if !merged {
-                            contents.push(json!({"role": "user", "parts": [{"text": text}]}));
-                        }
-                    } else {
-                        let mut parts: Vec<Value> = Vec::new();
-                        while i < req.messages.len() && req.messages[i].role == "tool" {
-                            let m = &req.messages[i];
-                            let fn_name = m
-                                .tool_call_id
-                                .as_deref()
-                                .and_then(|id| call_id_to_name.get(id).map(String::as_str))
-                                .or(m.tool_call_id.as_deref())
-                                .unwrap_or("tool")
-                                .to_string();
-                            parts.push(json!({ "functionResponse": {
-                                "name": fn_name,
-                                "response": { "result": m.content }
-                            }}));
-                            i += 1;
-                        }
-                        contents.push(json!({"role": "user", "parts": parts}));
-                    }
+                    contents.push(json!({"role": "user", "parts": parts}));
                 }
                 "assistant" if msg.tool_calls.is_some() => {
-                    // Check whether any tool call in this message lacks a
-                    // thought_signature.  If so, convert the entire turn to a
-                    // plain text summary.  Gemini models that enforce thought
-                    // signatures reject functionCall parts without one.
-                    let has_unsigned = msg
-                        .tool_calls
-                        .as_deref()
-                        .unwrap_or_default()
-                        .iter()
-                        .any(|tc| unsigned_call_ids.contains(&tc.id));
-
-                    if has_unsigned {
-                        // Fallback: emit a text-only model turn summarising
-                        // what the assistant did.
-                        use std::fmt::Write;
-                        let mut summary = String::new();
-                        if !msg.content.is_empty() {
-                            summary.push_str(&msg.content);
+                    // Build parts: optional text first, then all functionCall parts.
+                    // Including any text prevents a separate preceding model(text) turn
+                    // from being orphaned when the message has both content and calls.
+                    let mut all_parts: Vec<Value> = Vec::new();
+                    if !msg.content.is_empty() {
+                        all_parts.push(json!({"text": msg.content}));
+                    }
+                    for tc in msg.tool_calls.as_deref().unwrap_or_default().iter() {
+                        let mut fc = serde_json::Map::new();
+                        fc.insert("name".to_string(), json!(tc.name));
+                        fc.insert("args".to_string(), tc.arguments.clone());
+                        let mut part = serde_json::Map::new();
+                        part.insert("functionCall".to_string(), Value::Object(fc));
+                        if let Some(sig) = &tc.thought_signature {
+                            part.insert("thoughtSignature".to_string(), json!(sig));
                         }
-                        for tc in msg.tool_calls.as_deref().unwrap_or_default() {
-                            if !summary.is_empty() {
-                                summary.push('\n');
-                            }
-                            let args_str = serde_json::to_string(&tc.arguments).unwrap_or_default();
-                            let args_preview: String = args_str.chars().take(200).collect();
-                            let truncated = if args_str.chars().count() > 200 {
-                                "…"
-                            } else {
-                                ""
-                            };
-                            let _ = write!(
-                                summary,
-                                "[Called '{}': {args_preview}{truncated}]",
-                                tc.name
-                            );
-                        }
-                        if !summary.is_empty() {
-                            let merged = if let Some(last) = contents.last_mut() {
-                                if last.get("role").and_then(|v| v.as_str()) == Some("model") {
-                                    if let Some(arr) =
-                                        last.get_mut("parts").and_then(|v| v.as_array_mut())
-                                    {
-                                        arr.push(json!({"text": summary}));
-                                        true
-                                    } else {
-                                        false
-                                    }
-                                } else {
-                                    false
-                                }
-                            } else {
-                                false
-                            };
-                            if !merged {
-                                contents
-                                    .push(json!({"role": "model", "parts": [{"text": summary}]}));
-                            }
-                        }
-                        i += 1;
-                    } else {
-                        // Build parts: optional text first, then all functionCall parts.
-                        // Including any text prevents a separate preceding model(text) turn
-                        // from being orphaned when the message has both content and calls.
-                        let mut all_parts: Vec<Value> = Vec::new();
-                        if !msg.content.is_empty() {
-                            all_parts.push(json!({"text": msg.content}));
-                        }
-                        for tc in msg.tool_calls.as_deref().unwrap_or_default().iter() {
-                            let mut fc = serde_json::Map::new();
-                            fc.insert("name".to_string(), json!(tc.name));
-                            fc.insert("args".to_string(), tc.arguments.clone());
-                            let mut part = serde_json::Map::new();
-                            part.insert("functionCall".to_string(), Value::Object(fc));
-                            if let Some(sig) = &tc.thought_signature {
-                                part.insert("thoughtSignature".to_string(), json!(sig));
-                            }
-                            all_parts.push(Value::Object(part));
-                        }
-                        // If the immediately preceding contents entry is already a model
-                        // turn (e.g., a text-only assistant message that preceded this
-                        // tool-call message after context trimming removed the user turn
-                        // between them), merge our parts into it.  Two consecutive model
-                        // turns cause Gemini 400 "function call turn ordering" errors.
-                        let merged = if let Some(last) = contents.last_mut() {
-                            if last.get("role").and_then(|v| v.as_str()) == Some("model") {
-                                if let Some(arr) =
-                                    last.get_mut("parts").and_then(|v| v.as_array_mut())
-                                {
-                                    arr.append(&mut all_parts);
-                                    true
-                                } else {
-                                    false
-                                }
+                        all_parts.push(Value::Object(part));
+                    }
+                    // If the immediately preceding contents entry is already a model
+                    // turn (e.g., a text-only assistant message that preceded this
+                    // tool-call message after context trimming removed the user turn
+                    // between them), merge our parts into it.  Two consecutive model
+                    // turns cause Gemini 400 "function call turn ordering" errors.
+                    let merged = if let Some(last) = contents.last_mut() {
+                        if last.get("role").and_then(|v| v.as_str()) == Some("model") {
+                            if let Some(arr) =
+                                last.get_mut("parts").and_then(|v| v.as_array_mut())
+                            {
+                                arr.append(&mut all_parts);
+                                true
                             } else {
                                 false
                             }
                         } else {
                             false
-                        };
-                        if !merged {
-                            contents.push(json!({"role": "model", "parts": all_parts}));
                         }
-                        i += 1;
+                    } else {
+                        false
+                    };
+                    if !merged {
+                        contents.push(json!({"role": "model", "parts": all_parts}));
                     }
+                    i += 1;
                 }
                 "assistant" => {
                     // Gemini rejects empty text parts — only add the message if
