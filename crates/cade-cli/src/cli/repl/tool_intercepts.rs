@@ -413,13 +413,12 @@ impl Repl {
                 self.tui_ok(format!("  ✓ Subagent [{}] complete", subagent_mode));
             }
 
-            // Clean up any stale subagent memory blocks from the parent agent
-            if let Ok(blocks) = self.client.get_memory(&parent_agent_id).await {
-                for block in blocks {
-                    if block.label.starts_with("subagent:") {
-                        let _ = self.client.delete_memory(&parent_agent_id, &block.label).await;
-                    }
-                }
+            // Clean up this subagent's memory block from the parent agent.
+            // Scoped to own task ID to avoid deleting results from concurrent
+            // background subagents that the parent hasn't consumed yet.
+            {
+                let own_label = format!("subagent:{}:{}", subagent_mode, task_id_c);
+                let _ = self.client.delete_memory(&parent_agent_id, &own_label).await;
             }
 
             // Store full output in Archival Memory if it's large, but DO NOT pollute active memory.
