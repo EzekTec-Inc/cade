@@ -2176,6 +2176,24 @@ async fn handle_run_subagent_tool(
     let mut llm_err: Option<String> = None;
     let next_depth = cfg.depth + 1;
 
+    // Create a lightweight ephemeral DB row for the subagent so its
+    // meta-tool calls (update_memory, load_skill, etc.) are scoped to
+    // its own namespace rather than writing into the parent agent's
+    // memory store (memory isolation fix).
+    let _ = cade_store::sqlite::create_agent(
+        &state.db,
+        &cade_store::sqlite::AgentRow {
+            id: subagent_id.clone(),
+            name: cfg.ephemeral_agent_name(&subagent_id),
+            model: model.clone(),
+            description: Some(cfg.ephemeral_description()),
+            system_prompt: None,
+            created_at: None,
+            compaction_model: None,
+            theme: None,
+        },
+    );
+
     for _iter in 0..max_iters {
         let llm_req = cade_ai::CompletionRequest {
             model: model.clone(),
@@ -2256,11 +2274,11 @@ async fn handle_run_subagent_tool(
                 ))
                 .await
             } else if let Some(intercepted) =
-                Box::pin(intercept_meta_tool(state, parent_agent_id, tc, sse_tx.clone())).await
+                Box::pin(intercept_meta_tool(state, &subagent_id, tc, sse_tx.clone())).await
             {
                 // Meta-tools (memory, skills, checkpoints, artifacts)
-                // are dispatched against the parent agent's DB — same
-                // path the parent agentic loop uses.
+                // are dispatched against the subagent's own DB row so its
+                // memory writes don't pollute the parent agent's store.
                 intercepted
             } else {
                 cade_agent::tools::manager::dispatch(
@@ -2295,6 +2313,10 @@ async fn handle_run_subagent_tool(
 
     let elapsed = start_time.elapsed().as_secs() as u32;
     drop(permit);
+
+    // Clean up the ephemeral subagent DB row — memory it wrote is no
+    // longer needed once the result has been returned to the parent.
+    let _ = cade_store::sqlite::delete_agent(&state.db, &subagent_id);
 
     let (output, is_error) = match llm_err {
         Some(e) => (format!("Subagent error: {e}"), true),
@@ -3888,7 +3910,7 @@ mod tests {
         let state = build_state_with_llm(llm_dyn);
         let (tx, _rx) = tokio::sync::mpsc::channel(64);
 
-        // Create parent agent so memory writes have a home.
+        // Create parent agent.
         cade_store::sqlite::create_agent(
             &state.db,
             &cade_store::sqlite::AgentRow {
@@ -3926,15 +3948,18 @@ mod tests {
             tool_msg.content,
         );
 
-        // The memory block must actually be persisted in the parent's DB.
-        let blocks =
+        // Memory isolation: the block must NOT be written to the parent's DB.
+        // The subagent writes to its own ephemeral row (which is deleted on
+        // completion), so the parent's memory store must remain empty.
+        let parent_blocks =
             cade_store::sqlite::get_memory_blocks(&state.db, "parent_sa").unwrap();
-        let found = blocks
+        let leaked = parent_blocks
             .iter()
-            .any(|(label, value, _)| label == "sa_block" && value == "written by subagent");
+            .any(|(label, _, _)| label == "sa_block");
         assert!(
-            found,
-            "subagent update_memory must persist to parent agent's DB, got: {blocks:?}",
+            !leaked,
+            "subagent update_memory must NOT leak into parent DB (memory isolation), \
+             but found sa_block in parent: {parent_blocks:?}",
         );
     }
 
