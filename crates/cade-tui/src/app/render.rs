@@ -648,7 +648,12 @@ pub(crate) fn render_frame(
         
         for tracker in subagent_trackers {
             let elapsed = tracker.started.elapsed().as_secs();
-            let text = format!("⟳ Subagent [{}] · {}s · {} tools", tracker.mode, elapsed, tracker.tool_calls);
+            let tool_info = if let Some(ref tool) = tracker.current_tool {
+                format!(" · {} tools · {}", tracker.tool_calls, tool)
+            } else {
+                format!(" · {} tools", tracker.tool_calls)
+            };
+            let text = format!("⟳ Subagent [{}] · {}s{}", tracker.mode, elapsed, tool_info);
             let width = text.chars().count() as u16 + 4;
             let height = 3;
             let x = main_area.x + main_area.width.saturating_sub(width + 2);
@@ -668,11 +673,15 @@ pub(crate) fn render_frame(
                 .style(colors.style_surface1())
                 .border_style(colors.primary());
             
-            let p = Paragraph::new(Line::from(vec![
+            let mut spans = vec![
                 Span::styled("⟳ ", colors.warning()),
                 Span::styled(format!("Subagent [{}]", tracker.mode), colors.text_primary_bold()),
                 Span::styled(format!(" · {elapsed}s · {} tools", tracker.tool_calls), colors.text_dim()),
-            ])).block(block);
+            ];
+            if let Some(ref tool) = tracker.current_tool {
+                spans.push(Span::styled(format!(" · {tool}"), colors.warning()));
+            }
+            let p = Paragraph::new(Line::from(spans)).block(block);
 
             frame.render_widget(p, rect);
             

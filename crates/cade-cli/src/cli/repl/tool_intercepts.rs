@@ -190,9 +190,11 @@ impl Repl {
                         match evt {
                             crate::cli::headless::HeadlessEvent::Text(_) => {
                                 tracker.output_lines += 1;
+                                tracker.current_tool = None;
                             }
-                            crate::cli::headless::HeadlessEvent::ToolCall(_) => {
+                            crate::cli::headless::HeadlessEvent::ToolCall(tname) => {
                                 tracker.tool_calls += 1;
+                                tracker.current_tool = Some(tname.to_string());
                             }
                         }
                         app.draw_dirty = true;
