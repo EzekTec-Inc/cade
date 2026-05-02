@@ -418,6 +418,53 @@ async fn process_tool_calls(
         messages.iter().filter_map(|m| m.as_tool_call()).collect();
 
     if tool_calls.is_empty() {
+        if stats.turn_count >= 15 {
+            return Ok(());
+        }
+
+        tracing::info!("Headless loop stalled (no tool calls). Injecting re-prompt.");
+        let reprompt = "[System: You did not invoke any tools. You are a headless background agent and MUST invoke a tool to make progress. If you believe the task is fully complete, you MUST call the `bash` tool with the command `echo 'TASK_COMPLETE'` to exit.]";
+        
+        let on_out_clone = on_output.clone();
+        let follow = client.stream_message_cancellable(
+            agent_id,
+            reprompt,
+            None,
+            true, // ephemeral
+            None,
+            move |msg| {
+                if let Some(text) = msg.assistant_text() {
+                    if let Some(ref cb) = on_out_clone {
+                        cb(HeadlessEvent::Text(text));
+                    } else {
+                        print!("{text}");
+                        let _ = std::io::Write::flush(&mut std::io::stdout());
+                    }
+                }
+            },
+            None,
+        ).await?;
+
+        collect_assistant_text(&follow, output);
+        stats.turn_count += 1;
+        return Box::pin(process_tool_calls(
+            client,
+            agent_id,
+            follow,
+            permissions,
+            output,
+            mcp,
+            stats,
+            hooks,
+            on_output,
+        )).await;
+    }
+
+    // Check for TASK_COMPLETE signal
+    if tool_calls.iter().any(|(_, name, args)| {
+        name == "bash" && args.get("command").and_then(|v| v.as_str()).unwrap_or("").contains("TASK_COMPLETE")
+    }) {
+        tracing::info!("Subagent signalled completion via TASK_COMPLETE bash command.");
         return Ok(());
     }
 
@@ -621,6 +668,52 @@ async fn process_tool_calls_stream_json(
         messages.iter().filter_map(|m| m.as_tool_call()).collect();
 
     if tool_calls.is_empty() {
+        if stats.turn_count >= 15 {
+            return Ok(());
+        }
+
+        tracing::info!("Headless loop stalled (no tool calls). Injecting re-prompt.");
+        let reprompt = "[System: You did not invoke any tools. You are a headless background agent and MUST invoke a tool to make progress. If you believe the task is fully complete, you MUST call the `bash` tool with the command `echo 'TASK_COMPLETE'` to exit.]";
+        
+        let emit_clone = |v: serde_json::Value| emit(v);
+        let follow = client.stream_message_cancellable(
+            agent_id,
+            reprompt,
+            None,
+            true, // ephemeral
+            None,
+            move |msg| {
+                if let Some(text) = msg.assistant_text() {
+                    emit_clone(json!({
+                        "type": "message",
+                        "messageType": "assistant_message",
+                        "content": text
+                    }));
+                }
+            },
+            None,
+        ).await?;
+
+        collect_assistant_text(&follow, output);
+        stats.turn_count += 1;
+        return Box::pin(process_tool_calls_stream_json(
+            client,
+            agent_id,
+            follow,
+            permissions,
+            output,
+            mcp,
+            stats,
+            emit,
+            hooks,
+        )).await;
+    }
+
+    // Check for TASK_COMPLETE signal
+    if tool_calls.iter().any(|(_, name, args)| {
+        name == "bash" && args.get("command").and_then(|v| v.as_str()).unwrap_or("").contains("TASK_COMPLETE")
+    }) {
+        tracing::info!("Subagent signalled completion via TASK_COMPLETE bash command.");
         return Ok(());
     }
 
