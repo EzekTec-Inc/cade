@@ -13,9 +13,9 @@ pub(crate) fn question_height(aq: &ActiveQuestionDrawState, content_height: u16)
     let mut rows: u16 = 0;
 
     // header chip (no blank)
-    rows += 1;
+    rows += q.header.lines().count().max(1) as u16;
     // question text (treat as 1 row; long questions word-wrap but we keep it simple)
-    rows += 1;
+    rows += q.text.lines().count().max(1) as u16;
 
     // progress indicator
     if q.progress.is_some() {
@@ -29,9 +29,9 @@ pub(crate) fn question_height(aq: &ActiveQuestionDrawState, content_height: u16)
         } else if idx == aq.other_idx {
             rows += 2; // label + blank
         } else {
-            rows += 1; // label
+            rows += q.options[idx].label.lines().count().max(1) as u16; // label
             if idx < q.options.len() && !q.options[idx].description.is_empty() {
-                rows += 1; // description
+                rows += q.options[idx].description.lines().count().max(1) as u16; // description
             }
         }
     }
@@ -74,21 +74,39 @@ pub(crate) fn render_question_inline(
     let mut lines: Vec<Line<'static>> = Vec::new();
 
     // Header chip — left-aligned, yellow bold with a diamond glyph
-    lines.push(Line::from(vec![
-        Span::styled("◆ ", colors.md_heading()),
-        Span::styled(
-            q.header.clone(),
-            Style::default()
-                .fg(colors.md_heading.to_ratatui())
-                .add_modifier(Modifier::BOLD),
-        ),
-    ]));
+    let mut header_lines = q.header.lines();
+    if let Some(first) = header_lines.next() {
+        lines.push(Line::from(vec![
+            Span::styled("◆ ", colors.md_heading()),
+            Span::styled(
+                first.to_string(),
+                Style::default()
+                    .fg(colors.md_heading.to_ratatui())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
+    for l in header_lines {
+        lines.push(Line::from(vec![
+            Span::raw("  "),
+            Span::styled(
+                l.to_string(),
+                Style::default()
+                    .fg(colors.md_heading.to_ratatui())
+                    .add_modifier(Modifier::BOLD),
+            ),
+        ]));
+    }
 
     // Question text
-    lines.push(Line::from(Span::styled(
-        q.text.clone(),
-        colors.text_primary(),
-    )));
+    for l in q.text.lines() {
+        if !l.trim().is_empty() || q.text.lines().count() == 1 {
+            lines.push(Line::from(Span::styled(
+                l.to_string(),
+                colors.text_primary(),
+            )));
+        }
+    }
 
     // Progress indicator
     if let Some((cur, tot)) = q.progress {
@@ -174,17 +192,29 @@ pub(crate) fn render_question_inline(
             colors.text_primary()
         };
 
-        lines.push(Line::from(vec![
-            Span::styled(format!(" {selector} "), colors.success()),
-            Span::styled(format!("{}. ", idx + 1), num_style),
-            Span::styled(checkbox.to_string(), colors.success()),
-            Span::styled(opt.label.clone(), label_style),
-        ]));
+        let mut label_lines = opt.label.lines();
+        if let Some(first) = label_lines.next() {
+            lines.push(Line::from(vec![
+                Span::styled(format!(" {selector} "), colors.success()),
+                Span::styled(format!("{}. ", idx + 1), num_style),
+                Span::styled(checkbox.to_string(), colors.success()),
+                Span::styled(first.to_string(), label_style),
+            ]));
+        }
+        for l in label_lines {
+            lines.push(Line::from(vec![
+                Span::raw("       "),
+                Span::styled(l.to_string(), label_style),
+            ]));
+        }
+        
         if !opt.description.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!("       {}", opt.description),
-                colors.text_muted(),
-            )));
+            for l in opt.description.lines() {
+                lines.push(Line::from(Span::styled(
+                    format!("       {}", l),
+                    colors.text_muted(),
+                )));
+            }
         }
     }
 
