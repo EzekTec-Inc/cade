@@ -95,13 +95,14 @@ impl Repl {
             parent_blocks
                 .into_iter()
                 .filter(|b| {
-                    // Include pinned and short-tier blocks; skip internal bookkeeping.
+                    // Include pinned and short-tier blocks; skip internal bookkeeping and orchestration blocks.
                     let dominated = b.label.starts_with("__");
+                    let is_orchestration = b.label == "active_goal" || b.label == "session_summary";
                     let tier_ok = b
                         .tier
                         .as_deref()
                         .is_none_or(|t| t == "pinned" || t == "short");
-                    !dominated && tier_ok && !b.value.trim().is_empty()
+                    !dominated && !is_orchestration && tier_ok && !b.value.trim().is_empty()
                 })
                 .map(|b| cade_agent::agent::client::MemoryBlock {
                     label: b.label,
