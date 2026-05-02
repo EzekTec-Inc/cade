@@ -138,6 +138,7 @@ pub(crate) fn render_frame(
     colors: &ThemeColors,
     last_input_width: &mut u16,
     nerd: bool,
+    subagent_trackers: &[crate::subagent_tracker::SubagentTracker],
 ) -> (u16, Option<(u16, u16)>) {
     // returns max_skip for V-04 scroll clamping
     let area = frame.area();
@@ -639,6 +640,44 @@ pub(crate) fn render_frame(
                 .border_style(colors.border_base()),
         );
         frame.render_widget(list, chunks[2]); // chunks[2] is plan panel in my new chunks array
+    }
+
+    if !subagent_trackers.is_empty() {
+        use ratatui::widgets::Clear;
+        let mut y_offset = main_area.y + 1; // start near top
+        
+        for tracker in subagent_trackers {
+            let elapsed = tracker.started.elapsed().as_secs();
+            let text = format!("⟳ Subagent [{}] · {}s · {} tools", tracker.mode, elapsed, tracker.tool_calls);
+            let width = text.chars().count() as u16 + 4;
+            let height = 3;
+            let x = main_area.x + main_area.width.saturating_sub(width + 2);
+            
+            let rect = ratatui::layout::Rect::new(x, y_offset, width, height);
+            
+            // Drop shadow
+            let shadow_rect = ratatui::layout::Rect::new(x + 1, y_offset + 1, width, height);
+            let shadow_text = vec![Line::from(Span::styled("█".repeat(width as usize), Style::default().fg(ratatui::style::Color::DarkGray))) ; height as usize];
+            frame.render_widget(Paragraph::new(shadow_text), shadow_rect);
+
+            frame.render_widget(Clear, rect);
+
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .border_type(ratatui::widgets::BorderType::Rounded)
+                .style(colors.style_surface1())
+                .border_style(colors.primary());
+            
+            let p = Paragraph::new(Line::from(vec![
+                Span::styled("⟳ ", colors.warning()),
+                Span::styled(format!("Subagent [{}]", tracker.mode), colors.text_primary_bold()),
+                Span::styled(format!(" · {elapsed}s · {} tools", tracker.tool_calls), colors.text_dim()),
+            ])).block(block);
+
+            frame.render_widget(p, rect);
+            
+            y_offset += height + 1;
+        }
     }
 
     (max_skip, input_cursor_pos) // V-04: returned so draw_impl can clamp self.scroll

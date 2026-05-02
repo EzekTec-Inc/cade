@@ -140,23 +140,64 @@ impl Repl {
 
         let buffer = std::sync::Arc::new(parking_lot::Mutex::new(String::new()));
 
-        let on_output: Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>> =
+        let on_output: Option<std::sync::Arc<dyn for<'a> Fn(crate::cli::headless::HeadlessEvent<'a>) + Send + Sync>> =
             if let Some(idx) = live_idx {
                 let app_arc = app_arc.clone();
                 let buffer = buffer.clone();
-                Some(std::sync::Arc::new(move |chunk: &str| {
-                    let mut buf = buffer.lock();
-                    buf.push_str(chunk);
-                    while let Some(pos) = buf.find('\n') {
-                        let line = buf[..pos].to_string();
-                        buf.replace_range(..=pos, "");
-                        let _ = app_arc
-                            .lock()
-                            .append_live_output_line(idx, line);
+                Some(std::sync::Arc::new(move |evt| {
+                    match evt {
+                        crate::cli::headless::HeadlessEvent::Text(chunk) => {
+                            let mut buf = buffer.lock();
+                            buf.push_str(chunk);
+                            while let Some(pos) = buf.find('\n') {
+                                let line = buf[..pos].to_string();
+                                buf.replace_range(..=pos, "");
+                                let _ = app_arc
+                                    .lock()
+                                    .append_live_output_line(idx, line);
+                            }
+                        }
+                        crate::cli::headless::HeadlessEvent::ToolCall(tname) => {
+                            let mut buf = buffer.lock();
+                            let msg = format!("  [Calling {}...]\n", tname);
+                            buf.push_str(&msg);
+                            while let Some(pos) = buf.find('\n') {
+                                let line = buf[..pos].to_string();
+                                buf.replace_range(..=pos, "");
+                                let _ = app_arc
+                                    .lock()
+                                    .append_live_output_line(idx, line);
+                            }
+                        }
+                    }
+                }))
+            } else if background {
+                let app_arc = app_arc.clone();
+                let tid = task_id.clone();
+                let smode = subagent_mode.clone();
+                
+                // Initialize the tracker in the TUI state
+                {
+                    let mut app = app_arc.lock();
+                    app.subagent_trackers.push(cade_tui::subagent_tracker::SubagentTracker::new(tid.clone(), smode));
+                    app.draw_dirty = true;
+                }
+
+                Some(std::sync::Arc::new(move |evt| {
+                    let mut app = app_arc.lock();
+                    if let Some(tracker) = app.subagent_trackers.iter_mut().find(|t| t.task_id == tid) {
+                        match evt {
+                            crate::cli::headless::HeadlessEvent::Text(_) => {
+                                tracker.output_lines += 1;
+                            }
+                            crate::cli::headless::HeadlessEvent::ToolCall(_) => {
+                                tracker.tool_calls += 1;
+                            }
+                        }
+                        app.draw_dirty = true;
                     }
                 }))
             } else {
-                // For background subagents, we just buffer silently or ignore
                 Some(std::sync::Arc::new(|_| {}))
             };
 
@@ -263,6 +304,7 @@ impl Repl {
             let bg_st_label = subagent_mode.clone();
             let bg_task_id = task_id.clone();
             let bg_silent = silent_stream;
+            let bg_app_arc = app_arc.clone();
             tokio::spawn(async move {
                 // Permit held for the lifetime of the spawned task
                 let _permit = sem.acquire_owned().await;
@@ -307,6 +349,13 @@ impl Repl {
                     result,
                     is_error,
                 });
+
+                // Remove tracker
+                {
+                    let mut app = bg_app_arc.lock();
+                    app.subagent_trackers.retain(|t| t.task_id != bg_task_id);
+                    app.draw_dirty = true;
+                }
 
                 // Option 1: terminal BEL on completion.  Only when stdout is
                 // a TTY and the user has not opted into silent subagents.

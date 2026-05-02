@@ -11,6 +11,11 @@ use cade_core::permissions::PermissionManager;
 
 // -- Headless run statistics
 
+pub enum HeadlessEvent<'a> {
+    Text(&'a str),
+    ToolCall(&'a str),
+}
+
 #[derive(Debug, Default)]
 pub struct HeadlessStats {
     pub turn_count: u32,
@@ -48,7 +53,7 @@ pub async fn run_headless(
     permissions: &PermissionManager,
     mcp: &std::sync::Arc<McpManager>,
     hooks: &HookEngine,
-    on_output: Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>>,
+    on_output: Option<std::sync::Arc<dyn for<'a> Fn(HeadlessEvent<'a>) + Send + Sync>>,
 ) -> Result<(String, HeadlessStats)> {
     tracing::debug!("headless: agent={agent_id}");
 
@@ -70,7 +75,7 @@ pub async fn run_headless(
         .stream_message(agent_id, prompt, |msg| {
             if let Some(text) = msg.assistant_text() {
                 if let Some(ref cb) = on_output {
-                    cb(text);
+                    cb(HeadlessEvent::Text(text));
                 } else {
                     let safe = sanitize_for_terminal(text);
                     print!("{safe}");
@@ -407,7 +412,7 @@ async fn process_tool_calls(
     mcp: &std::sync::Arc<McpManager>,
     stats: &mut HeadlessStats,
     hooks: &HookEngine,
-    on_output: &Option<std::sync::Arc<dyn Fn(&str) + Send + Sync>>,
+    on_output: &Option<std::sync::Arc<dyn for<'a> Fn(HeadlessEvent<'a>) + Send + Sync>>,
 ) -> Result<()> {
     let tool_calls: Vec<(String, String, serde_json::Value)> =
         messages.iter().filter_map(|m| m.as_tool_call()).collect();
@@ -426,6 +431,9 @@ async fn process_tool_calls(
     if all_sequential || tool_calls.len() == 1 {
         // -- Sequential path
         for (call_id, tool_name, args) in tool_calls {
+            if let Some(cb) = on_output {
+                cb(HeadlessEvent::ToolCall(&tool_name));
+            }
             let (cid, tname, out, is_err) = run_one_tool(
                 client,
                 agent_id,
@@ -443,7 +451,7 @@ async fn process_tool_calls(
                 .stream_tool_return(agent_id, &cid, &tname, &out, is_err, move |msg: &CadeMessage| {
                     if let Some(text) = msg.assistant_text() {
                         if let Some(ref cb) = on_out_clone {
-                            cb(text);
+                            cb(HeadlessEvent::Text(text));
                         } else {
                             print!("{text}");
                             let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -477,6 +485,9 @@ async fn process_tool_calls(
         let mut sequential_remainder: Vec<(String, String, serde_json::Value)> = Vec::new();
 
         for tc in tool_calls {
+            if let Some(cb) = on_output {
+                cb(HeadlessEvent::ToolCall(&tc.1));
+            }
             if is_sequential_tool(&tc.1) {
                 sequential_remainder.push(tc);
             } else {
@@ -526,7 +537,7 @@ async fn process_tool_calls(
                     .stream_tool_return(agent_id, &call_id, &tname, &out, is_err, move |msg| {
                         if let Some(text) = msg.assistant_text() {
                             if let Some(ref cb) = on_out_clone {
-                                cb(text);
+                                cb(HeadlessEvent::Text(text));
                             } else {
                                 print!("{text}");
                                 let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -562,7 +573,7 @@ async fn process_tool_calls(
                 .stream_tool_return(agent_id, &cid, &tname, &out, is_err, move |msg| {
                     if let Some(text) = msg.assistant_text() {
                         if let Some(ref cb) = on_out_clone {
-                            cb(text);
+                            cb(HeadlessEvent::Text(text));
                         } else {
                             print!("{text}");
                             let _ = std::io::Write::flush(&mut std::io::stdout());

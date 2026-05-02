@@ -884,6 +884,9 @@ pub struct TuiApp {
     /// Width of the input area calculated during the last render.
     pub last_input_width: u16,
 
+    /// Subagent trackers for rendering glass cards in the TUI.
+    pub subagent_trackers: Vec<crate::subagent_tracker::SubagentTracker>,
+
     // -- Skills overlay
 
     // -- Render throttle (R-01)
@@ -1005,6 +1008,7 @@ impl TuiApp {
             queued_count: 0,
             toast: None,
             last_input_width: 80,
+            subagent_trackers: Vec::new(),
             draw_dirty: false,
             last_draw_at: Instant::now(),
             colors,
@@ -1281,6 +1285,7 @@ impl TuiApp {
                 &colors,
                 &mut self.last_input_width,
                 nerd,
+                &self.subagent_trackers,
             );
             max_skip = m_skip;
             input_cursor_pos = cur_pos;

@@ -29,6 +29,7 @@ pub mod question;
 pub mod session_tree;
 pub mod skills;
 pub mod slots;
+pub mod subagent_tracker;
 
 pub use app::{RenderLine, ToastLevel, TuiApp, cycle_mode, cycle_mode_back, truncate_str};
 pub use autocomplete::{
