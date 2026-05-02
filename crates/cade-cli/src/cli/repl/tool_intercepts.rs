@@ -1,7 +1,7 @@
 use super::{BackgroundResult, Repl};
 use crate::Result;
 use cade_agent::subagents::{
-    discover_all_subagents, resolve_subagent_def, should_emit_completion_bell,
+    discover_all_subagents, resolve_subagent_def, should_emit_completion_bell, SubagentConfig,
 };
 use std::sync::Arc;
 
@@ -13,35 +13,18 @@ impl Repl {
         call_id: &str,
         args: &serde_json::Value,
     ) -> Result<cade_agent::tools::ToolResult> {
-        let subagent_mode = args["mode"]
-            .as_str()
-            .unwrap_or("build")
-            .trim()
-            .to_string();
-        let mut prompt = args["prompt"].as_str().unwrap_or("").trim().to_string();
-        let background = args["background"].as_bool().unwrap_or(false);
-        let silent_stream = args["silent_stream"].as_bool().unwrap_or(false)
-            || self.settings.lock().silent_subagents();
-        let test_command = args["test_command"].as_str().map(|s| s.trim().to_string());
-        let agent_id_arg = args["agent_id"].as_str().map(|s| s.trim().to_string());
-        let model_override = args["model"].as_str().map(|s| s.trim().to_string());
-        let custom_system_prompt = args["system_prompt"].as_str().map(|s| s.trim().to_string());
-        let custom_description = args["description"].as_str().map(|s| s.trim().to_string());
-        let human_review = args["human_review"].as_bool().unwrap_or(false);
+        // -- Parse all args through the shared SubagentConfig ----------------
+        let mut cfg = SubagentConfig::from_args(args);
+        // silent_stream may also be forced by the user's settings
+        cfg.silent_stream |= self.settings.lock().silent_subagents();
 
-        if prompt.is_empty() {
+        if let Err(reason) = cfg.validate() {
             return Ok(cade_agent::tools::ToolResult {
                 tool_call_id: call_id.to_string(),
                 tool_name: "run_subagent".to_string(),
-                output: "error: 'prompt' is required".to_string(),
+                output: reason,
                 is_error: true,
             });
-        }
-
-        if let Some(cmd) = &test_command {
-            prompt.push_str(&format!(
-                "\n\nCRITICAL PROOF OF WORK REQUIRED: You MUST run the following test command to verify your fix: `{cmd}`. Do not return until this command passes. The main agent will execute this command on the host system to verify your work. If it fails, your answer will be rejected."
-            ));
         }
 
         // Resolve subagent definition.  Tries an exact name match against
@@ -50,10 +33,14 @@ impl Repl {
         // back to the built-in `worker` so existing callers passing
         // `mode="build"` / `mode="plan"` keep working unchanged.
         let all_defs = discover_all_subagents(&self.cwd);
-        let def_opt = resolve_subagent_def(&subagent_mode, &all_defs).cloned();
+        let def_opt = resolve_subagent_def(&cfg.mode, &all_defs).cloned();
 
-        // Determine if using existing stateful agent or ephemeral
-        let _use_existing_agent = agent_id_arg.is_some();
+        // Convenience aliases used throughout the function
+        let subagent_mode = cfg.mode.clone();
+        let background    = cfg.background;
+        let silent_stream = cfg.silent_stream;
+        let human_review  = cfg.human_review;
+        let prompt        = cfg.prompt_with_test_command();
 
         // Show progress
         self.tui_dim(format!(
@@ -78,7 +65,6 @@ impl Repl {
         let parent_agent_id = self.agent_id();
         let hooks = self.hooks.clone();
 
-        let test_command_c = test_command.clone();
         let cwd_c = self.cwd.clone();
         let task_id = uuid::Uuid::new_v4().to_string()[..8].to_string();
         let task_id_c = task_id.clone();
@@ -92,39 +78,7 @@ impl Repl {
                 .get_memory(&parent_agent_id)
                 .await
                 .unwrap_or_default();
-            parent_blocks
-                .into_iter()
-                .filter(|b| {
-                    // Include pinned and short-tier blocks; skip internal bookkeeping and orchestration blocks.
-                    let dominated = b.label.starts_with("__");
-                    let is_orchestration = b.label == "active_goal" || b.label == "session_summary";
-                    let tier_ok = b
-                        .tier
-                        .as_deref()
-                        .is_none_or(|t| t == "pinned" || t == "short");
-                    !dominated && !is_orchestration && tier_ok && !b.value.trim().is_empty()
-                })
-                .map(|b| cade_agent::agent::client::MemoryBlock {
-                    label: b.label,
-                    value: {
-                        // Cap each block to keep the seed compact.
-                        let max = 1500;
-                        if b.value.chars().count() > max {
-                            let end = b
-                                .value
-                                .char_indices()
-                                .nth(max)
-                                .map(|(i, _)| i)
-                                .unwrap_or(b.value.len());
-                            format!("{}…", &b.value[..end])
-                        } else {
-                            b.value
-                        }
-                    },
-                    description: b.description,
-                    tier: None, // server defaults to short
-                })
-                .collect()
+            SubagentConfig::build_seed_memory(parent_blocks)
         };
 
         let app_arc = self.app.clone();
@@ -205,34 +159,22 @@ impl Repl {
             };
 
         let run_task = {
-            let subagent_mode_c = subagent_mode.clone();
             let task_id_c = task_id.clone();
-            let _prompt_preview_c = prompt_preview.clone();
             async move {
                 // Determine agent to use
-                let (sub_agent_id, ephemeral) = if let Some(existing_id) = agent_id_arg {
+                let (sub_agent_id, ephemeral) = if let Some(existing_id) = cfg.agent_id.clone() {
                     (existing_id, false)
                 } else {
-                    // Create ephemeral agent
-                    let mut final_system_prompt = custom_system_prompt
-                        .or_else(|| def_opt.as_ref().map(|d| d.system_prompt.clone()))
-                        .unwrap_or_else(|| {
-                            "You are a helpful coding assistant. Complete the task and report back."
-                                .to_string()
-                        });
-
-                    final_system_prompt.push_str("\n\nCRITICAL SYSTEM OVERRIDE: You are running in a headless autonomous loop. You MUST call tools to accomplish the task. Do NOT ask for permission or emit conversational filler without calling a tool. If you output plain text without a tool call, your execution terminates immediately. When the task is complete, summarize your findings and stop.");
-
-                    let final_description = custom_description
-                        .unwrap_or_else(|| format!("Ephemeral subagent: {subagent_mode_c}"));
-
-                    let model = model_override
-                        .clone()
-                        .or_else(|| def_opt.as_ref().and_then(|d| d.model.clone()))
+                    // Build system prompt + model via shared config methods
+                    let final_system_prompt = cfg.resolve_system_prompt(def_opt.as_ref());
+                    let final_description   = cfg.ephemeral_description();
+                    let model = cfg
+                        .resolve_model(def_opt.as_ref())
+                        .map(|s| s.to_string())
                         .unwrap_or_else(|| cade_ai::catalogue::fast_model_for_main_model(&main_model));
 
                     let req = cade_agent::agent::client::CreateAgentRequest {
-                        name: Some(format!("subagent-{}-{}", subagent_mode_c, task_id_c)),
+                        name: Some(cfg.ephemeral_agent_name(&task_id_c)),
                         model,
                         description: Some(final_description),
                         system_prompt: Some(final_system_prompt),
@@ -269,7 +211,7 @@ impl Repl {
                 
                 // Verify Proof of Work
                 if !is_error
-                    && let Some(cmd) = test_command_c {
+                    && let Some(cmd) = cfg.test_command.as_deref() {
                         match std::process::Command::new("bash")
                             .arg("-c")
                             .arg(&cmd)

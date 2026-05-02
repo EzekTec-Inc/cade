@@ -2005,56 +2005,38 @@ async fn handle_run_subagent_tool(
     args: &serde_json::Value,
     sse_tx: tokio::sync::mpsc::Sender<Result<axum::response::sse::Event, std::convert::Infallible>>,
 ) -> cade_agent::tools::manager::ToolResult {
+    use cade_agent::subagents::SubagentConfig;
     use cade_agent::tools::manager::ToolResult;
     use cade_ai::LlmMessage;
 
-    let prompt = args["prompt"].as_str().unwrap_or("").trim().to_string();
-    let mode = args["mode"].as_str().unwrap_or("build").to_string();
-    let background = args["background"].as_bool().unwrap_or(false);
-    let model_override = args["model"].as_str().map(|s| s.to_string());
-    // Bug 3 fix: parse caller-provided system_prompt + description (previously ignored).
-    let custom_system_prompt = args["system_prompt"]
-        .as_str()
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty());
-    let _description = args["description"]
-        .as_str()
-        .unwrap_or("subagent task")
-        .to_string();
+    // -- Parse + validate args through shared SubagentConfig -----------------
+    let cfg = SubagentConfig::from_args(args);
 
-    // Recursion-depth guard.  When a subagent spawns another subagent, the
-    // dispatching code injects `_subagent_depth = parent_depth + 1` into the
-    // arguments before re-entering this function (see Approach C).  The
-    // global semaphore (default 4 permits) only bounds *concurrent*
-    // subagents, not *nested* ones — without this guard a subagent tree
-    // could grow unboundedly deep until permits run out.  Default cap is
-    // intentionally small (3) because deep nesting is almost always a
-    // prompt-engineering bug, not legitimate use.
+    // Recursion-depth guard.  When a subagent spawns another subagent the
+    // dispatcher injects `_subagent_depth = parent_depth + 1` into the
+    // arguments before re-entering this function.  Default cap is 3.
     let max_depth: usize = std::env::var("CADE_SUBAGENT_MAX_DEPTH")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(3);
-    let depth: usize = args["_subagent_depth"]
-        .as_u64()
-        .map(|n| n as usize)
-        .unwrap_or(0);
-    if depth >= max_depth {
+    if cfg.depth >= max_depth {
         return ToolResult {
             tool_call_id: tool_call_id.to_string(),
             tool_name: "run_subagent".to_string(),
             output: format!(
-                "error: subagent recursion depth {depth} exceeds CADE_SUBAGENT_MAX_DEPTH ({max_depth}). \
-                 Refusing to spawn deeper. Restructure the task or raise the limit if intentional."
+                "error: subagent recursion depth {} exceeds CADE_SUBAGENT_MAX_DEPTH ({max_depth}). \
+                 Refusing to spawn deeper. Restructure the task or raise the limit if intentional.",
+                cfg.depth
             ),
             is_error: true,
         };
     }
 
-    if prompt.is_empty() {
+    if let Err(reason) = cfg.validate() {
         return ToolResult {
             tool_call_id: tool_call_id.to_string(),
             tool_name: "run_subagent".to_string(),
-            output: "error: 'prompt' is required".to_string(),
+            output: reason,
             is_error: true,
         };
     }
@@ -2072,24 +2054,32 @@ async fn handle_run_subagent_tool(
         }
     };
 
-    let subagent_id = format!("sa_{}", &uuid::Uuid::new_v4().to_string()[..8]);
-    let task_preview: String = prompt.chars().take(80).collect();
+    let subagent_id   = format!("sa_{}", &uuid::Uuid::new_v4().to_string()[..8]);
+    let task_preview: String = cfg.prompt.chars().take(80).collect();
+    let prompt        = cfg.prompt_with_test_command();
 
-    // Resolve model
-    let model = model_override.unwrap_or_else(|| {
-        cade_store::sqlite::get_agent(&state.db, parent_agent_id)
-            .ok()
-            .flatten()
-            .map(|a| a.model)
-            .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string())
-    });
+    // Resolve subagent definition + model via shared helpers
+    let cwd_for_defs = std::env::current_dir().unwrap_or_default();
+    let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
+    let def_opt  = cade_agent::subagents::resolve_subagent_def(&cfg.mode, &all_defs);
+
+    let model = cfg
+        .resolve_model(def_opt)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            cade_store::sqlite::get_agent(&state.db, parent_agent_id)
+                .ok()
+                .flatten()
+                .map(|a| a.model)
+                .unwrap_or_else(|| "claude-sonnet-4-20250514".to_string())
+        });
 
     // Stream subagent_started event
     let started_event = json!({
         "message_type": "subagent_started",
         "subagent_id": &subagent_id,
         "task": &task_preview,
-        "mode": &mode,
+        "mode": &cfg.mode,
         "model": &model,
     });
     let ev = axum::response::sse::Event::default().data(started_event.to_string());
@@ -2097,72 +2087,32 @@ async fn handle_run_subagent_tool(
 
     let start_time = std::time::Instant::now();
 
-    // Bug 3 fix: resolve the subagent definition by `mode` (custom or built-in).
-    // Falls back to the built-in `worker` when no custom definition matches.
-    let cwd_for_defs = std::env::current_dir().unwrap_or_default();
-    let all_defs = cade_agent::subagents::discover_all_subagents(&cwd_for_defs);
-    let def_opt = cade_agent::subagents::resolve_subagent_def(&mode, &all_defs);
-    let def_system_prompt: Option<String> = def_opt.map(|d| d.system_prompt.clone());
+    // Build system prompt via shared resolution chain
+    let system_prompt_base = cfg.resolve_system_prompt(def_opt);
+    // Append "Task: <prompt>" so the subagent sees it in the system context
+    // (the prompt is also sent as a separate user message below).
+    let system_prompt = format!("{system_prompt_base}\n\nTask: {prompt}");
 
-    // Bug 2 fix: build a substantive system prompt.
-    //
-    // Resolution order:
-    //   1. caller's explicit `system_prompt` argument (highest priority)
-    //   2. the resolved subagent definition's system prompt
-    //   3. mode-aware built-in default
-    //
-    // For `mode == "plan"` we always append a strict read-only directive,
-    // even if a custom prompt is supplied — plan mode must be safe by
-    // construction.
-    let mode_directive = if mode == "plan" {
-        "\n\nIMPORTANT: You are in PLAN mode. Analyze and report only. \
-         Do NOT modify files, do NOT run mutating commands, do NOT use \
-         write_file / edit_file / apply_patch."
-    } else {
-        ""
-    };
-    let base_prompt = custom_system_prompt
-        .or(def_system_prompt)
-        .unwrap_or_else(|| {
-            "You are a CADE subagent — an autonomous coding assistant spawned \
-             to complete a focused task. You have access to the full CADE \
-             tool suite (file operations, shell, search, memory). Use tools \
-             aggressively to gather information before answering. Return a \
-             concise final summary describing what you did, what you found, \
-             and any follow-ups for the parent agent. Do NOT ask the parent \
-             clarifying questions — make reasonable assumptions and proceed."
-                .to_string()
-        });
-    let system_prompt = format!("{base_prompt}{mode_directive}\n\nTask: {prompt}");
-
-    // Bug 5 fix: seed the parent agent's pinned + short-tier memory blocks
-    // into the subagent's system prompt so it inherits project context,
-    // persona, and the active goal. Each block is capped at 1500 chars to
-    // keep the seed compact. Only included when the parent has any blocks.
+    // Seed the parent agent's pinned + short-tier memory blocks into the
+    // subagent's system prompt so it inherits project context, persona,
+    // and the active goal.  Uses the shared SubagentConfig helper to
+    // ensure filtering and capping are identical in both paths.
     let seed_section: String = {
-        match cade_store::sqlite::get_active_blocks(&state.db, parent_agent_id) {
-            Ok(blocks) if !blocks.is_empty() => {
-                let mut out = String::from("\n\n# Inherited memory (from parent agent)\n");
-                for (label, value, _desc, _tier, _last_turn) in blocks {
-                    if label.starts_with("__") || value.trim().is_empty() {
-                        continue;
-                    }
-                    let capped = if value.chars().count() > 1500 {
-                        let end = value
-                            .char_indices()
-                            .nth(1500)
-                            .map(|(i, _)| i)
-                            .unwrap_or(value.len());
-                        format!("{}…", &value[..end])
-                    } else {
-                        value
-                    };
-                    out.push_str(&format!("\n## {label}\n{capped}\n"));
+        let raw_blocks = cade_store::sqlite::get_active_blocks(&state.db, parent_agent_id)
+            .unwrap_or_default();
+        let seed: Vec<cade_agent::agent::client::MemoryBlock> = raw_blocks
+            .into_iter()
+            .map(|(label, value, description, tier, _last_turn)| {
+                cade_agent::agent::client::MemoryBlock {
+                    label,
+                    value,
+                    description: if description.is_empty() { None } else { Some(description) },
+                    tier: if tier.is_empty() { None } else { Some(tier) },
                 }
-                out
-            }
-            _ => String::new(),
-        }
+            })
+            .collect();
+        let filtered = SubagentConfig::build_seed_memory(seed);
+        SubagentConfig::format_seed_section(&filtered)
     };
     let system_prompt_full = format!("{system_prompt}{seed_section}");
 
@@ -2224,7 +2174,7 @@ async fn handle_run_subagent_tool(
     let mut messages = messages_init;
     let mut last_text = String::new();
     let mut llm_err: Option<String> = None;
-    let next_depth = depth + 1;
+    let next_depth = cfg.depth + 1;
 
     for _iter in 0..max_iters {
         let llm_req = cade_ai::CompletionRequest {
@@ -2364,7 +2314,7 @@ async fn handle_run_subagent_tool(
     let ev = axum::response::sse::Event::default().data(complete_event.to_string());
     let _ = sse_tx.send(Ok(ev)).await;
 
-    if background {
+    if cfg.background {
         let sr = crate::server::state::SubagentResult {
             subagent_id: subagent_id.clone(),
             tool_call_id: tool_call_id.to_string(),

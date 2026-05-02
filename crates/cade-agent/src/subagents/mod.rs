@@ -1,5 +1,8 @@
 // region:    --- Modules
 
+pub mod config;
+
+pub use config::SubagentConfig;
 
 use crate::Result;
 use std::path::{Path, PathBuf};
