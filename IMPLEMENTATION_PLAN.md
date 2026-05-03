@@ -460,3 +460,8 @@ _Append entries here as work items are finished._
 | 2026-05-01 | WI-9 (Follow-up) | `03444456` | Added mobile touch gestures (swipe to dismiss overlays, swipe to control sidebar drawer) |
 | 2026-05-01 | GUI Bug | `151002bb` | Fixed text input field horizontal overflow, word wrapping, and newline bugs in the web dashboard |
 | 2026-05-01 | TUI Bug | `94fb88d0` | Removed excess padding from the inline question modal |
+| 2026-05-02 | Subagent P1 | `753ff3a0` | Isolated server subagent memory via ephemeral DB row |
+| 2026-05-02 | Subagent P2 | `209e9cb2` | Extracted SubagentConfig shared orchestration |
+| 2026-05-02 | Subagent P3 | `b0d01ed0` | Split run.rs monolith (4,485 lines) into run/ submodules |
+| 2026-05-02 | Security | `1d542283` | Updated rustls-webpki 0.103.12→0.103.13 (RUSTSEC-2026-0104) |
+| 2026-05-02 | Tech Debt | `1f097663` | Updated roadmap, upgraded lru 0.12→0.16 (RUSTSEC-2026-0002) |
