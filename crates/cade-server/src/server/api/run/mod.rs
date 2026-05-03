@@ -407,8 +407,12 @@ async fn run_agent_loop(
         }
 
         // ── Build context ─────────────────────────────────────────────
+        // Fix: only increment the turn counter on the first iteration
+        // (the actual user message). Subsequent iterations are tool-return
+        // re-invocations — they should read, not advance, the staleness clock.
+        let is_tool_return = turns > 1;
         let (model, messages, tools) =
-            match build_context(&state2, &agent_id2, conv_id2.as_deref(), false).await {
+            match build_context(&state2, &agent_id2, conv_id2.as_deref(), is_tool_return).await {
                 Ok(ctx) => ctx,
                 Err(e) => {
                     send(json!({ "message_type": "error", "error": e })).await;
@@ -477,7 +481,7 @@ async fn run_agent_loop(
                     &state2,
                     &agent_id2,
                     conv_id2.as_deref(),
-                    false,
+                    is_tool_return, // reuse — never double-increment on retry
                 )
                 .await
                 {
