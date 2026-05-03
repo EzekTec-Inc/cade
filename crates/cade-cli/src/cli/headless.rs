@@ -28,17 +28,22 @@ pub struct HeadlessStats {
 /// Returns true for tools that mutate shared agent state and must run sequentially.
 ///
 /// These tools interact with the agent's memory or skills system and cannot be
-/// safely parallelised with other calls in the same turn:
-///   - `update_memory`     — writes to the agent memory block store
-///   - `load_skill`        — reads skills and triggers a follow-up turn
-///   - `install_skill`     — installs skills (file writes + agent state)
-///   - `run_skill_script`  — executes a skill script (side-effects)
-///   - `load_skill_ref`    — lazy-loads a reference doc
+/// safely parallelised with other calls in the same turn.
+///
+/// Classification is discovered from the meta-tool registry rather than a
+/// hardcoded name list — any tool registered as a meta tool is sequential.
 fn is_sequential_tool(name: &str) -> bool {
-    matches!(
-        name,
-        "update_memory" | "load_skill" | "unload_skill" | "install_skill" | "run_skill_script" | "load_skill_ref"
-    )
+    use std::sync::LazyLock;
+
+    // Build the set once from the meta-tool registry at first call.
+    static META_NAMES: LazyLock<std::collections::HashSet<String>> = LazyLock::new(|| {
+        cade_agent::tools::meta::all_meta_schemas()
+            .into_iter()
+            .filter_map(|s| s["name"].as_str().map(String::from))
+            .collect()
+    });
+
+    META_NAMES.contains(name)
 }
 
 // -- Text mode (default)

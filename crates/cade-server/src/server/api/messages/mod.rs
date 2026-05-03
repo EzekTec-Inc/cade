@@ -25,25 +25,6 @@ const CONV_TITLE_MAX: usize = 60;
 /// tool schemas.  MCP tools (identified by `__` namespace separator) are only
 /// sent when actually called within this window, saving prompt tokens.
 pub(crate) const RECENT_WINDOW: usize = 20;
-/// Tool names that must always appear in the tool-schema list even when extended
-/// tools are pruned on long conversations.  These are the agent's primary
-/// mechanism for recovering archived context and must never be silently dropped.
-///
-/// NOTE: As of the ITS cleanup, CADE-owned tools (meta + native) are never
-/// compressed — only MCP tools (containing `__`) are.  This list is retained
-/// for the desktop_* pruning filter: tools listed here bypass the
-/// `EXTENDED_TOOL_PREFIXES` prune even if unused in the recent window.
-pub(crate) const ALWAYS_INCLUDE_TOOL_NAMES: &[&str] = &[
-    "search_memory",
-    "conversation_search",
-    "query_event_log",
-    "archival_memory_insert",
-    "archival_memory_search",
-    "update_memory",
-    "memory_apply_patch",
-    "load_skill",
-    "unload_skill",
-];
 /// Minimum character budget for pinned memory blocks (always injected, highest priority).
 pub(crate) const PINNED_BUDGET_MIN: usize = 10_000;
 /// Minimum character budget for short-term active memory blocks (full fidelity).

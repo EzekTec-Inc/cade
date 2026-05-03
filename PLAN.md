@@ -1,3 +1,35 @@
+## 2026-05-03T22:15:00Z — refactor(its): replace hardcoded tool name lists with tag-based discovery
+
+**Task:** Remove all hardcoded tool name lists from ITS. Use DB registration tags (`"cade"`, `"meta"`, `"mcp"`) to classify tools dynamically. Use meta-tool registry for sequential-tool classification.
+
+**Files modified:**
+- `crates/cade-server/src/server/api/messages/context.rs` (carry tags alongside schemas; use `"mcp"` tag for prune/compress decisions instead of name heuristics)
+- `crates/cade-server/src/server/api/messages/mod.rs` (removed `ALWAYS_INCLUDE_TOOL_NAMES` constant — no longer needed)
+- `crates/cade-server/src/server/api/messages/tests.rs` (replaced hardcoded-name tests with tag-contract tests)
+- `crates/cade-cli/src/cli/headless.rs` (replaced hardcoded `is_sequential_tool` match with `LazyLock` set built from `all_meta_schemas()` registry)
+- `docs/intelligent-tool-selection.md` (updated to reflect tag-based discovery)
+
+**Previous behavior:**
+- `ALWAYS_INCLUDE_TOOL_NAMES` hardcoded 9 tool names for prune bypass.
+- `name.contains("__")` heuristic used to identify MCP tools for compression.
+- `is_sequential_tool` hardcoded 6 tool names for parallel-execution safety.
+- Adding a new meta tool required manually updating 3 separate lists.
+
+**New behavior:**
+- ITS reads `tags` from the DB `ToolRow` and checks for `"mcp"` tag to identify third-party tools.
+- CADE-owned tools (no `"mcp"` tag) are never pruned or compressed.
+- `is_sequential_tool` discovers meta tools from `all_meta_schemas()` at first call via `LazyLock`.
+- Adding a new meta tool only requires adding its schema to `meta.rs` — all downstream logic auto-discovers it.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git revert HEAD
+```
+
+---
+
 ## 2026-05-03T21:30:00Z — refactor(its): remove vaporware reranker, exempt CADE tools from compression
 
 **Task:** Clean up the Intelligent Tool Selection system — remove non-existent reranker documentation, exempt all CADE-owned tools from description compression, keep compression only for MCP (third-party) tools.

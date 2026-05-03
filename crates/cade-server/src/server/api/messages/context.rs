@@ -908,32 +908,40 @@ pub(crate) async fn build_context(
         messages = system_msgs.into_iter().chain(sanitized).collect();
     }
 
-    // Tool schemas — use agent-specific tools if wired, else all tools
+    // Tool schemas — use agent-specific tools if wired, else all tools.
+    // Carry tags alongside each schema so ITS decisions are tag-driven
+    // (no hardcoded tool name lists).
     let agent_tool_ids = sqlite::get_agent_tool_ids(&state.db, agent_id).unwrap_or_default();
     let all_tools = sqlite::list_tools(&state.db).unwrap_or_default();
-    let tool_schemas: Vec<Value> = if agent_tool_ids.is_empty() {
-        // Not yet wired → provide all registered tools (backwards-compatible)
+    let tagged_schemas: Vec<(Value, Vec<String>)> = if agent_tool_ids.is_empty() {
         all_tools
             .into_iter()
-            .filter_map(|t| t.json_schema)
+            .filter_map(|t| t.json_schema.map(|s| (s, t.tags)))
             .collect()
     } else {
         all_tools
             .into_iter()
             .filter(|t| agent_tool_ids.contains(&t.id))
-            .filter_map(|t| t.json_schema)
+            .filter_map(|t| t.json_schema.map(|s| (s, t.tags)))
             .collect()
     };
 
-    // Lazy tool schema loading: on long conversations, desktop_* tools are pruned
-    // unless they were actually called in the recent message window.  This saves
-    // prompt tokens for sessions that never use desktop features.
-    const EXTENDED_TOOL_PREFIXES: &[&str] = &["desktop_"];
+    // ── ITS Layer 1: prune + compress ─────────────────────────────────────
+    //
+    // On long sessions (> RECENT_WINDOW messages):
+    //   1. Prune: MCP tools unused in the recent window are removed entirely
+    //      when they belong to an "extended" prefix group (e.g. desktop_*).
+    //   2. Compress: MCP tools (tagged "mcp") that haven't been called
+    //      recently get their descriptions truncated to save prompt tokens.
+    //   3. CADE-owned tools (tagged "cade" without "mcp") are NEVER pruned
+    //      or compressed — the LLM needs full descriptions to reliably call
+    //      them.
+    //
+    // Tool classification is discovered from DB registration tags, not from
+    // hardcoded name lists.
+
     let is_long_session = messages.len() > 1 + RECENT_WINDOW;
 
-    // Collect tool names called in the recent window.  Used for both the
-    // prune step (drop entire desktop_* schema if unused) and the P5
-    // compression step (strip descriptions on unused MCP schemas).
     let recently_used: std::collections::HashSet<String> = if is_long_session {
         let recent_start = messages.len().saturating_sub(RECENT_WINDOW);
         messages[recent_start..]
@@ -946,31 +954,24 @@ pub(crate) async fn build_context(
     };
 
     let tool_schemas: Vec<Value> = if is_long_session {
-        tool_schemas
+        tagged_schemas
             .into_iter()
-            .filter(|schema| {
+            .filter(|(schema, tags)| {
                 let name = schema["name"].as_str().unwrap_or("");
-                // Safety net: never prune tools in the always-include list.
-                if ALWAYS_INCLUDE_TOOL_NAMES.contains(&name) {
+                let is_mcp = tags.contains(&"mcp".to_string());
+                // CADE-owned tools are never pruned.
+                if !is_mcp {
                     return true;
                 }
-                let is_extended = EXTENDED_TOOL_PREFIXES.iter().any(|p| name.starts_with(p));
-                !is_extended || recently_used.contains(name)
+                // MCP tools with a desktop_* prefix are pruned if unused.
+                let is_desktop = name.starts_with("desktop_");
+                !is_desktop || recently_used.contains(name)
             })
-            // P5: compress unused MCP tool schemas on long sessions.
-            //
-            // CADE-owned tools (meta + native) never have `__` in their name
-            // and always keep full descriptions — compressing them causes
-            // tool blindness (the model fails to call tools whose purpose
-            // it can't understand from a truncated 80-char stub).
-            //
-            // MCP tools (identified by `__` namespace separator) are
-            // third-party and numerous (50-100+).  Compressing unused MCP
-            // schemas saves ~10-15K tokens/request without affecting CADE's
-            // core tool reliability.
-            .map(|schema| {
+            // Compress unused MCP tool schemas.  CADE-owned tools keep full
+            // descriptions; MCP tools not called recently get truncated.
+            .map(|(schema, tags)| {
                 let name = schema["name"].as_str().unwrap_or("").to_string();
-                let is_mcp = name.contains("__");
+                let is_mcp = tags.contains(&"mcp".to_string());
                 if !is_mcp || recently_used.contains(&name) {
                     schema
                 } else {
@@ -979,7 +980,7 @@ pub(crate) async fn build_context(
             })
             .collect()
     } else {
-        tool_schemas
+        tagged_schemas.into_iter().map(|(s, _)| s).collect()
     };
 
     // ── Intelligent tool selection ────────────────────────────────────────────

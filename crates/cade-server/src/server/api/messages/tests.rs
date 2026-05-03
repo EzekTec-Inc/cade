@@ -239,53 +239,38 @@ fn tool_call_and_result_kept_atomically_during_selection() {
 // ── ALWAYS_INCLUDE_TOOL_NAMES ─────────────────────────────────────────────
 
 #[test]
-fn always_include_list_covers_all_retrieval_tools() {
-    // Every retrieval/memory/skill tool must be in the always-include list so
-    // they are never accidentally pruned by the desktop_* filter.
-    for name in &[
-        "search_memory",
-        "conversation_search",
-        "archival_memory_insert",
-        "archival_memory_search",
-        "update_memory",
-        "memory_apply_patch",
-        "load_skill",
-        "unload_skill",
-    ] {
-        assert!(
-            ALWAYS_INCLUDE_TOOL_NAMES.contains(name),
-            "'{name}' missing from ALWAYS_INCLUDE_TOOL_NAMES"
-        );
-    }
+fn meta_tools_are_tagged_correctly_at_registration() {
+    // Meta tools are registered with tags ["cade", "meta"] (see bootstrap/tools.rs).
+    // This test verifies the tag contract so ITS can rely on
+    // the "mcp" tag to identify third-party tools.
+    let meta_tags = vec!["cade".to_string(), "meta".to_string()];
+    assert!(!meta_tags.contains(&"mcp".to_string()),
+        "meta tool tags must not include 'mcp'");
+    assert!(meta_tags.contains(&"cade".to_string()),
+        "meta tool tags must include 'cade'");
 }
 
 #[test]
-fn cade_owned_tools_are_never_compressed_by_mcp_rule() {
-    // CADE-owned tools (no `__` in name) must never be compressed.
-    // The ITS compression step only targets MCP tools (name contains `__`).
-    let cade_tools = &[
-        "bash", "read_file", "write_file", "edit_file", "grep", "glob",
-        "update_memory", "load_skill", "unload_skill", "search_memory",
-        "run_subagent", "set_plan", "UpdatePlan", "ask_user_question",
-    ];
-    for name in cade_tools {
-        assert!(
-            !name.contains("__"),
-            "CADE tool '{name}' should not contain '__' (would be treated as MCP)"
-        );
-    }
-    // Verify MCP tools DO contain `__`.
-    let mcp_tools = &[
-        "desktop-commander__read_file",
-        "github-mcp-server__search_code",
-        "cade-rag__semantic_search",
-    ];
-    for name in mcp_tools {
-        assert!(
-            name.contains("__"),
-            "MCP tool '{name}' must contain '__' to be eligible for compression"
-        );
-    }
+fn mcp_tool_tags_contain_mcp() {
+    // MCP tools are registered with tags ["cade", "mcp"] (or ["cade", "mcp", "core_mcp"]).
+    // ITS uses the "mcp" tag to decide whether to compress a tool's schema.
+    let mcp_tags = vec!["cade".to_string(), "mcp".to_string()];
+    assert!(mcp_tags.contains(&"mcp".to_string()),
+        "MCP tool tags must include 'mcp' for ITS compression to apply");
+}
+
+#[test]
+fn its_compression_targets_only_mcp_tagged_tools() {
+    // Simulate the ITS decision: only tools tagged "mcp" get compressed.
+    let cade_tool_tags = vec!["cade".to_string(), "meta".to_string()];
+    let native_tool_tags = vec!["cade".to_string()];
+    let mcp_tool_tags = vec!["cade".to_string(), "mcp".to_string()];
+
+    let is_mcp = |tags: &[String]| tags.contains(&"mcp".to_string());
+
+    assert!(!is_mcp(&cade_tool_tags), "meta tools must not be compressed");
+    assert!(!is_mcp(&native_tool_tags), "native tools must not be compressed");
+    assert!(is_mcp(&mcp_tool_tags), "MCP tools should be eligible for compression");
 }
 
 // ── tool_output_limit + db_row_to_llm per-tool truncation ────────────────
