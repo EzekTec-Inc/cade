@@ -16,6 +16,16 @@ pub struct BlockInfo {
     pub updated_at: i64,
 }
 
+/// A3: Rich archived excerpt with retrieval hints.
+#[derive(Debug, Clone)]
+pub struct LongTermExcerpt {
+    pub label: String,
+    pub excerpt: String,      // 250 chars
+    pub keywords: Vec<String>, // top 5 distinctive terms
+    pub char_count: usize,    // total chars in original value
+    pub turns_idle: i64,
+}
+
 /// Create a standalone block with NO agent attachment.
 /// Returns the new block ID (UUID).
 pub fn create_standalone_block(
@@ -146,6 +156,41 @@ fn block_info_from_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<BlockInfo> {
         max_chars: r.get::<_, Option<i64>>(5)?.map(|n| n as usize),
         updated_at: r.get(6)?,
     })
+}
+
+/// A3: Extract distinctive keywords from text using simple TF-IDF-like scoring.
+/// Splits text on non-alphanumeric chars, lowercases, filters stop words,
+/// scores by len × frequency, and returns top `max` unique words.
+fn extract_keywords(text: &str, max: usize) -> Vec<String> {
+    let stop_words: &[&str] = &[
+        "the", "a", "an", "is", "are", "was", "were", "in", "on", "at", "to", "for", "of", "with",
+        "and", "or", "but", "not", "this", "that", "it", "be", "as", "by", "from", "has", "had",
+        "have", "which", "their", "they", "we", "you", "he", "she", "if", "do", "my", "no", "so",
+        "up", "out", "all", "use", "can", "will", "one", "when", "than", "each", "its", "been",
+        "who", "into", "may", "would", "could", "should", "some", "such", "also", "then", "just",
+        "like", "other", "more", "about", "these", "those", "only", "very", "how", "after", "new",
+        "any", "most", "what", "both", "did", "let", "get", "our", "his", "her"
+    ];
+
+    let mut word_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    
+    // Split on non-alphanumeric chars, lowercase, filter stop words
+    for word in text
+        .split(|c: char| !c.is_alphanumeric())
+        .map(|w| w.to_lowercase())
+        .filter(|w| !w.is_empty() && !stop_words.contains(&w.as_str()))
+    {
+        *word_counts.entry(word).or_insert(0) += 1;
+    }
+
+    // Score by len * frequency and take top `max`
+    let mut scored: Vec<(String, usize)> = word_counts
+        .into_iter()
+        .map(|(word, freq)| (word.clone(), word.len() * freq))
+        .collect();
+    
+    scored.sort_by(|a, b| b.1.cmp(&a.1)); // Sort by score desc
+    scored.into_iter().take(max).map(|(word, _)| word).collect()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -636,13 +681,13 @@ pub fn get_active_blocks(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-/// Fetch long-term blocks: label + first 80 chars of value, ordered by last_turn DESC.
-/// Returns (label, excerpt, turns_idle) where turns_idle = current_turn - last_turn.
+/// Fetch long-term blocks with rich excerpts (A3).
+/// Returns LongTermExcerpt with 250-char excerpts, keywords, char counts, and idle turn count.
 pub fn get_long_term_excerpts(
     db: &Db,
     agent_id: &str,
     current_turn: i64,
-) -> Result<Vec<(String, String, i64)>> {
+) -> Result<Vec<LongTermExcerpt>> {
     let conn = db
         .lock();
     let mut stmt = conn.prepare(
@@ -656,20 +701,28 @@ pub fn get_long_term_excerpts(
         let label: String = row.get(0)?;
         let value: String = row.get(1).unwrap_or_default();
         let last_turn: i64 = row.get(2).unwrap_or(0);
-        // Take first 80 chars as excerpt
-        let excerpt: String = value.chars().take(80).collect();
-        let excerpt = if value.chars().count() > 80 {
+        
+        // A3: Take first 250 chars as excerpt (increased from 80)
+        let char_count = value.chars().count();
+        let excerpt: String = value.chars().take(250).collect();
+        let excerpt = if char_count > 250 {
             format!("{excerpt}…")
         } else {
             excerpt
         };
-        Ok((label, excerpt, last_turn))
+        
+        // A3: Extract top 5 distinctive keywords
+        let keywords = extract_keywords(&value, 5);
+        
+        Ok(LongTermExcerpt {
+            label,
+            excerpt,
+            keywords,
+            char_count,
+            turns_idle: current_turn - last_turn,
+        })
     })?;
-    let rows: Vec<(String, String, i64)> = rows.collect::<rusqlite::Result<Vec<_>>>()?;
-    Ok(rows
-        .into_iter()
-        .map(|(l, e, lt)| (l, e, current_turn - lt))
-        .collect())
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 /// Explicitly set a block's tier and optionally reset last_turn to current_turn.

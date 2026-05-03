@@ -363,6 +363,12 @@ async fn run_agent_loop(
     // termination keeps `Done`.
     let mut exit_status = RunExitStatus::Done;
 
+    // A5: Track tool calls since last active_goal update.
+    // When this exceeds the threshold, inject a system nudge into the
+    // next LLM turn so the agent remembers to update its working state.
+    const ACTIVE_GOAL_NUDGE_INTERVAL: usize = 5;
+    let mut tool_calls_since_goal_update: usize = 0;
+
     loop {
         turns += 1;
         if turns > MAX_TURNS {
@@ -694,6 +700,31 @@ async fn run_agent_loop(
                     importance,
                 );
             }
+
+            // ── A5: Track active_goal freshness ───────────────────────────
+            tool_calls_since_goal_update += 1;
+            if tc.name == "update_memory" || tc.name == "memory_apply_patch" {
+                let label = tc.arguments["label"].as_str().unwrap_or("");
+                if label == "active_goal" {
+                    tool_calls_since_goal_update = 0;
+                }
+            }
+        }
+
+        // ── A5: Inject freshness nudge if active_goal hasn't been updated ──
+        if tool_calls_since_goal_update >= ACTIVE_GOAL_NUDGE_INTERVAL {
+            let nudge = format!(
+                "⚠️ Your active_goal memory block has not been updated in {} tool calls. \
+                 Update it now with your current task, status, and next steps to prevent context loss.",
+                tool_calls_since_goal_update
+            );
+            persist(
+                &state2,
+                &agent_id2,
+                conv_id2.as_deref(),
+                "system",
+                json!({ "content": nudge }),
+            );
         }
 
         // Loop → re-invoke LLM with tool results

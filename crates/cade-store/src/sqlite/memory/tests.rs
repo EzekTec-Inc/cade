@@ -164,7 +164,8 @@ fn test_get_long_term_excerpts() -> Result<()> {
     let turn = get_turn_counter(&db, "a1")?;
     let excerpts = get_long_term_excerpts(&db, "a1", turn)?;
     assert_eq!(excerpts.len(), 1);
-    assert_eq!(excerpts[0].0, "block1"); // label
+    assert_eq!(excerpts[0].label, "block1");
+    assert!(excerpts[0].char_count > 0);
     Ok(())
 }
 
@@ -1232,5 +1233,26 @@ fn upsert_errors_when_exceeding_char_limit() -> Result<()> {
     assert!(res.is_err());
     let err_msg = res.unwrap_err().to_string();
     assert!(err_msg.contains("exceeds character limit"));
+    Ok(())
+}
+
+#[test]
+fn extract_keywords_returns_distinctive_terms() -> Result<()> {
+    use super::extract_keywords;
+    
+    let text = "The Rust programming language is a systems programming language that focuses on memory safety. Rust provides zero-cost abstractions and memory management without garbage collection.";
+    let keywords = extract_keywords(text, 5);
+    
+    // Should extract distinctive terms, not stop words
+    assert_eq!(keywords.len(), 5);
+    assert!(keywords.contains(&"programming".to_string()));
+    assert!(keywords.contains(&"rust".to_string()) || keywords.contains(&"memory".to_string()));
+    assert!(!keywords.contains(&"the".to_string()));
+    assert!(!keywords.contains(&"is".to_string()));
+    
+    // Empty text should return empty vec
+    let empty_keywords = extract_keywords("", 5);
+    assert!(empty_keywords.is_empty());
+    
     Ok(())
 }

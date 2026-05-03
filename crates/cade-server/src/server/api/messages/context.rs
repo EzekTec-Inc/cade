@@ -1103,15 +1103,34 @@ fn assemble_system_prompt_memory(
     // 2. Promote stale short blocks to long.
     let _ = sqlite::promote_stale_blocks(&state.db, agent_id, current_turn, STALE_THRESHOLD);
 
-    // 3. Pinned + short-term blocks → full value, greedy-packed into budgets.
+    // 3. A1: Unified adaptive packing — priority-ordered greedy fill.
+    //
+    // Priority order:
+    //   P0: Core identity (persona, human, project) — never dropped
+    //   P1: Dynamic working state (active_goal, recent_edits, session_summary) — separate section
+    //   P2: Loaded skills (skill:*) — explicitly requested
+    //   P3: User-pinned blocks (tier=pinned, not in P0/P2)
+    //   P4: Short-term blocks (tier=short) — by recency
+    //   P5: Long-term archived excerpts — whatever fits
+    //
+    // A single unified budget replaces the old separate pinned/short/long pools.
     let budgets = MemoryBudgets::for_model(&agent.model);
+    let unified_budget = budgets.pinned + budgets.short + budgets.long;
     let active_blocks = sqlite::get_active_blocks(&state.db, agent_id).unwrap_or_default();
-    let mut pinned_parts: Vec<String> = Vec::new();
-    let mut short_parts: Vec<String> = Vec::new();
+
+    // Classify each block into a priority bucket.
+    const CORE_IDENTITY: &[&str] = &["persona", "human", "project"];
+    const DYNAMIC_LABELS: &[&str] = &["active_goal", "recent_edits", "session_summary"];
+
+    struct CandidateBlock {
+        label: String,
+        entry: String,
+        chars: usize,
+        priority: u8, // 0 = highest
+    }
+
     let mut dynamic_parts: Vec<String> = Vec::new();
-    let mut pinned_remaining = budgets.pinned;
-    let mut short_remaining = budgets.short;
-    let mut active_omitted = 0usize;
+    let mut candidates: Vec<CandidateBlock> = Vec::new();
 
     for (label, val, _desc, tier, _lt) in &active_blocks {
         if val.trim().is_empty() {
@@ -1133,57 +1152,83 @@ fn assemble_system_prompt_memory(
             format!("[{label}]\n{formatted_val}")
         };
 
-        let chars = entry.chars().count();
-        let is_dynamic =
-            label == "active_goal" || label == "recent_edits" || label == "session_summary";
-
-        if is_dynamic {
+        // Dynamic working-state blocks go to a separate section (always included).
+        if DYNAMIC_LABELS.contains(&label.as_str()) {
             dynamic_parts.push(entry);
             continue;
         }
 
-        if tier == "pinned" {
-            if chars <= pinned_remaining {
-                pinned_remaining -= chars;
-                pinned_parts.push(entry);
-            } else {
-                active_omitted += 1;
-            }
+        let priority = if CORE_IDENTITY.contains(&label.as_str()) {
+            0 // P0: core identity — never dropped
+        } else if label.starts_with("skill:") {
+            2 // P2: loaded skills
+        } else if tier == "pinned" {
+            3 // P3: user-pinned
         } else {
-            if chars <= short_remaining {
-                short_remaining -= chars;
-                short_parts.push(entry);
+            4 // P4: short-term
+        };
+
+        let chars = entry.chars().count();
+        candidates.push(CandidateBlock { label: label.clone(), entry, chars, priority });
+    }
+
+    // Sort by priority then by original order (stable sort preserves DB order within same priority).
+    candidates.sort_by_key(|c| c.priority);
+
+    // Greedy-pack into unified budget.
+    let mut packed_parts: Vec<String> = Vec::new();
+    let mut remaining = unified_budget;
+    // A1: Track excluded blocks with actionable recovery instructions.
+    let mut overflow_manifest: Vec<String> = Vec::new();
+
+    for c in &candidates {
+        if c.chars <= remaining {
+            remaining -= c.chars;
+            packed_parts.push(c.entry.clone());
+        } else {
+            // Build actionable recovery instruction.
+            let recovery = if c.label.starts_with("skill:") {
+                let skill_id = c.label.strip_prefix("skill:").unwrap_or(&c.label);
+                format!("- [{}] ({} chars) — use load_skill(\"{}\") to reload", c.label, c.chars, skill_id)
             } else {
-                active_omitted += 1;
-            }
+                format!("- [{}] ({} chars) — use search_memory(\"{}\") to retrieve", c.label, c.chars, c.label)
+            };
+            overflow_manifest.push(recovery);
         }
     }
 
-    // 4. Long-term archived blocks → label + excerpt only.
+    // 4. Long-term archived blocks → label + rich excerpt (A3).
     let long_excerpts =
         sqlite::get_long_term_excerpts(&state.db, agent_id, current_turn).unwrap_or_default();
     let mut long_parts: Vec<String> = Vec::new();
-    let mut long_remaining = budgets.long;
-    let mut long_omitted = 0usize;
 
-    for (label, excerpt, _idle) in &long_excerpts {
-        let entry = if excerpt.trim().is_empty() {
-            format!("[{label}]")
+    for excerpt_info in &long_excerpts {
+        let entry = if excerpt_info.excerpt.trim().is_empty() {
+            format!("[{}]\n  keywords: {} | {} chars",
+                excerpt_info.label,
+                excerpt_info.keywords.join(", "),
+                excerpt_info.char_count)
         } else {
-            format!("[{label}]: {excerpt}")
+            format!("[{}]: {}\n  keywords: {} | {} chars",
+                excerpt_info.label,
+                excerpt_info.excerpt,
+                excerpt_info.keywords.join(", "),
+                excerpt_info.char_count)
         };
         let chars = entry.chars().count();
-        if chars <= long_remaining {
-            long_remaining -= chars;
+        if chars <= remaining {
+            remaining -= chars;
             long_parts.push(entry);
         } else {
-            long_omitted += 1;
+            overflow_manifest.push(format!(
+                "- [{}] ({} chars, archived) — use search_memory(\"{}\")",
+                excerpt_info.label, excerpt_info.char_count, excerpt_info.label
+            ));
         }
     }
 
     // 5. Assemble system prompt memory sections.
-    let has_any_memory =
-        !pinned_parts.is_empty() || !short_parts.is_empty() || !long_parts.is_empty();
+    let has_any_memory = !packed_parts.is_empty() || !long_parts.is_empty();
     let base = agent.system_prompt.clone().unwrap_or_default();
 
     if !has_any_memory && dynamic_parts.is_empty() {
@@ -1191,27 +1236,26 @@ fn assemble_system_prompt_memory(
     } else {
         let mut sections: Vec<String> = vec![base];
 
-        // Active memory section (pinned + short)
+        // Active memory section (unified priority-packed blocks)
         let mut active_section_parts: Vec<String> = Vec::new();
-        active_section_parts.extend(pinned_parts);
-        active_section_parts.extend(short_parts);
-        if active_omitted > 0 {
-            active_section_parts.push(format!(
-                "[…{active_omitted} block(s) omitted — memory budget reached. Use /memory to manage.]"
-            ));
+        active_section_parts.extend(packed_parts);
+
+        // A1: Actionable overflow manifest replaces generic "[…N omitted]".
+        if !overflow_manifest.is_empty() {
+            let manifest = format!(
+                "# Context Overflow\nThe following memory blocks were excluded from this context:\n{}",
+                overflow_manifest.join("\n")
+            );
+            active_section_parts.push(manifest);
         }
+
         if !active_section_parts.is_empty() {
             sections.push(format!("# Memory\n{}", active_section_parts.join("\n\n")));
         }
 
         // Archived memory section (long-term excerpts)
         if !long_parts.is_empty() {
-            let mut archived = long_parts.join("\n");
-            if long_omitted > 0 {
-                archived.push_str(&format!(
-                    "\n[…{long_omitted} more archived — use /memory or search_memory]"
-                ));
-            }
+            let archived = long_parts.join("\n");
             sections.push(format!(
                 "# Archived Memory\n{archived}\nUse search_memory(query) to retrieve full archived content.\nAccessed blocks are automatically restored to active memory."
             ));
