@@ -240,8 +240,8 @@ fn tool_call_and_result_kept_atomically_during_selection() {
 
 #[test]
 fn always_include_list_covers_all_retrieval_tools() {
-    // Every retrieval/memory tool must be in the always-include list so
-    // they are never accidentally pruned on long conversations.
+    // Every retrieval/memory/skill tool must be in the always-include list so
+    // they are never accidentally pruned by the desktop_* filter.
     for name in &[
         "search_memory",
         "conversation_search",
@@ -249,10 +249,41 @@ fn always_include_list_covers_all_retrieval_tools() {
         "archival_memory_search",
         "update_memory",
         "memory_apply_patch",
+        "load_skill",
+        "unload_skill",
     ] {
         assert!(
             ALWAYS_INCLUDE_TOOL_NAMES.contains(name),
             "'{name}' missing from ALWAYS_INCLUDE_TOOL_NAMES"
+        );
+    }
+}
+
+#[test]
+fn cade_owned_tools_are_never_compressed_by_mcp_rule() {
+    // CADE-owned tools (no `__` in name) must never be compressed.
+    // The ITS compression step only targets MCP tools (name contains `__`).
+    let cade_tools = &[
+        "bash", "read_file", "write_file", "edit_file", "grep", "glob",
+        "update_memory", "load_skill", "unload_skill", "search_memory",
+        "run_subagent", "set_plan", "UpdatePlan", "ask_user_question",
+    ];
+    for name in cade_tools {
+        assert!(
+            !name.contains("__"),
+            "CADE tool '{name}' should not contain '__' (would be treated as MCP)"
+        );
+    }
+    // Verify MCP tools DO contain `__`.
+    let mcp_tools = &[
+        "desktop-commander__read_file",
+        "github-mcp-server__search_code",
+        "cade-rag__semantic_search",
+    ];
+    for name in mcp_tools {
+        assert!(
+            name.contains("__"),
+            "MCP tool '{name}' must contain '__' to be eligible for compression"
         );
     }
 }

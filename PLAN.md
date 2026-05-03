@@ -1,3 +1,58 @@
+## 2026-05-03T21:30:00Z — refactor(its): remove vaporware reranker, exempt CADE tools from compression
+
+**Task:** Clean up the Intelligent Tool Selection system — remove non-existent reranker documentation, exempt all CADE-owned tools from description compression, keep compression only for MCP (third-party) tools.
+
+**Files modified:**
+- `crates/cade-server/src/server/api/messages/context.rs` (compression now targets only MCP tools identified by `__` in name; CADE-owned tools always keep full descriptions)
+- `crates/cade-server/src/server/api/messages/mod.rs` (updated ALWAYS_INCLUDE_TOOL_NAMES doc comment to reflect new role as desktop prune safety net)
+- `crates/cade-server/src/server/api/messages/tests.rs` (updated always-include test to cover load_skill/unload_skill; added new test verifying CADE tools never match MCP `__` pattern)
+- `docs/intelligent-tool-selection.md` (replaced vaporware reranker docs with accurate 2-layer ITS documentation)
+
+**Previous behavior:**
+- ITS compressed descriptions of ALL non-recent, non-always-include tools (including CADE meta tools like unload_skill) to 80 chars on long sessions.
+- docs/intelligent-tool-selection.md described a cross-encoder reranker (ONNX, Cohere, Voyage, Jina) that did not exist in the codebase.
+- ALWAYS_INCLUDE_TOOL_NAMES only covered 7 memory tools — other meta tools could be compressed.
+
+**New behavior:**
+- CADE-owned tools (no `__` in name) are NEVER compressed — full descriptions always sent to LLM.
+- Only MCP tools (name contains `__`) are compressed when unused in the recent 20-message window.
+- desktop_* pruning unchanged (working correctly).
+- docs/intelligent-tool-selection.md accurately describes the 2-layer system that actually runs.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git revert HEAD
+```
+
+---
+
+## 2026-05-03T20:55:00Z — fix(skills): ensure unload_skill is always visible to LLM
+
+**Task:** Fix unload_skill tool not being callable by the LLM due to ITS description compression; add missing sequential-tool classification in headless mode.
+
+**Files modified:**
+- `crates/cade-server/src/server/api/messages/mod.rs` (added load_skill and unload_skill to ALWAYS_INCLUDE_TOOL_NAMES)
+- `crates/cade-cli/src/cli/headless.rs` (added unload_skill to is_sequential_tool match)
+
+**Previous behavior:**
+- unload_skill description was compressed to 80 chars on long sessions, making it invisible to the LLM.
+- unload_skill could run in parallel with other skill mutations in headless mode.
+
+**New behavior:**
+- unload_skill always keeps its full description (never compressed by ITS).
+- unload_skill classified as sequential in headless mode (no parallel execution race).
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git revert 0ce5a7fc
+```
+
+---
+
 ## 2026-05-03T20:49:00Z — refactor(scroll): unified viewport scroll for idle + processing states
 
 **Task:** Unify scroll handling so all scroll keys (Shift+K/J, PageUp/PageDown, mouse wheel) work identically whether idle or during agent processing, with smooth-scroll animation in both states.

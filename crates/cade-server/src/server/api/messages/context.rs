@@ -928,15 +928,12 @@ pub(crate) async fn build_context(
     // Lazy tool schema loading: on long conversations, desktop_* tools are pruned
     // unless they were actually called in the recent message window.  This saves
     // prompt tokens for sessions that never use desktop features.
-    //
-    // ALWAYS_INCLUDE_TOOL_NAMES are never pruned — they are the agent's primary
-    // mechanism for recovering archived/dropped context and must always be present.
     const EXTENDED_TOOL_PREFIXES: &[&str] = &["desktop_"];
     let is_long_session = messages.len() > 1 + RECENT_WINDOW;
 
     // Collect tool names called in the recent window.  Used for both the
     // prune step (drop entire desktop_* schema if unused) and the P5
-    // compression step (strip descriptions on unused non-desktop schemas).
+    // compression step (strip descriptions on unused MCP schemas).
     let recently_used: std::collections::HashSet<String> = if is_long_session {
         let recent_start = messages.len().saturating_sub(RECENT_WINDOW);
         messages[recent_start..]
@@ -953,23 +950,28 @@ pub(crate) async fn build_context(
             .into_iter()
             .filter(|schema| {
                 let name = schema["name"].as_str().unwrap_or("");
-                // Memory/retrieval tools are always included.
+                // Safety net: never prune tools in the always-include list.
                 if ALWAYS_INCLUDE_TOOL_NAMES.contains(&name) {
                     return true;
                 }
                 let is_extended = EXTENDED_TOOL_PREFIXES.iter().any(|p| name.starts_with(p));
                 !is_extended || recently_used.contains(name)
             })
-            // P5: compress unused (non-recent, non-always-included) schemas.
-            // Anthropic, OpenAI, and Gemini all include the full `description`
-            // and per-parameter descriptions in the wire format.  For tools
-            // the model hasn't called recently, names + params shape carry
-            // enough signal — verbose descriptions are ~70% of schema bytes.
+            // P5: compress unused MCP tool schemas on long sessions.
+            //
+            // CADE-owned tools (meta + native) never have `__` in their name
+            // and always keep full descriptions — compressing them causes
+            // tool blindness (the model fails to call tools whose purpose
+            // it can't understand from a truncated 80-char stub).
+            //
+            // MCP tools (identified by `__` namespace separator) are
+            // third-party and numerous (50-100+).  Compressing unused MCP
+            // schemas saves ~10-15K tokens/request without affecting CADE's
+            // core tool reliability.
             .map(|schema| {
                 let name = schema["name"].as_str().unwrap_or("").to_string();
-                let recent = recently_used.contains(&name);
-                let always = ALWAYS_INCLUDE_TOOL_NAMES.contains(&name.as_str());
-                if recent || always {
+                let is_mcp = name.contains("__");
+                if !is_mcp || recently_used.contains(&name) {
                     schema
                 } else {
                     compress_tool_schema(schema)
