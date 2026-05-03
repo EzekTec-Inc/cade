@@ -603,19 +603,12 @@ impl ThemeColors {
             .as_ref()
             .map(|c| resolve(c))
             .unwrap_or(base.primary);
-        if let ColorDef::Rgb(r, g, b) = spinner_base {
+        if let ColorDef::Rgb(_, _, _) = spinner_base {
             // Build a 4-step luminance gradient: base → brighter → brightest → mid
-            let brighten = |r: u8, g: u8, b: u8, amount: u8| -> ColorDef {
-                ColorDef::Rgb(
-                    r.saturating_add(amount),
-                    g.saturating_add(amount),
-                    b.saturating_add(amount),
-                )
-            };
-            base.spinner_0 = ColorDef::Rgb(r, g, b);
-            base.spinner_1 = brighten(r, g, b, 30);
-            base.spinner_2 = brighten(r, g, b, 50);
-            base.spinner_3 = brighten(r, g, b, 15);
+            base.spinner_0 = spinner_base;
+            base.spinner_1 = brighten_color(spinner_base, 30);
+            base.spinner_2 = brighten_color(spinner_base, 50);
+            base.spinner_3 = brighten_color(spinner_base, 15);
         }
 
         // Accent-dim: desaturate the primary slightly toward grey
@@ -1707,6 +1700,119 @@ mod tests {
         assert!(loaded.description.is_none());
         assert!(loaded.author.is_none());
         assert!(loaded.variant.is_none());
+    }
+    #[test]
+    fn brighten_color_clamps_at_255() {
+        let c = super::brighten_color(ColorDef::Rgb(250, 240, 200), 30);
+        assert_eq!(c, ColorDef::Rgb(255, 255, 230));
+    }
+
+    #[test]
+    fn brighten_color_zero_is_identity() {
+        let c = super::brighten_color(ColorDef::Rgb(100, 150, 200), 0);
+        assert_eq!(c, ColorDef::Rgb(100, 150, 200));
+    }
+
+    #[test]
+    fn brighten_color_reset_passthrough() {
+        let c = super::brighten_color(ColorDef::Reset, 50);
+        assert_eq!(c, ColorDef::Reset);
+    }
+
+    #[test]
+    fn dim_color_clamps_at_zero() {
+        let c = super::dim_color(ColorDef::Rgb(10, 5, 0), 30);
+        assert_eq!(c, ColorDef::Rgb(0, 0, 0));
+    }
+
+    #[test]
+    fn dim_color_zero_is_identity() {
+        let c = super::dim_color(ColorDef::Rgb(100, 150, 200), 0);
+        assert_eq!(c, ColorDef::Rgb(100, 150, 200));
+    }
+
+    #[test]
+    fn dim_color_reset_passthrough() {
+        let c = super::dim_color(ColorDef::Reset, 50);
+        assert_eq!(c, ColorDef::Reset);
+    }
+
+    #[test]
+    fn from_theme_derives_spinner_from_primary() {
+        // A theme with no spinnerAccent should derive spinner_* from primary.
+        let mut t = Theme {
+            name: "test-spinner".to_string(),
+            description: None,
+            author: None,
+            variant: None,
+            vars: Default::default(),
+            colors: Default::default(),
+            source: std::path::PathBuf::new(),
+        };
+        t.colors.accent = ThemeColor::Hex("#80a0ff".to_string());
+        let tc = ThemeColors::from_theme(&t);
+        // spinner_0 should match primary (resolved from accent)
+        assert_eq!(tc.spinner_0, tc.primary);
+        // spinner_1 should be brighter than spinner_0
+        assert_ne!(tc.spinner_1, tc.spinner_0);
+    }
+
+    #[test]
+    fn from_theme_fallback_thinking_xhigh_to_error() {
+        // thinkingXhigh defaults to empty string → Reset → should fall back to error.
+        let mut t = Theme {
+            name: "test-fallback".to_string(),
+            description: None,
+            author: None,
+            variant: None,
+            vars: Default::default(),
+            colors: Default::default(),
+            source: std::path::PathBuf::new(),
+        };
+        // Set error so the fallback has something real to use.
+        t.colors.error = ThemeColor::Hex("#ff5555".to_string());
+        let tc = ThemeColors::from_theme(&t);
+        // thinkingXhigh should have fallen back to error, not remain Reset
+        assert_eq!(tc.thinking_xhigh, ColorDef::Rgb(255, 85, 85));
+    }
+
+    #[test]
+    fn from_theme_fallback_bash_mode_to_warning() {
+        let mut t = Theme {
+            name: "test-fallback".to_string(),
+            description: None,
+            author: None,
+            variant: None,
+            vars: Default::default(),
+            colors: Default::default(),
+            source: std::path::PathBuf::new(),
+        };
+        // Set warning so the fallback has something real to use.
+        t.colors.warning = ThemeColor::Hex("#e0af68".to_string());
+        let tc = ThemeColors::from_theme(&t);
+        // bashMode should have fallen back to warning, not remain Reset
+        assert_eq!(tc.bash_mode, ColorDef::Rgb(224, 175, 104));
+    }
+
+    #[test]
+    fn from_theme_ctx_bar_derived_not_dark_default() {
+        // Context-bar tokens should be derived from the theme palette,
+        // not stuck on dark() defaults.
+        let mut t = Theme {
+            name: "test-ctx".to_string(),
+            description: None,
+            author: None,
+            variant: None,
+            vars: Default::default(),
+            colors: Default::default(),
+            source: std::path::PathBuf::new(),
+        };
+        t.colors.accent = ThemeColor::Hex("#ff0000".to_string());
+        let tc = ThemeColors::from_theme(&t);
+        let dark = ThemeColors::dark();
+        // ctx_bar_native_tools derives from primary, which came from accent
+        // — it should NOT equal the dark() built-in value
+        assert_ne!(tc.ctx_bar_native_tools, dark.ctx_bar_native_tools);
     }
 }
 
