@@ -37,7 +37,7 @@ pub struct HeadlessStats {
 fn is_sequential_tool(name: &str) -> bool {
     matches!(
         name,
-        "update_memory" | "load_skill" | "install_skill" | "run_skill_script" | "load_skill_ref"
+        "update_memory" | "load_skill" | "unload_skill" | "install_skill" | "run_skill_script" | "load_skill_ref"
     )
 }
 

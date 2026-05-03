@@ -36,6 +36,8 @@ pub(crate) const ALWAYS_INCLUDE_TOOL_NAMES: &[&str] = &[
     "archival_memory_search",
     "update_memory",
     "memory_apply_patch",
+    "load_skill",
+    "unload_skill",
 ];
 /// Minimum character budget for pinned memory blocks (always injected, highest priority).
 pub(crate) const PINNED_BUDGET_MIN: usize = 10_000;
