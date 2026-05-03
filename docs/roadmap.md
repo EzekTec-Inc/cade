@@ -36,7 +36,7 @@
 - [x] Streamable HTTP capability (`/v1/stream`)
 - [x] Background runs (`/v1/runs/:id`) for long detached tasks
 
-### Security
+### Security (2026 Apr)
 - [x] Opt-in filesystem sandbox (`CADE_FS_ROOT`)
 - [x] Path traversal protection in `apply_patch`
 - [x] Headless output sanitization (ANSI injection prevention)
@@ -44,9 +44,17 @@
 - [x] Secure random DB encryption key (`~/.cade/db.key`)
 - [x] 0600 permissions on settings files
 - [x] Always-on path protection (denies writes to `.git`, `.ssh`, `.env`, DB key — even in YOLO)
+- [x] Mandatory bearer-token auth with auto-generated token
+- [x] Global request body size limit (8 MiB)
+- [x] SSRF proxy lockdown
+- [x] Argon2id key derivation
+- [x] SSH `StrictHostKeyChecking=yes` + cwd shell quoting
+- [x] Origin header CSRF check
+- [x] Generic 500 error responses (no internal details leaked)
+- [x] `cargo-audit` CI workflow
 
 ### Architecture
-- [x] Cargo workspace split (14 crates)
+- [x] Cargo workspace split (17 crates)
 - [x] LLM providers extracted to `cade-ai`
 - [x] `cade-tui` extracted as standalone TUI library
 - [x] `cade-mcp` isolated from `cade-agent`
@@ -84,7 +92,7 @@
 - [x] **P8** — `tool_executions.output_chars` column for per-call cost telemetry
 
 ### Quality
-- [x] Test coverage: 1,434+ tests across the workspace
+- [x] Test coverage: 1,501+ tests across the workspace
 - [x] CI/CD pipeline: GitHub Actions (build, test, release)
 - [x] Plugin system: dynamic loading via shared libraries / WASM
 - [x] Multi-agent collaboration: named agents with message passing
@@ -100,33 +108,46 @@
 
 ## Recently Completed
 
-All near-term planned items have shipped. See `IMPLEMENTATION_PLAN.md` for detailed commit history.
+### Subagent System Refactoring (2026 May)
+- [x] **Phase 1** — Isolated server subagent memory via ephemeral DB rows
+- [x] **Phase 2** — Extracted `SubagentConfig` for shared arg parsing/validation
+- [x] **Phase 3** — Split `run.rs` monolith (4,485 lines) into `run/` submodules
 
-- TUI Refactor — Phase 2 (pluggable `EditorComponent`) — done
-- TUI Refactor — Phase 3 (dynamic overlay stack) — done
-- TUI Refactor — Phase 4 (UI extension slots) — done
-- Askpass implementation (`crates/cade-askpass`) — done
-- MCP prefix stripping for edit tracking — done
-- Memory system improvements (P1–P8) — done
-- System prompt optimization — done
-- Semantic memory search (fastembed + sqlite-vec) — done
+### GUI & TUI Polish (2026 May)
+- [x] **Mobile / responsive dashboard** — viewport breakpoints, drawer sidebar,
+      adaptive overlays, touch gestures (WI-9)
+- [x] **Subagent tracker cards** — glass-style cards with live tool names
+- [x] **Input field fixes** — word wrap, newline insertion, horizontal overflow
+- [x] **Question modal polish** — excess padding removed, multiline height fix
+
+See `IMPLEMENTATION_PLAN.md` for detailed commit history.
 
 ---
 
 ## Planned
 
-> Detailed plan with per-item context: see `IMPLEMENTATION_PLAN.md` (repo root).
+### Near term (all shipped ✅)
+- [x] **TUI overlay stack migration** (WI-2)
+- [x] **TUI slot rendering** (WI-3)
+- [x] **System prompt optimization** (WI-7)
+- [x] **Semantic memory search** (WI-6)
+- [x] **Mobile / responsive dashboard** (WI-9)
 
-### Near term
-- [x] **TUI overlay stack migration** — migrated 4 overlays from legacy `Option<...>` fields
-      to `Vec<Box<dyn OverlayComponent>>` stack (WI-2)
-- [x] **TUI slot rendering** — wired `SlotManager` into `render.rs` and `input.rs` (WI-3)
-- [x] **System prompt optimization** — added dynamic tool filtering, search-first
-      lookup, and `/memory pin` guidance to BASE_SYSTEM_PROMPT (WI-7)
-- [x] **Semantic memory search** — embedding-based `search_memory_semantic()`
-      with hybrid FTS5 + cosine ranking via sqlite-vec (WI-6)
+### Medium term
+- [ ] **StorageBackend trait extraction** — unify CLI (HttpTransport) and server
+      (direct DB) meta-tool handlers behind a shared async trait. Eliminates
+      ~1,500 lines of duplication across `cade-agent/src/tools/runtime/` and
+      `cade-server/src/server/api/run/meta_tools.rs`.
+- [ ] **Benchmark suite** — latency and throughput benchmarks for LLM streaming,
+      tool dispatch, and memory operations (criterion.rs)
+- [ ] **Structured logging** — migrate from `tracing` ad-hoc spans to
+      consistent structured fields across all crates
 
 ### Long term
-- [ ] **Team features** — shared agents, memory, and skills across a team
-- [ ] **Voice mode** — speech-to-text input + audio output
-- [ ] **Mobile / responsive dashboard** — `cade-gui` adapts to smaller viewports
+- [ ] **Team features** — shared agents, memory, and skills across a team.
+      Requires multi-tenant DB schema, RBAC, and agent-to-agent auth.
+- [ ] **Voice mode** — speech-to-text input + audio output. Likely via
+      WebRTC (browser) or local Whisper (CLI). Needs streaming TTS for
+      natural response delivery.
+- [ ] **Plugin marketplace** — discover, install, and rate community skills
+      and MCP server configs from a central registry
