@@ -65,10 +65,16 @@ While the picker overlay is open:
 
 ## Viewport Navigation
 
+All scroll keys work identically whether the agent is idle or actively processing a turn. When you scroll up during processing, the viewport stays in place and a **"↓ N new (Shift+J to follow)"** badge appears in the status bar so you can catch up when ready.
+
 | Key | Action |
 |-----|--------|
 | **Shift+K** | Scroll conversation up (10 rows) |
-| **Shift+J** | Scroll conversation down (10 rows) |
+| **Shift+J** | Snap to bottom (follow latest output) |
+| **PageUp** | Scroll up by one viewport height |
+| **PageDown** | Scroll down by one viewport height |
+| **Mouse wheel up** | Scroll up (3 rows, smooth) |
+| **Mouse wheel down** | Scroll down (3 rows, smooth) |
 | **Ctrl+Shift+K** | Focus previous timeline block |
 | **Ctrl+Shift+J** | Focus next timeline block |
 | **Alt+A** | Jump to the next assistant block |

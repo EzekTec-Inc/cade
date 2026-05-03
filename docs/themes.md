@@ -69,6 +69,114 @@ If you prefer building a theme manually from scratch without a `.tmTheme` base, 
 }
 ```
 
+#### Full Token Reference
+
+Below is the complete list of JSON keys accepted in the `"colors"` object. All tokens are optional — omitted tokens are auto-derived from the core palette or fall back to built-in defaults.
+
+**Core UI**
+
+| Token | Description |
+|-------|-------------|
+| `accent` | Primary accent color (buttons, links, highlights) |
+| `border` | Default border color |
+| `borderAccent` | Focused / active border color |
+| `borderMuted` | De-emphasised border color |
+| `success` | Success indicators (green) |
+| `error` | Error indicators (red) |
+| `warning` | Warning indicators (amber) |
+| `muted` | Muted text (comments, secondary labels) |
+| `dim` | Dim text (timestamps, metadata) |
+| `text` | Primary body text color |
+| `thinkingText` | Text color inside thinking/reasoning blocks |
+
+**Backgrounds & content**
+
+| Token | Description |
+|-------|-------------|
+| `selectedBg` | Selection highlight background |
+| `userMessageBg` | User message card background |
+| `userMessageText` | User message text color |
+| `customMessageBg` | System/custom message background |
+| `customMessageText` | System/custom message text |
+| `customMessageLabel` | Label color for custom messages |
+| `toolPendingBg` | Background while a tool call is running |
+| `toolSuccessBg` | Background for successful tool results |
+| `toolErrorBg` | Background for errored tool results |
+| `toolTitle` | Tool call header text |
+| `toolOutput` | Tool output body text |
+
+**Markdown rendering**
+
+| Token | Description |
+|-------|-------------|
+| `mdHeading` | Heading text (`# H1`, `## H2`, …) |
+| `mdLink` | Link label text |
+| `mdLinkUrl` | Link URL text |
+| `mdCode` | Inline code spans |
+| `mdCodeBlock` | Code block body text |
+| `mdCodeBlockBorder` | Code block border (`┌──` / `└──`) |
+| `mdQuote` | Block-quote text |
+| `mdQuoteBorder` | Block-quote left border |
+| `mdHr` | Horizontal rule |
+| `mdListBullet` | List bullet / number |
+
+**Diffs**
+
+| Token | Description |
+|-------|-------------|
+| `toolDiffAdded` | Added line color |
+| `toolDiffRemoved` | Removed line color |
+| `toolDiffContext` | Context line color |
+
+**Syntax highlighting** (code blocks)
+
+| Token | Description |
+|-------|-------------|
+| `syntaxComment` | Comments |
+| `syntaxKeyword` | Keywords (`fn`, `let`, `if`, …) |
+| `syntaxFunction` | Function names |
+| `syntaxVariable` | Variables |
+| `syntaxString` | String literals |
+| `syntaxNumber` | Numeric literals |
+| `syntaxType` | Type names |
+| `syntaxOperator` | Operators |
+| `syntaxPunctuation` | Punctuation |
+
+**Thinking level indicators**
+
+| Token | Description |
+|-------|-------------|
+| `thinkingOff` | Thinking disabled indicator |
+| `thinkingMinimal` | Minimal thinking indicator |
+| `thinkingLow` | Low thinking indicator |
+| `thinkingMedium` | Medium thinking indicator |
+| `thinkingHigh` | High thinking indicator |
+| `thinkingXhigh` | Extra-high thinking indicator (falls back to `error` if omitted) |
+
+**Bash mode**
+
+| Token | Description |
+|-------|-------------|
+| `bashMode` | Bash mode border indicator (falls back to `warning` if omitted) |
+
+**Extended tokens** *(optional — auto-derived when absent)*
+
+These tokens give fine-grained control over the context bar, spinner, and border style. When omitted they are automatically derived from the core palette.
+
+| Token | Description | Auto-derived from |
+|-------|-------------|-------------------|
+| `borderStyle` | Border character style: `"rounded"`, `"thick"`, `"plain"`, or `"double"` | Default: `"rounded"` |
+| `spinnerAccent` | Base color for the animated spinner gradient (4 steps are generated automatically) | `accent` |
+| `ctxBarSystem` | Context bar: system prompt segment | `muted` (dimmed) |
+| `ctxBarNativeTools` | Context bar: native tools segment | `accent` |
+| `ctxBarMcpTools` | Context bar: MCP tools segment | `accent` (brightened) |
+| `ctxBarMemory` | Context bar: memory segment | `warning` |
+| `ctxBarSkills` | Context bar: skills segment | `warning` (brightened) |
+| `ctxBarMessages` | Context bar: messages segment | `syntaxKeyword` |
+| `ctxBarFree` | Context bar: free/unused segment | `dim` |
+| `ctxBarBuffer` | Context bar: autocompact buffer segment | `border` |
+```
+
 ## Neovim Integration
 
 CADE natively parses `.tmTheme` files, so external Lua plugins are no longer necessary for syncing themes. You can download the `.tmTheme` artifact of any Neovim colorscheme (TokyoNight, Catppuccin, RosePine) and put it into `~/.cade/themes/` directly.

@@ -1,3 +1,112 @@
+## 2026-05-03T20:49:00Z — refactor(scroll): unified viewport scroll for idle + processing states
+
+**Task:** Unify scroll handling so all scroll keys (Shift+K/J, PageUp/PageDown, mouse wheel) work identically whether idle or during agent processing, with smooth-scroll animation in both states.
+
+**Files modified:**
+- `crates/cade-tui/src/app/state.rs` (shared `handle_scroll_key()`, `handle_scroll_mouse()`; `push()` respects `follow` flag)
+- `crates/cade-tui/src/app/input.rs` (idle loop rewired to shared handlers; removed duplicated scroll logic)
+- `crates/cade-cli/src/cli/repl/turn_loop/agent.rs` (tick task rewired to shared handlers; added PageUp/PageDown; smooth-scroll via `scroll_target`)
+
+**Previous behavior:**
+- Tick task used direct `scroll` mutation (instant, jarring jumps).
+- Only Shift+K (10 lines) and Shift+J (snap) worked during processing; no PageUp/PageDown.
+- Mouse wheel scrolled ±1 line during processing vs ±3 (smooth) when idle.
+- `push()` always force-reset scroll to bottom, even when user had scrolled up.
+
+**New behavior:**
+- All scroll keys route through `handle_scroll_key()` / `handle_scroll_mouse()` (single source of truth).
+- PageUp/PageDown work during agent processing.
+- Mouse and keyboard scroll use `scroll_target` for smooth animation in both states.
+- `push()` respects `follow` flag: scrolled-up users see "↓ N new" badge instead of viewport hijack.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git revert 7e5fa109
+```
+
+---
+
+## 2026-05-03T20:36:00Z — refactor(theme): deduplicate brighten logic + color helper tests
+
+**Task:** Address code-review warnings: deduplicate inline brighten closure and add unit test coverage for color helper functions.
+
+**Files modified:**
+- `crates/cade-core/src/resources/themes.rs` (replaced inline closure with `brighten_color()`; added 10 unit tests)
+
+**Previous behavior:**
+- Inline `brighten` closure in spinner gradient duplicated `brighten_color()` logic.
+- No unit tests for `brighten_color()`, `dim_color()`, or `from_theme()` fallback chains.
+
+**New behavior:**
+- Spinner gradient uses `brighten_color()` helper (no duplication).
+- 10 new tests: saturation clamping, underflow clamping, Reset passthrough, spinner derivation, thinkingXhigh→error fallback, bashMode→warning fallback, ctx_bar derivation.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git revert b3059bbc
+```
+
+---
+
+## 2026-05-03T20:26:00Z — fix(theme): auto-derive extended tokens and remove hardcoded colors
+
+**Task:** Fix 4 gaps in the theme system: auto-derive missing extended tokens, add fallback for thinkingXhigh/bashMode, expose extended tokens in JSON schema, and remove hardcoded Color::DarkGray.
+
+**Files modified:**
+- `crates/cade-core/src/resources/themes.rs` (11 new optional ThemeTokens fields; `from_theme()` auto-derives ctx_bar_*, spinner_*, accent_dim, border_style; fallback logic for thinkingXhigh/bashMode; `brighten_color()`/`dim_color()` helpers)
+- `crates/cade-tui/src/app/render.rs` (replaced `Color::DarkGray` with `colors.text_dim` in subagent drop shadow)
+
+**Previous behavior:**
+- `from_theme()` left ctx_bar_* (8 tokens), spinner_* (4 tokens), accent_dim, and border_style at `dark()` defaults for all custom JSON themes.
+- All 30 user JSON themes missing `thinkingXhigh` and `bashMode` tokens (resolved to `ColorDef::Reset`).
+- Subagent drop shadow used hardcoded `Color::DarkGray`.
+- No JSON schema for extended tokens (ctx_bar_*, spinner_*, border_style).
+
+**New behavior:**
+- Extended tokens auto-derived from core palette in `from_theme()`.
+- `thinkingXhigh` falls back to `error`; `bashMode` falls back to `warning`.
+- Drop shadow uses themed `text_dim` color.
+- 11 optional extended tokens available in JSON schema (`borderStyle`, `spinnerAccent`, `ctxBar*`).
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git revert d1dceca1
+```
+
+---
+
+## 2026-05-03T20:57:00Z — docs: update themes.md and keybindings.md for recent changes
+
+**Task:** Update documentation to reflect theme system optimizations and scroll refactoring.
+
+**Files modified:**
+- `docs/themes.md` (added full token reference table with all 60+ tokens; documented extended tokens, auto-derivation, and fallback behavior)
+- `docs/keybindings.md` (fixed incorrect Shift+J description; added PageUp/PageDown and mouse wheel; documented scroll-during-processing and follow behavior)
+- `PLAN.md` (appended entries for 3 recent commits + this docs update)
+
+**Previous behavior:**
+- themes.md JSON example showed only ~20 of 60+ tokens; no mention of extended tokens or auto-derivation.
+- keybindings.md incorrectly described Shift+J as "scroll down 10 rows" (it snaps to bottom); no PageUp/PageDown or mouse wheel documented; no mention of scroll during processing.
+
+**New behavior:**
+- themes.md has complete token reference table grouped by category with auto-derivation notes.
+- keybindings.md accurately describes all viewport scroll keys, mouse wheel, and scroll-during-processing behavior.
+
+**Dependency policy:** No new dependencies.
+
+**Rollback steps:**
+```sh
+git revert HEAD
+```
+
+---
+
 ## 2026-04-27T21:40:00Z — code-review: cleanup batch (M9r, M6, M5, M1, N1-N3)
 
 **Task:** Apply 6 lower-severity findings from validated code review (M9r, M6, M5, M1, N1-N3).
