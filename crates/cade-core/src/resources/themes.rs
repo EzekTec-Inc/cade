@@ -140,6 +140,34 @@ pub struct ThemeTokens {
     // -- Bash mode
     #[serde(rename = "bashMode")]
     pub bash_mode: ThemeColor,
+
+    // -- Extended tokens (optional — auto-derived from core palette when absent)
+
+    /// Border character style: "rounded", "thick", "plain", or "double".
+    #[serde(default, rename = "borderStyle", skip_serializing_if = "Option::is_none")]
+    pub border_style_hint: Option<String>,
+
+    /// Spinner accent color (used to auto-generate the 4-step gradient).
+    #[serde(default, rename = "spinnerAccent", skip_serializing_if = "Option::is_none")]
+    pub spinner_accent: Option<ThemeColor>,
+
+    /// Context-bar segment overrides (optional — derived from core palette).
+    #[serde(default, rename = "ctxBarSystem", skip_serializing_if = "Option::is_none")]
+    pub ctx_bar_system: Option<ThemeColor>,
+    #[serde(default, rename = "ctxBarNativeTools", skip_serializing_if = "Option::is_none")]
+    pub ctx_bar_native_tools: Option<ThemeColor>,
+    #[serde(default, rename = "ctxBarMcpTools", skip_serializing_if = "Option::is_none")]
+    pub ctx_bar_mcp_tools: Option<ThemeColor>,
+    #[serde(default, rename = "ctxBarMemory", skip_serializing_if = "Option::is_none")]
+    pub ctx_bar_memory: Option<ThemeColor>,
+    #[serde(default, rename = "ctxBarSkills", skip_serializing_if = "Option::is_none")]
+    pub ctx_bar_skills: Option<ThemeColor>,
+    #[serde(default, rename = "ctxBarMessages", skip_serializing_if = "Option::is_none")]
+    pub ctx_bar_messages: Option<ThemeColor>,
+    #[serde(default, rename = "ctxBarFree", skip_serializing_if = "Option::is_none")]
+    pub ctx_bar_free: Option<ThemeColor>,
+    #[serde(default, rename = "ctxBarBuffer", skip_serializing_if = "Option::is_none")]
+    pub ctx_bar_buffer: Option<ThemeColor>,
 }
 
 /// A loaded theme ready for use.
@@ -544,6 +572,101 @@ impl ThemeColors {
 
         // -- Bash mode indicator
         base.bash_mode = resolve(&t.bash_mode);
+
+        // -- Gap 3 fix: Fallback for missing thinkingXhigh / bashMode tokens.
+        //    When the JSON theme omits these (serde default → empty string → Reset),
+        //    derive sensible values from existing palette colors.
+        if base.thinking_xhigh == ColorDef::Reset {
+            base.thinking_xhigh = base.error;
+        }
+        if base.bash_mode == ColorDef::Reset {
+            base.bash_mode = base.warning;
+        }
+
+        // -- Gap 1 fix: Auto-derive extended tokens from the theme's core palette.
+        //    Custom JSON themes don't expose these, so we derive them here to avoid
+        //    always falling back to Self::dark() defaults.
+
+        // Border style hint
+        if let Some(ref hint) = t.border_style_hint {
+            base.border_style = match hint.as_str() {
+                "thick" => BorderStyle::Thick,
+                "plain" => BorderStyle::Plain,
+                "double" => BorderStyle::Double,
+                _ => BorderStyle::Rounded,
+            };
+        }
+
+        // Spinner gradient: derive from spinner_accent or fall back to accent/primary.
+        let spinner_base = t
+            .spinner_accent
+            .as_ref()
+            .map(|c| resolve(c))
+            .unwrap_or(base.primary);
+        if let ColorDef::Rgb(r, g, b) = spinner_base {
+            // Build a 4-step luminance gradient: base → brighter → brightest → mid
+            let brighten = |r: u8, g: u8, b: u8, amount: u8| -> ColorDef {
+                ColorDef::Rgb(
+                    r.saturating_add(amount),
+                    g.saturating_add(amount),
+                    b.saturating_add(amount),
+                )
+            };
+            base.spinner_0 = ColorDef::Rgb(r, g, b);
+            base.spinner_1 = brighten(r, g, b, 30);
+            base.spinner_2 = brighten(r, g, b, 50);
+            base.spinner_3 = brighten(r, g, b, 15);
+        }
+
+        // Accent-dim: desaturate the primary slightly toward grey
+        if let ColorDef::Rgb(r, g, b) = base.primary {
+            let mix = |c: u8, grey: u8| -> u8 {
+                ((c as u16 + grey as u16) / 2) as u8
+            };
+            base.accent_dim = ColorDef::Rgb(mix(r, 128), mix(g, 128), mix(b, 128));
+        }
+
+        // Context-bar: use explicit overrides if provided, otherwise derive from palette.
+        base.ctx_bar_system = t
+            .ctx_bar_system
+            .as_ref()
+            .map(|c| resolve(c))
+            .unwrap_or_else(|| dim_color(base.text_muted, 30));
+        base.ctx_bar_native_tools = t
+            .ctx_bar_native_tools
+            .as_ref()
+            .map(|c| resolve(c))
+            .unwrap_or(base.primary);
+        base.ctx_bar_mcp_tools = t
+            .ctx_bar_mcp_tools
+            .as_ref()
+            .map(|c| resolve(c))
+            .unwrap_or_else(|| brighten_color(base.primary, 30));
+        base.ctx_bar_memory = t
+            .ctx_bar_memory
+            .as_ref()
+            .map(|c| resolve(c))
+            .unwrap_or(base.warning);
+        base.ctx_bar_skills = t
+            .ctx_bar_skills
+            .as_ref()
+            .map(|c| resolve(c))
+            .unwrap_or_else(|| brighten_color(base.warning, 20));
+        base.ctx_bar_messages = t
+            .ctx_bar_messages
+            .as_ref()
+            .map(|c| resolve(c))
+            .unwrap_or(base.syntax_keyword);
+        base.ctx_bar_free = t
+            .ctx_bar_free
+            .as_ref()
+            .map(|c| resolve(c))
+            .unwrap_or(base.text_dim);
+        base.ctx_bar_buffer = t
+            .ctx_bar_buffer
+            .as_ref()
+            .map(|c| resolve(c))
+            .unwrap_or(base.border_base);
 
         base
     }
@@ -1619,6 +1742,30 @@ fn parse_hex(s: &str) -> Option<(u8, u8, u8)> {
     let g = u8::from_str_radix(&s[2..4], 16).ok()?;
     let b = u8::from_str_radix(&s[4..6], 16).ok()?;
     Some((r, g, b))
+}
+
+/// Brighten an RGB color by a fixed amount, clamping at 255.
+fn brighten_color(c: ColorDef, amount: u8) -> ColorDef {
+    match c {
+        ColorDef::Rgb(r, g, b) => ColorDef::Rgb(
+            r.saturating_add(amount),
+            g.saturating_add(amount),
+            b.saturating_add(amount),
+        ),
+        ColorDef::Reset => ColorDef::Reset,
+    }
+}
+
+/// Dim (darken) an RGB color by a fixed amount, clamping at 0.
+fn dim_color(c: ColorDef, amount: u8) -> ColorDef {
+    match c {
+        ColorDef::Rgb(r, g, b) => ColorDef::Rgb(
+            r.saturating_sub(amount),
+            g.saturating_sub(amount),
+            b.saturating_sub(amount),
+        ),
+        ColorDef::Reset => ColorDef::Reset,
+    }
 }
 
 // endregion: --- Support

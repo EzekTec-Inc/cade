@@ -662,7 +662,7 @@ pub(crate) fn render_frame(
             
             // Drop shadow
             let shadow_rect = ratatui::layout::Rect::new(x + 1, y_offset + 1, width, height);
-            let shadow_text = vec![Line::from(Span::styled("█".repeat(width as usize), Style::default().fg(ratatui::style::Color::DarkGray))) ; height as usize];
+            let shadow_text = vec![Line::from(Span::styled("█".repeat(width as usize), Style::default().fg(colors.text_dim.to_ratatui()))) ; height as usize];
             frame.render_widget(Paragraph::new(shadow_text), shadow_rect);
 
             frame.render_widget(Clear, rect);
