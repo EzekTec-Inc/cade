@@ -156,7 +156,6 @@ impl Repl {
                             }
                     }
                     Some(Ok(evt)) = reader.next() => {
-                        use crossterm::event::MouseEventKind;
 
                         // For key events targeting an active question modal we MUST
                         // not drop the event if the lock is momentarily held — retry
@@ -179,8 +178,15 @@ impl Repl {
                                             }
                                         } else {
                                             match (k.code, k.modifiers) {
-                                                    (KeyCode::Char('K'), _) => { app.follow = false; app.scroll = app.scroll.saturating_add(10); let _ = app.draw(); }
-                                                    (KeyCode::Char('J'), _) => { app.scroll = 0; app.follow = true; let _ = app.draw(); }
+                                                    // -- Scroll: delegate to shared handler
+                                                    // (Shift+K, Shift+J, PageUp, PageDown)
+                                                    (KeyCode::Char('K'), _)
+                                                    | (KeyCode::Char('J'), _)
+                                                    | (KeyCode::PageUp, _)
+                                                    | (KeyCode::PageDown, _) => {
+                                                        app.handle_scroll_key(k.code, k.modifiers);
+                                                        let _ = app.draw();
+                                                    }
                                                     (KeyCode::Char('o'), KeyModifiers::CONTROL) => { app.expand_all = !app.expand_all; let _ = app.draw(); }
                                                     (KeyCode::Tab, _) => {
                                                         let next_mode = cade_tui::app::cycle_mode(app.mode);
@@ -362,11 +368,11 @@ impl Repl {
                             }
                         } else if let Some(mut app) = tick_app.try_lock() {
                             // Mouse / resize — best-effort, fine to drop
-                            if let Event::Mouse(m) = evt { match m.kind {
-                                MouseEventKind::ScrollUp   => { app.follow = false; app.scroll = app.scroll.saturating_add(1); let _ = app.draw(); }
-                                MouseEventKind::ScrollDown => { if app.scroll > 1 { app.scroll = app.scroll.saturating_sub(1); } else { app.scroll = 0; app.follow = true; } let _ = app.draw(); }
-                                _ => {}
-                            } }
+                            if let Event::Mouse(m) = evt {
+                                if app.handle_scroll_mouse(m.kind) {
+                                    let _ = app.draw();
+                                }
+                            }
                         }
                     }
                 }

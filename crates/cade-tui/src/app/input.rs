@@ -7,7 +7,7 @@ use crossterm::event::{
 
 use crate::Result;
 
-use super::{FIXED_ROWS, MAX_INPUT_ROWS, FilePickerAction, PickerState, ThemePickerAction, ToastLevel, TuiApp};
+use super::{FilePickerAction, PickerState, ThemePickerAction, ToastLevel, TuiApp};
 use super::layout::cursor::{calc_visual_cursor, find_cursor_at_visual_row_col, input_mode_badge};
 
 impl TuiApp {
@@ -86,19 +86,8 @@ impl TuiApp {
                     self.draw()?;
                 }
                 Event::Mouse(m) => match m.kind {
-                    MouseEventKind::ScrollUp => {
-                        self.follow = false;
-                        self.scroll_target = self.scroll_target.saturating_add(3);
-                        self.draw_dirty = true;
-                        self.draw()?;
-                    }
-                    MouseEventKind::ScrollDown => {
-                        self.scroll_target = self.scroll_target.saturating_sub(3);
-                        if self.scroll_target == 0 {
-                            self.follow = true;
-                            self.pending_lines = 0;
-                        }
-                        self.draw_dirty = true;
+                    MouseEventKind::ScrollUp | MouseEventKind::ScrollDown => {
+                        self.handle_scroll_mouse(m.kind);
                         self.draw()?;
                     }
                     _ => {}
@@ -302,36 +291,11 @@ impl TuiApp {
             }
 
             // -- Timeline navigation / content scroll
-            (KeyCode::Char('K'), _) => {
-                self.follow = false;
-                self.scroll_target = self.scroll_target.saturating_add(10);
-                self.draw_dirty = true;
-            }
-            (KeyCode::Char('J'), _) => {
-                self.scroll_target = 0;
-                self.follow = true;
-                self.pending_lines = 0;
-                self.draw_dirty = true;
-            }
-            (KeyCode::PageUp, _) => {
-                self.follow = false;
-                let vh = crossterm::terminal::size()
-                    .map(|(_, h)| h.saturating_sub(FIXED_ROWS + MAX_INPUT_ROWS))
-                    .unwrap_or(20);
-                self.scroll_target = scroll_page_up(self.scroll_target, vh);
-                self.draw_dirty = true;
-            }
-            (KeyCode::PageDown, _) => {
-                let vh = crossterm::terminal::size()
-                    .map(|(_, h)| h.saturating_sub(FIXED_ROWS + MAX_INPUT_ROWS))
-                    .unwrap_or(20);
-                let (new_target, should_follow) = scroll_page_down(self.scroll_target, vh);
-                self.scroll_target = new_target;
-                if should_follow {
-                    self.follow = true;
-                    self.pending_lines = 0;
-                }
-                self.draw_dirty = true;
+            (KeyCode::Char('K'), _)
+            | (KeyCode::Char('J'), _)
+            | (KeyCode::PageUp, _)
+            | (KeyCode::PageDown, _) => {
+                self.handle_scroll_key(k.code, k.modifiers);
             }
 
             // -- Mode cycle / path completion

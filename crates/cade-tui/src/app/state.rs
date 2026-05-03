@@ -9,15 +9,19 @@ impl TuiApp {
         let is_tool_result = matches!(line, RenderLine::ToolResult { .. });
         self.lines.push(line);
 
-        if is_tool_result {
-            self.scroll_instant(self.rows_from_last_tool_call());
-        } else {
-            self.scroll_instant(0);
-        }
         if self.follow {
-            self.scroll_instant(0);
+            // User is following — auto-scroll to show new content.
+            if is_tool_result {
+                self.scroll_instant(self.rows_from_last_tool_call());
+            } else {
+                self.scroll_instant(0);
+            }
+            self.pending_lines = 0;
+        } else {
+            // User scrolled up — don't steal their position.
+            // Increment pending_lines so the "↓ N new" badge appears.
+            self.pending_lines += 1;
         }
-        self.pending_lines = 0;
         let scroll_before = self.scroll;
         self.draw()?;
         if is_tool_result && self.scroll != scroll_before {
@@ -465,6 +469,85 @@ impl TuiApp {
             Some("bash") => InputMode::BashCommand { silent: false },
             Some("bash:silent") => InputMode::BashCommand { silent: true },
             _ => InputMode::Regular,
+        }
+    }
+
+    // -- Shared scroll handler (Fix E) --
+    //
+    // Unified scroll logic used by both the idle input loop (input.rs) and the
+    // tick task during agent processing (turn_loop/agent.rs).  All scroll
+    // mutations go through scroll_target for smooth animation.
+
+    /// Handle a keyboard scroll event.  Returns `true` if the key was consumed.
+    pub fn handle_scroll_key(&mut self, code: crossterm::event::KeyCode, _modifiers: crossterm::event::KeyModifiers) -> bool {
+        use crossterm::event::KeyCode;
+
+        match code {
+            // Shift+K — scroll up 10 lines
+            KeyCode::Char('K') => {
+                self.follow = false;
+                self.scroll_target = self.scroll_target.saturating_add(10);
+                self.draw_dirty = true;
+                true
+            }
+            // Shift+J — snap to bottom
+            KeyCode::Char('J') => {
+                self.scroll_target = 0;
+                self.follow = true;
+                self.pending_lines = 0;
+                self.draw_dirty = true;
+                true
+            }
+            // PageUp — scroll up by viewport height
+            KeyCode::PageUp => {
+                self.follow = false;
+                let vh = crossterm::terminal::size()
+                    .map(|(_, h)| h.saturating_sub(super::FIXED_ROWS + super::MAX_INPUT_ROWS))
+                    .unwrap_or(20);
+                self.scroll_target = crate::app::input::scroll_page_up(self.scroll_target, vh);
+                self.draw_dirty = true;
+                true
+            }
+            // PageDown — scroll down by viewport height
+            KeyCode::PageDown => {
+                let vh = crossterm::terminal::size()
+                    .map(|(_, h)| h.saturating_sub(super::FIXED_ROWS + super::MAX_INPUT_ROWS))
+                    .unwrap_or(20);
+                let (new_target, should_follow) =
+                    crate::app::input::scroll_page_down(self.scroll_target, vh);
+                self.scroll_target = new_target;
+                if should_follow {
+                    self.follow = true;
+                    self.pending_lines = 0;
+                }
+                self.draw_dirty = true;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Handle a mouse scroll event.  Returns `true` if the event was consumed.
+    pub fn handle_scroll_mouse(&mut self, kind: crossterm::event::MouseEventKind) -> bool {
+        use crossterm::event::MouseEventKind;
+
+        match kind {
+            MouseEventKind::ScrollUp => {
+                self.follow = false;
+                self.scroll_target = self.scroll_target.saturating_add(3);
+                self.draw_dirty = true;
+                true
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_target = self.scroll_target.saturating_sub(3);
+                if self.scroll_target == 0 {
+                    self.follow = true;
+                    self.pending_lines = 0;
+                }
+                self.draw_dirty = true;
+                true
+            }
+            _ => false,
         }
     }
 }
