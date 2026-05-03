@@ -169,7 +169,7 @@ and `input.rs` never reference slots.
 6. [ ] Commit: `feat(tui): wire SlotManager into render + input dispatch`
 
 **Verification:**
-- `grep -c "UiSlot\|slots\." crates/cade-tui/src/app/render.rs` > 0
+- `grep -c "UiSlot\|slot_mgr\|SlotManager" crates/cade-tui/src/app/mod.rs` > 0 (slots render in `draw_impl`, not `render.rs`, due to borrow-checker constraints)
 - `grep -c "UiSlot\|slots\." crates/cade-tui/src/app/input.rs` > 0
 - Tests pass
 
